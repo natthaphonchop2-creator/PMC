@@ -2152,8 +2152,82 @@ td span {
   gap: 12px;
 }
 
+.campaign-detail-grid.navigator-collapsed {
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+
 .campaign-list-panel {
   align-self: start;
+}
+
+.campaign-panel-header,
+.campaign-section-bar,
+.delivery-header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.campaign-panel-header,
+.campaign-section-bar {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.campaign-panel-header > div,
+.campaign-section-bar > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.campaign-panel-header h2,
+.campaign-section-bar strong {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.campaign-panel-header span,
+.campaign-section-bar span {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-panel-header svg,
+.campaign-section-bar svg {
+  color: #64748b;
+}
+
+.collapse-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #475569;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.collapse-button:hover {
+  border-color: #c7d2fe;
+  background: #f8fbff;
+  color: var(--ink);
 }
 
 .campaign-list,
@@ -2251,7 +2325,7 @@ td span {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
-  margin-top: 16px;
+  margin-top: 10px;
 }
 
 .delivery-control-panel {
@@ -2271,6 +2345,12 @@ td span {
 .delivery-control-head {
   justify-content: space-between;
   gap: 12px;
+}
+
+.delivery-header-actions {
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .delivery-control-head strong {
@@ -3274,6 +3354,9 @@ td span {
     .approval-actions,
     .insights-toolbar,
     .group-control,
+    .campaign-panel-header,
+    .campaign-section-bar,
+    .delivery-header-actions,
     .delivery-control-head,
     .delivery-control-row {
     align-items: stretch;

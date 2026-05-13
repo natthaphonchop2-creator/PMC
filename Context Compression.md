@@ -206,6 +206,12 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Settings now lists write execution as `confirm-only` and documents the new object-status endpoint.
   - Browser QA confirms Campaigns control renders, status modal opens/closes, AI Insights Group By changes to Campaign, Ads Auto renders, and old `AI Launch` / `Winning Ads` labels are gone.
   - `npm run build` passes after these changes.
+- Campaigns UX cleanup completed:
+  - Removed the main duplication by making the left Campaign area a compact `Selected Campaign` navigator by default.
+  - `Meta Delivery Control` now starts at `Ad Sets` and the `Campaign` scope controls only the selected campaign instead of listing every campaign again.
+  - Added collapse/expand controls for Campaign navigator, Metrics, Delivery Control, Ad Sets, and Ads.
+  - Browser QA confirms default Campaigns view is compact, metrics are visible, delivery control starts with Ad Sets, and collapse/expand buttons work without console errors.
+  - `npm run build` passes after this cleanup.
 
 ## Next Recommended Step
 

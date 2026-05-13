@@ -2336,7 +2336,14 @@ function CampaignDetailPage({
   onRequestStatusChange: (request: DeliveryStatusChangeRequest) => void
 }) {
   const [selectedAdSetId, setSelectedAdSetId] = useState('')
-  const [controlScope, setControlScope] = useState<CampaignControlScope>('campaign')
+  const [controlScope, setControlScope] = useState<CampaignControlScope>('adset')
+  const [expandedSections, setExpandedSections] = useState({
+    navigator: false,
+    metrics: true,
+    delivery: true,
+    adSets: false,
+    ads: true,
+  })
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? campaigns[0]
   const campaignAdSets = adSets.filter((adSet) => adSet.campaignId === selectedCampaign.id)
   const activeAdSetId = campaignAdSets.some((adSet) => adSet.id === selectedAdSetId)
@@ -2345,16 +2352,21 @@ function CampaignDetailPage({
   const campaignAds = adInsights.filter((ad) => ad.campaignId === selectedCampaign.id)
   const visibleAds = campaignAds.filter((ad) => !activeAdSetId || ad.adSetId === activeAdSetId)
   const activeAdSet = campaignAdSets.find((adSet) => adSet.id === activeAdSetId)
-  const campaignControlRows = campaigns.map((campaign) => ({
-    id: campaign.id,
+  const toggleSection = (section: keyof typeof expandedSections) => {
+    setExpandedSections((current) => ({ ...current, [section]: !current[section] }))
+  }
+  const selectedCampaignDeliveryStatus = normalizeDeliveryStatus(selectedCampaign.deliveryStatus, selectedCampaign.spend)
+  const selectedCampaignStatusMeta = statusMeta(selectedCampaign.aiStatus)
+  const campaignControlRows = [{
+    id: selectedCampaign.id,
     objectType: 'campaign' as const,
-    name: campaign.name,
-    subtitle: campaign.objective,
-    status: normalizeDeliveryStatus(campaign.deliveryStatus, campaign.spend),
-    spend: campaign.spend,
-    roas: campaign.roas,
-    results: campaign.conversions,
-  }))
+    name: selectedCampaign.name,
+    subtitle: selectedCampaign.objective,
+    status: selectedCampaignDeliveryStatus,
+    spend: selectedCampaign.spend,
+    roas: selectedCampaign.roas,
+    results: selectedCampaign.conversions,
+  }]
   const adSetControlRows = campaignAdSets.map((adSet) => ({
     id: adSet.id,
     objectType: 'adset' as const,
@@ -2378,17 +2390,34 @@ function CampaignDetailPage({
   const controlRows =
     controlScope === 'campaign' ? campaignControlRows : controlScope === 'adset' ? adSetControlRows : adControlRows
   const controlOptions = [
-    { id: 'campaign' as const, label: 'Campaigns', rows: campaignControlRows },
+    { id: 'campaign' as const, label: 'Campaign', rows: campaignControlRows },
     { id: 'adset' as const, label: 'Ad Sets', rows: adSetControlRows },
     { id: 'ad' as const, label: 'Ads', rows: adControlRows },
   ]
+  const campaignListItems = expandedSections.navigator ? campaigns : [selectedCampaign]
 
   return (
-    <section className="campaign-detail-grid">
+    <section className={`campaign-detail-grid ${expandedSections.navigator ? '' : 'navigator-collapsed'}`}>
       <div className="panel campaign-list-panel">
-        <PanelHeader icon={HeartPulse} title="Campaigns" meta={`${campaigns.length} service campaigns`} />
+        <div className="campaign-panel-header">
+          <div>
+            <HeartPulse size={18} />
+            <h2>{expandedSections.navigator ? 'Campaigns' : 'Selected Campaign'}</h2>
+            <span>{expandedSections.navigator ? `${campaigns.length} campaigns` : 'compact'}</span>
+          </div>
+          <button
+            className="collapse-button"
+            type="button"
+            aria-expanded={expandedSections.navigator}
+            onClick={() => toggleSection('navigator')}
+            title={expandedSections.navigator ? 'ย่อรายการ Campaigns' : 'ขยายรายการ Campaigns'}
+          >
+            <ChevronDown size={15} />
+            {expandedSections.navigator ? 'ย่อ' : 'ขยาย'}
+          </button>
+        </div>
         <div className="campaign-list">
-          {campaigns.map((campaign) => {
+          {campaignListItems.map((campaign) => {
             const meta = statusMeta(campaign.aiStatus)
             return (
               <button
@@ -2415,11 +2444,11 @@ function CampaignDetailPage({
       <div className="panel campaign-main-panel">
         <div className="campaign-detail-hero">
           <div>
-            <span className={`badge ${statusMeta(selectedCampaign.aiStatus).className}`}>
-              {statusMeta(selectedCampaign.aiStatus).label}
+            <span className={`badge ${selectedCampaignStatusMeta.className}`}>
+              {selectedCampaignStatusMeta.label}
             </span>
-            <span className={`badge ${deliveryStatusTone(normalizeDeliveryStatus(selectedCampaign.deliveryStatus, selectedCampaign.spend))}`}>
-              {deliveryStatusLabel(normalizeDeliveryStatus(selectedCampaign.deliveryStatus, selectedCampaign.spend))}
+            <span className={`badge ${deliveryStatusTone(selectedCampaignDeliveryStatus)}`}>
+              {deliveryStatusLabel(selectedCampaignDeliveryStatus)}
             </span>
             <h2>{selectedCampaign.name}</h2>
             <p>{selectedCampaign.aiSummary}</p>
@@ -2441,41 +2470,59 @@ function CampaignDetailPage({
           </button>
         </div>
 
-        <div className="campaign-summary-grid">
-          <MiniMetric label="Budget" value={fmtMoney(selectedCampaign.budget)} help="Daily budget ของ campaign" />
-          <MiniMetric label="Spend" value={fmtMoney(selectedCampaign.spend)} help={metricHelp.adSpend} />
-          <MiniMetric label="Bookings" value={fmtNum(selectedCampaign.conversions)} help={metricHelp.bookings} />
-          <MiniMetric label="ROAS" value={`${selectedCampaign.roas.toFixed(2)}x`} help={metricHelp.roas} />
-          <MiniMetric label="CTR" value={`${selectedCampaign.ctr.toFixed(2)}%`} help={metricHelp.ctr} />
-          <MiniMetric label="Frequency" value={selectedCampaign.frequency.toFixed(1)} help={metricHelp.frequency} />
+        <div className="campaign-section-bar">
+          <div>
+            <strong>Metrics</strong>
+            <span>Budget, Spend, Booking, ROAS</span>
+          </div>
+          <button className="collapse-button" type="button" aria-expanded={expandedSections.metrics} onClick={() => toggleSection('metrics')}>
+            <ChevronDown size={15} />
+            {expandedSections.metrics ? 'ย่อ' : 'ขยาย'}
+          </button>
         </div>
+        {expandedSections.metrics && (
+          <div className="campaign-summary-grid">
+            <MiniMetric label="Budget" value={fmtMoney(selectedCampaign.budget)} help="Daily budget ของ campaign" />
+            <MiniMetric label="Spend" value={fmtMoney(selectedCampaign.spend)} help={metricHelp.adSpend} />
+            <MiniMetric label="Bookings" value={fmtNum(selectedCampaign.conversions)} help={metricHelp.bookings} />
+            <MiniMetric label="ROAS" value={`${selectedCampaign.roas.toFixed(2)}x`} help={metricHelp.roas} />
+            <MiniMetric label="CTR" value={`${selectedCampaign.ctr.toFixed(2)}%`} help={metricHelp.ctr} />
+            <MiniMetric label="Frequency" value={selectedCampaign.frequency.toFixed(1)} help={metricHelp.frequency} />
+          </div>
+        )}
 
         <div className="delivery-control-panel">
           <div className="delivery-control-head">
             <div>
               <strong>Meta Delivery Control</strong>
-              <span>Campaign / Ad set / Ad status</span>
+              <span>ควบคุม selected campaign, ad sets และ ads</span>
             </div>
-            <div className="control-scope-tabs" aria-label="Delivery control scope">
-              {controlOptions.map((option) => {
-                const active = option.rows.filter((row) => row.status === 'active').length
-                return (
-                  <button
-                    key={option.id}
-                    className={controlScope === option.id ? 'active' : ''}
-                    type="button"
-                    onClick={() => setControlScope(option.id)}
-                    title={`${active}/${option.rows.length} active`}
-                  >
-                    <span>{option.label}</span>
-                    <strong>{active}/{option.rows.length}</strong>
-                  </button>
-                )
-              })}
+            <div className="delivery-header-actions">
+              <div className="control-scope-tabs" aria-label="Delivery control scope">
+                {controlOptions.map((option) => {
+                  const active = option.rows.filter((row) => row.status === 'active').length
+                  return (
+                    <button
+                      key={option.id}
+                      className={controlScope === option.id ? 'active' : ''}
+                      type="button"
+                      onClick={() => setControlScope(option.id)}
+                      title={`${active}/${option.rows.length} active`}
+                    >
+                      <span>{option.label}</span>
+                      <strong>{active}/{option.rows.length}</strong>
+                    </button>
+                  )
+                })}
+              </div>
+              <button className="collapse-button" type="button" aria-expanded={expandedSections.delivery} onClick={() => toggleSection('delivery')}>
+                <ChevronDown size={15} />
+                {expandedSections.delivery ? 'ย่อ' : 'ขยาย'}
+              </button>
             </div>
           </div>
 
-          <div className="delivery-control-list">
+          {expandedSections.delivery && <div className="delivery-control-list">
             {controlRows.length === 0 && (
               <div className="empty-state table-empty-state">
                 <Database size={18} />
@@ -2518,13 +2565,23 @@ function CampaignDetailPage({
                 </article>
               )
             })}
-          </div>
+          </div>}
         </div>
       </div>
 
       <div className="panel adset-panel">
-        <PanelHeader icon={Layers3} title="Ad Sets" meta={activeAdSet ? activeAdSet.name : 'select ad set'} />
-        <div className="adset-grid">
+        <div className="campaign-panel-header">
+          <div>
+            <Layers3 size={18} />
+            <h2>Ad Sets</h2>
+            <span>{activeAdSet ? activeAdSet.name : `${campaignAdSets.length} ad sets`}</span>
+          </div>
+          <button className="collapse-button" type="button" aria-expanded={expandedSections.adSets} onClick={() => toggleSection('adSets')}>
+            <ChevronDown size={15} />
+            {expandedSections.adSets ? 'ย่อ' : 'ขยาย'}
+          </button>
+        </div>
+        {expandedSections.adSets && <div className="adset-grid">
           {campaignAdSets.length === 0 && (
             <div className="empty-state">
               <Database size={18} />
@@ -2555,12 +2612,22 @@ function CampaignDetailPage({
               </button>
             )
           })}
-        </div>
+        </div>}
       </div>
 
       <div className="panel ads-panel">
-        <PanelHeader icon={ImageIcon} title="Ads" meta={`${visibleAds.length} ads in selected ad set`} />
-        <div className="table-wrap compact-table-wrap">
+        <div className="campaign-panel-header">
+          <div>
+            <ImageIcon size={18} />
+            <h2>Ads</h2>
+            <span>{`${visibleAds.length} ads in selected ad set`}</span>
+          </div>
+          <button className="collapse-button" type="button" aria-expanded={expandedSections.ads} onClick={() => toggleSection('ads')}>
+            <ChevronDown size={15} />
+            {expandedSections.ads ? 'ย่อ' : 'ขยาย'}
+          </button>
+        </div>
+        {expandedSections.ads && <div className="table-wrap compact-table-wrap">
           <table className="performance-table">
             <thead>
               <tr>
@@ -2650,7 +2717,7 @@ function CampaignDetailPage({
               ))}
             </tbody>
           </table>
-        </div>
+        </div>}
       </div>
     </section>
   )
