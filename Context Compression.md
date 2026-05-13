@@ -8,6 +8,7 @@ The Performance page now renders from live Meta data for `maximum` / all-time ra
 The backend proxy now tolerates later Meta paging failures after a valid first page, preventing large all-time pulls from failing the whole workspace.
 Latest deployment pass made the app production-runnable with a Node server that serves `dist/` and preserves `/api/meta/*`.
 Latest temporary deployment pass exposes the production server through a localtunnel HTTPS URL protected by Basic Auth.
+Latest GitHub pass installed/enabled the GitHub plugin, initialized the project as a local git repository, created commits, and added GitHub/MCP setup notes.
 
 ## Current Architecture
 
@@ -34,6 +35,8 @@ Latest temporary deployment pass exposes the production server through a localtu
 - Date preset `maximum` is supported in the topbar and Settings form as `All time`.
 - Production must run through `npm start` after `npm run build`; a static-only host will not support Meta API routes.
 - Temporary public access is protected by `APP_BASIC_AUTH_USER` and `APP_BASIC_AUTH_PASSWORD` when those env vars are set.
+- Project is now a local git repository on branch `main`.
+- GitHub plugin login is `natthaphonchop2-creator`, but the GitHub App currently has no installed account/repository access.
 
 ## Files Changed In This Pass
 
@@ -99,6 +102,13 @@ Latest temporary deployment pass exposes the production server through a localtu
 
 - `.gitignore`
   - Added `dist-server`.
+  - Added `.mcp.local.json`, `*.zip`, and `*.tar.gz`.
+
+- `GITHUB_SETUP.md`
+  - Added current git state, safe ignored files, GitHub plugin/connector notes, manual push commands, and MCP setup instructions.
+
+- `mcp.github.example.json`
+  - Added example config for GitHub's official MCP server via Docker image `ghcr.io/github/github-mcp-server`.
 
 - `/Users/natthaphon/Desktop/Ai PMC/pmc-ads-agent-production.tar.gz`
   - Created production bundle containing `dist/`, `dist-server/`, `package.json`, docs, and `.env.example`.
@@ -120,6 +130,12 @@ Latest temporary deployment pass exposes the production server through a localtu
 - `npm run lint` passes.
 - `npm run build` passes.
 - Local production `/healthz` returns `200 {"ok": true}` without auth; root remains protected by Basic Auth.
+- GitHub plugin `_get_user_login` returns `natthaphonchop2-creator`.
+- GitHub plugin repository and installed account lists are empty.
+- Local git repo created with commits:
+  - `1e42b62 Initial PMC Ads Agent dashboard`
+  - `52787f4 Add GitHub setup notes and MCP example`
+- `git status --short --branch` is clean on `main`.
 - Production server check passed with `PORT=4180 npm start`.
 - Production `/` returned 200 HTML.
 - Production `/api/meta/status` returned configured/connected without exposing token.
@@ -156,4 +172,4 @@ Latest temporary deployment pass exposes the production server through a localtu
 
 ## Next Recommended Step
 
-Next step: if the temporary tunnel is no longer needed, stop screen sessions `pmc-ads-agent-prod` and `pmc-ads-agent-localtunnel`. For permanent deploy, get target server details and run behind Nginx/SSL.
+Next step: create or provide a GitHub repository URL, then add it as `origin` and push `main`. If using Codex GitHub plugin, install/authorize the GitHub App for an account/repository first.
