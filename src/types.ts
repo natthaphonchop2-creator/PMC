@@ -20,6 +20,8 @@ export type ActionStatus = 'pending' | 'approved' | 'rejected'
 export type TaskStatus = 'pending' | 'running' | 'done'
 export type AutomationMode = 'suggest' | 'autoPilot'
 export type AdDeliveryStatus = 'active' | 'paused'
+export type MetaObjectType = 'campaign' | 'adset' | 'ad'
+export type MetaObjectStatus = 'ACTIVE' | 'PAUSED'
 export type AutoDecision = 'pause' | 'enable' | 'keep' | 'reduceBudget'
 export type MemoryCategory = 'Insight' | 'Creative' | 'Audience' | 'Strategy' | 'Preference'
 
@@ -27,6 +29,7 @@ export interface CampaignInsight {
   id: string
   name: string
   objective: string
+  deliveryStatus: AdDeliveryStatus
   budget: number
   spend: number
   revenue: number
@@ -97,6 +100,7 @@ export interface RecommendedAction {
 
 export interface AutoAdControl {
   id: string
+  adId: string
   campaignId: string
   adName: string
   status: AdDeliveryStatus
@@ -221,6 +225,7 @@ export interface AdSetInsight {
   campaignId: string
   name: string
   audience: string
+  deliveryStatus: AdDeliveryStatus
   budget: number
   spend: number
   bookings: number

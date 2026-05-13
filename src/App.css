@@ -1809,6 +1809,7 @@ td span {
 }
 
 .group-select {
+  position: relative;
   gap: 12px;
   min-width: 284px;
   min-height: 56px;
@@ -1817,6 +1818,14 @@ td span {
   border-radius: 14px;
   background: white;
   color: #a855f7;
+  cursor: pointer;
+}
+
+.group-select select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
   cursor: pointer;
 }
 
@@ -2167,8 +2176,9 @@ td span {
 
 .campaign-list button {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: center;
   padding: 10px;
 }
 
@@ -2197,6 +2207,13 @@ td span {
   grid-column: 2;
 }
 
+.campaign-list .badge {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+  margin: 0;
+}
+
 .campaign-main-panel,
 .adset-panel,
 .ads-panel {
@@ -2210,12 +2227,20 @@ td span {
   gap: 14px;
 }
 
+.campaign-detail-hero > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
 .campaign-detail-hero h2 {
+  flex-basis: 100%;
   margin-top: 10px;
   font-size: 22px;
 }
 
 .campaign-detail-hero p {
+  flex-basis: 100%;
   margin-top: 6px;
   color: var(--muted);
   font-size: 13px;
@@ -2227,6 +2252,140 @@ td span {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   margin-top: 16px;
+}
+
+.delivery-control-panel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.delivery-control-head,
+.delivery-control-row,
+.delivery-metrics,
+.control-scope-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.delivery-control-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delivery-control-head strong {
+  display: block;
+  font-size: 13px;
+}
+
+.delivery-control-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.control-scope-tabs {
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.control-scope-tabs button {
+  min-height: 34px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.control-scope-tabs button.active {
+  background: white;
+  color: var(--ink);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.control-scope-tabs button strong {
+  margin-left: 5px;
+  font-size: 11px;
+}
+
+.delivery-control-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.delivery-control-row {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fbfdff;
+}
+
+.delivery-control-row > div:first-child {
+  min-width: 0;
+}
+
+.delivery-control-row strong,
+.delivery-control-row small {
+  display: block;
+}
+
+.delivery-control-row strong {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.delivery-control-row small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.delivery-metrics {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 230px;
+}
+
+.delivery-metrics span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mini-control-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: white;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.mini-control-button.good {
+  background: #059669;
+}
+
+.mini-control-button.critical {
+  background: #dc2626;
 }
 
 .mini-metric {
@@ -3114,7 +3273,9 @@ td span {
     .approval-summary,
     .approval-actions,
     .insights-toolbar,
-    .group-control {
+    .group-control,
+    .delivery-control-head,
+    .delivery-control-row {
     align-items: stretch;
     flex-direction: column;
     display: flex;
@@ -3171,9 +3332,19 @@ td span {
     .campaign-summary-grid,
     .adset-grid,
     .delegation-actions,
+    .control-scope-tabs,
   .category-grid,
   .evidence-grid {
     grid-template-columns: 1fr;
+  }
+
+  .control-scope-tabs {
+    display: grid;
+  }
+
+  .delivery-metrics {
+    min-width: 0;
+    justify-content: flex-start;
   }
 
   .tool-nav {

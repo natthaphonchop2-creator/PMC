@@ -52,7 +52,7 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
 - `src/App.tsx`
   - Removed frontend dataset import.
   - Added empty workspace normalization.
-  - Added empty states across Performance, Campaigns, Appointments, AI Insights, Action Queue, AI Launch, Creative, Audience, Media Library, and Audit.
+  - Added empty states across Performance, Campaigns, Appointments, AI Insights, Action Queue, Ads Auto, Creative, Audience, Media Library, and Audit.
   - Removed hardcoded clinic workspace name from sidebar.
   - Removed floating support/chat button from the app shell.
   - Workspace selector now opens Settings.
@@ -181,7 +181,7 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
 - Browser QA on `http://127.0.0.1:5174/` passes:
   - AI Insights shows empty state when no Meta dataset is loaded.
   - Settings shows API Settings, API Credentials, and Save & Test.
-  - Performance, Campaigns, AI Insights, Winning Ads, AI Launch, Creative, Audience, Media Library, Integrations, and Help Center do not show old development records.
+  - Performance, Campaigns, AI Insights, Action Queue, Ads Auto, Creative, Audience, Media Library, Integrations, and Help Center do not show old development records.
   - Removed app page no longer appears.
 - Meta workspace endpoint with `datePreset=maximum` now returns successfully:
   - 30 campaigns
@@ -194,6 +194,18 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Performance opens successfully
   - Performance shows `Media Cost`, `Funnel Quality`, `Business Outcome`
   - live all-time Meta numbers render in Performance, including spend and ROAS
+- Campaigns / Ads Auto UX update completed:
+  - `Winning Ads` was renamed to `Action Queue`; `AI Launch` was renamed to `Ads Auto`.
+  - Added `deliveryStatus` to Campaign and Ad Set data, plus `adId` to Ads Auto controls.
+  - Added `POST /api/meta/object-status` server endpoint to change Campaign, Ad set, or Ad status to `ACTIVE` / `PAUSED` through Meta Marketing API.
+  - Campaigns page now has `Meta Delivery Control` with scope tabs for Campaigns, Ad Sets, and Ads.
+  - Campaigns page can open a confirmation modal before executing real Meta status changes.
+  - Ads table includes per-ad Activate/Pause action buttons.
+  - Ads Auto page now shows status decisions and routes Pause/Enable through the real confirmation flow instead of local mock application.
+  - AI Insights now supports Group By: Creative, Campaign, Ad Set, Ad, Service, Objective, and Status.
+  - Settings now lists write execution as `confirm-only` and documents the new object-status endpoint.
+  - Browser QA confirms Campaigns control renders, status modal opens/closes, AI Insights Group By changes to Campaign, Ads Auto renders, and old `AI Launch` / `Winning Ads` labels are gone.
+  - `npm run build` passes after these changes.
 
 ## Next Recommended Step
 

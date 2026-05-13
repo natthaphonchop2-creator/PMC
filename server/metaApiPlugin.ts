@@ -336,6 +336,25 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
         return
       }
 
+      if (requestUrl.pathname === '/api/meta/object-status') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'Method not allowed' })
+          return
+        }
+
+        if (!config) {
+          writeJson(res, 400, {
+            error: 'Meta API ยังไม่ได้ตั้งค่า กรุณาใส่ Access Token และ Ad Account ID ใน Settings',
+          })
+          return
+        }
+
+        const body = await readJsonBody(req)
+        const result = await updateMetaObjectStatus(config, body)
+        writeJson(res, 200, result)
+        return
+      }
+
       writeJson(res, 404, { error: 'Unknown Meta API endpoint' })
     } catch (error) {
       const status = error instanceof MetaApiError ? error.status : 500
@@ -626,6 +645,62 @@ async function graphGetAllPages<T>(config: MetaConfig, path: string, params: Rec
   return records
 }
 
+async function graphPost<T>(config: MetaConfig, path: string, params: Record<string, string | number | undefined>): Promise<T> {
+  const url = new URL(`${GRAPH_HOST}/${config.graphVersion}${path}`)
+  const body = new URLSearchParams()
+  body.set('access_token', config.accessToken)
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) body.set(key, String(value))
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    body,
+  })
+  const json = await response.json().catch(() => ({}))
+  const maybeError = (json as { error?: { message?: string; code?: number; type?: string } }).error
+
+  if (!response.ok || maybeError) {
+    throw new MetaApiError(
+      maybeError?.message || `Meta API request failed (${response.status})`,
+      response.status,
+      maybeError?.code,
+      maybeError?.type,
+    )
+  }
+
+  return json as T
+}
+
+async function updateMetaObjectStatus(config: MetaConfig, body: Record<string, unknown>) {
+  const objectType = typeof body.objectType === 'string' ? body.objectType : ''
+  const objectId = typeof body.objectId === 'string' ? body.objectId.trim() : ''
+  const status = typeof body.status === 'string' ? body.status.toUpperCase() : ''
+
+  if (!['campaign', 'adset', 'ad'].includes(objectType)) {
+    throw new MetaApiError('Invalid object type. Use campaign, adset, or ad.', 400)
+  }
+
+  if (!objectId) {
+    throw new MetaApiError('Missing Meta object ID', 400)
+  }
+
+  if (status !== 'ACTIVE' && status !== 'PAUSED') {
+    throw new MetaApiError('Invalid status. Use ACTIVE or PAUSED.', 400)
+  }
+
+  const result = await graphPost<{ success?: boolean }>(config, `/${objectId}`, { status })
+
+  return {
+    ok: Boolean(result.success ?? true),
+    objectType,
+    objectId,
+    status,
+    checkedAt: new Date().toISOString(),
+    source: 'Meta Marketing API',
+  }
+}
+
 async function fetchMetaWorkspace(config: MetaConfig, datePreset: string) {
   const accountId = normalizeAdAccountId(config.adAccountId)
   const insightsParams = { fields: INSIGHT_FIELDS, date_preset: datePreset, limit: 500 }
@@ -770,6 +845,7 @@ function buildWorkspaceFromMeta(args: {
           campaignId: adSet.campaign_id ?? '',
           name: adSet.name,
           audience: summarizeTargeting(adSet.targeting),
+          deliveryStatus: isMetaActive(adSet.effective_status) ? 'active' : 'paused',
           budget: centsToCurrency(adSet.daily_budget || adSet.lifetime_budget),
           spend: metrics.spend,
           bookings: metrics.conversions,
@@ -817,17 +893,18 @@ function buildWorkspaceFromMeta(args: {
         const decision = metrics.spend > 0 && metrics.conversions === 0 ? 'pause' : metrics.roas >= 3 ? 'keep' : metrics.ctr < 0.7 ? 'reduceBudget' : 'keep'
         return {
           id: `meta-auto-${ad.id}`,
+          adId: ad.id,
           campaignId: ad.campaign_id ?? '',
           adName: ad.name,
           status: isMetaActive(ad.effective_status) ? 'active' : 'paused',
           recommendation: decision,
           reason: `Meta metrics: spend ${formatMoney(metrics.spend)}, ROAS ${metrics.roas.toFixed(2)}x, conversions ${formatNumber(metrics.conversions)}`,
-          guardrail: 'ยังเป็น read-only sync ต้องเปิด write execution แยกก่อนยิง Meta API จริง',
+          guardrail: 'ต้อง confirm ผ่าน UI ก่อนยิง Meta API เพื่อเปลี่ยนสถานะจริง',
           confidence: decision === 'keep' ? 72 : 82,
           risk: decision === 'pause' ? 'High' : decision === 'reduceBudget' ? 'Medium' : 'Low',
           before: `Status ${ad.effective_status} · Spend ${formatMoney(metrics.spend)}`,
-          after: decision === 'pause' ? 'Propose PAUSED in Meta Ads' : decision === 'reduceBudget' ? 'Propose budget reduction at ad set/campaign level' : 'Keep current delivery',
-          rollbackNote: 'ถ้าเปิด write execution ในอนาคต ต้องเก็บ previous status/budget ก่อน update',
+          after: decision === 'pause' ? 'Set ad status to PAUSED in Meta' : decision === 'reduceBudget' ? 'Review ad set/campaign budget manually' : 'Keep current delivery',
+          rollbackNote: 'ถ้า pause ผิด ให้กด Activate จาก Campaigns หรือ Ads Auto แล้ว sync เพื่อยืนยันผล',
           applied: false,
         }
       })
@@ -877,6 +954,7 @@ function buildCampaigns(rows: MetaCampaignRow[]): CampaignInsight[] {
         id: campaign.id,
         name: campaign.name,
         objective: campaign.objective ?? 'Meta Objective',
+        deliveryStatus: isMetaActive(campaign.effective_status) ? 'active' : 'paused',
         budget: centsToCurrency(campaign.daily_budget || campaign.lifetime_budget),
         spend: metrics.spend,
         revenue: metrics.revenue,

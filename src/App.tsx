@@ -27,7 +27,6 @@ import {
   Plug,
   Power,
   RefreshCw,
-  Rocket,
   Settings,
   ShieldCheck,
   Sparkles,
@@ -52,6 +51,7 @@ import {
 import './App.css'
 import type {
   AdDeliveryStatus,
+  AdSetInsight,
   AIInsight,
   AiInsightDrawerContext,
   AiStatus,
@@ -65,6 +65,8 @@ import type {
   ComplianceReview,
   MemoryCategory,
   MemoryItem,
+  MetaObjectStatus,
+  MetaObjectType,
   PerformanceDrilldown,
   RecommendedAction,
   RiskLevel,
@@ -128,7 +130,7 @@ const toolSections: ToolSection[] = [
     description: 'ระบบหลักของคลินิก',
     tabs: [
       { id: 'campaigns', label: 'Campaigns', description: 'จัดการ service campaign', icon: Zap },
-      { id: 'auto', label: 'AI Launch', description: 'เปิด ปิด และปรับ Ads ด้วย AI', icon: Rocket },
+      { id: 'auto', label: 'Ads Auto', description: 'เปิด ปิด และปรับ Ads ผ่าน Meta API', icon: Power },
     ],
   },
   {
@@ -146,7 +148,7 @@ const toolSections: ToolSection[] = [
     tabs: [
       { id: 'overview', label: 'Performance', description: 'ภาพรวมคลินิกและบริการ', icon: LineChart },
       { id: 'investigator', label: 'AI Insights', description: 'จัดอันดับ creative และ signal', icon: BarChart3 },
-      { id: 'actions', label: 'Winning Ads', description: 'Recommendation ที่รอ approve', icon: Trophy },
+      { id: 'actions', label: 'Action Queue', description: 'Recommendation ที่รอ approve', icon: ClipboardList },
     ],
   },
   {
@@ -189,14 +191,14 @@ const pageMeta: Record<TabId, { title: string; subtitle: string; icon: typeof Ba
     icon: BarChart3,
   },
   actions: {
-    title: 'Winning Ads',
+    title: 'Action Queue',
     subtitle: 'Recommended actions พร้อม approval, guardrail และ before/after',
-    icon: Trophy,
+    icon: ClipboardList,
   },
   auto: {
-    title: 'AI Launch',
-    subtitle: 'เปิด ปิด และปรับ Ads ด้วย AI ภายใต้ guardrails',
-    icon: Rocket,
+    title: 'Ads Auto',
+    subtitle: 'เปิด/ปิด Ads จาก Meta API ผ่าน approval และ guardrails',
+    icon: Power,
   },
   tasks: {
     title: 'Creative',
@@ -264,6 +266,31 @@ function autoDecisionTone(decision: AutoDecision) {
   if (decision === 'enable') return 'good'
   if (decision === 'reduceBudget') return 'watch'
   return 'scale'
+}
+
+function deliveryStatusLabel(status: AdDeliveryStatus) {
+  return status === 'active' ? 'ACTIVE' : 'PAUSED'
+}
+
+function deliveryStatusTone(status: AdDeliveryStatus) {
+  return status === 'active' ? 'good' : 'critical'
+}
+
+function nextDeliveryStatus(status: AdDeliveryStatus): AdDeliveryStatus {
+  return status === 'active' ? 'paused' : 'active'
+}
+
+function toMetaObjectStatus(status: AdDeliveryStatus): MetaObjectStatus {
+  return status === 'active' ? 'ACTIVE' : 'PAUSED'
+}
+
+function normalizeDeliveryStatus(status?: AdDeliveryStatus, spend = 0): AdDeliveryStatus {
+  if (status === 'active' || status === 'paused') return status
+  return spend > 0 ? 'active' : 'paused'
+}
+
+function autoAdObjectId(ad: AutoAdControl) {
+  return ad.adId || ad.id.replace(/^meta-auto-/, '')
 }
 
 function fallbackInsightForCampaign(campaign: CampaignInsight): AIInsight {
@@ -507,6 +534,57 @@ interface MetaCheckPayload {
   error?: string
 }
 
+interface DeliveryStatusChangeRequest {
+  objectType: MetaObjectType
+  objectId: string
+  targetName: string
+  currentStatus: AdDeliveryStatus
+  nextStatus: AdDeliveryStatus
+  summary: string
+  source: 'campaigns' | 'ads-auto'
+}
+
+interface MetaObjectStatusPayload {
+  ok: boolean
+  objectType: MetaObjectType
+  objectId: string
+  status: MetaObjectStatus
+  checkedAt: string
+  error?: string
+}
+
+type CampaignControlScope = MetaObjectType
+type InsightGroupBy = 'creative' | 'campaign' | 'adset' | 'ad' | 'service' | 'objective' | 'status'
+
+interface InsightTableRow {
+  id: string
+  kind: AiInsightDrawerContext['kind']
+  campaignId: string
+  title: string
+  subtitle: string
+  count: number
+  score: number
+  spend: number
+  clicks: number
+  ctr: number
+  results: number
+  costPerResult: number
+  purchaseValue: number
+  roas: number
+  tone: 'good' | 'watch' | 'critical'
+  thumbTone: string
+}
+
+const insightGroupOptions: Array<{ value: InsightGroupBy; label: string; description: string }> = [
+  { value: 'creative', label: 'Creative', description: 'Images / videos / angles' },
+  { value: 'campaign', label: 'Campaign', description: 'Meta campaign level' },
+  { value: 'adset', label: 'Ad Set', description: 'Audience and budget set' },
+  { value: 'ad', label: 'Ad', description: 'Single ad performance' },
+  { value: 'service', label: 'Service', description: 'Clinic service grouping' },
+  { value: 'objective', label: 'Objective', description: 'Meta objective grouping' },
+  { value: 'status', label: 'Status', description: 'ACTIVE / PAUSED grouping' },
+]
+
 function nowLabel() {
   return new Intl.DateTimeFormat('th-TH', {
     dateStyle: 'medium',
@@ -604,6 +682,11 @@ function App() {
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
   const [performanceDrilldown, setPerformanceDrilldown] = useState<PerformanceDrilldown | null>(null)
   const [aiInsightDrawer, setAiInsightDrawer] = useState<AiInsightDrawerContext | null>(null)
+  const [statusChangeRequest, setStatusChangeRequest] = useState<DeliveryStatusChangeRequest | null>(null)
+  const [statusChangeState, setStatusChangeState] = useState<{ running: boolean; error: string | null }>({
+    running: false,
+    error: null,
+  })
 
   const {
     campaigns,
@@ -744,6 +827,79 @@ function App() {
       },
       ...current,
     ])
+  }
+
+  const requestDeliveryStatusChange = (request: DeliveryStatusChangeRequest) => {
+    setStatusChangeState({ running: false, error: null })
+    setStatusChangeRequest(request)
+  }
+
+  const confirmDeliveryStatusChange = async () => {
+    if (!statusChangeRequest) return
+
+    setStatusChangeState({ running: true, error: null })
+    const metaStatus = toMetaObjectStatus(statusChangeRequest.nextStatus)
+
+    try {
+      const response = await fetch('/api/meta/object-status', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          objectType: statusChangeRequest.objectType,
+          objectId: statusChangeRequest.objectId,
+          status: metaStatus,
+        }),
+      })
+      const payload = (await response.json()) as Partial<MetaObjectStatusPayload>
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error || 'Meta status update failed')
+      }
+
+      const nextStatus = statusChangeRequest.nextStatus
+      setWorkspace((current) => ({
+        ...current,
+        campaigns: current.campaigns.map((campaign) =>
+          statusChangeRequest.objectType === 'campaign' && campaign.id === statusChangeRequest.objectId
+            ? { ...campaign, deliveryStatus: nextStatus }
+            : campaign,
+        ),
+        adSets: current.adSets.map((adSet) =>
+          statusChangeRequest.objectType === 'adset' && adSet.id === statusChangeRequest.objectId
+            ? { ...adSet, deliveryStatus: nextStatus }
+            : adSet,
+        ),
+        adInsights: current.adInsights.map((ad) =>
+          statusChangeRequest.objectType === 'ad' && ad.id === statusChangeRequest.objectId ? { ...ad, status: nextStatus } : ad,
+        ),
+        autoAds: current.autoAds.map((ad) =>
+          statusChangeRequest.objectType === 'ad' && autoAdObjectId(ad) === statusChangeRequest.objectId
+            ? { ...ad, status: nextStatus, applied: true }
+            : ad,
+        ),
+        auditTrail: [
+          {
+            id: `audit-meta-status-${Date.now()}`,
+            actor: statusChangeRequest.source === 'ads-auto' ? 'Ads Auto' : 'Current user',
+            action: `Meta ${statusChangeRequest.objectType} status ${metaStatus}`,
+            target: statusChangeRequest.targetName,
+            before: `Status ${deliveryStatusLabel(statusChangeRequest.currentStatus)}`,
+            after: `Status ${metaStatus}`,
+            reason: statusChangeRequest.summary,
+            timestamp: nowLabel(),
+          },
+          ...current.auditTrail,
+        ],
+        updatedAt: nowLabel(),
+      }))
+      setStatusChangeRequest(null)
+      setStatusChangeState({ running: false, error: null })
+      void handleSyncMetaWorkspace()
+    } catch (error) {
+      setStatusChangeState({
+        running: false,
+        error: error instanceof Error ? error.message : 'Meta status update failed',
+      })
+    }
   }
 
   const createPerformanceAction = (drilldown: PerformanceDrilldown) => {
@@ -1148,6 +1304,7 @@ function App() {
             adInsights={adInsights}
             onSelectCampaign={setSelectedCampaignId}
             onOpenAiDrawer={setAiInsightDrawer}
+            onRequestStatusChange={requestDeliveryStatusChange}
           />
         )}
         {activeTab === 'campaigns' && campaigns.length === 0 && (
@@ -1177,7 +1334,10 @@ function App() {
           <Investigator
             campaign={selectedCampaign}
             insight={selectedInsight}
+            campaigns={campaigns}
             insightComponents={insightComponents}
+            adSets={adSets}
+            adInsights={adInsights}
             onSelectCampaign={setSelectedCampaignId}
             onOpenAiDrawer={setAiInsightDrawer}
           />
@@ -1251,13 +1411,24 @@ function App() {
             mode={autoMode}
             ads={autoAds}
             onModeChange={setAutoMode}
-            onApply={(id) => setApprovalRequest({ kind: 'auto', id })}
+            onApply={(ad) => {
+              const nextStatus = ad.recommendation === 'enable' ? 'active' : 'paused'
+              requestDeliveryStatusChange({
+                objectType: 'ad',
+                objectId: autoAdObjectId(ad),
+                targetName: ad.adName,
+                currentStatus: normalizeDeliveryStatus(ad.status),
+                nextStatus,
+                summary: `${autoDecisionLabel(ad.recommendation)} · ${ad.reason}`,
+                source: 'ads-auto',
+              })
+            }}
           />
         )}
         {activeTab === 'auto' && autoAds.length === 0 && (
           <NoDataPanel
-            icon={Rocket}
-            title="ยังไม่มี AI Launch Actions"
+            icon={Power}
+            title="ยังไม่มี Ads Auto Actions"
             message="ระบบจะเสนอการเปิด ปิด หรือลดงบ ad-level จากข้อมูล ad จริงหลัง Sync Meta แล้วเท่านั้น"
             actionLabel="Open Settings"
             onAction={() => setActiveTab('settings')}
@@ -1403,6 +1574,16 @@ function App() {
           onConfirm={confirmApproval}
         />
       )}
+
+      {statusChangeRequest && (
+        <DeliveryStatusModal
+          request={statusChangeRequest}
+          running={statusChangeState.running}
+          error={statusChangeState.error}
+          onCancel={() => setStatusChangeRequest(null)}
+          onConfirm={confirmDeliveryStatusChange}
+        />
+      )}
     </div>
   )
 }
@@ -1446,7 +1627,7 @@ function AutoAdsPanel({
   mode: AutomationMode
   ads: AutoAdControl[]
   onModeChange: (mode: AutomationMode) => void
-  onApply: (id: string) => void
+  onApply: (ad: AutoAdControl) => void
 }) {
   const pendingCount = ads.filter((ad) => !ad.applied && ad.recommendation !== 'keep').length
   const activeCount = ads.filter((ad) => ad.status === 'active').length
@@ -1455,13 +1636,11 @@ function AutoAdsPanel({
   return (
     <section className="auto-grid">
       <div className="panel auto-hero">
-        <PanelHeader icon={Power} title="AI Auto Ads Control" meta="เปิด/ปิด Ads ภายใต้ approval" />
+        <PanelHeader icon={Power} title="Ads Auto Control" meta="Meta status execution" />
         <div className="auto-hero-content">
           <div>
-            <h2>ระบบช่วยตัดสินใจเปิด ปิด และลดงบ Ads</h2>
-            <p>
-              ใช้ AI ตรวจเงื่อนไขจาก performance workspace แล้วเสนอ action ระดับ ad ภายใต้ approval และ guardrails
-            </p>
+            <h2>Auto rules สำหรับเปิด/ปิด Ads จากข้อมูลจริง</h2>
+            <p>ระบบอ่าน performance จาก Meta แล้วเสนอ status action ระดับ ad ก่อนยิง Meta API ผ่าน confirmation</p>
           </div>
           <div className="mode-switch" aria-label="Automation mode">
             <button className={mode === 'suggest' ? 'active' : ''} type="button" onClick={() => onModeChange('suggest')}>
@@ -1504,49 +1683,54 @@ function AutoAdsPanel({
       </div>
 
       <div className="panel auto-list-panel">
-        <PanelHeader icon={Zap} title="AI Auto Recommendations" meta="ad-level decisions" />
+        <PanelHeader icon={Zap} title="Ads Auto Queue" meta="ad-level status decisions" />
         <div className="auto-list">
-          {ads.map((ad) => (
-            <article key={ad.id} className="auto-card">
-              <div className="auto-card-main">
-                <div className="auto-card-topline">
-                  <span className={`badge ${ad.status === 'active' ? 'good' : 'critical'}`}>
-                    {ad.status === 'active' ? 'ACTIVE' : 'PAUSED'}
-                  </span>
-                  <span className={`badge ${autoDecisionTone(ad.recommendation)}`}>
-                    {autoDecisionLabel(ad.recommendation)}
-                  </span>
-                  <span className={`badge ${riskClass(ad.risk)}`}>{ad.risk} risk</span>
+          {ads.map((ad) => {
+            const canRunStatusAction = ad.recommendation === 'pause' || ad.recommendation === 'enable'
+            return (
+              <article key={ad.id} className="auto-card">
+                <div className="auto-card-main">
+                  <div className="auto-card-topline">
+                    <span className={`badge ${ad.status === 'active' ? 'good' : 'critical'}`}>
+                      {ad.status === 'active' ? 'ACTIVE' : 'PAUSED'}
+                    </span>
+                    <span className={`badge ${autoDecisionTone(ad.recommendation)}`}>
+                      {autoDecisionLabel(ad.recommendation)}
+                    </span>
+                    <span className={`badge ${riskClass(ad.risk)}`}>{ad.risk} risk</span>
+                  </div>
+                  <h3>{ad.adName}</h3>
+                  <p>{ad.reason}</p>
+                  <div className="auto-guardrail">
+                    <ShieldCheck size={15} />
+                    <span>{ad.guardrail}</span>
+                  </div>
+                  <div className="snapshot-grid">
+                    <span>Before: {ad.before}</span>
+                    <span>After: {ad.after}</span>
+                  </div>
                 </div>
-                <h3>{ad.adName}</h3>
-                <p>{ad.reason}</p>
-                <div className="auto-guardrail">
-                  <ShieldCheck size={15} />
-                  <span>{ad.guardrail}</span>
+                <div className="confidence-ring">
+                  <span>{ad.confidence}%</span>
+                  <small>AI Confidence</small>
                 </div>
-                <div className="snapshot-grid">
-                  <span>Before: {ad.before}</span>
-                  <span>After: {ad.after}</span>
+                <div className="queue-actions">
+                  {ad.applied ? (
+                    <span className="badge good">Applied</span>
+                  ) : ad.recommendation === 'keep' ? (
+                    <span className="badge scale">Monitor only</span>
+                  ) : canRunStatusAction ? (
+                    <button className="approve-button" type="button" onClick={() => onApply(ad)}>
+                      <Check size={16} />
+                      {mode === 'suggest' ? 'Confirm status' : 'Run guarded'}
+                    </button>
+                  ) : (
+                    <span className="badge watch">Budget review</span>
+                  )}
                 </div>
-              </div>
-              <div className="confidence-ring">
-                <span>{ad.confidence}%</span>
-                <small>AI Confidence</small>
-              </div>
-              <div className="queue-actions">
-                {ad.applied ? (
-                  <span className="badge good">Applied</span>
-                ) : ad.recommendation === 'keep' ? (
-                  <span className="badge scale">Monitor only</span>
-                ) : (
-                  <button className="approve-button" type="button" onClick={() => onApply(ad.id)}>
-                    <Check size={16} />
-                    {mode === 'suggest' ? 'Apply locally' : 'Run guarded'}
-                  </button>
-                )}
-              </div>
-            </article>
-          ))}
+              </article>
+            )
+          })}
         </div>
       </div>
     </section>
@@ -2141,6 +2325,7 @@ function CampaignDetailPage({
   adInsights,
   onSelectCampaign,
   onOpenAiDrawer,
+  onRequestStatusChange,
 }: {
   selectedCampaignId: string
   campaigns: CampaignInsight[]
@@ -2148,8 +2333,10 @@ function CampaignDetailPage({
   adInsights: WorkspaceData['adInsights']
   onSelectCampaign: (id: string) => void
   onOpenAiDrawer: (context: AiInsightDrawerContext) => void
+  onRequestStatusChange: (request: DeliveryStatusChangeRequest) => void
 }) {
   const [selectedAdSetId, setSelectedAdSetId] = useState('')
+  const [controlScope, setControlScope] = useState<CampaignControlScope>('campaign')
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) ?? campaigns[0]
   const campaignAdSets = adSets.filter((adSet) => adSet.campaignId === selectedCampaign.id)
   const activeAdSetId = campaignAdSets.some((adSet) => adSet.id === selectedAdSetId)
@@ -2158,6 +2345,43 @@ function CampaignDetailPage({
   const campaignAds = adInsights.filter((ad) => ad.campaignId === selectedCampaign.id)
   const visibleAds = campaignAds.filter((ad) => !activeAdSetId || ad.adSetId === activeAdSetId)
   const activeAdSet = campaignAdSets.find((adSet) => adSet.id === activeAdSetId)
+  const campaignControlRows = campaigns.map((campaign) => ({
+    id: campaign.id,
+    objectType: 'campaign' as const,
+    name: campaign.name,
+    subtitle: campaign.objective,
+    status: normalizeDeliveryStatus(campaign.deliveryStatus, campaign.spend),
+    spend: campaign.spend,
+    roas: campaign.roas,
+    results: campaign.conversions,
+  }))
+  const adSetControlRows = campaignAdSets.map((adSet) => ({
+    id: adSet.id,
+    objectType: 'adset' as const,
+    name: adSet.name,
+    subtitle: adSet.audience,
+    status: normalizeDeliveryStatus(adSet.deliveryStatus, adSet.spend),
+    spend: adSet.spend,
+    roas: adSet.roas,
+    results: adSet.bookings,
+  }))
+  const adControlRows = visibleAds.map((ad) => ({
+    id: ad.id,
+    objectType: 'ad' as const,
+    name: ad.name,
+    subtitle: ad.creative,
+    status: normalizeDeliveryStatus(ad.status, ad.spend),
+    spend: ad.spend,
+    roas: ad.roas,
+    results: ad.bookings,
+  }))
+  const controlRows =
+    controlScope === 'campaign' ? campaignControlRows : controlScope === 'adset' ? adSetControlRows : adControlRows
+  const controlOptions = [
+    { id: 'campaign' as const, label: 'Campaigns', rows: campaignControlRows },
+    { id: 'adset' as const, label: 'Ad Sets', rows: adSetControlRows },
+    { id: 'ad' as const, label: 'Ads', rows: adControlRows },
+  ]
 
   return (
     <section className="campaign-detail-grid">
@@ -2179,6 +2403,9 @@ function CampaignDetailPage({
                 <span className={`status-dot ${meta.className}`} />
                 <strong>{campaign.name}</strong>
                 <small>{campaign.roas.toFixed(2)}x ROAS · {fmtMoney(campaign.cpa)} CPA</small>
+                <span className={`badge ${deliveryStatusTone(normalizeDeliveryStatus(campaign.deliveryStatus, campaign.spend))}`}>
+                  {deliveryStatusLabel(normalizeDeliveryStatus(campaign.deliveryStatus, campaign.spend))}
+                </span>
               </button>
             )
           })}
@@ -2190,6 +2417,9 @@ function CampaignDetailPage({
           <div>
             <span className={`badge ${statusMeta(selectedCampaign.aiStatus).className}`}>
               {statusMeta(selectedCampaign.aiStatus).label}
+            </span>
+            <span className={`badge ${deliveryStatusTone(normalizeDeliveryStatus(selectedCampaign.deliveryStatus, selectedCampaign.spend))}`}>
+              {deliveryStatusLabel(normalizeDeliveryStatus(selectedCampaign.deliveryStatus, selectedCampaign.spend))}
             </span>
             <h2>{selectedCampaign.name}</h2>
             <p>{selectedCampaign.aiSummary}</p>
@@ -2219,6 +2449,77 @@ function CampaignDetailPage({
           <MiniMetric label="CTR" value={`${selectedCampaign.ctr.toFixed(2)}%`} help={metricHelp.ctr} />
           <MiniMetric label="Frequency" value={selectedCampaign.frequency.toFixed(1)} help={metricHelp.frequency} />
         </div>
+
+        <div className="delivery-control-panel">
+          <div className="delivery-control-head">
+            <div>
+              <strong>Meta Delivery Control</strong>
+              <span>Campaign / Ad set / Ad status</span>
+            </div>
+            <div className="control-scope-tabs" aria-label="Delivery control scope">
+              {controlOptions.map((option) => {
+                const active = option.rows.filter((row) => row.status === 'active').length
+                return (
+                  <button
+                    key={option.id}
+                    className={controlScope === option.id ? 'active' : ''}
+                    type="button"
+                    onClick={() => setControlScope(option.id)}
+                    title={`${active}/${option.rows.length} active`}
+                  >
+                    <span>{option.label}</span>
+                    <strong>{active}/{option.rows.length}</strong>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="delivery-control-list">
+            {controlRows.length === 0 && (
+              <div className="empty-state table-empty-state">
+                <Database size={18} />
+                <strong>ยังไม่มีข้อมูลใน scope นี้</strong>
+                <p>กด Sync Meta เพื่อดึงรายการ Campaign, Ad set และ Ads ล่าสุด</p>
+              </div>
+            )}
+            {controlRows.map((row) => {
+              const nextStatus = nextDeliveryStatus(row.status)
+              return (
+                <article key={`${row.objectType}-${row.id}`} className="delivery-control-row">
+                  <div>
+                    <span className={`badge ${deliveryStatusTone(row.status)}`}>{deliveryStatusLabel(row.status)}</span>
+                    <strong>{row.name}</strong>
+                    <small>{row.subtitle}</small>
+                  </div>
+                  <div className="delivery-metrics">
+                    <span>{fmtMoney(row.spend)} spend</span>
+                    <span>{row.roas.toFixed(2)}x ROAS</span>
+                    <span>{fmtNum(row.results)} results</span>
+                  </div>
+                  <button
+                    className={nextStatus === 'active' ? 'approve-button' : 'reject-button'}
+                    type="button"
+                    onClick={() =>
+                      onRequestStatusChange({
+                        objectType: row.objectType,
+                        objectId: row.id,
+                        targetName: row.name,
+                        currentStatus: row.status,
+                        nextStatus,
+                        summary: `${nextStatus === 'active' ? 'Activate' : 'Pause'} ${row.name} จากหน้า Campaigns`,
+                        source: 'campaigns',
+                      })
+                    }
+                  >
+                    {nextStatus === 'active' ? <PlayCircle size={15} /> : <PauseCircle size={15} />}
+                    {nextStatus === 'active' ? 'Activate' : 'Pause'}
+                  </button>
+                </article>
+              )
+            })}
+          </div>
+        </div>
       </div>
 
       <div className="panel adset-panel">
@@ -2241,6 +2542,9 @@ function CampaignDetailPage({
                 onClick={() => setSelectedAdSetId(adSet.id)}
               >
                 <span className={`badge ${meta.className}`}>{meta.label}</span>
+                <span className={`badge ${deliveryStatusTone(normalizeDeliveryStatus(adSet.deliveryStatus, adSet.spend))}`}>
+                  {deliveryStatusLabel(normalizeDeliveryStatus(adSet.deliveryStatus, adSet.spend))}
+                </span>
                 <strong>{adSet.name}</strong>
                 <small>{adSet.audience}</small>
                 <div>
@@ -2270,12 +2574,13 @@ function CampaignDetailPage({
                 <th>Show-up</th>
                 <th>ROAS</th>
                 <th>Score</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
               {visibleAds.length === 0 && (
                 <tr className="empty-row">
-                  <td colSpan={10}>
+                  <td colSpan={11}>
                     <div className="empty-state table-empty-state">
                       <ImageIcon size={18} />
                       <strong>ยังไม่มี Ads detail สำหรับ campaign นี้</strong>
@@ -2316,6 +2621,31 @@ function CampaignDetailPage({
                   <td>{ad.showRate}%</td>
                   <td>{ad.roas.toFixed(2)}x</td>
                   <td>{ad.score.toFixed(1)}</td>
+                  <td>
+                    {(() => {
+                      const currentStatus = normalizeDeliveryStatus(ad.status, ad.spend)
+                      const nextStatus = nextDeliveryStatus(currentStatus)
+                      return (
+                        <button
+                          className={nextStatus === 'active' ? 'mini-control-button good' : 'mini-control-button critical'}
+                          type="button"
+                          onClick={() =>
+                            onRequestStatusChange({
+                              objectType: 'ad',
+                              objectId: ad.id,
+                              targetName: ad.name,
+                              currentStatus,
+                              nextStatus,
+                              summary: `${nextStatus === 'active' ? 'Activate' : 'Pause'} ad จาก Ads table`,
+                              source: 'campaigns',
+                            })
+                          }
+                        >
+                          {nextStatus === 'active' ? 'Activate' : 'Pause'}
+                        </button>
+                      )
+                    })()}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2622,7 +2952,7 @@ function SettingsPage({
           </div>
           <div>
             <span>Write execution</span>
-            <strong>disabled</strong>
+            <strong>confirm-only</strong>
           </div>
         </div>
         {metaSync.error && <div className="data-notice critical">{metaSync.error}</div>}
@@ -2668,6 +2998,10 @@ function SettingsPage({
             <span>ตรวจ /me, ad account และ insights read โดยไม่ sync ข้อมูลเข้า workspace</span>
           </div>
           <div>
+            <strong>POST /api/meta/object-status</strong>
+            <span>เปลี่ยนสถานะ Campaign, Ad set หรือ Ad เป็น ACTIVE/PAUSED ผ่าน confirmation ในเว็บ</span>
+          </div>
+          <div>
             <strong>GET /api/meta/workspace</strong>
             <span>ดึง Meta dataset และ map เป็นข้อมูลทั้ง Dashboard</span>
           </div>
@@ -2678,7 +3012,7 @@ function SettingsPage({
         <PanelHeader icon={ShieldCheck} title="Security Guardrails" meta="internal use" />
         <div className="settings-guardrails">
           <Signal icon={ShieldCheck} text="Token ไม่ถูกเก็บใน browser" tone="good" help="เมื่อกด Save token จะถูกส่งไป server และไม่ถูกบันทึกใน localStorage" />
-          <Signal icon={Power} text="Write execution ยังปิดไว้" tone="watch" help="approve/action ในเว็บยังไม่ยิง Meta API จริงจนกว่าจะเพิ่ม write connector และ guardrail" />
+          <Signal icon={Power} text="Write execution ต้อง confirm ก่อนทุกครั้ง" tone="watch" help="การเปลี่ยนสถานะ Campaign, Ad set และ Ad จะยิง Meta API หลังผู้ใช้กด confirm เท่านั้น" />
           <Signal icon={FileClock} text="ทุก sync เขียน Audit Log" tone="good" help="เมื่อ sync สำเร็จ workspace จะมี audit event ระบุ account และจำนวน records" />
         </div>
       </div>
@@ -2934,7 +3268,7 @@ function ApprovalModal({
 
         <div className="approval-warning">
           <ShieldCheck size={16} />
-          <span>การอนุมัตินี้จะบันทึกสถานะและ audit ใน workspace ก่อนเชื่อมต่อ execution API จริง</span>
+          <span>การอนุมัตินี้บันทึก Action Queue และ Audit ใน workspace; ถ้าต้องเปลี่ยนสถานะ Meta ให้ใช้ Campaigns หรือ Ads Auto</span>
         </div>
 
         <div className="approval-actions">
@@ -2945,6 +3279,73 @@ function ApprovalModal({
           <button className="approve-button" type="button" onClick={onConfirm}>
             <Check size={16} />
             Confirm approval
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function DeliveryStatusModal({
+  request,
+  running,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  request: DeliveryStatusChangeRequest
+  running: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const nextStatus = toMetaObjectStatus(request.nextStatus)
+  const objectLabel = request.objectType === 'adset' ? 'Ad Set' : request.objectType === 'ad' ? 'Ad' : 'Campaign'
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="status-change-title">
+        <div className="approval-modal-header">
+          <div>
+            <span className="badge scale">Meta Execution</span>
+            <h2 id="status-change-title">
+              {nextStatus === 'ACTIVE' ? 'Activate' : 'Pause'} {objectLabel}
+            </h2>
+            <p>{request.targetName}</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close status modal" onClick={onCancel} disabled={running}>
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="approval-checklist">
+          <div>
+            <span className={`badge ${deliveryStatusTone(request.currentStatus)}`}>{deliveryStatusLabel(request.currentStatus)}</span>
+            <strong>Current</strong>
+            <p>สถานะก่อนยิงคำสั่ง Meta API</p>
+          </div>
+          <div>
+            <span className={`badge ${deliveryStatusTone(request.nextStatus)}`}>{nextStatus}</span>
+            <strong>Next</strong>
+            <p>{request.summary}</p>
+          </div>
+        </div>
+
+        <div className="approval-warning">
+          <ShieldCheck size={16} />
+          <span>คำสั่งนี้จะยิง Meta Marketing API จริง ต้องใช้ token ที่มีสิทธิ์ ads_management และระบบจะ sync ข้อมูลหลังสำเร็จ</span>
+        </div>
+
+        {error && <div className="data-notice critical">{error}</div>}
+
+        <div className="approval-actions">
+          <button className="reject-button" type="button" onClick={onCancel} disabled={running}>
+            <X size={16} />
+            Cancel
+          </button>
+          <button className="approve-button" type="button" onClick={onConfirm} disabled={running}>
+            <Check size={16} />
+            {running ? 'Running...' : `Confirm ${nextStatus}`}
           </button>
         </div>
       </section>
@@ -3097,20 +3498,229 @@ function InfoHint({ text }: { text: string }) {
   )
 }
 
+function insightScore(roas: number, ctr: number, results: number, spend: number) {
+  const roasScore = Math.min(roas * 1.6, 5)
+  const ctrScore = Math.min(ctr * 0.7, 2)
+  const resultScore = Math.min(results / 20, 2)
+  const noResultPenalty = spend > 0 && results === 0 ? 1 : 0
+  return Math.round(Math.max(0, Math.min(10, 2 + roasScore + ctrScore + resultScore - noResultPenalty)) * 10) / 10
+}
+
+function insightTone(roas: number, spend: number): InsightTableRow['tone'] {
+  if (roas >= 2.5) return 'good'
+  if (spend > 0 && roas < 1.2) return 'critical'
+  return 'watch'
+}
+
+function makeInsightRow(input: {
+  id: string
+  kind: AiInsightDrawerContext['kind']
+  campaignId: string
+  title: string
+  subtitle: string
+  count: number
+  spend: number
+  clicks: number
+  ctr: number
+  results: number
+  purchaseValue: number
+  score?: number
+  thumbTone?: string
+}): InsightTableRow {
+  const roas = safeDivide(input.purchaseValue, input.spend)
+  const score = input.score ?? insightScore(roas, input.ctr, input.results, input.spend)
+  return {
+    ...input,
+    score,
+    costPerResult: safeDivide(input.spend, input.results),
+    roas,
+    tone: insightTone(roas, input.spend),
+    thumbTone: input.thumbTone ?? 'blue',
+  }
+}
+
+function aggregateInsightGroup(
+  id: string,
+  title: string,
+  subtitle: string,
+  rows: InsightTableRow[],
+  thumbTone: string,
+  kind: AiInsightDrawerContext['kind'] = 'creative',
+) {
+  const spend = rows.reduce((sum, row) => sum + row.spend, 0)
+  const clicks = rows.reduce((sum, row) => sum + row.clicks, 0)
+  const results = rows.reduce((sum, row) => sum + row.results, 0)
+  const purchaseValue = rows.reduce((sum, row) => sum + row.purchaseValue, 0)
+  const weightedCtr = safeDivide(rows.reduce((sum, row) => sum + row.ctr * row.clicks, 0), clicks)
+  return makeInsightRow({
+    id,
+    kind,
+    campaignId: rows[0]?.campaignId ?? '',
+    title,
+    subtitle,
+    count: rows.reduce((sum, row) => sum + row.count, 0),
+    spend,
+    clicks,
+    ctr: weightedCtr,
+    results,
+    purchaseValue,
+    thumbTone,
+  })
+}
+
+function buildInsightRows(args: {
+  groupBy: InsightGroupBy
+  campaigns: CampaignInsight[]
+  adSets: AdSetInsight[]
+  adInsights: WorkspaceData['adInsights']
+  insightComponents: WorkspaceData['insightComponents']
+}): InsightTableRow[] {
+  const thumbTones = ['blue', 'violet', 'teal', 'green', 'amber', 'navy', 'orange']
+  const adRows = args.adInsights.map((ad, index) =>
+    makeInsightRow({
+      id: `ad-${ad.id}`,
+      kind: 'ad',
+      campaignId: ad.campaignId,
+      title: ad.name,
+      subtitle: `${ad.creative} · ${deliveryStatusLabel(ad.status)}`,
+      count: 1,
+      spend: ad.spend,
+      clicks: ad.clicks,
+      ctr: ad.ctr,
+      results: ad.bookings,
+      purchaseValue: ad.spend * ad.roas,
+      score: ad.score,
+      thumbTone: thumbTones[index % thumbTones.length],
+    }),
+  )
+
+  if (args.groupBy === 'ad') return adRows.sort((a, b) => b.spend - a.spend)
+
+  if (args.groupBy === 'creative') {
+    return args.insightComponents
+      .map((component) =>
+        makeInsightRow({
+          id: component.id,
+          kind: 'creative',
+          campaignId: component.campaignId,
+          title: component.title,
+          subtitle: `${component.ads} ads · ${component.service}`,
+          count: component.ads,
+          spend: component.spend,
+          clicks: component.clicks,
+          ctr: component.ctr,
+          results: component.results,
+          purchaseValue: component.purchaseValue,
+          score: component.score,
+          thumbTone: component.thumbTone,
+        }),
+      )
+      .sort((a, b) => b.spend - a.spend)
+  }
+
+  if (args.groupBy === 'campaign') {
+    return args.campaigns
+      .map((campaign, index) => {
+        const ads = adRows.filter((ad) => ad.campaignId === campaign.id)
+        const clicks = ads.reduce((sum, ad) => sum + ad.clicks, 0)
+        const ctr = clicks > 0 ? safeDivide(ads.reduce((sum, ad) => sum + ad.ctr * ad.clicks, 0), clicks) : campaign.ctr
+        return makeInsightRow({
+          id: `campaign-${campaign.id}`,
+          kind: 'campaign',
+          campaignId: campaign.id,
+          title: campaign.name,
+          subtitle: `${campaign.objective} · ${deliveryStatusLabel(normalizeDeliveryStatus(campaign.deliveryStatus, campaign.spend))}`,
+          count: Math.max(ads.length, 1),
+          spend: campaign.spend,
+          clicks,
+          ctr,
+          results: campaign.conversions,
+          purchaseValue: campaign.revenue,
+          thumbTone: thumbTones[index % thumbTones.length],
+        })
+      })
+      .sort((a, b) => b.spend - a.spend)
+  }
+
+  if (args.groupBy === 'adset') {
+    return args.adSets
+      .map((adSet, index) => {
+        const ads = adRows.filter((ad) => args.adInsights.find((source) => source.id === ad.id.replace(/^ad-/, ''))?.adSetId === adSet.id)
+        const clicks = ads.reduce((sum, ad) => sum + ad.clicks, 0)
+        const purchaseValue = adSet.spend * adSet.roas
+        return makeInsightRow({
+          id: `adset-${adSet.id}`,
+          kind: 'creative',
+          campaignId: adSet.campaignId,
+          title: adSet.name,
+          subtitle: `${adSet.audience} · ${deliveryStatusLabel(normalizeDeliveryStatus(adSet.deliveryStatus, adSet.spend))}`,
+          count: Math.max(ads.length, 1),
+          spend: adSet.spend,
+          clicks,
+          ctr: safeDivide(ads.reduce((sum, ad) => sum + ad.ctr * ad.clicks, 0), clicks),
+          results: adSet.bookings,
+          purchaseValue,
+          thumbTone: thumbTones[index % thumbTones.length],
+        })
+      })
+      .sort((a, b) => b.spend - a.spend)
+  }
+
+  const groupMap = new Map<string, InsightTableRow[]>()
+  const addGroup = (key: string, row: InsightTableRow) => {
+    groupMap.set(key, [...(groupMap.get(key) ?? []), row])
+  }
+
+  if (args.groupBy === 'service') {
+    for (const row of buildInsightRows({ ...args, groupBy: 'creative' })) {
+      const parts = row.subtitle.split(' · ')
+      addGroup(parts[parts.length - 1] || 'Service', row)
+    }
+  } else if (args.groupBy === 'objective') {
+    for (const row of buildInsightRows({ ...args, groupBy: 'campaign' })) addGroup(row.subtitle.split(' · ')[0] || 'Objective', row)
+  } else if (args.groupBy === 'status') {
+    for (const row of adRows) addGroup(row.subtitle.includes('ACTIVE') ? 'ACTIVE' : 'PAUSED', row)
+  }
+
+  return Array.from(groupMap.entries())
+    .map(([key, rows], index) =>
+      aggregateInsightGroup(
+        `${args.groupBy}-${key}`,
+        key,
+        `${rows.length} grouped records`,
+        rows,
+        thumbTones[index % thumbTones.length],
+      ),
+    )
+    .sort((a, b) => b.spend - a.spend)
+}
+
 function Investigator({
   campaign,
   insight,
+  campaigns,
   insightComponents,
+  adSets,
+  adInsights,
   onSelectCampaign,
   onOpenAiDrawer,
 }: {
   campaign: CampaignInsight
   insight: AIInsight
+  campaigns: CampaignInsight[]
   insightComponents: WorkspaceData['insightComponents']
+  adSets: WorkspaceData['adSets']
+  adInsights: WorkspaceData['adInsights']
   onSelectCampaign: (id: string) => void
   onOpenAiDrawer: (context: AiInsightDrawerContext) => void
 }) {
-  const totals = insightComponents.reduce(
+  const [groupBy, setGroupBy] = useState<InsightGroupBy>('creative')
+  const insightRows = useMemo(
+    () => buildInsightRows({ groupBy, campaigns, adSets, adInsights, insightComponents }),
+    [adInsights, adSets, campaigns, groupBy, insightComponents],
+  )
+  const activeGroup = insightGroupOptions.find((option) => option.value === groupBy) ?? insightGroupOptions[0]
+  const totals = insightRows.reduce(
     (summary, component) => ({
       spend: summary.spend + component.spend,
       clicks: summary.clicks + component.clicks,
@@ -3120,7 +3730,7 @@ function Investigator({
     { spend: 0, clicks: 0, results: 0, purchaseValue: 0 },
   )
   const totalCtr = safeDivide(
-    insightComponents.reduce((sum, component) => sum + component.ctr * component.clicks, 0),
+    insightRows.reduce((sum, component) => sum + component.ctr * component.clicks, 0),
     totals.clicks,
   )
   const totalCostPerResult = safeDivide(totals.spend, totals.results)
@@ -3132,17 +3742,24 @@ function Investigator({
         <div className="insights-toolbar">
           <div className="group-control">
             <span>Group By</span>
-            <button className="group-select" type="button" aria-label="Group by creative">
+            <label className="group-select" aria-label="Group by insights">
               <ImageIcon size={20} />
               <span>
-                <strong>Creative</strong>
-                <small>Images and videos</small>
+                <strong>{activeGroup.label}</strong>
+                <small>{activeGroup.description}</small>
               </span>
+              <select value={groupBy} onChange={(event) => setGroupBy(event.target.value as InsightGroupBy)}>
+                {insightGroupOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
               <ChevronDown size={16} />
-            </button>
+            </label>
           </div>
           <div className="insight-toolbar-actions">
-            <span>{insightComponents.length} creatives</span>
+            <span>{insightRows.length} rows</span>
           </div>
         </div>
 
@@ -3153,7 +3770,7 @@ function Investigator({
                 <th aria-label="Select">
                   <input className="row-check" type="checkbox" aria-label="Select all creatives" />
                 </th>
-                <MetricTh label="Creative" help="Creative/ad component ที่จัดกลุ่มจากรูปภาพ วิดีโอ หรือ angle เดียวกัน" />
+                <MetricTh label={activeGroup.label} help="เลือก Group By เพื่อดู performance ระดับ Creative, Campaign, Ad set, Ad, Service, Objective หรือ Status" />
                 <MetricTh label="Score" help="AI score รวมจาก ROAS, CTR, cost/result และ lead quality" />
                 <MetricTh label="Spend" help={metricHelp.adSpend} />
                 <MetricTh label="Clicks" help="จำนวนคลิกจาก creative ใช้คู่กับ CTR และ CPC เพื่อวัด hook" />
@@ -3165,7 +3782,7 @@ function Investigator({
               </tr>
             </thead>
             <tbody>
-              {insightComponents.length === 0 && (
+              {insightRows.length === 0 && (
                 <tr className="empty-row">
                   <td colSpan={10}>
                     <div className="empty-state table-empty-state">
@@ -3176,7 +3793,7 @@ function Investigator({
                   </td>
                 </tr>
               )}
-              {insightComponents.map((component) => (
+              {insightRows.map((component) => (
                 <tr
                   key={component.id}
                   className={campaign.id === component.campaignId ? 'selected-row' : ''}
@@ -3186,7 +3803,7 @@ function Investigator({
                       kind: 'creative',
                       campaignId: component.campaignId,
                       title: component.title,
-                      subtitle: `${component.ads} ads · ${component.service} · Score ${component.score.toFixed(1)}`,
+                      subtitle: `${component.subtitle} · Score ${component.score.toFixed(1)}`,
                     })
                   }}
                 >
@@ -3211,9 +3828,9 @@ function Investigator({
                           {component.title}
                         </button>
                         <span className="creative-meta">
-                          {component.ads} ads
+                          {component.count} items
                           <ImageIcon size={13} />
-                          {component.service}
+                          {component.subtitle}
                         </span>
                       </div>
                     </div>
@@ -3242,7 +3859,7 @@ function Investigator({
             <tfoot>
               <tr>
                 <td />
-                <td>Total ({insightComponents.length} creatives)</td>
+                <td>Total ({insightRows.length} rows)</td>
                 <td>—</td>
                 <td>{fmtMoney(totals.spend)}</td>
                 <td>{fmtNum(totals.clicks)}</td>
