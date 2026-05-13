@@ -7,7 +7,7 @@ The topbar date range control is now a compact branded control with a visible `A
 The Performance page now renders from live Meta data for `maximum` / all-time ranges and groups metrics into business-readable categories.
 The backend proxy now tolerates later Meta paging failures after a valid first page, preventing large all-time pulls from failing the whole workspace.
 Latest deployment pass made the app production-runnable with a Node server that serves `dist/` and preserves `/api/meta/*`.
-Latest temporary deployment pass exposes the production server through a localtunnel HTTPS URL protected by Basic Auth.
+Latest temporary deployment pass exposes the production server through a Cloudflare Quick Tunnel HTTPS URL protected by Basic Auth.
 Latest GitHub pass installed/enabled the GitHub plugin, initialized the project as a local git repository, created commits, and added GitHub/MCP setup notes.
 
 ## Current Architecture
@@ -142,14 +142,16 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
 - Production `/api/meta/workspace?datePreset=maximum` returned 30 campaigns, 36 ad sets, 115 ads, 500 trend rows, and funnel/channel metrics.
 - Production bundle was created and inspected; token file is not included.
 - Temporary production server is running on local port `4174` with Basic Auth.
-- Temporary tunnel is running through localtunnel:
-  - URL: `https://salty-maps-shake.loca.lt`
+- Temporary tunnel is running through Cloudflare Quick Tunnel:
+  - URL: `https://connecticut-willing-networks-organ.trycloudflare.com`
   - Basic Auth user: `pmc`
   - Basic Auth password was generated for this temporary session.
   - No-auth request returns `401`.
   - Authenticated `/` returns `200`.
   - Authenticated `/api/meta/status` returns configured/connected and masks ad account.
-  - Localtunnel log: `/tmp/pmc-ads-agent-localtunnel.log`.
+  - Cloudflare tunnel log: `/tmp/pmc-ads-agent-cloudflare.log`.
+  - `cloudflared` binary was downloaded to `/tmp/pmc-cloudflared/cloudflared`; it is not installed system-wide.
+  - GitHub push is blocked until a GitHub browser login/PAT/repository access is available. Safari and the in-app browser were not logged into GitHub; Codex GitHub plugin is authenticated as `natthaphonchop2-creator` but has no installed account/repository access and no create-repo tool.
 - Source search found no app-owned records from the old development dataset.
 - Browser QA confirms support/chat button count is 0, workspace selector opens Settings, theme toggles to dark mode, and date preset can change to `last_7d`.
 - Meta API check passes for `/me`, ad account, and insights read using the imported local config.
@@ -172,4 +174,4 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
 
 ## Next Recommended Step
 
-Next step: create or provide a GitHub repository URL, then add it as `origin` and push `main`. If using Codex GitHub plugin, install/authorize the GitHub App for an account/repository first.
+Next step: create or provide a GitHub repository URL, then add it as `origin` and push `main`. If using Codex GitHub plugin, install/authorize the GitHub App for an account/repository first. Temporary web demo is available through the Cloudflare URL while the local machine and screen sessions remain running.
