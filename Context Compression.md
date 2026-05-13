@@ -9,7 +9,9 @@ The backend proxy now tolerates later Meta paging failures after a valid first p
 Latest deployment pass made the app production-runnable with a Node server that serves `dist/` and preserves `/api/meta/*`.
 Latest temporary deployment pass exposes the production server through a Cloudflare Quick Tunnel HTTPS URL protected by Basic Auth.
 Latest GitHub pass installed/enabled the GitHub plugin, initialized the project as a local git repository, created commits, and added GitHub/MCP setup notes.
-Latest GitHub connection test confirms the Codex GitHub connector now sees `natthaphonchop2-creator`, created a private GitHub repo, and has admin/push permission on it. Terminal `git push` is still blocked until GitHub CLI or SSH is authorized locally.
+Latest GitHub connection test confirms the Codex GitHub connector now sees `natthaphonchop2-creator`, created a private GitHub repo, and has admin/push permission on it.
+Latest GitHub CLI pass completed OAuth login, merged the remote README bootstrap commit into local history, and pushed `main` to GitHub.
+Latest deployment check confirms the existing Cloudflare Quick Tunnel is still online. Cloudflare permanent tunnel/DNS route is not configured yet because `cloudflared` has no origin certificate locally and the Cloudflare account dashboard currently shows no added site/domain.
 
 ## Current Architecture
 
@@ -41,7 +43,9 @@ Latest GitHub connection test confirms the Codex GitHub connector now sees `natt
 - GitHub repo created: `https://github.com/natthaphonchop2-creator/pmc-ads-agent` as a private repository.
 - Local git remote `origin` points to `https://github.com/natthaphonchop2-creator/pmc-ads-agent.git`.
 - A temporary local GitHub CLI binary was downloaded to `/tmp/pmc-gh-cli/gh/gh_2.92.0_macOS_arm64/bin/gh`; it is not installed system-wide.
-- GitHub CLI auth is not complete. Running `gh auth login` will create a persistent OAuth token, so the user must authorize that step before terminal push can proceed.
+- GitHub CLI auth is complete for `natthaphonchop2-creator` and credentials are stored in the macOS keyring.
+- Local branch `main` tracks `origin/main`.
+- Current pushed GitHub commit after merge: `9b1163bab9b148d9ab6e3c4a80bd6e4bcaf21151`.
 
 ## Files Changed In This Pass
 
@@ -122,6 +126,7 @@ Latest GitHub connection test confirms the Codex GitHub connector now sees `natt
 - `Context Compression.md`
   - Rewritten to reflect the current live-data-only state.
   - Updated after GitHub reconnection test with repo, connector, CLI, and push-blocker status.
+  - Updated after successful GitHub CLI login, merge, push, and Cloudflare deploy-readiness check.
 
 - `src/assets/` and `src/data/`
   - Removed unused starter assets and the now-empty data folder.
@@ -142,9 +147,13 @@ Latest GitHub connection test confirms the Codex GitHub connector now sees `natt
 - GitHub repo `natthaphonchop2-creator/pmc-ads-agent` was created in Chrome as a private repository.
 - GitHub connector created the first remote commit `be0aef5251020aa33711d2ffd07e47ac8556a26f` containing `README.md`.
 - Local `origin` remote is set to `https://github.com/natthaphonchop2-creator/pmc-ads-agent.git`.
-- Terminal `git push -u origin main` failed with `could not read Username for 'https://github.com': Device not configured`, because there is no local GitHub HTTPS credential yet.
 - GitHub CLI v2.92.0 was downloaded from the official `cli/cli` GitHub release to `/tmp/pmc-gh-cli/.../gh`.
-- `gh auth status` reports no logged-in GitHub hosts.
+- `gh auth status` now reports logged in to `github.com` as `natthaphonchop2-creator` through keyring, protocol `https`.
+- `gh auth setup-git` completed.
+- `git fetch origin main` succeeded.
+- `git merge origin/main --allow-unrelated-histories` created merge commit `9b1163b Merge remote GitHub bootstrap`.
+- `git push -u origin main` succeeded and set tracking to `origin/main`.
+- `git ls-remote --heads origin main` confirms remote `main` at `9b1163bab9b148d9ab6e3c4a80bd6e4bcaf21151`.
 - Local git repo created with commits:
   - `1e42b62 Initial PMC Ads Agent dashboard`
   - `52787f4 Add GitHub setup notes and MCP example`
@@ -164,7 +173,8 @@ Latest GitHub connection test confirms the Codex GitHub connector now sees `natt
   - Authenticated `/api/meta/status` returns configured/connected and masks ad account.
   - Cloudflare tunnel log: `/tmp/pmc-ads-agent-cloudflare.log`.
   - `cloudflared` binary was downloaded to `/tmp/pmc-cloudflared/cloudflared`; it is not installed system-wide.
-  - GitHub terminal push is blocked until GitHub CLI OAuth or SSH access is authorized locally. The connector itself now has repo access, but it cannot provide credentials to local `git`.
+  - `cloudflared tunnel list` currently fails because there is no origin cert at the default local paths.
+  - Cloudflare dashboard account `Natthaphon.chop2@gmail.com's Account` is logged in, but the account overview shows `Your sites` with `Add a domain`, and `Tunnels` count is `0`.
 - Source search found no app-owned records from the old development dataset.
 - Browser QA confirms support/chat button count is 0, workspace selector opens Settings, theme toggles to dark mode, and date preset can change to `last_7d`.
 - Meta API check passes for `/me`, ad account, and insights read using the imported local config.
@@ -187,4 +197,4 @@ Latest GitHub connection test confirms the Codex GitHub connector now sees `natt
 
 ## Next Recommended Step
 
-Next step: authorize GitHub CLI with `gh auth login` or add an SSH deploy key/account key, then run `git push -u origin main`. After the source is pushed, continue with permanent deployment. Temporary web demo is still available through the Cloudflare URL while the local machine and screen sessions remain running.
+Next step: choose permanent deployment route. For a true hosted app, use a Node-capable host such as Render/Railway and set `APP_BASIC_AUTH_PASSWORD`, `META_ACCESS_TOKEN`, and `META_AD_ACCOUNT_ID` as host secrets. For a Cloudflare/domain route that keeps the Meta token local, authorize `cloudflared tunnel login`, create a named tunnel, add a domain/zone, and route DNS to local port `4174`. Temporary web demo is still available through the Cloudflare URL while the local machine and screen sessions remain running.
