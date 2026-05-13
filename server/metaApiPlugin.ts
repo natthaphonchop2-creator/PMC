@@ -1,0 +1,1278 @@
+import { readFile, rm, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import type { Plugin } from 'vite'
+import type {
+  AdInsight,
+  AgentTask,
+  AIInsight,
+  AppointmentStage,
+  AuditEvent,
+  AutoAdControl,
+  CampaignInsight,
+  ChannelPerformance,
+  ComplianceReview,
+  FunnelMetric,
+  InsightComponent,
+  MemoryItem,
+  RecommendedAction,
+  ServiceLine,
+  WorkspaceData,
+} from '../src/types'
+
+const GRAPH_HOST = 'https://graph.facebook.com'
+const DEFAULT_GRAPH_VERSION = 'v21.0'
+const DEFAULT_DATE_PRESET = 'last_30d'
+const DEFAULT_MAX_PAGES = 6
+const LOCAL_CONFIG_FILE = resolve(process.cwd(), '.meta-api.local.json')
+
+const INSIGHT_FIELDS = [
+  'spend',
+  'impressions',
+  'clicks',
+  'ctr',
+  'cpc',
+  'cpm',
+  'reach',
+  'frequency',
+  'actions',
+  'action_values',
+  'cost_per_action_type',
+  'purchase_roas',
+].join(',')
+
+const PURCHASE_ACTION_TYPES = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase']
+const LEAD_ACTION_TYPES = [
+  'lead',
+  'omni_lead',
+  'onsite_conversion.lead_grouped',
+  'offsite_conversion.fb_pixel_lead',
+  'onsite_conversion.messaging_conversation_started_7d',
+  'contact',
+]
+const BOOKING_ACTION_TYPES = [
+  'schedule',
+  'offsite_conversion.fb_pixel_schedule',
+  'complete_registration',
+  'offsite_conversion.fb_pixel_complete_registration',
+  'submit_application',
+]
+
+interface MetaApiPluginEnv {
+  [key: string]: string | undefined
+}
+
+interface MetaConfig {
+  accessToken: string
+  adAccountId: string
+  graphVersion: string
+  defaultDatePreset: string
+  maxPages: number
+  source: 'web-settings' | 'server-env'
+}
+
+interface PersistedMetaConfig {
+  accessToken: string
+  adAccountId: string
+  graphVersion?: string
+  defaultDatePreset?: string
+  maxPages?: number
+  savedAt?: string
+}
+
+interface MetaUserProfile {
+  id: string
+  name: string
+}
+
+interface MetaAdAccountInfo {
+  id: string
+  account_id: string
+  name: string
+  currency: string
+  account_status: number
+  amount_spent?: string
+  balance?: string
+  timezone_name?: string
+}
+
+interface MetaActionValue {
+  action_type: string
+  value: string
+}
+
+interface MetaInsightsRow {
+  date_start?: string
+  date_stop?: string
+  spend?: string
+  impressions?: string
+  clicks?: string
+  ctr?: string
+  cpc?: string
+  cpm?: string
+  reach?: string
+  frequency?: string
+  actions?: MetaActionValue[]
+  action_values?: MetaActionValue[]
+  cost_per_action_type?: MetaActionValue[]
+  purchase_roas?: MetaActionValue[]
+}
+
+interface MetaCampaignRow {
+  id: string
+  name: string
+  status: string
+  effective_status: string
+  objective?: string
+  daily_budget?: string
+  lifetime_budget?: string
+  start_time?: string
+  stop_time?: string
+  insights?: { data: MetaInsightsRow[] }
+}
+
+interface MetaAdSetRow {
+  id: string
+  name: string
+  campaign_id?: string
+  status: string
+  effective_status: string
+  daily_budget?: string
+  lifetime_budget?: string
+  optimization_goal?: string
+  billing_event?: string
+  targeting?: {
+    age_min?: number
+    age_max?: number
+    genders?: number[]
+    publisher_platforms?: string[]
+    facebook_positions?: string[]
+    instagram_positions?: string[]
+  }
+  insights?: { data: MetaInsightsRow[] }
+}
+
+interface MetaAdRow {
+  id: string
+  name: string
+  adset_id?: string
+  campaign_id?: string
+  status: string
+  effective_status: string
+  creative?: { id: string; name?: string; thumbnail_url?: string }
+  insights?: { data: MetaInsightsRow[] }
+}
+
+interface MetricSummary {
+  spend: number
+  revenue: number
+  roas: number
+  cpa: number
+  ctr: number
+  cpc: number
+  cpm: number
+  impressions: number
+  reach: number
+  clicks: number
+  leads: number
+  bookings: number
+  purchases: number
+  conversions: number
+  frequency: number
+}
+
+interface MetaApiRequest {
+  url?: string
+  method?: string
+  on: (event: string, callback: (chunk?: Buffer) => void) => void
+}
+
+interface MetaApiResponse {
+  statusCode: number
+  setHeader: (key: string, value: string) => void
+  end: (body: string) => void
+}
+
+class MetaApiError extends Error {
+  status: number
+  fbCode?: number
+  fbType?: string
+
+  constructor(message: string, status: number, fbCode?: number, fbType?: string) {
+    super(message)
+    this.name = 'MetaApiError'
+    this.status = status
+    this.fbCode = fbCode
+    this.fbType = fbType
+  }
+}
+
+export function createMetaApiPlugin(env: MetaApiPluginEnv): Plugin {
+  return {
+    name: 'clinicstellar-meta-api',
+    configureServer(server) {
+      server.middlewares.use(createMetaApiMiddleware(env))
+    },
+  }
+}
+
+export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
+  return async (req: MetaApiRequest, res: MetaApiResponse, next: () => void = () => undefined) => {
+    if (!req.url?.startsWith('/api/meta/')) {
+      next()
+      return
+    }
+
+    try {
+      const requestUrl = new URL(req.url, 'http://localhost')
+      const config = await readMetaConfig(env)
+
+      if (requestUrl.pathname === '/api/meta/status') {
+        writeJson(res, 200, {
+          configured: Boolean(config),
+          connected: Boolean(config),
+          graphVersion: config?.graphVersion ?? env.META_GRAPH_VERSION ?? DEFAULT_GRAPH_VERSION,
+          adAccountId: config ? maskAdAccountId(config.adAccountId) : null,
+          datePreset: config?.defaultDatePreset ?? DEFAULT_DATE_PRESET,
+          source: 'Meta Marketing API',
+          settingsSource: config?.source ?? null,
+          tokenLocation: config?.source === 'web-settings' ? 'server-local-file' : 'server-env',
+          canEditInWeb: true,
+          requiredEnv: await buildConfigChecks(env),
+        })
+        return
+      }
+
+      if (requestUrl.pathname === '/api/meta/config') {
+        if (req.method === 'GET') {
+          writeJson(res, 200, await getConfigState(env))
+          return
+        }
+
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const existing = await readLocalConfig()
+          const nextConfig = normalizeSubmittedConfig(body, existing)
+          if (!nextConfig.accessToken || !nextConfig.adAccountId) {
+            writeJson(res, 400, {
+              ok: false,
+              error: 'กรุณาใส่ Access Token และ Ad Account ID',
+              checkedAt: new Date().toISOString(),
+              checks: [
+                {
+                  key: 'accessToken',
+                  label: 'Access Token',
+                  status: nextConfig.accessToken ? 'pass' : 'fail',
+                  detail: nextConfig.accessToken ? 'ready' : 'ต้องใส่ token หรือมี token saved อยู่แล้ว',
+                },
+                {
+                  key: 'adAccountId',
+                  label: 'Ad Account ID',
+                  status: nextConfig.adAccountId ? 'pass' : 'fail',
+                  detail: nextConfig.adAccountId ? 'ready' : 'ใส่ได้ทั้ง act_123 หรือ 123',
+                },
+              ],
+            })
+            return
+          }
+
+          await saveLocalConfig(nextConfig)
+          const savedConfig = await readMetaConfig(env)
+          if (!savedConfig) {
+            writeJson(res, 500, { ok: false, error: 'ไม่สามารถโหลด config ที่บันทึกแล้วได้' })
+            return
+          }
+
+          const result = await checkMetaConnection(savedConfig)
+          writeJson(res, 200, {
+            ...result,
+            configured: true,
+            settingsSource: savedConfig.source,
+          })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          await clearLocalConfig()
+          writeJson(res, 200, await getConfigState(env))
+          return
+        }
+
+        writeJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (requestUrl.pathname === '/api/meta/check') {
+        if (!config) {
+          writeJson(res, 400, {
+            ok: false,
+            checkedAt: new Date().toISOString(),
+            error: 'Meta API ยังไม่ได้ตั้งค่า กรุณาใส่ META_ACCESS_TOKEN และ META_AD_ACCOUNT_ID ใน .env',
+            checks: (await buildConfigChecks(env)).map((item) => ({
+              key: item.key,
+              label: item.key,
+              status: item.present ? 'pass' : item.source.includes('optional') ? 'warn' : 'fail',
+              detail: item.present ? 'configured' : item.help,
+            })),
+          })
+          return
+        }
+
+        const result = await checkMetaConnection(config)
+        writeJson(res, 200, result)
+        return
+      }
+
+      if (requestUrl.pathname === '/api/meta/workspace') {
+        if (!config) {
+          writeJson(res, 400, {
+            error: 'Meta API ยังไม่ได้ตั้งค่า กรุณาใส่ META_ACCESS_TOKEN และ META_AD_ACCOUNT_ID ใน .env',
+          })
+          return
+        }
+
+        const datePreset = requestUrl.searchParams.get('datePreset') || config.defaultDatePreset
+        const result = await fetchMetaWorkspace(config, datePreset)
+        writeJson(res, 200, result)
+        return
+      }
+
+      writeJson(res, 404, { error: 'Unknown Meta API endpoint' })
+    } catch (error) {
+      const status = error instanceof MetaApiError ? error.status : 500
+      writeJson(res, status, {
+        error: error instanceof Error ? error.message : 'Unknown Meta API error',
+        fbCode: error instanceof MetaApiError ? error.fbCode : undefined,
+        fbType: error instanceof MetaApiError ? error.fbType : undefined,
+      })
+    }
+  }
+}
+
+async function readMetaConfig(env: MetaApiPluginEnv): Promise<MetaConfig | null> {
+  const localConfig = await readLocalConfig()
+  if (localConfig?.accessToken && localConfig.adAccountId) {
+    return {
+      accessToken: localConfig.accessToken.trim(),
+      adAccountId: normalizeAdAccountId(localConfig.adAccountId),
+      graphVersion: (localConfig.graphVersion || env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
+      defaultDatePreset: (localConfig.defaultDatePreset || env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
+      maxPages: Number(localConfig.maxPages || env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
+      source: 'web-settings',
+    }
+  }
+
+  const accessToken = env.META_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || ''
+  const adAccountId = env.META_AD_ACCOUNT_ID || process.env.META_AD_ACCOUNT_ID || ''
+  if (!accessToken.trim() || !adAccountId.trim()) return null
+
+  return {
+    accessToken: accessToken.trim(),
+    adAccountId: normalizeAdAccountId(adAccountId),
+    graphVersion: (env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
+    defaultDatePreset: (env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
+    maxPages: Number(env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
+    source: 'server-env',
+  }
+}
+
+async function getConfigState(env: MetaApiPluginEnv) {
+  const localConfig = await readLocalConfig()
+  const config = await readMetaConfig(env)
+  return {
+    configured: Boolean(config),
+    settingsSource: config?.source ?? null,
+    hasSavedToken: Boolean(localConfig?.accessToken),
+    adAccountId: localConfig?.adAccountId ?? (config?.source === 'server-env' ? config.adAccountId : ''),
+    graphVersion: localConfig?.graphVersion ?? config?.graphVersion ?? DEFAULT_GRAPH_VERSION,
+    datePreset: localConfig?.defaultDatePreset ?? config?.defaultDatePreset ?? DEFAULT_DATE_PRESET,
+    maxPages: localConfig?.maxPages ?? config?.maxPages ?? DEFAULT_MAX_PAGES,
+    requiredEnv: await buildConfigChecks(env),
+  }
+}
+
+async function readLocalConfig(): Promise<PersistedMetaConfig | null> {
+  try {
+    const raw = await readFile(LOCAL_CONFIG_FILE, 'utf-8')
+    const parsed = JSON.parse(raw) as PersistedMetaConfig
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+async function saveLocalConfig(config: PersistedMetaConfig) {
+  await writeFile(
+    LOCAL_CONFIG_FILE,
+    JSON.stringify(
+      {
+        ...config,
+        adAccountId: normalizeAdAccountId(config.adAccountId),
+        savedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    'utf-8',
+  )
+}
+
+async function clearLocalConfig() {
+  await rm(LOCAL_CONFIG_FILE, { force: true })
+}
+
+function normalizeSubmittedConfig(body: Record<string, unknown>, existing: PersistedMetaConfig | null): PersistedMetaConfig {
+  const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string).trim() : '')
+  const accessToken = text('accessToken') || existing?.accessToken || ''
+  const adAccountId = text('adAccountId') || existing?.adAccountId || ''
+  const graphVersion = text('graphVersion') || existing?.graphVersion || DEFAULT_GRAPH_VERSION
+  const defaultDatePreset = text('datePreset') || text('defaultDatePreset') || existing?.defaultDatePreset || DEFAULT_DATE_PRESET
+  const maxPagesValue = Number(body.maxPages || existing?.maxPages || DEFAULT_MAX_PAGES)
+
+  return {
+    accessToken,
+    adAccountId,
+    graphVersion,
+    defaultDatePreset,
+    maxPages: Number.isFinite(maxPagesValue) ? Math.max(1, Math.min(20, Math.round(maxPagesValue))) : DEFAULT_MAX_PAGES,
+  }
+}
+
+async function buildConfigChecks(env: MetaApiPluginEnv) {
+  const read = (key: string) => env[key] || process.env[key] || ''
+  const localConfig = await readLocalConfig()
+  const source = localConfig?.accessToken ? 'web settings' : 'server .env'
+  const optionalSource = localConfig ? 'web settings optional' : 'server .env optional'
+  return [
+    {
+      key: 'META_ACCESS_TOKEN',
+      present: Boolean(localConfig?.accessToken || read('META_ACCESS_TOKEN').trim()),
+      source,
+      help: 'ต้องเป็น token ที่มี ads_read สำหรับอ่าน insights',
+    },
+    {
+      key: 'META_AD_ACCOUNT_ID',
+      present: Boolean(localConfig?.adAccountId || read('META_AD_ACCOUNT_ID').trim()),
+      source,
+      help: 'ใส่ได้ทั้ง act_123 หรือ 123',
+    },
+    {
+      key: 'META_GRAPH_VERSION',
+      present: Boolean(localConfig?.graphVersion || read('META_GRAPH_VERSION').trim()),
+      source: optionalSource,
+      help: `ไม่ใส่จะใช้ ${DEFAULT_GRAPH_VERSION}`,
+    },
+    {
+      key: 'META_DATE_PRESET',
+      present: Boolean(localConfig?.defaultDatePreset || read('META_DATE_PRESET').trim()),
+      source: optionalSource,
+      help: `ไม่ใส่จะใช้ ${DEFAULT_DATE_PRESET}`,
+    },
+  ]
+}
+
+function readJsonBody(req: { on: (event: string, callback: (chunk?: Buffer) => void) => void }): Promise<Record<string, unknown>> {
+  return new Promise((resolveBody, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk?: Buffer) => {
+      if (chunk) chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf-8')
+        resolveBody(raw ? (JSON.parse(raw) as Record<string, unknown>) : {})
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error('Invalid JSON body'))
+      }
+    })
+    req.on('error', () => reject(new Error('Request body read failed')))
+  })
+}
+
+async function checkMetaConnection(config: MetaConfig) {
+  const startedAt = Date.now()
+  const [userResult, accountResult, insightsResult] = await Promise.all([
+    settled(graphGet<MetaUserProfile>(config, '/me', { fields: 'id,name' })),
+    settled(graphGet<MetaAdAccountInfo>(config, `/${config.adAccountId}`, {
+      fields: 'id,account_id,name,currency,account_status,timezone_name',
+    })),
+    settled(graphGet<{ data?: MetaInsightsRow[] }>(config, `/${config.adAccountId}/insights`, {
+      fields: 'spend,impressions,clicks',
+      date_preset: config.defaultDatePreset,
+      limit: 1,
+    })),
+  ])
+  const ok = Boolean(userResult.data && accountResult.data && insightsResult.data)
+
+  return {
+    ok,
+    checkedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt,
+    graphVersion: config.graphVersion,
+    datePreset: config.defaultDatePreset,
+    adAccountId: maskAdAccountId(config.adAccountId),
+    user: userResult.data ? { id: userResult.data.id, name: userResult.data.name } : null,
+    account: accountResult.data
+      ? {
+          id: accountResult.data.id,
+          account_id: accountResult.data.account_id,
+          name: accountResult.data.name,
+          currency: accountResult.data.currency,
+          account_status: accountResult.data.account_status,
+          timezone_name: accountResult.data.timezone_name,
+        }
+      : null,
+    checks: [
+      {
+        key: 'env',
+        label: 'Server env',
+        status: 'pass',
+        detail: 'META_ACCESS_TOKEN และ META_AD_ACCOUNT_ID ถูกโหลดจาก server แล้ว',
+      },
+      {
+        key: 'user',
+        label: '/me',
+        status: userResult.data ? 'pass' : 'fail',
+        detail: userResult.data ? `Token owner: ${userResult.data.name}` : userResult.error,
+      },
+      {
+        key: 'account',
+        label: 'Ad account',
+        status: accountResult.data ? 'pass' : 'fail',
+        detail: accountResult.data ? `${accountResult.data.name} (${accountResult.data.currency})` : accountResult.error,
+      },
+      {
+        key: 'insights',
+        label: 'Insights read',
+        status: insightsResult.data ? 'pass' : 'fail',
+        detail: insightsResult.data ? `อ่าน insights ด้วย ${config.defaultDatePreset} ได้` : insightsResult.error,
+      },
+    ],
+  }
+}
+
+async function settled<T>(promise: Promise<T>): Promise<{ data: T | null; error: string }> {
+  try {
+    return { data: await promise, error: '' }
+  } catch (error) {
+    return { data: null, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+function writeJson(res: { statusCode: number; setHeader: (key: string, value: string) => void; end: (body: string) => void }, status: number, body: unknown) {
+  res.statusCode = status
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.end(JSON.stringify(body))
+}
+
+function normalizeAdAccountId(id: string) {
+  const trimmed = id.trim()
+  return trimmed.startsWith('act_') ? trimmed : `act_${trimmed}`
+}
+
+function maskAdAccountId(id: string) {
+  const clean = id.replace(/^act_/, '')
+  if (clean.length <= 4) return `act_${clean}`
+  return `act_${clean.slice(0, 2)}...${clean.slice(-4)}`
+}
+
+async function graphGet<T>(config: MetaConfig, path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+  const url = new URL(`${GRAPH_HOST}/${config.graphVersion}${path}`)
+  url.searchParams.set('access_token', config.accessToken)
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) url.searchParams.set(key, String(value))
+  }
+
+  const response = await fetch(url)
+  const json = await response.json().catch(() => ({}))
+  const maybeError = (json as { error?: { message?: string; code?: number; type?: string } }).error
+
+  if (!response.ok || maybeError) {
+    throw new MetaApiError(
+      maybeError?.message || `Meta API request failed (${response.status})`,
+      response.status,
+      maybeError?.code,
+      maybeError?.type,
+    )
+  }
+
+  return json as T
+}
+
+async function graphGetAllPages<T>(config: MetaConfig, path: string, params: Record<string, string | number | undefined> = {}): Promise<T[]> {
+  const firstPage = await graphGet<{ data?: T[]; paging?: { next?: string } }>(config, path, params)
+  const records = [...(firstPage.data ?? [])]
+  let nextUrl = firstPage.paging?.next
+  let pages = 1
+
+  while (nextUrl && pages < config.maxPages) {
+    try {
+      const response = await fetch(nextUrl)
+      const json = (await response.json().catch(() => ({}))) as { data?: T[]; paging?: { next?: string }; error?: { message?: string } }
+      if (!response.ok || json.error) {
+        if (records.length > 0) break
+        throw new MetaApiError(json.error?.message || 'Meta API paging request failed', response.status)
+      }
+      if (!json.data?.length) break
+      records.push(...json.data)
+      nextUrl = json.paging?.next
+      pages += 1
+    } catch (error) {
+      if (records.length > 0) break
+      throw error
+    }
+  }
+
+  return records
+}
+
+async function fetchMetaWorkspace(config: MetaConfig, datePreset: string) {
+  const accountId = normalizeAdAccountId(config.adAccountId)
+  const insightsParams = { fields: INSIGHT_FIELDS, date_preset: datePreset, limit: 500 }
+  const inlineInsights = `insights.date_preset(${datePreset}){${INSIGHT_FIELDS}}`
+
+  const [user, account, accountInsights, timeSeries, campaigns, adSets, ads] = await Promise.all([
+    graphGet<MetaUserProfile>(config, '/me', { fields: 'id,name' }),
+    graphGet<MetaAdAccountInfo>(config, `/${accountId}`, {
+      fields: 'id,account_id,name,currency,account_status,amount_spent,balance,timezone_name',
+    }),
+    graphGet<{ data?: MetaInsightsRow[] }>(config, `/${accountId}/insights`, insightsParams),
+    graphGet<{ data?: MetaInsightsRow[] }>(config, `/${accountId}/insights`, {
+      ...insightsParams,
+      time_increment: 1,
+    }),
+    graphGetAllPages<MetaCampaignRow>(config, `/${accountId}/campaigns`, {
+      fields: [
+        'id',
+        'name',
+        'status',
+        'effective_status',
+        'objective',
+        'daily_budget',
+        'lifetime_budget',
+        'start_time',
+        'stop_time',
+        inlineInsights,
+      ].join(','),
+      limit: 100,
+    }),
+    graphGetAllPages<MetaAdSetRow>(config, `/${accountId}/adsets`, {
+      fields: [
+        'id',
+        'name',
+        'campaign_id',
+        'status',
+        'effective_status',
+        'daily_budget',
+        'lifetime_budget',
+        'optimization_goal',
+        'billing_event',
+        'targeting',
+        inlineInsights,
+      ].join(','),
+      limit: 100,
+    }),
+    graphGetAllPages<MetaAdRow>(config, `/${accountId}/ads`, {
+      fields: ['id', 'name', 'adset_id', 'campaign_id', 'status', 'effective_status', 'creative{id,name,thumbnail_url}', inlineInsights].join(','),
+      limit: 100,
+    }),
+  ])
+
+  const workspace = buildWorkspaceFromMeta({
+    user,
+    account,
+    accountInsight: accountInsights.data?.[0] ?? null,
+    timeSeries: timeSeries.data ?? [],
+    campaigns,
+    adSets,
+    ads,
+    datePreset,
+    graphVersion: config.graphVersion,
+  })
+
+  return {
+    workspace,
+    meta: {
+      user,
+      account,
+      datePreset,
+      graphVersion: config.graphVersion,
+      fetchedAt: new Date().toISOString(),
+      counts: {
+        campaigns: campaigns.length,
+        adSets: adSets.length,
+        ads: ads.length,
+        timeSeries: timeSeries.data?.length ?? 0,
+      },
+      source: 'Meta Marketing API',
+    },
+  }
+}
+
+function buildWorkspaceFromMeta(args: {
+  user: MetaUserProfile
+  account: MetaAdAccountInfo
+  accountInsight: MetaInsightsRow | null
+  timeSeries: MetaInsightsRow[]
+  campaigns: MetaCampaignRow[]
+  adSets: MetaAdSetRow[]
+  ads: MetaAdRow[]
+  datePreset: string
+  graphVersion: string
+}): WorkspaceData {
+  const accountMetrics = metricFromInsight(args.accountInsight)
+  const campaigns = buildCampaigns(args.campaigns)
+  const adSets = buildAdSets(args.adSets)
+  const adInsights = buildAdInsights(args.ads)
+  const insightComponents = buildInsightComponents(args.ads)
+  const channelPerformance = buildChannelPerformance(accountMetrics)
+
+  return {
+    campaigns,
+    serviceLines: buildServiceLines(campaigns),
+    appointmentStages: buildAppointmentStages(accountMetrics),
+    complianceReviews: buildComplianceReviews(args.ads),
+    insights: buildAiInsights(campaigns),
+    insightComponents,
+    adSets,
+    adInsights,
+    actions: buildRecommendedActions(campaigns),
+    autoAds: buildAutoAds(args.ads),
+    tasks: buildAgentTasks(campaigns),
+    memoryItems: buildMemoryItems(args.user, args.account, args.datePreset, args.graphVersion),
+    auditTrail: buildAuditTrail(args.user, args.account, campaigns.length, adSets.length, adInsights.length),
+    trendData: args.timeSeries.map((row) => {
+      const metrics = metricFromInsight(row)
+      return {
+        date: row.date_start ?? row.date_stop ?? '-',
+        spend: metrics.spend,
+        revenue: metrics.revenue,
+        cpa: metrics.cpa,
+        clicks: metrics.clicks,
+        leads: metrics.leads,
+        bookings: metrics.conversions,
+        showUps: metrics.purchases,
+        treatments: metrics.purchases,
+      }
+    }),
+    channelPerformance,
+    funnelMetrics: buildFunnelMetrics(accountMetrics),
+    autoMode: 'suggest',
+    updatedAt: `Meta sync ${formatNow()}`,
+  }
+
+  function buildAdSets(rows: MetaAdSetRow[]) {
+    return rows
+      .map((adSet): WorkspaceData['adSets'][number] => {
+        const metrics = metricFromInsight(adSet.insights?.data?.[0])
+        return {
+          id: adSet.id,
+          campaignId: adSet.campaign_id ?? '',
+          name: adSet.name,
+          audience: summarizeTargeting(adSet.targeting),
+          budget: centsToCurrency(adSet.daily_budget || adSet.lifetime_budget),
+          spend: metrics.spend,
+          bookings: metrics.conversions,
+          cpa: metrics.cpa,
+          roas: metrics.roas,
+          status: statusFromMetrics(metrics, adSet.effective_status),
+        }
+      })
+      .sort((a, b) => b.spend - a.spend)
+  }
+
+  function buildAdInsights(rows: MetaAdRow[]): AdInsight[] {
+    return rows
+      .map((ad) => {
+        const metrics = metricFromInsight(ad.insights?.data?.[0])
+        return {
+          id: ad.id,
+          campaignId: ad.campaign_id ?? '',
+          adSetId: ad.adset_id ?? '',
+          name: ad.name,
+          creative: ad.creative?.name || ad.creative?.id || 'Meta creative',
+          status: isMetaActive(ad.effective_status) ? ('active' as const) : ('paused' as const),
+          spend: metrics.spend,
+          impressions: metrics.impressions,
+          clicks: metrics.clicks,
+          leads: metrics.leads,
+          bookings: metrics.conversions,
+          showRate: round1(safeRate(metrics.purchases, metrics.conversions || metrics.leads)),
+          ctr: metrics.ctr,
+          cpc: metrics.cpc,
+          roas: metrics.roas,
+          score: scoreFromMetrics(metrics),
+        }
+      })
+      .sort((a, b) => b.spend - a.spend)
+  }
+
+  function buildAutoAds(rows: MetaAdRow[]): AutoAdControl[] {
+    return rows
+      .slice()
+      .sort((a, b) => metricFromInsight(b.insights?.data?.[0]).spend - metricFromInsight(a.insights?.data?.[0]).spend)
+      .slice(0, 12)
+      .map((ad) => {
+        const metrics = metricFromInsight(ad.insights?.data?.[0])
+        const decision = metrics.spend > 0 && metrics.conversions === 0 ? 'pause' : metrics.roas >= 3 ? 'keep' : metrics.ctr < 0.7 ? 'reduceBudget' : 'keep'
+        return {
+          id: `meta-auto-${ad.id}`,
+          campaignId: ad.campaign_id ?? '',
+          adName: ad.name,
+          status: isMetaActive(ad.effective_status) ? 'active' : 'paused',
+          recommendation: decision,
+          reason: `Meta metrics: spend ${formatMoney(metrics.spend)}, ROAS ${metrics.roas.toFixed(2)}x, conversions ${formatNumber(metrics.conversions)}`,
+          guardrail: 'ยังเป็น read-only sync ต้องเปิด write execution แยกก่อนยิง Meta API จริง',
+          confidence: decision === 'keep' ? 72 : 82,
+          risk: decision === 'pause' ? 'High' : decision === 'reduceBudget' ? 'Medium' : 'Low',
+          before: `Status ${ad.effective_status} · Spend ${formatMoney(metrics.spend)}`,
+          after: decision === 'pause' ? 'Propose PAUSED in Meta Ads' : decision === 'reduceBudget' ? 'Propose budget reduction at ad set/campaign level' : 'Keep current delivery',
+          rollbackNote: 'ถ้าเปิด write execution ในอนาคต ต้องเก็บ previous status/budget ก่อน update',
+          applied: false,
+        }
+      })
+  }
+
+  function buildInsightComponents(rows: MetaAdRow[]): InsightComponent[] {
+    const sourceRows = rows.map((ad) => {
+      const metrics = metricFromInsight(ad.insights?.data?.[0])
+      return {
+        id: ad.id,
+        campaignId: ad.campaign_id ?? '',
+        title: ad.name,
+        service: inferService(ad.name),
+        ads: 1,
+        metrics,
+      }
+    })
+
+    return sourceRows
+      .sort((a, b) => b.metrics.spend - a.metrics.spend)
+      .slice(0, 20)
+      .map((row, index) => ({
+        id: `meta-component-${row.id}`,
+        campaignId: row.campaignId,
+        title: row.title,
+        service: row.service,
+        ads: row.ads,
+        score: scoreFromMetrics(row.metrics),
+        spend: row.metrics.spend,
+        clicks: row.metrics.clicks,
+        ctr: row.metrics.ctr,
+        results: row.metrics.conversions,
+        costPerResult: row.metrics.cpa,
+        purchaseValue: row.metrics.revenue,
+        roas: row.metrics.roas,
+        tone: row.metrics.roas >= 2.5 ? 'good' : row.metrics.roas < 1.2 && row.metrics.spend > 0 ? 'critical' : 'watch',
+        thumbTone: ['blue', 'violet', 'teal', 'green', 'amber'][index % 5],
+      }))
+  }
+}
+
+function buildCampaigns(rows: MetaCampaignRow[]): CampaignInsight[] {
+  return rows
+    .map((campaign) => {
+      const metrics = metricFromInsight(campaign.insights?.data?.[0])
+      return {
+        id: campaign.id,
+        name: campaign.name,
+        objective: campaign.objective ?? 'Meta Objective',
+        budget: centsToCurrency(campaign.daily_budget || campaign.lifetime_budget),
+        spend: metrics.spend,
+        revenue: metrics.revenue,
+        roas: metrics.roas,
+        cpa: metrics.cpa,
+        ctr: metrics.ctr,
+        conversions: metrics.conversions,
+        frequency: metrics.frequency,
+        aiStatus: statusFromMetrics(metrics, campaign.effective_status),
+        aiSummary: summaryFromMetrics(metrics, campaign.effective_status),
+      } satisfies CampaignInsight
+    })
+    .sort((a, b) => b.spend - a.spend)
+}
+
+function buildServiceLines(campaigns: CampaignInsight[]): ServiceLine[] {
+  const groups = new Map<string, { category: string; campaigns: CampaignInsight[] }>()
+  for (const campaign of campaigns) {
+    const service = inferService(campaign.name)
+    const category = inferServiceCategory(campaign.name, campaign.objective)
+    const current = groups.get(service) ?? { category, campaigns: [] }
+    current.campaigns.push(campaign)
+    groups.set(service, current)
+  }
+
+  return Array.from(groups.entries()).map(([service, group], index) => {
+    const spend = group.campaigns.reduce((sum, campaign) => sum + campaign.spend, 0)
+    const revenue = group.campaigns.reduce((sum, campaign) => sum + campaign.revenue, 0)
+    const bookings = group.campaigns.reduce((sum, campaign) => sum + campaign.conversions, 0)
+    const avgStatus = group.campaigns.some((campaign) => campaign.aiStatus === 'critical')
+      ? 'critical'
+      : group.campaigns.some((campaign) => campaign.aiStatus === 'watch')
+        ? 'watch'
+        : group.campaigns.some((campaign) => campaign.aiStatus === 'scaling')
+          ? 'scaling'
+          : 'healthy'
+
+    return {
+      id: `meta-service-${index + 1}`,
+      name: service,
+      category: group.category,
+      revenue,
+      bookings,
+      showRate: 0,
+      closeRate: 0,
+      cpa: safeDivide(spend, bookings),
+      aiStatus: avgStatus,
+    }
+  })
+}
+
+function buildChannelPerformance(metrics: MetricSummary): ChannelPerformance[] {
+  if (!hasMetricActivity(metrics)) return []
+
+  return [
+    {
+      channel: 'Meta Ads',
+      spend: metrics.spend,
+      impressions: metrics.impressions,
+      reach: metrics.reach,
+      clicks: metrics.clicks,
+      leads: metrics.leads,
+      bookings: metrics.conversions,
+      showUps: metrics.purchases,
+      treatments: metrics.purchases,
+      firstTimePatients: metrics.purchases,
+      revenue: metrics.revenue,
+      leadQuality: Math.round(Math.min(100, Math.max(0, safeRate(metrics.conversions || metrics.purchases, metrics.leads || metrics.clicks) + Math.min(metrics.roas * 12, 50)))),
+    },
+  ]
+}
+
+function buildAppointmentStages(metrics: MetricSummary): AppointmentStage[] {
+  if (!hasMetricActivity(metrics)) return []
+
+  const stages = [
+    { id: 'impressions', label: 'Impressions', count: metrics.impressions, previous: metrics.impressions, note: 'Meta delivery' },
+    { id: 'clicks', label: 'Clicks', count: metrics.clicks, previous: metrics.impressions, note: 'Meta link/click events' },
+    { id: 'leads', label: 'Leads', count: metrics.leads, previous: metrics.clicks, note: 'Meta lead actions' },
+    { id: 'booked', label: 'Tracked Bookings', count: metrics.bookings, previous: metrics.leads, note: 'Schedule/registration events' },
+    { id: 'paid', label: 'Purchases', count: metrics.purchases, previous: metrics.bookings || metrics.leads, note: 'Purchase conversion events' },
+  ]
+
+  return stages.map((stage) => {
+    const rate = stage.id === 'impressions' ? 100 : safeRate(stage.count, stage.previous)
+    return {
+      id: stage.id,
+      label: stage.label,
+      count: stage.count,
+      rate: stage.id === 'value' ? formatMoney(metrics.revenue) : `${round1(rate)}%`,
+      note: stage.note,
+      status: rate === 0 && stage.id !== 'value' ? 'critical' : rate < 5 && stage.id !== 'impressions' ? 'watch' : 'healthy',
+    }
+  })
+}
+
+function buildFunnelMetrics(metrics: MetricSummary): FunnelMetric[] {
+  if (!hasMetricActivity(metrics)) return []
+
+  const stages = [
+    { stage: 'Impressions', count: metrics.impressions, previous: metrics.impressions, help: 'จำนวนครั้งที่โฆษณาถูกแสดงจาก Meta' },
+    { stage: 'Clicks', count: metrics.clicks, previous: metrics.impressions, help: 'จำนวน click จาก Meta ใช้วัด creative และ hook' },
+    { stage: 'Leads', count: metrics.leads, previous: metrics.clicks, help: 'Lead actions ที่ Meta ส่งกลับจาก pixel/form/message events' },
+    { stage: 'Bookings', count: metrics.bookings || metrics.conversions, previous: metrics.leads || metrics.clicks, help: 'Schedule/registration/purchase actions ที่ใช้แทน booking ใน Meta dataset' },
+    { stage: 'Paid', count: metrics.purchases, previous: metrics.bookings || metrics.leads || metrics.clicks, help: 'Purchase conversions และ conversion value จาก Meta' },
+  ]
+
+  return stages.map((stage) => {
+    const conversionRate = stage.stage === 'Impressions' ? 100 : round1(safeRate(stage.count, stage.previous))
+    return {
+      stage: stage.stage,
+      count: stage.count,
+      conversionRate,
+      dropOffRate: round1(Math.max(0, 100 - conversionRate)),
+      benchmark: stage.stage === 'Impressions' ? 'Meta delivery' : `${stage.stage} rate`,
+      help: stage.help,
+    }
+  })
+}
+
+function buildAiInsights(campaigns: CampaignInsight[]): AIInsight[] {
+  return campaigns.slice(0, 20).map((campaign) => ({
+    campaignId: campaign.id,
+    whatHappened: `${campaign.name} ใช้ spend ${formatMoney(campaign.spend)} และสร้าง tracked conversions ${formatNumber(campaign.conversions)}`,
+    why: campaign.roas >= 3
+      ? 'Meta conversion value ดีเมื่อเทียบกับ spend เหมาะกับ staged scale'
+      : campaign.spend > 0 && campaign.conversions === 0
+        ? 'มี spend แต่ยังไม่มี tracked conversion ในช่วงเวลานี้'
+        : 'ควรอ่านคู่กับ CTR, CPA, frequency และ conversion value ก่อนตัดสินใจ',
+    evidence: [
+      `ROAS ${campaign.roas.toFixed(2)}x`,
+      `CPA ${formatMoney(campaign.cpa)}`,
+      `CTR ${campaign.ctr.toFixed(2)}%`,
+      `Frequency ${campaign.frequency.toFixed(1)}`,
+    ],
+    recommendation: campaign.roas >= 3
+      ? 'เพิ่มงบแบบ staged scale และ monitor CPA/ROAS 48 ชั่วโมง'
+      : campaign.spend > 0 && campaign.conversions === 0
+        ? 'ตรวจ event tracking, offer และ creative ก่อนเพิ่มงบ'
+        : 'เก็บข้อมูลเพิ่มหรือทดสอบ creative/targeting ใหม่แบบจำกัดงบ',
+    confidence: campaign.conversions >= 30 ? 86 : campaign.spend > 0 ? 74 : 62,
+    risk: campaign.aiStatus === 'critical' ? 'High' : campaign.aiStatus === 'watch' ? 'Medium' : 'Low',
+  }))
+}
+
+function buildRecommendedActions(campaigns: CampaignInsight[]): RecommendedAction[] {
+  return campaigns
+    .flatMap((campaign) => {
+      const actions: RecommendedAction[] = []
+      if (campaign.spend > 0 && campaign.conversions === 0) {
+        actions.push(makeAction(campaign, 'Tracking / budget protection', 'มี spend แต่ไม่มี conversion ใน Meta dataset', 'Pause or reduce spend until tracking and offer are verified', 'High', 84))
+      }
+      if (campaign.roas > 0 && campaign.roas < 1.5) {
+        actions.push(makeAction(campaign, 'Budget protection', `ROAS ${campaign.roas.toFixed(2)}x ต่ำกว่า guardrail`, 'Reduce budget 10-15% and test new offer/creative', 'Medium', 80))
+      }
+      if (campaign.roas >= 3 && campaign.conversions >= 10) {
+        actions.push(makeAction(campaign, 'Scale opportunity', `ROAS ${campaign.roas.toFixed(2)}x และ conversion volume พร้อม scale`, 'Increase budget 10-15% with daily monitoring', 'Low', 86))
+      }
+      if (campaign.frequency >= 5 && campaign.ctr < 1) {
+        actions.push(makeAction(campaign, 'Creative refresh', `Frequency ${campaign.frequency.toFixed(1)} สูงและ CTR ต่ำ`, 'Create new creative angle and rotate underperforming ads', 'Medium', 78))
+      }
+      return actions
+    })
+    .slice(0, 10)
+}
+
+function makeAction(campaign: CampaignInsight, type: string, summary: string, after: string, risk: RecommendedAction['risk'], confidence: number): RecommendedAction {
+  return {
+    id: `meta-action-${campaign.id}-${slugify(type)}`,
+    campaignId: campaign.id,
+    type,
+    target: campaign.name,
+    summary,
+    expectedImpact: 'ลด spend leakage หรือเพิ่ม revenue จากข้อมูล Meta ล่าสุด',
+    guardrail: 'Action นี้ยังเป็น approval recommendation จนกว่าจะเปิด Meta write execution',
+    before: `Spend ${formatMoney(campaign.spend)} · ROAS ${campaign.roas.toFixed(2)}x · Conversions ${formatNumber(campaign.conversions)}`,
+    after,
+    rollbackNote: 'หากเปิด write execution ต้องบันทึก previous status/budget ก่อนเปลี่ยนทุกครั้ง',
+    risk,
+    confidence,
+    status: 'pending',
+  }
+}
+
+function buildAgentTasks(campaigns: CampaignInsight[]): AgentTask[] {
+  return campaigns.slice(0, 5).map((campaign, index) => ({
+    id: `meta-task-${campaign.id}`,
+    agent: index === 0 ? 'Meta Performance Agent' : 'Creative Agent',
+    taskType: campaign.aiStatus === 'scaling' ? 'Scale review' : campaign.aiStatus === 'critical' ? 'Budget risk review' : 'Creative diagnosis',
+    owner: 'Growth team',
+    sourceCampaign: campaign.name,
+    inputContext: `Meta campaign metrics: spend ${formatMoney(campaign.spend)}, ROAS ${campaign.roas.toFixed(2)}x, CTR ${campaign.ctr.toFixed(2)}%`,
+    expectedOutput: 'Recommendation with guardrail, expected impact, and rollback note',
+    status: index === 0 ? 'running' : 'pending',
+    result: campaign.aiSummary,
+    updatedAt: 'Meta sync',
+  }))
+}
+
+function buildMemoryItems(user: MetaUserProfile, account: MetaAdAccountInfo, datePreset: string, graphVersion: string): MemoryItem[] {
+  return [
+    {
+      id: 'meta-memory-account',
+      category: 'Insight',
+      title: 'Connected Meta account',
+      detail: `${account.name} (${account.currency}) synced by ${user.name} with ${graphVersion}`,
+      source: 'Meta API /me and ad account',
+      confidence: 96,
+      updatedAt: formatNow(),
+    },
+    {
+      id: 'meta-memory-window',
+      category: 'Strategy',
+      title: 'Reporting window',
+      detail: `Dashboard metrics are synced from Meta date preset: ${datePreset}`,
+      source: 'Meta Marketing API insights',
+      confidence: 92,
+      updatedAt: formatNow(),
+    },
+  ]
+}
+
+function buildComplianceReviews(ads: MetaAdRow[]): ComplianceReview[] {
+  return ads.slice(0, 6).map((ad) => {
+    const name = ad.name.toLowerCase()
+    const needsReview = /before|after|ผลลัพธ์|รีวิว|review|guarantee|รับประกัน/.test(name)
+    return {
+      id: `meta-compliance-${ad.id}`,
+      title: ad.name,
+      service: inferService(ad.name),
+      status: needsReview ? 'needsReview' : 'approved',
+      issue: needsReview ? 'ชื่อ/creative อาจมี claim หรือ before-after signal ที่ควรตรวจ policy ก่อน scale' : 'ยังไม่พบ claim risk จากชื่อ ad ที่ Meta API ส่งมา',
+      fix: needsReview ? 'ตรวจข้อความ รูป before/after disclaimer และข้อกำหนดคลินิกก่อน approve' : 'ใช้ต่อได้ แต่ควรตรวจ creative asset จริงใน Meta Ads Manager',
+    }
+  })
+}
+
+function buildAuditTrail(user: MetaUserProfile, account: MetaAdAccountInfo, campaigns: number, adSets: number, ads: number): AuditEvent[] {
+  return [
+    {
+      id: `meta-audit-${Date.now()}`,
+      actor: user.name,
+      action: 'Synced Meta API workspace',
+      target: account.name,
+      before: 'Previous workspace state',
+      after: `${campaigns} campaigns · ${adSets} ad sets · ${ads} ads`,
+      reason: 'Pulled live Meta Marketing API data through server-side proxy',
+      timestamp: formatNow(),
+    },
+  ]
+}
+
+function metricFromInsight(row: MetaInsightsRow | null | undefined): MetricSummary {
+  const spend = numberOf(row?.spend)
+  const revenue = extractActionValue(row?.action_values, PURCHASE_ACTION_TYPES)
+  const leads = extractActionValue(row?.actions, LEAD_ACTION_TYPES)
+  const bookings = extractActionValue(row?.actions, BOOKING_ACTION_TYPES)
+  const purchases = extractActionValue(row?.actions, PURCHASE_ACTION_TYPES)
+  const conversions = bookings || purchases || leads
+  const roas = extractActionValue(row?.purchase_roas, PURCHASE_ACTION_TYPES) || safeDivide(revenue, spend)
+
+  return {
+    spend,
+    revenue,
+    roas,
+    cpa: extractActionValue(row?.cost_per_action_type, [...BOOKING_ACTION_TYPES, ...PURCHASE_ACTION_TYPES, ...LEAD_ACTION_TYPES]) || safeDivide(spend, conversions),
+    ctr: numberOf(row?.ctr),
+    cpc: numberOf(row?.cpc),
+    cpm: numberOf(row?.cpm),
+    impressions: numberOf(row?.impressions),
+    reach: numberOf(row?.reach),
+    clicks: numberOf(row?.clicks),
+    leads,
+    bookings,
+    purchases,
+    conversions,
+    frequency: numberOf(row?.frequency),
+  }
+}
+
+function hasMetricActivity(metrics: MetricSummary) {
+  return [
+    metrics.spend,
+    metrics.revenue,
+    metrics.impressions,
+    metrics.reach,
+    metrics.clicks,
+    metrics.leads,
+    metrics.bookings,
+    metrics.purchases,
+    metrics.conversions,
+  ].some((value) => value > 0)
+}
+
+function extractActionValue(rows: MetaActionValue[] | undefined, matchTypes: string[]) {
+  if (!rows) return 0
+  for (const actionType of matchTypes) {
+    const found = rows.find((row) => row.action_type === actionType)
+    if (found) return numberOf(found.value)
+  }
+  return 0
+}
+
+function statusFromMetrics(metrics: MetricSummary, effectiveStatus: string): CampaignInsight['aiStatus'] {
+  if (!isMetaActive(effectiveStatus)) return 'watch'
+  if (metrics.spend > 0 && metrics.conversions === 0) return 'critical'
+  if (metrics.roas >= 3 && metrics.conversions >= 10) return 'scaling'
+  if ((metrics.roas > 0 && metrics.roas < 1.5) || (metrics.frequency >= 5 && metrics.ctr < 1)) return 'watch'
+  return 'healthy'
+}
+
+function summaryFromMetrics(metrics: MetricSummary, effectiveStatus: string) {
+  if (!isMetaActive(effectiveStatus)) return `Meta status ${effectiveStatus}; ใช้ข้อมูล insight เพื่อพิจารณาเปิดกลับ`
+  if (metrics.spend > 0 && metrics.conversions === 0) return 'มี spend แต่ยังไม่มี tracked conversion ในช่วงเวลานี้'
+  if (metrics.roas >= 3) return 'ROAS จาก Meta สูง เหมาะกับ staged scale ภายใต้ guardrail'
+  if (metrics.frequency >= 5 && metrics.ctr < 1) return 'Frequency สูงและ CTR ต่ำ มีสัญญาณ creative fatigue'
+  return 'Performance อยู่ในโซนเฝ้าดูจาก Meta campaign insights'
+}
+
+function scoreFromMetrics(metrics: MetricSummary) {
+  const roasScore = Math.min(metrics.roas * 1.6, 5)
+  const ctrScore = Math.min(metrics.ctr * 0.7, 2)
+  const conversionScore = Math.min(metrics.conversions / 20, 2)
+  const fatiguePenalty = metrics.frequency > 6 ? 1 : 0
+  return round1(Math.max(0, Math.min(10, 2 + roasScore + ctrScore + conversionScore - fatiguePenalty)))
+}
+
+function inferService(name: string) {
+  const text = name.toLowerCase()
+  if (/surgery|rhinoplasty|nose|จมูก|ตา|ศัลย/.test(text)) return 'ศัลยกรรม'
+  if (/botox|filler|inject|skin booster|ฉีด|โบท็อก|ฟิลเลอร์/.test(text)) return 'ฉีดหน้า'
+  if (/laser|acne|scar|skin|เลเซอร์|หลุมสิว|ผิว/.test(text)) return 'เลเซอร์ผิว'
+  if (/hair|wellness|ปลูกผม|สุขภาพ/.test(text)) return 'บริการอื่นๆ'
+  return 'Meta Ads'
+}
+
+function inferServiceCategory(name: string, objective: string) {
+  const service = inferService(name)
+  if (service === 'ศัลยกรรม') return 'Surgery / Consult'
+  if (service === 'ฉีดหน้า') return 'Botox / Filler / Injectables'
+  if (service === 'เลเซอร์ผิว') return 'Laser / Skin treatment'
+  if (service === 'บริการอื่นๆ') return 'Hair / Wellness / Other service'
+  return objective || 'Meta campaign group'
+}
+
+function summarizeTargeting(targeting: MetaAdSetRow['targeting']) {
+  if (!targeting) return 'Meta targeting'
+  const platforms = targeting.publisher_platforms?.join(', ')
+  const age = targeting.age_min || targeting.age_max ? `${targeting.age_min ?? '?'}-${targeting.age_max ?? '?'}` : ''
+  return [platforms, age ? `age ${age}` : '', targeting.genders?.length ? `gender ${targeting.genders.join('/')}` : ''].filter(Boolean).join(' · ') || 'Meta targeting'
+}
+
+function isMetaActive(status: string) {
+  return status.toUpperCase() === 'ACTIVE'
+}
+
+function centsToCurrency(value: string | undefined) {
+  return safeDivide(numberOf(value), 100)
+}
+
+function numberOf(value: string | number | undefined) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
+function safeDivide(numerator: number, denominator: number) {
+  return denominator > 0 ? numerator / denominator : 0
+}
+
+function safeRate(numerator: number, denominator: number) {
+  return denominator > 0 ? (numerator / denominator) * 100 : 0
+}
+
+function round1(value: number) {
+  return Math.round(value * 10) / 10
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'action'
+}
+
+function formatMoney(value: number) {
+  return new Intl.NumberFormat('th-TH', {
+    style: 'currency',
+    currency: 'THB',
+    maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat('th-TH').format(value)
+}
+
+function formatNow() {
+  return new Intl.DateTimeFormat('th-TH', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date())
+}
