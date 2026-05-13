@@ -222,6 +222,16 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Browser QA confirms Campaign, Ad Set, and Ad create modals open; Campaign edit/delete modals open; no console errors were found.
   - Endpoint validation confirms invalid `/api/meta/object` operation returns a validation error without mutating Meta.
   - `npm run build` passes after this CRUD update.
+- Meta Object Manager form UX improved:
+  - Create/Edit forms now include short Thai helper text for key fields.
+  - Status is now a two-option button choice (`Draft / Paused`, `Active`) instead of a plain select.
+  - Campaign Objective is now button-based with clinic-friendly explanations for Leads, Traffic, Engagement, and Sales.
+  - Campaign Bid Strategy is now button-based.
+  - Budget fields now include quick-pick chips such as ฿300, ฿500, ฿1000, and ฿2000.
+  - Ad Set Billing Event, Optimization Goal, and Age are now button/chip based.
+  - Advanced JSON fields remain available with clearer explanations for targeting, promoted object, creative, and extra params.
+  - Browser QA confirms Campaign and Ad Set modals show the new choices/help text and no console errors.
+  - `npm run build` passes after this form UX update.
 
 ## Next Recommended Step
 

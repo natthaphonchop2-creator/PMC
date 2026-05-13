@@ -45,7 +45,9 @@
 .app-shell[data-theme='dark'] .api-form-grid select,
 .app-shell[data-theme='dark'] .mutation-form-grid input,
 .app-shell[data-theme='dark'] .mutation-form-grid select,
-.app-shell[data-theme='dark'] .mutation-form-grid textarea {
+.app-shell[data-theme='dark'] .mutation-form-grid textarea,
+.app-shell[data-theme='dark'] .choice-grid button,
+.app-shell[data-theme='dark'] .quick-chip-row button {
   background: var(--surface);
   color: var(--ink);
 }
@@ -3188,6 +3190,15 @@ td span {
   text-transform: uppercase;
 }
 
+.mutation-form-grid label > small,
+.choice-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+  text-transform: none;
+}
+
 .mutation-form-grid input,
 .mutation-form-grid select,
 .mutation-form-grid textarea {
@@ -3218,6 +3229,60 @@ td span {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.choice-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.choice-grid button,
+.quick-chip-row button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.choice-grid button {
+  display: grid;
+  gap: 5px;
+  min-height: 74px;
+  padding: 10px;
+  text-align: left;
+}
+
+.choice-grid button strong {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.choice-grid button.active,
+.quick-chip-row button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.quick-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quick-chip-row button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .approval-actions {
@@ -3516,6 +3581,7 @@ td span {
     .api-form-grid,
     .mutation-form-grid,
     .split-inputs,
+    .choice-grid,
     .app-module-grid,
   .clinic-service-grid,
   .pipeline-flow,

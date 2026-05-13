@@ -757,6 +757,44 @@ const insightGroupOptions: Array<{ value: InsightGroupBy; label: string; descrip
   { value: 'status', label: 'Status', description: 'ACTIVE / PAUSED grouping' },
 ]
 
+const campaignObjectiveOptions = [
+  { value: 'OUTCOME_LEADS', label: 'Leads', description: 'เก็บ lead / appointment จากฟอร์ม, chat หรือเว็บไซต์' },
+  { value: 'OUTCOME_TRAFFIC', label: 'Traffic', description: 'ส่งคนเข้า landing page หรือ LINE OA' },
+  { value: 'OUTCOME_ENGAGEMENT', label: 'Engagement', description: 'เน้น message, inbox หรือ interaction' },
+  { value: 'OUTCOME_SALES', label: 'Sales', description: 'ใช้เมื่อมี conversion purchase/treatment value ชัดเจน' },
+]
+
+const budgetQuickOptions = ['300', '500', '1000', '2000']
+const statusOptions: Array<{ value: MetaObjectStatus; label: string; description: string }> = [
+  { value: 'PAUSED', label: 'Draft / Paused', description: 'ปลอดภัยสำหรับสร้างหรือแก้ก่อนเปิดส่งจริง' },
+  { value: 'ACTIVE', label: 'Active', description: 'เปิดส่งจริงหลัง Meta รับคำสั่งสำเร็จ' },
+]
+
+const bidStrategyOptions = [
+  { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost', description: 'ให้ Meta หา result ราคาต่ำสุดโดยไม่กำหนด cap' },
+  { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap', description: 'ใช้เมื่อมี bid cap ใน Extra Params' },
+  { value: 'COST_CAP', label: 'Cost cap', description: 'ควบคุมต้นทุนเฉลี่ยต่อ result' },
+]
+
+const billingEventOptions = [
+  { value: 'IMPRESSIONS', label: 'Impressions', description: 'คิดตามการแสดงผล ใช้บ่อยกับ campaign ส่วนใหญ่' },
+  { value: 'LINK_CLICKS', label: 'Link clicks', description: 'ใช้เมื่อ optimization เน้นคลิก' },
+]
+
+const optimizationGoalOptions = [
+  { value: 'LEAD_GENERATION', label: 'Lead', description: 'เหมาะกับคลินิกที่เก็บ lead/booking' },
+  { value: 'CONVERSATIONS', label: 'Messages', description: 'เหมาะกับ LINE/inbox/chat' },
+  { value: 'LINK_CLICKS', label: 'Clicks', description: 'เหมาะกับ traffic ไป landing page' },
+  { value: 'OFFSITE_CONVERSIONS', label: 'Conversion', description: 'ใช้เมื่อ pixel/conversion tracking พร้อม' },
+]
+
+const agePresetOptions = [
+  { label: '20-45', min: '20', max: '45' },
+  { label: '25-55', min: '25', max: '55' },
+  { label: '20-65', min: '20', max: '65' },
+  { label: '35-65', min: '35', max: '65' },
+]
+
 function nowLabel() {
   return new Intl.DateTimeFormat('th-TH', {
     dateStyle: 'medium',
@@ -3869,6 +3907,10 @@ function MetaObjectMutationModal({
   const updateForm = <K extends keyof MetaObjectFormValues>(key: K, value: MetaObjectFormValues[K]) => {
     setForm((current) => ({ ...current, [key]: value }))
   }
+  const setBudget = (value: string) => updateForm('dailyBudget', value)
+  const setAgePreset = (min: string, max: string) => {
+    setForm((current) => ({ ...current, ageMin: min, ageMax: max }))
+  }
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3891,31 +3933,73 @@ function MetaObjectMutationModal({
           </div>
         ) : (
           <div className="mutation-form-grid">
-            <label>
+            <label className="field-wide">
               <span>Name</span>
               <input value={form.name} onChange={(event) => updateForm('name', event.target.value)} />
+              <small>ชื่อที่จะแสดงใน Meta Ads Manager ควรใส่ service, audience และวันที่ให้หาเจอง่าย</small>
             </label>
-            <label>
+            <label className="field-wide">
               <span>Status</span>
-              <select value={form.status} onChange={(event) => updateForm('status', event.target.value as MetaObjectStatus)}>
-                <option value="PAUSED">PAUSED</option>
-                <option value="ACTIVE">ACTIVE</option>
-              </select>
+              <div className="choice-grid two">
+                {statusOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={form.status === option.value ? 'active' : ''}
+                    type="button"
+                    onClick={() => updateForm('status', option.value)}
+                  >
+                    <strong>{option.label}</strong>
+                    <small>{option.description}</small>
+                  </button>
+                ))}
+              </div>
             </label>
 
             {request.objectType === 'campaign' && (
               <>
-                <label>
+                <label className="field-wide">
                   <span>Objective</span>
-                  <input value={form.objective} onChange={(event) => updateForm('objective', event.target.value)} />
+                  <div className="choice-grid">
+                    {campaignObjectiveOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        className={form.objective === option.value ? 'active' : ''}
+                        type="button"
+                        onClick={() => updateForm('objective', option.value)}
+                      >
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </button>
+                    ))}
+                  </div>
                 </label>
                 <label>
                   <span>Daily Budget (THB)</span>
                   <input value={form.dailyBudget} inputMode="numeric" onChange={(event) => updateForm('dailyBudget', event.target.value)} />
+                  <div className="quick-chip-row">
+                    {budgetQuickOptions.map((value) => (
+                      <button key={value} className={form.dailyBudget === value ? 'active' : ''} type="button" onClick={() => setBudget(value)}>
+                        ฿{value}
+                      </button>
+                    ))}
+                  </div>
+                  <small>ระบบส่งให้ Meta เป็นหน่วย cents โดยอัตโนมัติ เช่น 500 = ฿500/day</small>
                 </label>
                 <label className="field-wide">
                   <span>Bid Strategy</span>
-                  <input value={form.bidStrategy} onChange={(event) => updateForm('bidStrategy', event.target.value)} />
+                  <div className="choice-grid">
+                    {bidStrategyOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        className={form.bidStrategy === option.value ? 'active' : ''}
+                        type="button"
+                        onClick={() => updateForm('bidStrategy', option.value)}
+                      >
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </button>
+                    ))}
+                  </div>
                 </label>
               </>
             )}
@@ -3932,22 +4016,55 @@ function MetaObjectMutationModal({
                       </option>
                     ))}
                   </select>
+                  <small>Ad Set ต้องอยู่ใต้ Campaign ที่เลือก</small>
                 </label>
                 <label>
                   <span>Daily Budget (THB)</span>
                   <input value={form.dailyBudget} inputMode="numeric" onChange={(event) => updateForm('dailyBudget', event.target.value)} />
+                  <div className="quick-chip-row">
+                    {budgetQuickOptions.map((value) => (
+                      <button key={value} className={form.dailyBudget === value ? 'active' : ''} type="button" onClick={() => setBudget(value)}>
+                        ฿{value}
+                      </button>
+                    ))}
+                  </div>
                 </label>
-                <label>
+                <label className="field-wide">
                   <span>Billing Event</span>
-                  <input value={form.billingEvent} onChange={(event) => updateForm('billingEvent', event.target.value)} />
+                  <div className="choice-grid two">
+                    {billingEventOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        className={form.billingEvent === option.value ? 'active' : ''}
+                        type="button"
+                        onClick={() => updateForm('billingEvent', option.value)}
+                      >
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </button>
+                    ))}
+                  </div>
                 </label>
-                <label>
+                <label className="field-wide">
                   <span>Optimization Goal</span>
-                  <input value={form.optimizationGoal} onChange={(event) => updateForm('optimizationGoal', event.target.value)} />
+                  <div className="choice-grid">
+                    {optimizationGoalOptions.map((option) => (
+                      <button
+                        key={option.value}
+                        className={form.optimizationGoal === option.value ? 'active' : ''}
+                        type="button"
+                        onClick={() => updateForm('optimizationGoal', option.value)}
+                      >
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </button>
+                    ))}
+                  </div>
                 </label>
                 <label>
                   <span>Countries</span>
                   <input value={form.countries} onChange={(event) => updateForm('countries', event.target.value)} />
+                  <small>ใส่รหัสประเทศ เช่น TH หรือ TH,SG</small>
                 </label>
                 <label>
                   <span>Age</span>
@@ -3955,14 +4072,28 @@ function MetaObjectMutationModal({
                     <input value={form.ageMin} inputMode="numeric" onChange={(event) => updateForm('ageMin', event.target.value)} />
                     <input value={form.ageMax} inputMode="numeric" onChange={(event) => updateForm('ageMax', event.target.value)} />
                   </div>
+                  <div className="quick-chip-row">
+                    {agePresetOptions.map((option) => (
+                      <button
+                        key={option.label}
+                        className={form.ageMin === option.min && form.ageMax === option.max ? 'active' : ''}
+                        type="button"
+                        onClick={() => setAgePreset(option.min, option.max)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </label>
                 <label className="field-wide">
                   <span>Targeting JSON</span>
                   <textarea value={form.targetingJson} placeholder='เว้นว่างเพื่อใช้ countries/age หรือใส่ {"geo_locations":{"countries":["TH"]}}' onChange={(event) => updateForm('targetingJson', event.target.value)} />
+                  <small>Advanced: ใช้เมื่ออยากกำหนด placement, interest, custom audience หรือ targeting เฉพาะทาง</small>
                 </label>
                 <label className="field-wide">
                   <span>Promoted Object JSON</span>
                   <textarea value={form.promotedObjectJson} placeholder='เช่น {"page_id":"..."} สำหรับ objective ที่ต้องใช้ promoted_object' onChange={(event) => updateForm('promotedObjectJson', event.target.value)} />
+                  <small>Advanced: บาง objective ต้องมี page_id, pixel_id หรือ custom_event_type</small>
                 </label>
               </>
             )}
@@ -3979,14 +4110,17 @@ function MetaObjectMutationModal({
                       </option>
                     ))}
                   </select>
+                  <small>Ad จะถูกสร้างหรือแก้ภายใต้ Ad Set นี้</small>
                 </label>
                 <label className="field-wide">
                   <span>Creative ID</span>
                   <input value={form.creativeId} placeholder="Meta creative_id" onChange={(event) => updateForm('creativeId', event.target.value)} />
+                  <small>ใส่ ID ของ creative ที่สร้างใน Meta แล้ว ถ้าไม่มีให้ใช้ Creative JSON ด้านล่าง</small>
                 </label>
                 <label className="field-wide">
                   <span>Creative JSON</span>
                   <textarea value={form.creativeJson} placeholder='หรือใส่ {"creative_id":"..."}' onChange={(event) => updateForm('creativeJson', event.target.value)} />
+                  <small>Advanced: ใช้ส่ง object creative ตามรูปแบบ Meta API</small>
                 </label>
               </>
             )}
@@ -3994,6 +4128,7 @@ function MetaObjectMutationModal({
             <label className="field-wide">
               <span>Extra Params JSON</span>
               <textarea value={form.extraJson} placeholder='Optional JSON object สำหรับ fields เพิ่มเติมของ Meta API' onChange={(event) => updateForm('extraJson', event.target.value)} />
+              <small>Advanced: ใส่ field เพิ่มเติมที่ยังไม่มีในฟอร์ม เช่น bid_amount, attribution_spec, destination_type</small>
             </label>
           </div>
         )}
