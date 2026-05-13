@@ -23,9 +23,11 @@ import {
   Layers3,
   LineChart,
   PauseCircle,
+  Pencil,
   PlayCircle,
   Plug,
   Power,
+  Plus,
   RefreshCw,
   Settings,
   ShieldCheck,
@@ -33,6 +35,7 @@ import {
   Sun,
   Target,
   Trophy,
+  Trash2,
   Users,
   X,
   Zap,
@@ -291,6 +294,136 @@ function normalizeDeliveryStatus(status?: AdDeliveryStatus, spend = 0): AdDelive
 
 function autoAdObjectId(ad: AutoAdControl) {
   return ad.adId || ad.id.replace(/^meta-auto-/, '')
+}
+
+function emptyMetaObjectFormValues(overrides: Partial<MetaObjectFormValues> = {}): MetaObjectFormValues {
+  return {
+    name: '',
+    status: 'PAUSED',
+    campaignId: '',
+    adSetId: '',
+    objective: 'OUTCOME_LEADS',
+    dailyBudget: '',
+    billingEvent: 'IMPRESSIONS',
+    optimizationGoal: 'LEAD_GENERATION',
+    bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+    countries: 'TH',
+    ageMin: '20',
+    ageMax: '65',
+    creativeId: '',
+    targetingJson: '',
+    promotedObjectJson: '',
+    creativeJson: '',
+    extraJson: '',
+    ...overrides,
+  }
+}
+
+function parseOptionalJson(value: string, label: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    throw new Error(`${label} JSON ไม่ถูกต้อง`)
+  }
+}
+
+function bahtToMetaCents(value: string) {
+  const amount = Number(value)
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) : undefined
+}
+
+function stripEmptyParams(params: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== ''),
+  )
+}
+
+function buildTargetingFromForm(form: MetaObjectFormValues) {
+  const countries = form.countries
+    .split(',')
+    .map((country) => country.trim().toUpperCase())
+    .filter(Boolean)
+  const ageMin = Number(form.ageMin)
+  const ageMax = Number(form.ageMax)
+  return stripEmptyParams({
+    geo_locations: countries.length > 0 ? { countries } : undefined,
+    age_min: Number.isFinite(ageMin) && ageMin > 0 ? ageMin : undefined,
+    age_max: Number.isFinite(ageMax) && ageMax > 0 ? ageMax : undefined,
+  })
+}
+
+function buildMetaObjectParams(request: MetaObjectMutationRequest, form: MetaObjectFormValues) {
+  if (request.operation === 'delete') return {}
+
+  const extra = parseOptionalJson(form.extraJson, 'Extra params')
+  if (extra !== undefined && (typeof extra !== 'object' || Array.isArray(extra) || extra === null)) {
+    throw new Error('Extra params ต้องเป็น JSON object')
+  }
+
+  const base: Record<string, unknown> = stripEmptyParams({
+    name: form.name.trim(),
+    status: form.status,
+  })
+
+  if (request.objectType === 'campaign') {
+    Object.assign(
+      base,
+      stripEmptyParams({
+        objective: form.objective.trim(),
+        daily_budget: bahtToMetaCents(form.dailyBudget),
+        bid_strategy: form.bidStrategy.trim(),
+        special_ad_categories: request.operation === 'create' ? [] : undefined,
+      }),
+    )
+  }
+
+  if (request.objectType === 'adset') {
+    const targeting = parseOptionalJson(form.targetingJson, 'Targeting') ?? buildTargetingFromForm(form)
+    const promotedObject = parseOptionalJson(form.promotedObjectJson, 'Promoted object')
+    Object.assign(
+      base,
+      stripEmptyParams({
+        campaign_id: form.campaignId.trim(),
+        daily_budget: bahtToMetaCents(form.dailyBudget),
+        billing_event: form.billingEvent.trim(),
+        optimization_goal: form.optimizationGoal.trim(),
+        targeting,
+        promoted_object: promotedObject,
+      }),
+    )
+  }
+
+  if (request.objectType === 'ad') {
+    const creative = form.creativeId.trim()
+      ? { creative_id: form.creativeId.trim() }
+      : parseOptionalJson(form.creativeJson, 'Creative')
+    Object.assign(
+      base,
+      stripEmptyParams({
+        adset_id: form.adSetId.trim(),
+        creative,
+      }),
+    )
+  }
+
+  return {
+    ...base,
+    ...((extra as Record<string, unknown> | undefined) ?? {}),
+  }
+}
+
+function mutationOperationLabel(operation: MetaObjectMutationOperation) {
+  if (operation === 'create') return 'Create'
+  if (operation === 'update') return 'Edit'
+  return 'Delete'
+}
+
+function metaObjectLabel(type: MetaObjectType) {
+  if (type === 'adset') return 'Ad Set'
+  if (type === 'ad') return 'Ad'
+  return 'Campaign'
 }
 
 function fallbackInsightForCampaign(campaign: CampaignInsight): AIInsight {
@@ -553,6 +686,45 @@ interface MetaObjectStatusPayload {
   error?: string
 }
 
+type MetaObjectMutationOperation = 'create' | 'update' | 'delete'
+
+interface MetaObjectMutationRequest {
+  operation: MetaObjectMutationOperation
+  objectType: MetaObjectType
+  objectId?: string
+  targetName: string
+  initialValues: MetaObjectFormValues
+}
+
+interface MetaObjectFormValues {
+  name: string
+  status: MetaObjectStatus
+  campaignId: string
+  adSetId: string
+  objective: string
+  dailyBudget: string
+  billingEvent: string
+  optimizationGoal: string
+  bidStrategy: string
+  countries: string
+  ageMin: string
+  ageMax: string
+  creativeId: string
+  targetingJson: string
+  promotedObjectJson: string
+  creativeJson: string
+  extraJson: string
+}
+
+interface MetaObjectMutationPayload {
+  ok: boolean
+  operation: MetaObjectMutationOperation
+  objectType: MetaObjectType
+  objectId: string | null
+  checkedAt: string
+  error?: string
+}
+
 type CampaignControlScope = MetaObjectType
 type InsightGroupBy = 'creative' | 'campaign' | 'adset' | 'ad' | 'service' | 'objective' | 'status'
 
@@ -684,6 +856,11 @@ function App() {
   const [aiInsightDrawer, setAiInsightDrawer] = useState<AiInsightDrawerContext | null>(null)
   const [statusChangeRequest, setStatusChangeRequest] = useState<DeliveryStatusChangeRequest | null>(null)
   const [statusChangeState, setStatusChangeState] = useState<{ running: boolean; error: string | null }>({
+    running: false,
+    error: null,
+  })
+  const [objectMutationRequest, setObjectMutationRequest] = useState<MetaObjectMutationRequest | null>(null)
+  const [objectMutationState, setObjectMutationState] = useState<{ running: boolean; error: string | null }>({
     running: false,
     error: null,
   })
@@ -898,6 +1075,60 @@ function App() {
       setStatusChangeState({
         running: false,
         error: error instanceof Error ? error.message : 'Meta status update failed',
+      })
+    }
+  }
+
+  const requestMetaObjectMutation = (request: MetaObjectMutationRequest) => {
+    setObjectMutationState({ running: false, error: null })
+    setObjectMutationRequest(request)
+  }
+
+  const confirmMetaObjectMutation = async (form: MetaObjectFormValues) => {
+    if (!objectMutationRequest) return
+
+    setObjectMutationState({ running: true, error: null })
+
+    try {
+      const params = buildMetaObjectParams(objectMutationRequest, form)
+      const response = await fetch('/api/meta/object', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          operation: objectMutationRequest.operation,
+          objectType: objectMutationRequest.objectType,
+          objectId: objectMutationRequest.objectId,
+          params,
+        }),
+      })
+      const payload = (await response.json()) as Partial<MetaObjectMutationPayload>
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error || 'Meta object mutation failed')
+      }
+
+      setAuditTrail((current) => [
+        {
+          id: `audit-meta-object-${Date.now()}`,
+          actor: 'Current user',
+          action: `${mutationOperationLabel(objectMutationRequest.operation)} ${metaObjectLabel(objectMutationRequest.objectType)}`,
+          target: objectMutationRequest.targetName || form.name || payload.objectId || '-',
+          before: objectMutationRequest.operation === 'create' ? 'No object' : `Meta object ${objectMutationRequest.objectId}`,
+          after:
+            objectMutationRequest.operation === 'delete'
+              ? 'Deleted from Meta'
+              : `Meta object ${payload.objectId ?? objectMutationRequest.objectId ?? 'created/updated'}`,
+          reason: 'Executed from Campaigns object manager',
+          timestamp: nowLabel(),
+        },
+        ...current,
+      ])
+      setObjectMutationRequest(null)
+      setObjectMutationState({ running: false, error: null })
+      void handleSyncMetaWorkspace()
+    } catch (error) {
+      setObjectMutationState({
+        running: false,
+        error: error instanceof Error ? error.message : 'Meta object mutation failed',
       })
     }
   }
@@ -1305,6 +1536,7 @@ function App() {
             onSelectCampaign={setSelectedCampaignId}
             onOpenAiDrawer={setAiInsightDrawer}
             onRequestStatusChange={requestDeliveryStatusChange}
+            onRequestMutation={requestMetaObjectMutation}
           />
         )}
         {activeTab === 'campaigns' && campaigns.length === 0 && (
@@ -1582,6 +1814,18 @@ function App() {
           error={statusChangeState.error}
           onCancel={() => setStatusChangeRequest(null)}
           onConfirm={confirmDeliveryStatusChange}
+        />
+      )}
+
+      {objectMutationRequest && (
+        <MetaObjectMutationModal
+          request={objectMutationRequest}
+          campaigns={campaigns}
+          adSets={adSets}
+          running={objectMutationState.running}
+          error={objectMutationState.error}
+          onCancel={() => setObjectMutationRequest(null)}
+          onConfirm={confirmMetaObjectMutation}
         />
       )}
     </div>
@@ -2326,6 +2570,7 @@ function CampaignDetailPage({
   onSelectCampaign,
   onOpenAiDrawer,
   onRequestStatusChange,
+  onRequestMutation,
 }: {
   selectedCampaignId: string
   campaigns: CampaignInsight[]
@@ -2334,6 +2579,7 @@ function CampaignDetailPage({
   onSelectCampaign: (id: string) => void
   onOpenAiDrawer: (context: AiInsightDrawerContext) => void
   onRequestStatusChange: (request: DeliveryStatusChangeRequest) => void
+  onRequestMutation: (request: MetaObjectMutationRequest) => void
 }) {
   const [selectedAdSetId, setSelectedAdSetId] = useState('')
   const [controlScope, setControlScope] = useState<CampaignControlScope>('adset')
@@ -2395,6 +2641,20 @@ function CampaignDetailPage({
     { id: 'ad' as const, label: 'Ads', rows: adControlRows },
   ]
   const campaignListItems = expandedSections.navigator ? campaigns : [selectedCampaign]
+  const selectedCampaignForm = emptyMetaObjectFormValues({
+    name: selectedCampaign.name,
+    status: toMetaObjectStatus(selectedCampaignDeliveryStatus),
+    objective: selectedCampaign.objective,
+    dailyBudget: selectedCampaign.budget > 0 ? String(Math.round(selectedCampaign.budget)) : '',
+  })
+  const activeAdSetForm = activeAdSet
+    ? emptyMetaObjectFormValues({
+        name: activeAdSet.name,
+        status: toMetaObjectStatus(normalizeDeliveryStatus(activeAdSet.deliveryStatus, activeAdSet.spend)),
+        campaignId: activeAdSet.campaignId || selectedCampaign.id,
+        dailyBudget: activeAdSet.budget > 0 ? String(Math.round(activeAdSet.budget)) : '',
+      })
+    : emptyMetaObjectFormValues({ campaignId: selectedCampaign.id })
 
   return (
     <section className={`campaign-detail-grid ${expandedSections.navigator ? '' : 'navigator-collapsed'}`}>
@@ -2453,21 +2713,70 @@ function CampaignDetailPage({
             <h2>{selectedCampaign.name}</h2>
             <p>{selectedCampaign.aiSummary}</p>
           </div>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() =>
-              onOpenAiDrawer({
-                kind: 'campaign',
-                campaignId: selectedCampaign.id,
-                title: selectedCampaign.name,
-                subtitle: 'Campaign root-cause insight',
-              })
-            }
-          >
-            <BrainCircuit size={16} />
-            AI Insights
-          </button>
+          <div className="object-command-bar">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                onRequestMutation({
+                  operation: 'create',
+                  objectType: 'campaign',
+                  targetName: 'New campaign',
+                  initialValues: emptyMetaObjectFormValues({ name: `${selectedCampaign.name} copy` }),
+                })
+              }
+            >
+              <Plus size={15} />
+              Campaign
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                onRequestMutation({
+                  operation: 'update',
+                  objectType: 'campaign',
+                  objectId: selectedCampaign.id,
+                  targetName: selectedCampaign.name,
+                  initialValues: selectedCampaignForm,
+                })
+              }
+            >
+              <Pencil size={15} />
+              Edit
+            </button>
+            <button
+              className="reject-button"
+              type="button"
+              onClick={() =>
+                onRequestMutation({
+                  operation: 'delete',
+                  objectType: 'campaign',
+                  objectId: selectedCampaign.id,
+                  targetName: selectedCampaign.name,
+                  initialValues: selectedCampaignForm,
+                })
+              }
+            >
+              <Trash2 size={15} />
+              Delete
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() =>
+                onOpenAiDrawer({
+                  kind: 'campaign',
+                  campaignId: selectedCampaign.id,
+                  title: selectedCampaign.name,
+                  subtitle: 'Campaign root-cause insight',
+                })
+              }
+            >
+              <BrainCircuit size={16} />
+              AI Insights
+            </button>
+          </div>
         </div>
 
         <div className="campaign-section-bar">
@@ -2576,10 +2885,63 @@ function CampaignDetailPage({
             <h2>Ad Sets</h2>
             <span>{activeAdSet ? activeAdSet.name : `${campaignAdSets.length} ad sets`}</span>
           </div>
-          <button className="collapse-button" type="button" aria-expanded={expandedSections.adSets} onClick={() => toggleSection('adSets')}>
-            <ChevronDown size={15} />
-            {expandedSections.adSets ? 'ย่อ' : 'ขยาย'}
-          </button>
+          <div className="section-command-bar">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                onRequestMutation({
+                  operation: 'create',
+                  objectType: 'adset',
+                  targetName: 'New ad set',
+                  initialValues: emptyMetaObjectFormValues({ campaignId: selectedCampaign.id, name: `${selectedCampaign.name} - Ad Set` }),
+                })
+              }
+            >
+              <Plus size={15} />
+              Ad Set
+            </button>
+            {activeAdSet && (
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() =>
+                    onRequestMutation({
+                      operation: 'update',
+                      objectType: 'adset',
+                      objectId: activeAdSet.id,
+                      targetName: activeAdSet.name,
+                      initialValues: activeAdSetForm,
+                    })
+                  }
+                >
+                  <Pencil size={15} />
+                  Edit
+                </button>
+                <button
+                  className="reject-button"
+                  type="button"
+                  onClick={() =>
+                    onRequestMutation({
+                      operation: 'delete',
+                      objectType: 'adset',
+                      objectId: activeAdSet.id,
+                      targetName: activeAdSet.name,
+                      initialValues: activeAdSetForm,
+                    })
+                  }
+                >
+                  <Trash2 size={15} />
+                  Delete
+                </button>
+              </>
+            )}
+            <button className="collapse-button" type="button" aria-expanded={expandedSections.adSets} onClick={() => toggleSection('adSets')}>
+              <ChevronDown size={15} />
+              {expandedSections.adSets ? 'ย่อ' : 'ขยาย'}
+            </button>
+          </div>
         </div>
         {expandedSections.adSets && <div className="adset-grid">
           {campaignAdSets.length === 0 && (
@@ -2622,10 +2984,31 @@ function CampaignDetailPage({
             <h2>Ads</h2>
             <span>{`${visibleAds.length} ads in selected ad set`}</span>
           </div>
-          <button className="collapse-button" type="button" aria-expanded={expandedSections.ads} onClick={() => toggleSection('ads')}>
-            <ChevronDown size={15} />
-            {expandedSections.ads ? 'ย่อ' : 'ขยาย'}
-          </button>
+          <div className="section-command-bar">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                onRequestMutation({
+                  operation: 'create',
+                  objectType: 'ad',
+                  targetName: 'New ad',
+                  initialValues: emptyMetaObjectFormValues({
+                    campaignId: selectedCampaign.id,
+                    adSetId: activeAdSetId,
+                    name: `${selectedCampaign.name} - Ad`,
+                  }),
+                })
+              }
+            >
+              <Plus size={15} />
+              Ad
+            </button>
+            <button className="collapse-button" type="button" aria-expanded={expandedSections.ads} onClick={() => toggleSection('ads')}>
+              <ChevronDown size={15} />
+              {expandedSections.ads ? 'ย่อ' : 'ขยาย'}
+            </button>
+          </div>
         </div>
         {expandedSections.ads && <div className="table-wrap compact-table-wrap">
           <table className="performance-table">
@@ -2692,24 +3075,63 @@ function CampaignDetailPage({
                     {(() => {
                       const currentStatus = normalizeDeliveryStatus(ad.status, ad.spend)
                       const nextStatus = nextDeliveryStatus(currentStatus)
+                      const adForm = emptyMetaObjectFormValues({
+                        name: ad.name,
+                        status: toMetaObjectStatus(currentStatus),
+                        campaignId: ad.campaignId,
+                        adSetId: ad.adSetId,
+                        creativeId: ad.creative,
+                      })
                       return (
-                        <button
-                          className={nextStatus === 'active' ? 'mini-control-button good' : 'mini-control-button critical'}
-                          type="button"
-                          onClick={() =>
-                            onRequestStatusChange({
-                              objectType: 'ad',
-                              objectId: ad.id,
-                              targetName: ad.name,
-                              currentStatus,
-                              nextStatus,
-                              summary: `${nextStatus === 'active' ? 'Activate' : 'Pause'} ad จาก Ads table`,
-                              source: 'campaigns',
-                            })
-                          }
-                        >
-                          {nextStatus === 'active' ? 'Activate' : 'Pause'}
-                        </button>
+                        <div className="row-action-group">
+                          <button
+                            className={nextStatus === 'active' ? 'mini-control-button good' : 'mini-control-button critical'}
+                            type="button"
+                            onClick={() =>
+                              onRequestStatusChange({
+                                objectType: 'ad',
+                                objectId: ad.id,
+                                targetName: ad.name,
+                                currentStatus,
+                                nextStatus,
+                                summary: `${nextStatus === 'active' ? 'Activate' : 'Pause'} ad จาก Ads table`,
+                                source: 'campaigns',
+                              })
+                            }
+                          >
+                            {nextStatus === 'active' ? 'Activate' : 'Pause'}
+                          </button>
+                          <button
+                            className="mini-control-button neutral"
+                            type="button"
+                            onClick={() =>
+                              onRequestMutation({
+                                operation: 'update',
+                                objectType: 'ad',
+                                objectId: ad.id,
+                                targetName: ad.name,
+                                initialValues: adForm,
+                              })
+                            }
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="mini-control-button critical"
+                            type="button"
+                            onClick={() =>
+                              onRequestMutation({
+                                operation: 'delete',
+                                objectType: 'ad',
+                                objectId: ad.id,
+                                targetName: ad.name,
+                                initialValues: adForm,
+                              })
+                            }
+                          >
+                            Delete
+                          </button>
+                        </div>
                       )
                     })()}
                   </td>
@@ -3069,6 +3491,10 @@ function SettingsPage({
             <span>เปลี่ยนสถานะ Campaign, Ad set หรือ Ad เป็น ACTIVE/PAUSED ผ่าน confirmation ในเว็บ</span>
           </div>
           <div>
+            <strong>POST /api/meta/object</strong>
+            <span>สร้าง แก้ไข หรือลบ Campaign, Ad set และ Ad ผ่าน Object Manager พร้อม confirmation</span>
+          </div>
+          <div>
             <strong>GET /api/meta/workspace</strong>
             <span>ดึง Meta dataset และ map เป็นข้อมูลทั้ง Dashboard</span>
           </div>
@@ -3413,6 +3839,180 @@ function DeliveryStatusModal({
           <button className="approve-button" type="button" onClick={onConfirm} disabled={running}>
             <Check size={16} />
             {running ? 'Running...' : `Confirm ${nextStatus}`}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function MetaObjectMutationModal({
+  request,
+  campaigns,
+  adSets,
+  running,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  request: MetaObjectMutationRequest
+  campaigns: CampaignInsight[]
+  adSets: WorkspaceData['adSets']
+  running: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: (form: MetaObjectFormValues) => Promise<void>
+}) {
+  const [form, setForm] = useState<MetaObjectFormValues>(request.initialValues)
+  const title = `${mutationOperationLabel(request.operation)} ${metaObjectLabel(request.objectType)}`
+  const isDelete = request.operation === 'delete'
+  const updateForm = <K extends keyof MetaObjectFormValues>(key: K, value: MetaObjectFormValues[K]) => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="approval-modal meta-object-modal" role="dialog" aria-modal="true" aria-labelledby="meta-object-title">
+        <div className="approval-modal-header">
+          <div>
+            <span className={`badge ${isDelete ? 'critical' : 'scale'}`}>Meta Object Manager</span>
+            <h2 id="meta-object-title">{title}</h2>
+            <p>{request.targetName}</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close object modal" onClick={onCancel} disabled={running}>
+            <X size={17} />
+          </button>
+        </div>
+
+        {isDelete ? (
+          <div className="approval-warning critical-warning">
+            <Trash2 size={16} />
+            <span>คำสั่งนี้จะลบ {metaObjectLabel(request.objectType)} จริงจาก Meta API และอาจกระทบ delivery/history ของบัญชี</span>
+          </div>
+        ) : (
+          <div className="mutation-form-grid">
+            <label>
+              <span>Name</span>
+              <input value={form.name} onChange={(event) => updateForm('name', event.target.value)} />
+            </label>
+            <label>
+              <span>Status</span>
+              <select value={form.status} onChange={(event) => updateForm('status', event.target.value as MetaObjectStatus)}>
+                <option value="PAUSED">PAUSED</option>
+                <option value="ACTIVE">ACTIVE</option>
+              </select>
+            </label>
+
+            {request.objectType === 'campaign' && (
+              <>
+                <label>
+                  <span>Objective</span>
+                  <input value={form.objective} onChange={(event) => updateForm('objective', event.target.value)} />
+                </label>
+                <label>
+                  <span>Daily Budget (THB)</span>
+                  <input value={form.dailyBudget} inputMode="numeric" onChange={(event) => updateForm('dailyBudget', event.target.value)} />
+                </label>
+                <label className="field-wide">
+                  <span>Bid Strategy</span>
+                  <input value={form.bidStrategy} onChange={(event) => updateForm('bidStrategy', event.target.value)} />
+                </label>
+              </>
+            )}
+
+            {request.objectType === 'adset' && (
+              <>
+                <label>
+                  <span>Campaign</span>
+                  <select value={form.campaignId} onChange={(event) => updateForm('campaignId', event.target.value)}>
+                    <option value="">Select campaign</option>
+                    {campaigns.map((campaign) => (
+                      <option key={campaign.id} value={campaign.id}>
+                        {campaign.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Daily Budget (THB)</span>
+                  <input value={form.dailyBudget} inputMode="numeric" onChange={(event) => updateForm('dailyBudget', event.target.value)} />
+                </label>
+                <label>
+                  <span>Billing Event</span>
+                  <input value={form.billingEvent} onChange={(event) => updateForm('billingEvent', event.target.value)} />
+                </label>
+                <label>
+                  <span>Optimization Goal</span>
+                  <input value={form.optimizationGoal} onChange={(event) => updateForm('optimizationGoal', event.target.value)} />
+                </label>
+                <label>
+                  <span>Countries</span>
+                  <input value={form.countries} onChange={(event) => updateForm('countries', event.target.value)} />
+                </label>
+                <label>
+                  <span>Age</span>
+                  <div className="split-inputs">
+                    <input value={form.ageMin} inputMode="numeric" onChange={(event) => updateForm('ageMin', event.target.value)} />
+                    <input value={form.ageMax} inputMode="numeric" onChange={(event) => updateForm('ageMax', event.target.value)} />
+                  </div>
+                </label>
+                <label className="field-wide">
+                  <span>Targeting JSON</span>
+                  <textarea value={form.targetingJson} placeholder='เว้นว่างเพื่อใช้ countries/age หรือใส่ {"geo_locations":{"countries":["TH"]}}' onChange={(event) => updateForm('targetingJson', event.target.value)} />
+                </label>
+                <label className="field-wide">
+                  <span>Promoted Object JSON</span>
+                  <textarea value={form.promotedObjectJson} placeholder='เช่น {"page_id":"..."} สำหรับ objective ที่ต้องใช้ promoted_object' onChange={(event) => updateForm('promotedObjectJson', event.target.value)} />
+                </label>
+              </>
+            )}
+
+            {request.objectType === 'ad' && (
+              <>
+                <label className="field-wide">
+                  <span>Ad Set</span>
+                  <select value={form.adSetId} onChange={(event) => updateForm('adSetId', event.target.value)}>
+                    <option value="">Select ad set</option>
+                    {adSets.map((adSet) => (
+                      <option key={adSet.id} value={adSet.id}>
+                        {adSet.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-wide">
+                  <span>Creative ID</span>
+                  <input value={form.creativeId} placeholder="Meta creative_id" onChange={(event) => updateForm('creativeId', event.target.value)} />
+                </label>
+                <label className="field-wide">
+                  <span>Creative JSON</span>
+                  <textarea value={form.creativeJson} placeholder='หรือใส่ {"creative_id":"..."}' onChange={(event) => updateForm('creativeJson', event.target.value)} />
+                </label>
+              </>
+            )}
+
+            <label className="field-wide">
+              <span>Extra Params JSON</span>
+              <textarea value={form.extraJson} placeholder='Optional JSON object สำหรับ fields เพิ่มเติมของ Meta API' onChange={(event) => updateForm('extraJson', event.target.value)} />
+            </label>
+          </div>
+        )}
+
+        <div className="approval-warning">
+          <ShieldCheck size={16} />
+          <span>ระบบจะส่งคำสั่งจริงไป Meta API หลัง confirm และ sync workspace กลับมาใหม่เมื่อสำเร็จ</span>
+        </div>
+
+        {error && <div className="data-notice critical">{error}</div>}
+
+        <div className="approval-actions">
+          <button className="reject-button" type="button" onClick={onCancel} disabled={running}>
+            <X size={16} />
+            Cancel
+          </button>
+          <button className={isDelete ? 'reject-button' : 'approve-button'} type="button" onClick={() => onConfirm(form)} disabled={running}>
+            {isDelete ? <Trash2 size={16} /> : <Check size={16} />}
+            {running ? 'Running...' : `Confirm ${mutationOperationLabel(request.operation)}`}
           </button>
         </div>
       </section>

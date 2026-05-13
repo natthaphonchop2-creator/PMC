@@ -180,6 +180,8 @@ interface MetricSummary {
   frequency: number
 }
 
+type GraphParamValue = string | number | boolean | Record<string, unknown> | unknown[] | null | undefined
+
 interface MetaApiRequest {
   url?: string
   method?: string
@@ -351,6 +353,25 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
 
         const body = await readJsonBody(req)
         const result = await updateMetaObjectStatus(config, body)
+        writeJson(res, 200, result)
+        return
+      }
+
+      if (requestUrl.pathname === '/api/meta/object') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'Method not allowed' })
+          return
+        }
+
+        if (!config) {
+          writeJson(res, 400, {
+            error: 'Meta API ยังไม่ได้ตั้งค่า กรุณาใส่ Access Token และ Ad Account ID ใน Settings',
+          })
+          return
+        }
+
+        const body = await readJsonBody(req)
+        const result = await mutateMetaObject(config, body)
         writeJson(res, 200, result)
         return
       }
@@ -618,6 +639,13 @@ async function graphGet<T>(config: MetaConfig, path: string, params: Record<stri
   return json as T
 }
 
+function appendGraphParams(body: URLSearchParams, params: Record<string, GraphParamValue>) {
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || key === 'access_token') continue
+    body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value))
+  }
+}
+
 async function graphGetAllPages<T>(config: MetaConfig, path: string, params: Record<string, string | number | undefined> = {}): Promise<T[]> {
   const firstPage = await graphGet<{ data?: T[]; paging?: { next?: string } }>(config, path, params)
   const records = [...(firstPage.data ?? [])]
@@ -645,18 +673,36 @@ async function graphGetAllPages<T>(config: MetaConfig, path: string, params: Rec
   return records
 }
 
-async function graphPost<T>(config: MetaConfig, path: string, params: Record<string, string | number | undefined>): Promise<T> {
+async function graphPost<T>(config: MetaConfig, path: string, params: Record<string, GraphParamValue>): Promise<T> {
   const url = new URL(`${GRAPH_HOST}/${config.graphVersion}${path}`)
   const body = new URLSearchParams()
   body.set('access_token', config.accessToken)
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined) body.set(key, String(value))
-  }
+  appendGraphParams(body, params)
 
   const response = await fetch(url, {
     method: 'POST',
     body,
   })
+  const json = await response.json().catch(() => ({}))
+  const maybeError = (json as { error?: { message?: string; code?: number; type?: string } }).error
+
+  if (!response.ok || maybeError) {
+    throw new MetaApiError(
+      maybeError?.message || `Meta API request failed (${response.status})`,
+      response.status,
+      maybeError?.code,
+      maybeError?.type,
+    )
+  }
+
+  return json as T
+}
+
+async function graphDelete<T>(config: MetaConfig, path: string): Promise<T> {
+  const url = new URL(`${GRAPH_HOST}/${config.graphVersion}${path}`)
+  url.searchParams.set('access_token', config.accessToken)
+
+  const response = await fetch(url, { method: 'DELETE' })
   const json = await response.json().catch(() => ({}))
   const maybeError = (json as { error?: { message?: string; code?: number; type?: string } }).error
 
@@ -696,6 +742,74 @@ async function updateMetaObjectStatus(config: MetaConfig, body: Record<string, u
     objectType,
     objectId,
     status,
+    checkedAt: new Date().toISOString(),
+    source: 'Meta Marketing API',
+  }
+}
+
+function normalizeMetaObjectType(objectType: string) {
+  if (objectType === 'campaign' || objectType === 'adset' || objectType === 'ad') return objectType
+  throw new MetaApiError('Invalid object type. Use campaign, adset, or ad.', 400)
+}
+
+function readMutationParams(body: Record<string, unknown>) {
+  if (!body.params || typeof body.params !== 'object' || Array.isArray(body.params)) return {}
+  const params = { ...(body.params as Record<string, GraphParamValue>) }
+  delete params.access_token
+  return params
+}
+
+function createEdgeForObject(config: MetaConfig, objectType: 'campaign' | 'adset' | 'ad') {
+  const accountId = normalizeAdAccountId(config.adAccountId)
+  if (objectType === 'campaign') return `/${accountId}/campaigns`
+  if (objectType === 'adset') return `/${accountId}/adsets`
+  return `/${accountId}/ads`
+}
+
+async function mutateMetaObject(config: MetaConfig, body: Record<string, unknown>) {
+  const operation = typeof body.operation === 'string' ? body.operation : ''
+  const objectType = normalizeMetaObjectType(typeof body.objectType === 'string' ? body.objectType : '')
+  const objectId = typeof body.objectId === 'string' ? body.objectId.trim() : ''
+  const params = readMutationParams(body)
+
+  if (!['create', 'update', 'delete'].includes(operation)) {
+    throw new MetaApiError('Invalid operation. Use create, update, or delete.', 400)
+  }
+
+  if (operation === 'create') {
+    const result = await graphPost<{ id?: string; success?: boolean }>(config, createEdgeForObject(config, objectType), params)
+    return {
+      ok: Boolean(result.id || result.success),
+      operation,
+      objectType,
+      objectId: result.id ?? null,
+      checkedAt: new Date().toISOString(),
+      source: 'Meta Marketing API',
+    }
+  }
+
+  if (!objectId) {
+    throw new MetaApiError('Missing Meta object ID', 400)
+  }
+
+  if (operation === 'delete') {
+    const result = await graphDelete<{ success?: boolean }>(config, `/${objectId}`)
+    return {
+      ok: Boolean(result.success ?? true),
+      operation,
+      objectType,
+      objectId,
+      checkedAt: new Date().toISOString(),
+      source: 'Meta Marketing API',
+    }
+  }
+
+  const result = await graphPost<{ success?: boolean; id?: string }>(config, `/${objectId}`, params)
+  return {
+    ok: Boolean(result.success ?? true),
+    operation,
+    objectType,
+    objectId: result.id ?? objectId,
     checkedAt: new Date().toISOString(),
     source: 'Meta Marketing API',
   }
