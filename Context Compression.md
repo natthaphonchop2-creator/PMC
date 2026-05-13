@@ -9,6 +9,7 @@ The backend proxy now tolerates later Meta paging failures after a valid first p
 Latest deployment pass made the app production-runnable with a Node server that serves `dist/` and preserves `/api/meta/*`.
 Latest temporary deployment pass exposes the production server through a Cloudflare Quick Tunnel HTTPS URL protected by Basic Auth.
 Latest GitHub pass installed/enabled the GitHub plugin, initialized the project as a local git repository, created commits, and added GitHub/MCP setup notes.
+Latest GitHub connection test confirms the Codex GitHub connector now sees `natthaphonchop2-creator`, created a private GitHub repo, and has admin/push permission on it. Terminal `git push` is still blocked until GitHub CLI or SSH is authorized locally.
 
 ## Current Architecture
 
@@ -36,7 +37,11 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
 - Production must run through `npm start` after `npm run build`; a static-only host will not support Meta API routes.
 - Temporary public access is protected by `APP_BASIC_AUTH_USER` and `APP_BASIC_AUTH_PASSWORD` when those env vars are set.
 - Project is now a local git repository on branch `main`.
-- GitHub plugin login is `natthaphonchop2-creator`, but the GitHub App currently has no installed account/repository access.
+- GitHub plugin login is `natthaphonchop2-creator`, and the GitHub App is installed for that user account.
+- GitHub repo created: `https://github.com/natthaphonchop2-creator/pmc-ads-agent` as a private repository.
+- Local git remote `origin` points to `https://github.com/natthaphonchop2-creator/pmc-ads-agent.git`.
+- A temporary local GitHub CLI binary was downloaded to `/tmp/pmc-gh-cli/gh/gh_2.92.0_macOS_arm64/bin/gh`; it is not installed system-wide.
+- GitHub CLI auth is not complete. Running `gh auth login` will create a persistent OAuth token, so the user must authorize that step before terminal push can proceed.
 
 ## Files Changed In This Pass
 
@@ -116,6 +121,7 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
 
 - `Context Compression.md`
   - Rewritten to reflect the current live-data-only state.
+  - Updated after GitHub reconnection test with repo, connector, CLI, and push-blocker status.
 
 - `src/assets/` and `src/data/`
   - Removed unused starter assets and the now-empty data folder.
@@ -130,8 +136,15 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
 - `npm run lint` passes.
 - `npm run build` passes.
 - Local production `/healthz` returns `200 {"ok": true}` without auth; root remains protected by Basic Auth.
-- GitHub plugin `_get_user_login` returns `natthaphonchop2-creator`.
-- GitHub plugin repository and installed account lists are empty.
+- GitHub connector installed accounts now returns `natthaphonchop2-creator`.
+- GitHub connector installations now returns installation `131881501` for `natthaphonchop2-creator`.
+- GitHub connector repository search now returns `natthaphonchop2-creator/pmc-ads-agent` with admin and push permissions.
+- GitHub repo `natthaphonchop2-creator/pmc-ads-agent` was created in Chrome as a private repository.
+- GitHub connector created the first remote commit `be0aef5251020aa33711d2ffd07e47ac8556a26f` containing `README.md`.
+- Local `origin` remote is set to `https://github.com/natthaphonchop2-creator/pmc-ads-agent.git`.
+- Terminal `git push -u origin main` failed with `could not read Username for 'https://github.com': Device not configured`, because there is no local GitHub HTTPS credential yet.
+- GitHub CLI v2.92.0 was downloaded from the official `cli/cli` GitHub release to `/tmp/pmc-gh-cli/.../gh`.
+- `gh auth status` reports no logged-in GitHub hosts.
 - Local git repo created with commits:
   - `1e42b62 Initial PMC Ads Agent dashboard`
   - `52787f4 Add GitHub setup notes and MCP example`
@@ -151,7 +164,7 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
   - Authenticated `/api/meta/status` returns configured/connected and masks ad account.
   - Cloudflare tunnel log: `/tmp/pmc-ads-agent-cloudflare.log`.
   - `cloudflared` binary was downloaded to `/tmp/pmc-cloudflared/cloudflared`; it is not installed system-wide.
-  - GitHub push is blocked until a GitHub browser login/PAT/repository access is available. Safari and the in-app browser were not logged into GitHub; Codex GitHub plugin is authenticated as `natthaphonchop2-creator` but has no installed account/repository access and no create-repo tool.
+  - GitHub terminal push is blocked until GitHub CLI OAuth or SSH access is authorized locally. The connector itself now has repo access, but it cannot provide credentials to local `git`.
 - Source search found no app-owned records from the old development dataset.
 - Browser QA confirms support/chat button count is 0, workspace selector opens Settings, theme toggles to dark mode, and date preset can change to `last_7d`.
 - Meta API check passes for `/me`, ad account, and insights read using the imported local config.
@@ -174,4 +187,4 @@ Latest GitHub pass installed/enabled the GitHub plugin, initialized the project 
 
 ## Next Recommended Step
 
-Next step: create or provide a GitHub repository URL, then add it as `origin` and push `main`. If using Codex GitHub plugin, install/authorize the GitHub App for an account/repository first. Temporary web demo is available through the Cloudflare URL while the local machine and screen sessions remain running.
+Next step: authorize GitHub CLI with `gh auth login` or add an SSH deploy key/account key, then run `git push -u origin main`. After the source is pushed, continue with permanent deployment. Temporary web demo is still available through the Cloudflare URL while the local machine and screen sessions remain running.
