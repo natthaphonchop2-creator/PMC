@@ -3,13 +3,13 @@
     Inter, "IBM Plex Sans Thai", "Noto Sans Thai", ui-sans-serif, system-ui,
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color-scheme: light;
-  --background: #f6f7fb;
+  --background: #f7f8fc;
   --surface: #ffffff;
-  --ink: #171a24;
-  --muted: #707789;
-  --border: #e5e8ef;
+  --ink: #171b27;
+  --muted: #667085;
+  --border: #e1e7f0;
   --blue: #7567d8;
-  --shadow: 0 12px 34px rgba(32, 39, 58, 0.055);
+  --shadow: 0 10px 26px rgba(32, 39, 58, 0.052);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -24,7 +24,8 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: var(--background);
+  background:
+    linear-gradient(180deg, #f9fbff 0%, #f4f7fc 54%, #eef3f9 100%);
 }
 
 button,

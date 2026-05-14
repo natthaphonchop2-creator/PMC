@@ -7,6 +7,9 @@ import type {
   AgentTask,
   AIInsight,
   AppointmentStage,
+  AudienceGeoTarget,
+  AudienceTarget,
+  AudienceTargeting,
   AuditEvent,
   AutoAdControl,
   CampaignInsight,
@@ -148,8 +151,38 @@ interface MetaAdSetRow {
     publisher_platforms?: string[]
     facebook_positions?: string[]
     instagram_positions?: string[]
+    device_platforms?: string[]
+    locales?: number[]
+    geo_locations?: {
+      countries?: string[]
+      regions?: Array<{ key?: string; name?: string; country?: string; country_code?: string }>
+      cities?: Array<{ key?: string; name?: string; region?: string; country?: string; country_code?: string; radius?: number; distance_unit?: string }>
+      zips?: Array<{ key?: string; name?: string; primary_city?: string; region?: string; country?: string }>
+      custom_locations?: Array<{ name?: string; latitude?: number; longitude?: number; radius?: number; distance_unit?: string; address_string?: string }>
+      location_types?: string[]
+    }
+    excluded_geo_locations?: {
+      countries?: string[]
+      regions?: Array<{ key?: string; name?: string; country?: string; country_code?: string }>
+      cities?: Array<{ key?: string; name?: string; region?: string; country?: string; country_code?: string }>
+    }
+    flexible_spec?: Array<Record<string, MetaTargetingEntity[] | undefined>>
+    exclusions?: Record<string, MetaTargetingEntity[] | undefined>
+    interests?: MetaTargetingEntity[]
+    behaviors?: MetaTargetingEntity[]
+    demographics?: MetaTargetingEntity[]
+    custom_audiences?: MetaTargetingEntity[]
+    excluded_custom_audiences?: MetaTargetingEntity[]
+    lookalike_spec?: { type?: string; ratio?: number; country?: string; starting_ratio?: number }
   }
   insights?: { data: MetaInsightsRow[] }
+}
+
+interface MetaTargetingEntity {
+  id?: string
+  name?: string
+  path?: string[]
+  type?: string
 }
 
 interface MetaAdRow {
@@ -373,6 +406,25 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
 
         const body = await readJsonBody(req)
         const result = await mutateMetaObject(config, body)
+        writeJson(res, 200, result)
+        return
+      }
+
+      if (requestUrl.pathname === '/api/meta/creative-launch') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'Method not allowed' })
+          return
+        }
+
+        if (!config) {
+          writeJson(res, 400, {
+            error: 'Meta API ยังไม่ได้ตั้งค่า กรุณาใส่ Access Token และ Ad Account ID ใน Settings',
+          })
+          return
+        }
+
+        const body = await readJsonBody(req)
+        const result = await launchMetaCreative(config, body)
         writeJson(res, 200, result)
         return
       }
@@ -816,6 +868,76 @@ async function mutateMetaObject(config: MetaConfig, body: Record<string, unknown
   }
 }
 
+async function launchMetaCreative(config: MetaConfig, body: Record<string, unknown>) {
+  const accountId = normalizeAdAccountId(config.adAccountId)
+  const adSetId = stringField(body, 'adSetId')
+  const pageId = stringField(body, 'pageId')
+  const linkUrl = stringField(body, 'linkUrl')
+  const primaryText = stringField(body, 'primaryText')
+  const headline = stringField(body, 'headline')
+  const description = stringField(body, 'description')
+  const ctaType = stringField(body, 'ctaType') || 'LEARN_MORE'
+  const adName = stringField(body, 'adName') || `Auto post ad ${formatNow()}`
+  const creativeName = stringField(body, 'creativeName') || `${adName} creative`
+  const status = (stringField(body, 'status') || 'PAUSED').toUpperCase()
+
+  if (!adSetId) throw new MetaApiError('Missing adSetId for Meta launch', 400)
+  if (!pageId) throw new MetaApiError('Missing pageId for object_story_spec', 400)
+  if (!linkUrl) throw new MetaApiError('Missing linkUrl for creative link_data', 400)
+  if (!primaryText) throw new MetaApiError('Missing primaryText for creative message', 400)
+  if (!headline) throw new MetaApiError('Missing headline for creative name/headline', 400)
+  if (status !== 'PAUSED' && status !== 'ACTIVE') throw new MetaApiError('Invalid launch status. Use PAUSED or ACTIVE.', 400)
+
+  const linkData: Record<string, unknown> = {
+    link: linkUrl,
+    message: primaryText,
+    name: headline,
+    call_to_action: {
+      type: ctaType,
+      value: { link: linkUrl },
+    },
+  }
+
+  if (description) {
+    linkData.description = description
+  }
+
+  const objectStorySpec = {
+    page_id: pageId,
+    link_data: linkData,
+  }
+
+  const creative = await graphPost<{ id?: string }>(config, `/${accountId}/adcreatives`, {
+    name: creativeName,
+    object_story_spec: objectStorySpec,
+  })
+
+  if (!creative.id) {
+    throw new MetaApiError('Meta did not return creative_id', 502)
+  }
+
+  const ad = await graphPost<{ id?: string }>(config, `/${accountId}/ads`, {
+    name: adName,
+    adset_id: adSetId,
+    creative: { creative_id: creative.id },
+    status,
+  })
+
+  return {
+    ok: Boolean(ad.id),
+    creativeId: creative.id,
+    adId: ad.id ?? null,
+    adSetId,
+    status,
+    checkedAt: new Date().toISOString(),
+    source: 'Meta Marketing API',
+  }
+}
+
+function stringField(body: Record<string, unknown>, key: string) {
+  return typeof body[key] === 'string' ? body[key].trim() : ''
+}
+
 async function fetchMetaWorkspace(config: MetaConfig, datePreset: string) {
   const accountId = normalizeAdAccountId(config.adAccountId)
   const insightsParams = { fields: INSIGHT_FIELDS, date_preset: datePreset, limit: 500 }
@@ -955,11 +1077,13 @@ function buildWorkspaceFromMeta(args: {
     return rows
       .map((adSet): WorkspaceData['adSets'][number] => {
         const metrics = metricFromInsight(adSet.insights?.data?.[0])
+        const audienceTargeting = buildAudienceTargeting(adSet.targeting)
         return {
           id: adSet.id,
           campaignId: adSet.campaign_id ?? '',
           name: adSet.name,
-          audience: summarizeTargeting(adSet.targeting),
+          audience: audienceTargeting.rawSummary,
+          audienceTargeting,
           deliveryStatus: isMetaActive(adSet.effective_status) ? 'active' : 'paused',
           budget: centsToCurrency(adSet.daily_budget || adSet.lifetime_budget),
           spend: metrics.spend,
@@ -1527,11 +1651,178 @@ function inferServiceCategory(name: string, objective: string) {
   return objective || 'Meta campaign group'
 }
 
-function summarizeTargeting(targeting: MetaAdSetRow['targeting']) {
-  if (!targeting) return 'Meta targeting'
-  const platforms = targeting.publisher_platforms?.join(', ')
-  const age = targeting.age_min || targeting.age_max ? `${targeting.age_min ?? '?'}-${targeting.age_max ?? '?'}` : ''
-  return [platforms, age ? `age ${age}` : '', targeting.genders?.length ? `gender ${targeting.genders.join('/')}` : ''].filter(Boolean).join(' · ') || 'Meta targeting'
+function buildAudienceTargeting(targeting: MetaAdSetRow['targeting']): AudienceTargeting {
+  const genders = (targeting?.genders ?? []).map(genderLabel).filter(Boolean)
+  const publisherPlatforms = (targeting?.publisher_platforms ?? []).map(formatTargetingLabel)
+  const placements = [
+    ...(targeting?.facebook_positions ?? []).map((placement) => `Facebook ${formatTargetingLabel(placement)}`),
+    ...(targeting?.instagram_positions ?? []).map((placement) => `Instagram ${formatTargetingLabel(placement)}`),
+  ]
+  const devicePlatforms = (targeting?.device_platforms ?? []).map(formatTargetingLabel)
+  const geoLocations = collectGeoLocations(targeting)
+  const interests = collectAudienceTargets(targeting)
+  const exclusions = collectExcludedTargets(targeting)
+  const locales = (targeting?.locales ?? []).map((locale) => `Locale ${locale}`)
+  const age = targeting?.age_min || targeting?.age_max ? `Age ${targeting.age_min ?? '?'}-${targeting.age_max ?? '?'}` : ''
+  const geoSummary = geoLocations.slice(0, 3).map((geo) => geo.name).join(', ')
+  const interestSummary = interests.slice(0, 3).map((interest) => interest.name).join(', ')
+  const rawSummary =
+    [publisherPlatforms.join(', '), age, genders.join('/'), geoSummary, interestSummary ? `Interest: ${interestSummary}` : '']
+      .filter(Boolean)
+      .join(' · ') || 'Meta targeting'
+
+  return {
+    ageMin: targeting?.age_min,
+    ageMax: targeting?.age_max,
+    genders,
+    publisherPlatforms,
+    placements,
+    devicePlatforms,
+    geoLocations,
+    interests,
+    exclusions,
+    locales,
+    rawSummary,
+  }
+}
+
+function collectGeoLocations(targeting: MetaAdSetRow['targeting']): AudienceGeoTarget[] {
+  const geo = targeting?.geo_locations
+  if (!geo) return []
+
+  const countries = (geo.countries ?? []).map((country) => ({
+    type: 'country' as const,
+    name: countryName(country) ?? country,
+    key: country,
+    country,
+  }))
+  const regions = (geo.regions ?? []).map((region) => ({
+    type: 'region' as const,
+    name: region.name || region.key || 'Region',
+    key: region.key,
+    country: countryName(region.country_code || region.country),
+  }))
+  const cities = (geo.cities ?? []).map((city) => ({
+    type: 'city' as const,
+    name: city.name || city.key || 'City',
+    key: city.key,
+    region: city.region,
+    country: countryName(city.country_code || city.country),
+    radius: city.radius,
+    distanceUnit: city.distance_unit,
+  }))
+  const zips = (geo.zips ?? []).map((zip) => ({
+    type: 'zip' as const,
+    name: zip.name || zip.key || zip.primary_city || 'Zip',
+    key: zip.key,
+    region: zip.region,
+    country: countryName(zip.country),
+  }))
+  const custom = (geo.custom_locations ?? []).map((location, index) => ({
+    type: 'custom' as const,
+    name: location.name || location.address_string || `Custom location ${index + 1}`,
+    radius: location.radius,
+    distanceUnit: location.distance_unit,
+  }))
+
+  return [...countries, ...regions, ...cities, ...zips, ...custom].filter((location) => Boolean(location.name))
+}
+
+function collectAudienceTargets(targeting: MetaAdSetRow['targeting']): AudienceTarget[] {
+  const directTargets = [
+    ...targetEntities(targeting?.interests, 'interest'),
+    ...targetEntities(targeting?.behaviors, 'behavior'),
+    ...targetEntities(targeting?.demographics, 'demographic'),
+    ...targetEntities(targeting?.custom_audiences, 'custom_audience'),
+  ]
+  const flexibleTargets = (targeting?.flexible_spec ?? []).flatMap((spec) =>
+    Object.entries(spec).flatMap(([key, value]) => targetEntities(value, targetTypeFromKey(key), key)),
+  )
+  const lookalikeSpec = targeting?.lookalike_spec
+  const lookalikeTargets = lookalikeSpec
+    ? [
+        {
+          type: 'lookalike' as const,
+          name: `Lookalike ${lookalikeSpec.ratio ? `${lookalikeSpec.ratio}%` : lookalikeSpec.type || 'audience'}`,
+          source: lookalikeSpec.country ? countryName(lookalikeSpec.country) : 'Meta lookalike spec',
+        },
+      ]
+    : []
+
+  return dedupeAudienceTargets([...directTargets, ...flexibleTargets, ...lookalikeTargets])
+}
+
+function collectExcludedTargets(targeting: MetaAdSetRow['targeting']): AudienceTarget[] {
+  const exclusionTargets = Object.entries(targeting?.exclusions ?? {}).flatMap(([key, value]) =>
+    targetEntities(value, 'excluded', key),
+  )
+  const excludedCustom = targetEntities(targeting?.excluded_custom_audiences, 'excluded', 'excluded_custom_audiences')
+  const excludedCountries = (targeting?.excluded_geo_locations?.countries ?? []).map((country) => ({
+    type: 'excluded' as const,
+    name: countryName(country) ?? country,
+    source: 'excluded_geo_locations',
+  }))
+
+  return dedupeAudienceTargets([...exclusionTargets, ...excludedCustom, ...excludedCountries])
+}
+
+function targetEntities(entities: MetaTargetingEntity[] | undefined, type: AudienceTarget['type'], source?: string): AudienceTarget[] {
+  return (entities ?? [])
+    .map((entity) => ({
+      type,
+      id: entity.id,
+      name: entity.name || entity.id || 'Unnamed target',
+      path: entity.path?.join(' > '),
+      source,
+    }))
+    .filter((entity) => Boolean(entity.name))
+}
+
+function targetTypeFromKey(key: string): AudienceTarget['type'] {
+  if (key.includes('interest')) return 'interest'
+  if (key.includes('behavior')) return 'behavior'
+  if (key.includes('demographic')) return 'demographic'
+  if (key.includes('custom')) return 'custom_audience'
+  return 'other'
+}
+
+function dedupeAudienceTargets(targets: AudienceTarget[]) {
+  const seen = new Set<string>()
+  return targets.filter((target) => {
+    const key = `${target.type}:${target.id || target.name}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function genderLabel(gender: number) {
+  if (gender === 1) return 'Men'
+  if (gender === 2) return 'Women'
+  return `Gender ${gender}`
+}
+
+function formatTargetingLabel(value: string) {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function countryName(codeOrName: string | undefined) {
+  if (!codeOrName) return undefined
+  const countryMap: Record<string, string> = {
+    TH: 'Thailand',
+    US: 'United States',
+    SG: 'Singapore',
+    MY: 'Malaysia',
+    LA: 'Laos',
+    KH: 'Cambodia',
+    MM: 'Myanmar',
+    VN: 'Vietnam',
+  }
+  return countryMap[codeOrName.toUpperCase()] ?? codeOrName
 }
 
 function isMetaActive(status: string) {

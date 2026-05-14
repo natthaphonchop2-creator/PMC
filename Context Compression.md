@@ -1,5 +1,99 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 Whole-Site Comfort Polish
+
+User requested smaller typography, easier usability, subtle decoration/effects, and a more comfortable visual style across the whole website.
+
+Completed changes:
+- Added a site-wide comfort polish layer in CSS without changing Meta API logic or page data flow.
+- Reduced global type scale for headings, nav, buttons, tables, cards, forms, badges, tooltips, and mobile views.
+- Softened base colors and page background in `src/index.css`.
+- Added lighter card shadows, smaller radii, quieter borders, and more compact spacing.
+- Added subtle hover/active transitions for nav items, cards, tables, buttons, and interactive rows.
+- Reduced control heights for buttons/date range/form fields to make the UI denser but still readable.
+- Tuned chart heights, table cell padding, AI Insights table density, and mobile overrides.
+- Kept the previous functional layout and Audience Insights rebuild intact.
+
+Files changed:
+- `src/index.css`
+  - Softer background, border, shadow, and muted text tokens.
+- `src/App.css`
+  - Added `Comfort polish` block near the end of the file.
+
+Verification:
+- `npm run build` passes.
+- Browser QA on `http://127.0.0.1:5174/`:
+  - Reload produced `0` fresh console errors/warnings.
+  - Navigation and Audience Insights page still render correctly.
+  - Current narrow in-app browser view shows smaller text and compact controls without visible broken layout.
+
+## Latest Completed Work - 2026-05-14 Audience Insights Rebuild
+
+User requested a full rebuild of `Audience Insights` so it shows real target groups from Ads, including age, names, locations, and other targeting attributes, presented as both graphs and detailed data.
+
+Completed changes:
+- Rebuilt `Audience Insights` UI into a real Meta Ad Set targeting dashboard.
+- Added structured audience targeting data to `AdSetInsight`:
+  - age range
+  - genders
+  - publisher platforms
+  - placements
+  - device platforms
+  - geo locations: country, region, city, zip, custom location
+  - target names: interests, behaviors, demographics, custom audiences, lookalikes
+  - exclusions and locales
+- Backend now parses `targeting` from Meta ad sets into `audienceTargeting` instead of only a short text summary.
+- Frontend now presents:
+  - Target Snapshot: main age, main location, main target/audience name
+  - Age Performance graph
+  - Location Performance graph
+  - Platform Mix graph
+  - Target / Audience Names graph
+  - Ad Set Audience Detail table/cards with age, gender, location, target names, platform, placements, spend, budget, bookings, and ROAS
+  - Audience Memory panel from Meta sync
+- Added privacy note in the UI: Meta Ads does not provide individual personal names or personal addresses; the system shows targeting group names, location targets, and segment-level data from Ads.
+
+Files changed:
+- `src/types.ts`
+  - Added `AudienceGeoTarget`, `AudienceTarget`, and `AudienceTargeting`.
+  - Added optional `audienceTargeting` to `AdSetInsight`.
+- `server/metaApiPlugin.ts`
+  - Expanded `MetaAdSetRow.targeting` typing.
+  - Added audience targeting parser/normalizer helpers.
+  - `buildAdSets` now outputs structured `audienceTargeting`.
+- `src/App.tsx`
+  - Normalizes stored/synced `audienceTargeting`.
+  - Replaced the old `AudienceStudioPage` with the new Audience Insights dashboard.
+  - Added aggregation helpers and bar-list graph components.
+  - Updated Audience Insights page subtitle.
+- `src/App.css`
+  - Added responsive layout and visual styles for the new Audience Insights page.
+
+Verification:
+- `npm run build` passes.
+- Browser QA on `http://127.0.0.1:5174/`:
+  - Audience Insights nav opens the new page.
+  - Page contains Target Snapshot, Age Performance, Location Performance, Target / Audience Names, and Ad Set Audience Detail.
+  - Fresh browser logs after reload/click have `0` new errors/warnings.
+  - Mobile/narrow viewport shows cards and graph rows without visible overflow.
+- Local API check:
+  - `/api/meta/workspace?datePreset=maximum` returns 36 ad sets.
+  - 36/36 ad sets include `audienceTargeting`.
+  - Sample ad set includes age `20-65`, country `Thailand`, and custom audience name from Meta targeting.
+
+## Latest Completed Work - 2026-05-14 Ref-Style UI Rollback
+
+User cancelled the Madgicx/ref-style UI rebuild and requested an immediate rollback.
+
+Rollback completed:
+- Reverted `src/App.tsx`, `src/App.css`, and `src/index.css` to the previous committed state.
+- Removed the dark icon-rail shell, measured chart wrapper, dark chart token changes, dark-first default theme, and default `Analytics` tab change from the cancelled pass.
+- Kept this context note so future work does not assume the cancelled ref-style UI is still active.
+
+Latest verification target:
+- Run `npm run build`.
+- Reload `http://127.0.0.1:5174/` and confirm the UI is back to the previous pre-ref-style layout.
+
 ## Current Task Checkpoint
 
 Completed the navbar date range and Performance repair pass.
@@ -296,6 +390,30 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Added `AI Marketer Flow` on the platform page with entry points for daily audit recommendations, optimization, creative workflow, and one-click report.
   - Browser QA confirms the platform page renders the new style/function labels and `Ads Manager` opens without framework overlay or console errors.
   - `npm run build` passes after this UI/function pass.
+- Creative Studio Auto Post + Meta Ads completed:
+  - `Creative Studio` now has a real workflow split into `Creative performance`, `Asset/API work orders`, `Launch Notes`, and `Auto Post + Meta Ads`.
+  - Added `POST /api/meta/creative-launch` in `server/metaApiPlugin.ts`; it creates a Meta Ad Creative through `/{ad_account_id}/adcreatives` with `object_story_spec`, then creates an Ad through `/{ad_account_id}/ads`.
+  - Launch form requires Meta Page ID, Ad Set, Landing/Booking URL, Primary Text, and Headline before the create button is enabled.
+  - Default launch status is `PAUSED` to avoid accidentally activating spend before preview/policy/link review; `ACTIVE` is still available as an explicit selection.
+  - Source creative selector uses live `adInsights`, auto-fills ad name, creative name, primary text, headline, and target ad set.
+  - Launch notes are generated from selected creative metrics and selected ad set, with clear warning that clicking the button is the real Meta write action.
+  - Settings now documents the new `POST /api/meta/creative-launch` endpoint.
+  - CSS added for responsive launch form, preview panel, focus states, and mobile collapse.
+  - Local route check confirms `GET /api/meta/creative-launch` returns `405 Method not allowed`, proving the dev server has loaded the new endpoint without mutating Meta.
+  - Browser QA confirms `Auto Post + Meta Ads`, `Live Creative Performance`, `API Work Orders`, `Launch Notes`, and disabled `Create PAUSED Meta Ad` render on Creative Studio with no fresh console errors.
+  - `npm run build` passes after this Creative Studio launch update.
+- Tool-local action buttons completed:
+  - Updated page action behavior so tool pages do not send the user back and forth between other tools for primary actions.
+  - `Creative Studio` hero buttons no longer navigate to `AI Insights` or `Campaigns`.
+  - `Creative Studio` now shows local tool actions: `Creative Score` scrolls to the live creative performance section, and `Auto Post` scrolls to the Auto Post + Meta Ads form.
+  - Removed `onOpenCampaigns` and `onOpenInsights` from `CreativeStudioPage`; sidebar remains the intentional way to switch tools.
+  - `Performance` no longer uses in-page action buttons to jump to `Campaigns` or `Optimization`.
+  - `Performance` channel rows now open local drill-down context instead of a Campaigns navigation button.
+  - `Performance` AI Auto card now opens an `AI Auto Guardrails` drawer inside the same page instead of navigating to Optimization.
+  - `Performance` campaign alerts now open a local campaign-signal drill-down and only update selected campaign state; they do not switch to Creative Insights.
+  - Replaced Recharts `ResponsiveContainer` in Performance with a measured chart frame so charts render only after their container has a valid size.
+  - Browser QA confirms `Creative Score` / `Auto Post` labels are present, old `AI Insights` / `Create Ad` hero buttons are gone, clicking them keeps the same URL, `Guardrails` opens a local drawer, and fresh browser logs have no warnings/errors.
+  - `npm run build` passes after this tool-local action update.
 
 ## Next Recommended Step
 

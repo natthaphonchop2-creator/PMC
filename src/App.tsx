@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Activity,
@@ -23,6 +24,7 @@ import {
   Info,
   Layers3,
   LineChart,
+  MapPin,
   PauseCircle,
   Pencil,
   PlayCircle,
@@ -47,7 +49,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  ResponsiveContainer,
   Tooltip as ChartTooltip,
   XAxis,
   YAxis,
@@ -65,6 +66,9 @@ import type {
   AutoAdControl,
   AutoDecision,
   AutomationMode,
+  AudienceGeoTarget,
+  AudienceTarget,
+  AudienceTargeting,
   CampaignInsight,
   ChannelPerformance,
   ComplianceReview,
@@ -212,7 +216,7 @@ const pageMeta: Record<TabId, { title: string; subtitle: string; icon: typeof Ba
   },
   memory: {
     title: 'Audience Insights',
-    subtitle: 'Targeting, segment context และ audience memory จาก Meta API',
+    subtitle: 'Age, location, platform, target names และ performance จาก Meta Ad Sets',
     icon: Users,
   },
   compliance: {
@@ -871,6 +875,29 @@ interface MetaObjectMutationPayload {
   error?: string
 }
 
+interface CreativeLaunchFormValues {
+  pageId: string
+  adSetId: string
+  adName: string
+  creativeName: string
+  linkUrl: string
+  primaryText: string
+  headline: string
+  description: string
+  ctaType: string
+  status: MetaObjectStatus
+}
+
+interface CreativeLaunchPayload {
+  ok: boolean
+  creativeId: string
+  adId: string | null
+  adSetId: string
+  status: MetaObjectStatus
+  checkedAt: string
+  error?: string
+}
+
 type CampaignControlScope = MetaObjectType
 type InsightGroupBy = 'creative' | 'campaign' | 'adset' | 'ad' | 'service' | 'objective' | 'status'
 type AutoRulePreset = 'balanced' | 'protect' | 'scale'
@@ -1013,6 +1040,23 @@ function pickArray<T>(value: unknown, fallback: T[]): T[] {
   return value as T[]
 }
 
+function normalizeAudienceTargeting(input: AudienceTargeting | undefined): AudienceTargeting | undefined {
+  if (!input) return undefined
+  return {
+    ageMin: Number.isFinite(input.ageMin) ? input.ageMin : undefined,
+    ageMax: Number.isFinite(input.ageMax) ? input.ageMax : undefined,
+    genders: pickArray<string>(input.genders, []),
+    publisherPlatforms: pickArray<string>(input.publisherPlatforms, []),
+    placements: pickArray<string>(input.placements, []),
+    devicePlatforms: pickArray<string>(input.devicePlatforms, []),
+    geoLocations: pickArray<AudienceGeoTarget>(input.geoLocations, []),
+    interests: pickArray<AudienceTarget>(input.interests, []),
+    exclusions: pickArray<AudienceTarget>(input.exclusions, []),
+    locales: pickArray<string>(input.locales, []),
+    rawSummary: cleanMetaDisplayText(input.rawSummary, input.rawSummary),
+  }
+}
+
 function normalizeWorkspaceData(input?: Partial<WorkspaceData> | null): WorkspaceData {
   return {
     ...emptyWorkspaceData,
@@ -1042,6 +1086,7 @@ function normalizeWorkspaceData(input?: Partial<WorkspaceData> | null): Workspac
       ...adSet,
       name: cleanMetaDisplayText(adSet.name, 'Meta ad set'),
       audience: cleanMetaDisplayText(adSet.audience, adSet.audience),
+      audienceTargeting: normalizeAudienceTargeting(adSet.audienceTargeting),
     })),
     adInsights: pickArray(input?.adInsights, emptyWorkspaceData.adInsights).map((ad) => ({
       ...ad,
@@ -2003,12 +2048,8 @@ function App() {
             trendData={trendData}
             channelPerformance={channelPerformance}
             funnelMetrics={funnelMetrics}
-            onOpen={setActiveTab}
             onOpenDrilldown={setPerformanceDrilldown}
-            onSelectCampaign={(id) => {
-              setSelectedCampaignId(id)
-              setActiveTab('investigator')
-            }}
+            onSelectCampaign={setSelectedCampaignId}
           />
         )}
         {activeTab === 'overview' && !hasPerformanceData && (
@@ -2183,9 +2224,9 @@ function App() {
           <CreativeStudioPage
             tasks={tasks}
             campaigns={campaigns}
+            adSets={adSets}
             adInsights={adInsights}
-            onOpenCampaigns={() => setActiveTab('campaigns')}
-            onOpenInsights={() => setActiveTab('investigator')}
+            onSyncMeta={() => handleSyncMetaWorkspace()}
           />
         )}
         {activeTab === 'tasks' && adInsights.length === 0 && (
@@ -2199,7 +2240,7 @@ function App() {
         )}
 
         {activeTab === 'memory' && adSets.length > 0 && (
-          <AudienceStudioPage items={memoryItems} campaigns={campaigns} adSets={adSets} />
+          <AudienceStudioPage items={memoryItems} campaigns={campaigns} adSets={adSets} adInsights={adInsights} />
         )}
         {activeTab === 'memory' && adSets.length === 0 && (
           <NoDataPanel
@@ -2694,7 +2735,6 @@ function PerformancePage({
   trendData,
   channelPerformance,
   funnelMetrics,
-  onOpen,
   onOpenDrilldown,
   onSelectCampaign,
 }: {
@@ -2708,7 +2748,6 @@ function PerformancePage({
   trendData: TrendPoint[]
   channelPerformance: ChannelPerformance[]
   funnelMetrics: WorkspaceData['funnelMetrics']
-  onOpen: (tab: TabId) => void
   onOpenDrilldown: (drilldown: PerformanceDrilldown) => void
   onSelectCampaign: (id: string) => void
 }) {
@@ -2845,6 +2884,46 @@ function PerformancePage({
   const handleExportPdf = () => {
     window.requestAnimationFrame(() => window.print())
   }
+  const openAutoGuardrailDrilldown = () => {
+    onOpenDrilldown({
+      type: 'metric',
+      title: 'AI Auto Guardrails',
+      subtitle: `${activeAutoAds} active ads · ${autoPending} recommendations`,
+      summary: 'สรุปสถานะ automation ภายในหน้า Performance โดยไม่ย้ายไปหน้าอื่น เพื่ออ่านความเสี่ยงและ next action ก่อนเปิด/ปิด ads จริง',
+      metrics: [
+        { label: 'Mode', value: autoMode === 'suggest' ? 'Suggest' : 'Auto Pilot', help: metricHelp.autoAds },
+        { label: 'Active Ads', value: fmtNum(activeAutoAds), help: 'จำนวน ads ที่ยัง active จาก workspace ปัจจุบัน' },
+        { label: 'Pending Actions', value: fmtNum(pendingActions), help: 'จำนวน action ที่ยังรอ approve หรือ execute' },
+      ],
+      findings: [
+        autoPending > 0 ? `${autoPending} auto recommendations ต้องตรวจ guardrail ก่อน execute` : 'ยังไม่มี auto recommendation ค้าง',
+        pendingActions > 0 ? `${pendingActions} queued actions ควรอ่าน before/after ก่อนยิง Meta API` : 'Action Queue ไม่มีรายการค้าง',
+        'การเปิด/ปิด ads จริงยังต้องผ่าน confirmation ของ tool ที่รับผิดชอบ',
+      ],
+      nextAction: 'ใช้ Performance เพื่อวิเคราะห์ภาพรวม แล้วใช้ sidebar เลือก Optimization เมื่อต้องการทำ execution เฉพาะทาง',
+    })
+  }
+  const openCampaignSignalDrilldown = (campaign: CampaignInsight) => {
+    onSelectCampaign(campaign.id)
+    onOpenDrilldown({
+      type: 'metric',
+      title: campaign.name,
+      subtitle: `${campaign.objective} · ${statusMeta(campaign.aiStatus).label}`,
+      summary: campaign.aiSummary,
+      metrics: [
+        { label: 'Spend', value: fmtMoney(campaign.spend), help: metricHelp.adSpend },
+        { label: 'ROAS', value: `${campaign.roas.toFixed(2)}x`, help: metricHelp.roas },
+        { label: 'CPA', value: fmtMoney(campaign.cpa), help: 'Cost per acquisition/result จาก campaign insights' },
+        { label: 'CTR', value: fmtPct(campaign.ctr), help: metricHelp.ctr },
+      ],
+      findings: [
+        campaign.aiStatus === 'critical' ? 'Campaign นี้มี critical signal ต้องตรวจ cost/funnel ก่อน scale' : 'Campaign นี้ควร monitor signal เพิ่มก่อน action จริง',
+        campaign.frequency >= 5 ? `Frequency ${campaign.frequency.toFixed(1)} สูง ควรตรวจ creative fatigue` : `Frequency ${campaign.frequency.toFixed(1)} ยังไม่สูงมาก`,
+        campaign.conversions > 0 ? `${fmtNum(campaign.conversions)} tracked conversions ใช้อ่านร่วมกับ CPA/ROAS` : 'ยังไม่มี conversion ในช่วงเวลานี้',
+      ],
+      nextAction: 'ใช้ drawer นี้สรุปเหตุผลก่อน แล้วเลือก Ads Manager จาก sidebar เมื่อต้องแก้ campaign/ad set/ad โดยตรง',
+    })
+  }
 
   return (
     <section className="performance-grid performance-report-page">
@@ -2877,9 +2956,9 @@ function PerformancePage({
               <span>เทียบ media cost กับ business value</span>
             </div>
             {reportChannelData.length > 0 ? (
-              <div className="chart-wrap report-chart-wrap">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={reportChannelData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+              <MeasuredChart className="chart-wrap report-chart-wrap">
+                {({ width, height }) => (
+                  <BarChart width={width} height={height} data={reportChannelData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
                     <CartesianGrid stroke="#dce5f1" strokeDasharray="4 4" vertical={false} />
                     <XAxis dataKey="channel" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
                     <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
@@ -2891,8 +2970,8 @@ function PerformancePage({
                     <Bar dataKey="spend" name="Spend" fill="#2563eb" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="revenue" name="Revenue" fill="#0f9f6e" radius={[4, 4, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
-              </div>
+                )}
+              </MeasuredChart>
             ) : (
               <div className="empty-state chart-empty-state">
                 <Database size={18} />
@@ -2908,9 +2987,9 @@ function PerformancePage({
               <span>Conversion และ drop-off ราย stage</span>
             </div>
             {reportFunnelData.length > 0 ? (
-              <div className="chart-wrap report-chart-wrap">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={reportFunnelData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+              <MeasuredChart className="chart-wrap report-chart-wrap">
+                {({ width, height }) => (
+                  <BarChart width={width} height={height} data={reportFunnelData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
                     <CartesianGrid stroke="#dce5f1" strokeDasharray="4 4" vertical={false} />
                     <XAxis dataKey="stage" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
                     <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(value) => `${value}%`} />
@@ -2922,8 +3001,8 @@ function PerformancePage({
                     <Bar dataKey="conversionRate" name="Conversion" fill="#7c3aed" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="dropOffRate" name="Drop-off" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
-              </div>
+                )}
+              </MeasuredChart>
             ) : (
               <div className="empty-state chart-empty-state">
                 <Database size={18} />
@@ -2989,9 +3068,9 @@ function PerformancePage({
 
       <div className="panel wide performance-main-chart">
         <PanelHeader icon={BarChart3} title="Revenue Efficiency Trend" meta="Spend · Revenue · Bookings" help={metricHelp.conversionValue} />
-        <div className="chart-wrap">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={trendData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+        <MeasuredChart className="chart-wrap">
+          {({ width, height }) => (
+            <AreaChart width={width} height={height} data={trendData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
               <CartesianGrid stroke="#dce5f1" strokeDasharray="4 4" vertical={false} />
               <XAxis dataKey="date" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
               <YAxis yAxisId="money" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
@@ -3008,15 +3087,15 @@ function PerformancePage({
               <Area yAxisId="money" type="monotone" dataKey="spend" name="Spend" stroke="#2563eb" strokeWidth={2} fill="#dbeafe" />
               <Area yAxisId="volume" type="monotone" dataKey="bookings" name="Bookings" stroke="#7c3aed" strokeWidth={2} fill="#f3e8ff" />
             </AreaChart>
-          </ResponsiveContainer>
-        </div>
+          )}
+        </MeasuredChart>
       </div>
 
       <div className="panel">
         <PanelHeader icon={LineChart} title="Funnel Conversion" meta="Stage rate & drop-off" help={metricHelp.dropOff} />
-        <div className="chart-wrap compact-chart">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={funnelMetrics} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+        <MeasuredChart className="chart-wrap compact-chart">
+          {({ width, height }) => (
+            <BarChart width={width} height={height} data={funnelMetrics} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
               <CartesianGrid stroke="#dce5f1" strokeDasharray="4 4" vertical={false} />
               <XAxis dataKey="stage" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
               <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(value) => `${value}%`} />
@@ -3028,8 +3107,8 @@ function PerformancePage({
               <Bar dataKey="conversionRate" name="Conversion" fill="#2563eb" radius={[4, 4, 0, 0]} />
               <Bar dataKey="dropOffRate" name="Drop-off" fill="#f59e0b" radius={[4, 4, 0, 0]} />
             </BarChart>
-          </ResponsiveContainer>
-        </div>
+          )}
+        </MeasuredChart>
         <div className="funnel-stage-list">
           {funnelMetrics.slice(1).map((stage) => (
             <button
@@ -3143,22 +3222,14 @@ function PerformancePage({
                           channelShowRate < showRate ? 'Show-up ต่ำกว่าค่าเฉลี่ย ต้องดู lead expectation' : 'Show-up แข็งแรงกว่าค่าเฉลี่ย',
                           channelRoas > totals.roas ? 'ROAS สูงกว่าค่าเฉลี่ยรวม มีโอกาส scale' : 'ROAS ต่ำกว่าค่าเฉลี่ย ต้องตรวจ cost หรือ revenue quality',
                         ],
-                        nextAction: 'คลิก Campaigns เพื่อดู campaign/ad set/ad ที่เกี่ยวข้อง หรือสร้าง recommendation เข้า Action Queue ใน Step ต่อไป',
+                        nextAction: 'ใช้ drill-down นี้เพื่ออ่านปัญหาในหน้า Performance ก่อน แล้วค่อยเลือก tool เฉพาะจาก sidebar เมื่อต้องการ execution',
                       })
                     }
                   >
                     <td>
-                      <button
-                        className="table-title"
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onOpen('campaigns')
-                        }}
-                        title="เปิดหน้า Campaigns"
-                      >
+                      <strong className="table-title table-title-text">
                         {channel.channel}
-                      </button>
+                      </strong>
                       <span>{fmtNum(channel.leads)} leads · quality {channel.leadQuality}/100</span>
                     </td>
                     <td>{fmtMoney(channel.spend)}</td>
@@ -3195,8 +3266,8 @@ function PerformancePage({
             <strong>{activeAutoAds} active ads</strong>
             <p>{autoPending} auto recommendations · {pendingActions} queued actions</p>
           </div>
-          <button className="primary-button" type="button" onClick={() => onOpen('auto')} title={metricHelp.autoAds}>
-            Manage Auto
+          <button className="primary-button" type="button" onClick={openAutoGuardrailDrilldown} title={metricHelp.autoAds}>
+            Guardrails
           </button>
         </div>
         <div className="signal-list">
@@ -3225,8 +3296,8 @@ function PerformancePage({
                   key={campaign.id}
                   type="button"
                   className="alert-row"
-                  onClick={() => onSelectCampaign(campaign.id)}
-                  title={`${campaign.aiSummary} · เปิด AI Insights`}
+                  onClick={() => openCampaignSignalDrilldown(campaign)}
+                  title={`${campaign.aiSummary} · เปิด drill-down ในหน้า Performance`}
                 >
                   <span className={`status-dot ${meta.className}`} />
                   <div>
@@ -3996,6 +4067,46 @@ function MiniMetric({ label, value, help }: { label: string; value: string; help
   )
 }
 
+function MeasuredChart({
+  className,
+  children,
+}: {
+  className: string
+  children: (size: { width: number; height: number }) => ReactNode
+}) {
+  const frameRef = useRef<HTMLDivElement | null>(null)
+  const [size, setSize] = useState({ width: 0, height: 0 })
+
+  useEffect(() => {
+    const node = frameRef.current
+    if (!node) return undefined
+
+    const updateSize = () => {
+      const rect = node.getBoundingClientRect()
+      setSize({
+        width: Math.max(1, Math.floor(rect.width)),
+        height: Math.max(1, Math.floor(rect.height)),
+      })
+    }
+
+    updateSize()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateSize) : null
+    observer?.observe(node)
+    window.addEventListener('resize', updateSize)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', updateSize)
+    }
+  }, [])
+
+  return (
+    <div ref={frameRef} className={className}>
+      {size.width > 1 && size.height > 1 ? children(size) : null}
+    </div>
+  )
+}
+
 function PlatformHome({
   modules,
   services,
@@ -4387,6 +4498,10 @@ function SettingsPage({
             <span>สร้าง แก้ไข หรือลบ Campaign, Ad set และ Ad ผ่าน Object Manager พร้อม confirmation</span>
           </div>
           <div>
+            <strong>POST /api/meta/creative-launch</strong>
+            <span>สร้าง Ad Creative แบบ Auto Post และ Ad ใน Meta จาก Creative Studio โดยแนะนำให้เริ่มเป็น PAUSED</span>
+          </div>
+          <div>
             <strong>GET /api/meta/workspace</strong>
             <span>ดึง Meta dataset และ map เป็นข้อมูลทั้ง Dashboard</span>
           </div>
@@ -4452,22 +4567,146 @@ function AppointmentsPage({ stages, services }: { stages: AppointmentStage[]; se
 function CreativeStudioPage({
   tasks,
   campaigns,
+  adSets,
   adInsights,
-  onOpenCampaigns,
-  onOpenInsights,
+  onSyncMeta,
 }: {
   tasks: AgentTask[]
   campaigns: CampaignInsight[]
+  adSets: WorkspaceData['adSets']
   adInsights: WorkspaceData['adInsights']
-  onOpenCampaigns: () => void
-  onOpenInsights: () => void
+  onSyncMeta: () => Promise<void>
 }) {
   const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
+  const adSetById = new Map(adSets.map((adSet) => [adSet.id, adSet]))
   const topAds = adInsights.slice().sort((a, b) => b.spend - a.spend).slice(0, 12)
   const totalSpend = adInsights.reduce((sum, ad) => sum + ad.spend, 0)
   const totalResults = adInsights.reduce((sum, ad) => sum + ad.bookings, 0)
   const avgScore = safeDivide(adInsights.reduce((sum, ad) => sum + ad.score, 0), adInsights.length)
   const activeAds = adInsights.filter((ad) => ad.status === 'active').length
+  const launchPanelRef = useRef<HTMLDivElement | null>(null)
+  const performancePanelRef = useRef<HTMLDivElement | null>(null)
+  const [selectedSourceAdId, setSelectedSourceAdId] = useState(topAds[0]?.id ?? '')
+  const selectedSourceAd = topAds.find((ad) => ad.id === selectedSourceAdId) ?? topAds[0]
+  const selectedAdSet = selectedSourceAd ? adSetById.get(selectedSourceAd.adSetId) : adSets[0]
+  const defaultAdSetId = selectedAdSet?.id ?? adSets[0]?.id ?? ''
+  const [launchForm, setLaunchForm] = useState<CreativeLaunchFormValues>(() => ({
+    pageId: typeof window !== 'undefined' ? window.localStorage.getItem('pmc-creative-launch-page-id') ?? '' : '',
+    adSetId: defaultAdSetId,
+    adName: selectedSourceAd ? `Auto post · ${selectedSourceAd.name}` : 'Auto post ad',
+    creativeName: selectedSourceAd ? `Creative · ${selectedSourceAd.creative}` : 'Auto post creative',
+    linkUrl: '',
+    primaryText: selectedSourceAd ? `ดูโปรโมชันและปรึกษากับทีมคลินิกได้เลย\n\n${selectedSourceAd.name}` : '',
+    headline: selectedSourceAd?.name ?? 'โปรโมชันคลินิก',
+    description: 'จองคิวปรึกษาและรับข้อเสนอจากคลินิก',
+    ctaType: 'LEARN_MORE',
+    status: 'PAUSED',
+  }))
+  const [launchState, setLaunchState] = useState<{ running: boolean; error: string | null; result: CreativeLaunchPayload | null }>({
+    running: false,
+    error: null,
+    result: null,
+  })
+
+  useEffect(() => {
+    if (launchForm.pageId.trim()) {
+      window.localStorage.setItem('pmc-creative-launch-page-id', launchForm.pageId.trim())
+    }
+  }, [launchForm.pageId])
+
+  useEffect(() => {
+    if (!launchForm.adSetId && defaultAdSetId) {
+      setLaunchForm((current) => ({ ...current, adSetId: defaultAdSetId }))
+    }
+  }, [defaultAdSetId, launchForm.adSetId])
+
+  useEffect(() => {
+    if (!selectedSourceAd) return
+
+    setLaunchForm((current) => {
+      const nextAdName = current.adName === 'Auto post ad' ? `Auto post · ${selectedSourceAd.name}` : current.adName
+      const nextCreativeName = current.creativeName === 'Auto post creative' ? `Creative · ${selectedSourceAd.creative}` : current.creativeName
+      const nextPrimaryText = current.primaryText.trim()
+        ? current.primaryText
+        : `ดูโปรโมชันและปรึกษากับทีมคลินิกได้เลย\n\n${selectedSourceAd.name}`
+      const nextHeadline = current.headline === 'โปรโมชันคลินิก' || !current.headline.trim() ? selectedSourceAd.name : current.headline
+      const nextAdSetId = current.adSetId || selectedSourceAd.adSetId || defaultAdSetId
+
+      if (
+        nextAdName === current.adName
+        && nextCreativeName === current.creativeName
+        && nextPrimaryText === current.primaryText
+        && nextHeadline === current.headline
+        && nextAdSetId === current.adSetId
+      ) {
+        return current
+      }
+
+      return {
+        ...current,
+        adSetId: nextAdSetId,
+        adName: nextAdName,
+        creativeName: nextCreativeName,
+        primaryText: nextPrimaryText,
+        headline: nextHeadline,
+      }
+    })
+  }, [selectedSourceAd?.id, defaultAdSetId])
+
+  const updateLaunchForm = <K extends keyof CreativeLaunchFormValues>(key: K, value: CreativeLaunchFormValues[K]) => {
+    setLaunchForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const selectSourceAd = (adId: string) => {
+    const ad = topAds.find((item) => item.id === adId)
+    setSelectedSourceAdId(adId)
+    if (!ad) return
+
+    setLaunchForm((current) => ({
+      ...current,
+      adSetId: ad.adSetId || current.adSetId,
+      adName: `Auto post · ${ad.name}`,
+      creativeName: `Creative · ${ad.creative}`,
+      primaryText: current.primaryText.trim() ? current.primaryText : `ดูโปรโมชันและปรึกษากับทีมคลินิกได้เลย\n\n${ad.name}`,
+      headline: ad.name,
+    }))
+  }
+
+  const handleCreativeLaunch = async () => {
+    if (!launchForm.pageId.trim() || !launchForm.adSetId.trim() || !launchForm.linkUrl.trim() || !launchForm.primaryText.trim() || !launchForm.headline.trim()) {
+      setLaunchState({ running: false, error: 'กรุณากรอก Meta Page ID, Ad Set, URL, Primary Text และ Headline ให้ครบก่อนสร้าง Ad', result: null })
+      return
+    }
+
+    setLaunchState({ running: true, error: null, result: null })
+    try {
+      const response = await fetch('/api/meta/creative-launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(launchForm),
+      })
+      const payload = (await response.json()) as Partial<CreativeLaunchPayload>
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error || 'Meta creative launch failed')
+      }
+      setLaunchState({ running: false, error: null, result: payload as CreativeLaunchPayload })
+      await onSyncMeta()
+    } catch (error) {
+      setLaunchState({ running: false, error: error instanceof Error ? error.message : 'Meta creative launch failed', result: null })
+    }
+  }
+
+  const launchNotes = buildCreativeLaunchNotes(selectedSourceAd, selectedAdSet)
+  const launchReady = Boolean(
+    launchForm.pageId.trim()
+      && launchForm.adSetId.trim()
+      && launchForm.linkUrl.trim()
+      && launchForm.primaryText.trim()
+      && launchForm.headline.trim(),
+  )
+  const scrollToPanel = (ref: { current: HTMLDivElement | null }) => {
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return (
     <section className="studio-grid">
@@ -4475,17 +4714,17 @@ function CreativeStudioPage({
         <PanelHeader icon={Layers3} title="Creative Studio" meta="Meta ad-level API" />
         <div className="studio-hero-content">
           <div>
-            <h2>Creative workbench จากข้อมูล Ads จริง</h2>
-            <p>จัดอันดับ ads, creative signal และ action note จาก Meta API โดยตรง ไม่มี local mock records</p>
+            <h2>Creative performance, work orders และ Auto Post พร้อม Meta Ads</h2>
+            <p>จัดอันดับ ads, สร้าง launch notes และเตรียมโพสต์/โฆษณาใหม่เข้ากับ Meta Ad Set จริง โดย default สร้างเป็น PAUSED เพื่อให้ตรวจ preview ก่อนเปิดใช้งาน</p>
           </div>
           <div className="studio-actions">
-            <button className="secondary-button" type="button" onClick={onOpenInsights}>
+            <button className="secondary-button" type="button" onClick={() => scrollToPanel(performancePanelRef)}>
               <BarChart3 size={16} />
-              AI Insights
+              Creative Score
             </button>
-            <button className="primary-button" type="button" onClick={onOpenCampaigns}>
+            <button className="primary-button" type="button" onClick={() => scrollToPanel(launchPanelRef)}>
               <Plus size={16} />
-              Create Ad
+              Auto Post
             </button>
           </div>
         </div>
@@ -4498,7 +4737,109 @@ function CreativeStudioPage({
         </div>
       </div>
 
-      <div className="panel studio-main-panel">
+      <div className="panel studio-launch-panel" ref={launchPanelRef}>
+        <PanelHeader icon={Sparkles} title="Auto Post + Meta Ads" meta="dark post creative + ad" help="สร้าง Ad Creative แบบ object_story_spec และ Ad ใน Meta จากฟอร์มนี้ โดยค่าเริ่มต้นเป็น PAUSED เพื่อให้ทีมตรวจ preview ก่อนเปิดจริง" />
+        <div className="creative-launch-grid">
+          <div className="creative-launch-form">
+            <label>
+              <span>Source Creative</span>
+              <select value={selectedSourceAd?.id ?? ''} onChange={(event) => selectSourceAd(event.target.value)}>
+                {topAds.map((ad) => (
+                  <option key={ad.id} value={ad.id}>
+                    {ad.name} · {ad.score.toFixed(1)} score
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Meta Page ID</span>
+              <input value={launchForm.pageId} placeholder="เช่น 1234567890" onChange={(event) => updateLaunchForm('pageId', event.target.value)} />
+            </label>
+            <label>
+              <span>Ad Set</span>
+              <select value={launchForm.adSetId} onChange={(event) => updateLaunchForm('adSetId', event.target.value)}>
+                {adSets.map((adSet) => (
+                  <option key={adSet.id} value={adSet.id}>
+                    {adSet.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Status</span>
+              <select value={launchForm.status} onChange={(event) => updateLaunchForm('status', event.target.value as MetaObjectStatus)}>
+                <option value="PAUSED">PAUSED - สร้างไว้ตรวจก่อน</option>
+                <option value="ACTIVE">ACTIVE - เปิดใช้งานทันที</option>
+              </select>
+            </label>
+            <label>
+              <span>Landing / Booking URL</span>
+              <input value={launchForm.linkUrl} placeholder="https://..." onChange={(event) => updateLaunchForm('linkUrl', event.target.value)} />
+            </label>
+            <label>
+              <span>CTA</span>
+              <select value={launchForm.ctaType} onChange={(event) => updateLaunchForm('ctaType', event.target.value)}>
+                <option value="LEARN_MORE">Learn More</option>
+                <option value="SIGN_UP">Sign Up</option>
+                <option value="CONTACT_US">Contact Us</option>
+                <option value="BOOK_TRAVEL">Book Now</option>
+                <option value="WHATSAPP_MESSAGE">WhatsApp Message</option>
+              </select>
+            </label>
+            <label className="field-wide">
+              <span>Primary Text</span>
+              <textarea value={launchForm.primaryText} onChange={(event) => updateLaunchForm('primaryText', event.target.value)} />
+            </label>
+            <label>
+              <span>Headline</span>
+              <input value={launchForm.headline} onChange={(event) => updateLaunchForm('headline', event.target.value)} />
+            </label>
+            <label>
+              <span>Description</span>
+              <input value={launchForm.description} onChange={(event) => updateLaunchForm('description', event.target.value)} />
+            </label>
+            <label>
+              <span>Ad Name</span>
+              <input value={launchForm.adName} onChange={(event) => updateLaunchForm('adName', event.target.value)} />
+            </label>
+            <label>
+              <span>Creative Name</span>
+              <input value={launchForm.creativeName} onChange={(event) => updateLaunchForm('creativeName', event.target.value)} />
+            </label>
+          </div>
+          <div className="creative-launch-preview">
+            <span className="badge scale">Launch Notes</span>
+            <h3>{launchForm.headline || 'Headline'}</h3>
+            <p>{launchForm.primaryText || 'Primary text preview'}</p>
+            <div className="launch-note-list">
+              {launchNotes.map((note) => (
+                <Signal key={note} icon={CheckCircle2} text={note} tone="good" />
+              ))}
+            </div>
+            <div className="approval-warning">
+              <ShieldCheck size={16} />
+              <span>ระบบจะสร้าง Ad Creative และ Ad ผ่าน Meta API หลังคุณกดปุ่มนี้เท่านั้น แนะนำใช้ PAUSED ก่อนตรวจ preview</span>
+            </div>
+            {!launchReady && (
+              <div className="data-notice watch">
+                ต้องกรอก Page ID, Ad Set, URL, Primary Text และ Headline ก่อนยิง Meta API
+              </div>
+            )}
+            {launchState.error && <div className="data-notice critical">{launchState.error}</div>}
+            {launchState.result && (
+              <div className="data-notice good">
+                Created creative {launchState.result.creativeId} · ad {launchState.result.adId ?? 'pending'} · {launchState.result.status}
+              </div>
+            )}
+            <button className="primary-button" type="button" onClick={handleCreativeLaunch} disabled={launchState.running || !launchReady}>
+              <Sparkles size={16} />
+              {launchState.running ? 'Creating in Meta...' : `Create ${launchForm.status} Meta Ad`}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel studio-main-panel" ref={performancePanelRef}>
         <PanelHeader icon={ImageIcon} title="Live Creative Performance" meta={`${topAds.length} ads from Meta`} />
         <div className="studio-card-list">
           {topAds.map((ad, index) => {
@@ -4566,31 +4907,61 @@ function CreativeStudioPage({
   )
 }
 
+function buildCreativeLaunchNotes(ad: WorkspaceData['adInsights'][number] | undefined, adSet: WorkspaceData['adSets'][number] | undefined) {
+  if (!ad) return ['เลือก source creative เพื่อสร้าง launch note', 'สร้าง ad เป็น PAUSED ก่อนตรวจ preview', 'Sync Meta หลัง launch เพื่อดู ad ใหม่ในระบบ']
+
+  const notes = [
+    `Source: ${ad.name} · CTR ${ad.ctr.toFixed(2)}% · ROAS ${ad.roas.toFixed(2)}x · Score ${ad.score.toFixed(1)}`,
+    adSet ? `Launch into Ad Set: ${adSet.name}` : 'เลือก Ad Set ก่อน launch',
+    ad.score >= 7.5
+      ? 'ใช้เป็น winner variation ได้ แต่ควรเปลี่ยน hook/visual เล็กน้อยเพื่อเลี่ยง creative fatigue'
+      : ad.ctr < 1
+        ? 'ควรปรับ hook 3 วินาทีแรกและ headline ก่อนเปิด spend จริง'
+        : 'ควรเปิดเป็น limited test และรอ signal ก่อน scale',
+    'Default PAUSED ช่วยให้ตรวจ preview, link, claim และ policy risk ก่อนเปิดใช้งานจริง',
+  ]
+
+  return notes
+}
+
 function AudienceStudioPage({
   items,
   campaigns,
   adSets,
+  adInsights,
 }: {
   items: MemoryItem[]
   campaigns: CampaignInsight[]
   adSets: WorkspaceData['adSets']
+  adInsights: WorkspaceData['adInsights']
 }) {
   const categories: MemoryCategory[] = ['Insight', 'Creative', 'Audience', 'Strategy', 'Preference']
   const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
-  const topAdSets = adSets.slice().sort((a, b) => b.spend - a.spend).slice(0, 12)
+  const adsByAdSet = adInsights.reduce((map, ad) => {
+    map.set(ad.adSetId, (map.get(ad.adSetId) ?? 0) + 1)
+    return map
+  }, new Map<string, number>())
+  const topAdSets = adSets.slice().sort((a, b) => b.spend - a.spend).slice(0, 10)
   const activeAdSets = adSets.filter((adSet) => adSet.deliveryStatus === 'active').length
-  const totalBudget = adSets.reduce((sum, adSet) => sum + adSet.budget, 0)
   const totalSpend = adSets.reduce((sum, adSet) => sum + adSet.spend, 0)
   const totalBookings = adSets.reduce((sum, adSet) => sum + adSet.bookings, 0)
+  const targetingCoverage = Math.round(safeRate(adSets.filter((adSet) => adSet.audienceTargeting).length, adSets.length))
+  const ageRows = summarizeAudienceMetric(adSets, (adSet) => [audienceAgeLabel(adSet.audienceTargeting)])
+  const geoRows = summarizeAudienceMetric(adSets, (adSet) => audienceGeoLabels(adSet.audienceTargeting))
+  const platformRows = summarizeAudienceMetric(adSets, (adSet) => audiencePlatformLabels(adSet.audienceTargeting))
+  const targetRows = summarizeAudienceMetric(adSets, (adSet) => audienceNameLabels(adSet.audienceTargeting))
+  const topGeo = geoRows[0]?.label ?? 'รอข้อมูลพื้นที่'
+  const topAge = ageRows[0]?.label ?? 'รอข้อมูลอายุ'
+  const topTarget = targetRows[0]?.label ?? 'รอชื่อกลุ่มเป้าหมาย'
 
   return (
-    <section className="studio-grid">
-      <div className="panel studio-hero">
-        <PanelHeader icon={Users} title="Audience Studio" meta="Meta ad set API" />
+    <section className="audience-insights-grid">
+      <div className="panel studio-hero audience-hero">
+        <PanelHeader icon={Users} title="Audience Insights" meta="Meta ad set targeting API" />
         <div className="studio-hero-content">
           <div>
-            <h2>Audience และ targeting จาก Ad Sets จริง</h2>
-            <p>อ่าน audience, delivery, budget และผลลัพธ์จาก Meta API เพื่อใช้ตัดสินใจเรื่อง segment และ campaign structure</p>
+            <h2>กลุ่มเป้าหมายจาก Ads ที่ใช้งานจริง</h2>
+            <p>สรุปอายุ ชื่อกลุ่มเป้าหมาย พื้นที่ platform และผลลัพธ์จาก Ad Set targeting ของ Meta API โดยไม่ใช้ mock data</p>
           </div>
           <div className="memory-count">
             <strong>{fmtNum(adSets.length)}</strong>
@@ -4599,33 +4970,80 @@ function AudienceStudioPage({
         </div>
         <div className="studio-summary-grid">
           <MiniMetric label="Active Ad Sets" value={fmtNum(activeAdSets)} help="จำนวน ad sets ที่ Meta effective status เป็น ACTIVE" />
-          <MiniMetric label="Budget" value={fmtMoney(totalBudget)} help="งบรวมจาก daily/lifetime budget ที่ Meta API ส่งมา" />
+          <MiniMetric label="Targeting Data" value={`${targetingCoverage}%`} help="สัดส่วน ad sets ที่มี structured targeting object จาก Meta API" />
           <MiniMetric label="Spend" value={fmtMoney(totalSpend)} help="ยอด spend รวมของ ad sets ในช่วงเวลาปัจจุบัน" />
           <MiniMetric label="Bookings" value={fmtNum(totalBookings)} help="จำนวน conversion/booking ที่รวมจาก ad set insights" />
           <MiniMetric label="CPA" value={fmtMoney(safeDivide(totalSpend, totalBookings))} help="ต้นทุนเฉลี่ยต่อ booking จาก ad set spend / bookings" />
         </div>
       </div>
 
-      <div className="panel studio-main-panel">
-        <PanelHeader icon={Target} title="Audience Segments" meta={`${topAdSets.length} ad sets`} />
-        <div className="audience-segment-grid">
+      <div className="panel audience-highlight-panel">
+        <PanelHeader icon={Target} title="Target Snapshot" meta="age · name · location" />
+        <div className="audience-highlight-grid">
+          <AudienceSnapshot label="อายุหลัก" value={topAge} detail={`${fmtMoney(ageRows[0]?.spend ?? 0)} spend`} help="ช่วงอายุที่พบจาก ad set targeting และเรียงตาม spend" />
+          <AudienceSnapshot label="พื้นที่หลัก" value={topGeo} detail={`${fmtNum(geoRows[0]?.count ?? 0)} ad sets`} help="ประเทศ เมือง เขต หรือ custom location ที่ Meta targeting ส่งมา" />
+          <AudienceSnapshot label="ชื่อกลุ่มเป้าหมาย" value={topTarget} detail={`${fmtNum(targetRows[0]?.count ?? 0)} ad sets`} help="interest, behavior, demographic, custom audience หรือ lookalike name จาก targeting" />
+        </div>
+        <div className="audience-privacy-note">
+          <ShieldCheck size={16} />
+          <span>Meta Ads ไม่เปิดเผยรายชื่อบุคคลหรือที่อยู่ส่วนบุคคล หน้านี้แสดงข้อมูลระดับ targeting group, location และ segment จาก Ads เท่านั้น</span>
+        </div>
+      </div>
+
+      <div className="panel audience-chart-panel">
+        <PanelHeader icon={BarChart3} title="Age Performance" meta={`${ageRows.length} age groups`} />
+        <AudienceBarList rows={ageRows.slice(0, 8)} metric="spend" emptyLabel="ยังไม่มีข้อมูลอายุจาก targeting" />
+      </div>
+
+      <div className="panel audience-chart-panel">
+        <PanelHeader icon={MapPin} title="Location Performance" meta={`${geoRows.length} locations`} />
+        <AudienceBarList rows={geoRows.slice(0, 8)} metric="spend" emptyLabel="ยังไม่มีข้อมูลพื้นที่จาก targeting" />
+      </div>
+
+      <div className="panel audience-chart-panel">
+        <PanelHeader icon={Layers3} title="Platform Mix" meta={`${platformRows.length} platforms`} />
+        <AudienceBarList rows={platformRows.slice(0, 8)} metric="count" emptyLabel="ยังไม่มีข้อมูล platform จาก targeting" />
+      </div>
+
+      <div className="panel audience-chart-panel">
+        <PanelHeader icon={BrainCircuit} title="Target / Audience Names" meta={`${targetRows.length} names`} />
+        <AudienceBarList rows={targetRows.slice(0, 10)} metric="spend" emptyLabel="ยังไม่มี interest/custom audience name จาก Meta targeting" />
+      </div>
+
+      <div className="panel audience-table-panel">
+        <PanelHeader icon={Target} title="Ad Set Audience Detail" meta={`${topAdSets.length} top ad sets by spend`} />
+        <div className="audience-table-list">
           {topAdSets.map((adSet) => {
             const campaign = campaignById.get(adSet.campaignId)
             const meta = statusMeta(adSet.status)
+            const targeting = adSet.audienceTargeting
+            const geos = audienceGeoLabels(targeting)
+            const names = audienceNameLabels(targeting)
+            const platforms = audiencePlatformLabels(targeting)
             return (
-              <article key={adSet.id} className="audience-card">
-                <div className="compliance-topline">
-                  <span className={`badge ${deliveryStatusTone(adSet.deliveryStatus)}`}>{deliveryStatusLabel(adSet.deliveryStatus)}</span>
-                  <span className={`badge ${meta.className}`}>{meta.label}</span>
+              <article key={adSet.id} className="audience-detail-card">
+                <div className="audience-detail-main">
+                  <div className="compliance-topline">
+                    <span className={`badge ${deliveryStatusTone(adSet.deliveryStatus)}`}>{deliveryStatusLabel(adSet.deliveryStatus)}</span>
+                    <span className={`badge ${meta.className}`}>{meta.label}</span>
+                    <span className="badge scale">{fmtNum(adsByAdSet.get(adSet.id) ?? 0)} ads</span>
+                  </div>
+                  <h3>{adSet.name}</h3>
+                  <p>{campaign?.name ?? 'Unknown campaign'}</p>
+                  <div className="audience-chip-grid">
+                    <AudienceChip label="อายุ" value={audienceAgeLabel(targeting)} />
+                    <AudienceChip label="เพศ" value={targeting?.genders.length ? targeting.genders.join(', ') : 'All gender / ไม่ระบุ'} />
+                    <AudienceChip label="พื้นที่" value={geos.slice(0, 3).join(', ') || 'ไม่ระบุพื้นที่'} />
+                    <AudienceChip label="ชื่อกลุ่มเป้าหมาย" value={names.slice(0, 3).join(', ') || 'ไม่ระบุ interest/custom audience'} />
+                    <AudienceChip label="Platform" value={platforms.slice(0, 4).join(', ') || 'ไม่ระบุ platform'} />
+                    <AudienceChip label="Placement" value={targeting?.placements.slice(0, 4).join(', ') || 'ไม่ระบุ placement'} />
+                  </div>
                 </div>
-                <h3>{adSet.name}</h3>
-                <p>{adSet.audience}</p>
-                <small>{campaign?.name ?? 'Unknown campaign'}</small>
-                <div className="studio-metric-strip">
-                  <span>{fmtMoney(adSet.budget)} budget</span>
-                  <span>{fmtMoney(adSet.spend)} spend</span>
-                  <span>{fmtMoney(adSet.cpa)} CPA</span>
-                  <span>{adSet.roas.toFixed(2)}x ROAS</span>
+                <div className="audience-detail-metrics">
+                  <MiniMetric label="Spend" value={fmtMoney(adSet.spend)} help="Spend ของ ad set ในช่วงเวลาปัจจุบัน" />
+                  <MiniMetric label="Budget" value={fmtMoney(adSet.budget)} help="Daily/lifetime budget ที่ Meta API ส่งมา" />
+                  <MiniMetric label="Bookings" value={fmtNum(adSet.bookings)} help="Conversion/booking จาก ad set insights" />
+                  <MiniMetric label="ROAS" value={`${adSet.roas.toFixed(2)}x`} help="Revenue / Spend ของ ad set" />
                 </div>
               </article>
             )
@@ -4634,7 +5052,7 @@ function AudienceStudioPage({
       </div>
 
       <div className="panel studio-side-panel">
-        <PanelHeader icon={BrainCircuit} title="API Memory" meta="generated from sync" />
+        <PanelHeader icon={BrainCircuit} title="Audience Memory" meta="generated from sync" />
         <div className="category-grid studio-category-grid">
           {categories.map((category) => (
             <div key={category}>
@@ -4663,6 +5081,127 @@ function AudienceStudioPage({
         </div>
       </div>
     </section>
+  )
+}
+
+type AudienceMetricRow = {
+  label: string
+  count: number
+  spend: number
+  bookings: number
+  budget: number
+  active: number
+}
+
+function summarizeAudienceMetric(adSets: WorkspaceData['adSets'], getLabels: (adSet: WorkspaceData['adSets'][number]) => string[]): AudienceMetricRow[] {
+  const rows = new Map<string, AudienceMetricRow>()
+
+  adSets.forEach((adSet) => {
+    const labels = Array.from(new Set(getLabels(adSet).map((label) => label.trim()).filter(Boolean)))
+    const safeLabels = labels.length > 0 ? labels : ['ไม่ระบุ']
+
+    safeLabels.forEach((label) => {
+      const row = rows.get(label) ?? { label, count: 0, spend: 0, bookings: 0, budget: 0, active: 0 }
+      row.count += 1
+      row.spend += adSet.spend
+      row.bookings += adSet.bookings
+      row.budget += adSet.budget
+      row.active += adSet.deliveryStatus === 'active' ? 1 : 0
+      rows.set(label, row)
+    })
+  })
+
+  return Array.from(rows.values()).sort((a, b) => b.spend - a.spend || b.count - a.count || a.label.localeCompare(b.label))
+}
+
+function audienceAgeLabel(targeting: AudienceTargeting | undefined) {
+  if (!targeting?.ageMin && !targeting?.ageMax) return 'All age / ไม่ระบุ'
+  return `${targeting.ageMin ?? '?'}-${targeting.ageMax ?? '?'}`
+}
+
+function audienceGeoLabels(targeting: AudienceTargeting | undefined) {
+  return targeting?.geoLocations.map((geo) => [geo.name, geo.region, geo.country].filter(Boolean).join(', ')) ?? []
+}
+
+function audiencePlatformLabels(targeting: AudienceTargeting | undefined) {
+  return targeting?.publisherPlatforms.length ? targeting.publisherPlatforms : targeting?.devicePlatforms ?? []
+}
+
+function audienceNameLabels(targeting: AudienceTargeting | undefined) {
+  return targeting?.interests.map((target) => target.name) ?? []
+}
+
+function AudienceSnapshot({ label, value, detail, help }: { label: string; value: string; detail: string; help: string }) {
+  return (
+    <article className="audience-snapshot">
+      <span>
+        {label}
+        <InfoHint text={help} />
+      </span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  )
+}
+
+function AudienceChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="audience-chip">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
+function AudienceBarList({
+  rows,
+  metric,
+  emptyLabel,
+}: {
+  rows: AudienceMetricRow[]
+  metric: 'spend' | 'count'
+  emptyLabel: string
+}) {
+  const max = Math.max(...rows.map((row) => (metric === 'spend' ? row.spend : row.count)), 0)
+
+  if (rows.length === 0) {
+    return (
+      <div className="empty-state">
+        <Database size={18} />
+        <strong>{emptyLabel}</strong>
+        <p>ถ้า Meta API ส่ง targeting field มา หน้านี้จะแสดงกราฟอัตโนมัติหลัง Sync</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="audience-bar-list">
+      {rows.map((row) => {
+        const value = metric === 'spend' ? row.spend : row.count
+        const width = max > 0 ? Math.max(8, (value / max) * 100) : 8
+        return (
+          <article
+            key={row.label}
+            className="audience-bar-row"
+            title={`${row.label} · ${fmtMoney(row.spend)} spend · ${fmtNum(row.count)} ad sets · ${fmtNum(row.bookings)} bookings`}
+          >
+            <div className="audience-bar-head">
+              <strong>{row.label}</strong>
+              <span>{metric === 'spend' ? fmtMoney(row.spend) : `${fmtNum(row.count)} ad sets`}</span>
+            </div>
+            <div className="audience-bar-track">
+              <span style={{ width: `${width}%` }} />
+            </div>
+            <div className="audience-bar-meta">
+              <small>{fmtNum(row.count)} ad sets</small>
+              <small>{fmtNum(row.active)} active</small>
+              <small>{fmtNum(row.bookings)} bookings</small>
+              <small>{fmtMoney(safeDivide(row.spend, row.bookings))} CPA</small>
+            </div>
+          </article>
+        )
+      })}
+    </div>
   )
 }
 

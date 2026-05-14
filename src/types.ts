@@ -242,11 +242,44 @@ export interface FunnelMetric {
   help: string
 }
 
+export interface AudienceGeoTarget {
+  type: 'country' | 'region' | 'city' | 'zip' | 'custom' | 'location'
+  name: string
+  key?: string
+  country?: string
+  region?: string
+  radius?: number
+  distanceUnit?: string
+}
+
+export interface AudienceTarget {
+  type: 'interest' | 'behavior' | 'demographic' | 'custom_audience' | 'lookalike' | 'excluded' | 'other'
+  id?: string
+  name: string
+  path?: string
+  source?: string
+}
+
+export interface AudienceTargeting {
+  ageMin?: number
+  ageMax?: number
+  genders: string[]
+  publisherPlatforms: string[]
+  placements: string[]
+  devicePlatforms: string[]
+  geoLocations: AudienceGeoTarget[]
+  interests: AudienceTarget[]
+  exclusions: AudienceTarget[]
+  locales: string[]
+  rawSummary: string
+}
+
 export interface AdSetInsight {
   id: string
   campaignId: string
   name: string
   audience: string
+  audienceTargeting?: AudienceTargeting
   deliveryStatus: AdDeliveryStatus
   budget: number
   spend: number
