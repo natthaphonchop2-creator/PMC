@@ -1282,6 +1282,9 @@ function App() {
   const pendingActions = actions.filter((action) => action.status === 'pending').length
   const autoPending = autoAds.filter((ad) => !ad.applied && ad.recommendation !== 'keep').length
   const activeAutoAds = autoAds.filter((ad) => ad.status === 'active').length
+  const assistantRecordLabel = metaSync.counts
+    ? `${fmtNum(metaSync.counts.campaigns)} campaigns · ${fmtNum(metaSync.counts.adSets)} ad sets · ${fmtNum(metaSync.counts.ads)} ads`
+    : `${fmtNum(campaigns.length)} campaigns · ${fmtNum(adSets.length)} ad sets · ${fmtNum(adInsights.length)} ads`
 
   const rejectAction = (id: string) => {
     const target = actions.find((action) => action.id === id)
@@ -2035,6 +2038,15 @@ function App() {
           </div>
         </header>
 
+        <AssistantStatusStrip
+          metaSync={metaSync}
+          pageTitle={currentPage.title}
+          recordLabel={assistantRecordLabel}
+          updatedAt={workspace.updatedAt}
+          onSync={() => handleSyncMetaWorkspace()}
+          onOpenSettings={() => setActiveTab('settings')}
+        />
+
         {activeTab === 'platform' && (
           <PlatformHome
             modules={platformModules}
@@ -2387,6 +2399,59 @@ function App() {
         />
       )}
     </div>
+  )
+}
+
+function AssistantStatusStrip({
+  metaSync,
+  pageTitle,
+  recordLabel,
+  updatedAt,
+  onSync,
+  onOpenSettings,
+}: {
+  metaSync: MetaSyncState
+  pageTitle: string
+  recordLabel: string
+  updatedAt: string
+  onSync: () => void
+  onOpenSettings: () => void
+}) {
+  const isBusy = metaSync.loading || metaSync.checking
+  const tone = isBusy ? 'scale' : metaSync.connected ? 'good' : metaSync.configured ? 'watch' : 'critical'
+  const statusText = isBusy ? 'Syncing' : metaSync.connected ? 'Meta live' : metaSync.configured ? 'Check API' : 'Setup API'
+  const detailText = metaSync.connected
+    ? recordLabel
+    : metaSync.configured
+      ? 'ตรวจ token และสิทธิ์ API ก่อน sync'
+      : 'ใส่ Meta token และ Ad Account ID ใน Settings'
+
+  return (
+    <section className="assistant-status-strip" aria-label="PMC AI data status">
+      <div className="assistant-avatar" aria-hidden="true">
+        <img src="/pmc-ai-mascot.png" alt="" />
+      </div>
+      <div className="assistant-status-copy">
+        <div>
+          <span className={`status-dot ${tone}`} />
+          <strong>{statusText}</strong>
+          <small>{pageTitle}</small>
+        </div>
+        <p>{detailText}</p>
+      </div>
+      <div className="assistant-status-meta">
+        <span>{updatedAt}</span>
+        <button
+          className={metaSync.connected ? 'ghost-mini-button' : 'ghost-mini-button warning'}
+          type="button"
+          onClick={metaSync.connected ? onSync : onOpenSettings}
+          disabled={isBusy}
+        >
+          {metaSync.connected ? <RefreshCw size={13} /> : <Settings size={13} />}
+          {metaSync.connected ? 'Sync' : 'Settings'}
+        </button>
+      </div>
+    </section>
   )
 }
 
