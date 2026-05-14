@@ -289,6 +289,13 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Local `origin` remote was changed from the older `pmc-ads-agent.git` repository to `https://github.com/natthaphonchop2-creator/PMC.git`.
   - Current project was committed and pushed to `main` on the new `PMC` repository.
   - Secret/local files remain ignored; `.meta-api.local.json` is not tracked.
+- AdVibes / Madgicx-inspired UI and function direction started:
+  - Downloaded the provided Dribbble MP4 reference and inspected the Quick Look frame for style direction: compact light SaaS dashboard, pale sidebar, thin bordered cards, muted typography, soft multi-color accents, and a right-side insight rail.
+  - Updated global visual tokens, sidebar, topbar, page icon, buttons, panel/card radius, shadows, and platform module cards toward that light dashboard style.
+  - Renamed the main information architecture toward Madgicx-like functional areas without copying branding: `Ads Manager`, `Optimization`, `Creative Studio`, `Audience Insights`, `Ad Library`, `Analytics`, `Creative Insights`, `AI Marketer`, and `Reports`.
+  - Added `AI Marketer Flow` on the platform page with entry points for daily audit recommendations, optimization, creative workflow, and one-click report.
+  - Browser QA confirms the platform page renders the new style/function labels and `Ads Manager` opens without framework overlay or console errors.
+  - `npm run build` passes after this UI/function pass.
 
 ## Next Recommended Step
 

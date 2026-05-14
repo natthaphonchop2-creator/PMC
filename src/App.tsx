@@ -134,26 +134,26 @@ const toolSections: ToolSection[] = [
     title: 'Main',
     description: 'ระบบหลักของคลินิก',
     tabs: [
-      { id: 'campaigns', label: 'Campaigns', description: 'จัดการ service campaign', icon: Zap },
-      { id: 'auto', label: 'Ads Auto', description: 'เปิด ปิด และปรับ Ads ผ่าน Meta API', icon: Power },
+      { id: 'campaigns', label: 'Ads Manager', description: 'จัดการ Campaign, Ad Set, Ads', icon: Zap },
+      { id: 'auto', label: 'Optimization', description: 'เปิด/ปิดและปรับ Ads ด้วย guardrails', icon: Power },
     ],
   },
   {
-    title: 'Studio',
+    title: 'Creative',
     description: 'เครื่องมือทำงานกับ creative และ audience',
     tabs: [
-      { id: 'tasks', label: 'Creative', description: 'Creative, CRM, LP, Report tasks', icon: Layers3 },
-      { id: 'memory', label: 'Audience', description: 'Audience memory และ context', icon: Users },
-      { id: 'compliance', label: 'Media Library', description: 'ตรวจ claim และ creative คลินิก', icon: ImageIcon },
+      { id: 'tasks', label: 'Creative Studio', description: 'Creative performance และ work orders', icon: Layers3 },
+      { id: 'memory', label: 'Audience Insights', description: 'Audience memory และ segment context', icon: Users },
+      { id: 'compliance', label: 'Ad Library', description: 'ตรวจ claim และ creative assets', icon: ImageIcon },
     ],
   },
   {
     title: 'Insights',
     description: 'วิเคราะห์ performance และ action',
     tabs: [
-      { id: 'overview', label: 'Performance', description: 'ภาพรวมคลินิกและบริการ', icon: LineChart },
-      { id: 'investigator', label: 'AI Insights', description: 'จัดอันดับ creative และ signal', icon: BarChart3 },
-      { id: 'actions', label: 'Action Queue', description: 'Recommendation ที่รอ approve', icon: ClipboardList },
+      { id: 'overview', label: 'Analytics', description: 'ภาพรวม performance และรายงาน', icon: LineChart },
+      { id: 'investigator', label: 'Creative Insights', description: 'จัดอันดับ creative และ signal', icon: BarChart3 },
+      { id: 'actions', label: 'AI Marketer', description: 'Daily recommendations ที่รอ approve', icon: ClipboardList },
     ],
   },
   {
@@ -161,7 +161,7 @@ const toolSections: ToolSection[] = [
     description: 'ระบบเสริมและประวัติ',
     tabs: [
       { id: 'settings', label: 'Settings', description: 'API keys, connection checks, system health', icon: Settings },
-      { id: 'audit', label: 'Integrations', description: 'Before/after และ approval history', icon: Plug },
+      { id: 'audit', label: 'Reports', description: 'Before/after และ approval history', icon: Plug },
       { id: 'appointments', label: 'Help Center', description: 'Lead, booking, show-up', icon: HelpCircle },
     ],
   },
@@ -171,13 +171,13 @@ const platformModules: ToolTab[] = toolSections.flatMap((section) => section.tab
 
 const pageMeta: Record<TabId, { title: string; subtitle: string; icon: typeof BarChart3 }> = {
   platform: {
-    title: 'Clinic App Platform',
-    subtitle: 'ระบบจัดการ growth, creative, booking และ automation สำหรับคลินิก',
+    title: 'AdVibes Clinic OS',
+    subtitle: 'AI media-buying cockpit สำหรับ ads, creative, optimization และ reports',
     icon: Sparkles,
   },
   overview: {
-    title: 'Performance',
-    subtitle: 'ภาพรวม spend, booking, revenue และ service health',
+    title: 'Analytics',
+    subtitle: 'Business dashboard, funnel health และ one-click report',
     icon: LineChart,
   },
   appointments: {
@@ -186,38 +186,38 @@ const pageMeta: Record<TabId, { title: string; subtitle: string; icon: typeof Ba
     icon: HelpCircle,
   },
   campaigns: {
-    title: 'Campaigns',
-    subtitle: 'Service campaigns และ performance แยกตามบริการ',
+    title: 'Ads Manager',
+    subtitle: 'Meta Campaigns, Ad Sets, Ads และ delivery controls',
     icon: Zap,
   },
   investigator: {
-    title: 'AI Insights',
-    subtitle: 'Components ranked by clinic performance • Powered by your campaign data',
+    title: 'Creative Insights',
+    subtitle: 'Creative, campaign และ audience components ranked by performance',
     icon: BarChart3,
   },
   actions: {
-    title: 'Action Queue',
-    subtitle: 'Recommended actions พร้อม approval, guardrail และ before/after',
+    title: 'AI Marketer',
+    subtitle: 'Daily account audit, recommendations, approval และ before/after',
     icon: ClipboardList,
   },
   auto: {
-    title: 'Ads Auto',
-    subtitle: 'เปิด/ปิด Ads จาก Meta API ผ่าน approval และ guardrails',
+    title: 'Optimization',
+    subtitle: 'Budget protection, scale winners และ automation guardrails',
     icon: Power,
   },
   tasks: {
-    title: 'Creative',
-    subtitle: 'Agent tasks สำหรับ creative, CRM, report และ landing page',
+    title: 'Creative Studio',
+    subtitle: 'Creative performance, asset work orders และ launch notes',
     icon: Layers3,
   },
   memory: {
-    title: 'Audience',
-    subtitle: 'Knowledge base สำหรับ service, audience และ preference',
+    title: 'Audience Insights',
+    subtitle: 'Targeting, segment context และ audience memory จาก Meta API',
     icon: Users,
   },
   compliance: {
-    title: 'Media Library',
-    subtitle: 'ตรวจ creative, before/after และ claim ก่อนใช้งาน',
+    title: 'Ad Library',
+    subtitle: 'Creative assets, compliance risk และ performance metadata',
     icon: ImageIcon,
   },
   settings: {
@@ -226,8 +226,8 @@ const pageMeta: Record<TabId, { title: string; subtitle: string; icon: typeof Ba
     icon: Settings,
   },
   audit: {
-    title: 'Integrations',
-    subtitle: 'Audit trail และ snapshot ของ action ในระบบ',
+    title: 'Reports',
+    subtitle: 'Audit trail, one-click report และ snapshot ของ action',
     icon: Plug,
   },
 }
@@ -4009,48 +4009,101 @@ function PlatformHome({
 }) {
   const booked = stages.find((stage) => stage.id === 'booked')?.count ?? 0
   const showRate = stages.find((stage) => stage.id === 'show')?.rate ?? '-'
+  const functionStack: Array<{ label: string; detail: string; target: TabId; icon: typeof BarChart3; meta: string }> = [
+    {
+      label: 'AI Marketer',
+      detail: 'Audit account ทุกวัน แล้วเสนอ action ที่ทีมกด approve หรือ execute ได้',
+      target: 'actions',
+      icon: BrainCircuit,
+      meta: 'daily audit',
+    },
+    {
+      label: 'Optimization',
+      detail: 'จับ spend leakage, winner ads และ pause/activate ผ่าน Meta guardrails',
+      target: 'auto',
+      icon: Power,
+      meta: 'budget control',
+    },
+    {
+      label: 'Creative Workflow',
+      detail: 'ดู creative performance, work orders และ asset library ใน flow เดียว',
+      target: 'tasks',
+      icon: ImageIcon,
+      meta: 'creative loop',
+    },
+    {
+      label: 'Analytics Report',
+      detail: 'รวม dashboard, funnel, service revenue และ PDF-ready reporting',
+      target: 'overview',
+      icon: LineChart,
+      meta: 'one-click report',
+    },
+  ]
 
   return (
     <section className="platform-grid">
-      <div className="platform-hero panel">
-        <div>
-          <span className="badge scale">Clinic App Platform</span>
-          <h2>ศูนย์รวมระบบจัดการคลินิก</h2>
-          <p>แยกงานเป็นแอปสำหรับ growth, appointment, service, AI, compliance และทีมปฏิบัติการ</p>
-        </div>
-        <div className="platform-hero-stats">
+      <div className="platform-main-stack">
+        <div className="platform-hero panel">
           <div>
-            <span>Bookings</span>
-            <strong>{booked}</strong>
+            <span className="badge scale">AI Ads Operating System</span>
+            <h2>จัดการ Meta Ads แบบ media buyer dashboard</h2>
+            <p>รวม AI Marketer, optimization, creative insights, automation และ reports สำหรับธุรกิจคลินิกไว้ในหน้าเดียว</p>
           </div>
-          <div>
-            <span>Show-up</span>
-            <strong>{showRate}</strong>
+          <div className="platform-hero-stats">
+            <div>
+              <span>Bookings</span>
+              <strong>{booked}</strong>
+            </div>
+            <div>
+              <span>Show-up</span>
+              <strong>{showRate}</strong>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="app-module-grid">
-        {modules.map((module, index) => {
-          const Icon = module.icon
-          return (
-            <button
-              key={module.id}
-              type="button"
-              className={`app-module-card tone-${(index % 5) + 1}`}
-              onClick={() => onOpen(module.id)}
-            >
-              <span className="app-icon">
-                <Icon size={22} />
-              </span>
-              <strong>{module.label}</strong>
-              <small>{module.description}</small>
-            </button>
-          )
-        })}
+        <div className="app-module-grid">
+          {modules.map((module, index) => {
+            const Icon = module.icon
+            return (
+              <button
+                key={module.id}
+                type="button"
+                className={`app-module-card tone-${(index % 5) + 1}`}
+                onClick={() => onOpen(module.id)}
+              >
+                <span className="app-icon">
+                  <Icon size={22} />
+                </span>
+                <strong>{module.label}</strong>
+                <small>{module.description}</small>
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <div className="panel platform-side">
+        <PanelHeader icon={BrainCircuit} title="AI Marketer Flow" meta="audit · optimize · launch" />
+        <div className="platform-function-list">
+          {functionStack.map((item) => {
+            const Icon = item.icon
+            return (
+              <button key={item.label} type="button" onClick={() => onOpen(item.target)}>
+                <span className="function-icon">
+                  <Icon size={15} />
+                </span>
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.detail}</small>
+                </span>
+                <em>{item.meta}</em>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="panel platform-service-panel">
         <PanelHeader icon={HeartPulse} title="Service Snapshot" meta={`${services.length} service apps`} />
         <div className="platform-service-list">
           {services.length === 0 && (

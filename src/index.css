@@ -3,13 +3,13 @@
     Inter, "IBM Plex Sans Thai", "Noto Sans Thai", ui-sans-serif, system-ui,
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color-scheme: light;
-  --background: #f7f7f8;
+  --background: #f6f7fb;
   --surface: #ffffff;
-  --ink: #101828;
-  --muted: #667085;
-  --border: #e4e7ec;
-  --blue: #7c3aed;
-  --shadow: 0 14px 40px rgba(16, 24, 40, 0.06);
+  --ink: #171a24;
+  --muted: #707789;
+  --border: #e5e8ef;
+  --blue: #7567d8;
+  --shadow: 0 12px 34px rgba(32, 39, 58, 0.055);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
