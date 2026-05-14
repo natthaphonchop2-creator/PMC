@@ -24,7 +24,8 @@
 .app-shell[data-theme='dark'] .tool-section-header strong,
 .app-shell[data-theme='dark'] .nav-item,
 .app-shell[data-theme='dark'] .brand-home,
-.app-shell[data-theme='dark'] .theme-button {
+.app-shell[data-theme='dark'] .theme-button,
+.app-shell[data-theme='dark'] .organization-badge {
   color: var(--ink);
 }
 
@@ -65,6 +66,11 @@
   color: #93c5fd;
 }
 
+.app-shell[data-theme='dark'] .organization-badge {
+  border-color: rgba(129, 140, 248, 0.24);
+  background: rgba(24, 33, 49, 0.86);
+}
+
 .app-shell[data-theme='dark'] .assistant-status-strip {
   border-color: rgba(129, 140, 248, 0.22);
   background:
@@ -101,6 +107,7 @@
 .topbar,
 .topbar-title,
 .topbar-actions,
+.organization-badge,
 .eyebrow,
 .nav-item,
 .brand-home,
@@ -168,6 +175,19 @@
   border-radius: 9px;
   background: linear-gradient(135deg, #7567d8, #5bb9e8);
   color: white;
+}
+
+.brand-logo-mark {
+  overflow: hidden;
+  border: 1px solid rgba(122, 92, 255, 0.18);
+  background: #ffffff;
+  box-shadow: 0 10px 22px rgba(85, 194, 238, 0.15);
+}
+
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .theme-button {
@@ -388,6 +408,33 @@ h1 {
 .topbar-actions {
   gap: 8px;
   flex-shrink: 0;
+}
+
+.organization-badge {
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 11px 5px 6px;
+  border: 1px solid rgba(122, 92, 255, 0.16);
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, rgba(122, 92, 255, 0.08), rgba(85, 194, 238, 0.08)),
+    rgba(255, 255, 255, 0.86);
+  color: var(--ink);
+  box-shadow: 0 10px 24px rgba(85, 194, 238, 0.08);
+  white-space: nowrap;
+}
+
+.organization-badge img {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  box-shadow: 0 8px 18px rgba(85, 194, 238, 0.16);
+}
+
+.organization-badge strong {
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 .assistant-status-strip {
@@ -5101,6 +5148,11 @@ td span {
 
   .topbar-actions {
     width: 100%;
+  }
+
+  .organization-badge {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .settings-actions {

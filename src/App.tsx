@@ -2019,10 +2019,10 @@ function App() {
       <aside className="sidebar" aria-label="Clinic growth navigation">
         <div className="brand">
           <button className="brand-home" type="button" onClick={() => setActiveTab('platform')} aria-label="Open app platform">
-            <div className="brand-mark">
-              <Sparkles size={18} />
+            <div className="brand-mark brand-logo-mark">
+              <img className="brand-logo" src="/promedclinicpmc-logo.png" alt="" />
             </div>
-            <strong>ClinicStellar AI</strong>
+            <strong>Promedclinicpmc</strong>
           </button>
           <button
             className={`theme-button ${themeMode === 'dark' ? 'active' : ''}`}
@@ -2134,6 +2134,10 @@ function App() {
               </select>
               <ChevronDown size={15} />
             </label>
+            <div className="organization-badge" aria-label="Current organization Promedclinicpmc" title="Promedclinicpmc">
+              <img src="/promedclinicpmc-logo.png" alt="" />
+              <strong>Promedclinicpmc</strong>
+            </div>
           </div>
         </header>
 

@@ -456,6 +456,13 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Platform Tool cards now include an info icon, hover/focus tooltip, `aria-label`, and `aria-describedby` so users can understand each tool without changing pages.
   - Browser QA confirms `AdVibes Clinic OS` opens first, 11 Tool cards render, 11 tooltip bodies exist, key help content mentions Meta/API where relevant, and there are no fresh browser console errors.
   - `npm run build` passes after the tooltip update.
+- Promedclinicpmc branding completed:
+  - Generated a new logo asset and copied the selected generated PNG into `public/promedclinicpmc-logo.png`; the generated source remains in `/Users/natthaphon/.codex/generated_images/019e163b-c9fe-7e43-b796-03d828a56bfa/`.
+  - Replaced the sidebar brand text with `Promedclinicpmc`.
+  - Added a right-side topbar organization badge showing the generated logo and `Promedclinicpmc`.
+  - Optimized the app logo asset to 512x512 for navbar use.
+  - Browser QA confirms sidebar brand, top-right organization name, and both logo images load from `/promedclinicpmc-logo.png` with no fresh console errors.
+  - `npm run build` passes after the branding update.
 
 ## Next Recommended Step
 
