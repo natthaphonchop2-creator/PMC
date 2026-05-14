@@ -14,6 +14,7 @@ import {
   ClipboardList,
   Clock3,
   Database,
+  Download,
   FileClock,
   Flag,
   HelpCircle,
@@ -58,6 +59,7 @@ import type {
   AIInsight,
   AiInsightDrawerContext,
   AiStatus,
+  AgentTask,
   AppointmentStage,
   ApprovalRequest,
   AutoAdControl,
@@ -241,6 +243,19 @@ const fmtNum = (value: number) => new Intl.NumberFormat('th-TH').format(value)
 const fmtPct = (value: number) => `${value.toFixed(1)}%`
 const safeDivide = (numerator: number, denominator: number) => (denominator > 0 ? numerator / denominator : 0)
 const safeRate = (numerator: number, denominator: number) => (denominator > 0 ? (numerator / denominator) * 100 : 0)
+const metaTemplateTokenPattern = /\{\{[^{}]+\}\}/g
+
+function cleanMetaDisplayText(value: string | undefined, fallback = '') {
+  const cleaned = String(value ?? '')
+    .replace(metaTemplateTokenPattern, '')
+    .replace(/\s+([·,;:])/g, '$1')
+    .replace(/([·,;:])\s*([·,;:])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s·,;:\-–—]+|[\s·,;:\-–—]+$/g, '')
+    .trim()
+
+  return cleaned || fallback
+}
 
 function statusMeta(status: AiStatus) {
   if (status === 'healthy') return { label: 'Healthy', className: 'good' }
@@ -279,12 +294,44 @@ function deliveryStatusTone(status: AdDeliveryStatus) {
   return status === 'active' ? 'good' : 'critical'
 }
 
+function actionStatusLabel(status: RecommendedAction['status']) {
+  if (status === 'approved') return 'Approved'
+  if (status === 'executing') return 'Executing'
+  if (status === 'executed') return 'Executed'
+  if (status === 'failed') return 'Failed'
+  if (status === 'rejected') return 'Rejected'
+  return 'Pending'
+}
+
+function actionStatusTone(status: RecommendedAction['status']) {
+  if (status === 'approved' || status === 'executed') return 'good'
+  if (status === 'executing') return 'scale'
+  if (status === 'failed' || status === 'rejected') return 'critical'
+  return 'watch'
+}
+
 function nextDeliveryStatus(status: AdDeliveryStatus): AdDeliveryStatus {
   return status === 'active' ? 'paused' : 'active'
 }
 
 function toMetaObjectStatus(status: AdDeliveryStatus): MetaObjectStatus {
   return status === 'active' ? 'ACTIVE' : 'PAUSED'
+}
+
+function executionForCampaignRecommendation(campaign: CampaignInsight, type: string): RecommendedAction['execution'] | undefined {
+  const normalizedType = type.toLowerCase()
+  if (normalizedType.includes('budget protection') || normalizedType.includes('tracking')) {
+    return {
+      endpoint: '/api/meta/object-status',
+      method: 'POST',
+      objectType: 'campaign',
+      objectId: campaign.id,
+      status: 'PAUSED',
+      label: 'Pause campaign in Meta',
+    }
+  }
+
+  return undefined
 }
 
 function normalizeDeliveryStatus(status?: AdDeliveryStatus, spend = 0): AdDeliveryStatus {
@@ -294,6 +341,78 @@ function normalizeDeliveryStatus(status?: AdDeliveryStatus, spend = 0): AdDelive
 
 function autoAdObjectId(ad: AutoAdControl) {
   return ad.adId || ad.id.replace(/^meta-auto-/, '')
+}
+
+function buildAutoStatusCandidates(args: {
+  preset: AutoRulePreset
+  campaigns: CampaignInsight[]
+  adSets: AdSetInsight[]
+  adInsights: WorkspaceData['adInsights']
+}): AutoStatusCandidate[] {
+  const rule = autoRulePresets[args.preset]
+  return args.adInsights
+    .map((ad): AutoStatusCandidate => {
+      const campaign = args.campaigns.find((item) => item.id === ad.campaignId)
+      const adSet = args.adSets.find((item) => item.id === ad.adSetId)
+      const currentStatus = normalizeDeliveryStatus(ad.status, ad.spend)
+      let decision: AutoDecision = 'keep'
+      let nextStatus: AdDeliveryStatus | null = null
+      let reason = `ROAS ${ad.roas.toFixed(2)}x · spend ${fmtMoney(ad.spend)} · bookings ${fmtNum(ad.bookings)}`
+      let risk: RiskLevel = 'Low'
+      let confidence = Math.max(58, Math.min(88, Math.round(58 + ad.score * 3)))
+
+      if (currentStatus === 'active' && ad.spend >= rule.minSpend && ad.bookings === 0) {
+        decision = 'pause'
+        nextStatus = 'paused'
+        reason = `Spend ถึง ${fmtMoney(rule.minSpend)} แล้ว แต่ยังไม่มี booking tracked`
+        risk = 'High'
+        confidence = 86
+      } else if (currentStatus === 'active' && ad.spend >= rule.minSpend && ad.roas > 0 && ad.roas < rule.pauseRoas) {
+        decision = 'pause'
+        nextStatus = 'paused'
+        reason = `ROAS ต่ำกว่า rule (${ad.roas.toFixed(2)}x < ${rule.pauseRoas.toFixed(2)}x)`
+        risk = 'Medium'
+        confidence = 78
+      } else if (currentStatus === 'paused' && ad.roas >= rule.scaleRoas && ad.bookings >= rule.minBookingsToReactivate) {
+        decision = 'enable'
+        nextStatus = 'active'
+        reason = `Paused ad มี ROAS ${ad.roas.toFixed(2)}x และ booking ${fmtNum(ad.bookings)} ตาม rule`
+        risk = 'Medium'
+        confidence = 74
+      } else if (currentStatus === 'active' && ad.roas >= rule.scaleRoas && ad.score >= 7.5) {
+        reason = `ยังควร monitor: ROAS ${ad.roas.toFixed(2)}x และ score ${ad.score.toFixed(1)} อยู่ในโซนดี`
+        confidence = 72
+      }
+
+      return {
+        id: `auto-candidate-${ad.id}`,
+        adId: ad.id,
+        campaignId: ad.campaignId,
+        adSetId: ad.adSetId,
+        adName: ad.name,
+        campaignName: campaign?.name ?? 'Unknown campaign',
+        adSetName: adSet?.name ?? 'Unknown ad set',
+        currentStatus,
+        nextStatus,
+        decision,
+        reason,
+        guardrail: `Rule: ${rule.label} · min spend ${fmtMoney(rule.minSpend)} · pause below ${rule.pauseRoas.toFixed(2)}x ROAS`,
+        confidence,
+        risk,
+        spend: ad.spend,
+        bookings: ad.bookings,
+        clicks: ad.clicks,
+        ctr: ad.ctr,
+        cpc: ad.cpc,
+        roas: ad.roas,
+        score: ad.score,
+      }
+    })
+    .sort((a, b) => {
+      const actionSort = Number(Boolean(b.nextStatus)) - Number(Boolean(a.nextStatus))
+      if (actionSort !== 0) return actionSort
+      return b.spend - a.spend
+    })
 }
 
 function emptyMetaObjectFormValues(overrides: Partial<MetaObjectFormValues> = {}): MetaObjectFormValues {
@@ -463,6 +582,7 @@ function buildWorkspaceRecommendations(workspace: WorkspaceData, runId: number):
         risk: campaign.roas < 1 ? 'High' : 'Medium',
         confidence: campaign.conversions >= 50 ? 84 : 72,
         status: 'pending',
+        execution: executionForCampaignRecommendation(campaign, 'Budget protection'),
       })
     }
 
@@ -550,6 +670,32 @@ function buildWorkspaceRecommendations(workspace: WorkspaceData, runId: number):
   })
 
   return [...campaignActions, ...channelActions].slice(0, 8)
+}
+
+function mergeRecommendedActionState(nextActions: RecommendedAction[], currentActions: RecommendedAction[]) {
+  const currentById = new Map(currentActions.map((action) => [action.id, action]))
+  const nextIds = new Set(nextActions.map((action) => action.id))
+  const mergedGenerated = nextActions.map((action) => {
+    const current = currentById.get(action.id)
+    if (!current || current.status === 'pending') return action
+    return {
+      ...action,
+      status: current.status,
+      executionError: current.executionError,
+      executedAt: current.executedAt,
+    }
+  })
+  const localOnlyActions = currentActions.filter((action) => !nextIds.has(action.id) && action.id.startsWith('perf-action-'))
+  return [...localOnlyActions, ...mergedGenerated]
+}
+
+function mergeAuditTrail(nextAuditTrail: WorkspaceData['auditTrail'], currentAuditTrail: WorkspaceData['auditTrail']) {
+  const seen = new Set<string>()
+  return [...currentAuditTrail, ...nextAuditTrail].filter((event) => {
+    if (seen.has(event.id)) return false
+    seen.add(event.id)
+    return true
+  })
 }
 
 const WORKSPACE_STORAGE_KEY = 'clinicstellar-ai-live-workspace-v1'
@@ -727,6 +873,8 @@ interface MetaObjectMutationPayload {
 
 type CampaignControlScope = MetaObjectType
 type InsightGroupBy = 'creative' | 'campaign' | 'adset' | 'ad' | 'service' | 'objective' | 'status'
+type AutoRulePreset = 'balanced' | 'protect' | 'scale'
+type AutoQueueFilter = 'all' | 'action' | 'pause' | 'enable' | 'monitor'
 
 interface InsightTableRow {
   id: string
@@ -745,6 +893,34 @@ interface InsightTableRow {
   roas: number
   tone: 'good' | 'watch' | 'critical'
   thumbTone: string
+}
+
+interface AutoStatusCandidate {
+  id: string
+  adId: string
+  campaignId: string
+  adSetId: string
+  adName: string
+  campaignName: string
+  adSetName: string
+  currentStatus: AdDeliveryStatus
+  nextStatus: AdDeliveryStatus | null
+  decision: AutoDecision
+  reason: string
+  guardrail: string
+  confidence: number
+  risk: RiskLevel
+  spend: number
+  bookings: number
+  clicks: number
+  ctr: number
+  cpc: number
+  roas: number
+  score: number
+}
+
+interface BulkAutoExecutionRequest {
+  candidates: AutoStatusCandidate[]
 }
 
 const insightGroupOptions: Array<{ value: InsightGroupBy; label: string; description: string }> = [
@@ -795,6 +971,36 @@ const agePresetOptions = [
   { label: '35-65', min: '35', max: '65' },
 ]
 
+const autoRulePresets: Record<
+  AutoRulePreset,
+  { label: string; description: string; minSpend: number; pauseRoas: number; scaleRoas: number; minBookingsToReactivate: number }
+> = {
+  balanced: {
+    label: 'Balanced',
+    description: 'เหมาะกับการใช้งานประจำวัน หยุดตัวเปลือง และเปิดตัวที่มีหลักฐานพอ',
+    minSpend: 500,
+    pauseRoas: 1,
+    scaleRoas: 3,
+    minBookingsToReactivate: 2,
+  },
+  protect: {
+    label: 'Protect Budget',
+    description: 'เข้มขึ้น เหมาะกับช่วงคุมงบหรือไม่อยากให้ ads เปลืองเงิน',
+    minSpend: 300,
+    pauseRoas: 0.8,
+    scaleRoas: 2.5,
+    minBookingsToReactivate: 1,
+  },
+  scale: {
+    label: 'Scale Winners',
+    description: 'เน้นหา ads ที่ควรเปิดกลับหรือปล่อยให้วิ่งต่อเมื่อ ROAS สูง',
+    minSpend: 1000,
+    pauseRoas: 1.2,
+    scaleRoas: 3.5,
+    minBookingsToReactivate: 3,
+  },
+}
+
 function nowLabel() {
   return new Intl.DateTimeFormat('th-TH', {
     dateStyle: 'medium',
@@ -811,19 +1017,72 @@ function normalizeWorkspaceData(input?: Partial<WorkspaceData> | null): Workspac
   return {
     ...emptyWorkspaceData,
     ...input,
-    campaigns: pickArray<CampaignInsight>(input?.campaigns, emptyWorkspaceData.campaigns),
+    campaigns: pickArray<CampaignInsight>(input?.campaigns, emptyWorkspaceData.campaigns).map((campaign) => ({
+      ...campaign,
+      name: cleanMetaDisplayText(campaign.name, 'Meta campaign'),
+      aiSummary: cleanMetaDisplayText(campaign.aiSummary, campaign.aiSummary),
+    })),
     serviceLines: pickArray<ServiceLine>(input?.serviceLines, emptyWorkspaceData.serviceLines),
     appointmentStages: pickArray<AppointmentStage>(input?.appointmentStages, emptyWorkspaceData.appointmentStages),
-    complianceReviews: pickArray<ComplianceReview>(input?.complianceReviews, emptyWorkspaceData.complianceReviews),
+    complianceReviews: pickArray<ComplianceReview>(input?.complianceReviews, emptyWorkspaceData.complianceReviews).map((review) => ({
+      ...review,
+      title: cleanMetaDisplayText(review.title, 'Meta creative'),
+      service: cleanMetaDisplayText(review.service, review.service),
+      issue: cleanMetaDisplayText(review.issue, review.issue),
+      fix: cleanMetaDisplayText(review.fix, review.fix),
+      source: cleanMetaDisplayText(review.source, review.source),
+    })),
     insights: pickArray<AIInsight>(input?.insights, emptyWorkspaceData.insights),
-    insightComponents: pickArray(input?.insightComponents, emptyWorkspaceData.insightComponents),
-    adSets: pickArray(input?.adSets, emptyWorkspaceData.adSets),
-    adInsights: pickArray(input?.adInsights, emptyWorkspaceData.adInsights),
-    actions: pickArray<RecommendedAction>(input?.actions, emptyWorkspaceData.actions),
-    autoAds: pickArray<AutoAdControl>(input?.autoAds, emptyWorkspaceData.autoAds),
-    tasks: pickArray(input?.tasks, emptyWorkspaceData.tasks),
-    memoryItems: pickArray<MemoryItem>(input?.memoryItems, emptyWorkspaceData.memoryItems),
-    auditTrail: pickArray(input?.auditTrail, emptyWorkspaceData.auditTrail),
+    insightComponents: pickArray(input?.insightComponents, emptyWorkspaceData.insightComponents).map((component) => ({
+      ...component,
+      title: cleanMetaDisplayText(component.title, 'Meta creative'),
+      service: cleanMetaDisplayText(component.service, component.service),
+    })),
+    adSets: pickArray(input?.adSets, emptyWorkspaceData.adSets).map((adSet) => ({
+      ...adSet,
+      name: cleanMetaDisplayText(adSet.name, 'Meta ad set'),
+      audience: cleanMetaDisplayText(adSet.audience, adSet.audience),
+    })),
+    adInsights: pickArray(input?.adInsights, emptyWorkspaceData.adInsights).map((ad) => ({
+      ...ad,
+      name: cleanMetaDisplayText(ad.name, 'Meta ad'),
+      creative: cleanMetaDisplayText(ad.creative, 'Meta creative'),
+    })),
+    actions: pickArray<RecommendedAction>(input?.actions, emptyWorkspaceData.actions).map((action) => ({
+      ...action,
+      target: cleanMetaDisplayText(action.target, action.target),
+      summary: cleanMetaDisplayText(action.summary, action.summary),
+      before: cleanMetaDisplayText(action.before, action.before),
+      after: cleanMetaDisplayText(action.after, action.after),
+    })),
+    autoAds: pickArray<AutoAdControl>(input?.autoAds, emptyWorkspaceData.autoAds).map((ad) => ({
+      ...ad,
+      adName: cleanMetaDisplayText(ad.adName, 'Meta ad'),
+      reason: cleanMetaDisplayText(ad.reason, ad.reason),
+      before: cleanMetaDisplayText(ad.before, ad.before),
+      after: cleanMetaDisplayText(ad.after, ad.after),
+    })),
+    tasks: pickArray(input?.tasks, emptyWorkspaceData.tasks).map((task) => ({
+      ...task,
+      sourceCampaign: cleanMetaDisplayText(task.sourceCampaign, task.sourceCampaign),
+      inputContext: cleanMetaDisplayText(task.inputContext, task.inputContext),
+      expectedOutput: cleanMetaDisplayText(task.expectedOutput, task.expectedOutput),
+      result: cleanMetaDisplayText(task.result, task.result),
+    })),
+    memoryItems: pickArray<MemoryItem>(input?.memoryItems, emptyWorkspaceData.memoryItems).map((item) => ({
+      ...item,
+      title: cleanMetaDisplayText(item.title, item.title),
+      detail: cleanMetaDisplayText(item.detail, item.detail),
+      source: cleanMetaDisplayText(item.source, item.source),
+    })),
+    auditTrail: pickArray(input?.auditTrail, emptyWorkspaceData.auditTrail).map((event) => ({
+      ...event,
+      action: cleanMetaDisplayText(event.action, event.action),
+      target: cleanMetaDisplayText(event.target, event.target),
+      before: cleanMetaDisplayText(event.before, event.before),
+      after: cleanMetaDisplayText(event.after, event.after),
+      reason: cleanMetaDisplayText(event.reason, event.reason),
+    })),
     trendData: pickArray<TrendPoint>(input?.trendData, emptyWorkspaceData.trendData),
     channelPerformance: pickArray<ChannelPerformance>(input?.channelPerformance, emptyWorkspaceData.channelPerformance),
     funnelMetrics: pickArray(input?.funnelMetrics, emptyWorkspaceData.funnelMetrics),
@@ -890,6 +1149,10 @@ function App() {
   })
   const autoMetaSyncRef = useRef(false)
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
+  const [approvalExecutionState, setApprovalExecutionState] = useState<{ running: boolean; error: string | null }>({
+    running: false,
+    error: null,
+  })
   const [performanceDrilldown, setPerformanceDrilldown] = useState<PerformanceDrilldown | null>(null)
   const [aiInsightDrawer, setAiInsightDrawer] = useState<AiInsightDrawerContext | null>(null)
   const [statusChangeRequest, setStatusChangeRequest] = useState<DeliveryStatusChangeRequest | null>(null)
@@ -899,6 +1162,11 @@ function App() {
   })
   const [objectMutationRequest, setObjectMutationRequest] = useState<MetaObjectMutationRequest | null>(null)
   const [objectMutationState, setObjectMutationState] = useState<{ running: boolean; error: string | null }>({
+    running: false,
+    error: null,
+  })
+  const [bulkAutoRequest, setBulkAutoRequest] = useState<BulkAutoExecutionRequest | null>(null)
+  const [bulkAutoState, setBulkAutoState] = useState<{ running: boolean; error: string | null }>({
     running: false,
     error: null,
   })
@@ -990,24 +1258,135 @@ function App() {
     ])
   }
 
-  const approveRecommendedAction = (id: string) => {
+  const approveRecommendedAction = async (id: string) => {
     const target = actions.find((action) => action.id === id)
     if (!target) return
 
-    setActions((current) => current.map((action) => (action.id === id ? { ...action, status: 'approved' } : action)))
-    setAuditTrail((current) => [
-      {
-        id: `audit-approve-${id}`,
-        actor: 'Current user',
-        action: `${target.type} approved`,
-        target: target.target,
-        before: target.before,
-        after: target.after,
-        reason: target.summary,
-        timestamp: 'เมื่อสักครู่',
-      },
-      ...current,
-    ])
+    if (!target.execution) {
+      setActions((current) => current.map((action) => (action.id === id ? { ...action, status: 'approved', executionError: undefined } : action)))
+      setAuditTrail((current) => [
+        {
+          id: `audit-approve-${id}`,
+          actor: 'Current user',
+          action: `${target.type} approved`,
+          target: target.target,
+          before: target.before,
+          after: target.after,
+          reason: target.summary,
+          timestamp: 'เมื่อสักครู่',
+        },
+        ...current,
+      ])
+      setApprovalExecutionState({ running: false, error: null })
+      setApprovalRequest(null)
+      return
+    }
+    const execution = target.execution
+
+    setApprovalExecutionState({ running: true, error: null })
+    setActions((current) => current.map((action) => (action.id === id ? { ...action, status: 'executing', executionError: undefined } : action)))
+
+    try {
+      const response = await fetch(execution.endpoint, {
+        method: execution.method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(
+          execution.endpoint === '/api/meta/object-status'
+            ? {
+                objectType: execution.objectType,
+                objectId: execution.objectId,
+                status: execution.status,
+              }
+            : {
+                operation: execution.operation ?? 'update',
+                objectType: execution.objectType,
+                objectId: execution.objectId,
+                params: execution.params ?? {},
+              },
+        ),
+      })
+      const payload = (await response.json()) as { error?: string; ok?: boolean }
+      if (!response.ok || payload.error || payload.ok === false) {
+        throw new Error(payload.error || 'Action execution failed')
+      }
+
+      const nextDeliveryStatus: AdDeliveryStatus | null =
+        execution.endpoint === '/api/meta/object-status' && execution.status
+          ? execution.status === 'ACTIVE'
+            ? 'active'
+            : 'paused'
+          : null
+
+      setWorkspace((current) => ({
+        ...current,
+        campaigns: current.campaigns.map((campaign) =>
+          nextDeliveryStatus && execution.objectType === 'campaign' && campaign.id === execution.objectId
+            ? { ...campaign, deliveryStatus: nextDeliveryStatus }
+            : campaign,
+        ),
+        adSets: current.adSets.map((adSet) =>
+          nextDeliveryStatus && execution.objectType === 'adset' && adSet.id === execution.objectId
+            ? { ...adSet, deliveryStatus: nextDeliveryStatus }
+            : adSet,
+        ),
+        adInsights: current.adInsights.map((ad) =>
+          nextDeliveryStatus && execution.objectType === 'ad' && ad.id === execution.objectId
+            ? { ...ad, status: nextDeliveryStatus }
+            : ad,
+        ),
+        autoAds: current.autoAds.map((ad) =>
+          nextDeliveryStatus && execution.objectType === 'ad' && autoAdObjectId(ad) === execution.objectId
+            ? { ...ad, status: nextDeliveryStatus, applied: true }
+            : ad,
+        ),
+        actions: current.actions.map((action) =>
+          action.id === id
+            ? {
+                ...action,
+                status: 'executed',
+                executionError: undefined,
+                executedAt: nowLabel(),
+              }
+            : action,
+        ),
+        auditTrail: [
+          {
+            id: `audit-execute-${id}-${Date.now()}`,
+            actor: 'Action Queue',
+            action: execution.label,
+            target: target.target,
+            before: target.before,
+            after: execution.endpoint === '/api/meta/object-status' ? `Meta ${execution.objectType} status ${execution.status}` : target.after,
+            reason: target.summary,
+            timestamp: nowLabel(),
+          },
+          ...current.auditTrail,
+        ],
+        updatedAt: nowLabel(),
+      }))
+      setApprovalExecutionState({ running: false, error: null })
+      setApprovalRequest(null)
+      void handleSyncMetaWorkspace()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Action execution failed'
+      setActions((current) =>
+        current.map((action) => (action.id === id ? { ...action, status: 'failed', executionError: message } : action)),
+      )
+      setAuditTrail((current) => [
+        {
+          id: `audit-execute-failed-${id}-${Date.now()}`,
+          actor: 'Action Queue',
+          action: `${execution.label} failed`,
+          target: target.target,
+          before: target.before,
+          after: 'No Meta change executed',
+          reason: message,
+          timestamp: nowLabel(),
+        },
+        ...current,
+      ])
+      setApprovalExecutionState({ running: false, error: message })
+    }
   }
 
   const applyAutoDecision = (id: string) => {
@@ -1171,6 +1550,79 @@ function App() {
     }
   }
 
+  const requestBulkAutoExecution = (candidates: AutoStatusCandidate[]) => {
+    setBulkAutoState({ running: false, error: null })
+    setBulkAutoRequest({ candidates })
+  }
+
+  const confirmBulkAutoExecution = async () => {
+    if (!bulkAutoRequest) return
+
+    setBulkAutoState({ running: true, error: null })
+
+    try {
+      for (const candidate of bulkAutoRequest.candidates) {
+        if (!candidate.nextStatus) continue
+        const response = await fetch('/api/meta/object-status', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            objectType: 'ad',
+            objectId: candidate.adId,
+            status: toMetaObjectStatus(candidate.nextStatus),
+          }),
+        })
+        const payload = (await response.json()) as Partial<MetaObjectStatusPayload>
+        if (!response.ok || payload.error) {
+          throw new Error(payload.error || `Meta status update failed for ${candidate.adName}`)
+        }
+      }
+
+      const nextStatusByAdId = new Map(
+        bulkAutoRequest.candidates
+          .filter((candidate): candidate is AutoStatusCandidate & { nextStatus: AdDeliveryStatus } => Boolean(candidate.nextStatus))
+          .map((candidate) => [candidate.adId, candidate.nextStatus]),
+      )
+
+      setWorkspace((current) => ({
+        ...current,
+        adInsights: current.adInsights.map((ad) => {
+          const nextStatus = nextStatusByAdId.get(ad.id)
+          return nextStatus ? { ...ad, status: nextStatus } : ad
+        }),
+        autoAds: current.autoAds.map((ad) => {
+          const nextStatus = nextStatusByAdId.get(autoAdObjectId(ad))
+          return nextStatus ? { ...ad, status: nextStatus, applied: true } : ad
+        }),
+        updatedAt: nowLabel(),
+      }))
+
+      setAuditTrail((current) => [
+        {
+          id: `audit-bulk-auto-${Date.now()}`,
+          actor: 'Ads Auto',
+          action: 'Bulk Meta ad status update',
+          target: `${bulkAutoRequest.candidates.length} ads`,
+          before: bulkAutoRequest.candidates.map((candidate) => `${candidate.adName}: ${deliveryStatusLabel(candidate.currentStatus)}`).join(' · '),
+          after: bulkAutoRequest.candidates
+            .map((candidate) => `${candidate.adName}: ${candidate.nextStatus ? deliveryStatusLabel(candidate.nextStatus) : 'MONITOR'}`)
+            .join(' · '),
+          reason: 'Bulk approved from Ads Auto rule preview',
+          timestamp: nowLabel(),
+        },
+        ...current,
+      ])
+      setBulkAutoRequest(null)
+      setBulkAutoState({ running: false, error: null })
+      void handleSyncMetaWorkspace()
+    } catch (error) {
+      setBulkAutoState({
+        running: false,
+        error: error instanceof Error ? error.message : 'Bulk Ads Auto execution failed',
+      })
+    }
+  }
+
   const createPerformanceAction = (drilldown: PerformanceDrilldown) => {
     const newAction: RecommendedAction = {
       id: `perf-action-${Date.now()}`,
@@ -1230,7 +1682,11 @@ function App() {
               ...normalized,
               actions: buildWorkspaceRecommendations(normalized, Date.now()),
             }
-      setWorkspace(nextWorkspace)
+      setWorkspace((current) => ({
+        ...nextWorkspace,
+        actions: mergeRecommendedActionState(nextWorkspace.actions, current.actions),
+        auditTrail: mergeAuditTrail(nextWorkspace.auditTrail, current.auditTrail),
+      }))
       setSelectedCampaignId(nextWorkspace.campaigns[0]?.id ?? '')
       setMetaSync((current) => ({
         ...current,
@@ -1392,14 +1848,14 @@ function App() {
     void handleSyncMetaWorkspace()
   }, [handleSyncMetaWorkspace, metaSync.connected])
 
-  const confirmApproval = () => {
+  const confirmApproval = async () => {
     if (!approvalRequest) return
     if (approvalRequest.kind === 'recommendation') {
-      approveRecommendedAction(approvalRequest.id)
+      await approveRecommendedAction(approvalRequest.id)
     } else {
       applyAutoDecision(approvalRequest.id)
+      setApprovalRequest(null)
     }
-    setApprovalRequest(null)
   }
 
   const approvalTarget =
@@ -1624,31 +2080,47 @@ function App() {
 
         {activeTab === 'actions' && actions.length > 0 && (
           <section className="panel">
-            <PanelHeader icon={ClipboardList} title="Clinic Action Queue" meta="ทุก action ต้องผ่าน approval" />
+            <PanelHeader icon={ClipboardList} title="Clinic Action Queue" meta="Approve-only หรือ Execute ผ่าน Meta API" />
             <div className="action-list">
               {actions.map((action) => (
                 <article key={action.id} className="action-card">
                   <div className="action-main">
                     <span className={`badge ${riskClass(action.risk)}`}>{action.risk} risk</span>
+                    <span className={`badge ${actionStatusTone(action.status)}`}>{actionStatusLabel(action.status)}</span>
                     <h3>{action.type}</h3>
                     <strong>{action.target}</strong>
                     <p>{action.summary}</p>
                     <small>{action.expectedImpact}</small>
+                    {action.execution ? (
+                      <div className="action-execution-note">
+                        <Power size={14} />
+                        <span>{action.execution.label} · {metaObjectLabel(action.execution.objectType)} {action.execution.objectId}</span>
+                      </div>
+                    ) : (
+                      <div className="action-execution-note muted">
+                        <ShieldCheck size={14} />
+                        <span>Approval only · ยังไม่มี endpoint ที่ execute อัตโนมัติสำหรับ action นี้</span>
+                      </div>
+                    )}
+                    {action.executionError && <div className="data-notice critical action-error">{action.executionError}</div>}
                   </div>
                   <div className="confidence-ring">
                     <span>{action.confidence}%</span>
                     <small>AI Confidence</small>
                   </div>
                   <div className="queue-actions">
-                    {action.status === 'pending' ? (
+                    {action.status === 'pending' || action.status === 'failed' ? (
                       <>
                         <button
                           className="approve-button"
                           type="button"
-                          onClick={() => setApprovalRequest({ kind: 'recommendation', id: action.id })}
+                          onClick={() => {
+                            setApprovalExecutionState({ running: false, error: null })
+                            setApprovalRequest({ kind: 'recommendation', id: action.id })
+                          }}
                         >
-                          <Check size={16} />
-                          Approve
+                          {action.execution ? <Power size={16} /> : <Check size={16} />}
+                          {action.execution ? 'Execute' : 'Approve'}
                         </button>
                         <button className="reject-button" type="button" onClick={() => rejectAction(action.id)}>
                           <X size={16} />
@@ -1656,9 +2128,7 @@ function App() {
                         </button>
                       </>
                     ) : (
-                      <span className={`badge ${action.status === 'approved' ? 'good' : 'critical'}`}>
-                        {action.status === 'approved' ? 'Approved' : 'Rejected'}
-                      </span>
+                      <span className={`badge ${actionStatusTone(action.status)}`}>{actionStatusLabel(action.status)}</span>
                     )}
                   </div>
                 </article>
@@ -1676,26 +2146,30 @@ function App() {
           />
         )}
 
-        {activeTab === 'auto' && autoAds.length > 0 && (
+        {activeTab === 'auto' && adInsights.length > 0 && (
           <AutoAdsPanel
             mode={autoMode}
             ads={autoAds}
+            campaigns={campaigns}
+            adSets={adSets}
+            adInsights={adInsights}
             onModeChange={setAutoMode}
-            onApply={(ad) => {
-              const nextStatus = ad.recommendation === 'enable' ? 'active' : 'paused'
+            onApplyCandidate={(candidate) => {
+              if (!candidate.nextStatus) return
               requestDeliveryStatusChange({
                 objectType: 'ad',
-                objectId: autoAdObjectId(ad),
-                targetName: ad.adName,
-                currentStatus: normalizeDeliveryStatus(ad.status),
-                nextStatus,
-                summary: `${autoDecisionLabel(ad.recommendation)} · ${ad.reason}`,
+                objectId: candidate.adId,
+                targetName: candidate.adName,
+                currentStatus: candidate.currentStatus,
+                nextStatus: candidate.nextStatus,
+                summary: `${autoDecisionLabel(candidate.decision)} · ${candidate.reason}`,
                 source: 'ads-auto',
               })
             }}
+            onBulkApply={requestBulkAutoExecution}
           />
         )}
-        {activeTab === 'auto' && autoAds.length === 0 && (
+        {activeTab === 'auto' && adInsights.length === 0 && (
           <NoDataPanel
             icon={Power}
             title="ยังไม่มี Ads Auto Actions"
@@ -1705,59 +2179,40 @@ function App() {
           />
         )}
 
-        {activeTab === 'tasks' && tasks.length > 0 && (
-          <section className="panel">
-            <PanelHeader icon={Layers3} title="Agent Task Center" meta="Clinic AI Agent เป็น orchestrator กลาง" />
-            <div className="task-grid">
-              {tasks.map((task) => (
-                <article key={task.id} className="task-card">
-                  <div className="task-topline">
-                    <span className={`badge ${taskClass(task.status)}`}>{task.status}</span>
-                    <span>{task.updatedAt}</span>
-                  </div>
-                  <h3>{task.agent}</h3>
-                  <strong>{task.taskType}</strong>
-                  <p>{task.result}</p>
-                  <div className="task-context">
-                    <strong>Input</strong>
-                    <span>{task.inputContext}</span>
-                    <strong>Expected output</strong>
-                    <span>{task.expectedOutput}</span>
-                  </div>
-                  <div className="task-meta">
-                    <span>{task.owner}</span>
-                    <span>{task.sourceCampaign}</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
+        {activeTab === 'tasks' && adInsights.length > 0 && (
+          <CreativeStudioPage
+            tasks={tasks}
+            campaigns={campaigns}
+            adInsights={adInsights}
+            onOpenCampaigns={() => setActiveTab('campaigns')}
+            onOpenInsights={() => setActiveTab('investigator')}
+          />
         )}
-        {activeTab === 'tasks' && tasks.length === 0 && (
+        {activeTab === 'tasks' && adInsights.length === 0 && (
           <NoDataPanel
             icon={Layers3}
             title="ยังไม่มี Agent Tasks"
-            message="Task จะสร้างจากข้อมูล campaign, creative และ recommendation ที่ดึงจาก workspace จริง"
+            message="Creative Studio จะทำงานจาก ad-level creative metrics ที่ดึงจาก Meta API หลัง Sync เท่านั้น"
             actionLabel="Open Settings"
             onAction={() => setActiveTab('settings')}
           />
         )}
 
-        {activeTab === 'memory' && memoryItems.length > 0 && (
-          <MemoryPanel items={memoryItems} />
+        {activeTab === 'memory' && adSets.length > 0 && (
+          <AudienceStudioPage items={memoryItems} campaigns={campaigns} adSets={adSets} />
         )}
-        {activeTab === 'memory' && memoryItems.length === 0 && (
+        {activeTab === 'memory' && adSets.length === 0 && (
           <NoDataPanel
             icon={Database}
             title="ยังไม่มี Audience Memory"
-            message="Memory จะถูกเติมจาก insight, campaign context และ audit ที่เกิดจากข้อมูลจริงของบัญชี"
+            message="Audience Studio จะอ่าน ad set targeting, budget และ performance จาก Meta API หลัง Sync"
             actionLabel="Open Settings"
             onAction={() => setActiveTab('settings')}
           />
         )}
 
         {activeTab === 'compliance' && complianceReviews.length > 0 && (
-          <CompliancePage reviews={complianceReviews} />
+          <MediaLibraryPage reviews={complianceReviews} />
         )}
         {activeTab === 'compliance' && complianceReviews.length === 0 && (
           <NoDataPanel
@@ -1840,7 +2295,13 @@ function App() {
         <ApprovalModal
           request={approvalRequest}
           target={approvalTarget}
-          onCancel={() => setApprovalRequest(null)}
+          running={approvalExecutionState.running}
+          error={approvalExecutionState.error}
+          onCancel={() => {
+            if (approvalExecutionState.running) return
+            setApprovalRequest(null)
+            setApprovalExecutionState({ running: false, error: null })
+          }}
           onConfirm={confirmApproval}
         />
       )}
@@ -1864,6 +2325,16 @@ function App() {
           error={objectMutationState.error}
           onCancel={() => setObjectMutationRequest(null)}
           onConfirm={confirmMetaObjectMutation}
+        />
+      )}
+
+      {bulkAutoRequest && (
+        <BulkAutoExecutionModal
+          request={bulkAutoRequest}
+          running={bulkAutoState.running}
+          error={bulkAutoState.error}
+          onCancel={() => setBulkAutoRequest(null)}
+          onConfirm={confirmBulkAutoExecution}
         />
       )}
     </div>
@@ -1903,17 +2374,59 @@ function NoDataPanel({
 function AutoAdsPanel({
   mode,
   ads,
+  campaigns,
+  adSets,
+  adInsights,
   onModeChange,
-  onApply,
+  onApplyCandidate,
+  onBulkApply,
 }: {
   mode: AutomationMode
   ads: AutoAdControl[]
+  campaigns: CampaignInsight[]
+  adSets: WorkspaceData['adSets']
+  adInsights: WorkspaceData['adInsights']
   onModeChange: (mode: AutomationMode) => void
-  onApply: (ad: AutoAdControl) => void
+  onApplyCandidate: (candidate: AutoStatusCandidate) => void
+  onBulkApply: (candidates: AutoStatusCandidate[]) => void
 }) {
-  const pendingCount = ads.filter((ad) => !ad.applied && ad.recommendation !== 'keep').length
-  const activeCount = ads.filter((ad) => ad.status === 'active').length
-  const pausedCount = ads.length - activeCount
+  const [preset, setPreset] = useState<AutoRulePreset>('balanced')
+  const [queueFilter, setQueueFilter] = useState<AutoQueueFilter>('action')
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const candidates = useMemo(
+    () => buildAutoStatusCandidates({ preset, campaigns, adSets, adInsights }),
+    [adInsights, adSets, campaigns, preset],
+  )
+  const actionableCandidates = useMemo(() => candidates.filter((candidate) => Boolean(candidate.nextStatus)), [candidates])
+  const totalTrackedAds = adInsights.length > 0 ? adInsights.length : ads.length
+  const activeCount =
+    adInsights.length > 0 ? adInsights.filter((ad) => ad.status === 'active').length : ads.filter((ad) => ad.status === 'active').length
+  const pausedCount = totalTrackedAds - activeCount
+  const visibleCandidates = useMemo(
+    () =>
+      candidates.filter((candidate) => {
+        if (queueFilter === 'action') return Boolean(candidate.nextStatus)
+        if (queueFilter === 'pause') return candidate.decision === 'pause'
+        if (queueFilter === 'enable') return candidate.decision === 'enable'
+        if (queueFilter === 'monitor') return !candidate.nextStatus
+        return true
+      }),
+    [candidates, queueFilter],
+  )
+  const selectedCandidates = useMemo(
+    () => actionableCandidates.filter((candidate) => selectedIds.includes(candidate.id)),
+    [actionableCandidates, selectedIds],
+  )
+  const pauseCount = actionableCandidates.filter((candidate) => candidate.nextStatus === 'paused').length
+  const enableCount = actionableCandidates.filter((candidate) => candidate.nextStatus === 'active').length
+
+  useEffect(() => {
+    setSelectedIds(actionableCandidates.slice(0, 5).map((candidate) => candidate.id))
+  }, [actionableCandidates])
+
+  const toggleCandidate = (id: string) => {
+    setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
+  }
 
   return (
     <section className="auto-grid">
@@ -1922,7 +2435,7 @@ function AutoAdsPanel({
         <div className="auto-hero-content">
           <div>
             <h2>Auto rules สำหรับเปิด/ปิด Ads จากข้อมูลจริง</h2>
-            <p>ระบบอ่าน performance จาก Meta แล้วเสนอ status action ระดับ ad ก่อนยิง Meta API ผ่าน confirmation</p>
+            <p>เลือก preset แล้ว review รายการก่อนยิง Meta API จริง ใช้สำหรับ pause ตัวเปลืองและ activate ตัวที่มีสัญญาณกลับมาดี</p>
           </div>
           <div className="mode-switch" aria-label="Automation mode">
             <button className={mode === 'suggest' ? 'active' : ''} type="button" onClick={() => onModeChange('suggest')}>
@@ -1945,7 +2458,11 @@ function AutoAdsPanel({
           </div>
           <div>
             <span>Pending Auto Actions</span>
-            <strong>{pendingCount}</strong>
+            <strong>{actionableCandidates.length}</strong>
+          </div>
+          <div>
+            <span>Pause / Enable</span>
+            <strong>{pauseCount}/{enableCount}</strong>
           </div>
           <div>
             <span>Execution Mode</span>
@@ -1955,59 +2472,114 @@ function AutoAdsPanel({
       </div>
 
       <div className="panel guardrail-panel">
-        <PanelHeader icon={ShieldCheck} title="Auto Guardrails" meta="ข้อจำกัดก่อนเปิด/ปิด" />
+        <PanelHeader icon={ShieldCheck} title="Rule Preset" meta={autoRulePresets[preset].label} />
+        <div className="auto-rule-grid">
+          {(Object.keys(autoRulePresets) as AutoRulePreset[]).map((key) => {
+            const rule = autoRulePresets[key]
+            return (
+              <button key={key} className={preset === key ? 'active' : ''} type="button" onClick={() => setPreset(key)}>
+                <strong>{rule.label}</strong>
+                <small>{rule.description}</small>
+                <span>{fmtMoney(rule.minSpend)} min spend · {rule.pauseRoas.toFixed(1)}x pause</span>
+              </button>
+            )
+          })}
+        </div>
         <div className="guardrail-list">
           <Signal icon={ShieldCheck} text="ทุก action ต้องมี reason, confidence และ before/after snapshot" tone="good" />
-          <Signal icon={PauseCircle} text="Pause ได้เมื่อ spend และ data volume ผ่าน threshold เท่านั้น" tone="watch" />
-          <Signal icon={AlertTriangle} text="High risk action ยังต้องให้คนกด approve เสมอ" tone="critical" />
-          <Signal icon={PlayCircle} text="เปิด ad ที่ paused แล้วต้องเริ่มด้วย limited test budget" tone="good" />
+          <Signal icon={PauseCircle} text="Pause เฉพาะ ads ที่ผ่าน spend threshold ของ preset" tone="watch" />
+          <Signal icon={AlertTriangle} text="Bulk execution ต้องกด Confirm ใน modal ก่อนยิง Meta API" tone="critical" />
+          <Signal icon={PlayCircle} text="Reactivate เฉพาะ paused ads ที่มี ROAS และ bookings ตาม rule" tone="good" />
         </div>
       </div>
 
       <div className="panel auto-list-panel">
-        <PanelHeader icon={Zap} title="Ads Auto Queue" meta="ad-level status decisions" />
-        <div className="auto-list">
-          {ads.map((ad) => {
-            const canRunStatusAction = ad.recommendation === 'pause' || ad.recommendation === 'enable'
+        <div className="auto-queue-header">
+          <PanelHeader icon={Zap} title="Ads Auto Queue" meta={`${visibleCandidates.length} rows · ${selectedCandidates.length} selected`} />
+          <div className="auto-queue-actions">
+            <div className="mode-switch compact" aria-label="Queue filter">
+              {[
+                { id: 'action' as const, label: 'Action' },
+                { id: 'all' as const, label: 'All' },
+                { id: 'pause' as const, label: 'Pause' },
+                { id: 'enable' as const, label: 'Enable' },
+                { id: 'monitor' as const, label: 'Monitor' },
+              ].map((item) => (
+                <button key={item.id} className={queueFilter === item.id ? 'active' : ''} type="button" onClick={() => setQueueFilter(item.id)}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <button className="secondary-button" type="button" onClick={() => setSelectedIds(actionableCandidates.map((candidate) => candidate.id))}>
+              Select all
+            </button>
+            <button className="secondary-button" type="button" onClick={() => setSelectedIds([])} disabled={selectedCandidates.length === 0}>
+              Clear
+            </button>
+            <button className="primary-button" type="button" disabled={selectedCandidates.length === 0} onClick={() => onBulkApply(selectedCandidates)}>
+              <ShieldCheck size={16} />
+              Review selected
+            </button>
+          </div>
+        </div>
+
+        <div className="auto-candidate-list">
+          {visibleCandidates.length === 0 && (
+            <div className="empty-state">
+              <ShieldCheck size={18} />
+              <strong>ยังไม่มีรายการใน filter นี้</strong>
+              <p>ลองเปลี่ยน preset หรือเลือก All เพื่อดู ads ทั้งหมด</p>
+            </div>
+          )}
+          {visibleCandidates.map((candidate) => {
+            const canRunStatusAction = Boolean(candidate.nextStatus)
             return (
-              <article key={ad.id} className="auto-card">
+              <article key={candidate.id} className={`auto-candidate-card ${selectedIds.includes(candidate.id) ? 'selected' : ''}`}>
+                <label className="auto-select">
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(candidate.id)}
+                    disabled={!canRunStatusAction}
+                    onChange={() => toggleCandidate(candidate.id)}
+                  />
+                </label>
                 <div className="auto-card-main">
                   <div className="auto-card-topline">
-                    <span className={`badge ${ad.status === 'active' ? 'good' : 'critical'}`}>
-                      {ad.status === 'active' ? 'ACTIVE' : 'PAUSED'}
+                    <span className={`badge ${candidate.currentStatus === 'active' ? 'good' : 'critical'}`}>
+                      {deliveryStatusLabel(candidate.currentStatus)}
                     </span>
-                    <span className={`badge ${autoDecisionTone(ad.recommendation)}`}>
-                      {autoDecisionLabel(ad.recommendation)}
+                    <span className={`badge ${autoDecisionTone(candidate.decision)}`}>
+                      {autoDecisionLabel(candidate.decision)}
                     </span>
-                    <span className={`badge ${riskClass(ad.risk)}`}>{ad.risk} risk</span>
+                    <span className={`badge ${riskClass(candidate.risk)}`}>{candidate.risk} risk</span>
                   </div>
-                  <h3>{ad.adName}</h3>
-                  <p>{ad.reason}</p>
+                  <h3>{candidate.adName}</h3>
+                  <p>{candidate.reason}</p>
+                  <small>{candidate.campaignName} · {candidate.adSetName}</small>
                   <div className="auto-guardrail">
                     <ShieldCheck size={15} />
-                    <span>{ad.guardrail}</span>
+                    <span>{candidate.guardrail}</span>
                   </div>
-                  <div className="snapshot-grid">
-                    <span>Before: {ad.before}</span>
-                    <span>After: {ad.after}</span>
+                  <div className="auto-metric-strip">
+                    <span>{fmtMoney(candidate.spend)} spend</span>
+                    <span>{candidate.roas.toFixed(2)}x ROAS</span>
+                    <span>{fmtNum(candidate.bookings)} bookings</span>
+                    <span>{candidate.ctr.toFixed(2)}% CTR</span>
+                    <span>Score {candidate.score.toFixed(1)}</span>
                   </div>
                 </div>
                 <div className="confidence-ring">
-                  <span>{ad.confidence}%</span>
+                  <span>{candidate.confidence}%</span>
                   <small>AI Confidence</small>
                 </div>
                 <div className="queue-actions">
-                  {ad.applied ? (
-                    <span className="badge good">Applied</span>
-                  ) : ad.recommendation === 'keep' ? (
+                  {!canRunStatusAction ? (
                     <span className="badge scale">Monitor only</span>
-                  ) : canRunStatusAction ? (
-                    <button className="approve-button" type="button" onClick={() => onApply(ad)}>
-                      <Check size={16} />
-                      {mode === 'suggest' ? 'Confirm status' : 'Run guarded'}
-                    </button>
                   ) : (
-                    <span className="badge watch">Budget review</span>
+                    <button className="approve-button" type="button" onClick={() => onApplyCandidate(candidate)}>
+                      <Check size={16} />
+                      {candidate.nextStatus === 'active' ? 'Review activate' : 'Review pause'}
+                    </button>
                   )}
                 </div>
               </article>
@@ -2016,6 +2588,98 @@ function AutoAdsPanel({
         </div>
       </div>
     </section>
+  )
+}
+
+function BulkAutoExecutionModal({
+  request,
+  running,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  request: BulkAutoExecutionRequest
+  running: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const pauseCount = request.candidates.filter((candidate) => candidate.nextStatus === 'paused').length
+  const enableCount = request.candidates.filter((candidate) => candidate.nextStatus === 'active').length
+  const highRiskCount = request.candidates.filter((candidate) => candidate.risk === 'High').length
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="approval-modal bulk-auto-modal" role="dialog" aria-modal="true" aria-labelledby="bulk-auto-title">
+        <div className="approval-modal-header">
+          <div>
+            <span className="badge scale">Ads Auto Execution</span>
+            <h2 id="bulk-auto-title">Review {request.candidates.length} Meta Ads actions</h2>
+            <p>ตรวจรายการก่อนเปลี่ยนสถานะ ads จริงผ่าน Meta Marketing API</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close bulk auto modal" onClick={onCancel} disabled={running}>
+            <X size={17} />
+          </button>
+        </div>
+
+        <div className="bulk-auto-summary">
+          <div>
+            <span>Pause</span>
+            <strong>{pauseCount}</strong>
+          </div>
+          <div>
+            <span>Activate</span>
+            <strong>{enableCount}</strong>
+          </div>
+          <div>
+            <span>High risk</span>
+            <strong>{highRiskCount}</strong>
+          </div>
+        </div>
+
+        <div className="bulk-auto-list">
+          {request.candidates.map((candidate) => (
+            <article key={candidate.id} className="bulk-auto-item">
+              <div>
+                <div className="auto-card-topline">
+                  <span className={`badge ${deliveryStatusTone(candidate.currentStatus)}`}>{deliveryStatusLabel(candidate.currentStatus)}</span>
+                  {candidate.nextStatus && (
+                    <span className={`badge ${deliveryStatusTone(candidate.nextStatus)}`}>{deliveryStatusLabel(candidate.nextStatus)}</span>
+                  )}
+                  <span className={`badge ${riskClass(candidate.risk)}`}>{candidate.confidence}% confidence</span>
+                </div>
+                <h3>{candidate.adName}</h3>
+                <p>{candidate.reason}</p>
+                <small>{candidate.campaignName} · {candidate.adSetName}</small>
+              </div>
+              <div className="bulk-auto-item-metrics">
+                <span>{fmtMoney(candidate.spend)} spend</span>
+                <span>{candidate.roas.toFixed(2)}x ROAS</span>
+                <span>{fmtNum(candidate.bookings)} bookings</span>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="approval-warning">
+          <ShieldCheck size={16} />
+          <span>เมื่อกด Confirm ระบบจะเปลี่ยนสถานะ ads เหล่านี้จริงใน Meta และบันทึก Audit Log พร้อม sync workspace หลังสำเร็จ</span>
+        </div>
+
+        {error && <div className="data-notice critical">{error}</div>}
+
+        <div className="approval-actions">
+          <button className="reject-button" type="button" onClick={onCancel} disabled={running}>
+            <X size={16} />
+            Cancel
+          </button>
+          <button className="approve-button" type="button" onClick={onConfirm} disabled={running}>
+            <Check size={16} />
+            {running ? 'Running...' : 'Confirm Meta changes'}
+          </button>
+        </div>
+      </section>
+    </div>
   )
 }
 
@@ -2121,9 +2785,167 @@ function PerformancePage({
     leadToBooking > 0 ? `Lead → Booking ${fmtPct(leadToBooking)} จากข้อมูล funnel` : 'ยังไม่มี lead-to-booking signal',
     showRate > 0 ? `Show-up ${fmtPct(showRate)} ต้องอ่านคู่กับ booking volume` : 'ต้องมี show-up เพื่อวัด quality หลัง booking',
   ]
+  const reportGeneratedAt = nowLabel()
+  const reportChannelData = channelPerformance.map((channel) => ({
+    channel: channel.channel,
+    spend: Math.round(channel.spend),
+    revenue: Math.round(channel.revenue),
+    bookings: channel.bookings,
+    roas: safeDivide(channel.revenue, channel.spend),
+  }))
+  const reportFunnelData = funnelMetrics.slice(1).map((stage) => ({
+    stage: stage.stage,
+    conversionRate: Math.max(0, Math.min(100, stage.conversionRate)),
+    dropOffRate: Math.max(0, Math.min(100, stage.dropOffRate)),
+    count: stage.count,
+  }))
+  const mostLeakyStage = funnelMetrics.slice(1).reduce<WorkspaceData['funnelMetrics'][number] | null>(
+    (worst, stage) => (!worst || stage.dropOffRate > worst.dropOffRate ? stage : worst),
+    null,
+  )
+  const performanceTone = totals.roas >= 2.5 && showRate >= 55 ? 'good' : totals.roas >= 1.2 || showRate >= 45 ? 'watch' : 'critical'
+  const performanceLabel = performanceTone === 'good' ? 'พร้อม scale แบบคุมความเสี่ยง' : performanceTone === 'watch' ? 'ต้องติดตามก่อนเพิ่มงบ' : 'ต้องแก้ funnel/cost ก่อน'
+  const revenuePerBooking = safeDivide(totals.revenue, channelTotals.bookings)
+  const reportCards = [
+    {
+      label: 'Business Health',
+      value: performanceLabel,
+      detail: `ROAS ${totals.roas.toFixed(2)}x · Show-up ${fmtPct(showRate)}`,
+      tone: performanceTone,
+      help: 'สรุปจาก ROAS และ show-up เพื่อแยกว่า scale ได้, ต้องดูต่อ หรือควรแก้ปัญหาก่อน',
+    },
+    {
+      label: 'Best Channel',
+      value: bestRoasChannel ? bestRoasChannel.channel : 'รอข้อมูล',
+      detail: bestRoasChannel ? `${safeDivide(bestRoasChannel.revenue, bestRoasChannel.spend).toFixed(2)}x ROAS · ${fmtMoney(bestRoasChannel.spend)} spend` : 'ยังไม่มี channel ที่มี spend/revenue ครบ',
+      tone: bestRoasChannel ? 'good' : 'watch',
+      help: metricHelp.roas,
+    },
+    {
+      label: 'Funnel Bottleneck',
+      value: mostLeakyStage ? mostLeakyStage.stage : 'รอข้อมูล',
+      detail: mostLeakyStage ? `${fmtPct(mostLeakyStage.dropOffRate)} drop-off · ${fmtNum(mostLeakyStage.count)} records` : 'ต้องมี stage funnel เพื่อหา bottleneck',
+      tone: mostLeakyStage && mostLeakyStage.dropOffRate > 55 ? 'critical' : 'watch',
+      help: metricHelp.dropOff,
+    },
+    {
+      label: 'Value / Booking',
+      value: fmtMoney(revenuePerBooking),
+      detail: `${fmtNum(channelTotals.bookings)} bookings · ${fmtMoney(totals.revenue)} revenue`,
+      tone: revenuePerBooking > 0 ? 'scale' : 'watch',
+      help: 'Revenue per booking ใช้ดูมูลค่าเฉลี่ยของ booking ที่เข้ามา ก่อนตัดสินใจเพิ่มหรือลดงบ',
+    },
+  ]
+  const reportFindings = [
+    highestSpendChannel ? `${highestSpendChannel.channel} ใช้งบสูงสุด ควรตรวจว่า ROAS และ funnel quality สอดคล้องกับงบหรือไม่` : 'ยังไม่มี spend breakdown ราย channel',
+    bestRoasChannel ? `${bestRoasChannel.channel} เป็น channel ที่ควรถูกใช้เป็น benchmark สำหรับ creative และ audience` : 'ยังไม่มี channel ที่อ่าน ROAS ได้ครบ',
+    mostLeakyStage ? `${mostLeakyStage.stage} มี drop-off สูงสุดใน funnel ต้องตรวจ process, offer หรือ expectation ก่อน scale` : 'ยังไม่มี funnel stage เพียงพอสำหรับหา bottleneck',
+    pendingActions > 0 ? `มี ${pendingActions} actions รอ approve ควรตรวจ decision log ก่อนเปลี่ยนสถานะ ads จริง` : 'ยังไม่มี action ค้าง ระบบพร้อมใช้สำหรับ monitor',
+  ]
+  const handleExportPdf = () => {
+    window.requestAnimationFrame(() => window.print())
+  }
 
   return (
-    <section className="performance-grid">
+    <section className="performance-grid performance-report-page">
+      <div className="panel wide performance-report-panel">
+        <div className="performance-report-head">
+          <PanelHeader icon={FileClock} title="Performance Summary" meta={`Report · ${reportGeneratedAt}`} help="สรุปข้อมูล Meta และ clinic funnel เป็นรายงานที่พร้อม Export PDF" />
+          <button className="primary-button no-print" type="button" onClick={handleExportPdf} title="เปิดหน้าต่าง Print เพื่อบันทึกเป็น PDF">
+            <Download size={16} />
+            Export PDF
+          </button>
+        </div>
+
+        <div className="performance-report-cards">
+          {reportCards.map((card) => (
+            <article key={card.label} className={`performance-report-card ${card.tone}`}>
+              <span>
+                {card.label}
+                <InfoHint text={card.help} />
+              </span>
+              <strong>{card.value}</strong>
+              <p>{card.detail}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="performance-report-charts">
+          <div className="report-chart-card">
+            <div className="report-chart-title">
+              <strong>Spend vs Revenue by Channel</strong>
+              <span>เทียบ media cost กับ business value</span>
+            </div>
+            {reportChannelData.length > 0 ? (
+              <div className="chart-wrap report-chart-wrap">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={reportChannelData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid stroke="#dce5f1" strokeDasharray="4 4" vertical={false} />
+                    <XAxis dataKey="channel" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
+                    <ChartTooltip
+                      formatter={(value, name) => [fmtMoney(Number(value) || 0), name === 'revenue' ? 'Revenue' : 'Spend']}
+                      labelFormatter={(label) => `${label} · ดูงบกับรายได้ที่เกิดขึ้น`}
+                      contentStyle={{ borderRadius: 8, border: '1px solid #dce5f1', fontSize: 12 }}
+                    />
+                    <Bar dataKey="spend" name="Spend" fill="#2563eb" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="revenue" name="Revenue" fill="#0f9f6e" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="empty-state chart-empty-state">
+                <Database size={18} />
+                <strong>ยังไม่มีข้อมูล channel</strong>
+                <p>Sync Meta API เพื่อสร้างกราฟ spend/revenue ราย channel</p>
+              </div>
+            )}
+          </div>
+
+          <div className="report-chart-card">
+            <div className="report-chart-title">
+              <strong>Processed Funnel Health</strong>
+              <span>Conversion และ drop-off ราย stage</span>
+            </div>
+            {reportFunnelData.length > 0 ? (
+              <div className="chart-wrap report-chart-wrap">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={reportFunnelData} margin={{ top: 10, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid stroke="#dce5f1" strokeDasharray="4 4" vertical={false} />
+                    <XAxis dataKey="stage" tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: '#64748b' }} tickFormatter={(value) => `${value}%`} />
+                    <ChartTooltip
+                      formatter={(value, name) => [fmtPct(Number(value) || 0), name === 'conversionRate' ? 'Conversion' : 'Drop-off']}
+                      labelFormatter={(label) => `${label} · สัดส่วนที่ระบบประมวลผลจาก funnel`}
+                      contentStyle={{ borderRadius: 8, border: '1px solid #dce5f1', fontSize: 12 }}
+                    />
+                    <Bar dataKey="conversionRate" name="Conversion" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="dropOffRate" name="Drop-off" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="empty-state chart-empty-state">
+                <Database size={18} />
+                <strong>ยังไม่มีข้อมูล funnel</strong>
+                <p>เมื่อมี lead, booking, show-up และ treatment ระบบจะแสดงกราฟนี้</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="report-finding-list">
+          {reportFindings.map((finding, index) => (
+            <Signal
+              key={finding}
+              icon={index === 0 ? Activity : index === 1 ? Trophy : index === 2 ? AlertTriangle : ClipboardList}
+              text={finding}
+              tone={finding.includes('สูงสุด') || finding.includes('รอ approve') ? 'watch' : 'good'}
+            />
+          ))}
+        </div>
+      </div>
+
       <div className="performance-category-grid wide">
         <section className="metric-category">
           <div className="metric-category-head">
@@ -3048,40 +3870,30 @@ function CampaignDetailPage({
             </button>
           </div>
         </div>
-        {expandedSections.ads && <div className="table-wrap compact-table-wrap">
-          <table className="performance-table">
-            <thead>
-              <tr>
-                <th>Ad</th>
-                <th>Status</th>
-                <th>Spend</th>
-                <th>CTR</th>
-                <th>CPC</th>
-                <th>Leads</th>
-                <th>Bookings</th>
-                <th>Show-up</th>
-                <th>ROAS</th>
-                <th>Score</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleAds.length === 0 && (
-                <tr className="empty-row">
-                  <td colSpan={11}>
-                    <div className="empty-state table-empty-state">
-                      <ImageIcon size={18} />
-                      <strong>ยังไม่มี Ads detail สำหรับ campaign นี้</strong>
-                      <p>ตอนนี้ระบบยังใช้ campaign metrics ในการวิเคราะห์ได้ แต่ creative/ad-level optimization ต้องรอ ad detail import</p>
-                    </div>
-                  </td>
-                </tr>
-              )}
-              {visibleAds.map((ad) => (
-                <tr key={ad.id}>
-                  <td>
+        {expandedSections.ads && (
+          <div className="ads-card-list">
+            {visibleAds.length === 0 && (
+              <div className="empty-state table-empty-state">
+                <ImageIcon size={18} />
+                <strong>ยังไม่มี Ads detail สำหรับ campaign นี้</strong>
+                <p>ตอนนี้ระบบยังใช้ campaign metrics ในการวิเคราะห์ได้ แต่ creative/ad-level optimization ต้องรอ ad detail import</p>
+              </div>
+            )}
+            {visibleAds.map((ad) => {
+              const currentStatus = normalizeDeliveryStatus(ad.status, ad.spend)
+              const nextStatus = nextDeliveryStatus(currentStatus)
+              const adForm = emptyMetaObjectFormValues({
+                name: ad.name,
+                status: toMetaObjectStatus(currentStatus),
+                campaignId: ad.campaignId,
+                adSetId: ad.adSetId,
+                creativeId: ad.creative,
+              })
+              return (
+                <article key={ad.id} className="ads-detail-card">
+                  <div className="ads-detail-main">
                     <button
-                      className="table-title"
+                      className="table-title ads-detail-title"
                       type="button"
                       onClick={() =>
                         onOpenAiDrawer({
@@ -3095,89 +3907,78 @@ function CampaignDetailPage({
                       {ad.name}
                     </button>
                     <span>{ad.creative} · {fmtNum(ad.impressions)} impressions</span>
-                  </td>
-                  <td>
-                    <span className={`badge ${ad.status === 'active' ? 'good' : 'critical'}`}>
-                      {ad.status === 'active' ? 'ACTIVE' : 'PAUSED'}
-                    </span>
-                  </td>
-                  <td>{fmtMoney(ad.spend)}</td>
-                  <td>{ad.ctr.toFixed(2)}%</td>
-                  <td>{fmtMoney(ad.cpc)}</td>
-                  <td>{fmtNum(ad.leads)}</td>
-                  <td>{fmtNum(ad.bookings)}</td>
-                  <td>{ad.showRate}%</td>
-                  <td>{ad.roas.toFixed(2)}x</td>
-                  <td>{ad.score.toFixed(1)}</td>
-                  <td>
-                    {(() => {
-                      const currentStatus = normalizeDeliveryStatus(ad.status, ad.spend)
-                      const nextStatus = nextDeliveryStatus(currentStatus)
-                      const adForm = emptyMetaObjectFormValues({
-                        name: ad.name,
-                        status: toMetaObjectStatus(currentStatus),
-                        campaignId: ad.campaignId,
-                        adSetId: ad.adSetId,
-                        creativeId: ad.creative,
-                      })
-                      return (
-                        <div className="row-action-group">
-                          <button
-                            className={nextStatus === 'active' ? 'mini-control-button good' : 'mini-control-button critical'}
-                            type="button"
-                            onClick={() =>
-                              onRequestStatusChange({
-                                objectType: 'ad',
-                                objectId: ad.id,
-                                targetName: ad.name,
-                                currentStatus,
-                                nextStatus,
-                                summary: `${nextStatus === 'active' ? 'Activate' : 'Pause'} ad จาก Ads table`,
-                                source: 'campaigns',
-                              })
-                            }
-                          >
-                            {nextStatus === 'active' ? 'Activate' : 'Pause'}
-                          </button>
-                          <button
-                            className="mini-control-button neutral"
-                            type="button"
-                            onClick={() =>
-                              onRequestMutation({
-                                operation: 'update',
-                                objectType: 'ad',
-                                objectId: ad.id,
-                                targetName: ad.name,
-                                initialValues: adForm,
-                              })
-                            }
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="mini-control-button critical"
-                            type="button"
-                            onClick={() =>
-                              onRequestMutation({
-                                operation: 'delete',
-                                objectType: 'ad',
-                                objectId: ad.id,
-                                targetName: ad.name,
-                                initialValues: adForm,
-                              })
-                            }
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      )
-                    })()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>}
+                    <div className="ads-detail-metrics">
+                      <span>Spend <strong>{fmtMoney(ad.spend)}</strong></span>
+                      <span>CTR <strong>{ad.ctr.toFixed(2)}%</strong></span>
+                      <span>CPC <strong>{fmtMoney(ad.cpc)}</strong></span>
+                      <span>Leads <strong>{fmtNum(ad.leads)}</strong></span>
+                      <span>Bookings <strong>{fmtNum(ad.bookings)}</strong></span>
+                      <span>Show-up <strong>{ad.showRate}%</strong></span>
+                      <span>ROAS <strong>{ad.roas.toFixed(2)}x</strong></span>
+                    </div>
+                  </div>
+                  <div className="ads-detail-controls">
+                    <div className="ads-detail-status">
+                      <span className={`badge ${currentStatus === 'active' ? 'good' : 'critical'}`}>
+                        {currentStatus === 'active' ? 'ACTIVE' : 'PAUSED'}
+                      </span>
+                      <strong>Score {ad.score.toFixed(1)}</strong>
+                    </div>
+                    <div className="row-action-group ads-row-actions">
+                      <button
+                        className={nextStatus === 'active' ? 'mini-control-button good' : 'mini-control-button critical'}
+                        type="button"
+                        onClick={() =>
+                          onRequestStatusChange({
+                            objectType: 'ad',
+                            objectId: ad.id,
+                            targetName: ad.name,
+                            currentStatus,
+                            nextStatus,
+                            summary: `${nextStatus === 'active' ? 'Activate' : 'Pause'} ad จาก Ads card`,
+                            source: 'campaigns',
+                          })
+                        }
+                      >
+                        {nextStatus === 'active' ? 'Activate' : 'Pause'}
+                      </button>
+                      <button
+                        className="mini-control-button neutral"
+                        type="button"
+                        onClick={() =>
+                          onRequestMutation({
+                            operation: 'update',
+                            objectType: 'ad',
+                            objectId: ad.id,
+                            targetName: ad.name,
+                            initialValues: adForm,
+                          })
+                        }
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="mini-control-button critical"
+                        type="button"
+                        onClick={() =>
+                          onRequestMutation({
+                            operation: 'delete',
+                            objectType: 'ad',
+                            objectId: ad.id,
+                            targetName: ad.name,
+                            initialValues: adForm,
+                          })
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        )}
       </div>
     </section>
   )
@@ -3595,30 +4396,287 @@ function AppointmentsPage({ stages, services }: { stages: AppointmentStage[]; se
   )
 }
 
-function CompliancePage({ reviews }: { reviews: ComplianceReview[] }) {
-  const statusTone = (status: ComplianceReview['status']) =>
-    status === 'approved' ? 'good' : status === 'needsReview' ? 'watch' : 'critical'
+function CreativeStudioPage({
+  tasks,
+  campaigns,
+  adInsights,
+  onOpenCampaigns,
+  onOpenInsights,
+}: {
+  tasks: AgentTask[]
+  campaigns: CampaignInsight[]
+  adInsights: WorkspaceData['adInsights']
+  onOpenCampaigns: () => void
+  onOpenInsights: () => void
+}) {
+  const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
+  const topAds = adInsights.slice().sort((a, b) => b.spend - a.spend).slice(0, 12)
+  const totalSpend = adInsights.reduce((sum, ad) => sum + ad.spend, 0)
+  const totalResults = adInsights.reduce((sum, ad) => sum + ad.bookings, 0)
+  const avgScore = safeDivide(adInsights.reduce((sum, ad) => sum + ad.score, 0), adInsights.length)
+  const activeAds = adInsights.filter((ad) => ad.status === 'active').length
 
   return (
-    <section className="panel">
-      <PanelHeader icon={ShieldCheck} title="Clinic Compliance Review" meta="claims · creative · proof" />
-      <div className="compliance-grid">
+    <section className="studio-grid">
+      <div className="panel studio-hero">
+        <PanelHeader icon={Layers3} title="Creative Studio" meta="Meta ad-level API" />
+        <div className="studio-hero-content">
+          <div>
+            <h2>Creative workbench จากข้อมูล Ads จริง</h2>
+            <p>จัดอันดับ ads, creative signal และ action note จาก Meta API โดยตรง ไม่มี local mock records</p>
+          </div>
+          <div className="studio-actions">
+            <button className="secondary-button" type="button" onClick={onOpenInsights}>
+              <BarChart3 size={16} />
+              AI Insights
+            </button>
+            <button className="primary-button" type="button" onClick={onOpenCampaigns}>
+              <Plus size={16} />
+              Create Ad
+            </button>
+          </div>
+        </div>
+        <div className="studio-summary-grid">
+          <MiniMetric label="Synced Ads" value={fmtNum(adInsights.length)} help="จำนวน ads ที่ดึงจาก Meta API ใน date preset ปัจจุบัน" />
+          <MiniMetric label="Active Ads" value={fmtNum(activeAds)} help="จำนวน ads ที่ Meta effective status เป็น ACTIVE" />
+          <MiniMetric label="Spend" value={fmtMoney(totalSpend)} help="ยอด spend รวมของ ad-level creative metrics" />
+          <MiniMetric label="Results" value={fmtNum(totalResults)} help="จำนวน booking/conversion จาก ad-level insights" />
+          <MiniMetric label="Avg Score" value={avgScore.toFixed(1)} help="คะแนน creative เฉลี่ยจาก ROAS, CTR, conversion และ fatigue signals" />
+        </div>
+      </div>
+
+      <div className="panel studio-main-panel">
+        <PanelHeader icon={ImageIcon} title="Live Creative Performance" meta={`${topAds.length} ads from Meta`} />
+        <div className="studio-card-list">
+          {topAds.map((ad, index) => {
+            const campaign = campaignById.get(ad.campaignId)
+            return (
+              <article key={ad.id} className="studio-creative-row">
+                <div className={`creative-thumb ${['blue', 'violet', 'teal', 'navy', 'orange'][index % 5]}`} aria-hidden="true">
+                  <ImageIcon size={16} />
+                </div>
+                <div>
+                  <div className="auto-card-topline">
+                    <span className={`badge ${deliveryStatusTone(ad.status)}`}>{deliveryStatusLabel(ad.status)}</span>
+                    <span className={`badge ${ad.score >= 7.5 ? 'good' : ad.score >= 5 ? 'watch' : 'critical'}`}>Score {ad.score.toFixed(1)}</span>
+                  </div>
+                  <h3>{ad.name}</h3>
+                  <p>{ad.creative}</p>
+                  <small>{campaign?.name ?? 'Unknown campaign'}</small>
+                </div>
+                <div className="studio-metric-strip">
+                  <span>{fmtMoney(ad.spend)} spend</span>
+                  <span>{fmtNum(ad.impressions)} impressions</span>
+                  <span>{fmtNum(ad.clicks)} clicks</span>
+                  <span>{ad.ctr.toFixed(2)}% CTR</span>
+                  <span>{ad.roas.toFixed(2)}x ROAS</span>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="panel studio-side-panel">
+        <PanelHeader icon={ClipboardList} title="API Work Orders" meta={`${tasks.length} generated`} />
+        <div className="task-grid studio-task-grid">
+          {tasks.length === 0 && (
+            <div className="empty-state">
+              <ShieldCheck size={18} />
+              <strong>ยังไม่มี work order</strong>
+              <p>เมื่อ Meta API ส่ง ad insights ระบบจะสร้าง creative action note จากข้อมูลจริง</p>
+            </div>
+          )}
+          {tasks.map((task) => (
+            <article key={task.id} className="task-card">
+              <div className="task-topline">
+                <span className={`badge ${taskClass(task.status)}`}>{task.status}</span>
+                <span>{task.updatedAt}</span>
+              </div>
+              <h3>{task.taskType}</h3>
+              <p>{task.result}</p>
+              <div className="task-context">
+                <strong>Meta input</strong>
+                <span>{task.inputContext}</span>
+                <strong>Output</strong>
+                <span>{task.expectedOutput}</span>
+              </div>
+              <div className="task-meta">
+                <span>{task.owner}</span>
+                <span>{task.sourceCampaign}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function AudienceStudioPage({
+  items,
+  campaigns,
+  adSets,
+}: {
+  items: MemoryItem[]
+  campaigns: CampaignInsight[]
+  adSets: WorkspaceData['adSets']
+}) {
+  const categories: MemoryCategory[] = ['Insight', 'Creative', 'Audience', 'Strategy', 'Preference']
+  const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
+  const topAdSets = adSets.slice().sort((a, b) => b.spend - a.spend).slice(0, 12)
+  const activeAdSets = adSets.filter((adSet) => adSet.deliveryStatus === 'active').length
+  const totalBudget = adSets.reduce((sum, adSet) => sum + adSet.budget, 0)
+  const totalSpend = adSets.reduce((sum, adSet) => sum + adSet.spend, 0)
+  const totalBookings = adSets.reduce((sum, adSet) => sum + adSet.bookings, 0)
+
+  return (
+    <section className="studio-grid">
+      <div className="panel studio-hero">
+        <PanelHeader icon={Users} title="Audience Studio" meta="Meta ad set API" />
+        <div className="studio-hero-content">
+          <div>
+            <h2>Audience และ targeting จาก Ad Sets จริง</h2>
+            <p>อ่าน audience, delivery, budget และผลลัพธ์จาก Meta API เพื่อใช้ตัดสินใจเรื่อง segment และ campaign structure</p>
+          </div>
+          <div className="memory-count">
+            <strong>{fmtNum(adSets.length)}</strong>
+            <span>ad sets</span>
+          </div>
+        </div>
+        <div className="studio-summary-grid">
+          <MiniMetric label="Active Ad Sets" value={fmtNum(activeAdSets)} help="จำนวน ad sets ที่ Meta effective status เป็น ACTIVE" />
+          <MiniMetric label="Budget" value={fmtMoney(totalBudget)} help="งบรวมจาก daily/lifetime budget ที่ Meta API ส่งมา" />
+          <MiniMetric label="Spend" value={fmtMoney(totalSpend)} help="ยอด spend รวมของ ad sets ในช่วงเวลาปัจจุบัน" />
+          <MiniMetric label="Bookings" value={fmtNum(totalBookings)} help="จำนวน conversion/booking ที่รวมจาก ad set insights" />
+          <MiniMetric label="CPA" value={fmtMoney(safeDivide(totalSpend, totalBookings))} help="ต้นทุนเฉลี่ยต่อ booking จาก ad set spend / bookings" />
+        </div>
+      </div>
+
+      <div className="panel studio-main-panel">
+        <PanelHeader icon={Target} title="Audience Segments" meta={`${topAdSets.length} ad sets`} />
+        <div className="audience-segment-grid">
+          {topAdSets.map((adSet) => {
+            const campaign = campaignById.get(adSet.campaignId)
+            const meta = statusMeta(adSet.status)
+            return (
+              <article key={adSet.id} className="audience-card">
+                <div className="compliance-topline">
+                  <span className={`badge ${deliveryStatusTone(adSet.deliveryStatus)}`}>{deliveryStatusLabel(adSet.deliveryStatus)}</span>
+                  <span className={`badge ${meta.className}`}>{meta.label}</span>
+                </div>
+                <h3>{adSet.name}</h3>
+                <p>{adSet.audience}</p>
+                <small>{campaign?.name ?? 'Unknown campaign'}</small>
+                <div className="studio-metric-strip">
+                  <span>{fmtMoney(adSet.budget)} budget</span>
+                  <span>{fmtMoney(adSet.spend)} spend</span>
+                  <span>{fmtMoney(adSet.cpa)} CPA</span>
+                  <span>{adSet.roas.toFixed(2)}x ROAS</span>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="panel studio-side-panel">
+        <PanelHeader icon={BrainCircuit} title="API Memory" meta="generated from sync" />
+        <div className="category-grid studio-category-grid">
+          {categories.map((category) => (
+            <div key={category}>
+              <span className="badge scale">{category}</span>
+              <strong>{items.filter((item) => item.category === category).length}</strong>
+            </div>
+          ))}
+        </div>
+        <div className="memory-list studio-memory-list">
+          {items.map((item) => (
+            <article key={item.id} className="memory-card">
+              <div className="memory-card-topline">
+                <span className={`badge ${item.confidence >= 85 ? 'good' : item.confidence >= 75 ? 'watch' : 'scale'}`}>
+                  {item.category}
+                </span>
+                <span>{item.updatedAt}</span>
+              </div>
+              <h3>{item.title}</h3>
+              <p>{item.detail}</p>
+              <div className="task-meta">
+                <span>{item.source}</span>
+                <span>{item.confidence}% confidence</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function MediaLibraryPage({ reviews }: { reviews: ComplianceReview[] }) {
+  const statusTone = (status: ComplianceReview['status']) =>
+    status === 'approved' ? 'good' : status === 'needsReview' ? 'watch' : 'critical'
+  const approvedCount = reviews.filter((review) => review.status === 'approved').length
+  const reviewCount = reviews.filter((review) => review.status === 'needsReview').length
+  const blockedCount = reviews.filter((review) => review.status === 'blocked').length
+  const totalSpend = reviews.reduce((sum, review) => sum + (review.spend ?? 0), 0)
+
+  return (
+    <section className="studio-grid">
+      <div className="panel studio-hero">
+        <PanelHeader icon={ImageIcon} title="Media Library" meta="Meta ads + creative API" />
+        <div className="studio-hero-content">
+          <div>
+            <h2>Creative และ compliance จาก Meta API</h2>
+            <p>แสดง ad/creative metadata, thumbnail, spend และ policy risk ที่คำนวณจากข้อมูลจริงในบัญชี</p>
+          </div>
+          <div className="studio-summary-grid compact">
+            <MiniMetric label="Approved" value={fmtNum(approvedCount)} help="จำนวน creative ที่ยังไม่พบ claim risk จาก metadata" />
+            <MiniMetric label="Review" value={fmtNum(reviewCount)} help="จำนวน creative ที่ควรตรวจ claim หรือ before/after signal" />
+            <MiniMetric label="Blocked" value={fmtNum(blockedCount)} help="จำนวน creative ที่พบคำสัญญาผลลัพธ์หรือ claim เสี่ยงสูง" />
+            <MiniMetric label="Spend" value={fmtMoney(totalSpend)} help="ยอด spend รวมของรายการ media library ที่โหลดจาก Meta API" />
+          </div>
+        </div>
+      </div>
+
+      <div className="panel studio-main-panel full">
+        <PanelHeader icon={ShieldCheck} title="Creative Review Queue" meta={`${reviews.length} live assets`} />
+        <div className="compliance-grid media-library-grid">
         {reviews.map((review) => (
           <article key={review.id} className="compliance-card">
+            {review.thumbnailUrl ? (
+              <img className="media-thumb" src={review.thumbnailUrl} alt="" loading="lazy" />
+            ) : (
+              <div className="media-thumb fallback" aria-hidden="true">
+                <ImageIcon size={18} />
+              </div>
+            )}
             <div className="compliance-topline">
               <span className={`badge ${statusTone(review.status)}`}>
                 {review.status === 'approved' ? 'Approved' : review.status === 'needsReview' ? 'Review' : 'Blocked'}
               </span>
-              <span>{review.service}</span>
+              <span>{review.deliveryStatus ? deliveryStatusLabel(review.deliveryStatus) : review.service}</span>
             </div>
             <h3>{review.title}</h3>
+            <small>{review.source ?? review.service}</small>
             <p>{review.issue}</p>
             <div className="auto-guardrail">
               <ShieldCheck size={15} />
               <span>{review.fix}</span>
             </div>
+            <div className="studio-metric-strip">
+              <span>{fmtMoney(review.spend ?? 0)} spend</span>
+              <span>{fmtNum(review.impressions ?? 0)} impressions</span>
+              <span>{(review.ctr ?? 0).toFixed(2)}% CTR</span>
+              <span>{(review.roas ?? 0).toFixed(2)}x ROAS</span>
+            </div>
+            <div className="task-meta">
+              <span>{review.creativeId ? `creative ${review.creativeId}` : 'creative id pending'}</span>
+              <span>{review.adId ? `ad ${review.adId}` : 'ad id pending'}</span>
+            </div>
           </article>
         ))}
+      </div>
       </div>
     </section>
   )
@@ -3675,72 +4733,18 @@ function ClinicOpsPanel({ services, funnelMetrics }: { services: ServiceLine[]; 
   )
 }
 
-function MemoryPanel({ items }: { items: MemoryItem[] }) {
-  const categories: MemoryCategory[] = ['Insight', 'Creative', 'Audience', 'Strategy', 'Preference']
-
-  return (
-    <section className="memory-grid">
-      <div className="panel memory-hero">
-        <PanelHeader icon={Database} title="Memory & Knowledge Base" meta="semantic memory" />
-        <div className="memory-hero-content">
-          <div>
-            <h2>ฐานความจำของ Clinic AI Agent</h2>
-            <p>
-              เก็บ insight, creative notes, strategy history และ user preferences เพื่อให้คำแนะนำครั้งต่อไปไม่เริ่มจากศูนย์
-            </p>
-          </div>
-          <div className="memory-count">
-            <strong>{items.length}</strong>
-            <span>memory items</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="panel memory-taxonomy">
-        <PanelHeader icon={BrainCircuit} title="Knowledge Categories" meta="vector-ready structure" />
-        <div className="category-grid">
-          {categories.map((category) => (
-            <div key={category}>
-              <span className="badge scale">{category}</span>
-              <strong>{items.filter((item) => item.category === category).length}</strong>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="panel memory-list-panel">
-        <PanelHeader icon={Database} title="Saved Context" meta="used by Clinic AI Agent" />
-        <div className="memory-list">
-          {items.map((item) => (
-            <article key={item.id} className="memory-card">
-              <div className="memory-card-topline">
-                <span className={`badge ${item.confidence >= 85 ? 'good' : item.confidence >= 75 ? 'watch' : 'scale'}`}>
-                  {item.category}
-                </span>
-                <span>{item.updatedAt}</span>
-              </div>
-              <h3>{item.title}</h3>
-              <p>{item.detail}</p>
-              <div className="task-meta">
-                <span>{item.source}</span>
-                <span>{item.confidence}% confidence</span>
-              </div>
-            </article>
-          ))}
-        </div>
-      </div>
-    </section>
-  )
-}
-
 function ApprovalModal({
   request,
   target,
+  running,
+  error,
   onCancel,
   onConfirm,
 }: {
   request: ApprovalRequest
   target: RecommendedAction | AutoAdControl
+  running: boolean
+  error: string | null
   onCancel: () => void
   onConfirm: () => void
 }) {
@@ -3751,6 +4755,8 @@ function ApprovalModal({
   const targetName = autoTarget?.adName ?? recommendationTarget?.target ?? ''
   const reason = autoTarget?.reason ?? recommendationTarget?.summary ?? ''
   const impact = autoTarget ? autoTarget.after : recommendationTarget?.expectedImpact ?? ''
+  const execution = recommendationTarget?.execution
+  const isRealExecution = Boolean(execution)
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3761,7 +4767,7 @@ function ApprovalModal({
             <h2 id="approval-title">{title}</h2>
             <p>{targetName}</p>
           </div>
-          <button className="icon-button" type="button" aria-label="Close approval modal" onClick={onCancel}>
+          <button className="icon-button" type="button" aria-label="Close approval modal" onClick={onCancel} disabled={running}>
             <X size={17} />
           </button>
         </div>
@@ -3798,18 +4804,24 @@ function ApprovalModal({
         </div>
 
         <div className="approval-warning">
-          <ShieldCheck size={16} />
-          <span>การอนุมัตินี้บันทึก Action Queue และ Audit ใน workspace; ถ้าต้องเปลี่ยนสถานะ Meta ให้ใช้ Campaigns หรือ Ads Auto</span>
+          {isRealExecution ? <Power size={16} /> : <ShieldCheck size={16} />}
+          <span>
+            {isRealExecution
+              ? `เมื่อ Confirm ระบบจะเรียก ${execution?.endpoint} จริงเพื่อ ${execution?.label}; ผลลัพธ์จะถูกบันทึกใน Audit Log`
+              : 'การอนุมัตินี้บันทึก Action Queue และ Audit ใน workspace เท่านั้น ยังไม่มีการเปลี่ยน Meta จริงสำหรับ action ประเภทนี้'}
+          </span>
         </div>
 
+        {error && <div className="data-notice critical approval-error">{error}</div>}
+
         <div className="approval-actions">
-          <button className="reject-button" type="button" onClick={onCancel}>
+          <button className="reject-button" type="button" onClick={onCancel} disabled={running}>
             <X size={16} />
             Cancel
           </button>
-          <button className="approve-button" type="button" onClick={onConfirm}>
-            <Check size={16} />
-            Confirm approval
+          <button className="approve-button" type="button" onClick={onConfirm} disabled={running}>
+            {isRealExecution ? <Power size={16} /> : <Check size={16} />}
+            {running ? 'Executing...' : isRealExecution ? 'Confirm & Execute' : 'Confirm approval'}
           </button>
         </div>
       </section>
@@ -4626,7 +5638,20 @@ function Investigator({
                         <span className="thumb-line" />
                       </div>
                       <div>
-                        <button className="table-title" type="button">
+                        <button
+                          className="table-title"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onSelectCampaign(component.campaignId)
+                            onOpenAiDrawer({
+                              kind: 'creative',
+                              campaignId: component.campaignId,
+                              title: component.title,
+                              subtitle: `${component.subtitle} · Score ${component.score.toFixed(1)}`,
+                            })
+                          }}
+                        >
                           {component.title}
                         </button>
                         <span className="creative-meta">

@@ -16,7 +16,7 @@ export type TabId =
 
 export type AiStatus = 'healthy' | 'watch' | 'critical' | 'scaling'
 export type RiskLevel = 'Low' | 'Medium' | 'High'
-export type ActionStatus = 'pending' | 'approved' | 'rejected'
+export type ActionStatus = 'pending' | 'approved' | 'executing' | 'executed' | 'failed' | 'rejected'
 export type TaskStatus = 'pending' | 'running' | 'done'
 export type AutomationMode = 'suggest' | 'autoPilot'
 export type AdDeliveryStatus = 'active' | 'paused'
@@ -70,6 +70,16 @@ export interface ComplianceReview {
   status: 'approved' | 'needsReview' | 'blocked'
   issue: string
   fix: string
+  adId?: string
+  campaignId?: string
+  creativeId?: string
+  thumbnailUrl?: string
+  source?: string
+  spend?: number
+  impressions?: number
+  ctr?: number
+  roas?: number
+  deliveryStatus?: AdDeliveryStatus
 }
 
 export interface AIInsight {
@@ -96,6 +106,18 @@ export interface RecommendedAction {
   risk: RiskLevel
   confidence: number
   status: ActionStatus
+  execution?: {
+    endpoint: '/api/meta/object-status' | '/api/meta/object'
+    method: 'POST'
+    objectType: MetaObjectType
+    objectId: string
+    status?: MetaObjectStatus
+    operation?: 'update'
+    params?: Record<string, string | number | boolean>
+    label: string
+  }
+  executionError?: string
+  executedAt?: string
 }
 
 export interface AutoAdControl {

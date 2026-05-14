@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
 import type {
   AdInsight,
+  AdSetInsight,
   AgentTask,
   AIInsight,
   AppointmentStage,
@@ -920,15 +921,15 @@ function buildWorkspaceFromMeta(args: {
     campaigns,
     serviceLines: buildServiceLines(campaigns),
     appointmentStages: buildAppointmentStages(accountMetrics),
-    complianceReviews: buildComplianceReviews(args.ads),
+    complianceReviews: buildComplianceReviews(args.ads, campaigns),
     insights: buildAiInsights(campaigns),
     insightComponents,
     adSets,
     adInsights,
     actions: buildRecommendedActions(campaigns),
     autoAds: buildAutoAds(args.ads),
-    tasks: buildAgentTasks(campaigns),
-    memoryItems: buildMemoryItems(args.user, args.account, args.datePreset, args.graphVersion),
+    tasks: buildAgentTasks(args.ads, campaigns, adSets),
+    memoryItems: buildMemoryItems(args.user, args.account, args.datePreset, args.graphVersion, campaigns, adSets, args.ads),
     auditTrail: buildAuditTrail(args.user, args.account, campaigns.length, adSets.length, adInsights.length),
     trendData: args.timeSeries.map((row) => {
       const metrics = metricFromInsight(row)
@@ -980,7 +981,7 @@ function buildWorkspaceFromMeta(args: {
           campaignId: ad.campaign_id ?? '',
           adSetId: ad.adset_id ?? '',
           name: ad.name,
-          creative: ad.creative?.name || ad.creative?.id || 'Meta creative',
+          creative: displayMetaCreative(ad.creative),
           status: isMetaActive(ad.effective_status) ? ('active' as const) : ('paused' as const),
           spend: metrics.spend,
           impressions: metrics.impressions,
@@ -1236,6 +1237,7 @@ function buildRecommendedActions(campaigns: CampaignInsight[]): RecommendedActio
 }
 
 function makeAction(campaign: CampaignInsight, type: string, summary: string, after: string, risk: RecommendedAction['risk'], confidence: number): RecommendedAction {
+  const execution = executionForRecommendedAction(campaign, type)
   return {
     id: `meta-action-${campaign.id}-${slugify(type)}`,
     campaignId: campaign.id,
@@ -1250,60 +1252,171 @@ function makeAction(campaign: CampaignInsight, type: string, summary: string, af
     risk,
     confidence,
     status: 'pending',
+    ...(execution ? { execution } : {}),
   }
 }
 
-function buildAgentTasks(campaigns: CampaignInsight[]): AgentTask[] {
-  return campaigns.slice(0, 5).map((campaign, index) => ({
-    id: `meta-task-${campaign.id}`,
-    agent: index === 0 ? 'Meta Performance Agent' : 'Creative Agent',
-    taskType: campaign.aiStatus === 'scaling' ? 'Scale review' : campaign.aiStatus === 'critical' ? 'Budget risk review' : 'Creative diagnosis',
-    owner: 'Growth team',
-    sourceCampaign: campaign.name,
-    inputContext: `Meta campaign metrics: spend ${formatMoney(campaign.spend)}, ROAS ${campaign.roas.toFixed(2)}x, CTR ${campaign.ctr.toFixed(2)}%`,
-    expectedOutput: 'Recommendation with guardrail, expected impact, and rollback note',
-    status: index === 0 ? 'running' : 'pending',
-    result: campaign.aiSummary,
-    updatedAt: 'Meta sync',
-  }))
+function executionForRecommendedAction(campaign: CampaignInsight, type: string): RecommendedAction['execution'] | undefined {
+  const normalizedType = type.toLowerCase()
+  if (normalizedType.includes('budget protection') || normalizedType.includes('tracking')) {
+    return {
+      endpoint: '/api/meta/object-status',
+      method: 'POST',
+      objectType: 'campaign',
+      objectId: campaign.id,
+      status: 'PAUSED',
+      label: 'Pause campaign in Meta',
+    }
+  }
+
+  return undefined
 }
 
-function buildMemoryItems(user: MetaUserProfile, account: MetaAdAccountInfo, datePreset: string, graphVersion: string): MemoryItem[] {
+function buildAgentTasks(ads: MetaAdRow[], campaigns: CampaignInsight[], adSets: AdSetInsight[]): AgentTask[] {
+  const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
+  const adSetById = new Map(adSets.map((adSet) => [adSet.id, adSet]))
+
+  return ads
+    .slice()
+    .sort((a, b) => metricFromInsight(b.insights?.data?.[0]).spend - metricFromInsight(a.insights?.data?.[0]).spend)
+    .slice(0, 8)
+    .map((ad) => {
+      const metrics = metricFromInsight(ad.insights?.data?.[0])
+      const campaign = campaignById.get(ad.campaign_id ?? '')
+      const adSet = adSetById.get(ad.adset_id ?? '')
+      const taskType =
+        metrics.spend > 0 && metrics.conversions === 0
+          ? 'Creative conversion check'
+          : metrics.ctr > 0 && metrics.ctr < 0.8
+            ? 'Hook / CTR diagnosis'
+            : metrics.roas >= 3
+              ? 'Winner creative extraction'
+              : 'Creative performance review'
+      const result =
+        metrics.spend > 0 && metrics.conversions === 0
+          ? 'ตรวจ offer, creative promise, landing/chat flow และ event tracking ก่อนปล่อย spend ต่อ'
+          : metrics.roas >= 3
+            ? 'ดึง winning angle, audience context และ proof element เพื่อนำไปทำ variation ต่อ'
+            : summaryFromMetrics(metrics, ad.effective_status)
+
+      return {
+        id: `meta-task-ad-${ad.id}`,
+        agent: 'Creative Studio Agent',
+        taskType,
+        owner: 'Studio / Growth',
+        sourceCampaign: campaign?.name ?? adSet?.name ?? 'Meta ad',
+        inputContext: `Ad ${ad.name} · creative ${displayMetaCreative(ad.creative)} · spend ${formatMoney(metrics.spend)} · CTR ${metrics.ctr.toFixed(2)}% · ROAS ${metrics.roas.toFixed(2)}x`,
+        expectedOutput: 'Creative action note from live Meta ad metrics',
+        status: 'done',
+        result,
+        updatedAt: 'Meta API sync',
+      }
+    })
+}
+
+function buildMemoryItems(
+  user: MetaUserProfile,
+  account: MetaAdAccountInfo,
+  datePreset: string,
+  graphVersion: string,
+  campaigns: CampaignInsight[],
+  adSets: AdSetInsight[],
+  ads: MetaAdRow[],
+): MemoryItem[] {
+  const topCampaign = campaigns.slice().sort((a, b) => b.spend - a.spend)[0]
+  const topAdSet = adSets.slice().sort((a, b) => b.spend - a.spend)[0]
+  const topAd = ads.slice().sort((a, b) => metricFromInsight(b.insights?.data?.[0]).spend - metricFromInsight(a.insights?.data?.[0]).spend)[0]
+  const topAdMetrics = metricFromInsight(topAd?.insights?.data?.[0])
+  const now = formatNow()
+
   return [
     {
       id: 'meta-memory-account',
       category: 'Insight',
-      title: 'Connected Meta account',
-      detail: `${account.name} (${account.currency}) synced by ${user.name} with ${graphVersion}`,
-      source: 'Meta API /me and ad account',
+      title: `${account.name} synced from Meta API`,
+      detail: `${campaigns.length} campaigns, ${adSets.length} ad sets, ${ads.length} ads synced by ${user.name} with ${graphVersion}`,
+      source: 'Meta API /me, ad account, campaigns, adsets, ads',
       confidence: 96,
-      updatedAt: formatNow(),
+      updatedAt: now,
+    },
+    topCampaign && {
+      id: `meta-memory-campaign-${topCampaign.id}`,
+      category: 'Strategy',
+      title: `Top spend campaign: ${topCampaign.name}`,
+      detail: `Spend ${formatMoney(topCampaign.spend)}, ROAS ${topCampaign.roas.toFixed(2)}x, CTR ${topCampaign.ctr.toFixed(2)}%, status ${topCampaign.aiStatus}`,
+      source: 'Meta campaign insights',
+      confidence: 90,
+      updatedAt: now,
+    },
+    topAdSet && {
+      id: `meta-memory-audience-${topAdSet.id}`,
+      category: 'Audience',
+      title: `Audience context: ${topAdSet.name}`,
+      detail: `${topAdSet.audience} · spend ${formatMoney(topAdSet.spend)} · CPA ${formatMoney(topAdSet.cpa)} · ROAS ${topAdSet.roas.toFixed(2)}x`,
+      source: 'Meta ad set targeting and insights',
+      confidence: 88,
+      updatedAt: now,
+    },
+    topAd && {
+      id: `meta-memory-creative-${topAd.id}`,
+      category: 'Creative',
+      title: `Creative signal: ${topAd.name}`,
+      detail: `Creative ${displayMetaCreative(topAd.creative)} · spend ${formatMoney(topAdMetrics.spend)} · CTR ${topAdMetrics.ctr.toFixed(2)}% · ROAS ${topAdMetrics.roas.toFixed(2)}x`,
+      source: 'Meta ad creative and insights',
+      confidence: 86,
+      updatedAt: now,
     },
     {
       id: 'meta-memory-window',
-      category: 'Strategy',
-      title: 'Reporting window',
-      detail: `Dashboard metrics are synced from Meta date preset: ${datePreset}`,
-      source: 'Meta Marketing API insights',
+      category: 'Preference',
+      title: `Reporting window: ${datePreset}`,
+      detail: `Studio pages use the current Meta date preset and do not use local mock records`,
+      source: 'Meta Marketing API date preset',
       confidence: 92,
-      updatedAt: formatNow(),
+      updatedAt: now,
     },
-  ]
+  ].filter(Boolean) as MemoryItem[]
 }
 
-function buildComplianceReviews(ads: MetaAdRow[]): ComplianceReview[] {
-  return ads.slice(0, 6).map((ad) => {
-    const name = ad.name.toLowerCase()
-    const needsReview = /before|after|ผลลัพธ์|รีวิว|review|guarantee|รับประกัน/.test(name)
-    return {
-      id: `meta-compliance-${ad.id}`,
-      title: ad.name,
-      service: inferService(ad.name),
-      status: needsReview ? 'needsReview' : 'approved',
-      issue: needsReview ? 'ชื่อ/creative อาจมี claim หรือ before-after signal ที่ควรตรวจ policy ก่อน scale' : 'ยังไม่พบ claim risk จากชื่อ ad ที่ Meta API ส่งมา',
-      fix: needsReview ? 'ตรวจข้อความ รูป before/after disclaimer และข้อกำหนดคลินิกก่อน approve' : 'ใช้ต่อได้ แต่ควรตรวจ creative asset จริงใน Meta Ads Manager',
-    }
-  })
+function buildComplianceReviews(ads: MetaAdRow[], campaigns: CampaignInsight[]): ComplianceReview[] {
+  const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
+  return ads
+    .slice()
+    .sort((a, b) => metricFromInsight(b.insights?.data?.[0]).spend - metricFromInsight(a.insights?.data?.[0]).spend)
+    .slice(0, 18)
+    .map((ad) => {
+      const metrics = metricFromInsight(ad.insights?.data?.[0])
+      const name = ad.name.toLowerCase()
+      const blocked = /guarantee|รับประกัน|หายขาด|100%/.test(name)
+      const needsReview = blocked || /before|after|ผลลัพธ์|รีวิว|review|เห็นผล|เปลี่ยนชีวิต/.test(name)
+      const campaign = campaignById.get(ad.campaign_id ?? '')
+      return {
+        id: `meta-compliance-${ad.id}`,
+        title: ad.name,
+        service: inferService(ad.name),
+        status: blocked ? 'blocked' : needsReview ? 'needsReview' : 'approved',
+        issue: blocked
+          ? 'พบคำสัญญาผลลัพธ์หรือ claim ที่ควรหยุดใช้ก่อนตรวจ policy'
+          : needsReview
+            ? 'ชื่อ/creative อาจมี claim, review หรือ before-after signal ที่ควรตรวจก่อน scale'
+            : 'ยังไม่พบ claim risk จาก ad และ creative metadata ที่ Meta API ส่งมา',
+        fix: blocked
+          ? 'แก้ข้อความ claim ให้ไม่รับประกันผลลัพธ์ และตรวจภาพ/landing ก่อนเปิดใช้งาน'
+          : needsReview
+            ? 'ตรวจข้อความ รูป before/after disclaimer และข้อกำหนดคลินิกก่อน approve'
+            : 'ใช้ต่อได้ แต่ควรตรวจ creative asset จริงใน Meta Ads Manager เมื่อ spend สูง',
+        adId: ad.id,
+        campaignId: ad.campaign_id,
+        creativeId: ad.creative?.id,
+        thumbnailUrl: ad.creative?.thumbnail_url,
+        source: campaign?.name ?? 'Meta ad',
+        spend: metrics.spend,
+        impressions: metrics.impressions,
+        ctr: metrics.ctr,
+        roas: metrics.roas,
+        deliveryStatus: isMetaActive(ad.effective_status) ? 'active' : 'paused',
+      }
+    })
 }
 
 function buildAuditTrail(user: MetaUserProfile, account: MetaAdAccountInfo, campaigns: number, adSets: number, ads: number): AuditEvent[] {
@@ -1448,6 +1561,24 @@ function round1(value: number) {
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'action'
+}
+
+const metaTemplateTokenPattern = /\{\{[^{}]+\}\}/g
+
+function cleanMetaDisplayText(value: string | undefined, fallback = '') {
+  const cleaned = String(value ?? '')
+    .replace(metaTemplateTokenPattern, '')
+    .replace(/\s+([·,;:])/g, '$1')
+    .replace(/([·,;:])\s*([·,;:])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s·,;:\-–—]+|[\s·,;:\-–—]+$/g, '')
+    .trim()
+
+  return cleaned || fallback
+}
+
+function displayMetaCreative(creative: MetaAdRow['creative']) {
+  return cleanMetaDisplayText(creative?.name, creative?.id ? `Creative ID ${creative.id}` : 'Meta creative')
 }
 
 function formatMoney(value: number) {

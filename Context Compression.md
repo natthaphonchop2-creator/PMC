@@ -232,6 +232,59 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Advanced JSON fields remain available with clearer explanations for targeting, promoted object, creative, and extra params.
   - Browser QA confirms Campaign and Ad Set modals show the new choices/help text and no console errors.
   - `npm run build` passes after this form UX update.
+- Ads Auto execution UX improved:
+  - Ads Auto now builds a rule-based queue from real `adInsights` data instead of the older local recommendation cards.
+  - Added presets: `Balanced`, `Protect Budget`, and `Scale Winners` with visible spend/ROAS/reactivation guardrails.
+  - Added queue filters for Action, All, Pause, Enable, and Monitor plus selected-row bulk review controls.
+  - Added bulk review modal before sending real Meta status changes through `POST /api/meta/object-status`.
+  - Added optimistic local status update after successful bulk execution, then triggers Meta workspace sync.
+  - Single-row Review pause/activate still routes through the existing Meta execution confirmation modal.
+  - Browser QA confirms Ads Auto opens, presets/filtering work, bulk review modal opens/closes, single action modal opens/closes, and no console errors were found.
+  - `npm run build` passes after this Ads Auto update.
+- STUDIO pages now use Meta API data:
+  - `Creative` was rebuilt as `Creative Studio`, using live `adInsights` and API-generated creative work orders from Meta ad rows.
+  - `Audience` was rebuilt as `Audience Studio`, using live Meta ad set targeting, budget, delivery status, spend, bookings, CPA, and ROAS.
+  - `Media Library` now uses Meta ad/creative metadata, creative IDs, thumbnail URLs, spend, impressions, CTR, ROAS, and compliance risk generated from live ad rows.
+  - Backend `tasks`, `memoryItems`, and `complianceReviews` are now derived from Meta ads/ad sets/campaigns instead of static placeholder records.
+  - Local API check confirms workspace returns 8 tasks, 5 memory items, and 18 compliance reviews from Meta data for `datePreset=maximum`.
+  - Browser QA confirms Creative, Audience, and Media Library render API-derived data without console errors.
+  - `npm run build` passes after this STUDIO update.
+- Button QA pass completed:
+  - Static scan found 74 `<button>` tags in `src/App.tsx`; one AI Insights table-title button depended on row bubbling and was fixed to call its drawer handler directly.
+  - Static scan now confirms every `<button>` has an explicit `onClick`, submit behavior, or disabled state.
+  - Browser QA passed for sidebar navigation, workspace settings, theme toggle, platform module cards, STUDIO buttons, Settings check/sync buttons, Performance metric drawer, Campaigns visible create/edit/delete/status/collapse/scope controls, Action Queue approval modal, and Ads Auto mode/preset/filter controls.
+  - External/write/destructive confirmation buttons were not executed: Meta status confirm, bulk Ads Auto confirm, object create/update/delete confirm, Save & Test credentials, Clear Saved credentials, and direct Reject mutations.
+  - No console errors were found during the tested button flows.
+  - `npm run build` passes after the button QA fix.
+- Performance PDF report completed:
+  - Added a new `Performance Summary` report block at the top of the Performance page.
+  - Summary cards now process live workspace data into Business Health, Best Channel, Funnel Bottleneck, and Value / Booking.
+  - Added report charts for `Spend vs Revenue by Channel` and normalized `Processed Funnel Health`.
+  - Added tooltip/help copy to report cards and Recharts tooltips to both report charts.
+  - Added `Export PDF` button that opens the browser print flow, with print CSS for A4 landscape PDF output.
+  - Print stylesheet hides sidebar/topbar/modals, removes shadows, keeps report/chart sections printable, and compresses tables for PDF.
+  - Browser QA in Chrome confirms Performance renders, report cards show live Meta-derived numbers, both report charts render, and the Export PDF button is visible.
+  - `npm run build` passes after the Performance PDF report update.
+- Action Queue real endpoint binding completed:
+  - `RecommendedAction` now supports `execution`, `executionError`, `executedAt`, and action statuses `executing`, `executed`, and `failed`.
+  - Budget protection and tracking/budget protection actions are now executable through `POST /api/meta/object-status`.
+  - Executable actions show `Execute` with a concrete Meta API target such as `Pause campaign in Meta · Campaign <id>`.
+  - Non-executable recommendations remain `Approve` only and display that no automatic endpoint exists yet.
+  - Approval modal now distinguishes approve-only from real execution and shows `Confirm & Execute` before calling Meta API.
+  - Successful execution updates local delivery status, marks the action `executed`, writes Audit Log, and syncs Meta data.
+  - Failed execution marks the action `failed`, shows the error, keeps the action retryable, and writes a failed Audit Log entry.
+  - Sync now merges local Action Queue states and local audit events so executed/failed/approved/rejected actions are not overwritten back to pending after Meta refresh.
+  - Browser QA confirms Action Queue renders executable and approve-only actions separately, and the execute confirmation modal opens with the real endpoint warning; destructive Confirm was not clicked.
+  - `npm run build` passes after this Action Queue execution update.
+- Campaigns / Creative layout bug fix completed:
+  - Fixed `Creative Studio` API Work Orders overflow by making `.studio-task-grid` higher specificity, responsive, and able to wrap long Meta input/campaign text inside each card.
+  - Reworked the Campaigns Ads section from a horizontally scrolling table into responsive ad cards with visible metrics and fixed action controls.
+  - Removed the unused `ads-performance-table` path so the UI no longer depends on sticky table columns for `Activate`, `Edit`, and `Delete`.
+  - Follow-up fix: merged Ads status/score and action buttons into a single right-side control panel so `Activate`, `Edit`, and `Delete` cannot be pushed outside the card at wide/medium viewport widths.
+  - Follow-up fix: sanitized Meta template tokens such as `{{product.name}}` in server sync output and frontend workspace normalization so dynamic creative placeholders never render in Campaigns, Creative Studio, Action Queue, Memory, or Audit text.
+  - Browser QA confirms Creative Work Orders cards no longer overflow and Campaigns Ads action buttons are visible without horizontal table clipping.
+  - Browser QA confirms `{{product.name}}` no longer appears in the Campaigns Ads card after reload.
+  - `npm run build` passes after this stronger layout fix.
 
 ## Next Recommended Step
 
