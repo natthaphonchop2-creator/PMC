@@ -173,6 +173,20 @@ const toolSections: ToolSection[] = [
 
 const platformModules: ToolTab[] = toolSections.flatMap((section) => section.tabs).filter((tab) => tab.id !== 'platform')
 
+const platformToolHelp: Record<Exclude<TabId, 'platform'>, string> = {
+  campaigns: 'Ads Manager ใช้ดูและจัดการ Meta Campaign, Ad Set และ Ads พร้อมสั่งเปิด ปิด สร้าง แก้ไข หรือลบรายการที่เชื่อมกับ API',
+  auto: 'Optimization คือระบบ Ads Auto สำหรับให้ AI แนะนำหรือทำงานตาม guardrails เช่น pause ads ที่เสียเงิน, scale winner และคุมงบ',
+  tasks: 'Creative Studio ใช้ดู creative performance, สร้าง asset work orders, บันทึก launch notes และเตรียมโพสต์/ยิง Ads Meta',
+  memory: 'Audience Insights รวมข้อมูลกลุ่มเป้าหมายจาก Ads เช่น อายุ พื้นที่ placement ความสนใจ และ segment ที่ควรใช้ต่อ',
+  compliance: 'Ad Library ใช้ตรวจ creative assets, claim, risk และ metadata ของโฆษณาก่อนนำไปใช้หรือเปิด campaign',
+  overview: 'Analytics สรุป performance, funnel, revenue, ROAS, CPA และกราฟสำหรับอ่านภาพรวมธุรกิจหรือส่งออกเป็นรายงาน',
+  investigator: 'Creative Insights จัดอันดับผลลัพธ์แบบ Group By เช่น creative, campaign, ad set, audience และ placement เพื่อหา winner/loser',
+  actions: 'AI Marketer รวม recommendation ที่รอ approve หรือ execute พร้อมเหตุผล evidence และผลลัพธ์ก่อน/หลังจาก API',
+  settings: 'Settings ใช้ตั้งค่า API keys, Meta account, connection check, system health และ readiness ก่อนดึงข้อมูลจริง',
+  audit: 'Reports เก็บประวัติ action, approval, before/after และ export summary ให้ตรวจสอบย้อนหลังได้',
+  appointments: 'Help Center ใช้ดู lead, booking, show-up และ operational signals ที่เชื่อม performance ads กับงานหน้าคลินิก',
+}
+
 const pageMeta: Record<TabId, { title: string; subtitle: string; icon: typeof BarChart3 }> = {
   platform: {
     title: 'AdVibes Clinic OS',
@@ -4342,18 +4356,30 @@ function PlatformHome({
         <div className="app-module-grid">
           {modules.map((module, index) => {
             const Icon = module.icon
+            const helpText = platformToolHelp[module.id as Exclude<TabId, 'platform'>] ?? module.description
+            const tooltipId = `platform-tool-help-${module.id}`
             return (
               <button
                 key={module.id}
                 type="button"
                 className={`app-module-card tone-${(index % 5) + 1}`}
+                aria-label={`${module.label}: ${helpText}`}
+                aria-describedby={tooltipId}
                 onClick={() => onOpen(module.id)}
               >
-                <span className="app-icon">
-                  <Icon size={22} />
+                <span className="app-module-head">
+                  <span className="app-icon">
+                    <Icon size={22} />
+                  </span>
+                  <span className="tool-info-dot" aria-hidden="true">
+                    <Info size={13} />
+                  </span>
                 </span>
                 <strong>{module.label}</strong>
                 <small>{module.description}</small>
+                <span id={tooltipId} className="tool-help-tooltip" role="tooltip">
+                  {helpText}
+                </span>
               </button>
             )
           })}

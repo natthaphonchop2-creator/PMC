@@ -451,6 +451,11 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Changed the app initial `activeTab` from `Creative Insights` to `platform`.
   - Fresh visits and full page reloads now open the `AdVibes Clinic OS` platform page first.
   - Existing sidebar navigation remains unchanged after the user chooses another tool.
+- AdVibes Clinic OS tooltips completed:
+  - Added detailed Thai helper text for all 11 platform Tools: Ads Manager, Optimization, Creative Studio, Audience Insights, Ad Library, Analytics, Creative Insights, AI Marketer, Settings, Reports, and Help Center.
+  - Platform Tool cards now include an info icon, hover/focus tooltip, `aria-label`, and `aria-describedby` so users can understand each tool without changing pages.
+  - Browser QA confirms `AdVibes Clinic OS` opens first, 11 Tool cards render, 11 tooltip bodies exist, key help content mentions Meta/API where relevant, and there are no fresh browser console errors.
+  - `npm run build` passes after the tooltip update.
 
 ## Next Recommended Step
 
