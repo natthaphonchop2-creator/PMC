@@ -27,6 +27,7 @@ const GRAPH_HOST = 'https://graph.facebook.com'
 const DEFAULT_GRAPH_VERSION = 'v21.0'
 const DEFAULT_DATE_PRESET = 'last_30d'
 const DEFAULT_MAX_PAGES = 6
+const MAX_META_JSON_BODY_BYTES = 1_000_000
 const LOCAL_CONFIG_FILE = resolve(process.cwd(), '.meta-api.local.json')
 
 const INSIGHT_FIELDS = [
@@ -219,7 +220,8 @@ type GraphParamValue = string | number | boolean | Record<string, unknown> | unk
 interface MetaApiRequest {
   url?: string
   method?: string
-  on: (event: string, callback: (chunk?: Buffer) => void) => void
+  headers?: Record<string, string | string[] | undefined>
+  on: (event: string, callback: (chunk?: Buffer | string) => void) => void
 }
 
 interface MetaApiResponse {
@@ -285,6 +287,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
         }
 
         if (req.method === 'POST') {
+          assertJsonRequest(req)
           const body = await readJsonBody(req)
           const existing = await readLocalConfig()
           const nextConfig = normalizeSubmittedConfig(body, existing)
@@ -385,6 +388,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
           return
         }
 
+        assertJsonRequest(req)
         const body = await readJsonBody(req)
         const result = await updateMetaObjectStatus(config, body)
         writeJson(res, 200, result)
@@ -404,6 +408,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
           return
         }
 
+        assertJsonRequest(req)
         const body = await readJsonBody(req)
         const result = await updateMetaObjectStatuses(config, body)
         writeJson(res, 200, result)
@@ -423,6 +428,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
           return
         }
 
+        assertJsonRequest(req)
         const body = await readJsonBody(req)
         const result = await mutateMetaObject(config, body)
         writeJson(res, 200, result)
@@ -442,6 +448,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
           return
         }
 
+        assertJsonRequest(req)
         const body = await readJsonBody(req)
         const result = await launchMetaCreative(config, body)
         writeJson(res, 200, result)
@@ -525,7 +532,7 @@ async function saveLocalConfig(config: PersistedMetaConfig) {
       null,
       2,
     ),
-    'utf-8',
+    { encoding: 'utf-8', mode: 0o600 },
   )
 }
 
@@ -583,21 +590,60 @@ async function buildConfigChecks(env: MetaApiPluginEnv) {
   ]
 }
 
-function readJsonBody(req: { on: (event: string, callback: (chunk?: Buffer) => void) => void }): Promise<Record<string, unknown>> {
+function assertJsonRequest(req: MetaApiRequest) {
+  const contentType = headerValue(req.headers?.['content-type']).toLowerCase()
+  if (!contentType.includes('application/json')) {
+    throw new MetaApiError('Content-Type must be application/json', 415)
+  }
+}
+
+function headerValue(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value.join(',')
+  return value ?? ''
+}
+
+function readJsonBody(
+  req: { on: (event: string, callback: (chunk?: Buffer | string) => void) => void },
+  maxBytes = MAX_META_JSON_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   return new Promise((resolveBody, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (chunk?: Buffer) => {
-      if (chunk) chunks.push(chunk)
+    let totalBytes = 0
+    let done = false
+    const fail = (error: Error) => {
+      if (done) return
+      done = true
+      reject(error)
+    }
+
+    req.on('data', (chunk?: Buffer | string) => {
+      if (done || !chunk) return
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      totalBytes += buffer.byteLength
+      if (totalBytes > maxBytes) {
+        fail(new MetaApiError(`Request body too large. Limit ${Math.round(maxBytes / 1024)} KB.`, 413))
+        return
+      }
+      chunks.push(buffer)
     })
     req.on('end', () => {
+      if (done) return
       try {
         const raw = Buffer.concat(chunks).toString('utf-8')
-        resolveBody(raw ? (JSON.parse(raw) as Record<string, unknown>) : {})
+        const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+        done = true
+        resolveBody(parsed)
       } catch (error) {
-        reject(error instanceof Error ? error : new Error('Invalid JSON body'))
+        fail(
+          error instanceof SyntaxError
+            ? new MetaApiError('Invalid JSON body', 400)
+            : error instanceof Error
+              ? error
+              : new MetaApiError('Invalid JSON body', 400),
+        )
       }
     })
-    req.on('error', () => reject(new Error('Request body read failed')))
+    req.on('error', () => fail(new MetaApiError('Request body read failed', 400)))
   })
 }
 

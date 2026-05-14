@@ -1,5 +1,57 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 Final Codex Security Pass
+
+User requested `@codex-security` final review and fix.
+
+Completed security scan phases:
+- Threat model created/copied to scan artifacts.
+- Finding discovery completed.
+- Validation completed with runtime checks.
+- Attack-path analysis completed.
+- Final report written.
+
+Scan artifacts:
+- `/tmp/codex-security-scans/PMC Ads agent/53eb5a5_20260514T230520Z/artifacts/threat_model.md`
+- `/tmp/codex-security-scans/PMC Ads agent/53eb5a5_20260514T230520Z/artifacts/finding_discovery_report.md`
+- `/tmp/codex-security-scans/PMC Ads agent/53eb5a5_20260514T230520Z/artifacts/validation_report.md`
+- `/tmp/codex-security-scans/PMC Ads agent/53eb5a5_20260514T230520Z/artifacts/attack_path_analysis.md`
+- `/tmp/codex-security-scans/PMC Ads agent/53eb5a5_20260514T230520Z/artifacts/final_report.md`
+
+Findings fixed:
+- Added bounded JSON body parsing for OpenAI backend routes and Meta write/config routes.
+- Added JSON content-type enforcement for POST routes that parse JSON.
+- Added deterministic backend policy gate for AI-generated Meta campaign pause/activate actions.
+- AI-generated actions now remain approval-only unless local Meta metrics pass server-side guardrails.
+- Production server now requires `APP_BASIC_AUTH_PASSWORD` unless `APP_ALLOW_UNAUTHENTICATED=true` is set intentionally.
+- `.meta-api.local.json` writes now use file mode `0600`; the existing local file was chmodded to `600`.
+
+Files changed:
+- `.env.example`
+- `DEPLOYMENT.md`
+- `server/openAiPlugin.ts`
+- `server/metaApiPlugin.ts`
+- `server/productionServer.ts`
+- `Context Compression.md`
+
+Verification:
+- `npm run lint` passes.
+- `npm run build` passes.
+- Production runtime check on `PORT=4180`:
+  - `/api/ai/status` returned 200 with configured OpenAI status.
+  - 1.1 MB `/api/ai/marketer` body returned 413.
+  - non-JSON `/api/ai/creative` body returned 415.
+  - 1.1 MB `/api/meta/object-status` body returned 413.
+  - non-JSON `/api/meta/config` body returned 415.
+- Production auth check:
+  - `PORT=4181 npm start` without `APP_BASIC_AUTH_PASSWORD` returned 401 for `/api/ai/status` while `/healthz` stayed 200.
+  - `PORT=4182 APP_BASIC_AUTH_PASSWORD=security-test npm start` returned 200 for authenticated `/api/ai/status` and 413 for oversized AI body.
+- Targeted middleware harness confirmed a model-requested `pause_campaign` on a low-signal paused campaign returns an approval-only action without executable `execution`.
+
+Next deployment note:
+- Production must set `APP_BASIC_AUTH_PASSWORD`, or explicitly set `APP_ALLOW_UNAUTHENTICATED=true` for private/local-only operation.
+- If `.meta-api.local.json` already exists on a server, ensure file permissions are `600` or resave Settings after this version is deployed.
+
 ## Latest Completed Work - 2026-05-15 OpenAI AI Marketer + Creative Kit Integration
 
 User selected next work items `2` and `3`: make AI Marketer / AI Insights use a real LLM, and upgrade Creative Studio to generate real creative briefs, copy, angles, hooks, captions/notes from OpenAI instead of rule-only text.

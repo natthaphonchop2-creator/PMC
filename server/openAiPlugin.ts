@@ -14,6 +14,7 @@ import type {
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 const DEFAULT_MAX_OUTPUT_TOKENS = 2800
+const MAX_AI_JSON_BODY_BYTES = 1_000_000
 const LOCAL_ENV_FILES = [resolve(process.cwd(), '.env.local'), resolve(process.cwd(), '.env')]
 
 interface OpenAiPluginEnv {
@@ -30,7 +31,8 @@ interface OpenAiConfig {
 interface AiApiRequest {
   url?: string
   method?: string
-  on: (event: string, callback: (chunk?: Buffer) => void) => void
+  headers?: Record<string, string | string[] | undefined>
+  on: (event: string, callback: (chunk?: Buffer | string) => void) => void
 }
 
 interface AiApiResponse {
@@ -132,6 +134,7 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
           return
         }
 
+        assertJsonRequest(req)
         const config = await requireOpenAiConfig(env)
         const body = await readJsonBody(req)
         const workspace = normalizeWorkspacePayload(body.workspace)
@@ -173,6 +176,7 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
           return
         }
 
+        assertJsonRequest(req)
         const config = await requireOpenAiConfig(env)
         const body = await readJsonBody(req)
         const sourceAd = normalizeAdInsight(body.sourceAd)
@@ -382,21 +386,60 @@ function extractOutputText(json: unknown) {
   return chunks.join('\n').trim()
 }
 
-function readJsonBody(req: { on: (event: string, callback: (chunk?: Buffer) => void) => void }): Promise<Record<string, unknown>> {
+function assertJsonRequest(req: AiApiRequest) {
+  const contentType = headerValue(req.headers?.['content-type']).toLowerCase()
+  if (!contentType.includes('application/json')) {
+    throw new AiApiError('Content-Type must be application/json', 415)
+  }
+}
+
+function headerValue(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value.join(',')
+  return value ?? ''
+}
+
+function readJsonBody(
+  req: { on: (event: string, callback: (chunk?: Buffer | string) => void) => void },
+  maxBytes = MAX_AI_JSON_BODY_BYTES,
+): Promise<Record<string, unknown>> {
   return new Promise((resolveBody, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (chunk?: Buffer) => {
-      if (chunk) chunks.push(chunk)
+    let totalBytes = 0
+    let done = false
+    const fail = (error: Error) => {
+      if (done) return
+      done = true
+      reject(error)
+    }
+
+    req.on('data', (chunk?: Buffer | string) => {
+      if (done || !chunk) return
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      totalBytes += buffer.byteLength
+      if (totalBytes > maxBytes) {
+        fail(new AiApiError(`Request body too large. Limit ${Math.round(maxBytes / 1024)} KB.`, 413))
+        return
+      }
+      chunks.push(buffer)
     })
     req.on('end', () => {
+      if (done) return
       try {
         const raw = Buffer.concat(chunks).toString('utf-8')
-        resolveBody(raw ? (JSON.parse(raw) as Record<string, unknown>) : {})
+        const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+        done = true
+        resolveBody(parsed)
       } catch (error) {
-        reject(error instanceof Error ? error : new Error('Invalid JSON body'))
+        fail(
+          error instanceof SyntaxError
+            ? new AiApiError('Invalid JSON body', 400)
+            : error instanceof Error
+              ? error
+              : new AiApiError('Invalid JSON body', 400),
+        )
       }
     })
-    req.on('error', () => reject(new Error('Request body read failed')))
+    req.on('error', () => fail(new AiApiError('Request body read failed', 400)))
   })
 }
 
@@ -522,17 +565,12 @@ function normalizeAiActions(input: unknown, campaigns: CampaignInsight[]): Recom
     if (!campaign) return null
     const type = cleanText(record.type, 'AI Marketer action')
     const executionType = cleanText(record.execution, 'none')
-    const execution =
-      executionType === 'pause_campaign' || executionType === 'activate_campaign'
-        ? {
-            endpoint: '/api/meta/object-status' as const,
-            method: 'POST' as const,
-            objectType: 'campaign' as const,
-            objectId: campaign.id,
-            status: executionType === 'pause_campaign' ? 'PAUSED' as const : 'ACTIVE' as const,
-            label: executionType === 'pause_campaign' ? 'Pause campaign in Meta' : 'Activate campaign in Meta',
-          }
-        : undefined
+    const execution = executionForAiAction(campaign, executionType)
+    const guardrail = cleanText(record.guardrail, 'ต้องตรวจ evidence และ confirm ก่อน execute ผ่าน Meta API')
+    const policyNote =
+      executionType !== 'none' && !execution
+        ? ' · Server policy: ยังเป็น approval-only เพราะ metric guardrail ฝั่ง backend ยังไม่ผ่าน'
+        : ''
 
     return {
       id: `ai-action-${runId}-${index + 1}-${slugify(type, 'marketer')}`,
@@ -541,7 +579,7 @@ function normalizeAiActions(input: unknown, campaigns: CampaignInsight[]): Recom
       target: cleanText(record.target, campaign.name),
       summary: cleanText(record.summary, 'AI Marketer recommendation จากข้อมูล Meta ล่าสุด'),
       expectedImpact: cleanText(record.expectedImpact, 'ลด spend leakage หรือเพิ่ม result quality จากข้อมูลจริง'),
-      guardrail: cleanText(record.guardrail, 'ต้องตรวจ evidence และ confirm ก่อน execute ผ่าน Meta API'),
+      guardrail: `${guardrail}${policyNote}`,
       before: cleanText(record.before, `Spend ${formatMoney(campaign.spend)} · ROAS ${campaign.roas.toFixed(2)}x · CTR ${campaign.ctr.toFixed(2)}%`),
       after: cleanText(record.after, 'Update plan หลัง approve'),
       rollbackNote: cleanText(record.rollbackNote, 'Sync Meta หลัง execute และย้อนกลับหาก CPA/ROAS แย่ลง'),
@@ -551,6 +589,46 @@ function normalizeAiActions(input: unknown, campaigns: CampaignInsight[]): Recom
       ...(execution ? { execution } : {}),
     }
   }).slice(0, 10)
+}
+
+function executionForAiAction(campaign: CampaignInsight, executionType: string): RecommendedAction['execution'] | undefined {
+  if (executionType === 'pause_campaign' && canPauseCampaignByPolicy(campaign)) {
+    return {
+      endpoint: '/api/meta/object-status',
+      method: 'POST',
+      objectType: 'campaign',
+      objectId: campaign.id,
+      status: 'PAUSED',
+      label: 'Pause campaign in Meta',
+    }
+  }
+
+  if (executionType === 'activate_campaign' && canActivateCampaignByPolicy(campaign)) {
+    return {
+      endpoint: '/api/meta/object-status',
+      method: 'POST',
+      objectType: 'campaign',
+      objectId: campaign.id,
+      status: 'ACTIVE',
+      label: 'Activate campaign in Meta',
+    }
+  }
+
+  return undefined
+}
+
+function canPauseCampaignByPolicy(campaign: CampaignInsight) {
+  if (campaign.deliveryStatus !== 'active' || campaign.spend < 500) return false
+
+  const noConversionSpendLeak = campaign.conversions === 0 && campaign.spend >= 500
+  const lowReturnWithVolume = campaign.conversions >= 3 && campaign.roas > 0 && campaign.roas < 1.2
+  const fatigueWithCost = campaign.frequency >= 6 && campaign.ctr > 0 && campaign.ctr < 0.8 && campaign.spend >= 1_000
+  return noConversionSpendLeak || lowReturnWithVolume || fatigueWithCost
+}
+
+function canActivateCampaignByPolicy(campaign: CampaignInsight) {
+  if (campaign.deliveryStatus !== 'paused') return false
+  return campaign.conversions >= 10 && campaign.roas >= 2.5 && campaign.ctr >= 0.8
 }
 
 function normalizeCreativeResult(input: AiCreativeModelResult): AiCreativeModelResult {

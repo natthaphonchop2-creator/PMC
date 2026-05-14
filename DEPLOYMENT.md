@@ -7,7 +7,7 @@ This app now has a production Node server. It serves the built React app from `d
 ```bash
 npm install
 npm run build
-PORT=4174 npm start
+APP_BASIC_AUTH_PASSWORD=local-test PORT=4174 npm start
 ```
 
 Open:
@@ -19,8 +19,8 @@ http://127.0.0.1:4174/
 Health/API checks:
 
 ```bash
-curl http://127.0.0.1:4174/api/meta/status
-curl 'http://127.0.0.1:4174/api/meta/workspace?datePreset=maximum'
+curl -u pmc:local-test http://127.0.0.1:4174/api/meta/status
+curl -u pmc:local-test 'http://127.0.0.1:4174/api/meta/workspace?datePreset=maximum'
 ```
 
 ## Temporary Public Link
@@ -32,7 +32,7 @@ APP_BASIC_AUTH_USER=pmc APP_BASIC_AUTH_PASSWORD=change-this PORT=4174 npm start
 ```
 
 Then expose port `4174` through a tunnel provider such as localhost.run, Cloudflare Tunnel, or ngrok.
-Do not expose this app publicly without `APP_BASIC_AUTH_PASSWORD`, because `/api/meta/*` and Settings are live server endpoints.
+Do not expose this app publicly without `APP_BASIC_AUTH_PASSWORD`, because `/api/meta/*`, `/api/ai/*`, and Settings are live server endpoints. The production server now rejects unauthenticated access when the password is missing unless `APP_ALLOW_UNAUTHENTICATED=true` is set intentionally.
 
 ## Server Requirements
 
@@ -97,7 +97,7 @@ Commands on the server:
 cd /var/www/pmc-ads-agent
 npm ci
 npm run build
-PORT=4174 npm start
+APP_BASIC_AUTH_PASSWORD=change-this PORT=4174 npm start
 ```
 
 For a persistent process, use PM2 or systemd.
@@ -109,7 +109,7 @@ npm install -g pm2
 cd /var/www/pmc-ads-agent
 npm ci
 npm run build
-PORT=4174 pm2 start npm --name pmc-ads-agent -- start
+APP_BASIC_AUTH_PASSWORD=change-this PORT=4174 pm2 start npm --name pmc-ads-agent -- start
 pm2 save
 ```
 

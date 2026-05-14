@@ -10,6 +10,7 @@ const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
 const basicAuthUser = process.env.APP_BASIC_AUTH_USER || 'pmc'
 const basicAuthPassword = process.env.APP_BASIC_AUTH_PASSWORD || ''
+const allowUnauthenticated = process.env.APP_ALLOW_UNAUTHENTICATED === 'true'
 const distDir = resolve(process.cwd(), 'dist')
 const indexHtml = join(distDir, 'index.html')
 const metaApi = createMetaApiMiddleware(process.env)
@@ -41,7 +42,7 @@ const server = createServer(async (req, res) => {
     res.statusCode = 401
     res.setHeader('www-authenticate', 'Basic realm="PMC Ads Agent", charset="UTF-8"')
     res.setHeader('content-type', 'text/plain; charset=utf-8')
-    res.end('Authentication required')
+    res.end(basicAuthPassword ? 'Authentication required' : 'APP_BASIC_AUTH_PASSWORD required')
     return
   }
 
@@ -138,7 +139,7 @@ function isCacheableAsset(pathname: string) {
 }
 
 function isBasicAuthAllowed(authorization: string | undefined) {
-  if (!basicAuthPassword) return true
+  if (!basicAuthPassword) return allowUnauthenticated
   if (!authorization?.startsWith('Basic ')) return false
 
   try {
