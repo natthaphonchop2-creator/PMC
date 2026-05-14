@@ -439,6 +439,14 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Added light/dark theme styling and mobile responsive collapse for the strip.
   - Browser QA confirms the strip renders, the `Sync` button triggers read-only Meta sync, returns to `Meta live`, and no new console warnings/errors appear.
   - `npm run build` passes after the AI status strip update.
+- Mascot gradient theme + GSAP polish completed:
+  - Installed `gsap@3.15.0` and added `useMascotGsapMotion` with dynamic import so GSAP ships as a separate lazy chunk instead of the main bundle.
+  - Reworked the website theme around mascot colors: purple, sky blue, mint, warm gold, soft glass surfaces, subtle grid texture, and gradient page background.
+  - Added gradient hover accent lines to key cards/panels including module cards, metric cards, panels, reports, audience cards, studio rows, timeline items, empty states, and Creative Insights card.
+  - Added GSAP entrance animation for topbar, assistant strip, cards/panels, and GSAP-controlled hover accent progress with cleanup on tab changes.
+  - Kept `prefers-reduced-motion` support for existing mascot float animations and avoided adding mock data.
+  - Browser QA confirms the Platform page has 11 module cards and 3 panels with the new gradient card surface, `documentElement.dataset.gsapMotion` becomes `ready`, no new console warnings/errors appear, and Meta sync settles back to `Meta live`.
+  - `npm run build` passes after the mascot gradient theme update; output includes `dist/assets/gsap-BauIho7W.js`.
 
 ## Next Recommended Step
 

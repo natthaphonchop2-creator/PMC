@@ -5237,26 +5237,57 @@ td span {
 
 /* Comfort polish: smaller type, softer surfaces, and quieter interactions */
 .app-shell {
-  --background: #f7f8fc;
-  --surface: rgba(255, 255, 255, 0.94);
+  --background: #f7f9ff;
+  --surface: rgba(255, 255, 255, 0.88);
   --ink: #171b27;
   --muted: #667085;
-  --border: #e1e7f0;
-  --blue: #6f61d6;
-  --shadow: 0 10px 28px rgba(32, 39, 58, 0.055);
+  --border: #dfe8f4;
+  --blue: #7163de;
+  --mascot-purple: #7a5cff;
+  --mascot-blue: #55c2ee;
+  --mascot-mint: #73dfbe;
+  --mascot-gold: #ffd166;
+  --mascot-rose: #ff9fb8;
+  --accent-gradient: linear-gradient(90deg, #7a5cff 0%, #55c2ee 42%, #73dfbe 72%, #ffd166 100%);
+  --soft-gradient: linear-gradient(135deg, rgba(122, 92, 255, 0.12), rgba(85, 194, 238, 0.08) 48%, rgba(115, 223, 190, 0.11));
+  --shadow: 0 12px 34px rgba(54, 67, 104, 0.07);
+  position: relative;
   background:
-    linear-gradient(180deg, #f9fbff 0%, #f5f7fb 52%, #eef3f8 100%);
+    linear-gradient(120deg, rgba(122, 92, 255, 0.12) 0%, rgba(122, 92, 255, 0) 28%),
+    linear-gradient(250deg, rgba(85, 194, 238, 0.14) 0%, rgba(85, 194, 238, 0) 32%),
+    linear-gradient(35deg, rgba(115, 223, 190, 0.12) 0%, rgba(115, 223, 190, 0) 34%),
+    linear-gradient(180deg, #fbfdff 0%, #f7f9ff 46%, #eef8fb 100%);
   font-size: 12.5px;
   line-height: 1.42;
 }
 
+.app-shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(122, 92, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(85, 194, 238, 0.04) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: linear-gradient(180deg, black 0%, transparent 74%);
+  opacity: 0.72;
+}
+
 .sidebar {
+  position: sticky;
+  z-index: 1;
   width: 246px;
-  background: rgba(245, 247, 251, 0.88);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(241, 248, 255, 0.84)),
+    linear-gradient(145deg, rgba(122, 92, 255, 0.09), rgba(85, 194, 238, 0.08));
   backdrop-filter: blur(14px);
 }
 
 .main {
+  position: relative;
+  z-index: 1;
   padding: 20px 26px 38px;
 }
 
@@ -5272,7 +5303,11 @@ td span {
   width: 40px;
   height: 40px;
   border-radius: 8px;
-  background: linear-gradient(180deg, #ffffff, #f7f5ff);
+  border-color: rgba(122, 92, 255, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(247, 245, 255, 0.78)),
+    var(--soft-gradient);
+  box-shadow: 0 12px 26px rgba(122, 92, 255, 0.11);
 }
 
 h1 {
@@ -5310,6 +5345,8 @@ h3 {
   width: 26px;
   height: 26px;
   border-radius: 8px;
+  background: var(--accent-gradient);
+  box-shadow: 0 10px 22px rgba(85, 194, 238, 0.18);
 }
 
 .workspace-switch {
@@ -5347,7 +5384,7 @@ h3 {
   background: #ffffff;
   box-shadow:
     0 8px 22px rgba(32, 39, 58, 0.065),
-    inset 3px 0 0 rgba(117, 103, 216, 0.42);
+    inset 3px 0 0 rgba(122, 92, 255, 0.52);
 }
 
 .tool-section-header strong,
@@ -5372,6 +5409,7 @@ h3 {
 .performance-report-card,
 .report-chart-card,
 .app-module-card,
+.insights-card,
 .audience-detail-card,
 .audience-snapshot,
 .audience-bar-row,
@@ -5382,10 +5420,70 @@ h3 {
 .measurement-item,
 .data-stamp,
 .empty-state {
+  position: relative;
+  --accent-progress: 0.16;
   border-radius: 8px;
   border-color: var(--border);
-  background: var(--surface);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.91), rgba(249, 252, 255, 0.78)),
+    var(--soft-gradient);
   box-shadow: var(--shadow);
+}
+
+.panel::after,
+.metric-card::after,
+.metric-category::after,
+.action-card::after,
+.task-card::after,
+.performance-report-card::after,
+.report-chart-card::after,
+.app-module-card::after,
+.insights-card::after,
+.audience-detail-card::after,
+.audience-snapshot::after,
+.audience-bar-row::after,
+.audience-chip::after,
+.studio-creative-row::after,
+.memory-card::after,
+.timeline-item::after,
+.measurement-item::after,
+.data-stamp::after,
+.empty-state::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  right: 10px;
+  left: 10px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent-gradient);
+  transform: scaleX(var(--accent-progress, 0));
+  transform-origin: left center;
+  opacity: 0.9;
+  transition: transform 180ms ease;
+  pointer-events: none;
+}
+
+.panel:hover::after,
+.metric-card:hover::after,
+.metric-category:hover::after,
+.action-card:hover::after,
+.task-card:hover::after,
+.performance-report-card:hover::after,
+.report-chart-card:hover::after,
+.app-module-card:hover::after,
+.insights-card:hover::after,
+.audience-detail-card:hover::after,
+.audience-snapshot:hover::after,
+.audience-bar-row:hover::after,
+.audience-chip:hover::after,
+.studio-creative-row:hover::after,
+.memory-card:hover::after,
+.timeline-item:hover::after,
+.measurement-item:hover::after,
+.data-stamp:hover::after,
+.empty-state:hover::after {
+  transform: scaleX(1);
 }
 
 .panel,
@@ -5414,6 +5512,7 @@ h3 {
   width: 30px;
   height: 30px;
   border-radius: 8px;
+  background: linear-gradient(135deg, rgba(122, 92, 255, 0.12), rgba(85, 194, 238, 0.14));
 }
 
 .icon-button,
@@ -5460,7 +5559,8 @@ h3 {
 .reject-button:hover,
 .icon-button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(32, 39, 58, 0.08);
+  border-color: rgba(85, 194, 238, 0.44);
+  box-shadow: 0 12px 28px rgba(85, 194, 238, 0.13);
 }
 
 .primary-button:active,
@@ -5498,8 +5598,8 @@ tbody tr {
 .audience-detail-card:hover,
 .funnel-stage-list button:hover {
   transform: translateY(-1px);
-  border-color: rgba(117, 103, 216, 0.28);
-  box-shadow: 0 12px 26px rgba(32, 39, 58, 0.07);
+  border-color: rgba(85, 194, 238, 0.38);
+  box-shadow: 0 14px 30px rgba(85, 194, 238, 0.1);
 }
 
 table {
@@ -5656,11 +5756,15 @@ textarea {
 
 .app-shell[data-theme='dark'] {
   --background: #111827;
-  --surface: #172033;
+  --surface: rgba(23, 32, 51, 0.9);
   --ink: #f8fafc;
   --muted: #b6c2d2;
-  --border: #2a3547;
+  --border: #2c3a54;
   --shadow: 0 14px 36px rgba(0, 0, 0, 0.22);
+  background:
+    linear-gradient(120deg, rgba(122, 92, 255, 0.18) 0%, rgba(122, 92, 255, 0) 30%),
+    linear-gradient(250deg, rgba(85, 194, 238, 0.14) 0%, rgba(85, 194, 238, 0) 34%),
+    linear-gradient(180deg, #0f172a 0%, #111827 55%, #101923 100%);
 }
 
 .app-shell[data-theme='dark'] .panel,

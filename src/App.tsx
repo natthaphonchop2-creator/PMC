@@ -1171,6 +1171,90 @@ function slugify(value: string, fallback: string) {
   return slug || fallback
 }
 
+function useMascotGsapMotion(activeTab: TabId) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    if (reduceMotion.matches) return
+
+    let cleanup: (() => void) | undefined
+    let cancelled = false
+
+    void import('gsap').then(({ gsap }) => {
+      if (cancelled) return
+      let hoverCleanup: (() => void) | undefined
+      document.documentElement.dataset.gsapMotion = 'ready'
+
+      const ctx = gsap.context(() => {
+        const cards = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            [
+              '.assistant-status-strip',
+              '.panel',
+              '.insights-card',
+              '.metric-card',
+              '.app-module-card',
+              '.campaign-list button',
+              '.insights-table tbody tr',
+              '.studio-creative-row',
+              '.audience-detail-card',
+              '.audience-snapshot',
+            ].join(', '),
+          ),
+        ).slice(0, 28)
+
+        gsap.fromTo(
+          '.topbar-title, .topbar-actions',
+          { autoAlpha: 0, y: -8 },
+          { autoAlpha: 1, y: 0, duration: 0.42, ease: 'power2.out', stagger: 0.05, clearProps: 'all' },
+        )
+
+        gsap.fromTo(
+          cards,
+          { autoAlpha: 0, y: 12, scale: 0.992 },
+          {
+            autoAlpha: 1,
+            y: 0,
+            scale: 1,
+            duration: 0.46,
+            ease: 'power2.out',
+            stagger: { each: 0.025, from: 'start' },
+            clearProps: 'all',
+          },
+        )
+
+        const accentTargets = cards
+        const listeners = accentTargets.map((target) => {
+          const enter = () => gsap.to(target, { '--accent-progress': 1, duration: 0.28, ease: 'power2.out', overwrite: 'auto' })
+          const leave = () => gsap.to(target, { '--accent-progress': 0.16, duration: 0.24, ease: 'power2.out', overwrite: 'auto' })
+          target.addEventListener('pointerenter', enter)
+          target.addEventListener('pointerleave', leave)
+          return () => {
+            target.removeEventListener('pointerenter', enter)
+            target.removeEventListener('pointerleave', leave)
+          }
+        })
+
+        hoverCleanup = () => {
+          listeners.forEach((remove) => remove())
+        }
+      })
+
+      cleanup = () => {
+        hoverCleanup?.()
+        ctx.revert()
+        delete document.documentElement.dataset.gsapMotion
+      }
+    })
+
+    return () => {
+      cancelled = true
+      cleanup?.()
+    }
+  }, [activeTab])
+}
+
 function App() {
   const [workspace, setWorkspace] = usePersistentWorkspace()
   const [activeTab, setActiveTab] = useState<TabId>('investigator')
@@ -1914,6 +1998,7 @@ function App() {
         : null
   const currentPage = pageMeta[activeTab]
   const CurrentPageIcon = currentPage.icon
+  useMascotGsapMotion(activeTab)
 
   return (
     <div className="app-shell" data-theme={themeMode}>
