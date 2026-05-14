@@ -285,6 +285,10 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Browser QA confirms Creative Work Orders cards no longer overflow and Campaigns Ads action buttons are visible without horizontal table clipping.
   - Browser QA confirms `{{product.name}}` no longer appears in the Campaigns Ads card after reload.
   - `npm run build` passes after this stronger layout fix.
+- GitHub upload completed:
+  - Local `origin` remote was changed from the older `pmc-ads-agent.git` repository to `https://github.com/natthaphonchop2-creator/PMC.git`.
+  - Current project was committed and pushed to `main` on the new `PMC` repository.
+  - Secret/local files remain ignored; `.meta-api.local.json` is not tracked.
 
 ## Next Recommended Step
 
