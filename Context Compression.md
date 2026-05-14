@@ -463,6 +463,15 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Optimized the app logo asset to 512x512 for navbar use.
   - Browser QA confirms sidebar brand, top-right organization name, and both logo images load from `/promedclinicpmc-logo.png` with no fresh console errors.
   - `npm run build` passes after the branding update.
+- Optimization real Auto rules completed:
+  - `Suggest Mode` now remains a manual review flow from live `adInsights`, while `Auto Pilot` auto-selects only rule-qualified candidates that pass confidence, spend, ROAS, booking-volume, and max-actions guardrails.
+  - Auto rules are editable on the Optimization page: min spend before pause, pause ROAS, reactivate ROAS, min bookings to reactivate, Auto Pilot confidence, and max actions per run.
+  - Added server endpoint `POST /api/meta/bulk-status` for batched Meta status writes, limited to 25 actions per request, reusing the same validation as single object status updates.
+  - Bulk Auto execution now calls `/api/meta/bulk-status` instead of looping multiple `/api/meta/object-status` requests from the frontend.
+  - Settings endpoint documentation now includes `/api/meta/bulk-status`.
+  - Browser QA confirms Optimization renders `Suggest Mode`, `Auto Pilot`, `Auto Rules`, six rule controls, preset switching, and no fresh browser console errors.
+  - Endpoint QA confirms `GET /api/meta/bulk-status` returns `405 Method Not Allowed`, so the route is loaded and only accepts POST.
+  - `npm run build` passes after the Optimization update.
 
 ## Next Recommended Step
 

@@ -46,6 +46,7 @@
 .app-shell[data-theme='dark'] .group-select,
 .app-shell[data-theme='dark'] .api-form-grid input,
 .app-shell[data-theme='dark'] .api-form-grid select,
+.app-shell[data-theme='dark'] .auto-rule-control-grid input,
 .app-shell[data-theme='dark'] .mutation-form-grid input,
 .app-shell[data-theme='dark'] .mutation-form-grid select,
 .app-shell[data-theme='dark'] .mutation-form-grid textarea,
@@ -3578,7 +3579,7 @@ td span {
 
 .auto-stat-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 10px;
   margin-top: 16px;
 }
@@ -3645,6 +3646,54 @@ td span {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.auto-rule-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.auto-rule-control-grid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(251, 253, 255, 0.82);
+}
+
+.auto-rule-control-grid span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.auto-rule-control-grid input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 0 9px;
+}
+
+.auto-rule-control-grid small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.auto-mode-notice {
+  margin-top: 12px;
 }
 
 .auto-card {
@@ -5183,6 +5232,7 @@ td span {
     .media-library-grid,
     .api-config-grid,
     .api-form-grid,
+    .auto-rule-control-grid,
     .creative-launch-form,
     .mutation-form-grid,
     .split-inputs,

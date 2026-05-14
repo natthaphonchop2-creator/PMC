@@ -391,6 +391,25 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
         return
       }
 
+      if (requestUrl.pathname === '/api/meta/bulk-status') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'Method not allowed' })
+          return
+        }
+
+        if (!config) {
+          writeJson(res, 400, {
+            error: 'Meta API ยังไม่ได้ตั้งค่า กรุณาใส่ Access Token และ Ad Account ID ใน Settings',
+          })
+          return
+        }
+
+        const body = await readJsonBody(req)
+        const result = await updateMetaObjectStatuses(config, body)
+        writeJson(res, 200, result)
+        return
+      }
+
       if (requestUrl.pathname === '/api/meta/object') {
         if (req.method !== 'POST') {
           writeJson(res, 405, { error: 'Method not allowed' })
@@ -772,6 +791,37 @@ async function graphDelete<T>(config: MetaConfig, path: string): Promise<T> {
 }
 
 async function updateMetaObjectStatus(config: MetaConfig, body: Record<string, unknown>) {
+  const action = readMetaStatusAction(body)
+  return executeMetaObjectStatus(config, action)
+}
+
+async function updateMetaObjectStatuses(config: MetaConfig, body: Record<string, unknown>) {
+  const rawActions = Array.isArray(body.actions) ? body.actions : []
+  if (rawActions.length === 0) {
+    throw new MetaApiError('Missing status actions', 400)
+  }
+  if (rawActions.length > 25) {
+    throw new MetaApiError('Bulk status update is limited to 25 actions per request.', 400)
+  }
+
+  const results = []
+  for (const rawAction of rawActions) {
+    if (!rawAction || typeof rawAction !== 'object' || Array.isArray(rawAction)) {
+      throw new MetaApiError('Invalid status action payload', 400)
+    }
+    results.push(await executeMetaObjectStatus(config, readMetaStatusAction(rawAction as Record<string, unknown>)))
+  }
+
+  return {
+    ok: true,
+    count: results.length,
+    checkedAt: new Date().toISOString(),
+    source: 'Meta Marketing API',
+    results,
+  }
+}
+
+function readMetaStatusAction(body: Record<string, unknown>) {
   const objectType = typeof body.objectType === 'string' ? body.objectType : ''
   const objectId = typeof body.objectId === 'string' ? body.objectId.trim() : ''
   const status = typeof body.status === 'string' ? body.status.toUpperCase() : ''
@@ -788,13 +838,24 @@ async function updateMetaObjectStatus(config: MetaConfig, body: Record<string, u
     throw new MetaApiError('Invalid status. Use ACTIVE or PAUSED.', 400)
   }
 
-  const result = await graphPost<{ success?: boolean }>(config, `/${objectId}`, { status })
+  return {
+    objectType: objectType as 'campaign' | 'adset' | 'ad',
+    objectId,
+    status: status as 'ACTIVE' | 'PAUSED',
+  }
+}
+
+async function executeMetaObjectStatus(
+  config: MetaConfig,
+  action: { objectType: 'campaign' | 'adset' | 'ad'; objectId: string; status: 'ACTIVE' | 'PAUSED' },
+) {
+  const result = await graphPost<{ success?: boolean }>(config, `/${action.objectId}`, { status: action.status })
 
   return {
     ok: Boolean(result.success ?? true),
-    objectType,
-    objectId,
-    status,
+    objectType: action.objectType,
+    objectId: action.objectId,
+    status: action.status,
     checkedAt: new Date().toISOString(),
     source: 'Meta Marketing API',
   }

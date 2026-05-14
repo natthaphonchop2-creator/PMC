@@ -362,12 +362,12 @@ function autoAdObjectId(ad: AutoAdControl) {
 }
 
 function buildAutoStatusCandidates(args: {
-  preset: AutoRulePreset
+  rule: AutoRuleSettings
   campaigns: CampaignInsight[]
   adSets: AdSetInsight[]
   adInsights: WorkspaceData['adInsights']
 }): AutoStatusCandidate[] {
-  const rule = autoRulePresets[args.preset]
+  const rule = args.rule
   return args.adInsights
     .map((ad): AutoStatusCandidate => {
       const campaign = args.campaigns.find((item) => item.id === ad.campaignId)
@@ -431,6 +431,13 @@ function buildAutoStatusCandidates(args: {
       if (actionSort !== 0) return actionSort
       return b.spend - a.spend
     })
+}
+
+function isAutoPilotEligible(candidate: AutoStatusCandidate, rule: AutoRuleSettings) {
+  if (!candidate.nextStatus) return false
+  if (candidate.confidence < rule.minConfidenceToAutoPilot) return false
+  if (candidate.nextStatus === 'active') return candidate.bookings >= rule.minBookingsToReactivate && candidate.roas >= rule.scaleRoas
+  return candidate.spend >= rule.minSpend
 }
 
 function emptyMetaObjectFormValues(overrides: Partial<MetaObjectFormValues> = {}): MetaObjectFormValues {
@@ -850,6 +857,14 @@ interface MetaObjectStatusPayload {
   error?: string
 }
 
+interface MetaBulkStatusPayload {
+  ok: boolean
+  count: number
+  checkedAt: string
+  results: MetaObjectStatusPayload[]
+  error?: string
+}
+
 type MetaObjectMutationOperation = 'create' | 'update' | 'delete'
 
 interface MetaObjectMutationRequest {
@@ -916,6 +931,17 @@ type CampaignControlScope = MetaObjectType
 type InsightGroupBy = 'creative' | 'campaign' | 'adset' | 'ad' | 'service' | 'objective' | 'status'
 type AutoRulePreset = 'balanced' | 'protect' | 'scale'
 type AutoQueueFilter = 'all' | 'action' | 'pause' | 'enable' | 'monitor'
+
+interface AutoRuleSettings {
+  label: string
+  description: string
+  minSpend: number
+  pauseRoas: number
+  scaleRoas: number
+  minBookingsToReactivate: number
+  minConfidenceToAutoPilot: number
+  maxActionsPerRun: number
+}
 
 interface InsightTableRow {
   id: string
@@ -1014,7 +1040,7 @@ const agePresetOptions = [
 
 const autoRulePresets: Record<
   AutoRulePreset,
-  { label: string; description: string; minSpend: number; pauseRoas: number; scaleRoas: number; minBookingsToReactivate: number }
+  AutoRuleSettings
 > = {
   balanced: {
     label: 'Balanced',
@@ -1023,6 +1049,8 @@ const autoRulePresets: Record<
     pauseRoas: 1,
     scaleRoas: 3,
     minBookingsToReactivate: 2,
+    minConfidenceToAutoPilot: 78,
+    maxActionsPerRun: 5,
   },
   protect: {
     label: 'Protect Budget',
@@ -1031,6 +1059,8 @@ const autoRulePresets: Record<
     pauseRoas: 0.8,
     scaleRoas: 2.5,
     minBookingsToReactivate: 1,
+    minConfidenceToAutoPilot: 80,
+    maxActionsPerRun: 8,
   },
   scale: {
     label: 'Scale Winners',
@@ -1039,6 +1069,8 @@ const autoRulePresets: Record<
     pauseRoas: 1.2,
     scaleRoas: 3.5,
     minBookingsToReactivate: 3,
+    minConfidenceToAutoPilot: 82,
+    maxActionsPerRun: 4,
   },
 }
 
@@ -1707,21 +1739,26 @@ function App() {
     setBulkAutoState({ running: true, error: null })
 
     try {
-      for (const candidate of bulkAutoRequest.candidates) {
-        if (!candidate.nextStatus) continue
-        const response = await fetch('/api/meta/object-status', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            objectType: 'ad',
-            objectId: candidate.adId,
-            status: toMetaObjectStatus(candidate.nextStatus),
-          }),
-        })
-        const payload = (await response.json()) as Partial<MetaObjectStatusPayload>
-        if (!response.ok || payload.error) {
-          throw new Error(payload.error || `Meta status update failed for ${candidate.adName}`)
-        }
+      const actions = bulkAutoRequest.candidates
+        .filter((candidate): candidate is AutoStatusCandidate & { nextStatus: AdDeliveryStatus } => Boolean(candidate.nextStatus))
+        .map((candidate) => ({
+          objectType: 'ad',
+          objectId: candidate.adId,
+          status: toMetaObjectStatus(candidate.nextStatus),
+        }))
+
+      if (actions.length === 0) {
+        throw new Error('No Ads Auto actions selected')
+      }
+
+      const response = await fetch('/api/meta/bulk-status', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actions }),
+      })
+      const payload = (await response.json()) as Partial<MetaBulkStatusPayload>
+      if (!response.ok || payload.error) {
+        throw new Error(payload.error || 'Bulk Ads Auto execution failed')
       }
 
       const nextStatusByAdId = new Map(
@@ -2609,13 +2646,18 @@ function AutoAdsPanel({
   onBulkApply: (candidates: AutoStatusCandidate[]) => void
 }) {
   const [preset, setPreset] = useState<AutoRulePreset>('balanced')
+  const [rule, setRule] = useState<AutoRuleSettings>(autoRulePresets.balanced)
   const [queueFilter, setQueueFilter] = useState<AutoQueueFilter>('action')
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const candidates = useMemo(
-    () => buildAutoStatusCandidates({ preset, campaigns, adSets, adInsights }),
-    [adInsights, adSets, campaigns, preset],
+    () => buildAutoStatusCandidates({ rule, campaigns, adSets, adInsights }),
+    [adInsights, adSets, campaigns, rule],
   )
   const actionableCandidates = useMemo(() => candidates.filter((candidate) => Boolean(candidate.nextStatus)), [candidates])
+  const autoPilotCandidates = useMemo(
+    () => actionableCandidates.filter((candidate) => isAutoPilotEligible(candidate, rule)).slice(0, rule.maxActionsPerRun),
+    [actionableCandidates, rule],
+  )
   const totalTrackedAds = adInsights.length > 0 ? adInsights.length : ads.length
   const activeCount =
     adInsights.length > 0 ? adInsights.filter((ad) => ad.status === 'active').length : ads.filter((ad) => ad.status === 'active').length
@@ -2635,12 +2677,38 @@ function AutoAdsPanel({
     () => actionableCandidates.filter((candidate) => selectedIds.includes(candidate.id)),
     [actionableCandidates, selectedIds],
   )
+  const autoPilotSelectedCandidates = useMemo(
+    () => selectedCandidates.filter((candidate) => isAutoPilotEligible(candidate, rule)).slice(0, rule.maxActionsPerRun),
+    [rule, selectedCandidates],
+  )
   const pauseCount = actionableCandidates.filter((candidate) => candidate.nextStatus === 'paused').length
   const enableCount = actionableCandidates.filter((candidate) => candidate.nextStatus === 'active').length
+  const executionCandidates = mode === 'autoPilot' ? autoPilotSelectedCandidates : selectedCandidates
+  const executionActionLabel = mode === 'autoPilot' ? 'Run Auto Pilot' : 'Review selected'
 
   useEffect(() => {
-    setSelectedIds(actionableCandidates.slice(0, 5).map((candidate) => candidate.id))
-  }, [actionableCandidates])
+    setSelectedIds((mode === 'autoPilot' ? autoPilotCandidates : actionableCandidates.slice(0, 5)).map((candidate) => candidate.id))
+  }, [actionableCandidates, autoPilotCandidates, mode])
+
+  const applyPreset = (key: AutoRulePreset) => {
+    setPreset(key)
+    setRule(autoRulePresets[key])
+  }
+
+  const updateRuleNumber = (field: keyof Pick<AutoRuleSettings, 'minSpend' | 'pauseRoas' | 'scaleRoas' | 'minBookingsToReactivate' | 'minConfidenceToAutoPilot' | 'maxActionsPerRun'>, value: string) => {
+    const nextValue = Number(value)
+    if (!Number.isFinite(nextValue) || nextValue < 0) return
+    let safeValue = nextValue
+    if (field === 'minConfidenceToAutoPilot') safeValue = Math.min(100, Math.max(50, nextValue))
+    if (field === 'maxActionsPerRun') safeValue = Math.min(25, Math.max(1, nextValue))
+    setPreset('balanced')
+    setRule((current) => ({
+      ...current,
+      label: 'Custom',
+      description: 'ตั้งค่า rules เองจากข้อมูล ads จริงใน workspace ปัจจุบัน',
+      [field]: field === 'pauseRoas' || field === 'scaleRoas' ? Number(safeValue.toFixed(2)) : Math.round(safeValue),
+    }))
+  }
 
   const toggleCandidate = (id: string) => {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
@@ -2684,24 +2752,85 @@ function AutoAdsPanel({
           </div>
           <div>
             <span>Execution Mode</span>
-            <strong>{mode === 'suggest' ? 'Manual' : 'Guarded'}</strong>
+            <strong>{mode === 'suggest' ? 'Suggest' : 'Auto Pilot'}</strong>
           </div>
+          <div>
+            <span>Auto Pilot Ready</span>
+            <strong>{autoPilotCandidates.length}</strong>
+          </div>
+        </div>
+        <div className={`data-notice ${mode === 'autoPilot' ? 'watch' : 'good'} auto-mode-notice`}>
+          {mode === 'autoPilot'
+            ? `Auto Pilot จะเลือกเฉพาะ ads ที่ผ่าน confidence ${rule.minConfidenceToAutoPilot}% ขึ้นไป และจำกัดไม่เกิน ${rule.maxActionsPerRun} actions ต่อรอบ ก่อนยิง Meta API จริง`
+            : 'Suggest Mode จะแสดง recommendation จากข้อมูล Meta จริง ให้ผู้ใช้เลือกและ confirm ก่อน execution'}
         </div>
       </div>
 
       <div className="panel guardrail-panel">
-        <PanelHeader icon={ShieldCheck} title="Rule Preset" meta={autoRulePresets[preset].label} />
+        <PanelHeader icon={ShieldCheck} title="Auto Rules" meta={rule.label} />
         <div className="auto-rule-grid">
           {(Object.keys(autoRulePresets) as AutoRulePreset[]).map((key) => {
-            const rule = autoRulePresets[key]
+            const presetRule = autoRulePresets[key]
             return (
-              <button key={key} className={preset === key ? 'active' : ''} type="button" onClick={() => setPreset(key)}>
-                <strong>{rule.label}</strong>
-                <small>{rule.description}</small>
-                <span>{fmtMoney(rule.minSpend)} min spend · {rule.pauseRoas.toFixed(1)}x pause</span>
+              <button key={key} className={preset === key && rule.label === presetRule.label ? 'active' : ''} type="button" onClick={() => applyPreset(key)}>
+                <strong>{presetRule.label}</strong>
+                <small>{presetRule.description}</small>
+                <span>{fmtMoney(presetRule.minSpend)} min spend · {presetRule.pauseRoas.toFixed(1)}x pause</span>
               </button>
             )
           })}
+        </div>
+        <div className="auto-rule-control-grid">
+          <label>
+            <span>Min spend before pause</span>
+            <input type="number" min="0" step="50" value={rule.minSpend} onChange={(event) => updateRuleNumber('minSpend', event.target.value)} />
+            <small>Ads ต้องใช้เงินถึงค่านี้ก่อนถึงจะ pause ได้</small>
+          </label>
+          <label>
+            <span>Pause below ROAS</span>
+            <input type="number" min="0" step="0.1" value={rule.pauseRoas} onChange={(event) => updateRuleNumber('pauseRoas', event.target.value)} />
+            <small>Active ads ที่ ROAS ต่ำกว่านี้จะเข้า queue pause</small>
+          </label>
+          <label>
+            <span>Reactivate from ROAS</span>
+            <input type="number" min="0" step="0.1" value={rule.scaleRoas} onChange={(event) => updateRuleNumber('scaleRoas', event.target.value)} />
+            <small>Paused ads ที่ ROAS ถึงค่านี้มีสิทธิ์เปิดกลับ</small>
+          </label>
+          <label>
+            <span>Min bookings to reactivate</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={rule.minBookingsToReactivate}
+              onChange={(event) => updateRuleNumber('minBookingsToReactivate', event.target.value)}
+            />
+            <small>กันการเปิดกลับจากข้อมูลที่ volume ต่ำเกินไป</small>
+          </label>
+          <label>
+            <span>Auto Pilot confidence</span>
+            <input
+              type="number"
+              min="50"
+              max="100"
+              step="1"
+              value={rule.minConfidenceToAutoPilot}
+              onChange={(event) => updateRuleNumber('minConfidenceToAutoPilot', event.target.value)}
+            />
+            <small>Auto Pilot จะไม่เลือก candidate ที่ confidence ต่ำกว่า</small>
+          </label>
+          <label>
+            <span>Max actions / run</span>
+            <input
+              type="number"
+              min="1"
+              max="25"
+              step="1"
+              value={rule.maxActionsPerRun}
+              onChange={(event) => updateRuleNumber('maxActionsPerRun', event.target.value)}
+            />
+            <small>จำกัดจำนวน write actions ต่อรอบ execution</small>
+          </label>
         </div>
         <div className="guardrail-list">
           <Signal icon={ShieldCheck} text="ทุก action ต้องมี reason, confidence และ before/after snapshot" tone="good" />
@@ -2734,9 +2863,14 @@ function AutoAdsPanel({
             <button className="secondary-button" type="button" onClick={() => setSelectedIds([])} disabled={selectedCandidates.length === 0}>
               Clear
             </button>
-            <button className="primary-button" type="button" disabled={selectedCandidates.length === 0} onClick={() => onBulkApply(selectedCandidates)}>
+            {mode === 'autoPilot' && (
+              <button className="secondary-button" type="button" onClick={() => setSelectedIds(autoPilotCandidates.map((candidate) => candidate.id))}>
+                Auto select
+              </button>
+            )}
+            <button className="primary-button" type="button" disabled={executionCandidates.length === 0} onClick={() => onBulkApply(executionCandidates)}>
               <ShieldCheck size={16} />
-              Review selected
+              {executionActionLabel}
             </button>
           </div>
         </div>
@@ -4689,6 +4823,10 @@ function SettingsPage({
           <div>
             <strong>POST /api/meta/object-status</strong>
             <span>เปลี่ยนสถานะ Campaign, Ad set หรือ Ad เป็น ACTIVE/PAUSED ผ่าน confirmation ในเว็บ</span>
+          </div>
+          <div>
+            <strong>POST /api/meta/bulk-status</strong>
+            <span>เปลี่ยนสถานะ Ads หลายรายการจาก Optimization Auto rules ในคำสั่งเดียว จำกัด 25 actions ต่อรอบ</span>
           </div>
           <div>
             <strong>POST /api/meta/object</strong>
