@@ -1257,7 +1257,7 @@ function useMascotGsapMotion(activeTab: TabId) {
 
 function App() {
   const [workspace, setWorkspace] = usePersistentWorkspace()
-  const [activeTab, setActiveTab] = useState<TabId>('investigator')
+  const [activeTab, setActiveTab] = useState<TabId>('platform')
   const [selectedCampaignId, setSelectedCampaignId] = useState(workspace.campaigns[0]?.id ?? '')
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light')
   const [metaSync, setMetaSync] = useState<MetaSyncState>({

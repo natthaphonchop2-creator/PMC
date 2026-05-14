@@ -447,6 +447,10 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Kept `prefers-reduced-motion` support for existing mascot float animations and avoided adding mock data.
   - Browser QA confirms the Platform page has 11 module cards and 3 panels with the new gradient card surface, `documentElement.dataset.gsapMotion` becomes `ready`, no new console warnings/errors appear, and Meta sync settles back to `Meta live`.
   - `npm run build` passes after the mascot gradient theme update; output includes `dist/assets/gsap-BauIho7W.js`.
+- Default landing page completed:
+  - Changed the app initial `activeTab` from `Creative Insights` to `platform`.
+  - Fresh visits and full page reloads now open the `AdVibes Clinic OS` platform page first.
+  - Existing sidebar navigation remains unchanged after the user chooses another tool.
 
 ## Next Recommended Step
 
