@@ -414,6 +414,16 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Replaced Recharts `ResponsiveContainer` in Performance with a measured chart frame so charts render only after their container has a valid size.
   - Browser QA confirms `Creative Score` / `Auto Post` labels are present, old `AI Insights` / `Create Ad` hero buttons are gone, clicking them keeps the same URL, `Guardrails` opens a local drawer, and fresh browser logs have no warnings/errors.
   - `npm run build` passes after this tool-local action update.
+- Production Render deployment completed:
+  - Committed latest dashboard changes as `2f9d38f Improve tool-local dashboard workflows`.
+  - Pushed `main` to `https://github.com/natthaphonchop2-creator/PMC.git`.
+  - Render service URL verified: `https://pmc-ads-agent.onrender.com/`.
+  - Production health check verified: `GET https://pmc-ads-agent.onrender.com/healthz` returns `200 {"ok":true}`.
+  - Production root verified: `GET https://pmc-ads-agent.onrender.com/` returns the built app HTML.
+  - Production asset verified: root HTML serves `/assets/index-B9XHvsWS.js`, matching the latest local build output.
+  - Production JS verified to contain the latest features: `Creative Score`, `Auto Post`, `AI Auto Guardrails`, and `creative-launch`.
+  - Production Meta API status/check verified as connected using server env (`META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`) without exposing the token in output.
+  - Important security follow-up: production currently responds without Basic Auth if `APP_BASIC_AUTH_PASSWORD` is not configured in Render. Set `APP_BASIC_AUTH_PASSWORD` in Render env before sharing the URL outside the organization.
 
 ## Next Recommended Step
 
