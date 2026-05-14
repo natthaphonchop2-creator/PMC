@@ -275,6 +275,33 @@
   box-shadow: 0 10px 24px rgba(32, 39, 58, 0.055);
 }
 
+.mascot-agent-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 18% 16%, rgba(117, 103, 216, 0.17), transparent 38%),
+    linear-gradient(135deg, #ffffff, #f7f8ff);
+}
+
+.mascot-agent-card::after {
+  content: '';
+  position: absolute;
+  inset: auto -18px -26px auto;
+  width: 92px;
+  height: 92px;
+  border-radius: 999px;
+  background: rgba(91, 185, 232, 0.12);
+  z-index: -1;
+}
+
+.sidebar-mascot {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 15px rgba(47, 51, 69, 0.16));
+}
+
 .agent-pulse {
   width: 34px;
   height: 34px;
@@ -865,6 +892,10 @@ h1 {
     var(--surface);
 }
 
+.platform-hero > div:first-child {
+  min-width: 0;
+}
+
 .platform-hero h2 {
   margin-top: 11px;
   max-width: 660px;
@@ -880,9 +911,70 @@ h1 {
   line-height: 1.55;
 }
 
+.platform-hero-visual {
+  display: grid;
+  grid-template-columns: minmax(126px, 0.72fr) minmax(118px, 0.58fr);
+  align-items: stretch;
+  gap: 10px;
+  flex: 0 0 min(390px, 45%);
+  min-width: 320px;
+}
+
+.platform-mascot-card {
+  position: relative;
+  min-height: 142px;
+  overflow: hidden;
+  border: 1px solid rgba(117, 103, 216, 0.18);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 64%, rgba(117, 103, 216, 0.16), transparent 48%),
+    linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(241, 245, 255, 0.78));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88), 0 18px 42px rgba(47, 51, 69, 0.08);
+}
+
+.platform-mascot-card img {
+  position: absolute;
+  left: 50%;
+  bottom: -26px;
+  width: min(178px, 118%);
+  max-width: none;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 22px 24px rgba(47, 51, 69, 0.18));
+}
+
+.mascot-orbit {
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(117, 103, 216, 0.18);
+  box-shadow: 0 0 0 5px rgba(117, 103, 216, 0.06);
+}
+
+.mascot-orbit.one {
+  top: 18px;
+  right: 22px;
+  width: 12px;
+  height: 12px;
+}
+
+.mascot-orbit.two {
+  left: 20px;
+  bottom: 28px;
+  width: 8px;
+  height: 8px;
+  background: rgba(91, 185, 232, 0.24);
+}
+
+.mascot-orbit.three {
+  top: 34px;
+  left: 24px;
+  width: 6px;
+  height: 6px;
+  background: rgba(117, 215, 178, 0.34);
+}
+
 .platform-hero-stats {
   display: grid;
-  grid-template-columns: repeat(2, minmax(104px, 1fr));
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
@@ -1261,6 +1353,19 @@ h1 {
   background: #f8fafc;
   color: #64748b;
   text-align: center;
+}
+
+.empty-mascot {
+  width: 82px;
+  height: 82px;
+  object-fit: contain;
+  margin-bottom: -4px;
+  padding: 6px;
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at 50% 58%, rgba(117, 103, 216, 0.12), transparent 62%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(246, 248, 255, 0.75));
+  filter: drop-shadow(0 16px 22px rgba(47, 51, 69, 0.13));
 }
 
 .empty-state svg {
@@ -4645,6 +4750,11 @@ td span {
   .adset-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .platform-hero-visual {
+    flex-basis: min(320px, 42%);
+    min-width: 280px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -4653,6 +4763,7 @@ td span {
   }
 
   .topbar,
+  .platform-hero,
   .investigation-title,
   .action-card,
   .auto-card,
@@ -4683,6 +4794,21 @@ td span {
     align-items: stretch;
     flex-direction: column;
     display: flex;
+  }
+
+  .platform-hero-visual {
+    grid-template-columns: 1fr;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .platform-mascot-card {
+    min-height: 132px;
+  }
+
+  .platform-mascot-card img {
+    bottom: -42px;
+    width: 178px;
   }
 
   h1 {

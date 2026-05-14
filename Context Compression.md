@@ -424,6 +424,13 @@ Latest deployment check confirms the existing Cloudflare Quick Tunnel is still o
   - Production JS verified to contain the latest features: `Creative Score`, `Auto Post`, `AI Auto Guardrails`, and `creative-launch`.
   - Production Meta API status/check verified as connected using server env (`META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`) without exposing the token in output.
   - Important security follow-up: production currently responds without Basic Auth if `APP_BASIC_AUTH_PASSWORD` is not configured in Render. Set `APP_BASIC_AUTH_PASSWORD` in Render env before sharing the URL outside the organization.
+- PMC AI mascot decoration completed:
+  - Added generated mascot asset at `public/pmc-ai-mascot.png`.
+  - Decorated the Platform home hero with a responsive mascot visual card and retained the existing light ClinicStellar visual system.
+  - Added a compact sidebar `PMC AI Buddy` card for desktop navigation and a small mascot treatment for no-data/empty states.
+  - Browser QA confirms the mascot renders on the Platform hero in the mobile layout without overlapping the title, controls, or KPI cards.
+  - Browser console check after the mascot update found no new errors; older retained logs were from previous Performance fixes.
+  - `npm run build` passes after the mascot decoration update.
 
 ## Next Recommended Step
 

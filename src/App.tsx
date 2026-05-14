@@ -1976,6 +1976,14 @@ function App() {
           ))}
         </nav>
 
+        <div className="agent-card mascot-agent-card" aria-hidden="true">
+          <img className="sidebar-mascot" src="/pmc-ai-mascot.png" alt="" />
+          <div>
+            <strong>PMC AI Buddy</strong>
+            <p>Meta ads helper</p>
+          </div>
+        </div>
+
       </aside>
 
       <main className="main">
@@ -2398,6 +2406,7 @@ function NoDataPanel({
   return (
     <section className="panel no-data-panel">
       <div className="empty-state no-data-state">
+        <img className="empty-mascot" src="/pmc-ai-mascot.png" alt="" aria-hidden="true" />
         <Icon size={22} />
         <strong>{title}</strong>
         <p>{message}</p>
@@ -4160,14 +4169,22 @@ function PlatformHome({
             <h2>จัดการ Meta Ads แบบ media buyer dashboard</h2>
             <p>รวม AI Marketer, optimization, creative insights, automation และ reports สำหรับธุรกิจคลินิกไว้ในหน้าเดียว</p>
           </div>
-          <div className="platform-hero-stats">
-            <div>
-              <span>Bookings</span>
-              <strong>{booked}</strong>
+          <div className="platform-hero-visual">
+            <div className="platform-mascot-card" aria-hidden="true">
+              <span className="mascot-orbit one" />
+              <span className="mascot-orbit two" />
+              <span className="mascot-orbit three" />
+              <img src="/pmc-ai-mascot.png" alt="" />
             </div>
-            <div>
-              <span>Show-up</span>
-              <strong>{showRate}</strong>
+            <div className="platform-hero-stats">
+              <div>
+                <span>Bookings</span>
+                <strong>{booked}</strong>
+              </div>
+              <div>
+                <span>Show-up</span>
+                <strong>{showRate}</strong>
+              </div>
             </div>
           </div>
         </div>
