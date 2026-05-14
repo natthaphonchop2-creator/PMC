@@ -723,6 +723,11 @@ function mergeAuditTrail(nextAuditTrail: WorkspaceData['auditTrail'], currentAud
   })
 }
 
+function mergeAiInsights(nextInsights: AIInsight[], currentInsights: AIInsight[]) {
+  const nextIds = new Set(nextInsights.map((insight) => insight.campaignId))
+  return [...nextInsights, ...currentInsights.filter((insight) => !nextIds.has(insight.campaignId))]
+}
+
 const WORKSPACE_STORAGE_KEY = 'clinicstellar-ai-live-workspace-v1'
 const DEFAULT_META_DATE_PRESET = 'last_30d'
 const datePresetOptions = [
@@ -924,6 +929,74 @@ interface CreativeLaunchPayload {
   adSetId: string
   status: MetaObjectStatus
   checkedAt: string
+  error?: string
+}
+
+interface AiStatusPayload {
+  configured?: boolean
+  connected?: boolean
+  model?: string
+  source?: string
+  tokenLocation?: 'server-env' | 'local-env-file' | null
+  requiredEnv?: MetaEnvCheck[]
+  error?: string
+}
+
+interface AiRuntimeState {
+  configured: boolean
+  connected: boolean
+  loading: boolean
+  model: string
+  source: string
+  tokenLocation: string | null
+  lastCheckedAt: string | null
+  error: string | null
+  envChecks: MetaEnvCheck[]
+}
+
+interface AiMarketerPayload {
+  ok: boolean
+  source: string
+  model: string
+  durationMs: number
+  checkedAt: string
+  summary: string
+  modelNotes: string[]
+  insights: AIInsight[]
+  actions: RecommendedAction[]
+  error?: string
+}
+
+interface AiCreativeKitResult {
+  summary: string
+  brief: {
+    objective: string
+    audience: string
+    offer: string
+    positioning: string
+  }
+  hooks: string[]
+  primaryTexts: string[]
+  headlines: string[]
+  descriptions: string[]
+  launchNotes: string[]
+  complianceNotes: string[]
+  recommendedCta: string
+  workOrders: Array<{
+    title: string
+    owner: string
+    inputContext: string
+    expectedOutput: string
+  }>
+}
+
+interface AiCreativePayload {
+  ok: boolean
+  source: string
+  model: string
+  durationMs: number
+  checkedAt: string
+  result: AiCreativeKitResult
   error?: string
 }
 
@@ -1321,6 +1394,30 @@ function App() {
     checkResult: null,
     envChecks: [],
     counts: null,
+  })
+  const [aiRuntime, setAiRuntime] = useState<AiRuntimeState>({
+    configured: false,
+    connected: false,
+    loading: false,
+    model: 'checking',
+    source: 'OpenAI Responses API',
+    tokenLocation: null,
+    lastCheckedAt: null,
+    error: null,
+    envChecks: [],
+  })
+  const [aiMarketerRun, setAiMarketerRun] = useState<{
+    running: boolean
+    error: string | null
+    summary: string
+    modelNotes: string[]
+    lastRunAt: string | null
+  }>({
+    running: false,
+    error: null,
+    summary: '',
+    modelNotes: [],
+    lastRunAt: null,
   })
   const autoMetaSyncRef = useRef(false)
   const [approvalRequest, setApprovalRequest] = useState<ApprovalRequest | null>(null)
@@ -1944,6 +2041,133 @@ function App() {
     }
   }, [])
 
+  const handleRefreshAiStatus = useCallback(async () => {
+    setAiRuntime((current) => ({ ...current, loading: true, error: null }))
+
+    try {
+      const response = await fetch('/api/ai/status')
+      const payload = (await response.json()) as AiStatusPayload
+      setAiRuntime((current) => ({
+        ...current,
+        configured: Boolean(payload.configured),
+        connected: Boolean(payload.connected),
+        loading: false,
+        model: payload.model ?? current.model,
+        source: payload.source ?? current.source,
+        tokenLocation: payload.tokenLocation ?? null,
+        lastCheckedAt: new Date().toISOString(),
+        error: response.ok ? null : payload.error ?? 'OpenAI status check failed',
+        envChecks: payload.requiredEnv ?? current.envChecks,
+      }))
+    } catch (error) {
+      setAiRuntime((current) => ({
+        ...current,
+        configured: false,
+        connected: false,
+        loading: false,
+        lastCheckedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'OpenAI status check failed',
+      }))
+    }
+  }, [])
+
+  const handleGenerateAiMarketerPlan = useCallback(async () => {
+    if (campaigns.length === 0 && adInsights.length === 0 && adSets.length === 0) {
+      setAiMarketerRun((current) => ({
+        ...current,
+        running: false,
+        error: 'ต้อง Sync Meta API ก่อนให้ AI Marketer วิเคราะห์ข้อมูลจริง',
+      }))
+      return
+    }
+
+    setAiMarketerRun((current) => ({ ...current, running: true, error: null }))
+
+    try {
+      const response = await fetch('/api/ai/marketer', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspace: {
+            campaigns,
+            adSets,
+            adInsights,
+            channelPerformance,
+            funnelMetrics,
+            trendData,
+            updatedAt: workspace.updatedAt,
+          },
+        }),
+      })
+      const payload = (await response.json()) as Partial<AiMarketerPayload>
+      if (!response.ok || payload.error || !payload.ok) {
+        throw new Error(payload.error || 'AI Marketer generation failed')
+      }
+
+      const generatedActions = (payload.actions ?? []).map((action) => ({
+        ...action,
+        status: 'pending' as const,
+      }))
+      const generatedInsights = payload.insights ?? []
+
+      setWorkspace((current) => ({
+        ...current,
+        insights: generatedInsights.length > 0 ? mergeAiInsights(generatedInsights, current.insights) : current.insights,
+        actions: [
+          ...generatedActions,
+          ...current.actions.filter((action) => !action.id.startsWith('ai-action-')),
+        ],
+        auditTrail: [
+          {
+            id: `audit-ai-marketer-${Date.now()}`,
+            actor: 'OpenAI Marketer',
+            action: 'Generated AI marketer plan',
+            target: metaSync.accountName ?? 'Meta workspace',
+            before: `${current.actions.filter((action) => action.status === 'pending').length} pending actions`,
+            after: `${generatedActions.length} AI actions · ${generatedInsights.length} insights`,
+            reason: payload.summary ?? 'OpenAI analyzed Meta Ads workspace',
+            timestamp: nowLabel(),
+          },
+          ...current.auditTrail,
+        ],
+        updatedAt: nowLabel(),
+      }))
+
+      setAiRuntime((current) => ({
+        ...current,
+        configured: true,
+        connected: true,
+        model: payload.model ?? current.model,
+        source: payload.source ?? current.source,
+        lastCheckedAt: payload.checkedAt ?? new Date().toISOString(),
+        error: null,
+      }))
+      setAiMarketerRun({
+        running: false,
+        error: null,
+        summary: payload.summary ?? 'AI Marketer วิเคราะห์ข้อมูลเสร็จแล้ว',
+        modelNotes: payload.modelNotes ?? [],
+        lastRunAt: payload.checkedAt ?? new Date().toISOString(),
+      })
+    } catch (error) {
+      setAiMarketerRun((current) => ({
+        ...current,
+        running: false,
+        error: error instanceof Error ? error.message : 'AI Marketer generation failed',
+      }))
+    }
+  }, [
+    adInsights,
+    adSets,
+    campaigns,
+    channelPerformance,
+    funnelMetrics,
+    metaSync.accountName,
+    setWorkspace,
+    trendData,
+    workspace.updatedAt,
+  ])
+
   const handleCheckMetaApi = useCallback(async () => {
     setMetaSync((current) => ({ ...current, checking: true, error: null }))
 
@@ -2024,6 +2248,10 @@ function App() {
   useEffect(() => {
     void handleRefreshMetaStatus()
   }, [handleRefreshMetaStatus])
+
+  useEffect(() => {
+    void handleRefreshAiStatus()
+  }, [handleRefreshAiStatus])
 
   useEffect(() => {
     if (!metaSync.connected || autoMetaSyncRef.current) return
@@ -2279,6 +2507,64 @@ function App() {
           />
         )}
 
+        {activeTab === 'actions' && (
+          <section className="panel ai-marketer-hero">
+            <PanelHeader
+              icon={BrainCircuit}
+              title="AI Marketer"
+              meta={aiRuntime.configured ? `${aiRuntime.model} · ${aiRuntime.source}` : 'OpenAI setup required'}
+              help="เรียก OpenAI จาก backend เพื่อวิเคราะห์ Meta Ads workspace จริง แล้วสร้าง AI Insights และ Action Queue ที่มี guardrails"
+            />
+            <div className="ai-marketer-layout">
+              <div>
+                <h2>วิเคราะห์ account แล้วสร้าง action จากข้อมูลจริง</h2>
+                <p>ใช้ campaign, ad set, ad-level metrics, funnel และ trend ที่ sync จาก Meta API เพื่อสร้างแผน optimization แบบ approve-first</p>
+                <div className="ai-runtime-strip">
+                  <span className={`badge ${aiRuntime.connected ? 'good' : 'critical'}`}>
+                    {aiRuntime.connected ? 'OpenAI configured' : 'OpenAI not ready'}
+                  </span>
+                  <span>{aiRuntime.tokenLocation ?? 'no key'} · {fmtNum(campaigns.length)} campaigns · {fmtNum(adInsights.length)} ads</span>
+                </div>
+              </div>
+              <div className="ai-marketer-actions">
+                <button className="secondary-button" type="button" onClick={handleRefreshAiStatus} disabled={aiRuntime.loading}>
+                  <RefreshCw size={16} />
+                  {aiRuntime.loading ? 'Checking...' : 'Check AI'}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={handleGenerateAiMarketerPlan}
+                  disabled={aiMarketerRun.running || !aiRuntime.configured || (campaigns.length === 0 && adInsights.length === 0)}
+                >
+                  <Sparkles size={16} />
+                  {aiMarketerRun.running ? 'Generating...' : 'Generate AI Plan'}
+                </button>
+                {!aiRuntime.configured && (
+                  <button className="secondary-button" type="button" onClick={() => setActiveTab('settings')}>
+                    <Settings size={16} />
+                    Open Settings
+                  </button>
+                )}
+              </div>
+            </div>
+            {aiMarketerRun.summary && (
+              <div className="ai-result-summary">
+                <strong>{aiMarketerRun.summary}</strong>
+                {aiMarketerRun.modelNotes.length > 0 && (
+                  <div>
+                    {aiMarketerRun.modelNotes.map((note) => (
+                      <span key={note}>{note}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {aiMarketerRun.error && <div className="data-notice critical">{aiMarketerRun.error}</div>}
+            {aiRuntime.error && <div className="data-notice watch">{aiRuntime.error}</div>}
+          </section>
+        )}
+
         {activeTab === 'actions' && actions.length > 0 && (
           <section className="panel">
             <PanelHeader icon={ClipboardList} title="Clinic Action Queue" meta="Approve-only หรือ Execute ผ่าน Meta API" />
@@ -2386,7 +2672,9 @@ function App() {
             campaigns={campaigns}
             adSets={adSets}
             adInsights={adInsights}
+            aiRuntime={aiRuntime}
             onSyncMeta={() => handleSyncMetaWorkspace()}
+            onRefreshAiStatus={handleRefreshAiStatus}
           />
         )}
         {activeTab === 'tasks' && adInsights.length === 0 && (
@@ -2428,7 +2716,9 @@ function App() {
         {activeTab === 'settings' && (
           <SettingsPage
             metaSync={metaSync}
+            aiRuntime={aiRuntime}
             onRefreshStatus={() => handleRefreshMetaStatus(true)}
+            onRefreshAiStatus={handleRefreshAiStatus}
             onCheckMeta={handleCheckMetaApi}
             onSyncMeta={() => handleSyncMetaWorkspace()}
             onSaveConfig={handleSaveMetaConfig}
@@ -2687,6 +2977,7 @@ function AutoAdsPanel({
   const executionActionLabel = mode === 'autoPilot' ? 'Run Auto Pilot' : 'Review selected'
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedIds((mode === 'autoPilot' ? autoPilotCandidates : actionableCandidates.slice(0, 5)).map((candidate) => candidate.id))
   }, [actionableCandidates, autoPilotCandidates, mode])
 
@@ -4573,14 +4864,18 @@ function PlatformHome({
 
 function SettingsPage({
   metaSync,
+  aiRuntime,
   onRefreshStatus,
+  onRefreshAiStatus,
   onCheckMeta,
   onSyncMeta,
   onSaveConfig,
   onClearConfig,
 }: {
   metaSync: MetaSyncState
+  aiRuntime: AiRuntimeState
   onRefreshStatus: () => void
+  onRefreshAiStatus: () => void
   onCheckMeta: () => void
   onSyncMeta: () => void
   onSaveConfig: (form: MetaConfigFormValues) => Promise<MetaCheckPayload>
@@ -4691,6 +4986,7 @@ function SettingsPage({
         <MiniMetric label="Connection" value={statusLabel} help="สถานะการตั้งค่า Meta API จาก backend proxy" />
         <MiniMetric label="Graph" value={metaSync.graphVersion} help="Meta Graph / Marketing API version ที่ server ใช้เรียก" />
         <MiniMetric label="Date Preset" value={metaSync.datePreset} help="ช่วงเวลาของ insights ที่ใช้ตอน sync" />
+        <MiniMetric label="OpenAI" value={aiRuntime.connected ? aiRuntime.model : 'Not ready'} help="สถานะ OpenAI API key สำหรับ AI Marketer และ Creative Kit ฝั่ง backend" />
         <MiniMetric label="Last Check" value={metaSync.lastStatusCheckAt ? new Date(metaSync.lastStatusCheckAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) : '-'} help="เวลาล่าสุดที่ตรวจ status หรือ connection" />
       </div>
 
@@ -4782,6 +5078,44 @@ function SettingsPage({
       </div>
 
       <div className="panel api-card">
+        <PanelHeader icon={BrainCircuit} title="OpenAI Runtime" meta={aiRuntime.connected ? 'configured' : 'not ready'} />
+        <div className="api-config-grid">
+          <div>
+            <span>Model</span>
+            <strong>{aiRuntime.model}</strong>
+          </div>
+          <div>
+            <span>Source</span>
+            <strong>{aiRuntime.source}</strong>
+          </div>
+          <div>
+            <span>Key location</span>
+            <strong>{aiRuntime.tokenLocation ?? 'missing'}</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong>{aiRuntime.connected ? 'Configured' : 'Not configured'}</strong>
+          </div>
+        </div>
+        <div className="data-action-row">
+          <button className="secondary-button" type="button" onClick={onRefreshAiStatus} disabled={aiRuntime.loading}>
+            <RefreshCw size={16} />
+            {aiRuntime.loading ? 'Checking...' : 'Check OpenAI'}
+          </button>
+        </div>
+        {aiRuntime.error && <div className="data-notice critical">{aiRuntime.error}</div>}
+        <div className="api-check-list compact-check-list">
+          {aiRuntime.envChecks.map((item) => (
+            <div key={item.key}>
+              <span className={`status-dot ${item.present ? 'good' : 'critical'}`} />
+              <strong>{item.key}</strong>
+              <small>{item.present ? `${item.source} configured` : item.help}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel api-card">
         <PanelHeader icon={CheckCircle2} title="Connection Checks" meta={metaSync.checkResult?.ok ? 'passed' : 'ready to test'} />
         <div className="api-check-list">
           {checkItems.length === 0 && (
@@ -4839,6 +5173,18 @@ function SettingsPage({
           <div>
             <strong>GET /api/meta/workspace</strong>
             <span>ดึง Meta dataset และ map เป็นข้อมูลทั้ง Dashboard</span>
+          </div>
+          <div>
+            <strong>GET /api/ai/status</strong>
+            <span>ตรวจ OpenAI API key และ model สำหรับ AI Marketer / Creative Kit โดยไม่ส่ง key กลับ browser</span>
+          </div>
+          <div>
+            <strong>POST /api/ai/marketer</strong>
+            <span>ให้ OpenAI วิเคราะห์ Meta workspace จริงและสร้าง AI Insights กับ Action Queue แบบมี guardrails</span>
+          </div>
+          <div>
+            <strong>POST /api/ai/creative</strong>
+            <span>ให้ OpenAI สร้าง creative brief, hooks, copy, compliance notes และ work orders จาก source ad จริง</span>
           </div>
         </div>
       </div>
@@ -4904,13 +5250,17 @@ function CreativeStudioPage({
   campaigns,
   adSets,
   adInsights,
+  aiRuntime,
   onSyncMeta,
+  onRefreshAiStatus,
 }: {
   tasks: AgentTask[]
   campaigns: CampaignInsight[]
   adSets: WorkspaceData['adSets']
   adInsights: WorkspaceData['adInsights']
+  aiRuntime: AiRuntimeState
   onSyncMeta: () => Promise<void>
+  onRefreshAiStatus: () => void
 }) {
   const campaignById = new Map(campaigns.map((campaign) => [campaign.id, campaign]))
   const adSetById = new Map(adSets.map((adSet) => [adSet.id, adSet]))
@@ -4942,6 +5292,15 @@ function CreativeStudioPage({
     error: null,
     result: null,
   })
+  const [creativeAiState, setCreativeAiState] = useState<{
+    running: boolean
+    error: string | null
+    result: AiCreativeKitResult | null
+  }>({
+    running: false,
+    error: null,
+    result: null,
+  })
 
   useEffect(() => {
     if (launchForm.pageId.trim()) {
@@ -4951,6 +5310,7 @@ function CreativeStudioPage({
 
   useEffect(() => {
     if (!launchForm.adSetId && defaultAdSetId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLaunchForm((current) => ({ ...current, adSetId: defaultAdSetId }))
     }
   }, [defaultAdSetId, launchForm.adSetId])
@@ -4958,6 +5318,7 @@ function CreativeStudioPage({
   useEffect(() => {
     if (!selectedSourceAd) return
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLaunchForm((current) => {
       const nextAdName = current.adName === 'Auto post ad' ? `Auto post · ${selectedSourceAd.name}` : current.adName
       const nextCreativeName = current.creativeName === 'Auto post creative' ? `Creative · ${selectedSourceAd.creative}` : current.creativeName
@@ -4986,7 +5347,7 @@ function CreativeStudioPage({
         headline: nextHeadline,
       }
     })
-  }, [selectedSourceAd?.id, defaultAdSetId])
+  }, [selectedSourceAd, defaultAdSetId])
 
   const updateLaunchForm = <K extends keyof CreativeLaunchFormValues>(key: K, value: CreativeLaunchFormValues[K]) => {
     setLaunchForm((current) => ({ ...current, [key]: value }))
@@ -5031,6 +5392,55 @@ function CreativeStudioPage({
     }
   }
 
+  const handleGenerateCreativeKit = async () => {
+    if (!selectedSourceAd) {
+      setCreativeAiState({ running: false, error: 'ต้องเลือก source creative จาก Meta ad-level data ก่อน', result: null })
+      return
+    }
+
+    setCreativeAiState({ running: true, error: null, result: null })
+    try {
+      const response = await fetch('/api/ai/creative', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sourceAd: selectedSourceAd,
+          adSet: selectedAdSet,
+          campaign: campaignById.get(selectedSourceAd.campaignId),
+          launchForm,
+        }),
+      })
+      const payload = (await response.json()) as Partial<AiCreativePayload>
+      if (!response.ok || payload.error || !payload.ok || !payload.result) {
+        throw new Error(payload.error || 'AI Creative Kit generation failed')
+      }
+      setCreativeAiState({ running: false, error: null, result: payload.result })
+    } catch (error) {
+      setCreativeAiState({
+        running: false,
+        error: error instanceof Error ? error.message : 'AI Creative Kit generation failed',
+        result: null,
+      })
+    }
+  }
+
+  const applyCreativeKitToLaunchForm = () => {
+    const kit = creativeAiState.result
+    if (!kit) return
+    setLaunchForm((current) => ({
+      ...current,
+      primaryText: kit.primaryTexts[0] ?? current.primaryText,
+      headline: kit.headlines[0] ?? current.headline,
+      description: kit.descriptions[0] ?? current.description,
+      ctaType: ['LEARN_MORE', 'SIGN_UP', 'CONTACT_US', 'BOOK_TRAVEL', 'WHATSAPP_MESSAGE'].includes(kit.recommendedCta)
+        ? kit.recommendedCta
+        : current.ctaType,
+      adName: selectedSourceAd ? `AI variation · ${selectedSourceAd.name}` : current.adName,
+      creativeName: selectedSourceAd ? `AI creative · ${selectedSourceAd.creative}` : current.creativeName,
+    }))
+    launchPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   const launchNotes = buildCreativeLaunchNotes(selectedSourceAd, selectedAdSet)
   const launchReady = Boolean(
     launchForm.pageId.trim()
@@ -5069,6 +5479,90 @@ function CreativeStudioPage({
           <MiniMetric label="Spend" value={fmtMoney(totalSpend)} help="ยอด spend รวมของ ad-level creative metrics" />
           <MiniMetric label="Results" value={fmtNum(totalResults)} help="จำนวน booking/conversion จาก ad-level insights" />
           <MiniMetric label="Avg Score" value={avgScore.toFixed(1)} help="คะแนน creative เฉลี่ยจาก ROAS, CTR, conversion และ fatigue signals" />
+        </div>
+      </div>
+
+      <div className="panel creative-ai-panel">
+        <PanelHeader
+          icon={BrainCircuit}
+          title="AI Creative Kit"
+          meta={aiRuntime.configured ? `${aiRuntime.model} · source ad` : 'OpenAI setup required'}
+          help="สร้าง creative brief, hooks, primary text, headline, compliance notes และ work orders จาก source ad ที่ดึงมาจาก Meta API"
+        />
+        <div className="creative-ai-layout">
+          <div className="creative-ai-source">
+            <span className={`badge ${selectedSourceAd?.status === 'active' ? 'good' : 'watch'}`}>
+              {selectedSourceAd ? deliveryStatusLabel(selectedSourceAd.status) : 'No source'}
+            </span>
+            <h3>{selectedSourceAd?.name ?? 'เลือก source creative ก่อน'}</h3>
+            <p>
+              {selectedSourceAd
+                ? `${fmtMoney(selectedSourceAd.spend)} spend · ${selectedSourceAd.ctr.toFixed(2)}% CTR · ${selectedSourceAd.roas.toFixed(2)}x ROAS · Score ${selectedSourceAd.score.toFixed(1)}`
+                : 'AI Creative Kit ต้องใช้ ad-level metrics จริงก่อน'}
+            </p>
+            <div className="ai-marketer-actions compact-actions">
+              <button className="secondary-button" type="button" onClick={onRefreshAiStatus} disabled={aiRuntime.loading}>
+                <RefreshCw size={16} />
+                {aiRuntime.loading ? 'Checking...' : 'Check AI'}
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={handleGenerateCreativeKit}
+                disabled={creativeAiState.running || !aiRuntime.configured || !selectedSourceAd}
+              >
+                <Sparkles size={16} />
+                {creativeAiState.running ? 'Generating...' : 'Generate Kit'}
+              </button>
+            </div>
+            {!aiRuntime.configured && <div className="data-notice watch">ต้องตั้งค่า OPENAI_API_KEY ฝั่ง server ก่อนใช้ AI Creative Kit</div>}
+            {creativeAiState.error && <div className="data-notice critical">{creativeAiState.error}</div>}
+          </div>
+          <div className="creative-ai-result">
+            {!creativeAiState.result && (
+              <div className="empty-state ai-empty-state">
+                <BrainCircuit size={18} />
+                <strong>ยังไม่ได้ generate</strong>
+                <p>กด Generate Kit เพื่อให้ OpenAI สร้าง copy และ notes จาก source ad นี้</p>
+              </div>
+            )}
+            {creativeAiState.result && (
+              <>
+                <div className="ai-result-summary creative-kit-summary">
+                  <strong>{creativeAiState.result.summary}</strong>
+                  <div>
+                    <span>Objective: {creativeAiState.result.brief.objective}</span>
+                    <span>Audience: {creativeAiState.result.brief.audience}</span>
+                    <span>Offer: {creativeAiState.result.brief.offer}</span>
+                  </div>
+                </div>
+                <div className="creative-kit-columns">
+                  <div>
+                    <h4>Hooks</h4>
+                    {creativeAiState.result.hooks.map((hook) => <span key={hook}>{hook}</span>)}
+                  </div>
+                  <div>
+                    <h4>Headlines</h4>
+                    {creativeAiState.result.headlines.map((headline) => <span key={headline}>{headline}</span>)}
+                  </div>
+                  <div>
+                    <h4>Compliance</h4>
+                    {creativeAiState.result.complianceNotes.map((note) => <span key={note}>{note}</span>)}
+                  </div>
+                </div>
+                <div className="creative-kit-copy">
+                  <h4>Primary Text</h4>
+                  {creativeAiState.result.primaryTexts.map((text) => <p key={text}>{text}</p>)}
+                </div>
+                <div className="data-action-row">
+                  <button className="primary-button" type="button" onClick={applyCreativeKitToLaunchForm}>
+                    <Pencil size={16} />
+                    Use in Auto Post
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

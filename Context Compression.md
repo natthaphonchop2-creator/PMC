@@ -1,5 +1,52 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 OpenAI AI Marketer + Creative Kit Integration
+
+User selected next work items `2` and `3`: make AI Marketer / AI Insights use a real LLM, and upgrade Creative Studio to generate real creative briefs, copy, angles, hooks, captions/notes from OpenAI instead of rule-only text.
+
+Completed changes:
+- Created an OpenAI API key through the OpenAI Developers flow and saved it locally as `OPENAI_API_KEY` in `.env.local`.
+- Added backend-only OpenAI proxy endpoints:
+  - `GET /api/ai/status`
+  - `POST /api/ai/marketer`
+  - `POST /api/ai/creative`
+- Added `server/openAiPlugin.ts` and wired it into both Vite dev server and production server.
+- `AI Marketer` now has a real `Generate AI Plan` control that sends current Meta workspace data to the backend, calls OpenAI, then merges returned AI Insights and Action Queue items into workspace state.
+- `Creative Studio` now has an `AI Creative Kit` panel that sends selected source ad, ad set, campaign, and launch form context to OpenAI and can apply generated copy into Auto Post fields.
+- `Settings` now shows OpenAI Runtime status and documents the new `/api/ai/*` endpoints.
+- OpenAI errors now surface the upstream OpenAI request id in UI/backend responses to make debugging possible.
+- Fixed the Creative Studio form duplication around `Primary Text` if present in previous UI state.
+
+Important security behavior:
+- `OPENAI_API_KEY` is never sent to the browser.
+- `.env.local` is ignored by git.
+- The browser only calls local backend endpoints; backend calls OpenAI.
+- Render/production will need `OPENAI_API_KEY` added as a server environment variable before AI generation works there.
+
+Current OpenAI API status:
+- `/api/ai/status` returns configured locally with model `gpt-5.5`.
+- Smoke tests reached OpenAI but OpenAI returned HTTP 500 for multiple models and for both Responses API and Chat Completions.
+- UI handles this by showing the OpenAI error plus request id, e.g. `Internal server error · OpenAI request id ...`.
+- This is classified as an upstream OpenAI/API project issue, not a frontend route/build failure.
+
+Files changed:
+- `server/openAiPlugin.ts`
+- `server/productionServer.ts`
+- `vite.config.ts`
+- `src/App.tsx`
+- `src/App.css`
+- `Context Compression.md`
+
+Verification:
+- `npm run build` passes.
+- Local `/api/ai/status` returns configured.
+- Browser QA on `http://127.0.0.1:5174/`:
+  - AI Marketer page shows OpenAI configured status and `Generate AI Plan`.
+  - AI Marketer generation failure path shows OpenAI request id.
+  - Creative Studio page shows `AI Creative Kit`, selected source ad metrics, and `Generate Kit`.
+  - Creative Kit generation failure path shows OpenAI request id.
+  - Settings page shows OpenAI Runtime and `/api/ai/*` endpoint documentation.
+
 ## Latest Completed Work - 2026-05-15 Whole-Site Comfort Polish
 
 User requested smaller typography, easier usability, subtle decoration/effects, and a more comfortable visual style across the whole website.
