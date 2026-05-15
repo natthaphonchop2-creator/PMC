@@ -25,6 +25,7 @@ import {
   Layers3,
   LineChart,
   MapPin,
+  Menu,
   PauseCircle,
   Pencil,
   PlayCircle,
@@ -1379,6 +1380,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabId>('platform')
   const [selectedCampaignId, setSelectedCampaignId] = useState(workspace.campaigns[0]?.id ?? '')
   const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light')
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [metaSync, setMetaSync] = useState<MetaSyncState>({
     configured: false,
     connected: false,
@@ -2259,6 +2261,10 @@ function App() {
     void handleSyncMetaWorkspace()
   }, [handleSyncMetaWorkspace, metaSync.connected])
 
+  useEffect(() => {
+    setMobileNavOpen(false)
+  }, [activeTab])
+
   const confirmApproval = async () => {
     if (!approvalRequest) return
     if (approvalRequest.kind === 'recommendation') {
@@ -2280,7 +2286,7 @@ function App() {
   useMascotGsapMotion(activeTab)
 
   return (
-    <div className="app-shell" data-theme={themeMode}>
+    <div className={`app-shell ${mobileNavOpen ? 'mobile-nav-open' : ''}`} data-theme={themeMode}>
       <aside className="sidebar" aria-label="Clinic growth navigation">
         <div className="brand">
           <button className="brand-home" type="button" onClick={() => setActiveTab('platform')} aria-label="Open app platform">
@@ -2298,6 +2304,17 @@ function App() {
           >
             <Sun size={17} />
           </button>
+          <button
+            className="mobile-menu-button"
+            type="button"
+            aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={mobileNavOpen}
+            aria-controls="mobile-dashboard-nav"
+            title={mobileNavOpen ? 'ปิดเมนู' : 'เปิดเมนู'}
+            onClick={() => setMobileNavOpen((current) => !current)}
+          >
+            {mobileNavOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
         </div>
 
         <button
@@ -2314,7 +2331,7 @@ function App() {
           <ChevronDown size={15} />
         </button>
 
-        <nav className="tool-nav" aria-label="Dashboard tools">
+        <nav id="mobile-dashboard-nav" className="tool-nav" aria-label="Dashboard tools">
           {toolSections.map((section) => (
             <section key={section.title} className="tool-section">
               <div className="tool-section-header">

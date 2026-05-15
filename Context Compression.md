@@ -1,5 +1,36 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 Mobile Hamburger Navigation
+
+User requested the mobile version of the navbar become a hamburger menu.
+
+Completed changes:
+- Added mobile navigation open/close state in `src/App.tsx`.
+- Added a hamburger button beside the theme button on mobile only.
+- Mobile sidebar now shows only brand, theme toggle, and hamburger by default.
+- Opening the hamburger reveals workspace switch, grouped tool navigation, and the PMC AI Buddy card.
+- Selecting any navigation item automatically closes the mobile menu.
+- Added `aria-expanded` and `aria-controls` for the mobile menu button.
+- Desktop and tablet navigation behavior remains unchanged above the 760px mobile breakpoint.
+
+Files changed:
+- `src/App.tsx`
+- `src/App.css`
+- `Context Compression.md`
+
+Verification:
+- `npm run lint` passes.
+- `npm run build` passes.
+- Browser QA on `http://127.0.0.1:5174/`:
+  - 390x844 closed menu: hamburger visible, nav hidden, no horizontal overflow.
+  - 390x844 open menu: grouped nav visible, workspace switch visible, no horizontal overflow.
+  - Selecting `Settings` from the open menu changes page and closes the menu.
+  - 320x720 closed/open states have no horizontal overflow.
+  - Browser console had no errors or warnings during the mobile checks.
+- Screenshots captured:
+  - `/tmp/pmc-mobile-hamburger-closed.png`
+  - `/tmp/pmc-mobile-hamburger-open.png`
+
 ## Latest Completed Work - 2026-05-15 Render CLI Deploy Verified
 
 User installed Render CLI and confirmed they had a Render token.
