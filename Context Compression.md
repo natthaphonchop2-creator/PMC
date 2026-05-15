@@ -1,5 +1,42 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 Responsive Viewport Hardening
+
+User requested the website window/layout support every screen size.
+
+Completed changes:
+- Added a responsive viewport hardening layer in `src/App.css`.
+- Desktop layout remains sidebar + content.
+- Tablet and mobile now use a sticky top navigation area with horizontal scrolling tools instead of a tall broken sidebar.
+- Topbar actions now wrap/grid correctly on small screens.
+- Organization badge is hidden on very small phones to prevent right-side overflow.
+- Tables, insight tables, performance tables, delivery panels, and wide panels now scroll horizontally inside their own container instead of pushing the whole page wider.
+- Cards, panels, charts, modals, and grid layouts now use safer `min-width: 0`, responsive columns, and `100dvh` modal sizing.
+- Tooltips on app module cards no longer overflow off-screen on tablet/mobile; they expand within the card.
+- Added body `overflow-x: hidden` and `100dvh` support in `src/index.css`.
+
+Files changed:
+- `src/App.css`
+- `src/index.css`
+- `Context Compression.md`
+
+Verification:
+- `npm run lint` passes.
+- `npm run build` passes.
+- Browser viewport QA on `http://127.0.0.1:5174/`:
+  - 1440x900: no horizontal page overflow.
+  - 1024x768: no horizontal page overflow; tools scroll inside nav.
+  - 768x900: no horizontal page overflow; tablet layout collapses to one column.
+  - 390x844: no horizontal page overflow; topbar controls stack cleanly.
+  - 320x720: no horizontal page overflow.
+- Mobile interaction QA:
+  - Clicked `Ads Manager`, `Analytics`, `Creative Studio`, `Audience Insights`, `AI Marketer`, and `Settings`.
+  - Each page changed active title correctly and had no horizontal document overflow at 390px.
+- Browser console after checks had no errors or warnings.
+- Screenshots captured:
+  - `/tmp/pmc-responsive-desktop.png`
+  - `/tmp/pmc-responsive-mobile.png`
+
 ## Latest Completed Work - 2026-05-15 Render Redeploy Trigger
 
 User confirmed deployment env was set and requested a new deploy.

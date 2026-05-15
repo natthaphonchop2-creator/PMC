@@ -24,8 +24,10 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   background:
     linear-gradient(180deg, #f9fbff 0%, #f4f7fc 54%, #eef3f9 100%);
+  overflow-x: hidden;
 }
 
 button,

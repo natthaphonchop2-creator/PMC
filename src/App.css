@@ -6168,6 +6168,478 @@ textarea {
   }
 }
 
+/* Responsive viewport hardening: keeps the dashboard usable from 320px phones to wide desktops. */
+.app-shell,
+.main,
+.topbar,
+.topbar-title,
+.topbar-actions,
+.panel,
+.metric-card,
+.metric-category,
+.performance-report-card,
+.report-chart-card,
+.action-card,
+.task-card,
+.auto-card,
+.auto-candidate-card,
+.app-module-card,
+.audience-detail-card,
+.studio-creative-row,
+.memory-card,
+.settings-grid,
+.screen-grid,
+.performance-grid,
+.campaign-detail-grid,
+.platform-grid,
+.appointments-grid,
+.investigator-grid,
+.auto-grid,
+.memory-grid,
+.settings-grid,
+.audience-insights-grid,
+.studio-grid,
+.creative-ai-layout,
+.ai-marketer-layout {
+  min-width: 0;
+}
+
+.table-wrap,
+.compact-table-wrap,
+.insights-table-wrap,
+.delivery-control-panel,
+.report-chart-card,
+.panel.wide {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.table-title,
+td span,
+.delivery-control-row strong,
+.delivery-control-row small,
+.campaign-detail-hero h2,
+.campaign-detail-hero p,
+.adset-grid div span,
+.action-card p,
+.task-card p,
+.studio-creative-row p,
+.memory-card p,
+.creative-kit-copy p,
+.ai-result-summary strong,
+.data-notice,
+.approval-snapshot,
+.approval-warning {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    width: 100%;
+    max-width: 100vw;
+    max-height: 42dvh;
+    overflow: auto;
+    padding: 0 12px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(16px);
+  }
+
+  .brand {
+    min-height: 54px;
+  }
+
+  .tool-nav {
+    display: flex;
+    grid-template-columns: none;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px 2px 8px;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tool-section {
+    flex: 0 0 auto;
+    min-width: min(270px, 74vw);
+    scroll-snap-align: start;
+  }
+
+  .nav-list {
+    display: flex;
+    grid-template-columns: none;
+    gap: 6px;
+  }
+
+  .nav-item {
+    width: auto;
+    flex: 0 0 auto;
+    min-width: 112px;
+    justify-content: flex-start;
+    white-space: nowrap;
+  }
+
+  .main {
+    padding: clamp(14px, 2.6vw, 24px);
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .topbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .organization-badge {
+    max-width: 100%;
+  }
+
+  table {
+    min-width: 780px;
+  }
+
+  .compact-table-wrap table {
+    min-width: 920px;
+  }
+
+  .insights-table {
+    min-width: 980px;
+  }
+
+  .creative-kit-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tool-help-tooltip {
+    position: static;
+    display: block;
+    width: 100%;
+    max-width: none;
+    max-height: 0;
+    margin-top: 0;
+    padding: 0 9px;
+    overflow: hidden;
+    border-width: 0;
+    transform: none;
+  }
+
+  .tool-help-tooltip::after {
+    display: none;
+  }
+
+  .app-module-card:hover .tool-help-tooltip,
+  .app-module-card:focus .tool-help-tooltip,
+  .app-module-card:focus-visible .tool-help-tooltip {
+    max-height: 128px;
+    margin-top: 8px;
+    padding: 8px 9px;
+    border-width: 1px;
+    transform: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .assistant-status-strip {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .assistant-status-meta {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .assistant-status-meta span {
+    max-width: min(100%, 520px);
+    text-align: left;
+  }
+
+  .metric-grid,
+  .category-grid,
+  .evidence-grid,
+  .performance-report-cards,
+  .performance-report-charts,
+  .report-finding-list,
+  .studio-summary-grid,
+  .audience-segment-grid,
+  .media-library-grid,
+  .creative-kit-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .campaign-detail-grid,
+  .campaign-detail-grid.navigator-collapsed,
+  .screen-grid,
+  .performance-grid,
+  .platform-grid,
+  .appointments-grid,
+  .investigator-grid,
+  .auto-grid,
+  .memory-grid,
+  .settings-grid,
+  .audience-insights-grid,
+  .studio-grid,
+  .ai-marketer-layout,
+  .creative-ai-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    font-size: 12px;
+  }
+
+  .sidebar {
+    max-height: 48dvh;
+    padding: 0 10px 9px;
+  }
+
+  .brand {
+    gap: 6px;
+  }
+
+  .brand-home {
+    max-width: calc(100vw - 72px);
+  }
+
+  .brand-home strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-switch {
+    min-width: 0;
+  }
+
+  .workspace-switch > span:not(.workspace-icon) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-section-header {
+    display: none;
+  }
+
+  .tool-section {
+    min-width: auto;
+  }
+
+  .nav-item {
+    width: auto;
+    min-width: 94px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 7px 8px;
+    text-align: center;
+  }
+
+  .nav-item > span strong {
+    display: block;
+    max-width: 78px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .main {
+    padding: 12px;
+  }
+
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .topbar-title {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .topbar-title > div:last-child {
+    min-width: 0;
+  }
+
+  .topbar p {
+    max-width: 100%;
+  }
+
+  .topbar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .topbar-actions > * {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .organization-badge {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .organization-badge strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .date-range-control {
+    min-width: 0;
+  }
+
+  .panel,
+  .performance-report-panel {
+    padding: 12px;
+  }
+
+  .metric-grid,
+  .category-grid,
+  .evidence-grid,
+  .data-summary-grid,
+  .settings-summary-grid,
+  .studio-summary-grid,
+  .studio-summary-grid.compact,
+  .audience-segment-grid,
+  .audience-highlight-grid,
+  .audience-chip-grid,
+  .audience-detail-metrics,
+  .media-library-grid,
+  .api-config-grid,
+  .api-form-grid,
+  .auto-rule-control-grid,
+  .creative-launch-form,
+  .mutation-form-grid,
+  .split-inputs,
+  .choice-grid,
+  .app-module-grid,
+  .clinic-service-grid,
+  .pipeline-flow,
+  .compliance-grid,
+  .clinic-funnel,
+  .task-grid,
+  .auto-stat-grid,
+  .campaign-summary-grid,
+  .adset-grid,
+  .delegation-actions,
+  .control-scope-tabs,
+  .performance-report-cards,
+  .performance-report-charts,
+  .report-finding-list,
+  .creative-kit-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  table {
+    min-width: 680px;
+  }
+
+  .compact-table-wrap table,
+  .performance-table,
+  .insights-table {
+    min-width: 760px;
+  }
+
+  .insights-table th,
+  .insights-table td,
+  .performance-table th,
+  .performance-table td {
+    padding: 8px 9px;
+    font-size: 11px;
+  }
+
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .approval-modal,
+  .meta-object-modal,
+  .bulk-auto-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 14px;
+  }
+}
+
+@media (max-width: 430px) {
+  .main {
+    padding: 10px;
+  }
+
+  .sidebar {
+    max-height: 50dvh;
+    padding-inline: 8px;
+  }
+
+  .topbar-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .organization-badge {
+    display: none;
+  }
+
+  .assistant-status-strip {
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .assistant-status-copy p,
+  .assistant-status-copy small,
+  .assistant-status-meta span {
+    white-space: normal;
+  }
+
+  .nav-item {
+    min-width: 86px;
+  }
+
+  h1 {
+    font-size: 20px;
+  }
+
+  h2 {
+    font-size: 16px;
+  }
+
+  .date-filter,
+  .date-range-control,
+  .primary-button,
+  .secondary-button,
+  .file-button,
+  .approve-button,
+  .reject-button {
+    min-height: 38px;
+    height: auto;
+    padding-block: 8px;
+  }
+}
+
 @media print {
   @page {
     size: A4 landscape;
