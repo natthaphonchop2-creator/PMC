@@ -1,5 +1,30 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 Render CLI Deploy Verified
+
+User installed Render CLI and confirmed they had a Render token.
+
+Completed actions:
+- Verified Render CLI is installed at `/Users/natthaphon/.local/bin/render`.
+- Verified Render CLI auth with `render whoami`; account: Natthaphon Chopchit.
+- Listed Render services and found `pmc-ads-agent`.
+- Service ID: `srv-d82trdg3kofs73d6a150`.
+- Service URL: `https://pmc-ads-agent.onrender.com`.
+- Triggered manual deploy through Render CLI:
+  - Deploy ID: `dep-d83ck9naqgkc73fc22og`.
+  - Commit deployed: `c61d812f7092c8f6c3d1794a4da597b3bfa78260`.
+  - Commit message: `Improve responsive dashboard layout`.
+  - Status: `live`.
+  - Finished at: `2026-05-15T07:25:10.062468Z`.
+
+Verification:
+- `https://pmc-ads-agent.onrender.com/healthz` returned HTTP 200.
+- `https://pmc-ads-agent.onrender.com/` returned HTTP 401 with Basic Auth challenge, confirming protected production access is active.
+
+Important:
+- Render service has auto deploy enabled on branch `main`.
+- Root app requires Basic Auth; use `APP_BASIC_AUTH_USER=pmc` and the user's configured `APP_BASIC_AUTH_PASSWORD`.
+
 ## Latest Completed Work - 2026-05-15 Responsive Viewport Hardening
 
 User requested the website window/layout support every screen size.
