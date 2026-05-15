@@ -1,5 +1,19 @@
 # Context Compression
 
+## Latest Completed Work - 2026-05-15 Render Redeploy Trigger
+
+User confirmed deployment env was set and requested a new deploy.
+
+Actions:
+- Render CLI/MCP was not available locally (`render` command and `RENDER_API_KEY` env were not present).
+- Used the Git-backed deployment path by pushing a new commit to `main`, which should trigger Render auto-deploy if the Render service is connected to this GitHub repo with auto deploy enabled.
+- Latest deploy target commit after this note should be newer than security hardening commit `56e485f`.
+
+Deployment requirements:
+- `APP_BASIC_AUTH_PASSWORD` must be set on Render.
+- `APP_BASIC_AUTH_USER` can stay `pmc`.
+- `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`, and `OPENAI_API_KEY` should be set as server env vars if the app should work without web-entered local settings.
+
 ## Latest Completed Work - 2026-05-15 Final Codex Security Pass
 
 User requested `@codex-security` final review and fix.
