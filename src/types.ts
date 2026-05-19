@@ -106,6 +106,9 @@ export interface RecommendedAction {
   risk: RiskLevel
   confidence: number
   status: ActionStatus
+  source?: 'meta_metrics' | 'ai_brain'
+  sourceDecisionId?: string
+  requiresApproval?: boolean
   execution?: {
     endpoint: '/api/meta/object-status' | '/api/meta/object'
     method: 'POST'
@@ -329,6 +332,281 @@ export interface AiInsightDrawerContext {
   campaignId: string
   title: string
   subtitle: string
+}
+
+export type AgentInputSource = 'meta_api' | 'website_ui' | 'knowledgebase' | 'user_input' | 'codebase'
+export type KnowledgeMemoryType = 'campaign' | 'creative' | 'audience' | 'compliance' | 'business' | 'system'
+export type DecisionStatus = 'suggested' | 'approved' | 'executed' | 'rejected' | 'failed' | 'rolled_back'
+export type AgentExecutionStatus = 'done' | 'blocked' | 'needs_review'
+
+export interface AgentPolicyConstraints {
+  noInventedMetrics: boolean
+  requireEvidence: boolean
+  requireApprovalForWrites: boolean
+  medicalCompliance: boolean
+}
+
+export interface WebsiteContext {
+  route: string
+  activeTab: string
+  datePreset: string
+  dataState: 'loading' | 'live' | 'empty' | 'error' | 'unknown'
+  selectedCampaignId?: string
+  selectedAdSetId?: string
+  selectedAdId?: string
+  visibleCards: string[]
+  visibleTableRows: Array<{
+    objectType: 'campaign' | 'adset' | 'ad'
+    objectId: string
+    title: string
+    visibleMetrics: Record<string, string | number>
+  }>
+  modal?: {
+    type: string
+    title: string
+    targetId?: string
+  }
+  lastError?: string
+  capturedAt: string
+}
+
+export interface KnowledgeMemory {
+  id: string
+  type: KnowledgeMemoryType
+  title: string
+  summary: string
+  evidence: Array<{
+    source: 'meta_api' | 'website_ui' | 'user_input' | 'ai_analysis' | 'execution_result'
+    sourceId?: string
+    observedAt: string
+    value: string
+  }>
+  entities: Array<{
+    kind: 'campaign' | 'adset' | 'ad' | 'creative' | 'service' | 'audience'
+    id?: string
+    name: string
+  }>
+  metrics?: {
+    spend?: number
+    revenue?: number
+    roas?: number
+    cpa?: number
+    ctr?: number
+    conversions?: number
+  }
+  recommendation?: string
+  outcome?: string
+  confidence: number
+  tags: string[]
+  createdAt: string
+  updatedAt: string
+  expiresAt?: string
+}
+
+export interface DecisionRecord {
+  id: string
+  syncId: string
+  actor: 'ai' | 'human' | 'system'
+  actionType: string
+  target: {
+    objectType: 'campaign' | 'adset' | 'ad' | 'creative' | 'account'
+    objectId: string
+    name: string
+  }
+  before: Record<string, unknown>
+  recommendedAfter: Record<string, unknown>
+  approvedAfter?: Record<string, unknown>
+  evidence: string[]
+  guardrail: string
+  risk: RiskLevel
+  confidence: number
+  status: DecisionStatus
+  userNote?: string
+  executionResult?: Record<string, unknown>
+  createdAt: string
+  executedAt?: string
+}
+
+export interface AgentTaskEnvelope {
+  taskId: string
+  requestedBy: 'master'
+  agentName: string
+  intent: string
+  inputSources: AgentInputSource[]
+  payload: Record<string, unknown>
+  constraints: AgentPolicyConstraints
+}
+
+export interface AgentTaskResult {
+  taskId: string
+  agentName: string
+  status: AgentExecutionStatus
+  summary: string
+  evidence: string[]
+  output: Record<string, unknown>
+  proposedActions: Array<{
+    actionType: string
+    targetId: string
+    risk: RiskLevel
+    requiresApproval: boolean
+  }>
+  memoryWrites: KnowledgeMemory[]
+  blockers: string[]
+}
+
+export interface AiBrainFinding {
+  title: string
+  explanation: string
+  evidence: string[]
+  confidence: number
+  risk: RiskLevel
+}
+
+export interface AiBrainRecommendation {
+  type: string
+  targetId: string
+  targetName: string
+  action: string
+  expectedImpact: string
+  guardrail: string
+  rollbackNote: string
+  risk: RiskLevel
+  confidence: number
+  executable: boolean
+  requiresApproval: boolean
+  evidence: string[]
+}
+
+export interface AiBrainSpecialistReport {
+  agentName: string
+  status: AgentExecutionStatus
+  priority: RiskLevel
+  summary: string
+  evidence: string[]
+  nextStep: string
+  confidence: number
+  blockers: string[]
+}
+
+export interface AiBrainSpecialistOutputs {
+  campaignAnalyst?: AiBrainSpecialistReport
+  adSetAnalyst?: AiBrainSpecialistReport
+  adAnalyst?: AiBrainSpecialistReport
+  budgetOptimization?: AiBrainSpecialistReport
+  funnelDiagnosis?: AiBrainSpecialistReport
+  creativeStrategist?: AiBrainSpecialistReport
+  audienceSegment?: AiBrainSpecialistReport
+  medicalCompliance?: AiBrainSpecialistReport
+  approvalGatekeeper?: AiBrainSpecialistReport
+  actionBuilder?: AiBrainSpecialistReport
+}
+
+export interface AiBrainResponse {
+  summary: string
+  masterDecision: string
+  findings: AiBrainFinding[]
+  recommendations: AiBrainRecommendation[]
+  specialistOutputs: AiBrainSpecialistOutputs
+  approvalActions: RecommendedAction[]
+  agentResults: AgentTaskResult[]
+  memoryWrites: KnowledgeMemory[]
+  decisionRecords: DecisionRecord[]
+  policy: {
+    approvedForDirectExecution: boolean
+    reasons: string[]
+  }
+}
+
+export type OutcomeWindow = 'same_sync' | '24h' | '48h' | '7d' | 'manual_review'
+export type OutcomeStatus = 'improved' | 'declined' | 'unchanged' | 'pending' | 'blocked'
+export type MonitoringSeverity = 'info' | 'watch' | 'critical'
+
+export interface OutcomeObservation {
+  id: string
+  decisionId?: string
+  target: DecisionRecord['target']
+  window: OutcomeWindow
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  deltas: {
+    spend?: number
+    revenue?: number
+    roas?: number
+    cpa?: number
+    ctr?: number
+    conversions?: number
+  }
+  status: OutcomeStatus
+  summary: string
+  evidence: string[]
+  confidence: number
+  observedAt: string
+}
+
+export interface OutcomeLearningRecord {
+  id: string
+  title: string
+  summary: string
+  pattern: string
+  recommendation: string
+  supportingOutcomeIds: string[]
+  confidence: number
+  tags: string[]
+  createdAt: string
+}
+
+export interface MonitoringAlert {
+  id: string
+  severity: MonitoringSeverity
+  title: string
+  detail: string
+  source: 'sync' | 'ai' | 'meta' | 'knowledgebase' | 'compliance'
+  evidence: string[]
+  status: 'open' | 'acknowledged' | 'resolved'
+  createdAt: string
+}
+
+export interface Phase4Report {
+  id: string
+  generatedAt: string
+  period: string
+  summary: string
+  outcomeStatus: OutcomeStatus
+  metrics: {
+    spend: number
+    revenue: number
+    roas: number
+    cpa: number
+    ctr: number
+    conversions: number
+    activeCampaigns: number
+  }
+  keyFindings: string[]
+  nextActions: string[]
+}
+
+export interface AiPhase4Response {
+  summary: string
+  agents: AiBrainSpecialistReport[]
+  outcomes: OutcomeObservation[]
+  learnings: OutcomeLearningRecord[]
+  alerts: MonitoringAlert[]
+  report: Phase4Report
+  memoryWrites: KnowledgeMemory[]
+  knowledge: {
+    source: 'runtime-jsonl'
+    decisionsRead: number
+    memoriesRead: number
+    memoriesWritten: number
+    outcomesWritten: number
+    learningsWritten: number
+    alertsWritten: number
+    reportsWritten: number
+  }
+  policy: {
+    approvedForDirectExecution: false
+    reasons: string[]
+  }
 }
 
 export interface WorkspaceData {

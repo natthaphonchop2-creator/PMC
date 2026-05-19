@@ -1500,7 +1500,7 @@ function buildRecommendedActions(campaigns: CampaignInsight[]): RecommendedActio
         actions.push(makeAction(campaign, 'Tracking / budget protection', 'มี spend แต่ไม่มี conversion ใน Meta dataset', 'Pause or reduce spend until tracking and offer are verified', 'High', 84))
       }
       if (campaign.roas > 0 && campaign.roas < 1.5) {
-        actions.push(makeAction(campaign, 'Budget protection', `ROAS ${campaign.roas.toFixed(2)}x ต่ำกว่า guardrail`, 'Reduce budget 10-15% and test new offer/creative', 'Medium', 80))
+        actions.push(makeAction(campaign, 'Budget protection', `ROAS ${campaign.roas.toFixed(2)}x ต่ำกว่าเกณฑ์`, 'Reduce budget 10-15% and test new offer/creative', 'Medium', 80))
       }
       if (campaign.roas >= 3 && campaign.conversions >= 10) {
         actions.push(makeAction(campaign, 'Scale opportunity', `ROAS ${campaign.roas.toFixed(2)}x และ conversion volume พร้อม scale`, 'Increase budget 10-15% with daily monitoring', 'Low', 86))
@@ -1522,10 +1522,10 @@ function makeAction(campaign: CampaignInsight, type: string, summary: string, af
     target: campaign.name,
     summary,
     expectedImpact: 'ลด spend leakage หรือเพิ่ม revenue จากข้อมูล Meta ล่าสุด',
-    guardrail: 'Action นี้ยังเป็น approval recommendation จนกว่าจะเปิด Meta write execution',
+    guardrail: 'ตรวจข้อมูลล่าสุดก่อนดำเนินการ',
     before: `Spend ${formatMoney(campaign.spend)} · ROAS ${campaign.roas.toFixed(2)}x · Conversions ${formatNumber(campaign.conversions)}`,
     after,
-    rollbackNote: 'หากเปิด write execution ต้องบันทึก previous status/budget ก่อนเปลี่ยนทุกครั้ง',
+    rollbackNote: 'หลังดำเนินการให้ซิงก์ใหม่ และย้อนกลับจาก Ads Manager ได้หากผลลัพธ์ไม่ดีขึ้น',
     risk,
     confidence,
     status: 'pending',

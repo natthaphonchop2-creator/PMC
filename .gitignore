@@ -15,6 +15,7 @@ lerna-debug.log*
 !.env.example
 .meta-api.local.json
 .mcp.local.json
+knowledge-base/runtime/
 
 node_modules
 dist
