@@ -1892,8 +1892,13 @@ input:focus-visible {
 
 .optimizer-hero-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(620px, 1.45fr) minmax(340px, 0.82fr);
   gap: 18px;
+  align-items: start;
+}
+
+.optimizer-recommendations {
+  grid-row: span 2;
 }
 
 .optimizer-lower-grid {
@@ -1997,7 +2002,7 @@ input:focus-visible {
 
 .optimizer-control-kpis {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
   gap: 8px;
 }
 
@@ -2031,7 +2036,7 @@ input:focus-visible {
 
 .optimizer-strategy-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
   gap: 8px;
 }
 
@@ -3091,6 +3096,10 @@ input:focus-visible {
   .optimizer-hero-grid,
   .optimizer-lower-grid {
     grid-template-columns: 1fr;
+  }
+
+  .optimizer-recommendations {
+    grid-row: auto;
   }
 
   .ads-entity-row,
