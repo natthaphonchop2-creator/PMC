@@ -2607,7 +2607,7 @@ function AutoAdsPage({
     ? 'พักอยู่'
     : approvalMode
       ? optimizerWritablePlans.length > 0
-        ? `Optimize จริง ${optimizerWritablePlans.length} รายการ`
+        ? `ปรับ Meta จริง ${optimizerWritablePlans.length} รายการ`
         : 'ไม่มีรายการที่ต้องเขียน Meta'
       : optimizerWritablePlans.length > 0
         ? 'เปิดโหมดอนุมัติเพื่อ Optimize'
@@ -2681,7 +2681,7 @@ function AutoAdsPage({
     if (!approvalMode) {
       if (optimizerWritablePlans.length > 0) {
         onModeChange('ต้องอนุมัติก่อน')
-        setMessage(`เปลี่ยนเป็นโหมดต้องอนุมัติก่อนแล้ว กด "Optimize จริง ${optimizerWritablePlans.length} รายการ" เพื่อเปิดหน้าต่างยืนยัน batch`)
+        setMessage(`เปลี่ยนเป็นโหมดต้องอนุมัติก่อนแล้ว กด "ปรับ Meta จริง ${optimizerWritablePlans.length} รายการ" เพื่อเปิดหน้าต่างยืนยัน batch`)
         return
       }
       setShowAllRecommendations(true)
@@ -2973,6 +2973,11 @@ function AutoAdsPage({
                   <div>
                     <strong>{optimizerRecommendationTitle(plan)}</strong>
                     <span>{plan.campaign?.name ?? plan.ad.name}</span>
+                    <div className="optimizer-recommendation-meta">
+                      <StatusBadge label={optimizerPlanStatusLabel(plan)} tone={plan.targetStatus === 'PAUSED' ? 'critical' : plan.targetStatus === 'ACTIVE' ? 'good' : plan.tone} />
+                      <StatusBadge label={deliveryLabel(plan.ad.status)} tone={deliveryTone(plan.ad.status)} />
+                      <StatusBadge label={shortMetaId(plan.ad.id)} tone="neutral" />
+                    </div>
                     <small>{optimizerImpactText(plan)}</small>
                   </div>
                   <button
@@ -2981,7 +2986,7 @@ function AutoAdsPage({
                     onClick={() => selectRecommendation(plan)}
                     disabled={automationPaused && Boolean(plan.targetStatus)}
                   >
-                    {automationPaused && plan.targetStatus ? 'พักอยู่' : plan.targetStatus ? (approvalMode ? 'ใช้แนะนำ' : 'ดูคำแนะนำ') : 'ดูรายละเอียด'}
+                    {optimizerPlanButtonLabel(plan, approvalMode, automationPaused)}
                   </button>
                 </article>
               ))
@@ -3524,14 +3529,28 @@ function OptimizerRuleRunModal({
 }
 
 function optimizerRecommendationTitle(plan: AutoAdPlan) {
-  if (plan.decision === 'pause') return 'ปิดแคมเปญประสิทธิภาพต่ำ'
-  if (plan.decision === 'activate') return 'เปิดกลับแคมเปญที่มีสัญญาณดี'
-  if (plan.decision === 'keep') return 'เพิ่มงบให้แคมเปญที่มี ROAS สูง'
+  if (plan.decision === 'pause') return 'ปิด Ad ประสิทธิภาพต่ำ'
+  if (plan.decision === 'activate') return 'เปิด Ad ที่มีสัญญาณดี'
+  if (plan.decision === 'keep') return 'เปิดต่อเป็นตัวชนะ'
   return 'เฝ้าดูและปรับครีเอทีฟ'
 }
 
 function optimizerImpactText(plan: AutoAdPlan) {
   return `Meta จริง: Spend ${fmtMoneyShort(plan.ad.spend)} · ROAS ${plan.ad.roas.toFixed(2)}x · Booking ${fmtNum(plan.ad.bookings)}`
+}
+
+function optimizerPlanStatusLabel(plan: AutoAdPlan) {
+  if (plan.targetStatus === 'ACTIVE') return 'พร้อมเปิด Ad'
+  if (plan.targetStatus === 'PAUSED') return 'พร้อมปิด Ad'
+  if (plan.decision === 'keep') return 'เปิดต่อ'
+  return 'ดูข้อมูลก่อน'
+}
+
+function optimizerPlanButtonLabel(plan: AutoAdPlan, approvalMode: boolean, automationPaused: boolean) {
+  if (automationPaused && plan.targetStatus) return 'พักอยู่'
+  if (plan.targetStatus === 'ACTIVE') return approvalMode ? 'ยืนยันเปิด Ad' : 'ดูเหตุผลเปิด'
+  if (plan.targetStatus === 'PAUSED') return approvalMode ? 'ยืนยันปิด Ad' : 'ดูเหตุผลปิด'
+  return 'ดูรายละเอียด'
 }
 
 function optimizerStrategyLabel(strategy: OptimizerStrategy) {

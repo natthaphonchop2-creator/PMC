@@ -2148,6 +2148,13 @@ input:focus-visible {
   line-height: 1.35;
 }
 
+.optimizer-recommendation-meta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .optimizer-recommendation-row small {
   margin-top: 6px;
   color: var(--green);
@@ -3888,6 +3895,16 @@ input:focus-visible {
   .optimizer-recommendation-row span {
     font-size: 12px;
     line-height: 1.45;
+  }
+
+  .optimizer-recommendation-meta {
+    gap: 5px;
+  }
+
+  .optimizer-recommendation-meta .status-badge {
+    min-height: 24px;
+    padding: 3px 8px;
+    font-size: 10px;
   }
 
   .optimizer-recommendation-row small {
