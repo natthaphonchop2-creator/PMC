@@ -2548,6 +2548,7 @@ function AutoAdsPage({
   const [ruleRun, setRuleRun] = useState<OptimizerRuleRun | null>(null)
   const [ruleRunStates, setRuleRunStates] = useState<Record<string, OptimizerRuleRunState>>({})
   const [isExecutingRule, setIsExecutingRule] = useState(false)
+  const [showAllRecommendations, setShowAllRecommendations] = useState(false)
 
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns])
   const adSetById = useMemo(() => new Map(adSets.map((adSet) => [adSet.id, adSet])), [adSets])
@@ -2577,7 +2578,8 @@ function AutoAdsPage({
   const keepPlans = plans.filter((plan) => plan.decision === 'keep')
   const activatePlans = plans.filter((plan) => plan.decision === 'activate')
   const watchPlans = plans.filter((plan) => plan.decision === 'watch')
-  const recommendationPlans = [...activatePlans, ...keepPlans, ...pausePlans, ...watchPlans].slice(0, 3)
+  const allRecommendationPlans = [...activatePlans, ...keepPlans, ...pausePlans, ...watchPlans]
+  const recommendationPlans = showAllRecommendations ? allRecommendationPlans : allRecommendationPlans.slice(0, 3)
   const baseRules = useMemo(() => buildOptimizerRules(plans, campaigns.length), [campaigns.length, plans])
   const rules = useMemo(() => [...customRules, ...baseRules], [baseRules, customRules])
   const displayRules = useMemo(
@@ -2742,13 +2744,13 @@ function AutoAdsPage({
     <>
     <div className="optimizer-page">
       <div className="optimizer-hero-grid">
-        <section className="optimizer-panel optimizer-recommendations">
+        <section className={`optimizer-panel optimizer-recommendations ${showAllRecommendations ? 'expanded' : ''}`}>
           <div className="optimizer-panel-head">
             <div>
               <h2>Optimizer Recommendations</h2>
-              <p>{recommendationPlans.length} คำแนะนำจาก ads ที่ซิงก์ล่าสุด</p>
+              <p>{showAllRecommendations ? allRecommendationPlans.length : recommendationPlans.length} คำแนะนำจาก ads ที่ซิงก์ล่าสุด</p>
             </div>
-            <StatusBadge label={`${recommendationPlans.length}`} tone="violet" />
+            <StatusBadge label={`${showAllRecommendations ? allRecommendationPlans.length : recommendationPlans.length}`} tone="violet" />
           </div>
           <div className="optimizer-recommendation-list">
             {recommendationPlans.length > 0 ? (
@@ -2771,10 +2773,20 @@ function AutoAdsPage({
               <EmptyState title="ยังไม่มีคำแนะนำ" detail="ซิงก์ Meta API เพื่อให้ AI วิเคราะห์ ads และสร้างคำแนะนำ" />
             )}
           </div>
-          <button className="optimizer-link-button" type="button" onClick={() => setMessage(`แสดงคำแนะนำทั้งหมด ${plans.length} รายการ`)}>
-            ดูทั้งหมด
-            <ChevronRight size={15} />
-          </button>
+          {allRecommendationPlans.length > 3 && (
+            <button
+              aria-expanded={showAllRecommendations}
+              className="optimizer-link-button"
+              type="button"
+              onClick={() => {
+                setShowAllRecommendations((current) => !current)
+                setMessage('')
+              }}
+            >
+              {showAllRecommendations ? 'ย่อรายการ' : `ดูทั้งหมด ${allRecommendationPlans.length} รายการ`}
+              {showAllRecommendations ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            </button>
+          )}
         </section>
 
         <section className="optimizer-panel">
