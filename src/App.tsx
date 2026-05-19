@@ -2596,8 +2596,22 @@ function AutoAdsPage({
   const optimizerRevenue = optimizerPlans.reduce((sum, plan) => sum + plan.ad.spend * plan.ad.roas, 0)
   const optimizerRoas = optimizerSpend > 0 ? optimizerRevenue / optimizerSpend : 0
   const optimizerBookings = optimizerPlans.reduce((sum, plan) => sum + plan.ad.bookings, 0)
-  const optimizerButtonClass = approvalMode && optimizerWritablePlans.some((plan) => plan.targetStatus === 'PAUSED') ? 'danger-button' : approvalMode && optimizerWritablePlans.length > 0 ? 'primary-button' : 'outline-button'
-  const optimizerButtonLabel = automationPaused ? 'พักอยู่' : approvalMode && optimizerWritablePlans.length > 0 ? `Optimize จริง ${optimizerWritablePlans.length} รายการ` : 'ตรวจระบบ Optimizer'
+  const optimizerButtonClass = automationPaused
+    ? 'outline-button'
+    : approvalMode && optimizerWritablePlans.some((plan) => plan.targetStatus === 'PAUSED')
+      ? 'danger-button'
+      : optimizerWritablePlans.length > 0
+        ? 'primary-button'
+        : 'outline-button'
+  const optimizerButtonLabel = automationPaused
+    ? 'พักอยู่'
+    : approvalMode
+      ? optimizerWritablePlans.length > 0
+        ? `Optimize จริง ${optimizerWritablePlans.length} รายการ`
+        : 'ไม่มีรายการที่ต้องเขียน Meta'
+      : optimizerWritablePlans.length > 0
+        ? 'เปิดโหมดอนุมัติเพื่อ Optimize'
+        : 'ดูรายการแนะนำ'
   const optimizerStrategyCards: Array<{ count: number; strategy: OptimizerStrategy; tone: Tone }> = [
     { count: allRecommendationPlans.length, strategy: 'all', tone: 'info' },
     { count: activatePlans.length, strategy: 'activate', tone: 'good' },
@@ -2665,7 +2679,13 @@ function AutoAdsPage({
       return
     }
     if (!approvalMode) {
-      setMessage(`โหมดแนะนำเท่านั้น: ตรวจพบ ${optimizerPlans.length} รายการจาก Meta จริง แต่ยังไม่เขียนข้อมูล`)
+      if (optimizerWritablePlans.length > 0) {
+        onModeChange('ต้องอนุมัติก่อน')
+        setMessage(`เปลี่ยนเป็นโหมดต้องอนุมัติก่อนแล้ว กด "Optimize จริง ${optimizerWritablePlans.length} รายการ" เพื่อเปิดหน้าต่างยืนยัน batch`)
+        return
+      }
+      setShowAllRecommendations(true)
+      setMessage(`โหมดแนะนำเท่านั้น: พบ ${optimizerPlans.length} รายการจาก Meta จริง แต่ยังไม่มี action ที่ต้องเขียน Meta`)
       return
     }
     if (!optimizerWritablePlans.length) {
@@ -2929,7 +2949,13 @@ function AutoAdsPage({
               ))}
             </div>
             <div className="optimizer-control-actions">
-              <button className={optimizerButtonClass} type="button" onClick={startOptimizerBatch} disabled={automationPaused || optimizerPlans.length === 0}>
+              <button
+                aria-label={approvalMode ? 'เปิดหน้าต่างยืนยัน Optimizer batch ก่อนส่ง Meta' : 'เปลี่ยนเป็นโหมดต้องอนุมัติก่อนเพื่อใช้ Optimizer'}
+                className={optimizerButtonClass}
+                type="button"
+                onClick={startOptimizerBatch}
+                disabled={automationPaused || optimizerPlans.length === 0 || (approvalMode && optimizerWritablePlans.length === 0)}
+              >
                 {optimizerButtonLabel}
               </button>
               <button className="outline-button" type="button" onClick={manageAllAutomations}>
