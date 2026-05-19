@@ -68,14 +68,12 @@ type Campaign = {
   deliveryStatus: 'active' | 'paused'
   budget: number
   spend: number
+  revenue: number
+  conversions: number
   cpa: number
   roas: number
   frequency: number
   ctr: number
-  cpc: number
-  cpm: number
-  cpl: number
-  leadQuality: number
   aiTag: string
   tone: Tone
 }
@@ -219,6 +217,7 @@ type OptimizerRuleRun = {
   candidates: OptimizerRuleCandidate[]
   generatedAt: string
   rule: OptimizerRule
+  writeEnabled: boolean
 }
 
 type MetaStatusResponse = {
@@ -483,14 +482,12 @@ function mapMetaCampaign(campaign: CampaignInsight): Campaign {
     deliveryStatus: campaign.deliveryStatus,
     budget: campaign.budget,
     spend: campaign.spend,
+    revenue: campaign.revenue,
+    conversions: campaign.conversions,
     cpa: campaign.cpa,
     roas: campaign.roas,
     frequency: campaign.frequency,
     ctr: campaign.ctr,
-    cpc: 0,
-    cpm: 0,
-    cpl: campaign.cpa,
-    leadQuality: Math.round(Math.min(100, Math.max(0, campaign.roas * 18 + campaign.conversions))),
     aiTag: campaign.aiStatus === 'scaling' ? 'Scale' : campaign.aiStatus === 'critical' ? 'Pause' : campaign.aiStatus === 'watch' ? 'Watch' : 'Healthy',
     tone,
   }
@@ -529,10 +526,10 @@ function buildSummaryFromWorkspace(workspace: WorkspaceData | null, campaignList
 
   const channel = workspace.channelPerformance[0]
   const spend = channel?.spend ?? campaignList.reduce((sum, campaign) => sum + campaign.spend, 0)
-  const revenue = channel?.revenue ?? campaignList.reduce((sum, campaign) => sum + campaign.spend * campaign.roas, 0)
-  const leads = channel?.leads ?? workspace.appointmentStages.find((stage) => stage.id === 'leads')?.count ?? 0
-  const bookings = channel?.bookings ?? campaignList.reduce((sum, campaign) => sum + Math.round(campaign.spend / Math.max(campaign.cpa, 1)), 0)
-  const paidTreatments = channel?.treatments ?? workspace.appointmentStages.find((stage) => stage.id === 'paid')?.count ?? 0
+  const revenue = channel?.revenue ?? campaignList.reduce((sum, campaign) => sum + campaign.revenue, 0)
+  const leads = channel?.leads ?? 0
+  const bookings = channel?.bookings ?? campaignList.reduce((sum, campaign) => sum + campaign.conversions, 0)
+  const paidTreatments = channel?.treatments ?? 0
 
   return {
     spend,
@@ -840,7 +837,7 @@ function App() {
 
   return (
     <div className="app-shell" ref={shellRef}>
-      <Sidebar activeTab={activeTab} accountName={metaInfo?.accountName ?? 'PMC Clinic'} dataState={dataState} onSelect={setActiveTab} syncState={syncState} />
+      <Sidebar activeTab={activeTab} accountName={metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อ Meta'} automationMode={automationMode} dataState={dataState} onSelect={setActiveTab} syncState={syncState} />
       <main className="app-main">
         <Topbar
           activePage={activePage}
@@ -953,12 +950,13 @@ function App() {
 type SidebarProps = {
   activeTab: TabId
   accountName: string
+  automationMode: string
   dataState: DataSourceState
   onSelect: (tab: TabId) => void
   syncState: string
 }
 
-function Sidebar({ activeTab, accountName, dataState, onSelect, syncState }: SidebarProps) {
+function Sidebar({ activeTab, accountName, automationMode, dataState, onSelect, syncState }: SidebarProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const statusTone: Tone = dataState === 'live' ? 'good' : dataState === 'error' ? 'critical' : dataState === 'loading' ? 'info' : 'watch'
   const freshnessLabel =
@@ -1028,7 +1026,7 @@ function Sidebar({ activeTab, accountName, dataState, onSelect, syncState }: Sid
         <StatusBadge label={syncStateLabel(syncState)} tone={statusTone} />
         <strong>บัญชีโฆษณา: {accountName}</strong>
         <span>ความสดข้อมูล: {freshnessLabel}</span>
-        <span>โหมด: แนะนำเท่านั้น</span>
+        <span>โหมด: {automationMode}</span>
       </div>
     </aside>
   )
@@ -1327,7 +1325,7 @@ function CampaignTable({
               >
                 <span>
                   <strong>{campaign.name}</strong>
-                  <small>ซิงก์จาก Meta API · วันนี้ · CTR {campaign.ctr}% · CPL {fmtMoney(campaign.cpl)}</small>
+                  <small>ซิงก์จาก Meta API · CTR {campaign.ctr}% · Conversion {fmtNum(campaign.conversions)}</small>
                 </span>
                 <StatusBadge label={campaignStatusLabel(campaign.status)} tone={campaign.tone} />
                 <span>{fmtMoney(campaign.budget)}</span>
@@ -1363,8 +1361,8 @@ function AiQueue({
       action={<StatusBadge label="แนะนำเท่านั้น" tone="violet" />}
       className="ai-queue"
       collapsible
-      title="คิวงาน AI Marketer"
-      subtitle="คำแนะนำที่รอรีวิว พร้อม guardrail ก่อนเขียนข้อมูลไป Meta"
+      title="คิวคำแนะนำจาก Meta metrics"
+      subtitle="รายการนี้คำนวณจากข้อมูล Meta จริง และต้องรีวิวก่อนเขียนข้อมูล"
     >
       <div className="recommendation-list">
         {recommendations.length > 0 ? recommendations.map((rec, index) => {
@@ -1395,12 +1393,11 @@ function AiQueue({
                     </button>
                   </>
                 )}
-                <span className="confidence">{rec.confidence}%</span>
               </div>
             </article>
           )
         }) : (
-          <EmptyState title="ยังไม่มี action จาก AI" detail="Meta API ยังไม่มีคำแนะนำที่มี guardrail ในช่วงวันที่นี้" />
+          <EmptyState title="ยังไม่มีคำแนะนำจากข้อมูลจริง" detail="Meta API ยังไม่มีรายการที่เข้าเงื่อนไข guardrail ในช่วงวันที่นี้" />
         )}
       </div>
     </SectionCard>
@@ -1656,7 +1653,7 @@ function AdsManagerPage({
               <MetricLine label="งบประมาณ" value={fmtMoney(selectedCampaign.budget)} />
               <MetricLine label="ใช้จ่าย" value={fmtMoney(selectedCampaign.spend)} />
               <MetricLine label="ชุดโฆษณา / โฆษณา" value={`${selectedAdSets.length} / ${selectedAds.length}`} />
-              <MetricLine label="คุณภาพ Lead" value={`${selectedCampaign.leadQuality}/100`} />
+              <MetricLine label="Conversion ที่ Meta track" value={fmtNum(selectedCampaign.conversions)} />
               <div className="campaign-detail-actions">
                 <button className="outline-button" type="button" onClick={() => focusCampaign(selectedCampaign.id)}>
                   เปิดชุดโฆษณา
@@ -1998,7 +1995,7 @@ function AdsReviewModal({
               <MetricLine label="งบประมาณ" value={fmtMoney(selectedCampaign.budget)} />
               <MetricLine label="ใช้จ่าย" value={fmtMoney(selectedCampaign.spend)} />
               <MetricLine label="ROAS" value={`${selectedCampaign.roas.toFixed(2)}x`} />
-              <MetricLine label="คุณภาพ Lead" value={`${selectedCampaign.leadQuality}/100`} />
+              <MetricLine label="Conversion ที่ Meta track" value={fmtNum(selectedCampaign.conversions)} />
             </>
           ) : (
             <>
@@ -2245,7 +2242,7 @@ function AiMarketerPage({
 
   return (
     <TwoColumnPage aside={<AuditPanel auditTrail={auditTrail} />}>
-      <SectionCard collapsible title="สัญญาณโฆษณาจาก AI" subtitle="โฆษณาที่ดีและแย่จากคะแนน AI ของ Meta ad insights">
+      <SectionCard collapsible title="สัญญาณโฆษณาจาก Meta metrics" subtitle="โฆษณาที่ดีและแย่จาก spend, ROAS, CTR และ conversion ที่ Meta ส่งมา">
         <div className="ai-ad-signal-grid">
           <AiAdSignalColumn
             ads={topAds}
@@ -2291,7 +2288,7 @@ function AiAdSignalColumn({
         {ads.length > 0 ? (
           ads.map((ad) => <AiAdSignalCard ad={ad} key={`${type}-${ad.id}`} type={type} />)
         ) : (
-          <EmptyState title="ยังไม่มีสัญญาณจาก AI" detail={emptyDetail} />
+          <EmptyState title="ยังไม่มีสัญญาณจากข้อมูลจริง" detail={emptyDetail} />
         )}
       </div>
     </div>
@@ -2303,7 +2300,7 @@ function AiAdSignalCard({ ad, type }: { ad: WorkspaceData['adInsights'][number];
   const cpa = ad.bookings > 0 ? ad.spend / ad.bookings : 0
   const reason = isGood
     ? ad.score >= 7
-      ? 'AI ให้คะแนนสูงจาก ROAS, CTR และ conversion signal'
+      ? 'คะแนน metric สูงจาก ROAS, CTR และ conversion signal'
       : ad.roas >= 1.5
         ? 'ROAS ดีกว่ากลุ่ม watch เหมาะกับการเฝ้าดูเพื่อ scale'
         : 'มี engagement signal ดีกว่าโฆษณาส่วนใหญ่ในชุดข้อมูล'
@@ -2311,7 +2308,7 @@ function AiAdSignalCard({ ad, type }: { ad: WorkspaceData['adInsights'][number];
       ? 'มี spend แต่ยังไม่มี tracked booking/conversion'
       : ad.roas > 0 && ad.roas < 1
         ? 'ROAS ต่ำกว่า guardrail ต้องตรวจ offer หรือ creative'
-        : 'AI score ต่ำกว่ากลุ่มอื่น ควรตรวจ creative, audience และ tracking'
+        : 'คะแนน metric ต่ำกว่ากลุ่มอื่น ควรตรวจ creative, audience และ tracking'
   const nextAction = isGood
     ? 'คงไว้ / ทดสอบ scale แบบค่อยเป็นค่อยไป'
     : ad.bookings === 0
@@ -2321,7 +2318,7 @@ function AiAdSignalCard({ ad, type }: { ad: WorkspaceData['adInsights'][number];
   return (
     <article className="ai-ad-card">
       <div className="ai-ad-card-head">
-        <StatusBadge label={`คะแนน AI ${ad.score.toFixed(1)}`} tone={isGood ? 'good' : 'critical'} />
+        <StatusBadge label={`Metric score ${ad.score.toFixed(1)}`} tone={isGood ? 'good' : 'critical'} />
         <StatusBadge label={deliveryLabel(ad.status)} tone={deliveryTone(ad.status)} />
       </div>
       <h3>{ad.name}</h3>
@@ -2340,11 +2337,11 @@ function AiAdSignalCard({ ad, type }: { ad: WorkspaceData['adInsights'][number];
 }
 
 function autoAdSourceRecommendationLabel(recommendation?: WorkspaceData['autoAds'][number]['recommendation']) {
-  if (recommendation === 'pause') return 'AI backend แนะนำให้ปิด'
-  if (recommendation === 'enable') return 'AI backend แนะนำให้เปิด'
-  if (recommendation === 'keep') return 'AI backend แนะนำให้เปิดต่อ'
-  if (recommendation === 'reduceBudget') return 'AI backend แนะนำให้ลดแรงส่ง'
-  return 'วิเคราะห์จาก ad insight สด'
+  if (recommendation === 'pause') return 'Meta metrics เข้าเงื่อนไขปิด'
+  if (recommendation === 'enable') return 'Meta metrics เข้าเงื่อนไขเปิด'
+  if (recommendation === 'keep') return 'Meta metrics เข้าเงื่อนไขเปิดต่อ'
+  if (recommendation === 'reduceBudget') return 'Meta metrics เข้าเงื่อนไขลดแรงส่ง'
+  return 'อ่านจาก ad insight สด'
 }
 
 function autoAdsModeTone(mode: string): Tone {
@@ -2371,7 +2368,6 @@ function createAutoAdPlan({
   const lowReturn = enoughSpend && ad.roas > 0 && ad.roas < 1
   const weakCtr = ad.ctr > 0 && ad.ctr < thresholds.ctrFloor
   const winner = ad.roas >= thresholds.winnerRoas || ad.score >= 7.8 || (ad.bookings >= 2 && ad.roas >= 1.5)
-  const sourceConfidence = autoAd?.confidence ?? 0
   const sourcePause = autoAd?.recommendation === 'pause' && ad.status === 'active' && enoughSpend
   const sourceEnable = autoAd?.recommendation === 'enable' && ad.status === 'paused' && (winner || ad.score >= 6.5)
   const sourceReduce = autoAd?.recommendation === 'reduceBudget'
@@ -2380,20 +2376,19 @@ function createAutoAdPlan({
     `ROAS ${ad.roas.toFixed(2)}x`,
     `CTR ${ad.ctr.toFixed(2)}%`,
     `Booking ${fmtNum(ad.bookings)}`,
-    `AI score ${ad.score.toFixed(1)}`,
+    `Metric score ${ad.score.toFixed(1)}`,
     autoAdSourceRecommendationLabel(autoAd?.recommendation),
   ]
   const finalize = (plan: Omit<AutoAdPlan, 'blockedReason' | 'canQueue' | 'evidence' | 'sortScore'> & { evidence?: string[] }): AutoAdPlan => {
-    const confidence = clampNumber(Math.round(Math.max(plan.confidence, sourceConfidence)), 0, 100)
-    const canQueue = Boolean(plan.targetStatus) && confidence >= thresholds.confidenceFloor
-    const blockedReason = plan.targetStatus && !canQueue ? `ความมั่นใจ ${confidence}% ต่ำกว่าเกณฑ์ ${thresholds.confidenceFloor}%` : undefined
+    const canQueue = Boolean(plan.targetStatus)
+    const blockedReason = undefined
     return {
       ...plan,
       blockedReason,
       canQueue,
-      confidence,
+      confidence: 0,
       evidence: [...baseEvidence, ...(plan.evidence ?? [])],
-      sortScore: plan.priority * 100000 + ad.spend + confidence * 10,
+      sortScore: plan.priority * 100000 + ad.spend,
     }
   }
 
@@ -2402,7 +2397,7 @@ function createAutoAdPlan({
       ? `ใช้จ่าย ${fmtMoney(ad.spend)} แล้วแต่ยังไม่มี booking ที่ track ได้`
       : lowReturn
         ? `ROAS ${ad.roas.toFixed(2)}x ต่ำกว่า guardrail หลังมี spend แล้ว`
-        : 'AI backend เห็นสัญญาณควรหยุดเพื่อกัน spend ไหลต่อ'
+        : 'Meta metrics เข้าเงื่อนไขควรหยุดเพื่อกัน spend ไหลต่อ'
     return finalize({
       id: `auto-os-${ad.id}`,
       ad,
@@ -2417,11 +2412,11 @@ function createAutoAdPlan({
       guardrail: `ปิดได้เมื่อ spend เกิน ${fmtMoney(thresholds.minSpend)} และมีสัญญาณ conversion/ROAS ไม่ผ่านเกณฑ์`,
       impact: 'ลดค่าใช้จ่ายของ ad ที่ยังไม่สร้าง booking และบังคับให้ทีมตรวจ creative, offer หรือ tracking ก่อนเปิดใหม่',
       nextStep: 'เพิ่มเข้าคิว แล้วกดยืนยันคิว Auto Ads เพื่อส่งคำสั่ง PAUSED ไป Meta',
-      confidence: noBookingLeak ? 90 : lowReturn ? 84 : 78,
+      confidence: 0,
       priority: noBookingLeak ? 5 : 4,
       risk: 'High',
       tone: 'critical',
-      evidence: noBookingLeak ? ['ไม่มี booking หลังมี spend'] : lowReturn ? ['ROAS ต่ำกว่า 1.00x'] : ['มี backend recommendation รองรับ'],
+      evidence: noBookingLeak ? ['ไม่มี booking หลังมี spend'] : lowReturn ? ['ROAS ต่ำกว่า 1.00x'] : ['Meta metrics เข้าเงื่อนไขปิด'],
     })
   }
 
@@ -2436,15 +2431,15 @@ function createAutoAdPlan({
       targetStatus: 'ACTIVE',
       label: 'เปิดกลับเพราะมีสัญญาณชนะ',
       actionLabel: 'เพิ่มคิวเปิด',
-      reason: `แม้ ad ถูกพักอยู่ แต่มี ROAS ${ad.roas.toFixed(2)}x, booking ${fmtNum(ad.bookings)} และคะแนน AI ${ad.score.toFixed(1)}`,
-      guardrail: 'เปิดกลับเฉพาะ ad ที่มีสัญญาณชนะหรือ backend confidence รองรับ และซิงก์ซ้ำหลังเขียนข้อมูล',
+      reason: `แม้ ad ถูกพักอยู่ แต่มี ROAS ${ad.roas.toFixed(2)}x, booking ${fmtNum(ad.bookings)} และ metric score ${ad.score.toFixed(1)}`,
+      guardrail: 'เปิดกลับเฉพาะ ad ที่มีสัญญาณชนะจาก Meta metrics และซิงก์ซ้ำหลังเขียนข้อมูล',
       impact: 'ให้ ad ที่มีสัญญาณดีมีโอกาสกลับมาส่ง โดยยังคุมด้วยคิวอนุมัติก่อนเขียน Meta',
       nextStep: 'เพิ่มเข้าคิว แล้วส่งคำสั่ง ACTIVE ไป Meta หลังตรวจรายการ',
-      confidence: winner ? 82 : 74,
+      confidence: 0,
       priority: 4,
       risk: 'Medium',
       tone: 'good',
-      evidence: ['อยู่ในสถานะหยุดอยู่', winner ? 'ผ่านเกณฑ์ winner' : 'backend แนะนำให้เปิด'],
+      evidence: ['อยู่ในสถานะหยุดอยู่', winner ? 'ผ่านเกณฑ์ winner' : 'Meta metrics เข้าเงื่อนไขเปิด'],
     })
   }
 
@@ -2458,11 +2453,11 @@ function createAutoAdPlan({
       decision: 'keep',
       label: 'เปิดต่อและใช้เป็นตัวชนะ',
       actionLabel: 'ไม่ต้องเขียน Meta',
-      reason: `ROAS ${ad.roas.toFixed(2)}x, booking ${fmtNum(ad.bookings)} และคะแนน AI ${ad.score.toFixed(1)} ผ่านเกณฑ์ตัวชนะ`,
+      reason: `ROAS ${ad.roas.toFixed(2)}x, booking ${fmtNum(ad.bookings)} และ metric score ${ad.score.toFixed(1)} ผ่านเกณฑ์ตัวชนะ`,
       guardrail: 'ไม่เขียนข้อมูลไป Meta ในรอบนี้ ให้ใช้เป็น reference สำหรับ scale หรือทำ creative variation',
       impact: 'รักษา ad ที่ทำงานดีไว้ และแยกออกจากกลุ่มที่ควรถูกปิด',
       nextStep: 'เปิดต่อและใช้ insight นี้เป็นต้นแบบของ creative หรือ audience รอบถัดไป',
-      confidence: 86,
+      confidence: 0,
       priority: 3,
       risk: 'Low',
       tone: 'good',
@@ -2480,15 +2475,15 @@ function createAutoAdPlan({
       decision: 'watch',
       label: 'เฝ้าดูและตรวจ creative',
       actionLabel: 'ยังไม่ส่งคำสั่ง',
-      reason: weakCtr ? `CTR ${ad.ctr.toFixed(2)}% ต่ำกว่าเกณฑ์ ${thresholds.ctrFloor.toFixed(2)}%` : `คะแนน AI ${ad.score.toFixed(1)} ยังไม่พอให้สั่งเปิดหรือปิด`,
+      reason: weakCtr ? `CTR ${ad.ctr.toFixed(2)}% ต่ำกว่าเกณฑ์ ${thresholds.ctrFloor.toFixed(2)}%` : `metric score ${ad.score.toFixed(1)} ยังไม่พอให้สั่งเปิดหรือปิด`,
       guardrail: 'ยังไม่ปิดอัตโนมัติจนกว่าจะมี spend และ conversion signal ชัดพอ',
       impact: 'กันการปิดเร็วเกินไป และส่งให้ตรวจ hook, audience, landing หรือ tracking',
       nextStep: 'ติดตามอีกหนึ่งรอบ หรือส่งให้ทีมครีเอทีฟปรับชิ้นงานก่อนตัดสินใจ',
-      confidence: sourceReduce ? 70 : 64,
+      confidence: 0,
       priority: 2,
       risk: 'Medium',
       tone: 'watch',
-      evidence: weakCtr ? ['CTR ต่ำกว่าเกณฑ์'] : sourceReduce ? ['backend แนะนำให้ลดแรงส่ง'] : ['AI score ต่ำ'],
+      evidence: weakCtr ? ['CTR ต่ำกว่าเกณฑ์'] : sourceReduce ? ['Meta metrics เข้าเงื่อนไขลดแรงส่ง'] : ['Metric score ต่ำ'],
     })
   }
 
@@ -2503,9 +2498,9 @@ function createAutoAdPlan({
     actionLabel: 'ไม่ต้องเขียน Meta',
     reason: `ยังไม่มีสัญญาณบวกหรือลบที่แรงพอ · spend ${fmtMoney(ad.spend)} · ROAS ${ad.roas.toFixed(2)}x`,
     guardrail: 'รอ insight รอบถัดไปก่อน execute เพื่อเลี่ยงการเปลี่ยนสถานะที่ไม่จำเป็น',
-    impact: 'เก็บข้อมูลต่อให้ AI ตัดสินใจแม่นขึ้นในรอบถัดไป',
+    impact: 'เก็บข้อมูลต่อจนกว่า Meta metrics จะมีสัญญาณชัดพอ',
     nextStep: ad.status === 'active' ? 'เปิดต่อและติดตาม metric หลัก' : 'ยังไม่เปิดกลับจนกว่าจะมีสัญญาณ winner',
-    confidence: 58,
+    confidence: 0,
     priority: 1,
     risk: 'Low',
     tone: ad.status === 'active' ? 'neutral' : 'watch',
@@ -2551,6 +2546,8 @@ function AutoAdsPage({
   const [showAllRecommendations, setShowAllRecommendations] = useState(false)
   const [isRulesPanelHighlighted, setIsRulesPanelHighlighted] = useState(false)
   const rulesPanelRef = useRef<HTMLElement | null>(null)
+  const automationPaused = automationMode === 'พัก automation'
+  const approvalMode = automationMode === 'ต้องอนุมัติก่อน'
 
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns])
   const adSetById = useMemo(() => new Map(adSets.map((adSet) => [adSet.id, adSet])), [adSets])
@@ -2582,7 +2579,7 @@ function AutoAdsPage({
   const watchPlans = plans.filter((plan) => plan.decision === 'watch')
   const allRecommendationPlans = [...activatePlans, ...keepPlans, ...pausePlans, ...watchPlans]
   const recommendationPlans = showAllRecommendations ? allRecommendationPlans : allRecommendationPlans.slice(0, 3)
-  const baseRules = useMemo(() => buildOptimizerRules(plans, campaigns.length), [campaigns.length, plans])
+  const baseRules = useMemo(() => buildOptimizerRules(plans), [plans])
   const rules = useMemo(() => [...customRules, ...baseRules], [baseRules, customRules])
   const displayRules = useMemo(
     () =>
@@ -2594,7 +2591,7 @@ function AutoAdsPage({
   )
   const activeRules = displayRules.filter((rule) => ruleOverrides[rule.id] ?? rule.defaultEnabled)
   const pausedRules = displayRules.length - activeRules.length
-  const actionablePlans = plans.filter((plan) => plan.confidence >= 68 && plan.decision !== 'watch').length
+  const actionablePlans = plans.filter((plan) => plan.targetStatus).length
   const inspectedSpend = ads.reduce((sum, ad) => sum + ad.spend, 0)
   const trendBookings = trendData.reduce((sum, point) => sum + point.bookings, 0)
   const insightRows = buildOptimizerInsights(plans, trendData)
@@ -2625,6 +2622,14 @@ function AutoAdsPage({
   const selectRecommendation = (plan: AutoAdPlan) => {
     setSelectedPlanId(plan.id)
     if (plan.targetStatus) {
+      if (automationPaused) {
+        setMessage('Automation ถูกพักอยู่: เปลี่ยนโหมดเป็น "ต้องอนุมัติก่อน" ก่อนส่งคำสั่งไป Meta')
+        return
+      }
+      if (!approvalMode) {
+        setMessage(`โหมดแนะนำเท่านั้น: ${plan.label} จากข้อมูล Meta จริง แต่ยังไม่เปิดการเขียนข้อมูล`)
+        return
+      }
       setPendingPlan(plan)
       setMessage('')
       return
@@ -2681,11 +2686,16 @@ function AutoAdsPage({
       setMessage(`เปิดใช้งานกฎ "${rule.title}" ก่อนรัน`)
       return
     }
+    if (automationPaused) {
+      setMessage('Automation ถูกพักอยู่: กฎจะไม่รันหรือเขียนข้อมูลจนกว่าจะเปิดโหมดอีกครั้ง')
+      return
+    }
     const candidates = buildOptimizerRuleCandidates(rule, plans)
     setRuleRun({
       candidates,
       generatedAt: new Date().toISOString(),
       rule,
+      writeEnabled: approvalMode,
     })
     setMessage('')
   }
@@ -2699,6 +2709,10 @@ function AutoAdsPage({
 
   const executeRuleRun = async () => {
     if (!ruleRun || isExecutingRule) return
+    if (!ruleRun.writeEnabled) {
+      recordRuleRun()
+      return
+    }
     const writableCandidates = optimizerRuleWritableCandidates(ruleRun.candidates)
     if (writableCandidates.length === 0) {
       recordRuleRun()
@@ -2734,6 +2748,11 @@ function AutoAdsPage({
 
   const executePlan = async () => {
     if (!pendingPlan?.targetStatus || isExecutingPlan) return
+    if (automationMode !== 'ต้องอนุมัติก่อน') {
+      setMessage('โหมดนี้ไม่อนุญาตให้เขียน Meta เปลี่ยนเป็น "ต้องอนุมัติก่อน" แล้วกดยืนยันอีกครั้ง')
+      setPendingPlan(null)
+      return
+    }
     setIsExecutingPlan(true)
     setMessage('')
 
@@ -2781,13 +2800,18 @@ function AutoAdsPage({
                     <span>{plan.campaign?.name ?? plan.ad.name}</span>
                     <small>{optimizerImpactText(plan)}</small>
                   </div>
-                  <button className={plan.targetStatus === 'PAUSED' ? 'danger-button' : plan.targetStatus === 'ACTIVE' ? 'primary-button' : 'outline-button'} type="button" onClick={() => selectRecommendation(plan)}>
-                    {plan.targetStatus ? 'ใช้แนะนำ' : 'ดูรายละเอียด'}
+                  <button
+                    className={approvalMode && plan.targetStatus === 'PAUSED' ? 'danger-button' : approvalMode && plan.targetStatus === 'ACTIVE' ? 'primary-button' : 'outline-button'}
+                    type="button"
+                    onClick={() => selectRecommendation(plan)}
+                    disabled={automationPaused && Boolean(plan.targetStatus)}
+                  >
+                    {automationPaused && plan.targetStatus ? 'พักอยู่' : plan.targetStatus ? (approvalMode ? 'ใช้แนะนำ' : 'ดูคำแนะนำ') : 'ดูรายละเอียด'}
                   </button>
                 </article>
               ))
             ) : (
-              <EmptyState title="ยังไม่มีคำแนะนำ" detail="ซิงก์ Meta API เพื่อให้ AI วิเคราะห์ ads และสร้างคำแนะนำ" />
+              <EmptyState title="ยังไม่มีคำแนะนำ" detail="ยังไม่มี ads ที่เข้าเงื่อนไขจาก Meta metrics ในช่วงวันที่นี้" />
             )}
           </div>
           {allRecommendationPlans.length > 3 && (
@@ -2850,7 +2874,7 @@ function AutoAdsPage({
               <h2>Active Automations</h2>
               <p>เปิด/ปิด automation ที่ทำงานกับ ads จริง</p>
             </div>
-            <StatusBadge label={`${activeRules.length} Running`} tone="good" />
+            <StatusBadge label={`${activeRules.length} เปิดอยู่`} tone={automationPaused ? 'critical' : 'good'} />
           </div>
           <div className="optimizer-active-list">
             {displayRules.slice(0, 4).map((rule) => {
@@ -2962,6 +2986,8 @@ function AutoAdsPage({
                 const candidates = buildOptimizerRuleCandidates(rule, plans)
                 const candidateCount = candidates.length
                 const writableCount = optimizerRuleWritableCandidates(candidates).length
+                const canRunRule = enabled && !automationPaused
+                const canWriteRule = approvalMode && writableCount > 0
                 return (
                   <article className="optimizer-rule-row" key={rule.id}>
                     <div className="optimizer-rule-name">
@@ -2970,21 +2996,21 @@ function AutoAdsPage({
                       </span>
                       <div>
                         <strong>{rule.title}</strong>
-                        <small>{rule.affectedAds} แคมเปญ</small>
+                        <small>{candidateCount} รายการเข้าเงื่อนไขจาก Meta</small>
                       </div>
                     </div>
                     <StatusBadge label={rule.type} tone={rule.tone} />
                     <span>{rule.condition}</span>
                     <span>
                       {rule.lastRun}
-                      <small>ทำงาน {rule.runCount} ครั้ง · พบ {candidateCount} รายการ</small>
+                      <small>{rule.runCount > 0 ? `บันทึกผล ${rule.runCount} ครั้ง` : 'ยังไม่มีประวัติรันจริง'} · พบ {candidateCount} รายการ</small>
                     </span>
                     <div className="optimizer-rule-actions">
                       <button className={`optimizer-switch ${enabled ? 'on' : ''}`} type="button" onClick={() => toggleRule(rule)} aria-label={`${enabled ? 'พัก' : 'เปิด'} ${rule.title}`} aria-pressed={enabled}>
                         <span />
                       </button>
-                      <button className="outline-button" type="button" onClick={() => openRuleRun(rule)} disabled={!enabled}>
-                        {writableCount > 0 ? `รันจริง ${writableCount}` : 'ตรวจรายการ'}
+                      <button className="outline-button" type="button" onClick={() => openRuleRun(rule)} disabled={!canRunRule}>
+                        {automationPaused ? 'พักอยู่' : canWriteRule ? `รันจริง ${writableCount}` : 'ตรวจรายการ'}
                       </button>
                     </div>
                   </article>
@@ -3058,7 +3084,8 @@ function OptimizerActionModal({
           <MetricLine label="Ad" value={plan.ad.name} />
           <MetricLine label="Meta ID" value={shortMetaId(plan.ad.id)} />
           <MetricLine label="Action" value={actionLabel} />
-          <MetricLine label="Confidence" value={`${plan.confidence}%`} />
+          <MetricLine label="Spend / ROAS" value={`${fmtMoney(plan.ad.spend)} · ${plan.ad.roas.toFixed(2)}x`} />
+          <MetricLine label="Booking" value={fmtNum(plan.ad.bookings)} />
           <MetricLine label="เหตุผล" value={plan.reason} />
           <MetricLine label="Rollback" value="เปิด/ปิดกลับได้จาก Ads Manager หลังซิงก์" />
         </div>
@@ -3084,9 +3111,9 @@ function OptimizerRuleCreateModal({
   onCancel: () => void
   onCreate: (values: OptimizerRuleFormValues) => void
 }) {
-  const [title, setTitle] = useState('หยุด Ad เมื่อ CPA สูง')
+  const [title, setTitle] = useState('')
   const [type, setType] = useState<OptimizerRule['type']>('Pause')
-  const [condition, setCondition] = useState('CPA > เป้าหมาย 2 วันติด และมี spend เกินเกณฑ์')
+  const [condition, setCondition] = useState('')
   const [affectedAds, setAffectedAds] = useState(Math.max(1, Math.min(campaignCount || 1, 30)))
   const [enabled, setEnabled] = useState(true)
   const canCreate = title.trim().length > 0 && condition.trim().length > 0 && affectedAds > 0
@@ -3183,7 +3210,8 @@ function OptimizerRuleRunModal({
   run: OptimizerRuleRun
 }) {
   const writableCandidates = optimizerRuleWritableCandidates(run.candidates)
-  const canWriteMeta = writableCandidates.length > 0
+  const canWriteMeta = run.writeEnabled && writableCandidates.length > 0
+  const hasBlockedWrites = !run.writeEnabled && writableCandidates.length > 0
   const reviewOnlyCount = run.candidates.length - writableCandidates.length
 
   return (
@@ -3192,15 +3220,21 @@ function OptimizerRuleRunModal({
         <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดผลการรันกฎ" disabled={isExecuting}>
           <X size={18} />
         </button>
-        <StatusBadge label={canWriteMeta ? 'Meta write ready' : 'Review only'} tone={canWriteMeta ? 'critical' : run.rule.tone} />
+        <StatusBadge label={canWriteMeta ? 'Meta write ready' : hasBlockedWrites ? 'โหมดแนะนำเท่านั้น' : 'Review only'} tone={canWriteMeta ? 'critical' : run.rule.tone} />
         <h2 id="optimizer-rule-run-title">{canWriteMeta ? 'ยืนยันรันกฎจริงกับ Meta' : `ตรวจรายการกฎ: ${run.rule.title}`}</h2>
-        <p>{canWriteMeta ? `กฎนี้จะส่งคำสั่งไป Meta Marketing API จริงหลังยืนยัน: ${run.rule.condition}` : `${run.rule.condition} · กฎนี้ยังไม่มี Meta write action ที่ปลอดภัย จึงเป็นรายการตรวจเท่านั้น`}</p>
+        <p>
+          {canWriteMeta
+            ? `กฎนี้จะส่งคำสั่งไป Meta Marketing API จริงหลังยืนยัน: ${run.rule.condition}`
+            : hasBlockedWrites
+              ? `${run.rule.condition} · มีรายการที่ส่ง Meta ได้ แต่โหมดปัจจุบันเป็นแนะนำเท่านั้น จึงไม่เขียนข้อมูล`
+              : `${run.rule.condition} · กฎนี้ยังไม่มี Meta write action ที่ปลอดภัย จึงเป็นรายการตรวจเท่านั้น`}
+        </p>
         <div className="confirm-grid">
           <MetricLine label="พบรายการ" value={`${run.candidates.length} ads`} />
-          <MetricLine label="จะส่ง Meta จริง" value={`${writableCandidates.length} ads`} />
-          <MetricLine label="ตรวจอย่างเดียว" value={`${reviewOnlyCount} ads`} />
+          <MetricLine label="จะส่ง Meta จริง" value={`${canWriteMeta ? writableCandidates.length : 0} ads`} />
+          <MetricLine label="ตรวจอย่างเดียว" value={`${canWriteMeta ? reviewOnlyCount : run.candidates.length} ads`} />
           <MetricLine label="รันเมื่อ" value={new Date(run.generatedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} />
-          <MetricLine label="สถานะ" value={canWriteMeta ? 'พร้อมเขียน Meta หลังยืนยัน' : 'ยังไม่เขียน Meta'} />
+          <MetricLine label="สถานะ" value={canWriteMeta ? 'พร้อมเขียน Meta หลังยืนยัน' : hasBlockedWrites ? 'ถูกบล็อกโดยโหมดแนะนำเท่านั้น' : 'ยังไม่เขียน Meta'} />
         </div>
         <div className="rule-run-list">
           {run.candidates.length > 0 ? (
@@ -3251,9 +3285,7 @@ function optimizerRecommendationTitle(plan: AutoAdPlan) {
 }
 
 function optimizerImpactText(plan: AutoAdPlan) {
-  if (plan.decision === 'pause') return `คาดว่าประหยัดงบประมาณ ${fmtMoneyShort(plan.ad.spend * 0.08)}`
-  if (plan.decision === 'activate' || plan.decision === 'keep') return `คาดว่าจะเพิ่มผลลัพธ์ ${fmtMoneyShort(Math.max(plan.ad.spend * Math.max(plan.ad.roas, 0.6), 12000))}`
-  return 'รอข้อมูลเพิ่มก่อนเปิด automation'
+  return `Meta จริง: Spend ${fmtMoneyShort(plan.ad.spend)} · ROAS ${plan.ad.roas.toFixed(2)}x · Booking ${fmtNum(plan.ad.bookings)}`
 }
 
 const OPTIMIZER_CUSTOM_RULES_KEY = 'pmc.optimizer.customRules'
@@ -3337,6 +3369,9 @@ function buildOptimizerRuleCandidates(rule: OptimizerRule, plans: AutoAdPlan[]):
       if (rule.type === 'Pause') {
         return plan.decision === 'pause' || plan.ad.roas < 1 || (plan.ad.spend >= 500 && plan.ad.bookings === 0)
       }
+      if (rule.id === 'target-cpa') {
+        return plan.ad.bookings > 0 && plan.ad.spend / plan.ad.bookings > 120
+      }
       if (rule.type === 'Budget') {
         return plan.decision === 'keep' || plan.decision === 'activate' || plan.ad.roas >= 1.5 || plan.ad.score >= 7.5
       }
@@ -3345,7 +3380,7 @@ function buildOptimizerRuleCandidates(rule: OptimizerRule, plans: AutoAdPlan[]):
       }
       return plan.decision === 'watch' || plan.decision === 'pause' || plan.ad.ctr < 1 || plan.ad.score < 6
     })
-    .toSorted((a, b) => b.ad.spend - a.ad.spend || b.confidence - a.confidence)
+    .toSorted((a, b) => b.ad.spend - a.ad.spend || b.ad.roas - a.ad.roas)
     .slice(0, Math.max(1, rule.affectedAds))
 
   return candidates.map((plan) => {
@@ -3367,7 +3402,7 @@ function buildOptimizerRuleCandidates(rule: OptimizerRule, plans: AutoAdPlan[]):
         ad: plan.ad,
         campaign: plan.campaign,
         plan,
-        reason: `ROAS ${plan.ad.roas.toFixed(2)}x / score ${plan.ad.score.toFixed(1)} เหมาะกับการตรวจเพิ่มงบ`,
+        reason: `ROAS ${plan.ad.roas.toFixed(2)}x / metric score ${plan.ad.score.toFixed(1)} เหมาะกับการตรวจเพิ่มงบ`,
         writable: false,
       }
     }
@@ -3388,77 +3423,66 @@ function buildOptimizerRuleCandidates(rule: OptimizerRule, plans: AutoAdPlan[]):
       ad: plan.ad,
       campaign: plan.campaign,
       plan,
-      reason: plan.decision === 'pause' ? 'ประสิทธิภาพต่ำ ควรทำ creative/offer ใหม่ก่อนเปิดต่อ' : 'สัญญาณ CTR หรือ AI score ยังไม่แข็งแรง',
+      reason: plan.decision === 'pause' ? 'ประสิทธิภาพต่ำ ควรทำ creative/offer ใหม่ก่อนเปิดต่อ' : 'สัญญาณ CTR หรือ metric score ยังไม่แข็งแรง',
       writable: false,
     }
   })
 }
 
-function buildOptimizerRules(plans: AutoAdPlan[], campaignCount: number): OptimizerRule[] {
+function buildOptimizerRules(plans: AutoAdPlan[]): OptimizerRule[] {
   const pauseCount = plans.filter((plan) => plan.decision === 'pause').length
   const keepCount = plans.filter((plan) => plan.decision === 'keep').length
   const activateCount = plans.filter((plan) => plan.decision === 'activate').length
+  const highCpaCount = plans.filter((plan) => plan.ad.bookings > 0 && plan.ad.spend / plan.ad.bookings > 120).length
 
   return [
     {
       id: 'scale-high-roas',
       title: 'เพิ่มงบเมื่อ ROAS สูง',
-      subtitle: 'เพิ่มงบ 20% เมื่อเจอตัวชนะ',
+      subtitle: 'ตรวจรายการที่มีสัญญาณชนะจาก Meta',
       type: 'Budget',
-      condition: 'ROAS > 3.0x ต่อเนื่อง 2 วัน',
-      lastRun: '2 ชั่วโมงที่แล้ว',
-      runCount: Math.max(3, keepCount),
+      condition: 'ROAS > 3.0x หรือ metric score สูง',
+      lastRun: 'ยังไม่เคยรัน',
+      runCount: 0,
       tone: 'good',
       defaultEnabled: true,
-      affectedAds: Math.max(1, keepCount || campaignCount),
+      affectedAds: keepCount + activateCount,
     },
     {
       id: 'pause-low-roas',
       title: 'หยุดแคมเปญประสิทธิภาพต่ำ',
       subtitle: 'หยุด ads ที่ใช้จ่ายแล้วไม่คุ้ม',
       type: 'Pause',
-      condition: 'ROAS < 1.0x ต่อเนื่อง 2 วัน',
-      lastRun: '5 ชั่วโมงที่แล้ว',
-      runCount: Math.max(2, pauseCount),
+      condition: 'ROAS < 1.0x หรือมี spend แต่ไม่มี conversion',
+      lastRun: 'ยังไม่เคยรัน',
+      runCount: 0,
       tone: 'critical',
       defaultEnabled: true,
-      affectedAds: Math.max(1, pauseCount),
+      affectedAds: pauseCount,
     },
     {
       id: 'target-cpa',
-      title: 'ปรับงบตาม CPA เป้าหมาย',
-      subtitle: 'รักษา CPA ไม่ให้เกินเกณฑ์',
+      title: 'ตรวจ CPA เกินเป้าหมาย',
+      subtitle: 'ตรวจรายการที่ CPA สูงจาก Meta conversions',
       type: 'Budget',
-      condition: 'CPA > ฿120 ปรับลด 20%',
-      lastRun: '1 ชั่วโมงที่แล้ว',
-      runCount: Math.max(5, plans.filter((plan) => plan.ad.bookings > 0).length),
+      condition: 'CPA > ฿120 จาก spend / conversion',
+      lastRun: 'ยังไม่เคยรัน',
+      runCount: 0,
       tone: 'info',
       defaultEnabled: true,
-      affectedAds: Math.max(1, Math.round(campaignCount / 4)),
-    },
-    {
-      id: 'daypart-schedule',
-      title: 'ปรับงบตามเวลา',
-      subtitle: 'เพิ่มแรงส่งช่วงเวลาที่ปิดเคสได้ดี',
-      type: 'Schedule',
-      condition: 'เวลา 18:00 - 23:00 เพิ่มงบ 20%',
-      lastRun: 'กำลังทำงาน',
-      runCount: 6,
-      tone: 'violet',
-      defaultEnabled: true,
-      affectedAds: Math.max(1, Math.round(campaignCount / 5)),
+      affectedAds: highCpaCount,
     },
     {
       id: 'new-ad-boost',
-      title: 'เพิ่มงบให้แคมเปญใหม่',
-      subtitle: 'เร่งเก็บข้อมูลช่วง learning',
+      title: 'ตรวจ creative ที่ต้องรีเฟรช',
+      subtitle: 'ตรวจ creative จาก CTR/metric score ของ Meta',
       type: 'Creative',
-      condition: 'แคมเปญใหม่ 3 วันแรก เพิ่มงบ 30%',
-      lastRun: '1 วันที่แล้ว',
-      runCount: Math.max(2, activateCount),
+      condition: 'CTR ต่ำหรือ metric score ต่ำ',
+      lastRun: 'ยังไม่เคยรัน',
+      runCount: 0,
       tone: 'watch',
       defaultEnabled: false,
-      affectedAds: Math.max(1, activateCount),
+      affectedAds: plans.filter((plan) => plan.decision === 'watch' || plan.decision === 'pause' || plan.ad.ctr < 1 || plan.ad.score < 6).length,
     },
   ]
 }
@@ -3697,7 +3721,6 @@ export function AutoAdsPageDraft({
   const [minSpend, setMinSpend] = useState(500)
   const [winnerRoas, setWinnerRoas] = useState(2)
   const [ctrFloor, setCtrFloor] = useState(0.8)
-  const [confidenceFloor, setConfidenceFloor] = useState(70)
   const [activeLane, setActiveLane] = useState<'all' | AutoAdDecision>('all')
   const [search, setSearch] = useState('')
   const [selectedPlanId, setSelectedPlanId] = useState('')
@@ -3710,15 +3733,14 @@ export function AutoAdsPageDraft({
   const safeMinSpend = clampNumber(minSpend, 100, 100000)
   const safeWinnerRoas = clampNumber(winnerRoas, 0.5, 20)
   const safeCtrFloor = clampNumber(ctrFloor, 0.1, 10)
-  const safeConfidenceFloor = clampNumber(confidenceFloor, 40, 95)
   const thresholds = useMemo<AutoAdsThresholds>(
     () => ({
-      confidenceFloor: safeConfidenceFloor,
+      confidenceFloor: 0,
       ctrFloor: safeCtrFloor,
       minSpend: safeMinSpend,
       winnerRoas: safeWinnerRoas,
     }),
-    [safeConfidenceFloor, safeCtrFloor, safeMinSpend, safeWinnerRoas],
+    [safeCtrFloor, safeMinSpend, safeWinnerRoas],
   )
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns])
   const adSetById = useMemo(() => new Map(adSets.map((adSet) => [adSet.id, adSet])), [adSets])
@@ -3880,7 +3902,7 @@ export function AutoAdsPageDraft({
                   <div className="auto-os-badges">
                     <StatusBadge label={autoAdDecisionLabel(activePlan.decision)} tone={activePlan.tone} />
                     <StatusBadge label={deliveryLabel(activePlan.ad.status)} tone={deliveryTone(activePlan.ad.status)} />
-                    <StatusBadge label={`มั่นใจ ${activePlan.confidence}%`} tone={activePlan.confidence >= 80 ? 'good' : activePlan.confidence >= 65 ? 'watch' : 'neutral'} />
+                    <StatusBadge label={`Metric score ${activePlan.ad.score.toFixed(1)}`} tone={activePlan.tone} />
                   </div>
                   <h3 className="auto-os-inspector-title">{activePlan.ad.name}</h3>
                   <MetricLine label="Campaign" value={activePlan.campaign?.name ?? shortMetaId(activePlan.ad.campaignId)} />
@@ -3919,7 +3941,7 @@ export function AutoAdsPageDraft({
                     <div className="auto-os-queue-row" key={plan.id}>
                       <StatusBadge label={mutationStatusLabel(plan.targetStatus ?? '')} tone={plan.targetStatus === 'PAUSED' ? 'critical' : 'good'} />
                       <strong>{plan.ad.name}</strong>
-                      <span>{shortMetaId(plan.ad.id)} · มั่นใจ {plan.confidence}%</span>
+                      <span>{shortMetaId(plan.ad.id)} · {fmtMoney(plan.ad.spend)} spend</span>
                       <button className="outline-button" type="button" onClick={() => removeQueuedPlan(plan.id)}>
                         เอาออก
                       </button>
@@ -3977,10 +3999,6 @@ export function AutoAdsPageDraft({
                 CTR ต่ำกว่า
                 <input min={0.1} max={10} step={0.1} type="number" value={ctrFloor} onChange={(event) => setCtrFloor(Number(event.target.value))} onBlur={() => setCtrFloor(safeCtrFloor)} />
               </label>
-              <label>
-                ความมั่นใจขั้นต่ำ
-                <input min={40} max={95} step={1} type="number" value={confidenceFloor} onChange={(event) => setConfidenceFloor(Number(event.target.value))} onBlur={() => setConfidenceFloor(safeConfidenceFloor)} />
-              </label>
             </div>
           </div>
           <div className="auto-os-actions">
@@ -4014,7 +4032,7 @@ export function AutoAdsPageDraft({
           </div>
         </SectionCard>
 
-        <SectionCard collapsible title="Decision Board" subtitle="รายการถูกจัดตามความเร่งด่วน confidence และ spend ที่เสี่ยงไหลต่อ">
+        <SectionCard collapsible title="Decision Board" subtitle="รายการถูกจัดตาม Meta metrics และ spend ที่เสี่ยงไหลต่อ">
           <div className="auto-os-toolbar">
             <label className="search-box">
               <Search size={15} />
