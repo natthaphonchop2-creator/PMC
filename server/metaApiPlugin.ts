@@ -25,7 +25,7 @@ import type {
 
 const GRAPH_HOST = 'https://graph.facebook.com'
 const DEFAULT_GRAPH_VERSION = 'v21.0'
-const DEFAULT_DATE_PRESET = 'last_30d'
+const DEFAULT_DATE_PRESET = 'maximum'
 const DEFAULT_MAX_PAGES = 6
 const MAX_META_JSON_BODY_BYTES = 1_000_000
 const LOCAL_CONFIG_FILE = resolve(process.cwd(), '.meta-api.local.json')
@@ -265,9 +265,10 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
       const config = await readMetaConfig(env)
 
       if (requestUrl.pathname === '/api/meta/status') {
+        const connection = config ? await checkMetaConnection(config) : null
         writeJson(res, 200, {
           configured: Boolean(config),
-          connected: Boolean(config),
+          connected: Boolean(connection?.ok),
           graphVersion: config?.graphVersion ?? env.META_GRAPH_VERSION ?? DEFAULT_GRAPH_VERSION,
           adAccountId: config ? maskAdAccountId(config.adAccountId) : null,
           datePreset: config?.defaultDatePreset ?? DEFAULT_DATE_PRESET,
@@ -275,6 +276,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
           settingsSource: config?.source ?? null,
           tokenLocation: config?.source === 'web-settings' ? 'server-local-file' : 'server-env',
           canEditInWeb: true,
+          connection,
           requiredEnv: await buildConfigChecks(env),
         })
         return
@@ -314,18 +316,23 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
             return
           }
 
-          await saveLocalConfig(nextConfig)
-          const savedConfig = await readMetaConfig(env)
-          if (!savedConfig) {
-            writeJson(res, 500, { ok: false, error: 'ไม่สามารถโหลด config ที่บันทึกแล้วได้' })
+          const candidateConfig = buildMetaConfigFromPersisted(nextConfig, env)
+          const result = await checkMetaConnection(candidateConfig)
+          if (!result.ok) {
+            writeJson(res, 400, {
+              ...result,
+              configured: false,
+              settingsSource: null,
+              error: 'Meta API config validation failed. Credentials were not saved.',
+            })
             return
           }
 
-          const result = await checkMetaConnection(savedConfig)
+          await saveLocalConfig(nextConfig)
           writeJson(res, 200, {
             ...result,
             configured: true,
-            settingsSource: savedConfig.source,
+            settingsSource: candidateConfig.source,
           })
           return
         }
@@ -470,14 +477,7 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
 async function readMetaConfig(env: MetaApiPluginEnv): Promise<MetaConfig | null> {
   const localConfig = await readLocalConfig()
   if (localConfig?.accessToken && localConfig.adAccountId) {
-    return {
-      accessToken: localConfig.accessToken.trim(),
-      adAccountId: normalizeAdAccountId(localConfig.adAccountId),
-      graphVersion: (localConfig.graphVersion || env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
-      defaultDatePreset: (localConfig.defaultDatePreset || env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
-      maxPages: Number(localConfig.maxPages || env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
-      source: 'web-settings',
-    }
+    return buildMetaConfigFromPersisted(localConfig, env)
   }
 
   const accessToken = env.META_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || ''
@@ -491,6 +491,17 @@ async function readMetaConfig(env: MetaApiPluginEnv): Promise<MetaConfig | null>
     defaultDatePreset: (env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
     maxPages: Number(env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
     source: 'server-env',
+  }
+}
+
+function buildMetaConfigFromPersisted(config: PersistedMetaConfig, env: MetaApiPluginEnv): MetaConfig {
+  return {
+    accessToken: config.accessToken.trim(),
+    adAccountId: normalizeAdAccountId(config.adAccountId),
+    graphVersion: (config.graphVersion || env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
+    defaultDatePreset: (config.defaultDatePreset || env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
+    maxPages: Number(config.maxPages || env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
+    source: 'web-settings',
   }
 }
 
@@ -895,6 +906,7 @@ async function executeMetaObjectStatus(
   config: MetaConfig,
   action: { objectType: 'campaign' | 'adset' | 'ad'; objectId: string; status: 'ACTIVE' | 'PAUSED' },
 ) {
+  await assertMetaObjectMatchesType(config, action)
   const result = await graphPost<{ success?: boolean }>(config, `/${action.objectId}`, { status: action.status })
 
   return {
@@ -905,6 +917,38 @@ async function executeMetaObjectStatus(
     checkedAt: new Date().toISOString(),
     source: 'Meta Marketing API',
   }
+}
+
+async function assertMetaObjectMatchesType(
+  config: MetaConfig,
+  action: { objectType: 'campaign' | 'adset' | 'ad'; objectId: string },
+) {
+  const edge = {
+    campaign: 'campaigns',
+    adset: 'adsets',
+    ad: 'ads',
+  }[action.objectType]
+
+  const filtering = JSON.stringify([{ field: 'id', operator: 'IN', value: [action.objectId] }])
+
+  try {
+    const result = await graphGet<{ data?: Array<{ id?: string }> }>(config, `/${config.adAccountId}/${edge}`, {
+      fields: 'id',
+      filtering,
+      limit: 1,
+    })
+    const isExpectedType = result.data?.some((record) => record.id === action.objectId)
+    if (isExpectedType) return
+  } catch (error) {
+    throw new MetaApiError(
+      `Unable to verify Meta object ${action.objectId} as ${action.objectType}`,
+      error instanceof MetaApiError ? error.status : 400,
+      error instanceof MetaApiError ? error.fbCode : undefined,
+      error instanceof MetaApiError ? error.fbType : undefined,
+    )
+  }
+
+  throw new MetaApiError(`Meta object ${action.objectId} is not a ${action.objectType} in ${maskAdAccountId(config.adAccountId)}`, 400)
 }
 
 function normalizeMetaObjectType(objectType: string) {
@@ -951,6 +995,8 @@ async function mutateMetaObject(config: MetaConfig, body: Record<string, unknown
   if (!objectId) {
     throw new MetaApiError('Missing Meta object ID', 400)
   }
+
+  await assertMetaObjectMatchesType(config, { objectType, objectId })
 
   if (operation === 'delete') {
     const result = await graphDelete<{ success?: boolean }>(config, `/${objectId}`)
@@ -1601,7 +1647,7 @@ function buildMemoryItems(
       id: 'meta-memory-window',
       category: 'Preference',
       title: `Reporting window: ${datePreset}`,
-      detail: `Studio pages use the current Meta date preset and do not use local mock records`,
+      detail: `Studio pages use the current Meta date preset and live Meta records`,
       source: 'Meta Marketing API date preset',
       confidence: 92,
       updatedAt: now,

@@ -1,0 +1,97 @@
+[
+  {
+    "id": "orchestrator",
+    "name": "Dashboard Redesign Orchestrator Agent",
+    "thaiName": "ผู้คุมภาพรวมงานรีดีไซน์",
+    "mission": "Keep the dashboard redesign coherent from research to Figma review and implementation handoff.",
+    "responsibilities": [
+      "Maintain the end-to-end workflow",
+      "Track decisions, blockers, and acceptance criteria",
+      "Coordinate handoffs between specialist agents"
+    ],
+    "outputs": [
+      "Workflow status",
+      "Decision log",
+      "Final handoff summary"
+    ]
+  },
+  {
+    "id": "product-context",
+    "name": "Product Context Agent",
+    "thaiName": "ผู้วิเคราะห์บริบทสินค้า",
+    "mission": "Extract the app purpose, dashboard modules, metrics, and user workflows from the codebase.",
+    "responsibilities": [
+      "Read product copy, navigation, data types, and dashboard views",
+      "Identify required metrics and operational constraints",
+      "Summarize redesign opportunities grounded in source files"
+    ],
+    "outputs": [
+      "Product brief",
+      "Metric inventory",
+      "UX opportunity list"
+    ]
+  },
+  {
+    "id": "visual-reference",
+    "name": "Visual Reference Agent",
+    "thaiName": "ผู้กำกับภาพอ้างอิง",
+    "mission": "Define the AI-generated visual reference direction for a pragmatic clinic ads cockpit.",
+    "responsibilities": [
+      "Write image-generation prompts",
+      "Maintain visual principles and anti-patterns",
+      "Translate product needs into layout direction"
+    ],
+    "outputs": [
+      "Reference image prompt",
+      "Visual direction notes"
+    ]
+  },
+  {
+    "id": "figma-mockup",
+    "name": "Figma Mockup Agent",
+    "thaiName": "ผู้สร้าง Mockup ใน Figma",
+    "mission": "Create the dashboard mockup in Figma using stable layout, reusable tokens, and implementation-friendly structure.",
+    "responsibilities": [
+      "Build desktop dashboard frames",
+      "Use consistent spacing, type, color, and component naming",
+      "Prepare layers for review and engineering handoff"
+    ],
+    "outputs": [
+      "Figma design file",
+      "Layer inventory",
+      "Implementation notes"
+    ]
+  },
+  {
+    "id": "design-review",
+    "name": "Design Review Agent",
+    "thaiName": "ผู้รีวิวดีไซน์",
+    "mission": "Review the final design for usability, hierarchy, accessibility, and implementation risk.",
+    "responsibilities": [
+      "Check navigation and dashboard density",
+      "Review contrast, typography, spacing, and responsive risks",
+      "Produce actionable findings before implementation"
+    ],
+    "outputs": [
+      "Design review checklist",
+      "Actionable findings",
+      "Approval recommendation"
+    ]
+  },
+  {
+    "id": "knowledge-curator",
+    "name": "Knowledge Curator Agent",
+    "thaiName": "ผู้ดูแล Knowledge Base",
+    "mission": "Keep durable redesign knowledge organized as markdown files with clear ownership and handoffs.",
+    "responsibilities": [
+      "Maintain markdown files and metadata",
+      "Index decisions and references",
+      "Record cross-agent handoffs"
+    ],
+    "outputs": [
+      "Knowledge base index",
+      "Agent notes",
+      "Handoff records"
+    ]
+  }
+]
