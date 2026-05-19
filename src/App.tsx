@@ -189,6 +189,14 @@ type OptimizerRule = {
   affectedAds: number
 }
 
+type OptimizerStrategy = AutoAdDecision | 'all'
+
+type OptimizerBatch = {
+  generatedAt: string
+  plans: AutoAdPlan[]
+  strategy: OptimizerStrategy
+}
+
 type OptimizerRuleFormValues = {
   affectedAds: number
   condition: string
@@ -2534,6 +2542,9 @@ function AutoAdsPage({
   const [pendingPlan, setPendingPlan] = useState<AutoAdPlan | null>(null)
   const [isExecutingPlan, setIsExecutingPlan] = useState(false)
   const [message, setMessage] = useState('')
+  const [optimizerStrategy, setOptimizerStrategy] = useState<OptimizerStrategy>('all')
+  const [pendingOptimizerBatch, setPendingOptimizerBatch] = useState<OptimizerBatch | null>(null)
+  const [isExecutingOptimizerBatch, setIsExecutingOptimizerBatch] = useState(false)
   const [ruleSearch, setRuleSearch] = useState('')
   const [ruleStatusFilter, setRuleStatusFilter] = useState('all')
   const [ruleTypeFilter, setRuleTypeFilter] = useState('all')
@@ -2572,13 +2583,28 @@ function AutoAdsPage({
         .sort((a, b) => b.sortScore - a.sortScore),
     [adSetById, ads, autoAdById, campaignById],
   )
-  const selectedPlan = plans.find((plan) => plan.id === selectedPlanId) ?? plans[0]
   const pausePlans = plans.filter((plan) => plan.decision === 'pause')
   const keepPlans = plans.filter((plan) => plan.decision === 'keep')
   const activatePlans = plans.filter((plan) => plan.decision === 'activate')
   const watchPlans = plans.filter((plan) => plan.decision === 'watch')
   const allRecommendationPlans = [...activatePlans, ...keepPlans, ...pausePlans, ...watchPlans]
-  const recommendationPlans = showAllRecommendations ? allRecommendationPlans : allRecommendationPlans.slice(0, 3)
+  const optimizerPlans = allRecommendationPlans.filter((plan) => optimizerStrategy === 'all' || plan.decision === optimizerStrategy)
+  const selectedPlan = optimizerPlans.find((plan) => plan.id === selectedPlanId) ?? plans.find((plan) => plan.id === selectedPlanId) ?? optimizerPlans[0] ?? plans[0]
+  const recommendationPlans = showAllRecommendations ? optimizerPlans : optimizerPlans.slice(0, 3)
+  const optimizerWritablePlans = optimizerPlans.filter(isOptimizerPlanWritable)
+  const optimizerSpend = optimizerPlans.reduce((sum, plan) => sum + plan.ad.spend, 0)
+  const optimizerRevenue = optimizerPlans.reduce((sum, plan) => sum + plan.ad.spend * plan.ad.roas, 0)
+  const optimizerRoas = optimizerSpend > 0 ? optimizerRevenue / optimizerSpend : 0
+  const optimizerBookings = optimizerPlans.reduce((sum, plan) => sum + plan.ad.bookings, 0)
+  const optimizerButtonClass = approvalMode && optimizerWritablePlans.some((plan) => plan.targetStatus === 'PAUSED') ? 'danger-button' : approvalMode && optimizerWritablePlans.length > 0 ? 'primary-button' : 'outline-button'
+  const optimizerButtonLabel = automationPaused ? 'พักอยู่' : approvalMode && optimizerWritablePlans.length > 0 ? `Optimize จริง ${optimizerWritablePlans.length} รายการ` : 'ตรวจระบบ Optimizer'
+  const optimizerStrategyCards: Array<{ count: number; strategy: OptimizerStrategy; tone: Tone }> = [
+    { count: allRecommendationPlans.length, strategy: 'all', tone: 'info' },
+    { count: activatePlans.length, strategy: 'activate', tone: 'good' },
+    { count: keepPlans.length, strategy: 'keep', tone: 'good' },
+    { count: pausePlans.length, strategy: 'pause', tone: 'critical' },
+    { count: watchPlans.length, strategy: 'watch', tone: 'watch' },
+  ]
   const baseRules = useMemo(() => buildOptimizerRules(plans), [plans])
   const rules = useMemo(() => [...customRules, ...baseRules], [baseRules, customRules])
   const displayRules = useMemo(
@@ -2617,6 +2643,41 @@ function AutoAdsPage({
       rulesPanelRef.current?.focus({ preventScroll: true })
     }, 0)
     window.setTimeout(() => setIsRulesPanelHighlighted(false), 1800)
+  }
+
+  const selectOptimizerStrategy = (strategy: OptimizerStrategy) => {
+    setOptimizerStrategy(strategy)
+    setShowAllRecommendations(false)
+    setMessage('')
+    const firstPlan = allRecommendationPlans.find((plan) => strategy === 'all' || plan.decision === strategy)
+    if (firstPlan) setSelectedPlanId(firstPlan.id)
+  }
+
+  const startOptimizerBatch = () => {
+    if (!optimizerPlans.length) {
+      setMessage('ยังไม่มีรายการเข้าเงื่อนไขจาก Meta metrics สำหรับกลยุทธ์นี้')
+      return
+    }
+    const firstPlan = optimizerPlans[0]
+    if (firstPlan) setSelectedPlanId(firstPlan.id)
+    if (automationPaused) {
+      setMessage('Automation ถูกพักอยู่: Optimizer จะไม่เขียน Meta จนกว่าจะเปิดโหมดอีกครั้ง')
+      return
+    }
+    if (!approvalMode) {
+      setMessage(`โหมดแนะนำเท่านั้น: ตรวจพบ ${optimizerPlans.length} รายการจาก Meta จริง แต่ยังไม่เขียนข้อมูล`)
+      return
+    }
+    if (!optimizerWritablePlans.length) {
+      setMessage('กลยุทธ์นี้ยังไม่มีรายการที่ต้องเขียน Meta จริง ใช้เป็นรายการรีวิวเท่านั้น')
+      return
+    }
+    setPendingOptimizerBatch({
+      generatedAt: new Date().toISOString(),
+      plans: optimizerWritablePlans.slice(0, 25),
+      strategy: optimizerStrategy,
+    })
+    setMessage('')
   }
 
   const selectRecommendation = (plan: AutoAdPlan) => {
@@ -2776,6 +2837,46 @@ function AutoAdsPage({
     }
   }
 
+  const executeOptimizerBatch = async () => {
+    if (!pendingOptimizerBatch || isExecutingOptimizerBatch) return
+    if (automationMode !== 'ต้องอนุมัติก่อน') {
+      setMessage('โหมดนี้ไม่อนุญาตให้ Optimizer เขียน Meta เปลี่ยนเป็น "ต้องอนุมัติก่อน" แล้วรันอีกครั้ง')
+      setPendingOptimizerBatch(null)
+      return
+    }
+    const writablePlans = pendingOptimizerBatch.plans.filter(isOptimizerPlanWritable)
+    if (!writablePlans.length) {
+      setMessage('ไม่มีรายการใน batch ที่ยังเขียน Meta ได้จริงหลังตรวจสถานะล่าสุด')
+      setPendingOptimizerBatch(null)
+      return
+    }
+
+    setIsExecutingOptimizerBatch(true)
+    setMessage('')
+    try {
+      for (const chunk of chunkArray(writablePlans, 25)) {
+        await apiJson('/api/meta/bulk-status', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            actions: chunk.map((plan) => ({
+              objectType: 'ad',
+              objectId: plan.ad.id,
+              status: plan.targetStatus,
+            })),
+          }),
+        })
+      }
+      await onMutationComplete()
+      setMessage(`Optimizer อัปเดตสถานะจริงใน Meta แล้ว ${writablePlans.length} รายการ`)
+      setPendingOptimizerBatch(null)
+    } catch (error) {
+      setMessage(error instanceof Error ? formatApiMessage(error.message) : 'Optimizer เขียนข้อมูลไป Meta ไม่สำเร็จ')
+    } finally {
+      setIsExecutingOptimizerBatch(false)
+    }
+  }
+
   return (
     <>
     <div className="optimizer-page">
@@ -2783,15 +2884,63 @@ function AutoAdsPage({
         <section className={`optimizer-panel optimizer-recommendations ${showAllRecommendations ? 'expanded' : ''}`}>
           <div className="optimizer-panel-head">
             <div>
-              <h2>Optimizer Recommendations</h2>
-              <p>{showAllRecommendations ? allRecommendationPlans.length : recommendationPlans.length} คำแนะนำจาก ads ที่ซิงก์ล่าสุด</p>
+              <h2>ระบบ Optimizer</h2>
+              <p>คัดรายการจาก Meta metrics จริง และส่งคำสั่งผ่าน approval เท่านั้น</p>
             </div>
-            <StatusBadge label={`${showAllRecommendations ? allRecommendationPlans.length : recommendationPlans.length}`} tone="violet" />
+            <StatusBadge label={`${optimizerPlans.length}`} tone={optimizerStrategyTone(optimizerStrategy)} />
+          </div>
+          <div className="optimizer-control-panel">
+            <div className="optimizer-control-main">
+              <span>กลยุทธ์ที่กำลังตรวจ</span>
+              <strong>{optimizerStrategyLabel(optimizerStrategy)}</strong>
+              <small>{optimizerStrategyDetail(optimizerStrategy)}</small>
+            </div>
+            <div className="optimizer-control-kpis" aria-label="Optimizer metrics from Meta">
+              <span>
+                <small>เข้าเงื่อนไข</small>
+                <strong>{fmtNum(optimizerPlans.length)}</strong>
+              </span>
+              <span>
+                <small>พร้อมเขียน Meta</small>
+                <strong>{fmtNum(optimizerWritablePlans.length)}</strong>
+              </span>
+              <span>
+                <small>Spend ที่ตรวจ</small>
+                <strong>{fmtMoneyShort(optimizerSpend)}</strong>
+              </span>
+              <span>
+                <small>ROAS / Booking</small>
+                <strong>{optimizerRoas > 0 ? `${optimizerRoas.toFixed(2)}x` : '0.00x'} · {fmtNum(optimizerBookings)}</strong>
+              </span>
+            </div>
+            <div className="optimizer-strategy-tabs" role="tablist" aria-label="เลือกกลยุทธ์ Optimizer">
+              {optimizerStrategyCards.map((card) => (
+                <button
+                  aria-selected={optimizerStrategy === card.strategy}
+                  className={optimizerStrategy === card.strategy ? 'active' : ''}
+                  key={card.strategy}
+                  onClick={() => selectOptimizerStrategy(card.strategy)}
+                  role="tab"
+                  type="button"
+                >
+                  <span>{optimizerStrategyLabel(card.strategy)}</span>
+                  <StatusBadge label={`${card.count}`} tone={card.tone} />
+                </button>
+              ))}
+            </div>
+            <div className="optimizer-control-actions">
+              <button className={optimizerButtonClass} type="button" onClick={startOptimizerBatch} disabled={automationPaused || optimizerPlans.length === 0}>
+                {optimizerButtonLabel}
+              </button>
+              <button className="outline-button" type="button" onClick={manageAllAutomations}>
+                จัดการกฎ
+              </button>
+            </div>
           </div>
           <div className="optimizer-recommendation-list">
             {recommendationPlans.length > 0 ? (
               recommendationPlans.map((plan) => (
-                <article className={`optimizer-recommendation-row ${plan.tone}`} key={plan.id}>
+                <article className={`optimizer-recommendation-row ${plan.tone} ${selectedPlan?.id === plan.id ? 'selected' : ''}`} key={plan.id}>
                   <div className="optimizer-icon-box">
                     <LineChart size={18} />
                   </div>
@@ -2814,7 +2963,7 @@ function AutoAdsPage({
               <EmptyState title="ยังไม่มีคำแนะนำ" detail="ยังไม่มี ads ที่เข้าเงื่อนไขจาก Meta metrics ในช่วงวันที่นี้" />
             )}
           </div>
-          {allRecommendationPlans.length > 3 && (
+          {optimizerPlans.length > 3 && (
             <button
               aria-expanded={showAllRecommendations}
               className="optimizer-link-button"
@@ -2824,7 +2973,7 @@ function AutoAdsPage({
                 setMessage('')
               }}
             >
-              {showAllRecommendations ? 'ย่อรายการ' : `ดูทั้งหมด ${allRecommendationPlans.length} รายการ`}
+              {showAllRecommendations ? 'ย่อรายการ' : `ดูทั้งหมด ${optimizerPlans.length} รายการ`}
               {showAllRecommendations ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             </button>
           )}
@@ -3054,6 +3203,16 @@ function AutoAdsPage({
     ) : null}
     {isRuleModalOpen ? <OptimizerRuleCreateModal campaignCount={campaigns.length} onCancel={() => setIsRuleModalOpen(false)} onCreate={createRule} /> : null}
     {ruleRun ? <OptimizerRuleRunModal isExecuting={isExecutingRule} onCancel={() => setRuleRun(null)} onConfirm={executeRuleRun} onRecord={recordRuleRun} run={ruleRun} /> : null}
+    {pendingOptimizerBatch ? (
+      <OptimizerBatchModal
+        batch={pendingOptimizerBatch}
+        isExecuting={isExecutingOptimizerBatch}
+        onCancel={() => {
+          if (!isExecutingOptimizerBatch) setPendingOptimizerBatch(null)
+        }}
+        onConfirm={executeOptimizerBatch}
+      />
+    ) : null}
     </>
   )
 }
@@ -3095,6 +3254,67 @@ function OptimizerActionModal({
           </button>
           <button className={plan.targetStatus === 'PAUSED' ? 'danger-button' : 'primary-button'} type="button" onClick={onConfirm} disabled={isExecuting || !plan.targetStatus}>
             {isExecuting ? 'กำลังอัปเดต Meta...' : `ยืนยัน ${actionLabel}`}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function OptimizerBatchModal({
+  batch,
+  isExecuting,
+  onCancel,
+  onConfirm,
+}: {
+  batch: OptimizerBatch
+  isExecuting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const writablePlans = batch.plans.filter(isOptimizerPlanWritable)
+  const pauseCount = writablePlans.filter((plan) => plan.targetStatus === 'PAUSED').length
+  const activateCount = writablePlans.filter((plan) => plan.targetStatus === 'ACTIVE').length
+  const checkedSpend = writablePlans.reduce((sum, plan) => sum + plan.ad.spend, 0)
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-modal optimizer-batch-modal" role="dialog" aria-modal="true" aria-labelledby="optimizer-batch-title">
+        <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดการยืนยัน Optimizer" disabled={isExecuting}>
+          <X size={18} />
+        </button>
+        <StatusBadge label="Meta write batch" tone={pauseCount > 0 ? 'critical' : 'good'} />
+        <h2 id="optimizer-batch-title">ยืนยัน Optimizer Batch</h2>
+        <p>ระบบจะส่งคำสั่งระดับ Ad ไป Meta Marketing API จริงตามรายการที่ผ่าน guardrail แล้วเท่านั้น</p>
+        <div className="confirm-grid">
+          <MetricLine label="กลยุทธ์" value={optimizerStrategyLabel(batch.strategy)} />
+          <MetricLine label="รายการที่จะเขียน Meta" value={`${writablePlans.length} ads`} />
+          <MetricLine label="ปิด Ad" value={`${pauseCount} รายการ`} />
+          <MetricLine label="เปิด Ad" value={`${activateCount} รายการ`} />
+          <MetricLine label="Spend ที่ตรวจ" value={fmtMoneyShort(checkedSpend)} />
+          <MetricLine label="สร้างเมื่อ" value={new Date(batch.generatedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} />
+        </div>
+        <div className="rule-run-list">
+          {writablePlans.slice(0, 8).map((plan) => (
+            <article className="rule-run-row" key={`optimizer-batch-${plan.ad.id}`}>
+              <div>
+                <StatusBadge label={mutationStatusLabel(plan.targetStatus)} tone={plan.targetStatus === 'PAUSED' ? 'critical' : 'good'} />
+                <StatusBadge label={shortMetaId(plan.ad.id)} tone="neutral" />
+              </div>
+              <strong>{plan.ad.name}</strong>
+              <span>{plan.campaign?.name ?? 'Meta campaign'} · {plan.reason}</span>
+              <small>
+                Spend {fmtMoney(plan.ad.spend)} · ROAS {plan.ad.roas.toFixed(2)}x · Booking {fmtNum(plan.ad.bookings)}
+              </small>
+            </article>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="outline-button" type="button" onClick={onCancel} disabled={isExecuting}>
+            ยกเลิก
+          </button>
+          <button className={pauseCount > 0 ? 'danger-button' : 'primary-button'} type="button" onClick={onConfirm} disabled={isExecuting || writablePlans.length === 0}>
+            {isExecuting ? 'กำลังส่ง Meta...' : `ยืนยันส่ง Meta ${writablePlans.length} รายการ`}
           </button>
         </div>
       </section>
@@ -3286,6 +3506,36 @@ function optimizerRecommendationTitle(plan: AutoAdPlan) {
 
 function optimizerImpactText(plan: AutoAdPlan) {
   return `Meta จริง: Spend ${fmtMoneyShort(plan.ad.spend)} · ROAS ${plan.ad.roas.toFixed(2)}x · Booking ${fmtNum(plan.ad.bookings)}`
+}
+
+function optimizerStrategyLabel(strategy: OptimizerStrategy) {
+  if (strategy === 'pause') return 'ปิดตัวเสีย'
+  if (strategy === 'activate') return 'เปิดตัวชนะ'
+  if (strategy === 'keep') return 'เปิดต่อ'
+  if (strategy === 'watch') return 'เฝ้าดู'
+  return 'ทั้งหมด'
+}
+
+function optimizerStrategyDetail(strategy: OptimizerStrategy) {
+  if (strategy === 'pause') return 'เฉพาะ ads ที่เปิดอยู่และเข้าเงื่อนไขหยุดจาก spend, ROAS หรือ booking'
+  if (strategy === 'activate') return 'เฉพาะ ads ที่หยุดอยู่แต่มีสัญญาณชนะจาก Meta metrics'
+  if (strategy === 'keep') return 'ads ที่เปิดอยู่และผ่านเกณฑ์ตัวชนะ ใช้เป็น reference โดยไม่เขียน Meta'
+  if (strategy === 'watch') return 'ads ที่ยังไม่ควรเขียนสถานะ แต่ควรติดตาม creative หรือ tracking'
+  return 'รวมทุกกลุ่มจาก Meta metrics รอบล่าสุด แล้วแยกเฉพาะรายการที่ส่งคำสั่ง Meta ได้จริง'
+}
+
+function optimizerStrategyTone(strategy: OptimizerStrategy): Tone {
+  if (strategy === 'pause') return 'critical'
+  if (strategy === 'activate' || strategy === 'keep') return 'good'
+  if (strategy === 'watch') return 'watch'
+  return 'violet'
+}
+
+function isOptimizerPlanWritable(plan: AutoAdPlan): plan is AutoAdPlan & { targetStatus: 'ACTIVE' | 'PAUSED' } {
+  if (!plan.targetStatus) return false
+  if (plan.targetStatus === 'PAUSED') return plan.ad.status === 'active'
+  if (plan.targetStatus === 'ACTIVE') return plan.ad.status === 'paused'
+  return false
 }
 
 const OPTIMIZER_CUSTOM_RULES_KEY = 'pmc.optimizer.customRules'
