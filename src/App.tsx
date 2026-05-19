@@ -2549,6 +2549,8 @@ function AutoAdsPage({
   const [ruleRunStates, setRuleRunStates] = useState<Record<string, OptimizerRuleRunState>>({})
   const [isExecutingRule, setIsExecutingRule] = useState(false)
   const [showAllRecommendations, setShowAllRecommendations] = useState(false)
+  const [isRulesPanelHighlighted, setIsRulesPanelHighlighted] = useState(false)
+  const rulesPanelRef = useRef<HTMLElement | null>(null)
 
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns])
   const adSetById = useMemo(() => new Map(adSets.map((adSet) => [adSet.id, adSet])), [adSets])
@@ -2606,6 +2608,19 @@ function AutoAdsPage({
     if (!query) return true
     return `${rule.title} ${rule.subtitle} ${rule.condition} ${rule.type}`.toLowerCase().includes(query)
   })
+
+  const manageAllAutomations = () => {
+    setRuleSearch('')
+    setRuleStatusFilter('all')
+    setRuleTypeFilter('all')
+    setMessage('')
+    setIsRulesPanelHighlighted(true)
+    window.setTimeout(() => {
+      rulesPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      rulesPanelRef.current?.focus({ preventScroll: true })
+    }, 0)
+    window.setTimeout(() => setIsRulesPanelHighlighted(false), 1800)
+  }
 
   const selectRecommendation = (plan: AutoAdPlan) => {
     setSelectedPlanId(plan.id)
@@ -2854,7 +2869,7 @@ function AutoAdsPage({
               )
             })}
           </div>
-          <button className="optimizer-link-button" type="button" onClick={() => setMessage('แสดง Automation ทั้งหมดแล้ว')}>
+          <button className="optimizer-link-button" type="button" onClick={manageAllAutomations}>
             จัดการ Automations ทั้งหมด
             <ChevronRight size={15} />
           </button>
@@ -2897,7 +2912,12 @@ function AutoAdsPage({
           </div>
         </section>
 
-        <section className="optimizer-panel optimizer-rules-panel">
+        <section
+          aria-label="จัดการ Automation Rules ทั้งหมด"
+          className={`optimizer-panel optimizer-rules-panel ${isRulesPanelHighlighted ? 'attention' : ''}`}
+          ref={rulesPanelRef}
+          tabIndex={-1}
+        >
           <div className="optimizer-panel-head">
             <div>
               <h2>Automation Rules</h2>
