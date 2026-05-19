@@ -909,8 +909,11 @@ function App() {
               automationMode={automationMode}
               autoAds={workspace?.autoAds ?? []}
               campaigns={displayCampaigns}
+              datePreset={datePreset}
+              onDateChange={setDatePreset}
               onModeChange={setAutomationMode}
               onMutationComplete={() => refreshWorkspace('execution')}
+              trendData={workspace?.trendData ?? []}
             />
           )}
           {activeTab === 'creative' && <CreativeStudioPage components={workspace?.insightComponents ?? []} />}
@@ -2515,16 +2518,22 @@ function AutoAdsPage({
   automationMode,
   autoAds,
   campaigns,
+  datePreset,
+  onDateChange,
   onModeChange,
   onMutationComplete,
+  trendData,
 }: {
   adSets: WorkspaceData['adSets']
   ads: WorkspaceData['adInsights']
   automationMode: string
   autoAds: WorkspaceData['autoAds']
   campaigns: Campaign[]
+  datePreset: string
+  onDateChange: (value: string) => void
   onModeChange: (value: string) => void
   onMutationComplete: () => Promise<void>
+  trendData: TrendPoint[]
 }) {
   const [selectedPlanId, setSelectedPlanId] = useState('')
   const [pendingPlan, setPendingPlan] = useState<AutoAdPlan | null>(null)
@@ -2581,13 +2590,11 @@ function AutoAdsPage({
   )
   const activeRules = displayRules.filter((rule) => ruleOverrides[rule.id] ?? rule.defaultEnabled)
   const pausedRules = displayRules.length - activeRules.length
-  const actionsToday = plans.filter((plan) => plan.confidence >= 68 && plan.decision !== 'watch').length
-  const estimatedImpact = Math.round(
-    keepPlans.slice(0, 4).reduce((sum, plan) => sum + plan.ad.spend * Math.max(plan.ad.roas - 1, 0.4), 0) -
-      pausePlans.slice(0, 4).reduce((sum, plan) => sum + plan.ad.spend * 0.08, 0),
-  )
-  const insightRows = buildOptimizerInsights(plans)
-  const chartPoints = buildOptimizerChart(plans.length, actionsToday)
+  const actionablePlans = plans.filter((plan) => plan.confidence >= 68 && plan.decision !== 'watch').length
+  const inspectedSpend = ads.reduce((sum, ad) => sum + ad.spend, 0)
+  const trendBookings = trendData.reduce((sum, point) => sum + point.bookings, 0)
+  const insightRows = buildOptimizerInsights(plans, trendData)
+  const chartPoints = buildOptimizerChart(trendData)
   const query = ruleSearch.trim().toLowerCase()
   const visibleRules = displayRules.filter((rule) => {
     const enabled = ruleOverrides[rule.id] ?? rule.defaultEnabled
@@ -2773,30 +2780,39 @@ function AutoAdsPage({
         <section className="optimizer-panel">
           <div className="optimizer-panel-head">
             <div>
-              <h2>Performance Insights</h2>
-              <p>แนวโน้มสำคัญจาก ad-level performance</p>
+              <h2>อินไซต์ประสิทธิภาพจริง</h2>
+              <p>ข้อมูลจริงจาก Meta daily insights · {datePreset}</p>
             </div>
-            <select aria-label="ช่วง insight" defaultValue="30d">
-              <option value="30d">30 วันล่าสุด</option>
-              <option value="7d">7 วันล่าสุด</option>
-              <option value="all">ข้อมูลทั้งหมด</option>
+            <select aria-label="ช่วง insight" value={datePreset} onChange={(event) => onDateChange(event.target.value)}>
+              {datePresetOptions.map((option) => (
+                <option value={option} key={option}>
+                  {option}
+                </option>
+              ))}
             </select>
           </div>
-          <div className="optimizer-insight-list">
-            {insightRows.map((insight) => (
-              <div className="optimizer-insight-row" key={insight.label}>
-                <div className={`optimizer-icon-box ${insight.tone}`}>
-                  <LineChart size={18} />
+          {insightRows.length > 0 ? (
+            <div className="optimizer-insight-list">
+              {insightRows.map((insight) => (
+                <div className="optimizer-insight-row" key={insight.label}>
+                  <div className={`optimizer-icon-box ${insight.tone}`}>
+                    <LineChart size={18} />
+                  </div>
+                  <div>
+                    <span>{insight.label}</span>
+                    <strong>{insight.value}</strong>
+                    <small>{insight.detail}</small>
+                  </div>
+                  <OptimizerSparkline unit={insight.unit} values={insight.values} tone={insight.tone} />
                 </div>
-                <div>
-                  <span>{insight.label}</span>
-                  <strong>{insight.value}</strong>
-                  <small>{insight.detail}</small>
-                </div>
-                <OptimizerSparkline unit={insight.unit} values={insight.values} tone={insight.tone} />
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="ไม่มี daily insight จาก Meta ในช่วงนี้"
+              detail="เปลี่ยนช่วงวันที่หรือกดเชื่อมต่อ Meta API อีกครั้ง ระบบจะไม่เติมตัวเลข mockup แทนข้อมูลจริง"
+            />
+          )}
         </section>
 
         <section className="optimizer-panel">
@@ -2838,24 +2854,34 @@ function AutoAdsPage({
           <div className="optimizer-panel-head">
             <div>
               <h2>Automation Summary</h2>
-              <p>ภาพรวมการทำงานของระบบอัตโนมัติ</p>
+              <p>กฎ automation และ metric จริงจาก Meta รอบปัจจุบัน</p>
             </div>
           </div>
           <div className="optimizer-summary-grid">
-            <OptimizerSummaryTile label="กำลังทำงาน" value={`${activeRules.length}`} detail="Active" tone="good" />
-            <OptimizerSummaryTile label="หยุดชั่วคราว" value={`${pausedRules}`} detail="Paused" tone="watch" />
-            <OptimizerSummaryTile label="ทำงานวันนี้" value={`${actionsToday}`} detail="Actions today" tone="info" />
-            <OptimizerSummaryTile label="ผลลัพธ์จาก Automation" value={fmtMoneyShort(Math.abs(estimatedImpact))} detail="Last 7 days" tone={estimatedImpact >= 0 ? 'good' : 'critical'} />
+            <OptimizerSummaryTile label="กฎที่เปิดอยู่" value={`${activeRules.length}`} detail="Active rules" tone="good" />
+            <OptimizerSummaryTile label="กฎที่พักไว้" value={`${pausedRules}`} detail="Paused rules" tone="watch" />
+            <OptimizerSummaryTile label="รายการเข้าเกณฑ์" value={`${actionablePlans}`} detail="จาก Meta รอบนี้" tone="info" />
+            <OptimizerSummaryTile label="Spend ที่ตรวจ" value={fmtMoneyShort(inspectedSpend)} detail={datePreset} tone={trendBookings > 0 ? 'good' : 'neutral'} />
           </div>
           <div className="optimizer-chart-panel">
             <div className="optimizer-chart-head">
-              <strong>Actions Over Time</strong>
-              <select aria-label="ช่วงกราฟ" defaultValue="7d">
-                <option value="7d">7 วันล่าสุด</option>
-                <option value="30d">30 วันล่าสุด</option>
+              <strong>Booking ที่ Meta track ตามวัน</strong>
+              <select aria-label="ช่วงกราฟ" value={datePreset} onChange={(event) => onDateChange(event.target.value)}>
+                {datePresetOptions.map((option) => (
+                  <option value={option} key={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </div>
-            <OptimizerLineChart points={chartPoints} />
+            {chartPoints.length > 0 ? (
+              <OptimizerLineChart points={chartPoints} />
+            ) : (
+              <EmptyState
+                title="ไม่มีข้อมูลรายวันสำหรับกราฟ"
+                detail="กราฟนี้ใช้ time_increment=1 จาก Meta API เท่านั้น จึงไม่แสดงเส้นจำลองเมื่อ API ไม่ส่งข้อมูล"
+              />
+            )}
           </div>
         </section>
 
@@ -3388,26 +3414,32 @@ function buildOptimizerRules(plans: AutoAdPlan[], campaignCount: number): Optimi
 
 type OptimizerInsightUnit = 'money' | 'percent' | 'ratio'
 
-function buildOptimizerInsights(plans: AutoAdPlan[]) {
-  const ads = plans.map((plan) => plan.ad)
-  const activeAds = ads.filter((ad) => ad.spend > 0 || ad.clicks > 0 || ad.bookings > 0)
-  const totalSpend = activeAds.reduce((sum, ad) => sum + ad.spend, 0)
-  const totalRevenue = activeAds.reduce((sum, ad) => sum + ad.spend * ad.roas, 0)
-  const totalBookings = activeAds.reduce((sum, ad) => sum + ad.bookings, 0)
-  const totalClicks = activeAds.reduce((sum, ad) => sum + ad.clicks, 0)
-  const realAds = activeAds.length > 0 ? activeAds : ads
+function buildOptimizerInsights(plans: AutoAdPlan[], trendData: TrendPoint[]) {
+  const dailyRows = trendData.filter((point) => point.spend > 0 || point.revenue > 0 || point.clicks > 0 || point.bookings > 0)
+  if (!dailyRows.length) return []
+
+  const totalSpend = dailyRows.reduce((sum, point) => sum + point.spend, 0)
+  const totalRevenue = dailyRows.reduce((sum, point) => sum + point.revenue, 0)
+  const totalBookings = dailyRows.reduce((sum, point) => sum + point.bookings, 0)
+  const totalClicks = dailyRows.reduce((sum, point) => sum + point.clicks, 0)
   const averageRoas = totalSpend > 0 ? totalRevenue / totalSpend : 0
   const averageCpa = totalBookings > 0 ? totalSpend / totalBookings : 0
   const conversionRate = totalClicks > 0 ? (totalBookings / totalClicks) * 100 : 0
-  const roasSeries = buildRealInsightSeries(realAds, (ad) => ad.roas)
-  const cpaSeries = buildRealInsightSeries(realAds.filter((ad) => ad.bookings > 0), (ad) => ad.spend / Math.max(ad.bookings, 1))
-  const conversionSeries = buildRealInsightSeries(realAds.filter((ad) => ad.clicks > 0), (ad) => (ad.bookings / Math.max(ad.clicks, 1)) * 100)
+  const sparklineRows = dailyRows.slice(-12)
+  const roasSeries = sparklineRows.map((point) => (point.spend > 0 ? point.revenue / point.spend : 0))
+  const cpaSeries = sparklineRows
+    .filter((point) => point.bookings > 0)
+    .map((point) => point.spend / point.bookings)
+  const conversionSeries = sparklineRows
+    .filter((point) => point.clicks > 0)
+    .map((point) => (point.bookings / point.clicks) * 100)
+  const sourceDetail = `${fmtNum(dailyRows.length)} วันจาก Meta · ${fmtNum(plans.length)} ads`
 
   return [
     {
       label: 'ROAS เฉลี่ยจริง',
       value: `${averageRoas.toFixed(2)}x`,
-      detail: `${fmtNum(realAds.length)} ads · spend ${fmtMoneyShort(totalSpend)}`,
+      detail: `${sourceDetail} · spend ${fmtMoneyShort(totalSpend)}`,
       tone: 'good' as Tone,
       unit: 'ratio' as OptimizerInsightUnit,
       values: roasSeries,
@@ -3431,29 +3463,27 @@ function buildOptimizerInsights(plans: AutoAdPlan[]) {
   ]
 }
 
-function buildRealInsightSeries(ads: WorkspaceData['adInsights'], selector: (ad: WorkspaceData['adInsights'][number]) => number) {
-  const values = ads
-    .filter((ad) => ad.spend > 0 || ad.clicks > 0 || ad.bookings > 0)
-    .toSorted((a, b) => b.spend - a.spend || b.bookings - a.bookings || b.clicks - a.clicks)
-    .slice(0, 7)
-    .map((ad) => selector(ad))
-    .filter((value) => Number.isFinite(value) && value >= 0)
-
-  return values.length > 0 ? values : [0]
-}
-
 function formatOptimizerInsightMetric(value: number, unit: OptimizerInsightUnit) {
   if (unit === 'money') return fmtMoney(value)
   if (unit === 'ratio') return `${value.toFixed(2)}x`
   return `${value.toFixed(2)}%`
 }
 
-function buildOptimizerChart(totalPlans: number, actionsToday: number) {
-  const base = Math.max(8, Math.round(totalPlans / 5))
-  return ['May 12', 'May 13', 'May 14', 'May 15', 'May 16', 'May 17', 'May 18'].map((label, index) => ({
-    label,
-    value: Math.max(5, base + ((index * 7 + actionsToday) % 31)),
-  }))
+function buildOptimizerChart(trendData: TrendPoint[]) {
+  return trendData
+    .filter((point) => point.spend > 0 || point.revenue > 0 || point.clicks > 0 || point.bookings > 0)
+    .slice(-12)
+    .map((point) => ({
+      label: formatTrendPointLabel(point.date),
+      value: point.bookings,
+    }))
+}
+
+function formatTrendPointLabel(date: string) {
+  if (!date || date === '-') return '-'
+  const parts = date.split('-')
+  if (parts.length === 3) return `${parts[2]}/${parts[1]}`
+  return date
 }
 
 function OptimizerSummaryTile({ detail, label, tone, value }: { detail: string; label: string; tone: Tone; value: string }) {
@@ -3468,6 +3498,14 @@ function OptimizerSummaryTile({ detail, label, tone, value }: { detail: string; 
 
 function OptimizerSparkline({ tone, unit, values }: { tone: Tone; unit: OptimizerInsightUnit; values: number[] }) {
   const safeValues = values.filter((value) => Number.isFinite(value))
+  if (!safeValues.length) {
+    return (
+      <div className={`optimizer-sparkline-card ${tone}`}>
+        <div className="optimizer-sparkline-empty">ไม่มีข้อมูลรายวัน</div>
+      </div>
+    )
+  }
+
   const min = Math.min(...safeValues, 0)
   const max = Math.max(...safeValues, 1)
   const range = Math.max(max - min, max || 1, 1)
@@ -3512,11 +3550,11 @@ function OptimizerLineChart({ points }: { points: Array<{ label: string; value: 
     <div className="optimizer-line-chart">
       <div className="optimizer-chart-kpis" aria-label="Automation chart metrics">
         <span>
-          <small>รวม 7 วัน</small>
+          <small>รวมช่วงนี้</small>
           <strong>{fmtNum(total)}</strong>
         </span>
         <span>
-          <small>เฉลี่ย</small>
+          <small>เฉลี่ยต่อวัน</small>
           <strong>{fmtNum(average)}</strong>
         </span>
         <span>
@@ -3543,7 +3581,7 @@ function OptimizerLineChart({ points }: { points: Array<{ label: string; value: 
               </linearGradient>
             </defs>
             <CartesianGrid stroke="#eef2f8" strokeDasharray="3 9" vertical={false} />
-            <XAxis dataKey="label" tickFormatter={(value: string) => value.replace('May ', '')} tick={{ fontSize: 11, fill: '#667085', fontWeight: 700 }} axisLine={false} tickLine={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#667085', fontWeight: 700 }} axisLine={false} tickLine={false} />
             <YAxis tick={{ fontSize: 11, fill: '#98a2b3', fontWeight: 700 }} axisLine={false} tickLine={false} width={38} />
             <ReferenceLine y={average} stroke="#a78bfa" strokeDasharray="7 7" strokeWidth={1.5} ifOverflow="extendDomain" />
             <Tooltip cursor={{ fill: 'rgba(117, 103, 216, 0.06)', stroke: '#c7d2fe', strokeWidth: 1 }} content={<OptimizerChartTooltip average={average} />} />
@@ -3551,7 +3589,7 @@ function OptimizerLineChart({ points }: { points: Array<{ label: string; value: 
             <Area
               type="monotone"
               dataKey="value"
-              name="ดำเนินการ"
+              name="Tracked booking"
               stroke="#4f46e5"
               strokeWidth={4}
               fill="url(#optimizerActionFill)"
@@ -3582,8 +3620,8 @@ function OptimizerChartTooltip({
   return (
     <div className="optimizer-chart-tooltip">
       <span>{label}</span>
-      <strong>{fmtNum(value)} actions</strong>
-      <small>ค่าเฉลี่ย {fmtNum(average)} actions</small>
+      <strong>{fmtNum(value)} booking</strong>
+      <small>ค่าเฉลี่ย {fmtNum(average)} booking/วัน</small>
     </div>
   )
 }
