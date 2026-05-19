@@ -2540,6 +2540,7 @@ function AutoAdsPage({
 }) {
   const [selectedPlanId, setSelectedPlanId] = useState('')
   const [pendingPlan, setPendingPlan] = useState<AutoAdPlan | null>(null)
+  const [reviewPlan, setReviewPlan] = useState<AutoAdPlan | null>(null)
   const [isExecutingPlan, setIsExecutingPlan] = useState(false)
   const [message, setMessage] = useState('')
   const [optimizerStrategy, setOptimizerStrategy] = useState<OptimizerStrategy>('all')
@@ -2708,14 +2709,16 @@ function AutoAdsPage({
         return
       }
       if (!approvalMode) {
-        setMessage(`โหมดแนะนำเท่านั้น: ${plan.label} จากข้อมูล Meta จริง แต่ยังไม่เปิดการเขียนข้อมูล`)
+        setReviewPlan(plan)
+        setMessage('')
         return
       }
       setPendingPlan(plan)
       setMessage('')
       return
     }
-    setMessage(`เลือกคำแนะนำ: ${plan.label}`)
+    setReviewPlan(plan)
+    setMessage('')
   }
 
   const toggleRule = (rule: OptimizerRule) => {
@@ -3232,6 +3235,18 @@ function AutoAdsPage({
         plan={pendingPlan}
       />
     ) : null}
+    {reviewPlan ? (
+      <OptimizerPlanDetailModal
+        approvalMode={approvalMode}
+        onClose={() => setReviewPlan(null)}
+        onEnableApproval={() => {
+          onModeChange('ต้องอนุมัติก่อน')
+          setReviewPlan(null)
+          setMessage(`เปลี่ยนเป็นโหมดต้องอนุมัติก่อนแล้ว เลือก "${optimizerPlanButtonLabel(reviewPlan, true, false)}" เพื่อเปิดหน้าต่างยืนยัน`)
+        }}
+        plan={reviewPlan}
+      />
+    ) : null}
     {isRuleModalOpen ? <OptimizerRuleCreateModal campaignCount={campaigns.length} onCancel={() => setIsRuleModalOpen(false)} onCreate={createRule} /> : null}
     {ruleRun ? <OptimizerRuleRunModal isExecuting={isExecutingRule} onCancel={() => setRuleRun(null)} onConfirm={executeRuleRun} onRecord={recordRuleRun} run={ruleRun} /> : null}
     {pendingOptimizerBatch ? (
@@ -3286,6 +3301,62 @@ function OptimizerActionModal({
           <button className={plan.targetStatus === 'PAUSED' ? 'danger-button' : 'primary-button'} type="button" onClick={onConfirm} disabled={isExecuting || !plan.targetStatus}>
             {isExecuting ? 'กำลังอัปเดต Meta...' : `ยืนยัน ${actionLabel}`}
           </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function OptimizerPlanDetailModal({
+  approvalMode,
+  onClose,
+  onEnableApproval,
+  plan,
+}: {
+  approvalMode: boolean
+  onClose: () => void
+  onEnableApproval: () => void
+  plan: AutoAdPlan
+}) {
+  const actionLabel = plan.targetStatus ? mutationStatusLabel(plan.targetStatus) : 'ไม่ต้องเขียน Meta'
+  const cpa = plan.ad.bookings > 0 ? plan.ad.spend / plan.ad.bookings : 0
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-modal optimizer-detail-modal" role="dialog" aria-modal="true" aria-labelledby="optimizer-detail-title">
+        <button className="modal-close" type="button" onClick={onClose} aria-label="ปิดรายละเอียดคำแนะนำ">
+          <X size={18} />
+        </button>
+        <StatusBadge label={optimizerPlanStatusLabel(plan)} tone={plan.targetStatus === 'PAUSED' ? 'critical' : plan.targetStatus === 'ACTIVE' ? 'good' : plan.tone} />
+        <h2 id="optimizer-detail-title">{optimizerRecommendationTitle(plan)}</h2>
+        <p>รายละเอียดนี้ใช้ Meta metrics รอบล่าสุดเท่านั้น และยังไม่เขียนข้อมูลกลับ Meta จนกว่าจะผ่านหน้าต่างยืนยัน</p>
+        <div className="confirm-grid">
+          <MetricLine label="Ad" value={plan.ad.name} />
+          <MetricLine label="Campaign" value={plan.campaign?.name ?? shortMetaId(plan.ad.campaignId)} />
+          <MetricLine label="Meta ID" value={shortMetaId(plan.ad.id)} />
+          <MetricLine label="สถานะปัจจุบัน" value={deliveryLabel(plan.ad.status)} />
+          <MetricLine label="Action ที่แนะนำ" value={actionLabel} />
+          <MetricLine label="Spend / ROAS" value={`${fmtMoney(plan.ad.spend)} · ${plan.ad.roas.toFixed(2)}x`} />
+          <MetricLine label="Booking / CPA" value={`${fmtNum(plan.ad.bookings)} · ${cpa ? fmtMoney(cpa) : 'ยังไม่มี booking'}`} />
+          <MetricLine label="CTR / Score" value={`${plan.ad.ctr.toFixed(2)}% · ${plan.ad.score.toFixed(1)}`} />
+          <MetricLine label="เหตุผล" value={plan.reason} />
+          <MetricLine label="Guardrail" value={plan.guardrail} />
+          <MetricLine label="ขั้นถัดไป" value={plan.nextStep} />
+        </div>
+        <div className="optimizer-evidence-list" aria-label="หลักฐานจาก Meta metrics">
+          {plan.evidence.slice(0, 8).map((item) => (
+            <span key={`${plan.id}-${item}`}>{item}</span>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="outline-button" type="button" onClick={onClose}>
+            ปิด
+          </button>
+          {plan.targetStatus && !approvalMode ? (
+            <button className="primary-button" type="button" onClick={onEnableApproval}>
+              เปิดโหมดอนุมัติก่อน
+            </button>
+          ) : null}
         </div>
       </section>
     </div>
