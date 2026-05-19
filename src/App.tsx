@@ -2699,7 +2699,7 @@ function AutoAdsPage({
 
   const executeRuleRun = async () => {
     if (!ruleRun || isExecutingRule) return
-    const writableCandidates = ruleRun.candidates.filter((candidate) => candidate.writable && candidate.targetStatus).slice(0, 25)
+    const writableCandidates = optimizerRuleWritableCandidates(ruleRun.candidates)
     if (writableCandidates.length === 0) {
       recordRuleRun()
       return
@@ -2708,17 +2708,19 @@ function AutoAdsPage({
     setIsExecutingRule(true)
     setMessage('')
     try {
-      await apiJson('/api/meta/bulk-status', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          actions: writableCandidates.map((candidate) => ({
-            objectType: 'ad',
-            objectId: candidate.ad.id,
-            status: candidate.targetStatus,
-          })),
-        }),
-      })
+      for (const chunk of chunkArray(writableCandidates, 25)) {
+        await apiJson('/api/meta/bulk-status', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            actions: chunk.map((candidate) => ({
+              objectType: 'ad',
+              objectId: candidate.ad.id,
+              status: candidate.targetStatus,
+            })),
+          }),
+        })
+      }
       await onMutationComplete()
       markRuleRun(ruleRun.rule, writableCandidates)
       setMessage(`รันกฎและอัปเดต Meta แล้ว ${writableCandidates.length} รายการ: ${ruleRun.rule.title}`)
@@ -2957,7 +2959,9 @@ function AutoAdsPage({
             {visibleRules.length > 0 ? (
               visibleRules.map((rule) => {
                 const enabled = ruleOverrides[rule.id] ?? rule.defaultEnabled
-                const candidateCount = buildOptimizerRuleCandidates(rule, plans).length
+                const candidates = buildOptimizerRuleCandidates(rule, plans)
+                const candidateCount = candidates.length
+                const writableCount = optimizerRuleWritableCandidates(candidates).length
                 return (
                   <article className="optimizer-rule-row" key={rule.id}>
                     <div className="optimizer-rule-name">
@@ -2980,7 +2984,7 @@ function AutoAdsPage({
                         <span />
                       </button>
                       <button className="outline-button" type="button" onClick={() => openRuleRun(rule)} disabled={!enabled}>
-                        รันกฎ
+                        {writableCount > 0 ? `รันจริง ${writableCount}` : 'ตรวจรายการ'}
                       </button>
                     </div>
                   </article>
@@ -3178,8 +3182,9 @@ function OptimizerRuleRunModal({
   onRecord: () => void
   run: OptimizerRuleRun
 }) {
-  const writableCandidates = run.candidates.filter((candidate) => candidate.writable && candidate.targetStatus)
+  const writableCandidates = optimizerRuleWritableCandidates(run.candidates)
   const canWriteMeta = writableCandidates.length > 0
+  const reviewOnlyCount = run.candidates.length - writableCandidates.length
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -3187,14 +3192,15 @@ function OptimizerRuleRunModal({
         <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดผลการรันกฎ" disabled={isExecuting}>
           <X size={18} />
         </button>
-        <StatusBadge label={run.rule.type} tone={run.rule.tone} />
-        <h2 id="optimizer-rule-run-title">ผลการรันกฎ: {run.rule.title}</h2>
-        <p>{run.rule.condition}</p>
+        <StatusBadge label={canWriteMeta ? 'Meta write ready' : 'Review only'} tone={canWriteMeta ? 'critical' : run.rule.tone} />
+        <h2 id="optimizer-rule-run-title">{canWriteMeta ? 'ยืนยันรันกฎจริงกับ Meta' : `ตรวจรายการกฎ: ${run.rule.title}`}</h2>
+        <p>{canWriteMeta ? `กฎนี้จะส่งคำสั่งไป Meta Marketing API จริงหลังยืนยัน: ${run.rule.condition}` : `${run.rule.condition} · กฎนี้ยังไม่มี Meta write action ที่ปลอดภัย จึงเป็นรายการตรวจเท่านั้น`}</p>
         <div className="confirm-grid">
           <MetricLine label="พบรายการ" value={`${run.candidates.length} ads`} />
-          <MetricLine label="ส่ง Meta ได้" value={`${writableCandidates.length} ads`} />
+          <MetricLine label="จะส่ง Meta จริง" value={`${writableCandidates.length} ads`} />
+          <MetricLine label="ตรวจอย่างเดียว" value={`${reviewOnlyCount} ads`} />
           <MetricLine label="รันเมื่อ" value={new Date(run.generatedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} />
-          <MetricLine label="สถานะ" value={canWriteMeta ? 'ต้องยืนยันก่อนเขียน Meta' : 'บันทึกผลการรันเท่านั้น'} />
+          <MetricLine label="สถานะ" value={canWriteMeta ? 'พร้อมเขียน Meta หลังยืนยัน' : 'ยังไม่เขียน Meta'} />
         </div>
         <div className="rule-run-list">
           {run.candidates.length > 0 ? (
@@ -3204,7 +3210,8 @@ function OptimizerRuleRunModal({
                 <article className="rule-run-row" key={`${run.rule.id}-${candidate.ad.id}`}>
                   <div>
                     <StatusBadge label={candidate.targetStatus ? mutationStatusLabel(candidate.targetStatus) : candidate.action} tone={candidate.targetStatus === 'PAUSED' ? 'critical' : candidate.targetStatus === 'ACTIVE' ? 'good' : run.rule.tone} />
-                    {!candidate.writable && candidate.targetStatus ? <StatusBadge label="รอ guardrail" tone="watch" /> : null}
+                    {candidate.writable && candidate.targetStatus ? <StatusBadge label="ส่ง Meta ได้" tone="good" /> : null}
+                    {!candidate.writable && candidate.targetStatus ? <StatusBadge label={candidate.ad.status === 'active' ? 'รอ guardrail' : 'ไม่ต้องส่งซ้ำ'} tone="watch" /> : null}
                   </div>
                   <strong>{candidate.ad.name}</strong>
                   <span>{candidate.campaign?.name ?? 'Meta campaign'} · {candidate.reason}</span>
@@ -3227,7 +3234,7 @@ function OptimizerRuleRunModal({
           </button>
           {canWriteMeta ? (
             <button className="danger-button" type="button" onClick={onConfirm} disabled={isExecuting}>
-              {isExecuting ? 'กำลังส่ง Meta...' : `ยืนยันส่ง Meta ${writableCandidates.length} รายการ`}
+              {isExecuting ? 'กำลังส่ง Meta...' : `รันจริงใน Meta ${writableCandidates.length} รายการ`}
             </button>
           ) : null}
         </div>
@@ -3312,6 +3319,18 @@ function writeOptimizerCustomRules(rules: OptimizerRule[]) {
   }
 }
 
+function optimizerRuleWritableCandidates(candidates: OptimizerRuleCandidate[]): Array<OptimizerRuleCandidate & { targetStatus: 'ACTIVE' | 'PAUSED' }> {
+  return candidates.filter((candidate): candidate is OptimizerRuleCandidate & { targetStatus: 'ACTIVE' | 'PAUSED' } => Boolean(candidate.writable && candidate.targetStatus))
+}
+
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
+  }
+  return chunks
+}
+
 function buildOptimizerRuleCandidates(rule: OptimizerRule, plans: AutoAdPlan[]): OptimizerRuleCandidate[] {
   const candidates = plans
     .filter((plan) => {
@@ -3338,7 +3357,7 @@ function buildOptimizerRuleCandidates(rule: OptimizerRule, plans: AutoAdPlan[]):
         plan,
         reason: plan.ad.status === 'active' ? plan.reason : `${plan.reason} · ตอนนี้ไม่ได้ active จึงเป็น review ไม่ส่งคำสั่งซ้ำ`,
         targetStatus: 'PAUSED' as const,
-        writable: Boolean(plan.canQueue && plan.ad.status === 'active'),
+        writable: plan.ad.status === 'active',
       }
     }
 
