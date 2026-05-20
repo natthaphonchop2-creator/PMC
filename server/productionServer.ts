@@ -5,6 +5,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { extname, join, resolve } from 'node:path'
 import { createMetaApiMiddleware } from './metaApiPlugin.js'
 import { createOpenAiMiddleware } from './openAiPlugin.js'
+import { createPageAutomationMiddleware } from './pageAutomationPlugin.js'
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
@@ -15,6 +16,7 @@ const distDir = resolve(process.cwd(), 'dist')
 const indexHtml = join(distDir, 'index.html')
 const metaApi = createMetaApiMiddleware(process.env)
 const openAiApi = createOpenAiMiddleware(process.env)
+const pageAutomationApi = createPageAutomationMiddleware(process.env)
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -53,6 +55,11 @@ const server = createServer(async (req, res) => {
 
   if (req.url?.startsWith('/api/ai/')) {
     await openAiApi(req, res)
+    return
+  }
+
+  if (req.url?.startsWith('/api/page-automation/')) {
+    await pageAutomationApi(req, res)
     return
   }
 
