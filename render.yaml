@@ -12,6 +12,14 @@ services:
         value: pmc
       - key: APP_BASIC_AUTH_PASSWORD
         sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_SERVICE_ID
+        sync: false
+      - key: META_WORKSPACES_JSON
+        sync: false
+      - key: META_ACTIVE_WORKSPACE_ID
+        sync: false
       - key: META_ACCESS_TOKEN
         sync: false
       - key: META_AD_ACCOUNT_ID

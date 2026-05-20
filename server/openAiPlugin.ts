@@ -8,6 +8,7 @@ import {
   readAiBrainKnowledge,
   readAiOutcomeKnowledge,
 } from './aiKnowledgeBase.js'
+import { persistRenderEnvVars } from './renderEnvPersistence.js'
 import type {
   AdInsight,
   AdSetInsight,
@@ -282,18 +283,29 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
           }
 
           await saveLocalOpenAiConfig(nextConfig)
+          const renderPersistence = await persistRenderEnvVars(env, {
+            OPENAI_API_KEY: nextConfig.apiKey,
+            OPENAI_MODEL: nextConfig.model || DEFAULT_OPENAI_MODEL,
+            OPENAI_MAX_OUTPUT_TOKENS: nextConfig.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS,
+          })
           writeJson(res, 200, {
             ...result,
             configured: true,
             settingsSource: 'web-settings',
             tokenLocation: 'web-settings',
+            renderPersistence,
           })
           return
         }
 
         if (req.method === 'DELETE') {
           await clearLocalOpenAiConfig()
-          writeJson(res, 200, await getOpenAiConfigState(env))
+          const renderPersistence = await persistRenderEnvVars(env, {
+            OPENAI_API_KEY: '',
+            OPENAI_MODEL: '',
+            OPENAI_MAX_OUTPUT_TOKENS: '',
+          })
+          writeJson(res, 200, { ...(await getOpenAiConfigState(env)), renderPersistence })
           return
         }
 

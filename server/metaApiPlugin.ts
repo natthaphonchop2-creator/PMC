@@ -1,6 +1,7 @@
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
+import { persistRenderEnvVars } from './renderEnvPersistence.js'
 import type {
   AdInsight,
   AdSetInsight,
@@ -72,15 +73,33 @@ interface MetaConfig {
   graphVersion: string
   defaultDatePreset: string
   maxPages: number
+  workspaceId: string
+  workspaceLabel: string
   source: 'web-settings' | 'server-env'
 }
 
-interface PersistedMetaConfig {
+interface PersistedMetaWorkspace {
+  id: string
+  label: string
   accessToken: string
   adAccountId: string
   graphVersion?: string
   defaultDatePreset?: string
   maxPages?: number
+  savedAt?: string
+  source?: 'web-settings' | 'server-env'
+}
+
+interface PersistedMetaConfig {
+  accessToken?: string
+  adAccountId?: string
+  graphVersion?: string
+  defaultDatePreset?: string
+  maxPages?: number
+  workspaceLabel?: string
+  activeWorkspaceId?: string
+  disconnected?: boolean
+  workspaces?: PersistedMetaWorkspace[]
   savedAt?: string
 }
 
@@ -266,11 +285,15 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
 
       if (requestUrl.pathname === '/api/meta/status') {
         const connection = config ? await checkMetaConnection(config) : null
+        const configState = await getConfigState(env)
         writeJson(res, 200, {
           configured: Boolean(config),
           connected: Boolean(connection?.ok),
           graphVersion: config?.graphVersion ?? env.META_GRAPH_VERSION ?? DEFAULT_GRAPH_VERSION,
           adAccountId: config ? maskAdAccountId(config.adAccountId) : null,
+          activeWorkspaceId: config?.workspaceId ?? configState.activeWorkspaceId ?? null,
+          workspaceLabel: config?.workspaceLabel ?? configState.workspaceLabel ?? null,
+          workspaces: configState.workspaces,
           datePreset: config?.defaultDatePreset ?? DEFAULT_DATE_PRESET,
           source: 'Meta Marketing API',
           settingsSource: config?.source ?? null,
@@ -291,9 +314,25 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
         if (req.method === 'POST') {
           assertJsonRequest(req)
           const body = await readJsonBody(req)
+          const action = typeof body.action === 'string' ? body.action.trim() : ''
+
+          if (action === 'switch') {
+            const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId.trim() : ''
+            const result = await switchActiveWorkspace(env, workspaceId)
+            writeJson(res, 200, result)
+            return
+          }
+
+          if (action === 'disconnect') {
+            const result = await disconnectMetaConfig(env)
+            writeJson(res, 200, result)
+            return
+          }
+
           const existing = await readLocalConfig()
           const nextConfig = normalizeSubmittedConfig(body, existing)
-          if (!nextConfig.accessToken || !nextConfig.adAccountId) {
+          const candidateWorkspace = getActiveWorkspace(nextConfig)
+          if (!candidateWorkspace?.accessToken || !candidateWorkspace.adAccountId) {
             writeJson(res, 400, {
               ok: false,
               error: 'กรุณาใส่ Access Token และ Ad Account ID',
@@ -302,21 +341,21 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
                 {
                   key: 'accessToken',
                   label: 'Access Token',
-                  status: nextConfig.accessToken ? 'pass' : 'fail',
-                  detail: nextConfig.accessToken ? 'ready' : 'ต้องใส่ token หรือมี token saved อยู่แล้ว',
+                  status: candidateWorkspace?.accessToken ? 'pass' : 'fail',
+                  detail: candidateWorkspace?.accessToken ? 'ready' : 'ต้องใส่ token หรือมี token saved อยู่แล้ว',
                 },
                 {
                   key: 'adAccountId',
                   label: 'Ad Account ID',
-                  status: nextConfig.adAccountId ? 'pass' : 'fail',
-                  detail: nextConfig.adAccountId ? 'ready' : 'ใส่ได้ทั้ง act_123 หรือ 123',
+                  status: candidateWorkspace?.adAccountId ? 'pass' : 'fail',
+                  detail: candidateWorkspace?.adAccountId ? 'ready' : 'ใส่ได้ทั้ง act_123 หรือ 123',
                 },
               ],
             })
             return
           }
 
-          const candidateConfig = buildMetaConfigFromPersisted(nextConfig, env)
+          const candidateConfig = buildMetaConfigFromWorkspace(candidateWorkspace, env, 'web-settings')
           const result = await checkMetaConnection(candidateConfig)
           if (!result.ok) {
             writeJson(res, 400, {
@@ -328,18 +367,24 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
             return
           }
 
-          await saveLocalConfig(nextConfig)
+          const verifiedConfig = applyVerifiedWorkspaceLabel(nextConfig, result.account?.name ?? '')
+          await saveLocalConfig(verifiedConfig)
+          const renderPersistence = await persistMetaConfigToRender(env, verifiedConfig)
           writeJson(res, 200, {
             ...result,
             configured: true,
             settingsSource: candidateConfig.source,
+            activeWorkspaceId: verifiedConfig.activeWorkspaceId,
+            workspaceLabel: getActiveWorkspace(verifiedConfig)?.label ?? candidateConfig.workspaceLabel,
+            workspaces: buildWorkspaceOptions(verifiedConfig, normalizePersistedConfig(verifiedConfig)?.workspaces ?? []),
+            renderPersistence,
           })
           return
         }
 
         if (req.method === 'DELETE') {
-          await clearLocalConfig()
-          writeJson(res, 200, await getConfigState(env))
+          const result = await disconnectMetaConfig(env)
+          writeJson(res, 200, result)
           return
         }
 
@@ -476,43 +521,39 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
 
 async function readMetaConfig(env: MetaApiPluginEnv): Promise<MetaConfig | null> {
   const localConfig = await readLocalConfig()
-  if (localConfig?.accessToken && localConfig.adAccountId) {
-    return buildMetaConfigFromPersisted(localConfig, env)
-  }
+  if (localConfig?.disconnected) return null
 
-  const accessToken = env.META_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || ''
-  const adAccountId = env.META_AD_ACCOUNT_ID || process.env.META_AD_ACCOUNT_ID || ''
-  if (!accessToken.trim() || !adAccountId.trim()) return null
-
-  return {
-    accessToken: accessToken.trim(),
-    adAccountId: normalizeAdAccountId(adAccountId),
-    graphVersion: (env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
-    defaultDatePreset: (env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
-    maxPages: Number(env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
-    source: 'server-env',
-  }
+  const workspaces = collectMetaWorkspaces(localConfig, env)
+  const activeWorkspace = findActiveWorkspace(workspaces, localConfig?.activeWorkspaceId || readEnvActiveWorkspaceId(env))
+  return activeWorkspace ? buildMetaConfigFromWorkspace(activeWorkspace, env, activeWorkspace.source ?? 'web-settings') : null
 }
 
-function buildMetaConfigFromPersisted(config: PersistedMetaConfig, env: MetaApiPluginEnv): MetaConfig {
+function buildMetaConfigFromWorkspace(workspace: PersistedMetaWorkspace, env: MetaApiPluginEnv, source: 'web-settings' | 'server-env'): MetaConfig {
   return {
-    accessToken: config.accessToken.trim(),
-    adAccountId: normalizeAdAccountId(config.adAccountId),
-    graphVersion: (config.graphVersion || env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
-    defaultDatePreset: (config.defaultDatePreset || env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
-    maxPages: Number(config.maxPages || env.META_MAX_PAGES || process.env.META_MAX_PAGES) || DEFAULT_MAX_PAGES,
-    source: 'web-settings',
+    accessToken: workspace.accessToken.trim(),
+    adAccountId: normalizeAdAccountId(workspace.adAccountId),
+    graphVersion: (workspace.graphVersion || env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION).trim(),
+    defaultDatePreset: (workspace.defaultDatePreset || env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET).trim(),
+    maxPages: clampMaxPages(Number(workspace.maxPages || env.META_MAX_PAGES || process.env.META_MAX_PAGES || DEFAULT_MAX_PAGES)),
+    workspaceId: workspace.id,
+    workspaceLabel: workspace.label || maskAdAccountId(workspace.adAccountId),
+    source,
   }
 }
 
 async function getConfigState(env: MetaApiPluginEnv) {
   const localConfig = await readLocalConfig()
   const config = await readMetaConfig(env)
+  const workspaces = localConfig?.disconnected ? [] : collectMetaWorkspaces(localConfig, env)
+  const activeWorkspace = config ? findActiveWorkspace(workspaces, config.workspaceId) : null
   return {
     configured: Boolean(config),
     settingsSource: config?.source ?? null,
-    hasSavedToken: Boolean(localConfig?.accessToken),
-    adAccountId: localConfig?.adAccountId ?? (config?.source === 'server-env' ? config.adAccountId : ''),
+    hasSavedToken: Boolean(normalizePersistedConfig(localConfig)?.workspaces?.some((workspace) => workspace.accessToken)),
+    adAccountId: activeWorkspace ? maskAdAccountId(activeWorkspace.adAccountId) : '',
+    activeWorkspaceId: activeWorkspace?.id ?? null,
+    workspaceLabel: activeWorkspace?.label ?? null,
+    workspaces: buildWorkspaceOptions(localConfig, workspaces),
     graphVersion: localConfig?.graphVersion ?? config?.graphVersion ?? DEFAULT_GRAPH_VERSION,
     datePreset: localConfig?.defaultDatePreset ?? config?.defaultDatePreset ?? DEFAULT_DATE_PRESET,
     maxPages: localConfig?.maxPages ?? config?.maxPages ?? DEFAULT_MAX_PAGES,
@@ -525,19 +566,36 @@ async function readLocalConfig(): Promise<PersistedMetaConfig | null> {
     const raw = await readFile(LOCAL_CONFIG_FILE, 'utf-8')
     const parsed = JSON.parse(raw) as PersistedMetaConfig
     if (!parsed || typeof parsed !== 'object') return null
-    return parsed
+    return normalizePersistedConfig(parsed)
   } catch {
     return null
   }
 }
 
 async function saveLocalConfig(config: PersistedMetaConfig) {
+  const normalized = normalizePersistedConfig(config) ?? config
+  const activeWorkspace = getActiveWorkspace(normalized)
   await writeFile(
     LOCAL_CONFIG_FILE,
     JSON.stringify(
       {
-        ...config,
-        adAccountId: normalizeAdAccountId(config.adAccountId),
+        ...normalized,
+        accessToken: activeWorkspace?.accessToken ?? '',
+        adAccountId: activeWorkspace?.adAccountId ? normalizeAdAccountId(activeWorkspace.adAccountId) : '',
+        graphVersion: activeWorkspace?.graphVersion ?? normalized.graphVersion ?? DEFAULT_GRAPH_VERSION,
+        defaultDatePreset: activeWorkspace?.defaultDatePreset ?? normalized.defaultDatePreset ?? DEFAULT_DATE_PRESET,
+        maxPages: activeWorkspace?.maxPages ?? normalized.maxPages ?? DEFAULT_MAX_PAGES,
+        workspaceLabel: activeWorkspace?.label ?? normalized.workspaceLabel ?? '',
+        activeWorkspaceId: normalized.activeWorkspaceId ?? activeWorkspace?.id ?? '',
+        workspaces: (normalized.workspaces ?? []).map((workspace) => ({
+          ...workspace,
+          adAccountId: normalizeAdAccountId(workspace.adAccountId),
+          graphVersion: workspace.graphVersion || DEFAULT_GRAPH_VERSION,
+          defaultDatePreset: workspace.defaultDatePreset || DEFAULT_DATE_PRESET,
+          maxPages: clampMaxPages(Number(workspace.maxPages || DEFAULT_MAX_PAGES)),
+          source: 'web-settings',
+          savedAt: workspace.savedAt || new Date().toISOString(),
+        })),
         savedAt: new Date().toISOString(),
       },
       null,
@@ -547,48 +605,84 @@ async function saveLocalConfig(config: PersistedMetaConfig) {
   )
 }
 
-async function clearLocalConfig() {
-  await rm(LOCAL_CONFIG_FILE, { force: true })
-}
-
 function normalizeSubmittedConfig(body: Record<string, unknown>, existing: PersistedMetaConfig | null): PersistedMetaConfig {
   const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string).trim() : '')
-  const accessToken = text('accessToken') || existing?.accessToken || ''
-  const adAccountId = text('adAccountId') || existing?.adAccountId || ''
-  const graphVersion = text('graphVersion') || existing?.graphVersion || DEFAULT_GRAPH_VERSION
-  const defaultDatePreset = text('datePreset') || text('defaultDatePreset') || existing?.defaultDatePreset || DEFAULT_DATE_PRESET
-  const maxPagesValue = Number(body.maxPages || existing?.maxPages || DEFAULT_MAX_PAGES)
-
-  return {
+  const base = normalizePersistedConfig(existing) ?? { workspaces: [] }
+  const existingWorkspaces = [...(base.workspaces ?? [])]
+  const shouldAddAsNew = body.addAsNew === true || text('mode') === 'add'
+  const requestedWorkspaceId = text('workspaceId')
+  const currentWorkspace = requestedWorkspaceId
+    ? existingWorkspaces.find((workspace) => workspace.id === requestedWorkspaceId)
+    : getActiveWorkspace(base)
+  const accessToken = text('accessToken') || currentWorkspace?.accessToken || ''
+  const adAccountId = text('adAccountId') || currentWorkspace?.adAccountId || ''
+  const graphVersion = text('graphVersion') || currentWorkspace?.graphVersion || base.graphVersion || DEFAULT_GRAPH_VERSION
+  const defaultDatePreset = text('datePreset') || text('defaultDatePreset') || currentWorkspace?.defaultDatePreset || base.defaultDatePreset || DEFAULT_DATE_PRESET
+  const maxPages = clampMaxPages(Number(body.maxPages || currentWorkspace?.maxPages || base.maxPages || DEFAULT_MAX_PAGES))
+  const label = text('workspaceLabel') || text('label') || currentWorkspace?.label || maskAdAccountId(adAccountId || 'act_0000')
+  const workspaceId = shouldAddAsNew || !currentWorkspace
+    ? createWorkspaceId(adAccountId, label, existingWorkspaces)
+    : currentWorkspace.id
+  const nextWorkspace: PersistedMetaWorkspace = {
+    id: workspaceId,
+    label,
     accessToken,
-    adAccountId,
+    adAccountId: adAccountId ? normalizeAdAccountId(adAccountId) : '',
     graphVersion,
     defaultDatePreset,
-    maxPages: Number.isFinite(maxPagesValue) ? Math.max(1, Math.min(20, Math.round(maxPagesValue))) : DEFAULT_MAX_PAGES,
+    maxPages,
+    source: 'web-settings',
+    savedAt: new Date().toISOString(),
+  }
+  const nextWorkspaces = existingWorkspaces.some((workspace) => workspace.id === workspaceId)
+    ? existingWorkspaces.map((workspace) => (workspace.id === workspaceId ? nextWorkspace : workspace))
+    : [...existingWorkspaces, nextWorkspace]
+
+  return {
+    ...base,
+    disconnected: false,
+    activeWorkspaceId: workspaceId,
+    accessToken,
+    adAccountId: nextWorkspace.adAccountId,
+    graphVersion,
+    defaultDatePreset,
+    maxPages,
+    workspaceLabel: label,
+    workspaces: nextWorkspaces,
   }
 }
 
 async function buildConfigChecks(env: MetaApiPluginEnv) {
   const read = (key: string) => env[key] || process.env[key] || ''
   const localConfig = await readLocalConfig()
-  const source = localConfig?.accessToken ? 'web settings' : 'server .env'
+  const localWorkspaces = normalizePersistedConfig(localConfig)?.workspaces ?? []
+  const envWorkspaces = readEnvWorkspaces(env)
+  const hasLocalWorkspace = !localConfig?.disconnected && localWorkspaces.some((workspace) => workspace.accessToken && workspace.adAccountId)
+  const hasEnvWorkspace = envWorkspaces.some((workspace) => workspace.accessToken && workspace.adAccountId)
+  const source = hasLocalWorkspace ? 'web settings' : hasEnvWorkspace ? 'Render env workspace' : 'server .env'
   const optionalSource = localConfig ? 'web settings optional' : 'server .env optional'
   return [
     {
+      key: 'META_WORKSPACES_JSON',
+      present: hasLocalWorkspace || hasEnvWorkspace,
+      source,
+      help: 'เก็บหลาย Ads Account เป็น workspace แยกกันเพื่อให้ deploy รอบถัดไปยังเชื่อมต่ออยู่',
+    },
+    {
       key: 'META_ACCESS_TOKEN',
-      present: Boolean(localConfig?.accessToken || read('META_ACCESS_TOKEN').trim()),
+      present: Boolean(hasLocalWorkspace || hasEnvWorkspace || read('META_ACCESS_TOKEN').trim()),
       source,
       help: 'ต้องเป็น token ที่มี ads_read สำหรับอ่าน insights',
     },
     {
       key: 'META_AD_ACCOUNT_ID',
-      present: Boolean(localConfig?.adAccountId || read('META_AD_ACCOUNT_ID').trim()),
+      present: Boolean(hasLocalWorkspace || hasEnvWorkspace || read('META_AD_ACCOUNT_ID').trim()),
       source,
       help: 'ใส่ได้ทั้ง act_123 หรือ 123',
     },
     {
       key: 'META_GRAPH_VERSION',
-      present: Boolean(localConfig?.graphVersion || read('META_GRAPH_VERSION').trim()),
+      present: Boolean(localConfig?.graphVersion || hasEnvWorkspace || read('META_GRAPH_VERSION').trim()),
       source: optionalSource,
       help: `ไม่ใส่จะใช้ ${DEFAULT_GRAPH_VERSION}`,
     },
@@ -599,6 +693,263 @@ async function buildConfigChecks(env: MetaApiPluginEnv) {
       help: `ไม่ใส่จะใช้ ${DEFAULT_DATE_PRESET}`,
     },
   ]
+}
+
+function normalizePersistedConfig(config: PersistedMetaConfig | null): PersistedMetaConfig | null {
+  if (!config || typeof config !== 'object') return null
+
+  const workspaces = Array.isArray(config.workspaces)
+    ? config.workspaces.map((workspace) => normalizeWorkspaceRecord(workspace, 'web-settings')).filter(isPersistedMetaWorkspace)
+    : []
+  if (workspaces.length === 0 && config.accessToken && config.adAccountId) {
+    const legacyWorkspace = normalizeWorkspaceRecord(
+      {
+        id: config.activeWorkspaceId || createWorkspaceId(config.adAccountId, config.workspaceLabel || '', []),
+        label: config.workspaceLabel || maskAdAccountId(config.adAccountId),
+        accessToken: config.accessToken,
+        adAccountId: config.adAccountId,
+        graphVersion: config.graphVersion,
+        defaultDatePreset: config.defaultDatePreset,
+        maxPages: config.maxPages,
+        savedAt: config.savedAt,
+        source: 'web-settings',
+      },
+      'web-settings',
+    )
+    if (legacyWorkspace) workspaces.push(legacyWorkspace)
+  }
+
+  const activeWorkspaceId = config.activeWorkspaceId || workspaces[0]?.id || ''
+  const activeWorkspace = findActiveWorkspace(workspaces, activeWorkspaceId)
+  return {
+    ...config,
+    accessToken: activeWorkspace?.accessToken ?? config.accessToken ?? '',
+    adAccountId: activeWorkspace?.adAccountId ?? config.adAccountId ?? '',
+    graphVersion: activeWorkspace?.graphVersion ?? config.graphVersion ?? DEFAULT_GRAPH_VERSION,
+    defaultDatePreset: activeWorkspace?.defaultDatePreset ?? config.defaultDatePreset ?? DEFAULT_DATE_PRESET,
+    maxPages: activeWorkspace?.maxPages ?? config.maxPages ?? DEFAULT_MAX_PAGES,
+    workspaceLabel: activeWorkspace?.label ?? config.workspaceLabel ?? '',
+    activeWorkspaceId,
+    workspaces,
+  }
+}
+
+function normalizeWorkspaceRecord(raw: unknown, fallbackSource: 'web-settings' | 'server-env'): PersistedMetaWorkspace | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const accessToken = typeof record.accessToken === 'string' ? record.accessToken.trim() : ''
+  const adAccountId = typeof record.adAccountId === 'string' ? record.adAccountId.trim() : ''
+  if (!accessToken || !adAccountId) return null
+  const label = typeof record.label === 'string' && record.label.trim()
+    ? record.label.trim()
+    : typeof record.workspaceLabel === 'string' && record.workspaceLabel.trim()
+      ? record.workspaceLabel.trim()
+      : maskAdAccountId(adAccountId)
+  const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : createWorkspaceId(adAccountId, label, [])
+  const source = record.source === 'server-env' || record.source === 'web-settings' ? record.source : fallbackSource
+  return {
+    id,
+    label,
+    accessToken,
+    adAccountId: normalizeAdAccountId(adAccountId),
+    graphVersion: typeof record.graphVersion === 'string' && record.graphVersion.trim() ? record.graphVersion.trim() : DEFAULT_GRAPH_VERSION,
+    defaultDatePreset: typeof record.defaultDatePreset === 'string' && record.defaultDatePreset.trim() ? record.defaultDatePreset.trim() : DEFAULT_DATE_PRESET,
+    maxPages: clampMaxPages(Number(record.maxPages || DEFAULT_MAX_PAGES)),
+    savedAt: typeof record.savedAt === 'string' ? record.savedAt : undefined,
+    source,
+  }
+}
+
+function collectMetaWorkspaces(localConfig: PersistedMetaConfig | null, env: MetaApiPluginEnv) {
+  const localWorkspaces = normalizePersistedConfig(localConfig)?.workspaces ?? []
+  const envWorkspaces = readEnvWorkspaces(env)
+  const envSingleWorkspace = readSingleEnvWorkspace(env)
+  return dedupeWorkspaces([...localWorkspaces, ...envWorkspaces, ...(envSingleWorkspace ? [envSingleWorkspace] : [])])
+}
+
+function readEnvWorkspaces(env: MetaApiPluginEnv) {
+  const raw = (env.META_WORKSPACES_JSON || process.env.META_WORKSPACES_JSON || '').trim()
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const list = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { workspaces?: unknown[] }).workspaces)
+        ? (parsed as { workspaces: unknown[] }).workspaces
+        : []
+    return list.map((item) => normalizeWorkspaceRecord(item, 'server-env')).filter(isPersistedMetaWorkspace)
+  } catch {
+    return []
+  }
+}
+
+function isPersistedMetaWorkspace(workspace: PersistedMetaWorkspace | null): workspace is PersistedMetaWorkspace {
+  return Boolean(workspace)
+}
+
+function readEnvActiveWorkspaceId(env: MetaApiPluginEnv) {
+  const explicit = (env.META_ACTIVE_WORKSPACE_ID || process.env.META_ACTIVE_WORKSPACE_ID || '').trim()
+  if (explicit) return explicit
+  const raw = (env.META_WORKSPACES_JSON || process.env.META_WORKSPACES_JSON || '').trim()
+  if (!raw) return ''
+  try {
+    const parsed = JSON.parse(raw) as { activeWorkspaceId?: unknown }
+    return typeof parsed.activeWorkspaceId === 'string' ? parsed.activeWorkspaceId.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function readSingleEnvWorkspace(env: MetaApiPluginEnv): PersistedMetaWorkspace | null {
+  const accessToken = (env.META_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || '').trim()
+  const adAccountId = (env.META_AD_ACCOUNT_ID || process.env.META_AD_ACCOUNT_ID || '').trim()
+  if (!accessToken || !adAccountId) return null
+  return normalizeWorkspaceRecord(
+    {
+      id: createWorkspaceId(adAccountId, env.META_WORKSPACE_LABEL || process.env.META_WORKSPACE_LABEL || '', []),
+      label: env.META_WORKSPACE_LABEL || process.env.META_WORKSPACE_LABEL || maskAdAccountId(adAccountId),
+      accessToken,
+      adAccountId,
+      graphVersion: env.META_GRAPH_VERSION || process.env.META_GRAPH_VERSION || DEFAULT_GRAPH_VERSION,
+      defaultDatePreset: env.META_DATE_PRESET || process.env.META_DATE_PRESET || DEFAULT_DATE_PRESET,
+      maxPages: env.META_MAX_PAGES || process.env.META_MAX_PAGES || DEFAULT_MAX_PAGES,
+      source: 'server-env',
+    },
+    'server-env',
+  )
+}
+
+function dedupeWorkspaces(workspaces: PersistedMetaWorkspace[]) {
+  const seen = new Set<string>()
+  const output: PersistedMetaWorkspace[] = []
+  for (const workspace of workspaces) {
+    if (!workspace.id || seen.has(workspace.id)) continue
+    seen.add(workspace.id)
+    output.push(workspace)
+  }
+  return output
+}
+
+function findActiveWorkspace(workspaces: PersistedMetaWorkspace[], activeWorkspaceId?: string | null) {
+  if (!workspaces.length) return null
+  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0]
+}
+
+function getActiveWorkspace(config: PersistedMetaConfig | null) {
+  const normalized = normalizePersistedConfig(config)
+  return normalized?.workspaces?.find((workspace) => workspace.id === normalized.activeWorkspaceId) ?? normalized?.workspaces?.[0] ?? null
+}
+
+function buildWorkspaceOptions(localConfig: PersistedMetaConfig | null, workspaces: PersistedMetaWorkspace[]) {
+  const activeWorkspaceId = normalizePersistedConfig(localConfig)?.activeWorkspaceId || workspaces[0]?.id || ''
+  return workspaces.map((workspace) => ({
+    id: workspace.id,
+    label: workspace.label,
+    adAccountId: maskAdAccountId(workspace.adAccountId),
+    graphVersion: workspace.graphVersion || DEFAULT_GRAPH_VERSION,
+    datePreset: workspace.defaultDatePreset || DEFAULT_DATE_PRESET,
+    maxPages: workspace.maxPages || DEFAULT_MAX_PAGES,
+    source: workspace.source || 'web-settings',
+    active: workspace.id === activeWorkspaceId,
+  }))
+}
+
+function applyVerifiedWorkspaceLabel(config: PersistedMetaConfig, accountName: string): PersistedMetaConfig {
+  const activeWorkspace = getActiveWorkspace(config)
+  if (!activeWorkspace || !accountName || activeWorkspace.label !== maskAdAccountId(activeWorkspace.adAccountId)) return config
+  const workspaces = (config.workspaces ?? []).map((workspace) => (workspace.id === activeWorkspace.id ? { ...workspace, label: accountName } : workspace))
+  return {
+    ...config,
+    workspaceLabel: accountName,
+    workspaces,
+  }
+}
+
+async function switchActiveWorkspace(env: MetaApiPluginEnv, workspaceId: string) {
+  const localConfig = await readLocalConfig()
+  const workspaces = collectMetaWorkspaces(localConfig, env)
+  const workspace = workspaces.find((item) => item.id === workspaceId)
+  if (!workspace) {
+    throw new MetaApiError('ไม่พบ Ads Account workspace ที่เลือก', 404)
+  }
+
+  const candidateConfig = buildMetaConfigFromWorkspace(workspace, env, workspace.source ?? 'web-settings')
+  const result = await checkMetaConnection(candidateConfig)
+  if (!result.ok) {
+    throw new MetaApiError('เชื่อมต่อ Ads Account ที่เลือกไม่สำเร็จ กรุณาตรวจ token และสิทธิ์ Meta', 400)
+  }
+
+  await saveLocalConfig({
+    ...(localConfig ?? {}),
+    disconnected: false,
+    activeWorkspaceId: workspace.id,
+  })
+  const state = await getConfigState(env)
+  return {
+    ...result,
+    ...state,
+    configured: true,
+    settingsSource: candidateConfig.source,
+  }
+}
+
+async function disconnectMetaConfig(env: MetaApiPluginEnv) {
+  await saveLocalConfig({
+    disconnected: true,
+    activeWorkspaceId: '',
+    workspaces: [],
+  })
+  const renderPersistence = await persistRenderEnvVars(env, {
+    META_WORKSPACES_JSON: '',
+    META_ACTIVE_WORKSPACE_ID: '',
+    META_ACCESS_TOKEN: '',
+    META_AD_ACCOUNT_ID: '',
+  })
+  const state = await getConfigState(env)
+  return {
+    ...state,
+    configured: false,
+    connected: false,
+    renderPersistence,
+  }
+}
+
+async function persistMetaConfigToRender(env: MetaApiPluginEnv, config: PersistedMetaConfig) {
+  const activeWorkspace = getActiveWorkspace(config)
+  const workspaces = (normalizePersistedConfig(config)?.workspaces ?? []).map((workspace) => ({
+    id: workspace.id,
+    label: workspace.label,
+    accessToken: workspace.accessToken,
+    adAccountId: normalizeAdAccountId(workspace.adAccountId),
+    graphVersion: workspace.graphVersion || DEFAULT_GRAPH_VERSION,
+    defaultDatePreset: workspace.defaultDatePreset || DEFAULT_DATE_PRESET,
+    maxPages: workspace.maxPages || DEFAULT_MAX_PAGES,
+  }))
+  return persistRenderEnvVars(env, {
+    META_WORKSPACES_JSON: JSON.stringify({
+      activeWorkspaceId: config.activeWorkspaceId || activeWorkspace?.id || workspaces[0]?.id || '',
+      workspaces,
+    }),
+    META_ACTIVE_WORKSPACE_ID: config.activeWorkspaceId || activeWorkspace?.id || '',
+    META_ACCESS_TOKEN: activeWorkspace?.accessToken ?? '',
+    META_AD_ACCOUNT_ID: activeWorkspace?.adAccountId ?? '',
+    META_GRAPH_VERSION: activeWorkspace?.graphVersion || DEFAULT_GRAPH_VERSION,
+    META_DATE_PRESET: activeWorkspace?.defaultDatePreset || DEFAULT_DATE_PRESET,
+    META_MAX_PAGES: activeWorkspace?.maxPages || DEFAULT_MAX_PAGES,
+  })
+}
+
+function createWorkspaceId(adAccountId: string, label: string, existing: PersistedMetaWorkspace[]) {
+  const baseSource = normalizeAdAccountId(adAccountId || 'act_workspace').replace(/^act_/, '') || label || 'workspace'
+  const base = `meta-${baseSource.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace'}`
+  if (!existing.some((workspace) => workspace.id === base)) return base
+  let index = existing.length + 1
+  while (existing.some((workspace) => workspace.id === `${base}-${index}`)) index += 1
+  return `${base}-${index}`
+}
+
+function clampMaxPages(value: number) {
+  return Number.isFinite(value) ? Math.max(1, Math.min(20, Math.round(value))) : DEFAULT_MAX_PAGES
 }
 
 function assertJsonRequest(req: MetaApiRequest) {
@@ -1160,6 +1511,8 @@ async function fetchMetaWorkspace(config: MetaConfig, datePreset: string) {
     meta: {
       user,
       account,
+      activeWorkspaceId: config.workspaceId,
+      workspaceLabel: config.workspaceLabel,
       datePreset,
       graphVersion: config.graphVersion,
       fetchedAt: new Date().toISOString(),

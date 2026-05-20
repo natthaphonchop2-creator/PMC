@@ -62,6 +62,7 @@ input:focus-visible {
 .sidebar {
   position: sticky;
   top: 0;
+  z-index: 120;
   height: 100vh;
   padding: 20px 14px;
   border-right: 1px solid var(--border);
@@ -70,6 +71,7 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  overflow: visible;
 }
 
 .sidebar-header {
@@ -132,12 +134,14 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow: visible;
 }
 
 .nav-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow: visible;
 }
 
 .nav-group-title {
@@ -194,7 +198,7 @@ input:focus-visible {
 .help-tooltip::after {
   content: attr(data-tooltip);
   position: absolute;
-  z-index: 80;
+  z-index: 10000;
   width: min(260px, 78vw);
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 8px;
@@ -219,6 +223,15 @@ input:focus-visible {
 .help-tooltip:focus-visible::after {
   opacity: 1;
   visibility: visible;
+}
+
+.has-tooltip:hover,
+.has-tooltip:focus-visible,
+.tooltip-wrap:hover,
+.tooltip-wrap:focus-within,
+.help-tooltip:hover,
+.help-tooltip:focus-visible {
+  z-index: 10001;
 }
 
 .nav-item.has-tooltip::after {
@@ -297,7 +310,7 @@ input:focus-visible {
 .app-main {
   min-width: 0;
   position: relative;
-  z-index: 1;
+  z-index: 0;
 }
 
 .topbar {
@@ -313,7 +326,8 @@ input:focus-visible {
   backdrop-filter: blur(18px);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 110;
+  overflow: visible;
 }
 
 .topbar > div:first-child,
@@ -486,6 +500,10 @@ input:focus-visible {
     border-color 180ms ease,
     box-shadow 180ms ease,
     transform 180ms ease;
+}
+
+.panel {
+  overflow: visible;
 }
 
 .metric-card::before,
@@ -803,7 +821,7 @@ input:focus-visible {
 }
 
 .table-panel {
-  overflow: hidden;
+  overflow: visible;
 }
 
 .table-head {
@@ -1859,6 +1877,51 @@ input:focus-visible {
   margin-bottom: 14px;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 800;
+}
+
+.workspace-switcher {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.workspace-switcher > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.workspace-switcher strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.workspace-switcher span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-switcher select {
+  min-height: 38px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font: inherit;
   font-weight: 800;
 }
 
@@ -3829,7 +3892,7 @@ input:focus-visible {
   .sidebar.menu-open .nav-groups {
     display: flex;
     max-height: min(62dvh, 520px);
-    overflow-y: auto;
+    overflow: visible;
     overscroll-behavior: contain;
   }
 
@@ -3982,7 +4045,7 @@ input:focus-visible {
   .page-body {
     padding: 14px;
     max-width: 100vw;
-    overflow-x: clip;
+    overflow-x: visible;
   }
 
   .main-stack,
@@ -3994,6 +4057,7 @@ input:focus-visible {
 
   .panel {
     padding: 14px;
+    overflow: visible;
   }
 
   .metric-card:hover,
@@ -4134,6 +4198,7 @@ input:focus-visible {
   .auto-os-control-grid,
   .auto-os-summary-grid,
   .right-rail,
+  .workspace-switcher,
   .form-grid {
     grid-template-columns: 1fr;
   }

@@ -252,6 +252,9 @@ type MetaStatusResponse = {
   connected: boolean
   graphVersion?: string
   adAccountId?: string | null
+  activeWorkspaceId?: string | null
+  workspaceLabel?: string | null
+  workspaces?: MetaWorkspaceOption[]
   datePreset?: string
   source?: string
   settingsSource?: string | null
@@ -271,12 +274,19 @@ type OpenAiStatusResponse = {
   hasSavedApiKey?: boolean
   canEditInWeb?: boolean
   requiredEnv?: Array<{ key: string; present: boolean; source?: string; help?: string }>
+  renderPersistence?: {
+    enabled: boolean
+    updated?: Array<{ key: string; ok: boolean; status: number }>
+    error?: string
+  }
 }
 
 type MetaWorkspaceResponse = {
   workspace: WorkspaceData
   meta: {
     account?: { name?: string; account_id?: string; currency?: string; timezone_name?: string }
+    activeWorkspaceId?: string
+    workspaceLabel?: string
     counts?: { campaigns: number; adSets: number; ads: number; timeSeries: number }
     datePreset: string
     fetchedAt: string
@@ -319,12 +329,36 @@ type BrainDeepDiveState = {
 type MetaInfo = {
   accountName: string
   adAccountId?: string | null
+  activeWorkspaceId?: string | null
+  workspaceLabel?: string | null
+  workspaces?: MetaWorkspaceOption[]
   fetchedAt: string
   graphVersion: string
   source: string
   settingsSource?: string | null
   tokenLocation?: string | null
   counts?: MetaWorkspaceResponse['meta']['counts']
+}
+
+type MetaWorkspaceOption = {
+  id: string
+  label: string
+  adAccountId: string
+  graphVersion?: string
+  datePreset?: string
+  maxPages?: number
+  source?: string
+  active?: boolean
+}
+
+type MetaConfigResponse = MetaStatusResponse & {
+  hasSavedToken?: boolean
+  maxPages?: number
+  renderPersistence?: {
+    enabled: boolean
+    updated?: Array<{ key: string; ok: boolean; status: number }>
+    error?: string
+  }
 }
 
 const navItems: NavItem[] = [
@@ -405,6 +439,13 @@ function formatApiMessage(message: string) {
     return 'Meta ไม่พบ object นี้หรือ token ไม่มีสิทธิ์อ่านข้อมูล กรุณาตรวจ ad account และลองซิงก์ใหม่'
   }
   return message
+}
+
+function renderPersistenceLabel(result?: MetaConfigResponse['renderPersistence']) {
+  if (!result) return ''
+  if (!result.enabled) return ' · บันทึกใน server แล้ว แต่ Render env ยังไม่ได้ตั้ง RENDER_API_KEY/RENDER_SERVICE_ID'
+  const failed = result.updated?.find((item) => !item.ok)
+  return failed ? ` · Render env อัปเดตบางส่วนไม่สำเร็จ (${failed.key})` : ' · ผูกกับ Render env แล้ว'
 }
 
 function metaDatePresetForUi(preset: string) {
@@ -1019,6 +1060,7 @@ function toneForRisk(risk: Recommendation['risk']): Tone {
 function App() {
   const shellRef = useRef<HTMLDivElement>(null)
   const refreshRequestRef = useRef(0)
+  const activeMetaWorkspaceRef = useRef<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('analytics')
   const [datePreset, setDatePreset] = useState('ข้อมูลทั้งหมด')
   const [automationMode, setAutomationMode] = useState('แนะนำเท่านั้น')
@@ -1120,12 +1162,16 @@ function App() {
         setMetaInfo({
           accountName: 'ยังไม่ได้ตั้งค่าบัญชี Meta',
           adAccountId: status.adAccountId ?? null,
+          activeWorkspaceId: status.activeWorkspaceId ?? null,
+          workspaceLabel: status.workspaceLabel ?? null,
+          workspaces: status.workspaces ?? [],
           fetchedAt: new Date().toISOString(),
           graphVersion: status.graphVersion ?? 'v21.0',
           source: status.source ?? 'Meta Marketing API',
           settingsSource: status.settingsSource ?? null,
           tokenLocation: status.tokenLocation ?? null,
         })
+        activeMetaWorkspaceRef.current = null
         setDataState('setup-required')
         setSyncState('Setup required')
         setApiMessage('เพิ่ม META_ACCESS_TOKEN และ META_AD_ACCOUNT_ID หรือบันทึกข้อมูลผ่านหน้า Settings')
@@ -1137,6 +1183,9 @@ function App() {
         setMetaInfo({
           accountName: 'เชื่อมต่อ Meta API ไม่สำเร็จ',
           adAccountId: status.adAccountId ?? null,
+          activeWorkspaceId: status.activeWorkspaceId ?? null,
+          workspaceLabel: status.workspaceLabel ?? null,
+          workspaces: status.workspaces ?? [],
           fetchedAt: new Date().toISOString(),
           graphVersion: status.graphVersion ?? 'v21.0',
           source: status.source ?? 'Meta Marketing API',
@@ -1154,8 +1203,11 @@ function App() {
       if (!isLatestRequest()) return
 
       const nextMetaInfo: MetaInfo = {
-        accountName: result.meta.account?.name || 'บัญชีโฆษณา Meta',
+        accountName: result.meta.account?.name || result.meta.workspaceLabel || status.workspaceLabel || 'บัญชีโฆษณา Meta',
         adAccountId: status.adAccountId ?? result.meta.account?.account_id ?? null,
+        activeWorkspaceId: status.activeWorkspaceId ?? result.meta.activeWorkspaceId ?? null,
+        workspaceLabel: result.meta.workspaceLabel ?? status.workspaceLabel ?? null,
+        workspaces: status.workspaces ?? [],
         counts: result.meta.counts,
         fetchedAt: result.meta.fetchedAt,
         graphVersion: result.meta.graphVersion,
@@ -1171,6 +1223,14 @@ function App() {
 
       setWorkspace(result.workspace)
       setMetaInfo(nextMetaInfo)
+      if (activeMetaWorkspaceRef.current && nextMetaInfo.activeWorkspaceId && activeMetaWorkspaceRef.current !== nextMetaInfo.activeWorkspaceId) {
+        setSelectedCampaignId('')
+        setBrainApprovalActions([])
+        setRecommendationStates({})
+        setConfirmingId(null)
+        setActivePlanExecution(null)
+      }
+      activeMetaWorkspaceRef.current = nextMetaInfo.activeWorkspaceId ?? null
       setDataState(nextDataState)
       setSyncState(nextSyncState)
       setApiMessage(nextApiMessage)
@@ -1199,6 +1259,10 @@ function App() {
     }, 0)
     return () => window.clearTimeout(timer)
   }, [refreshWorkspace])
+
+  useEffect(() => {
+    window.scrollTo({ left: 0, top: 0 })
+  }, [activeTab])
 
   useEffect(() => {
     const root = shellRef.current
@@ -1400,6 +1464,7 @@ function App() {
           activePage={activePage}
           automationMode={automationMode}
           datePreset={datePreset}
+          metaInfo={metaInfo}
           onDateChange={setDatePreset}
           onModeChange={setAutomationMode}
           onPrepareReport={() => {
@@ -1736,6 +1801,7 @@ type TopbarProps = {
   activePage: NavItem
   automationMode: string
   datePreset: string
+  metaInfo: MetaInfo | null
   onDateChange: (value: string) => void
   onModeChange: (value: string) => void
   onPrepareReport: () => void
@@ -1743,7 +1809,8 @@ type TopbarProps = {
   syncState: string
 }
 
-function Topbar({ activePage, automationMode, datePreset, onDateChange, onModeChange, onPrepareReport, onSync, syncState }: TopbarProps) {
+function Topbar({ activePage, automationMode, datePreset, metaInfo, onDateChange, onModeChange, onPrepareReport, onSync, syncState }: TopbarProps) {
+  const workspaceLabel = metaInfo?.workspaceLabel || metaInfo?.accountName || 'ยังไม่ได้เชื่อมต่อ Meta'
   return (
     <header className="topbar">
       <div>
@@ -1752,7 +1819,7 @@ function Topbar({ activePage, automationMode, datePreset, onDateChange, onModeCh
       </div>
       <div className="topbar-actions">
         <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.workspace}>
-          <PillButton icon={Database} label="Promed Clinic PMC" />
+          <PillButton icon={Database} label={workspaceLabel} />
         </TooltipWrap>
         <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.datePreset}>
           <select aria-label="ช่วงวันที่" value={datePreset} onChange={(event) => onDateChange(event.target.value)}>
@@ -5800,9 +5867,12 @@ function ReportsPage({
 }
 
 function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: DataSourceState; metaInfo: MetaInfo | null; onSync: () => void; syncState: string }) {
-  const account = metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อ Meta API'
+  const account = metaInfo?.workspaceLabel || metaInfo?.accountName || 'ยังไม่ได้เชื่อมต่อ Meta API'
   const [accessToken, setAccessToken] = useState('')
   const [adAccountId, setAdAccountId] = useState('')
+  const [workspaceLabel, setWorkspaceLabel] = useState('')
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('')
+  const [metaConfigState, setMetaConfigState] = useState<MetaConfigResponse | null>(null)
   const [openAiApiKey, setOpenAiApiKey] = useState('')
   const [openAiModel, setOpenAiModel] = useState('gpt-5.5')
   const [openAiMaxOutputTokens, setOpenAiMaxOutputTokens] = useState('2800')
@@ -5810,13 +5880,19 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
   const [openAiMessage, setOpenAiMessage] = useState('')
   const [settingsMessage, setSettingsMessage] = useState('')
   const [isSavingConfig, setIsSavingConfig] = useState(false)
+  const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false)
+  const [isDisconnectingMeta, setIsDisconnectingMeta] = useState(false)
   const [isSavingOpenAiConfig, setIsSavingOpenAiConfig] = useState(false)
   const [isConfirmingConfigSave, setIsConfirmingConfigSave] = useState(false)
+  const [saveAsNewWorkspace, setSaveAsNewWorkspace] = useState(false)
   const [isConfirmingOpenAiSave, setIsConfirmingOpenAiSave] = useState(false)
   const isSyncing = syncState === 'Syncing...'
+  const metaWorkspaces = metaConfigState?.workspaces ?? metaInfo?.workspaces ?? []
+  const selectedWorkspace = metaWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId)
+  const activeWorkspace = metaWorkspaces.find((workspace) => workspace.active) ?? selectedWorkspace
   const stateTone: Tone = dataState === 'live' ? 'good' : dataState === 'error' ? 'critical' : dataState === 'loading' ? 'info' : 'watch'
-  const savedCredentialLabel = metaInfo?.settingsSource
-    ? metaInfo.settingsSource === 'web-settings'
+  const savedCredentialLabel = metaConfigState?.settingsSource || metaInfo?.settingsSource
+    ? (metaConfigState?.settingsSource || metaInfo?.settingsSource) === 'web-settings'
       ? 'มี credential ที่บันทึกผ่านหน้า Settings'
       : 'มี credential จาก server environment'
     : 'ยังไม่พบ credential ที่บันทึกไว้'
@@ -5846,6 +5922,20 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
     : 'ยังไม่ได้เชื่อม OpenAI API'
   const openAiTone: Tone = openAiStatus?.configured ? 'good' : 'watch'
 
+  const loadMetaConfig = useCallback(async () => {
+    try {
+      const status = await apiJson<MetaConfigResponse>('/api/meta/config')
+      setMetaConfigState(status)
+      const nextWorkspace = status.workspaces?.find((workspace) => workspace.active) ?? status.workspaces?.[0]
+      if (nextWorkspace) {
+        setSelectedWorkspaceId(nextWorkspace.id)
+        setWorkspaceLabel(nextWorkspace.label)
+      }
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? formatApiMessage(error.message) : 'โหลดสถานะ Meta API ไม่สำเร็จ')
+    }
+  }, [])
+
   const loadOpenAiStatus = useCallback(async () => {
     try {
       const status = await apiJson<OpenAiStatusResponse>('/api/ai/config')
@@ -5871,32 +5961,81 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadOpenAiStatus()
+      void loadMetaConfig()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [loadOpenAiStatus])
+  }, [loadMetaConfig, loadOpenAiStatus])
 
   const saveMetaConfig = async () => {
     setIsSavingConfig(true)
-    setSettingsMessage('กำลังบันทึกค่า Meta API...')
+    setSettingsMessage(saveAsNewWorkspace ? 'กำลังเพิ่ม Ads Account แยก...' : 'กำลังบันทึกค่า Meta API...')
     try {
-      await apiJson('/api/meta/config', {
+      const result = await apiJson<MetaConfigResponse>('/api/meta/config', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           accessToken,
           adAccountId,
+          workspaceId: saveAsNewWorkspace ? undefined : selectedWorkspaceId,
+          workspaceLabel,
+          addAsNew: saveAsNewWorkspace,
           graphVersion: metaInfo?.graphVersion ?? 'v21.0',
           defaultDatePreset: 'maximum',
         }),
       })
-      setSettingsMessage('บันทึกค่า Meta API แล้ว กำลังซิงก์ workspace จริง...')
+      setMetaConfigState(result)
+      setSelectedWorkspaceId(result.activeWorkspaceId || result.workspaces?.find((workspace) => workspace.active)?.id || selectedWorkspaceId)
+      setWorkspaceLabel(result.workspaceLabel || workspaceLabel)
+      setSettingsMessage(`บันทึกค่า Meta API แล้ว${renderPersistenceLabel(result.renderPersistence)} กำลังซิงก์ workspace จริง...`)
       setAccessToken('')
       setIsConfirmingConfigSave(false)
+      setSaveAsNewWorkspace(false)
+      void loadMetaConfig()
       onSync()
     } catch (error) {
       setSettingsMessage(error instanceof Error ? formatApiMessage(error.message) : 'บันทึกค่า Meta API ไม่สำเร็จ')
     } finally {
       setIsSavingConfig(false)
+    }
+  }
+
+  const switchMetaWorkspace = async () => {
+    if (!selectedWorkspaceId) return
+    setIsSwitchingWorkspace(true)
+    setSettingsMessage('กำลังสลับ Ads Account และตรวจการเชื่อมต่อ...')
+    try {
+      const result = await apiJson<MetaConfigResponse>('/api/meta/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'switch', workspaceId: selectedWorkspaceId }),
+      })
+      setMetaConfigState(result)
+      setWorkspaceLabel(result.workspaceLabel || activeWorkspace?.label || '')
+      setSettingsMessage(`สลับ Ads Account เป็น ${result.workspaceLabel || activeWorkspace?.label || 'workspace ที่เลือก'} แล้ว`)
+      onSync()
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? formatApiMessage(error.message) : 'สลับ Ads Account ไม่สำเร็จ')
+    } finally {
+      setIsSwitchingWorkspace(false)
+    }
+  }
+
+  const disconnectMetaApi = async () => {
+    setIsDisconnectingMeta(true)
+    setSettingsMessage('กำลังตัดการเชื่อมต่อ Meta API...')
+    try {
+      const result = await apiJson<MetaConfigResponse>('/api/meta/config', { method: 'DELETE' })
+      setMetaConfigState(result)
+      setAccessToken('')
+      setAdAccountId('')
+      setWorkspaceLabel('')
+      setSelectedWorkspaceId('')
+      setSettingsMessage(`ตัดการเชื่อมต่อแล้ว${renderPersistenceLabel(result.renderPersistence)}`)
+      onSync()
+    } catch (error) {
+      setSettingsMessage(error instanceof Error ? formatApiMessage(error.message) : 'ตัดการเชื่อมต่อไม่สำเร็จ')
+    } finally {
+      setIsDisconnectingMeta(false)
     }
   }
 
@@ -5916,7 +6055,7 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
       setOpenAiStatus(result)
       setOpenAiApiKey('')
       setIsConfirmingOpenAiSave(false)
-      setOpenAiMessage('เชื่อมต่อ OpenAI API สำเร็จ และบันทึกไว้ฝั่ง server แล้ว')
+      setOpenAiMessage(`เชื่อมต่อ OpenAI API สำเร็จ${renderPersistenceLabel(result.renderPersistence)} และบันทึกไว้ฝั่ง server แล้ว`)
       void loadOpenAiStatus()
     } catch (error) {
       setOpenAiMessage(error instanceof Error ? error.message : 'บันทึกค่า OpenAI API ไม่สำเร็จ')
@@ -5939,14 +6078,41 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
       >
         <SectionCard collapsible title="ตั้งค่า Workspace" subtitle="การเชื่อมต่อ Meta, OpenAI และความพร้อมของแหล่งข้อมูล">
           <div className="settings-credential-state">
-            <StatusBadge label={savedCredentialLabel} tone={metaInfo?.settingsSource ? 'good' : 'watch'} />
+            <StatusBadge label={savedCredentialLabel} tone={metaConfigState?.settingsSource || metaInfo?.settingsSource ? 'good' : 'watch'} />
             <span>{tokenLocationLabel}</span>
             {metaInfo?.adAccountId ? <span>Ad Account: {metaInfo.adAccountId}</span> : null}
+          </div>
+          <div className="workspace-switcher">
+            <div>
+              <strong>Ads Account ที่ใช้งาน</strong>
+              <span>{activeWorkspace ? `${activeWorkspace.label} · ${activeWorkspace.adAccountId}` : 'ยังไม่มี Ads Account ที่บันทึกไว้'}</span>
+            </div>
+            <select aria-label="เลือก Ads Account workspace" value={selectedWorkspaceId} onChange={(event) => setSelectedWorkspaceId(event.target.value)} disabled={!metaWorkspaces.length || isSwitchingWorkspace}>
+              {metaWorkspaces.length ? (
+                metaWorkspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.label} · {workspace.adAccountId}
+                  </option>
+                ))
+              ) : (
+                <option value="">ยังไม่มี workspace</option>
+              )}
+            </select>
+            <button className="primary-button" type="button" onClick={() => void switchMetaWorkspace()} disabled={!selectedWorkspaceId || isSwitchingWorkspace || selectedWorkspace?.active}>
+              {isSwitchingWorkspace ? 'กำลังสลับ...' : 'สลับ Ads Account'}
+            </button>
+            <button className="danger-button" type="button" onClick={() => void disconnectMetaApi()} disabled={isDisconnectingMeta || (!metaConfigState?.configured && !metaInfo?.settingsSource)}>
+              {isDisconnectingMeta ? 'กำลังตัด...' : 'ตัดการเชื่อมต่อ'}
+            </button>
           </div>
           <div className="form-grid">
             <label>
               บัญชีที่แสดง
               <input value={account} readOnly />
+            </label>
+            <label>
+              ชื่อ Workspace
+              <input value={workspaceLabel} onChange={(event) => setWorkspaceLabel(event.target.value)} placeholder="เช่น Promed Clinic PMC" />
             </label>
             <label>
               Meta Ad Account ID
@@ -5974,11 +6140,24 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
               type="button"
               onClick={() => {
                 setSettingsMessage('')
+                setSaveAsNewWorkspace(false)
                 setIsConfirmingConfigSave(true)
               }}
-              disabled={isSavingConfig || (!accessToken && !adAccountId)}
+              disabled={isSavingConfig || (!accessToken && !adAccountId && !metaConfigState?.hasSavedToken)}
             >
-              {isSavingConfig ? 'กำลังบันทึก...' : 'บันทึกค่า Meta API'}
+              {isSavingConfig && !saveAsNewWorkspace ? 'กำลังบันทึก...' : 'บันทึก/อัปเดต'}
+            </button>
+            <button
+              className="outline-button"
+              type="button"
+              onClick={() => {
+                setSettingsMessage('')
+                setSaveAsNewWorkspace(true)
+                setIsConfirmingConfigSave(true)
+              }}
+              disabled={isSavingConfig || !accessToken || !adAccountId}
+            >
+              {isSavingConfig && saveAsNewWorkspace ? 'กำลังเพิ่ม...' : 'เพิ่ม Ads Account แยก'}
             </button>
           </div>
           {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
@@ -6046,8 +6225,10 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
           adAccountId={adAccountId}
           hasAccessToken={Boolean(accessToken)}
           isSaving={isSavingConfig}
+          isNewWorkspace={saveAsNewWorkspace}
           onCancel={() => setIsConfirmingConfigSave(false)}
           onConfirm={saveMetaConfig}
+          workspaceLabel={workspaceLabel}
         />
       ) : null}
       {isConfirmingOpenAiSave ? (
@@ -6067,15 +6248,19 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
 function SettingsSaveConfirmModal({
   adAccountId,
   hasAccessToken,
+  isNewWorkspace,
   isSaving,
   onCancel,
   onConfirm,
+  workspaceLabel,
 }: {
   adAccountId: string
   hasAccessToken: boolean
+  isNewWorkspace: boolean
   isSaving: boolean
   onCancel: () => void
   onConfirm: () => void
+  workspaceLabel: string
 }) {
   return (
     <div className="modal-backdrop">
@@ -6084,12 +6269,13 @@ function SettingsSaveConfirmModal({
           <X size={18} />
         </button>
         <StatusBadge label="บันทึก credential จริง" tone="watch" />
-        <h2 id="settings-save-title">ยืนยันการบันทึก Meta API</h2>
-        <p>ระบบจะตรวจ credential กับ Meta และบันทึกค่าไว้ฝั่ง server ของเครื่องนี้ก่อนซิงก์ข้อมูลจริง</p>
+        <h2 id="settings-save-title">{isNewWorkspace ? 'ยืนยันการเพิ่ม Ads Account' : 'ยืนยันการบันทึก Meta API'}</h2>
+        <p>ระบบจะตรวจ credential กับ Meta บันทึกไว้ฝั่ง server และซิงก์ขึ้น Render env เพื่อให้ deploy รอบถัดไปยังเชื่อมต่ออยู่</p>
         <div className="confirm-grid">
+          <MetricLine label="Workspace" value={workspaceLabel || (isNewWorkspace ? 'workspace ใหม่' : 'workspace ปัจจุบัน')} />
           <MetricLine label="Access Token" value={hasAccessToken ? 'มี token ใหม่ในฟอร์ม' : 'ใช้ token ที่บันทึกไว้เดิม'} />
           <MetricLine label="Ad Account ID" value={adAccountId || 'ใช้ค่าที่บันทึกไว้เดิม'} />
-          <MetricLine label="ตำแหน่งบันทึก" value="server-local-file" />
+          <MetricLine label="ตำแหน่งบันทึก" value="server-local-file + Render env" />
           <MetricLine label="หลังบันทึก" value="ตรวจ connection และซิงก์ workspace" />
         </div>
         <div className="modal-actions">

@@ -42,8 +42,25 @@ Do not expose this app publicly without `APP_BASIC_AUTH_PASSWORD`, because `/api
   - set server environment variables from `.env.example`
   - or enter credentials from the web Settings page after deployment
   - or securely copy `.meta-api.local.json` to the project root on the server
+- optional Render self-persistence:
+  - `RENDER_API_KEY`
+  - `RENDER_SERVICE_ID`
+  - when these are set, Settings can save Meta/OpenAI credentials back to Render env so future deploys stay connected
 
 Do not commit `.meta-api.local.json`.
+
+## Permanent API Binding
+
+The Settings page can now keep API connections after redeploys. When `RENDER_API_KEY` and `RENDER_SERVICE_ID` are configured on the Render service, saving Meta API or OpenAI API from Settings also updates the service environment variables through the Render API.
+
+Meta supports multiple Ads Account workspaces:
+
+- `META_WORKSPACES_JSON` stores all saved Ads Account workspaces.
+- `META_ACTIVE_WORKSPACE_ID` stores the active workspace.
+- `META_ACCESS_TOKEN` and `META_AD_ACCOUNT_ID` are still written for single-account fallback.
+- Clicking disconnect clears the saved local connection and blanks the Render env values used by the app.
+
+Each workspace keeps its own Ad Account ID, token, Graph API version, date preset, and page limit. Switching workspace reloads the app data from that Ads Account before any AI or Meta action runs.
 
 ## Easiest Permanent Deploy
 
@@ -56,6 +73,8 @@ Use Render or Railway. This project includes both `render.yaml` and `railway.jso
 3. Render reads `render.yaml`.
 4. Fill the prompted secret env vars:
    - `APP_BASIC_AUTH_PASSWORD`
+   - `RENDER_API_KEY`
+   - `RENDER_SERVICE_ID`
    - `META_ACCESS_TOKEN`
    - `META_AD_ACCOUNT_ID`
    - `OPENAI_API_KEY`
