@@ -55,3 +55,64 @@ export type ManagedPageRecord = {
   permissions: PageAutomationPermissionReport[]
   lastSyncedAt: string
 }
+
+export type SharedAdsInsightForPageRecord = {
+  source: {
+    workspaceId?: string
+    datePreset: string
+    checkedAt: string
+    taskId?: string
+  }
+  scope: {
+    pageId?: string
+    pageName?: string
+    campaignIds: string[]
+    adSetIds: string[]
+    adIds: string[]
+  }
+  metrics: {
+    spend: number
+    revenue: number
+    roas: number
+    cpa: number
+    ctr: number
+    leads?: number
+    bookings?: number
+  }
+  findings: Array<{
+    title: string
+    summary: string
+    evidence: string[]
+    risk: 'Low' | 'Medium' | 'High'
+    confidence: number
+  }>
+  recommendations: Array<{
+    id: string
+    action: string
+    expectedImpact: string
+    guardrail: string
+    requiresApproval: true
+    risk: 'Low' | 'Medium' | 'High'
+    confidence: number
+  }>
+  creativeSignals: Array<{
+    adId: string
+    campaignId: string
+    creative: string
+    score: number
+    ctr: number
+    roas: number
+    bookings: number
+  }>
+  outcomeSignals: {
+    alerts: unknown[]
+    learnings: unknown[]
+    nextActions: string[]
+  }
+  policy: {
+    readOnly: true
+    noMetaWrites: true
+    noInventedMetrics: true
+    approvalRequired: true
+  }
+}
