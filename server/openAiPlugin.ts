@@ -92,6 +92,33 @@ interface AiMarketerModelResult {
   actions: AiMarketerModelAction[]
 }
 
+interface AiOptimizerModelDecision {
+  adId: string
+  decision: 'pause' | 'keep' | 'activate' | 'watch'
+  actionLabel: string
+  reason: string
+  conditionAnalysis: string
+  guardrail: string
+  nextStep: string
+  confidence: number
+  risk: RiskLevel
+}
+
+interface AiOptimizerModelCondition {
+  title: string
+  analysis: string
+  matchedAdIds: string[]
+  recommendedAction: string
+  risk: RiskLevel
+}
+
+interface AiOptimizerModelResult {
+  summary: string
+  modelNotes: string[]
+  decisions: AiOptimizerModelDecision[]
+  conditions: AiOptimizerModelCondition[]
+}
+
 interface AiCreativeModelResult {
   summary: string
   brief: {
@@ -530,6 +557,55 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
 	        return
 	      }
 
+      if (requestUrl.pathname === '/api/ai/optimizer') {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: 'Method not allowed' })
+          return
+        }
+
+        assertJsonRequest(req)
+        const config = await requireOpenAiConfig(env)
+        const body = await readJsonBody(req)
+        const workspace = normalizeWorkspacePayload(body.workspace)
+        if (!hasWorkspaceSignal(workspace)) {
+          throw new AiApiError('ต้อง Sync Meta API ก่อนให้ AI Optimizer วิเคราะห์ข้อมูลจริง', 400)
+        }
+
+        const candidates = normalizeOptimizerCandidates(body.candidates)
+        if (!candidates.length) {
+          throw new AiApiError('ยังไม่มี ad-level candidate ให้ AI Optimizer วิเคราะห์', 400)
+        }
+
+        const startedAt = Date.now()
+        const modelResult = await callOpenAiJson<AiOptimizerModelResult>({
+          config: {
+            ...config,
+            maxOutputTokens: Math.max(config.maxOutputTokens, 6500),
+          },
+          schemaName: 'pmc_ai_optimizer_result',
+          schema: aiOptimizerSchema,
+          systemPrompt: aiOptimizerSystemPrompt,
+          payload: {
+            instruction: 'Analyze optimizer actions for Thai clinic Meta Ads. Return concise Thai reasons and condition analysis only from supplied data.',
+            automationMode: cleanText(body.automationMode, 'แนะนำเท่านั้น'),
+            candidates,
+            datePreset: cleanText(body.datePreset, 'current'),
+            workspace,
+          },
+        })
+        const result = normalizeAiOptimizerResult(modelResult, candidates)
+
+        writeJson(res, 200, {
+          ok: true,
+          source: 'OpenAI Responses API',
+          model: config.model,
+          durationMs: Date.now() - startedAt,
+          checkedAt: new Date().toISOString(),
+          ...result,
+        })
+        return
+      }
+
 	      if (requestUrl.pathname === '/api/ai/marketer') {
         if (req.method !== 'POST') {
           writeJson(res, 405, { error: 'Method not allowed' })
@@ -943,9 +1019,26 @@ async function callOpenAiJson<T>({
   if (!outputText) throw new AiApiError('OpenAI response ไม่มี output text ที่ parse ได้', 502)
 
   try {
-    return JSON.parse(outputText) as T
+    return parseOpenAiJsonOutput<T>(outputText)
   } catch {
     throw new AiApiError('OpenAI response ไม่ใช่ JSON ตาม schema ที่กำหนด', 502)
+  }
+}
+
+function parseOpenAiJsonOutput<T>(outputText: string): T {
+  const trimmed = outputText.trim()
+  try {
+    return JSON.parse(trimmed) as T
+  } catch {
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1]?.trim()
+    if (fenced) return JSON.parse(fenced) as T
+
+    const firstObject = trimmed.indexOf('{')
+    const lastObject = trimmed.lastIndexOf('}')
+    if (firstObject !== -1 && lastObject > firstObject) {
+      return JSON.parse(trimmed.slice(firstObject, lastObject + 1)) as T
+    }
+    throw new Error('No parseable JSON object')
   }
 }
 
@@ -2978,6 +3071,81 @@ function normalizeAiActions(input: unknown, campaigns: CampaignInsight[]): Recom
   }).slice(0, 10)
 }
 
+function normalizeOptimizerCandidates(input: unknown) {
+  return pickArray(input, (item) => {
+    const record = sanitizeUnknownRecord(item)
+    return {
+      adId: cleanText(record.adId, ''),
+      adName: cleanText(record.adName, ''),
+      adSetName: cleanText(record.adSetName, ''),
+      campaignName: cleanText(record.campaignName, ''),
+      currentStatus: cleanText(record.currentStatus, ''),
+      deterministicDecision: cleanText(record.deterministicDecision, ''),
+      targetStatus: cleanText(record.targetStatus, ''),
+      spend: numberOf(record.spend),
+      roas: numberOf(record.roas),
+      ctr: numberOf(record.ctr),
+      bookings: numberOf(record.bookings),
+      leads: numberOf(record.leads),
+      clicks: numberOf(record.clicks),
+      impressions: numberOf(record.impressions),
+      score: numberOf(record.score),
+      deterministicReason: cleanText(record.deterministicReason, ''),
+      deterministicGuardrail: cleanText(record.deterministicGuardrail, ''),
+      evidence: cleanStringList(record.evidence, 8),
+    }
+  }).filter((item) => item.adId).slice(0, 25)
+}
+
+function normalizeAiOptimizerResult(
+  input: AiOptimizerModelResult,
+  candidates: ReturnType<typeof normalizeOptimizerCandidates>,
+): AiOptimizerModelResult {
+  const candidateIds = new Set(candidates.map((candidate) => candidate.adId))
+  const cleanDecision = (value: unknown): AiOptimizerModelDecision['decision'] => {
+    const decision = cleanText(value, 'watch')
+    return decision === 'pause' || decision === 'keep' || decision === 'activate' || decision === 'watch' ? decision : 'watch'
+  }
+
+  return {
+    summary: cleanText(input.summary, 'AI Optimizer วิเคราะห์ข้อมูล Meta จริงเสร็จแล้ว'),
+    modelNotes: cleanStringList(input.modelNotes, 5),
+    decisions: pickArray(input.decisions, (item): AiOptimizerModelDecision | null => {
+      const record = sanitizeUnknownRecord(item)
+      const adId = cleanText(record.adId, '')
+      if (!candidateIds.has(adId)) return null
+      const decision = cleanDecision(record.decision)
+      return {
+        adId,
+        decision,
+        actionLabel: cleanText(
+          record.actionLabel,
+          decision === 'pause' ? 'เพิ่มคิวปิด' : decision === 'activate' ? 'เพิ่มคิวเปิด' : 'ไม่ต้องเขียน Meta',
+        ),
+        reason: cleanText(record.reason, 'AI ต้องการข้อมูลเพิ่มก่อนสรุปเหตุผล'),
+        conditionAnalysis: cleanText(record.conditionAnalysis, 'AI ยังไม่พบเงื่อนไขที่ชัดเจนพอ'),
+        guardrail: cleanText(record.guardrail, 'ต้องตรวจข้อมูลจริงก่อน execute'),
+        nextStep: cleanText(record.nextStep, 'รีวิวก่อนดำเนินการ'),
+        confidence: clamp(Math.round(numberOf(record.confidence)), 0, 100),
+        risk: normalizeRisk(record.risk),
+      }
+    }).slice(0, 25),
+    conditions: pickArray(input.conditions, (item): AiOptimizerModelCondition | null => {
+      const record = sanitizeUnknownRecord(item)
+      const title = cleanText(record.title, '')
+      const analysis = cleanText(record.analysis, '')
+      if (!title && !analysis) return null
+      return {
+        title: title || 'เงื่อนไขจาก AI',
+        analysis: analysis || 'AI วิเคราะห์เงื่อนไขจากข้อมูลจริง',
+        matchedAdIds: cleanStringList(record.matchedAdIds, 12).filter((id) => candidateIds.has(id)),
+        recommendedAction: cleanText(record.recommendedAction, 'รีวิวก่อน execute'),
+        risk: normalizeRisk(record.risk),
+      }
+    }).slice(0, 6),
+  }
+}
+
 function executionForAiAction(campaign: CampaignInsight, executionType: string): RecommendedAction['execution'] | undefined {
   if (executionType === 'pause_campaign' && canPauseCampaignByPolicy(campaign)) {
     return {
@@ -3109,6 +3277,17 @@ const aiMarketerSystemPrompt = [
   'Every action must include evidence-based guardrails and rollback notes.',
   'Medical/aesthetic ads must avoid guaranteed results, exaggerated claims, and unsafe before/after promises.',
   'Only set execution to pause_campaign or activate_campaign when the evidence is strong enough for a campaign-level status change. Otherwise use none.',
+].join('\n')
+
+const aiOptimizerSystemPrompt = [
+  'You are PMC AI Optimizer for a Thai clinic Meta Ads backend.',
+  'Use only the supplied ad-level candidates and workspace metrics. Do not invent spend, ROAS, booking, CTR, CPA, audience, age, location, or creative details.',
+  'Return concise Thai UI copy that a non-technical operator can understand.',
+  'Decision meanings: pause sends PAUSED only when the current ad is active and evidence is strong; activate sends ACTIVE only when the current ad is paused and evidence is strong; keep/watch must not write Meta.',
+  'Every decision must include reason, conditionAnalysis, guardrail, nextStep, risk, and confidence.',
+  'Group conditions into human-readable rules: spend leakage, ROAS weakness, winner signal, tracking gap, creative fatigue, or not enough data.',
+  'Medical/aesthetic clinic ads must avoid guaranteed results, unsafe before/after promises, cure claims, and exaggerated claims.',
+  'If data is ambiguous, choose watch or keep and say what to verify next.',
 ].join('\n')
 
 const aiCreativeSystemPrompt = [
@@ -3289,6 +3468,52 @@ const aiMarketerSchema: Record<string, unknown> = {
           risk: { type: 'string', enum: ['Low', 'Medium', 'High'] },
           confidence: { type: 'integer', minimum: 0, maximum: 100 },
           execution: { type: 'string', enum: ['none', 'pause_campaign', 'activate_campaign'] },
+        },
+      },
+    },
+  },
+}
+
+const aiOptimizerSchema: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'modelNotes', 'decisions', 'conditions'],
+  properties: {
+    summary: { type: 'string' },
+    modelNotes: { type: 'array', maxItems: 5, items: { type: 'string' } },
+    decisions: {
+      type: 'array',
+      maxItems: 25,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['adId', 'decision', 'actionLabel', 'reason', 'conditionAnalysis', 'guardrail', 'nextStep', 'confidence', 'risk'],
+        properties: {
+          adId: { type: 'string' },
+          decision: { type: 'string', enum: ['pause', 'keep', 'activate', 'watch'] },
+          actionLabel: { type: 'string' },
+          reason: { type: 'string' },
+          conditionAnalysis: { type: 'string' },
+          guardrail: { type: 'string' },
+          nextStep: { type: 'string' },
+          confidence: { type: 'integer', minimum: 0, maximum: 100 },
+          risk: { type: 'string', enum: ['Low', 'Medium', 'High'] },
+        },
+      },
+    },
+    conditions: {
+      type: 'array',
+      maxItems: 6,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'analysis', 'matchedAdIds', 'recommendedAction', 'risk'],
+        properties: {
+          title: { type: 'string' },
+          analysis: { type: 'string' },
+          matchedAdIds: { type: 'array', maxItems: 12, items: { type: 'string' } },
+          recommendedAction: { type: 'string' },
+          risk: { type: 'string', enum: ['Low', 'Medium', 'High'] },
         },
       },
     },
