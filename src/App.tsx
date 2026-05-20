@@ -1,28 +1,22 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   BookOpenCheck,
-  BarChart3,
   BrainCircuit,
-  CalendarClock,
   ChevronDown,
   ChevronRight,
-  CheckCircle2,
   Database,
   FileText,
   HelpCircle,
   ImageIcon,
-  Inbox,
   Info,
   Layers3,
   LineChart,
   Menu,
   Megaphone,
-  MessageSquareText,
   Pencil,
   Power,
   RefreshCw,
   Search,
-  Send,
   Settings,
   Trash2,
   Users,
@@ -51,6 +45,7 @@ import type {
   WebsiteContext,
   WorkspaceData,
 } from './types'
+import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
 import './App.css'
 
 type TabId =
@@ -447,278 +442,10 @@ const fmtChartMoney = (value: number | string) => {
   return `฿${Math.round(amount)}`
 }
 
-type PageAutomationPage = {
-  id: string
-  name: string
-  handle: string
-  followers: number
-  engagementRate: number
-  responseRate: number
-  unread: number
-  tone: Tone
-}
-
-type PageAutomationPost = {
-  id: string
-  pageId: string
-  title: string
-  goal: string
-  channel: string
-  status: 'พร้อมโพสต์' | 'รออนุมัติ' | 'ต้องแก้ไข'
-  time: string
-  score: number
-}
-
-type PageAutomationMessage = {
-  id: string
-  pageId: string
-  customer: string
-  pageName: string
-  topic: string
-  detail: string
-  priority: 'สูง' | 'กลาง' | 'ต่ำ'
-  waitTime: string
-}
-
-const pageAutomationPages: PageAutomationPage[] = [
-  { id: 'fifth', name: 'Fifth Clinic', handle: '@fifthclinic', followers: 128400, engagementRate: 4.8, responseRate: 91, unread: 18, tone: 'good' },
-  { id: 'tab', name: 'Tab Aesthetic', handle: '@tabaesthetic', followers: 84200, engagementRate: 3.2, responseRate: 76, unread: 31, tone: 'watch' },
-  { id: 'sugar', name: 'Sugar Beauty', handle: '@sugarbeauty', followers: 51200, engagementRate: 2.1, responseRate: 63, unread: 46, tone: 'critical' },
-]
-
-const pageAutomationPosts: PageAutomationPost[] = [
-  { id: 'post-1', pageId: 'fifth', title: 'โปรแกรมเติมไขมัน 9900', goal: 'เก็บ lead จากคนที่เคยทัก', channel: 'Feed + Story', status: 'พร้อมโพสต์', time: 'วันนี้ 18:30', score: 89 },
-  { id: 'post-2', pageId: 'tab', title: 'รีวิวเคสก่อนหลังแบบปลอดภัย', goal: 'เพิ่มความมั่นใจก่อนจอง', channel: 'Feed', status: 'รออนุมัติ', time: 'พรุ่งนี้ 11:00', score: 78 },
-  { id: 'post-3', pageId: 'sugar', title: 'Q&A ข้อสงสัยก่อนปรึกษา', goal: 'ลดคำถามซ้ำใน inbox', channel: 'Story', status: 'ต้องแก้ไข', time: 'ศุกร์ 20:00', score: 61 },
-]
-
-const pageAutomationMessages: PageAutomationMessage[] = [
-  { id: 'msg-1', pageId: 'sugar', customer: 'คุณแพรว', pageName: 'Sugar Beauty', topic: 'ถามราคาและวันว่าง', detail: 'สนใจเติมไขมัน ต้องการดูคิววันเสาร์และเงื่อนไขมัดจำ', priority: 'สูง', waitTime: 'รอ 42 นาที' },
-  { id: 'msg-2', pageId: 'tab', customer: 'คุณมิ้น', pageName: 'Tab Aesthetic', topic: 'ขอดูรีวิวเพิ่ม', detail: 'ถามเคสใกล้เคียงและระยะพักฟื้น ควรส่งรีวิวที่ผ่าน compliance แล้ว', priority: 'กลาง', waitTime: 'รอ 18 นาที' },
-  { id: 'msg-3', pageId: 'fifth', customer: 'คุณบี', pageName: 'Fifth Clinic', topic: 'ติดตามหลังทักจาก Ads', detail: 'เคยทักไว้เมื่อวาน ยังไม่เลือกวันปรึกษา เหมาะกับข้อความ follow-up สั้นๆ', priority: 'กลาง', waitTime: 'รอ 9 นาที' },
-]
-
 function App() {
   const pathname = typeof window === 'undefined' ? '/' : window.location.pathname
   if (pathname.startsWith('/page-automation')) return <PageAutomationApp />
   return <PmcAdsAgentApp />
-}
-
-function PageAutomationApp() {
-  const [selectedPageId, setSelectedPageId] = useState('all')
-  const [messagePriority, setMessagePriority] = useState<'all' | PageAutomationMessage['priority']>('all')
-  const selectedPages = selectedPageId === 'all' ? pageAutomationPages : pageAutomationPages.filter((page) => page.id === selectedPageId)
-  const selectedPageNames = new Set(selectedPages.map((page) => page.id))
-  const posts = pageAutomationPosts.filter((post) => selectedPageId === 'all' || post.pageId === selectedPageId)
-  const messages = pageAutomationMessages.filter((message) => {
-    const pageMatch = selectedPageNames.has(message.pageId)
-    const priorityMatch = messagePriority === 'all' || message.priority === messagePriority
-    return pageMatch && priorityMatch
-  })
-  const dashboard = useMemo(() => {
-    const followers = selectedPages.reduce((sum, page) => sum + page.followers, 0)
-    const unread = selectedPages.reduce((sum, page) => sum + page.unread, 0)
-    const engagement = selectedPages.length ? selectedPages.reduce((sum, page) => sum + page.engagementRate, 0) / selectedPages.length : 0
-    const response = selectedPages.length ? selectedPages.reduce((sum, page) => sum + page.responseRate, 0) / selectedPages.length : 0
-    return { followers, unread, engagement, response }
-  }, [selectedPages])
-
-  return (
-    <main className="page-app-shell">
-      <header className="page-app-topbar">
-        <div>
-          <span className="page-app-eyebrow">Separate program</span>
-          <h1>Page Automation Center</h1>
-          <p>จัดตารางโพสต์ วิเคราะห์เพจ รวมข้อความทุกเพจ และดู dashboard ของเพจในที่เดียว</p>
-        </div>
-        <div className="page-app-actions">
-          <select aria-label="เลือกเพจ" value={selectedPageId} onChange={(event) => setSelectedPageId(event.target.value)}>
-            <option value="all">ทุกเพจ</option>
-            {pageAutomationPages.map((page) => (
-              <option key={page.id} value={page.id}>{page.name}</option>
-            ))}
-          </select>
-          <a className="page-app-secondary-link" href="/">กลับ PMC Ads Agent</a>
-        </div>
-      </header>
-
-      <section className="page-app-kpis" aria-label="ภาพรวม Page Automation">
-        <PageAutomationKpi icon={Users} label="ผู้ติดตามรวม" value={fmtNum(dashboard.followers)} detail={`${selectedPages.length} เพจที่เลือก`} />
-        <PageAutomationKpi icon={MessageSquareText} label="ข้อความรอตอบ" value={fmtNum(dashboard.unread)} detail="รวมจากทุกเพจ" tone="watch" />
-        <PageAutomationKpi icon={BarChart3} label="Engagement เฉลี่ย" value={`${dashboard.engagement.toFixed(1)}%`} detail="จากโพสต์ล่าสุด" tone="good" />
-        <PageAutomationKpi icon={Inbox} label="ตอบกลับทันเวลา" value={`${Math.round(dashboard.response)}%`} detail="เป้าหมาย 90%+" tone={dashboard.response >= 90 ? 'good' : 'critical'} />
-      </section>
-
-      <div className="page-app-grid">
-        <section className="page-app-panel page-app-autopost">
-          <div className="page-app-panel-head">
-            <div>
-              <span className="page-app-section-icon"><CalendarClock size={18} /></span>
-              <h2>Ads Auto Post</h2>
-              <p>เตรียมโพสต์ แยกตามเพจ เวลา เป้าหมาย และสถานะอนุมัติ</p>
-            </div>
-            <button className="page-app-primary-button" type="button">
-              <Send size={16} />
-              สร้างโพสต์
-            </button>
-          </div>
-
-          <div className="page-app-composer">
-            <label>
-              แนวทางโพสต์
-              <textarea defaultValue="เขียนโพสต์ให้เหมาะกับคนที่เคยทักเพจ เน้นข้อเสนอชัด อ่านง่าย และไม่มี claim เกินจริง" />
-            </label>
-            <div className="page-app-chip-row" aria-label="โหมดโพสต์">
-              <span>Feed</span>
-              <span>Story</span>
-              <span>Reels caption</span>
-              <span>Follow-up</span>
-            </div>
-          </div>
-
-          <div className="page-app-post-list">
-            {posts.map((post) => (
-              <article className="page-app-post-item" key={post.id}>
-                <div>
-                  <span className={`page-app-status ${statusToneForPost(post.status)}`}>{post.status}</span>
-                  <h3>{post.title}</h3>
-                  <p>{post.goal}</p>
-                  <small>{post.channel} · {post.time}</small>
-                </div>
-                <strong>{post.score}%</strong>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="page-app-panel">
-          <div className="page-app-panel-head">
-            <div>
-              <span className="page-app-section-icon"><Inbox size={18} /></span>
-              <h2>ข้อความจากทุก Page</h2>
-              <p>รวมข้อความที่ควรตอบก่อน พร้อมหัวข้อและเวลารอ</p>
-            </div>
-            <select aria-label="กรองความสำคัญ" value={messagePriority} onChange={(event) => setMessagePriority(event.target.value as 'all' | PageAutomationMessage['priority'])}>
-              <option value="all">ทุกความสำคัญ</option>
-              <option value="สูง">สูง</option>
-              <option value="กลาง">กลาง</option>
-              <option value="ต่ำ">ต่ำ</option>
-            </select>
-          </div>
-
-          <div className="page-app-message-list">
-            {messages.map((message) => (
-              <article className="page-app-message" key={message.id}>
-                <div className="page-app-avatar">{message.customer.slice(0, 1)}</div>
-                <div>
-                  <div className="page-app-message-meta">
-                    <strong>{message.customer}</strong>
-                    <span>{message.pageName}</span>
-                  </div>
-                  <h3>{message.topic}</h3>
-                  <p>{message.detail}</p>
-                  <small>{message.waitTime}</small>
-                </div>
-                <span className={`page-app-priority ${priorityTone(message.priority)}`}>{message.priority}</span>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="page-app-panel">
-          <div className="page-app-panel-head">
-            <div>
-              <span className="page-app-section-icon"><Search size={18} /></span>
-              <h2>วิเคราะห์ข้อมูล Page</h2>
-              <p>อ่านสัญญาณเพจจาก follower, engagement, inbox และจุดที่ควรแก้</p>
-            </div>
-          </div>
-          <div className="page-app-page-list">
-            {selectedPages.map((page) => (
-              <article className="page-app-page-row" key={page.id}>
-                <div>
-                  <h3>{page.name}</h3>
-                  <p>{page.handle}</p>
-                </div>
-                <div className="page-app-page-metrics">
-                  <span>{fmtNum(page.followers)} followers</span>
-                  <span>{page.engagementRate.toFixed(1)}% engagement</span>
-                  <span>{page.unread} unread</span>
-                </div>
-                <span className={`page-app-health ${page.tone}`}>
-                  {page.tone === 'good' ? 'ดี' : page.tone === 'watch' ? 'ต้องดู' : 'เร่งแก้'}
-                </span>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="page-app-panel page-app-dashboard">
-          <div className="page-app-panel-head">
-            <div>
-              <span className="page-app-section-icon"><BarChart3 size={18} /></span>
-              <h2>Dashboard วิเคราะห์</h2>
-              <p>ดูภาพรวมการเติบโต การตอบกลับ และคุณภาพโพสต์ของเพจ</p>
-            </div>
-          </div>
-          <div className="page-app-bars" aria-label="กราฟ Page dashboard">
-            <PageAutomationBar label="Reach" value={82} />
-            <PageAutomationBar label="Engagement" value={Math.round(dashboard.engagement * 14)} />
-            <PageAutomationBar label="Inbox response" value={Math.round(dashboard.response)} />
-            <PageAutomationBar label="Post readiness" value={posts.length ? Math.round(posts.reduce((sum, post) => sum + post.score, 0) / posts.length) : 0} />
-          </div>
-          <div className="page-app-next-actions">
-            <h3>สิ่งที่ควรทำก่อน</h3>
-            <p>ตอบข้อความที่รอนานก่อน จากนั้นอนุมัติโพสต์ที่คะแนนสูง และแยกโพสต์ที่ต้องแก้ไขออกจากคิวเผยแพร่</p>
-            <button className="page-app-outline-button" type="button">
-              <CheckCircle2 size={16} />
-              เตรียมงานวันนี้
-            </button>
-          </div>
-        </section>
-      </div>
-    </main>
-  )
-}
-
-function PageAutomationKpi({ detail, icon: Icon, label, tone = 'info', value }: { detail: string; icon: LucideIcon; label: string; tone?: Tone; value: string }) {
-  return (
-    <article className={`page-app-kpi ${tone}`}>
-      <span><Icon size={18} /></span>
-      <div>
-        <p>{label}</p>
-        <strong>{value}</strong>
-        <small>{detail}</small>
-      </div>
-    </article>
-  )
-}
-
-function PageAutomationBar({ label, value }: { label: string; value: number }) {
-  const width = Math.max(8, Math.min(value, 100))
-  return (
-    <div className="page-app-bar-row">
-      <div>
-        <span>{label}</span>
-        <strong>{value}%</strong>
-      </div>
-      <span className="page-app-bar-track">
-        <span style={{ width: `${width}%` }} />
-      </span>
-    </div>
-  )
-}
-
-function statusToneForPost(status: PageAutomationPost['status']) {
-  if (status === 'พร้อมโพสต์') return 'good'
-  if (status === 'รออนุมัติ') return 'watch'
-  return 'critical'
-}
-
-function priorityTone(priority: PageAutomationMessage['priority']) {
-  if (priority === 'สูง') return 'critical'
-  if (priority === 'กลาง') return 'watch'
-  return 'good'
 }
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
