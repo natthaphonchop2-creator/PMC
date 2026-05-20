@@ -64,6 +64,27 @@ describe('pageAutomationPlugin middleware', () => {
     })
   })
 
+  it('returns unavailable pages when Meta fetch and cache read both fail', async () => {
+    const deps = baseDeps({
+      fetchPages: vi.fn(async () => {
+        throw new Error('Meta unavailable with meta-token')
+      }),
+      readJsonSnapshot: vi.fn(async () => {
+        throw new Error('Cache unreadable')
+      }),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/pages'), res)
+
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({
+      pages: [],
+      source: 'unavailable',
+    })
+  })
+
   it('writes live Meta pages to cache when fetch succeeds', async () => {
     const livePages = [managedPage({ id: 'live-page', name: 'Live Clinic' })]
     const deps = baseDeps({
@@ -82,8 +103,155 @@ describe('pageAutomationPlugin middleware', () => {
     })
   })
 
+  it('returns live Meta pages when cache write fails', async () => {
+    const livePages = [managedPage({ id: 'live-page', name: 'Live Clinic' })]
+    const deps = baseDeps({
+      fetchPages: vi.fn(async () => livePages),
+      writeJsonSnapshot: vi.fn(async () => {
+        throw new Error('Cache write failed')
+      }),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/pages'), res)
+
+    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/pages.json', livePages)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({
+      pages: livePages,
+      source: 'meta',
+    })
+  })
+
+  it('rejects post drafts without JSON content type and does not append', async () => {
+    const deps = baseDeps()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    for (const contentType of [null, 'text/plain']) {
+      const res = mockResponse()
+
+      await middleware(
+        mockRequest(
+          'POST',
+          '/api/page-automation/post-drafts',
+          {
+            id: 'draft-1',
+            pageId: 'page-1',
+            caption: 'New service reminder',
+          },
+          { contentType },
+        ),
+        res,
+      )
+
+      expect(res.statusCode).toBe(415)
+      expect(JSON.parse(res.body)).toEqual({ error: 'POST /post-drafts requires application/json' })
+    }
+
+    expect(deps.appendJsonlRecord).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid JSON post draft bodies and does not append', async () => {
+    const deps = baseDeps()
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(
+      mockRequest('POST', '/api/page-automation/post-drafts', '{"id":', { contentType: 'application/json', rawBody: true }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toEqual({ error: 'Request body must be valid JSON' })
+    expect(deps.appendJsonlRecord).not.toHaveBeenCalled()
+  })
+
+  it('rejects post drafts with missing required fields and does not append', async () => {
+    const deps = baseDeps()
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(
+      mockRequest('POST', '/api/page-automation/post-drafts', {
+        id: 'draft-1',
+        caption: 'New service reminder',
+      }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toEqual({ error: 'Post draft requires id, pageId, and content' })
+    expect(deps.appendJsonlRecord).not.toHaveBeenCalled()
+  })
+
+  it.each(['posted', 'scheduled'])('rejects post drafts with %s status and does not append', async (status) => {
+    const deps = baseDeps()
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(
+      mockRequest('POST', '/api/page-automation/post-drafts', {
+        id: 'draft-1',
+        pageId: 'page-1',
+        caption: 'New service reminder',
+        status,
+      }),
+      res,
+    )
+
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body)).toEqual({ error: 'Post draft status must be draft, needs_review, or ready' })
+    expect(deps.appendJsonlRecord).not.toHaveBeenCalled()
+  })
+
   it('appends a post draft and audit event', async () => {
     const deps = baseDeps()
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(
+      mockRequest('POST', '/api/page-automation/post-drafts', {
+        id: 'draft-1',
+        pageId: 'page-1',
+        caption: 'New service reminder',
+        status: 'ready',
+      }),
+      res,
+    )
+
+    expect(deps.appendJsonlRecord).toHaveBeenCalledTimes(2)
+    expect(deps.appendJsonlRecord).toHaveBeenNthCalledWith(
+      1,
+      '/tmp/page-automation/audit-log.jsonl',
+      expect.objectContaining({
+        actor: 'user',
+        action: 'intent_create_post_draft',
+        target: 'draft-1',
+        reason: 'intent to create post draft from Page Automation UI',
+        createdAt: FIXED_NOW,
+      }),
+    )
+    expect(deps.appendJsonlRecord).toHaveBeenNthCalledWith(
+      2,
+      '/tmp/page-automation/post-drafts.jsonl',
+      expect.objectContaining({
+        id: 'draft-1',
+        pageId: 'page-1',
+        caption: 'New service reminder',
+        status: 'draft',
+        createdAt: FIXED_NOW,
+      }),
+    )
+    expect(JSON.parse(res.body)).toEqual({ ok: true })
+  })
+
+  it('does not append a post draft when audit intent append fails', async () => {
+    const deps = baseDeps({
+      appendJsonlRecord: vi.fn(async (filePath: string) => {
+        if (filePath.endsWith('/audit-log.jsonl')) throw new Error('Audit log unavailable')
+      }),
+    })
     const res = mockResponse()
     const middleware = createPageAutomationMiddleware({}, deps)
 
@@ -96,29 +264,15 @@ describe('pageAutomationPlugin middleware', () => {
       res,
     )
 
-    expect(deps.appendJsonlRecord).toHaveBeenCalledTimes(2)
-    expect(deps.appendJsonlRecord).toHaveBeenNthCalledWith(
-      1,
-      '/tmp/page-automation/post-drafts.jsonl',
-      expect.objectContaining({
-        id: 'draft-1',
-        pageId: 'page-1',
-        caption: 'New service reminder',
-        createdAt: FIXED_NOW,
-      }),
-    )
-    expect(deps.appendJsonlRecord).toHaveBeenNthCalledWith(
-      2,
+    expect(res.statusCode).toBe(500)
+    expect(deps.appendJsonlRecord).toHaveBeenCalledTimes(1)
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith(
       '/tmp/page-automation/audit-log.jsonl',
       expect.objectContaining({
-        actor: 'user',
-        action: 'create_post_draft',
+        action: 'intent_create_post_draft',
         target: 'draft-1',
-        reason: 'created from Page Automation UI',
-        createdAt: FIXED_NOW,
       }),
     )
-    expect(JSON.parse(res.body)).toEqual({ ok: true })
   })
 
   it('returns a normalized read-only Ads insight with a null workspace by default', async () => {
@@ -161,7 +315,14 @@ describe('pageAutomationPlugin middleware', () => {
     const res = mockResponse()
     const middleware = createPageAutomationMiddleware({ PAGE_AUTOMATION_META_ACCESS_TOKEN: 'secret-token' }, deps)
 
-    await middleware(mockRequest('POST', '/api/page-automation/post-drafts', { id: 'draft-1' }), res)
+    await middleware(
+      mockRequest('POST', '/api/page-automation/post-drafts', {
+        id: 'draft-1',
+        pageId: 'page-1',
+        caption: 'New service reminder',
+      }),
+      res,
+    )
 
     expect(res.statusCode).toBe(500)
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8')
@@ -196,14 +357,23 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function mockRequest(method: string, url: string, body?: unknown) {
-  const chunks = body === undefined ? [] : [JSON.stringify(body)]
+function mockRequest(
+  method: string,
+  url: string,
+  body?: unknown,
+  options: {
+    contentType?: string | null
+    rawBody?: boolean
+  } = {},
+) {
+  const chunks = body === undefined ? [] : [options.rawBody ? String(body) : JSON.stringify(body)]
+  const contentType = options.contentType === undefined ? 'application/json' : options.contentType
   return Object.assign(Readable.from(chunks), {
     method,
     url,
     headers: {
       host: 'localhost',
-      ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      ...(body === undefined || contentType === null ? {} : { 'content-type': contentType }),
     },
   })
 }

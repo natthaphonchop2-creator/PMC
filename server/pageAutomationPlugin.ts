@@ -94,12 +94,22 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/pages') {
         const livePages = await deps.fetchPages(metaConfig).catch(() => null)
-        const pages = livePages ?? (await deps.readJsonSnapshot<ManagedPageRecord[]>(deps.store.files.pages, []))
-        if (livePages) await deps.writeJsonSnapshot(deps.store.files.pages, livePages)
+        if (livePages) {
+          await deps.writeJsonSnapshot(deps.store.files.pages, livePages).catch(() => undefined)
+          writeJson(res, 200, {
+            pages: livePages,
+            source: 'meta',
+          })
+          return
+        }
+
+        const cachedPages = await deps
+          .readJsonSnapshot<ManagedPageRecord[]>(deps.store.files.pages, [])
+          .catch(() => null)
 
         writeJson(res, 200, {
-          pages,
-          source: livePages ? 'meta' : 'cache',
+          pages: cachedPages ?? [],
+          source: cachedPages ? 'cache' : 'unavailable',
         })
         return
       }
@@ -122,19 +132,23 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/api/page-automation/post-drafts') {
+        assertJsonContentType(req)
         const body = await readJsonBody(req)
-        const draftId = objectString(body, 'id') || 'draft'
-        await deps.appendJsonlRecord(deps.store.files.postDrafts, {
-          ...body,
-          createdAt: deps.now(),
-        })
+        const draft = validatePostDraftBody(body)
+        const createdAt = deps.now()
         await deps.appendJsonlRecord(deps.store.files.auditLog, {
           id: `audit-${Date.now()}`,
           actor: 'user',
-          action: 'create_post_draft',
-          target: draftId,
-          reason: 'created from Page Automation UI',
-          createdAt: deps.now(),
+          action: 'intent_create_post_draft',
+          target: draft.id,
+          reason: 'intent to create post draft from Page Automation UI',
+          createdAt,
+        })
+        await deps.appendJsonlRecord(deps.store.files.postDrafts, {
+          ...body,
+          ...draft,
+          status: 'draft',
+          createdAt,
         })
         writeJson(res, 200, { ok: true })
         return
@@ -171,6 +185,15 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
   }
 }
 
+function assertJsonContentType(req: IncomingMessage) {
+  const contentType = req.headers['content-type']
+  const values = Array.isArray(contentType) ? contentType : [contentType]
+  const hasJsonContentType = values.some((value) => value?.toLowerCase().split(';', 1)[0].trim() === 'application/json')
+  if (!hasJsonContentType) {
+    throw new PageAutomationApiError('POST /post-drafts requires application/json', 415)
+  }
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   let size = 0
@@ -187,12 +210,37 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   const raw = Buffer.concat(chunks).toString('utf-8').trim()
   if (!raw) return {}
 
-  const parsed = JSON.parse(raw) as unknown
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw) as unknown
+  } catch {
+    throw new PageAutomationApiError('Request body must be valid JSON', 400)
+  }
+
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new PageAutomationApiError('JSON body must be an object', 400)
   }
 
   return parsed as Record<string, unknown>
+}
+
+function validatePostDraftBody(body: Record<string, unknown>) {
+  const id = objectString(body, 'id').trim()
+  const pageId = objectString(body, 'pageId').trim()
+  const hasContent = ['caption', 'captionTh', 'title'].some((key) => Boolean(objectString(body, key).trim()))
+  if (!id || !pageId || !hasContent) {
+    throw new PageAutomationApiError('Post draft requires id, pageId, and content', 400)
+  }
+
+  const status = body.status
+  if (status !== undefined && (!objectString(body, 'status') || !['draft', 'needs_review', 'ready'].includes(objectString(body, 'status')))) {
+    throw new PageAutomationApiError('Post draft status must be draft, needs_review, or ready', 400)
+  }
+
+  return {
+    id,
+    pageId,
+  }
 }
 
 function writeJson(res: PageAutomationResponse, status: number, payload: unknown) {
