@@ -16,6 +16,17 @@ const FACEBOOK_REQUIRED: PageAutomationPermission[] = [
 
 const INSTAGRAM_REQUIRED: PageAutomationPermission[] = ['instagram_basic', 'instagram_manage_insights', 'instagram_manage_messages']
 
+const FACEBOOK_PAGE_FIELDS = 'id,name,username,followers_count,tasks'
+const FACEBOOK_PERMISSION_VALUES = new Set<PageAutomationPermission>([
+  ...FACEBOOK_REQUIRED,
+  'pages_manage_metadata',
+  'pages_manage_engagement',
+  'ads_read',
+  'business_management',
+  'leads_retrieval',
+])
+const GRAPH_PAGE_PERMISSION_KEYS = ['perms', 'permissions', 'granted_permissions', 'tasks'] as const
+
 export type PageAutomationMetaConfig = {
   accessToken?: string
   graphVersion?: string
@@ -48,6 +59,10 @@ type MetaPageRecord = {
   name?: string
   username?: string
   followers_count?: number | string
+  perms?: unknown
+  permissions?: unknown
+  granted_permissions?: unknown
+  tasks?: unknown
 }
 
 type PageAccountsPayload = {
@@ -69,30 +84,30 @@ type GraphErrorPayload = {
 
 export async function readPageAutomationMetaConfig(env: PageAutomationMetaEnv = process.env): Promise<PageAutomationMetaConfig> {
   const localConfig = await readLocalMetaConfig()
-  const activeWorkspace = localConfig?.disconnected ? null : activeLocalWorkspace(localConfig)
+  const activeWorkspace = localConfig?.disconnected ? null : activeLocalWorkspace(localConfig) ?? activeEnvWorkspace(env)
 
   return {
     accessToken: localConfig?.disconnected
       ? undefined
       : firstNonEmpty(
+          env.PAGE_AUTOMATION_META_ACCESS_TOKEN,
           activeWorkspace?.accessToken,
           localConfig?.accessToken,
-          env.PAGE_AUTOMATION_META_ACCESS_TOKEN,
           env.META_PAGE_ACCESS_TOKEN,
           env.META_ACCESS_TOKEN,
         ),
     graphVersion: firstNonEmpty(
+      env.PAGE_AUTOMATION_META_GRAPH_VERSION,
       activeWorkspace?.graphVersion,
       localConfig?.graphVersion,
-      env.PAGE_AUTOMATION_META_GRAPH_VERSION,
       env.META_GRAPH_VERSION,
       env.VITE_META_GRAPH_VERSION,
       DEFAULT_GRAPH_VERSION,
     ),
     graphHost: firstNonEmpty(
+      env.PAGE_AUTOMATION_META_GRAPH_HOST,
       activeWorkspace?.graphHost,
       localConfig?.graphHost,
-      env.PAGE_AUTOMATION_META_GRAPH_HOST,
       env.META_GRAPH_HOST,
       env.VITE_META_GRAPH_HOST,
       DEFAULT_GRAPH_HOST,
@@ -108,7 +123,7 @@ export async function fetchPageAutomationPages(
   if (!requestConfig) return []
 
   const payload = await graphGet<PageAccountsPayload>(requestConfig, `/${requestConfig.graphVersion}/me/accounts`, fetchImpl, {
-    fields: 'id,name,username,followers_count',
+    fields: FACEBOOK_PAGE_FIELDS,
   })
   const now = new Date().toISOString()
 
@@ -125,7 +140,7 @@ export async function fetchPageAutomationPages(
     responseRate: 0,
     avgFirstResponseMins: 0,
     healthScore: 50,
-    permissions: [buildPermissionReport(page.id, 'facebook', FACEBOOK_REQUIRED, now)],
+    permissions: [buildPermissionReport(page.id, 'facebook', extractGrantedFacebookPermissions(page), now)],
     lastSyncedAt: now,
   }))
 }
@@ -139,12 +154,12 @@ export async function fetchPageInsights(config: PageAutomationMetaConfig, pageId
     `/${requestConfig.graphVersion}/${encodeURIComponent(pageId)}/insights`,
     fetchImpl,
     {
-      metric: 'page_impressions,page_post_engagements',
+      metric: 'page_impressions_unique,page_impressions,page_post_engagements',
       period: 'day',
     },
   )
-  const reach = metricValue(payload, 'page_impressions')
-  const engagements = metricValue(payload, 'page_post_engagements')
+  const reach = metricValue(payload, 'page_impressions_unique') ?? metricValue(payload, 'page_impressions') ?? 0
+  const engagements = metricValue(payload, 'page_post_engagements') ?? 0
 
   return {
     reach,
@@ -188,10 +203,11 @@ async function graphGet<T>(
     throw new Error(sanitizeMetaErrorMessage(`Meta API request failed: ${errorMessage(error)}`, config.accessToken))
   }
 
-  const payload = (await response.json().catch(() => ({}))) as GraphErrorPayload
+  const responseBody = await response.text().catch(() => '')
+  const payload = parseGraphPayload(responseBody)
   const maybeError = payload.error
   if (!response.ok || maybeError) {
-    throw new Error(sanitizeMetaErrorMessage(maybeError?.message || `Meta API request failed (${response.status})`, config.accessToken))
+    throw new Error(sanitizeMetaErrorMessage(maybeError?.message || graphErrorMessage(response, responseBody), config.accessToken))
   }
 
   return payload as T
@@ -210,7 +226,9 @@ function graphRequestConfig(config: PageAutomationMetaConfig): GraphRequestConfi
 
 function metricValue(payload: PageInsightsPayload, metric: string) {
   const row = payload.data?.find((entry) => entry.name === metric)
-  return numericValue(row?.values?.[0]?.value)
+  if (!row) return null
+  const values = row.values ?? []
+  return numericValue(values.at(-1)?.value)
 }
 
 function numericValue(value: number | string | undefined) {
@@ -226,6 +244,51 @@ function activeLocalWorkspace(config: PersistedMetaConfig | null): PersistedMeta
   if (!activeWorkspaceId) return workspaces[0] ?? null
 
   return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0] ?? null
+}
+
+function activeEnvWorkspace(env: PageAutomationMetaEnv): PersistedMetaWorkspace | null {
+  const { activeWorkspaceId, workspaces } = readEnvWorkspaceConfig(env)
+  if (workspaces.length === 0) return null
+  if (!activeWorkspaceId) return workspaces[0] ?? null
+
+  return workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0] ?? null
+}
+
+function readEnvWorkspaceConfig(env: PageAutomationMetaEnv) {
+  const raw = firstNonEmpty(env.META_WORKSPACES_JSON)
+  if (!raw) return { activeWorkspaceId: firstNonEmpty(env.META_ACTIVE_WORKSPACE_ID), workspaces: [] }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    const record = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
+    const rawWorkspaces = Array.isArray(parsed) ? parsed : Array.isArray(record?.workspaces) ? record.workspaces : []
+    const workspaces = rawWorkspaces.map(normalizeEnvWorkspace).filter(isPersistedMetaWorkspace)
+
+    return {
+      activeWorkspaceId: firstNonEmpty(env.META_ACTIVE_WORKSPACE_ID, typeof record?.activeWorkspaceId === 'string' ? record.activeWorkspaceId : undefined),
+      workspaces,
+    }
+  } catch {
+    return { activeWorkspaceId: firstNonEmpty(env.META_ACTIVE_WORKSPACE_ID), workspaces: [] }
+  }
+}
+
+function normalizeEnvWorkspace(raw: unknown): PersistedMetaWorkspace | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const accessToken = typeof record.accessToken === 'string' ? record.accessToken.trim() : ''
+  if (!accessToken) return null
+
+  return {
+    id: typeof record.id === 'string' ? record.id.trim() : undefined,
+    accessToken,
+    graphVersion: typeof record.graphVersion === 'string' ? record.graphVersion.trim() : undefined,
+    graphHost: typeof record.graphHost === 'string' ? record.graphHost.trim() : undefined,
+  }
+}
+
+function isPersistedMetaWorkspace(workspace: PersistedMetaWorkspace | null): workspace is PersistedMetaWorkspace {
+  return Boolean(workspace)
 }
 
 async function readLocalMetaConfig(): Promise<PersistedMetaConfig | null> {
@@ -265,4 +328,50 @@ function sanitizeMetaErrorMessage(message: string, accessToken: string) {
   }
 
   return sanitized
+}
+
+function extractGrantedFacebookPermissions(page: MetaPageRecord) {
+  const granted = new Set<PageAutomationPermission>()
+  for (const key of GRAPH_PAGE_PERMISSION_KEYS) {
+    for (const permission of permissionStrings(page[key])) {
+      const normalized = permission.trim()
+      if (FACEBOOK_PERMISSION_VALUES.has(normalized as PageAutomationPermission)) {
+        granted.add(normalized as PageAutomationPermission)
+      }
+    }
+  }
+
+  return [...granted]
+}
+
+function permissionStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((item) => {
+    if (typeof item === 'string') return [item]
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+
+    const record = item as Record<string, unknown>
+    if (record.status && record.status !== 'granted') return []
+    const permission = record.permission ?? record.name
+    return typeof permission === 'string' ? [permission] : []
+  })
+}
+
+function parseGraphPayload(body: string): GraphErrorPayload {
+  if (!body.trim()) return {}
+
+  try {
+    const parsed = JSON.parse(body) as unknown
+    return parsed && typeof parsed === 'object' ? (parsed as GraphErrorPayload) : {}
+  } catch {
+    return {}
+  }
+}
+
+function graphErrorMessage(response: Response, body: string) {
+  const trimmed = body.trim()
+  if (!trimmed) return `Meta API request failed (${response.status})`
+
+  return `Meta API request failed (${response.status}): ${trimmed.slice(0, 500)}`
 }
