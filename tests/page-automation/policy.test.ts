@@ -16,6 +16,7 @@ const freshInsight: SharedAdsInsightForPage = {
 const baseInput: AutoEligibilityInput = {
   adsAiConfidence: 0.9,
   guardrailScore: 95,
+  pageId: 'page-1',
   pageMapping: 'explicit',
   contentType: 'education',
   hasPii: false,
@@ -24,6 +25,16 @@ const baseInput: AutoEligibilityInput = {
   adsInsightCheckedAt: freshInsight.source.checkedAt,
   pageSyncedAt: new Date('2026-05-21T03:30:00.000Z').toISOString(),
   permissionsSyncedAt: new Date('2026-05-21T03:50:00.000Z').toISOString(),
+  publishSurface: 'facebook_feed',
+  permissionReports: [
+    {
+      pageId: 'page-1',
+      platform: 'facebook',
+      granted: ['pages_show_list', 'pages_read_engagement', 'pages_manage_posts'],
+      missing: [],
+      checkedAt: new Date('2026-05-21T03:50:00.000Z').toISOString(),
+    },
+  ],
   now: new Date('2026-05-21T04:00:00.000Z').toISOString(),
 }
 
@@ -49,6 +60,34 @@ describe('Page Automation policy', () => {
     })
   })
 
+  it('blocks Facebook auto publishing when required publishing permission is missing', () => {
+    expect(
+      classifyAutoEligibility({
+        ...baseInput,
+        permissionReports: [
+          {
+            pageId: 'page-1',
+            platform: 'facebook',
+            granted: ['pages_show_list', 'pages_read_engagement'],
+            missing: [],
+            checkedAt: '2026-05-21T04:00:00.000Z',
+          },
+        ],
+      }),
+    ).toEqual({
+      state: 'blocked',
+      reason: 'permission ไม่ครบสำหรับ Auto ON publishing surface',
+    })
+  })
+
+  it('keeps unsupported v1 auto publish surfaces out of auto eligibility', () => {
+    const unsupportedSurfaces = ['instagram_feed', 'instagram_reels', 'story_preview'] as const
+
+    for (const publishSurface of unsupportedSurfaces) {
+      expect(classifyAutoEligibility({ ...baseInput, publishSurface }).state).not.toBe('auto_eligible')
+    }
+  })
+
   it('treats Ads AI insight older than 6 hours as stale for Auto decisions', () => {
     expect(
       isAdsInsightStaleForAuto({
@@ -62,13 +101,30 @@ describe('Page Automation policy', () => {
     const report: PageAutomationPermissionReport = {
       pageId: 'page-1',
       platform: 'facebook',
-      granted: ['pages_show_list', 'pages_read_engagement'],
+      granted: ['pages_show_list', 'pages_read_engagement', 'pages_read_user_content', 'ads_read'],
       missing: ['pages_manage_posts', 'pages_messaging'],
       checkedAt: '2026-05-21T04:00:00.000Z',
     }
     expect(missingPermissionStates(report)).toEqual([
       { feature: 'facebook_publishing', missing: ['pages_manage_posts'] },
       { feature: 'facebook_messages', missing: ['pages_messaging'] },
+    ])
+  })
+
+  it('derives missing permissions from granted permissions even when report.missing is empty', () => {
+    const report: PageAutomationPermissionReport = {
+      pageId: 'page-1',
+      platform: 'facebook',
+      granted: ['pages_show_list', 'pages_read_engagement'],
+      missing: [],
+      checkedAt: '2026-05-21T04:00:00.000Z',
+    }
+
+    expect(missingPermissionStates(report)).toEqual([
+      { feature: 'content_leaderboard', missing: ['pages_read_user_content'] },
+      { feature: 'facebook_publishing', missing: ['pages_manage_posts'] },
+      { feature: 'facebook_messages', missing: ['pages_messaging'] },
+      { feature: 'ads_ai_bridge', missing: ['ads_read'] },
     ])
   })
 })

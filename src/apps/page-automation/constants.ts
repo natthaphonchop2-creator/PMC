@@ -1,4 +1,10 @@
-import type { PageAutomationFeature, PageAutomationPermission, PageAutomationRouteId } from './types'
+import type {
+  PageAutomationFeature,
+  PageAutomationPermission,
+  PageAutomationPlatform,
+  PageAutomationRouteId,
+  PostDraftChannel,
+} from './types'
 
 export const PAGE_AUTOMATION_ROUTES: Array<{ id: PageAutomationRouteId; href: string; label: string }> = [
   { id: 'dashboard', href: '/page-automation', label: 'Dashboard' },
@@ -20,6 +26,35 @@ export const FEATURE_PERMISSION_REQUIREMENTS: Record<PageAutomationFeature, Page
   instagram_comments: ['instagram_manage_comments'],
   instagram_messages: ['instagram_manage_messages'],
   ads_ai_bridge: ['ads_read'],
+}
+
+export const PLATFORM_PERMISSION_FEATURES: Record<PageAutomationPlatform, PageAutomationFeature[]> = {
+  facebook: [
+    'page_selection',
+    'page_insights',
+    'content_leaderboard',
+    'facebook_publishing',
+    'facebook_messages',
+    'ads_ai_bridge',
+  ],
+  instagram: [
+    'instagram_profile',
+    'instagram_analytics',
+    'instagram_publishing',
+    'instagram_comments',
+    'instagram_messages',
+    'ads_ai_bridge',
+  ],
+}
+
+export const AUTO_SUPPORTED_V1_PUBLISH_SURFACES: ReadonlySet<PostDraftChannel> = new Set([
+  'facebook_feed',
+  'facebook_video',
+])
+
+export const AUTO_PUBLISH_SURFACE_REQUIRED_FEATURES: Partial<Record<PostDraftChannel, PageAutomationFeature>> = {
+  facebook_feed: 'facebook_publishing',
+  facebook_video: 'facebook_publishing',
 }
 
 export const ADS_AI_AUTO_STALE_MS = 6 * 60 * 60 * 1000

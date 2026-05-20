@@ -1,8 +1,11 @@
 import {
   ADS_AI_AUTO_STALE_MS,
+  AUTO_PUBLISH_SURFACE_REQUIRED_FEATURES,
+  AUTO_SUPPORTED_V1_PUBLISH_SURFACES,
   FEATURE_PERMISSION_REQUIREMENTS,
   PAGE_SYNC_AUTO_STALE_MS,
   PERMISSION_AUTO_STALE_MS,
+  PLATFORM_PERMISSION_FEATURES,
 } from './constants'
 import type {
   AutoEligibilityContentType,
@@ -10,6 +13,7 @@ import type {
   AutoEligibilityResult,
   MissingPermissionState,
   PageAutomationPermissionReport,
+  PostDraftChannel,
 } from './types'
 
 const NEEDS_APPROVAL_CONTENT_TYPES: AutoEligibilityContentType[] = [
@@ -65,6 +69,14 @@ export function classifyAutoEligibility(input: AutoEligibilityInput): AutoEligib
     return { state: 'blocked', reason: 'ข้อมูลเพจหรือ permission stale สำหรับ Auto ON' }
   }
 
+  if (!AUTO_SUPPORTED_V1_PUBLISH_SURFACES.has(input.publishSurface)) {
+    return { state: 'needs_approval', reason: 'publishing surface ยังไม่รองรับ Auto ON v1' }
+  }
+
+  if (missingAutoPublishPermissions(input).length > 0) {
+    return { state: 'blocked', reason: 'permission ไม่ครบสำหรับ Auto ON publishing surface' }
+  }
+
   if (input.pageMapping === 'inferred') {
     return { state: 'needs_approval', reason: 'page-to-ads mapping เป็น inferred' }
   }
@@ -90,14 +102,39 @@ export function classifyAutoEligibility(input: AutoEligibilityInput): AutoEligib
 
 export function missingPermissionStates(report: PageAutomationPermissionReport): MissingPermissionState[] {
   const granted = new Set(report.granted)
-  const reportedMissing = new Set(report.missing)
+  const features = PLATFORM_PERMISSION_FEATURES[report.platform]
 
-  return Object.entries(FEATURE_PERMISSION_REQUIREMENTS)
-    .map(([feature, permissions]) => ({
+  return features
+    .map((feature) => ({
       feature,
-      missing: permissions.filter((permission) => !granted.has(permission) && reportedMissing.has(permission)),
+      missing: FEATURE_PERMISSION_REQUIREMENTS[feature].filter((permission) => !granted.has(permission)),
     }))
     .filter((item) => item.missing.length > 0) as MissingPermissionState[]
+}
+
+function missingAutoPublishPermissions(input: AutoEligibilityInput) {
+  const requiredFeature = AUTO_PUBLISH_SURFACE_REQUIRED_FEATURES[input.publishSurface]
+
+  if (!requiredFeature) {
+    return []
+  }
+
+  const requiredPlatform = platformForPublishSurface(input.publishSurface)
+  const granted = new Set(
+    input.permissionReports
+      .filter((report) => report.pageId === input.pageId && report.platform === requiredPlatform)
+      .flatMap((report) => report.granted),
+  )
+
+  return FEATURE_PERMISSION_REQUIREMENTS[requiredFeature].filter((permission) => !granted.has(permission))
+}
+
+function platformForPublishSurface(publishSurface: PostDraftChannel) {
+  if (publishSurface.startsWith('facebook_')) {
+    return 'facebook'
+  }
+
+  return 'instagram'
 }
 
 function ageMs(checkedAt: string, now: string) {

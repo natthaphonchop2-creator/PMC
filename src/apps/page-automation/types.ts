@@ -216,7 +216,10 @@ export type AutoEligibilityAssetState =
 export type AutoEligibilityInput = {
   adsAiConfidence: number
   guardrailScore: number
+  pageId: string
   pageMapping: PageMappingState
+  publishSurface: PostDraftChannel
+  permissionReports: PageAutomationPermissionReport[]
   contentType: AutoEligibilityContentType
   hasPii: boolean
   hasSensitiveHealthDetail: boolean
