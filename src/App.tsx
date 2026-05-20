@@ -1,22 +1,28 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   BookOpenCheck,
+  BarChart3,
   BrainCircuit,
+  CalendarClock,
   ChevronDown,
   ChevronRight,
+  CheckCircle2,
   Database,
   FileText,
   HelpCircle,
   ImageIcon,
+  Inbox,
   Info,
   Layers3,
   LineChart,
   Menu,
   Megaphone,
+  MessageSquareText,
   Pencil,
   Power,
   RefreshCw,
   Search,
+  Send,
   Settings,
   Trash2,
   Users,
@@ -157,7 +163,12 @@ type Summary = {
   aov: number
 }
 
-type TrendDatum = { day: string; spend: number; revenue: number; bookings: number }
+type TrendDatum = { date: string; day: string; spend: number; revenue: number; bookings: number }
+type TrendTooltipItem = {
+  dataKey?: string | number
+  value?: number | string
+  payload?: TrendDatum
+}
 
 type DataSourceState = 'loading' | 'live' | 'setup-required' | 'empty' | 'error'
 type AutomationMode = 'แนะนำเท่านั้น' | 'ต้องอนุมัติก่อน' | 'พัก automation'
@@ -238,6 +249,10 @@ type OptimizerAiApiResponse = {
   checkedAt: string
   durationMs: number
   model: string
+  modelFallback?: {
+    reason: string
+    mode: string
+  }
 }
 
 type MetaStatusResponse = {
@@ -357,7 +372,7 @@ type MetaConfigResponse = MetaStatusResponse & {
 const navItems: NavItem[] = [
   { id: 'analytics', label: 'วิเคราะห์', group: 'Main', icon: LineChart, description: 'ภาพรวมโฆษณา Meta, funnel คลินิก, งานจาก AI และสถานะ audit' },
   { id: 'ads', label: 'ตัวจัดการโฆษณา', group: 'Main', icon: Megaphone, description: 'จัดการแคมเปญ ชุดโฆษณา และโฆษณาจากข้อมูล Meta จริง' },
-  { id: 'marketer', label: 'นักการตลาด AI', group: 'Main', icon: BrainCircuit, description: 'คิวคำแนะนำ การอนุมัติ และ workflow ก่อนเขียนข้อมูลจริง' },
+  { id: 'marketer', label: 'นักการตลาด AI', group: 'Main', icon: BrainCircuit, description: 'คำแนะนำ การอนุมัติ และ workflow ก่อนเขียนข้อมูลจริง' },
   { id: 'optimization', label: 'Optimizer & Automation', group: 'Main', icon: Power, description: 'ตรวจแผนปรับแคมเปญ จัดลำดับรายการสำคัญ และยืนยันก่อนส่งคำสั่งจริง' },
   { id: 'creative', label: 'สตูดิโอครีเอทีฟ', group: 'Creative', icon: Layers3, description: 'ผลงานครีเอทีฟจาก ads และ insight ที่ซิงก์มา' },
   { id: 'audience', label: 'กลุ่มเป้าหมาย', group: 'Creative', icon: Users, description: 'Segment, placement, พื้นที่ และคุณภาพ lead' },
@@ -396,7 +411,7 @@ const sectionTooltips: Record<string, string> = {
   'Funnel คลินิก': 'ดูว่าลูกค้าหลุดตรงขั้นตอนไหน ตั้งแต่เห็นโฆษณาจนถึงเคสชำระเงิน',
   'แนวโน้มผลงาน': 'ดูกราฟรายวันเพื่อเทียบค่าโฆษณากับรายได้',
   'ผลงานแคมเปญ': 'ตารางสำหรับเลือกแคมเปญและดูสถานะ CPA ROAS frequency และสัญญาณ AI',
-  'คิวคำแนะนำและ Approval': 'รวม action ที่ระบบหรือ AI แนะนำให้ตรวจ ก่อนอนุมัติหรือปฏิเสธ',
+  'คำแนะนำและ Approval': 'รวมรายการที่ระบบหรือ AI แนะนำให้ตรวจ ก่อนอนุมัติหรือปฏิเสธ',
   'Audit Trail ล่าสุด': 'บันทึกเหตุการณ์สำคัญ เช่น sync, approval และผลการดำเนินการ',
   'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
   'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
@@ -420,6 +435,291 @@ const fmtMoney = (value: number) =>
 
 const fmtNum = (value: number) => new Intl.NumberFormat('th-TH').format(value)
 const fmtMoneyShort = (value: number) => (value >= 1000 ? `฿${Math.round(value / 1000)}k` : fmtMoney(value))
+const fmtChartMoney = (value: number | string) => {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return String(value)
+  if (Math.abs(amount) >= 1_000_000) return `฿${(amount / 1_000_000).toFixed(amount >= 10_000_000 ? 0 : 1)}M`
+  if (Math.abs(amount) >= 1000) {
+    const scaled = amount / 1000
+    const label = scaled >= 10 ? String(Math.round(scaled)) : scaled.toFixed(1).replace(/\\.0$/, '')
+    return `฿${label}k`
+  }
+  return `฿${Math.round(amount)}`
+}
+
+type PageAutomationPage = {
+  id: string
+  name: string
+  handle: string
+  followers: number
+  engagementRate: number
+  responseRate: number
+  unread: number
+  tone: Tone
+}
+
+type PageAutomationPost = {
+  id: string
+  pageId: string
+  title: string
+  goal: string
+  channel: string
+  status: 'พร้อมโพสต์' | 'รออนุมัติ' | 'ต้องแก้ไข'
+  time: string
+  score: number
+}
+
+type PageAutomationMessage = {
+  id: string
+  pageId: string
+  customer: string
+  pageName: string
+  topic: string
+  detail: string
+  priority: 'สูง' | 'กลาง' | 'ต่ำ'
+  waitTime: string
+}
+
+const pageAutomationPages: PageAutomationPage[] = [
+  { id: 'fifth', name: 'Fifth Clinic', handle: '@fifthclinic', followers: 128400, engagementRate: 4.8, responseRate: 91, unread: 18, tone: 'good' },
+  { id: 'tab', name: 'Tab Aesthetic', handle: '@tabaesthetic', followers: 84200, engagementRate: 3.2, responseRate: 76, unread: 31, tone: 'watch' },
+  { id: 'sugar', name: 'Sugar Beauty', handle: '@sugarbeauty', followers: 51200, engagementRate: 2.1, responseRate: 63, unread: 46, tone: 'critical' },
+]
+
+const pageAutomationPosts: PageAutomationPost[] = [
+  { id: 'post-1', pageId: 'fifth', title: 'โปรแกรมเติมไขมัน 9900', goal: 'เก็บ lead จากคนที่เคยทัก', channel: 'Feed + Story', status: 'พร้อมโพสต์', time: 'วันนี้ 18:30', score: 89 },
+  { id: 'post-2', pageId: 'tab', title: 'รีวิวเคสก่อนหลังแบบปลอดภัย', goal: 'เพิ่มความมั่นใจก่อนจอง', channel: 'Feed', status: 'รออนุมัติ', time: 'พรุ่งนี้ 11:00', score: 78 },
+  { id: 'post-3', pageId: 'sugar', title: 'Q&A ข้อสงสัยก่อนปรึกษา', goal: 'ลดคำถามซ้ำใน inbox', channel: 'Story', status: 'ต้องแก้ไข', time: 'ศุกร์ 20:00', score: 61 },
+]
+
+const pageAutomationMessages: PageAutomationMessage[] = [
+  { id: 'msg-1', pageId: 'sugar', customer: 'คุณแพรว', pageName: 'Sugar Beauty', topic: 'ถามราคาและวันว่าง', detail: 'สนใจเติมไขมัน ต้องการดูคิววันเสาร์และเงื่อนไขมัดจำ', priority: 'สูง', waitTime: 'รอ 42 นาที' },
+  { id: 'msg-2', pageId: 'tab', customer: 'คุณมิ้น', pageName: 'Tab Aesthetic', topic: 'ขอดูรีวิวเพิ่ม', detail: 'ถามเคสใกล้เคียงและระยะพักฟื้น ควรส่งรีวิวที่ผ่าน compliance แล้ว', priority: 'กลาง', waitTime: 'รอ 18 นาที' },
+  { id: 'msg-3', pageId: 'fifth', customer: 'คุณบี', pageName: 'Fifth Clinic', topic: 'ติดตามหลังทักจาก Ads', detail: 'เคยทักไว้เมื่อวาน ยังไม่เลือกวันปรึกษา เหมาะกับข้อความ follow-up สั้นๆ', priority: 'กลาง', waitTime: 'รอ 9 นาที' },
+]
+
+function App() {
+  const pathname = typeof window === 'undefined' ? '/' : window.location.pathname
+  if (pathname.startsWith('/page-automation')) return <PageAutomationApp />
+  return <PmcAdsAgentApp />
+}
+
+function PageAutomationApp() {
+  const [selectedPageId, setSelectedPageId] = useState('all')
+  const [messagePriority, setMessagePriority] = useState<'all' | PageAutomationMessage['priority']>('all')
+  const selectedPages = selectedPageId === 'all' ? pageAutomationPages : pageAutomationPages.filter((page) => page.id === selectedPageId)
+  const selectedPageNames = new Set(selectedPages.map((page) => page.id))
+  const posts = pageAutomationPosts.filter((post) => selectedPageId === 'all' || post.pageId === selectedPageId)
+  const messages = pageAutomationMessages.filter((message) => {
+    const pageMatch = selectedPageNames.has(message.pageId)
+    const priorityMatch = messagePriority === 'all' || message.priority === messagePriority
+    return pageMatch && priorityMatch
+  })
+  const dashboard = useMemo(() => {
+    const followers = selectedPages.reduce((sum, page) => sum + page.followers, 0)
+    const unread = selectedPages.reduce((sum, page) => sum + page.unread, 0)
+    const engagement = selectedPages.length ? selectedPages.reduce((sum, page) => sum + page.engagementRate, 0) / selectedPages.length : 0
+    const response = selectedPages.length ? selectedPages.reduce((sum, page) => sum + page.responseRate, 0) / selectedPages.length : 0
+    return { followers, unread, engagement, response }
+  }, [selectedPages])
+
+  return (
+    <main className="page-app-shell">
+      <header className="page-app-topbar">
+        <div>
+          <span className="page-app-eyebrow">Separate program</span>
+          <h1>Page Automation Center</h1>
+          <p>จัดตารางโพสต์ วิเคราะห์เพจ รวมข้อความทุกเพจ และดู dashboard ของเพจในที่เดียว</p>
+        </div>
+        <div className="page-app-actions">
+          <select aria-label="เลือกเพจ" value={selectedPageId} onChange={(event) => setSelectedPageId(event.target.value)}>
+            <option value="all">ทุกเพจ</option>
+            {pageAutomationPages.map((page) => (
+              <option key={page.id} value={page.id}>{page.name}</option>
+            ))}
+          </select>
+          <a className="page-app-secondary-link" href="/">กลับ PMC Ads Agent</a>
+        </div>
+      </header>
+
+      <section className="page-app-kpis" aria-label="ภาพรวม Page Automation">
+        <PageAutomationKpi icon={Users} label="ผู้ติดตามรวม" value={fmtNum(dashboard.followers)} detail={`${selectedPages.length} เพจที่เลือก`} />
+        <PageAutomationKpi icon={MessageSquareText} label="ข้อความรอตอบ" value={fmtNum(dashboard.unread)} detail="รวมจากทุกเพจ" tone="watch" />
+        <PageAutomationKpi icon={BarChart3} label="Engagement เฉลี่ย" value={`${dashboard.engagement.toFixed(1)}%`} detail="จากโพสต์ล่าสุด" tone="good" />
+        <PageAutomationKpi icon={Inbox} label="ตอบกลับทันเวลา" value={`${Math.round(dashboard.response)}%`} detail="เป้าหมาย 90%+" tone={dashboard.response >= 90 ? 'good' : 'critical'} />
+      </section>
+
+      <div className="page-app-grid">
+        <section className="page-app-panel page-app-autopost">
+          <div className="page-app-panel-head">
+            <div>
+              <span className="page-app-section-icon"><CalendarClock size={18} /></span>
+              <h2>Ads Auto Post</h2>
+              <p>เตรียมโพสต์ แยกตามเพจ เวลา เป้าหมาย และสถานะอนุมัติ</p>
+            </div>
+            <button className="page-app-primary-button" type="button">
+              <Send size={16} />
+              สร้างโพสต์
+            </button>
+          </div>
+
+          <div className="page-app-composer">
+            <label>
+              แนวทางโพสต์
+              <textarea defaultValue="เขียนโพสต์ให้เหมาะกับคนที่เคยทักเพจ เน้นข้อเสนอชัด อ่านง่าย และไม่มี claim เกินจริง" />
+            </label>
+            <div className="page-app-chip-row" aria-label="โหมดโพสต์">
+              <span>Feed</span>
+              <span>Story</span>
+              <span>Reels caption</span>
+              <span>Follow-up</span>
+            </div>
+          </div>
+
+          <div className="page-app-post-list">
+            {posts.map((post) => (
+              <article className="page-app-post-item" key={post.id}>
+                <div>
+                  <span className={`page-app-status ${statusToneForPost(post.status)}`}>{post.status}</span>
+                  <h3>{post.title}</h3>
+                  <p>{post.goal}</p>
+                  <small>{post.channel} · {post.time}</small>
+                </div>
+                <strong>{post.score}%</strong>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="page-app-panel">
+          <div className="page-app-panel-head">
+            <div>
+              <span className="page-app-section-icon"><Inbox size={18} /></span>
+              <h2>ข้อความจากทุก Page</h2>
+              <p>รวมข้อความที่ควรตอบก่อน พร้อมหัวข้อและเวลารอ</p>
+            </div>
+            <select aria-label="กรองความสำคัญ" value={messagePriority} onChange={(event) => setMessagePriority(event.target.value as 'all' | PageAutomationMessage['priority'])}>
+              <option value="all">ทุกความสำคัญ</option>
+              <option value="สูง">สูง</option>
+              <option value="กลาง">กลาง</option>
+              <option value="ต่ำ">ต่ำ</option>
+            </select>
+          </div>
+
+          <div className="page-app-message-list">
+            {messages.map((message) => (
+              <article className="page-app-message" key={message.id}>
+                <div className="page-app-avatar">{message.customer.slice(0, 1)}</div>
+                <div>
+                  <div className="page-app-message-meta">
+                    <strong>{message.customer}</strong>
+                    <span>{message.pageName}</span>
+                  </div>
+                  <h3>{message.topic}</h3>
+                  <p>{message.detail}</p>
+                  <small>{message.waitTime}</small>
+                </div>
+                <span className={`page-app-priority ${priorityTone(message.priority)}`}>{message.priority}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="page-app-panel">
+          <div className="page-app-panel-head">
+            <div>
+              <span className="page-app-section-icon"><Search size={18} /></span>
+              <h2>วิเคราะห์ข้อมูล Page</h2>
+              <p>อ่านสัญญาณเพจจาก follower, engagement, inbox และจุดที่ควรแก้</p>
+            </div>
+          </div>
+          <div className="page-app-page-list">
+            {selectedPages.map((page) => (
+              <article className="page-app-page-row" key={page.id}>
+                <div>
+                  <h3>{page.name}</h3>
+                  <p>{page.handle}</p>
+                </div>
+                <div className="page-app-page-metrics">
+                  <span>{fmtNum(page.followers)} followers</span>
+                  <span>{page.engagementRate.toFixed(1)}% engagement</span>
+                  <span>{page.unread} unread</span>
+                </div>
+                <span className={`page-app-health ${page.tone}`}>
+                  {page.tone === 'good' ? 'ดี' : page.tone === 'watch' ? 'ต้องดู' : 'เร่งแก้'}
+                </span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="page-app-panel page-app-dashboard">
+          <div className="page-app-panel-head">
+            <div>
+              <span className="page-app-section-icon"><BarChart3 size={18} /></span>
+              <h2>Dashboard วิเคราะห์</h2>
+              <p>ดูภาพรวมการเติบโต การตอบกลับ และคุณภาพโพสต์ของเพจ</p>
+            </div>
+          </div>
+          <div className="page-app-bars" aria-label="กราฟ Page dashboard">
+            <PageAutomationBar label="Reach" value={82} />
+            <PageAutomationBar label="Engagement" value={Math.round(dashboard.engagement * 14)} />
+            <PageAutomationBar label="Inbox response" value={Math.round(dashboard.response)} />
+            <PageAutomationBar label="Post readiness" value={posts.length ? Math.round(posts.reduce((sum, post) => sum + post.score, 0) / posts.length) : 0} />
+          </div>
+          <div className="page-app-next-actions">
+            <h3>สิ่งที่ควรทำก่อน</h3>
+            <p>ตอบข้อความที่รอนานก่อน จากนั้นอนุมัติโพสต์ที่คะแนนสูง และแยกโพสต์ที่ต้องแก้ไขออกจากคิวเผยแพร่</p>
+            <button className="page-app-outline-button" type="button">
+              <CheckCircle2 size={16} />
+              เตรียมงานวันนี้
+            </button>
+          </div>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function PageAutomationKpi({ detail, icon: Icon, label, tone = 'info', value }: { detail: string; icon: LucideIcon; label: string; tone?: Tone; value: string }) {
+  return (
+    <article className={`page-app-kpi ${tone}`}>
+      <span><Icon size={18} /></span>
+      <div>
+        <p>{label}</p>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </article>
+  )
+}
+
+function PageAutomationBar({ label, value }: { label: string; value: number }) {
+  const width = Math.max(8, Math.min(value, 100))
+  return (
+    <div className="page-app-bar-row">
+      <div>
+        <span>{label}</span>
+        <strong>{value}%</strong>
+      </div>
+      <span className="page-app-bar-track">
+        <span style={{ width: `${width}%` }} />
+      </span>
+    </div>
+  )
+}
+
+function statusToneForPost(status: PageAutomationPost['status']) {
+  if (status === 'พร้อมโพสต์') return 'good'
+  if (status === 'รออนุมัติ') return 'watch'
+  return 'critical'
+}
+
+function priorityTone(priority: PageAutomationMessage['priority']) {
+  if (priority === 'สูง') return 'critical'
+  if (priority === 'กลาง') return 'watch'
+  return 'good'
+}
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -962,11 +1262,18 @@ function buildSummaryFromWorkspace(workspace: WorkspaceData | null, campaignList
 function mapTrendData(points: TrendPoint[]): TrendDatum[] {
   if (!points.length) return []
   return points.slice(-12).map((point, index) => ({
-    day: point.date.slice(5) || String(index + 1),
-    spend: Math.round(point.spend / 1000),
-    revenue: Math.round(point.revenue / 1000),
+    date: point.date,
+    day: formatTrendDay(point.date, index),
+    spend: Math.round(point.spend),
+    revenue: Math.round(point.revenue),
     bookings: point.bookings,
   }))
+}
+
+function formatTrendDay(date: string, index: number) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(date)
+  if (match) return `${match[2]}-${match[3]}`
+  return date && date !== '-' ? date : String(index + 1)
 }
 
 function buildWebsiteContext({
@@ -1028,7 +1335,7 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['ภาพรวม KPI', 'Funnel คลินิก', 'แนวโน้มผลงาน', 'ผลงานแคมเปญ', 'คิวคำแนะนำ'],
+    analytics: ['ภาพรวม KPI', 'Funnel คลินิก', 'แนวโน้มผลงาน', 'ผลงานแคมเปญ', 'คำแนะนำและ Approval'],
     audience: ['Segment กลุ่มเป้าหมาย', 'ปริมาณของ Segment'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
@@ -1063,7 +1370,7 @@ function toneForRisk(risk: Recommendation['risk']): Tone {
   return 'good'
 }
 
-function App() {
+function PmcAdsAgentApp() {
   const shellRef = useRef<HTMLDivElement>(null)
   const refreshRequestRef = useRef(0)
   const activeMetaWorkspaceRef = useRef<string | null>(null)
@@ -2090,6 +2397,11 @@ function ClinicFunnel({ funnelMetrics, summary }: { funnelMetrics: MetaFunnelMet
 }
 
 function PerformanceTrend({ trendData }: { trendData: TrendDatum[] }) {
+  const yDomain = useMemo(() => {
+    const maxValue = Math.max(...trendData.flatMap((point) => [point.spend, point.revenue]), 0)
+    return [0, Math.max(1000, Math.ceil(maxValue * 1.15))]
+  }, [trendData])
+
   return (
     <SectionCard
       collapsible
@@ -2105,13 +2417,30 @@ function PerformanceTrend({ trendData }: { trendData: TrendDatum[] }) {
       {trendData.length > 0 ? (
         <div className="chart-box">
           <ResponsiveContainer height={238} width="100%">
-            <ComposedChart data={trendData} margin={{ top: 8, right: 8, bottom: 0, left: -18 }}>
+            <ComposedChart data={trendData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid stroke="#e7edf5" vertical={false} />
               <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#667085' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#667085' }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ border: '1px solid #e1e7f0', borderRadius: 8 }} />
-              <Bar dataKey="spend" fill="#cfe4ff" radius={[6, 6, 0, 0]} />
-              <Area type="monotone" dataKey="revenue" stroke="#7567d8" fill="rgba(117, 103, 216, 0.12)" strokeWidth={3} />
+              <YAxis
+                axisLine={false}
+                domain={yDomain}
+                tick={{ fontSize: 11, fill: '#667085' }}
+                tickFormatter={fmtChartMoney}
+                tickLine={false}
+                width={48}
+              />
+              <Tooltip content={<TrendTooltip />} cursor={{ fill: 'rgba(47, 128, 237, 0.08)' }} />
+              <Bar dataKey="spend" fill="#a8d3ff" isAnimationActive={false} maxBarSize={22} name="ค่าโฆษณา" radius={[6, 6, 0, 0]} />
+              <Area
+                activeDot={{ r: 5 }}
+                dataKey="revenue"
+                dot={{ r: 3, strokeWidth: 0 }}
+                fill="rgba(117, 103, 216, 0.12)"
+                isAnimationActive={false}
+                name="รายได้"
+                stroke="#7567d8"
+                strokeWidth={3}
+                type="monotone"
+              />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -2119,6 +2448,32 @@ function PerformanceTrend({ trendData }: { trendData: TrendDatum[] }) {
         <EmptyState title="ยังไม่มีข้อมูลแนวโน้ม" detail="Meta API ยังไม่มีค่าโฆษณาหรือรายได้รายวันในช่วงวันที่นี้" />
       )}
     </SectionCard>
+  )
+}
+
+function TrendTooltip({
+  active,
+  label,
+  payload,
+}: {
+  active?: boolean
+  label?: string | number
+  payload?: TrendTooltipItem[]
+}) {
+  if (!active || !payload?.length) return null
+  const point = payload.find((item) => item.payload)?.payload
+  const spend = point?.spend ?? Number(payload.find((item) => item.dataKey === 'spend')?.value ?? 0)
+  const revenue = point?.revenue ?? Number(payload.find((item) => item.dataKey === 'revenue')?.value ?? 0)
+  const bookings = point?.bookings ?? 0
+  const roas = spend > 0 ? revenue / spend : 0
+
+  return (
+    <div className="trend-chart-tooltip">
+      <span>{point?.date && point.date !== '-' ? point.date : label}</span>
+      <strong>ค่าโฆษณา {fmtMoney(spend)}</strong>
+      <strong>รายได้ {fmtMoney(revenue)}</strong>
+      <small>ROAS {roas.toFixed(2)}x · Booking {fmtNum(bookings)}</small>
+    </div>
   )
 }
 
@@ -2210,8 +2565,8 @@ function AiQueue({
       action={<StatusBadge label="คำแนะนำ" tone="violet" />}
       className="ai-queue"
       collapsible
-      title="คิวคำแนะนำและ Approval"
-      subtitle="รวมคำแนะนำจาก Meta metrics และ action cards จาก PMC Master Agent"
+      title="คำแนะนำและ Approval"
+      subtitle="รายการที่ระบบวิเคราะห์จากข้อมูล Meta และ PMC Master Agent"
     >
       <div className="recommendation-list">
         {recommendations.length > 0 ? recommendations.map((rec, index) => {
@@ -3611,7 +3966,46 @@ function optimizerUiText(value: string, fallback = '') {
     .replace(/^ต้องอนุมัติก่อน:\s*/i, '')
     .replace(/^พัก automation:\s*/i, '')
     .replace(/AI Optimizer/g, 'ตัวช่วยปรับแคมเปญ')
-    .replace(/AI/g, 'ระบบ')
+    .replace(/OpenAI/g, 'ระบบวิเคราะห์ที่เชื่อมไว้')
+    .replace(/Responses API/g, 'บริการวิเคราะห์')
+    .replace(/Settings/g, 'ตั้งค่า')
+    .replace(/quota/gi, 'เครดิตการใช้งาน')
+    .replace(/billing/gi, 'แพ็กเกจการใช้งาน')
+    .replace(/fallback/gi, 'ผลตรวจเบื้องต้น')
+    .replace(/schema/gi, 'รูปแบบข้อมูล')
+    .replace(/\bAI\b/g, 'ระบบ')
+    .replace(/\bad\b/gi, 'โฆษณา')
+    .replace(/\bspend\b/gi, 'ค่าใช้จ่าย')
+    .replace(/\bmetric score\b/gi, 'คะแนนรวม')
+    .replace(/Meta metrics/gi, 'ข้อมูลจาก Meta')
+    .replace(/winner/gi, 'ตัวชนะ')
+    .replace(/booking/gi, 'ยอดจอง')
+    .replace(/tracking/gi, 'การวัดผล')
+    .replace(/\btrack\b/gi, 'วัดผล')
+    .replace(/\bactive\b/gi, 'กำลังเปิด')
+    .replace(/audience overlap/gi, 'กลุ่มเป้าหมายทับซ้อน')
+    .replace(/creative\/audience/gi, 'ครีเอทีฟหรือกลุ่มเป้าหมาย')
+    .replace(/diagnostic/gi, 'การตรวจหาสาเหตุ')
+    .replace(/\boffer\b/gi, 'ข้อเสนอ')
+    .replace(/\baudience\b/gi, 'กลุ่มเป้าหมาย')
+    .replace(/\bcreative\b/gi, 'ครีเอทีฟ')
+    .replace(/\bplacement\b/gi, 'ตำแหน่งโฆษณา')
+    .replace(/\bhook\b/gi, 'มุมเปิดข้อความ')
+    .replace(/conversion signal/gi, 'สัญญาณผลลัพธ์')
+    .replace(/creative variation/gi, 'ชิ้นงานโฆษณาแบบใหม่')
+    .replace(/\breference\b/gi, 'ตัวอย่างอ้างอิง')
+    .replace(/\bscale\b/gi, 'เพิ่มแรงส่ง')
+    .replace(/\bexecute\b/gi, 'ดำเนินการ')
+    .replace(/\bguardrail\b/gi, 'เงื่อนไขก่อนทำ')
+    .replace(/แม้ โฆษณา ถูก/g, 'แม้โฆษณาถูก')
+    .replace(/ใช้จ่าย ฿/g, 'ค่าใช้จ่าย ฿')
+    .replace(/ผ่านเกณฑ์ ตัวชนะ/g, 'ผ่านเกณฑ์ตัวชนะ')
+    .replace(/ยัง กำลังเปิด/g, 'ยังเปิดอยู่')
+    .replace(/เกิด ยอดจอง/g, 'เกิดยอดจอง')
+    .replace(/ไม่มี ยอดจอง ที่ วัดผล ได้/g, 'ไม่มียอดจองที่วัดผลได้')
+    .replace(/มี ยอดจอง/g, 'มียอดจอง')
+    .replace(/ก่อน เพิ่มแรงส่ง/g, 'ก่อนเพิ่มแรงส่ง')
+    .replace(/ใช้เป็น ตัวอย่างอ้างอิง/g, 'ใช้เป็นตัวอย่างอ้างอิง')
     .replace(/action cards?/gi, 'รายการดำเนินการ')
     .replace(/action/gi, 'รายการดำเนินการ')
     .replace(/ad-level candidates/gi, 'รายการโฆษณาที่ตรวจ')
@@ -3628,13 +4022,13 @@ function optimizerErrorText(error: unknown) {
   const formatted = formatApiMessage(rawMessage)
   const lower = formatted.toLowerCase()
   if (lower.includes('exceeded your current quota') || lower.includes('billing') || lower.includes('quota')) {
-    return 'ยังวิเคราะห์ข้อมูลไม่ได้ เพราะโควต้า OpenAI ไม่พอ กรุณาตรวจเครดิตหรือแผนชำระเงินในหน้า Settings'
+    return 'การวิเคราะห์เชิงลึกยังไม่พร้อม เพราะเครดิตหรือแพ็กเกจของระบบวิเคราะห์ที่เชื่อมไว้ใช้งานไม่ได้ กรุณาตรวจในหน้า ตั้งค่า'
   }
   if (lower.includes('openai api key') || lower.includes('api key')) {
-    return 'ยังไม่ได้เชื่อมต่อ OpenAI API Key กรุณาตรวจในหน้า Settings'
+    return 'การเชื่อมต่อระบบวิเคราะห์ยังไม่พร้อม กรุณาตรวจ API Key ในหน้า ตั้งค่า'
   }
   if (lower.includes('openai request failed')) {
-    return 'วิเคราะห์ข้อมูลไม่สำเร็จจากฝั่ง OpenAI กรุณาลองใหม่อีกครั้ง'
+    return 'การวิเคราะห์เชิงลึกยังไม่พร้อม กรุณาลองใหม่อีกครั้ง'
   }
   return optimizerUiText(formatted, 'วิเคราะห์ข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
 }
@@ -3749,6 +4143,7 @@ function AutoAdsPage({
   ]
   const aiConditionCards = optimizerAi?.conditions ?? []
   const aiAnalyzedCount = optimizerAi?.decisions.length ?? 0
+  const optimizerUsedFallback = Boolean(optimizerAi?.modelFallback)
   const optimizerAiCheckedAt = optimizerAi?.checkedAt
     ? new Date(optimizerAi.checkedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
     : ''
@@ -3820,15 +4215,15 @@ function AutoAdsPage({
     if (!approvalMode) {
       if (optimizerWritablePlans.length > 0) {
         onModeChange('ต้องอนุมัติก่อน')
-        setMessage(`ยืนยันเปิด Auto ก่อน แล้วกด "ปรับ Meta จริง ${optimizerWritablePlans.length} รายการ" เพื่อเปิดหน้าต่างยืนยัน batch`)
+        setMessage(`ยืนยันเปิด Auto ก่อน แล้วกด "ปรับ Meta จริง ${optimizerWritablePlans.length} รายการ" เพื่อเปิดหน้าต่างยืนยันรายการ`)
         return
       }
       setShowAllRecommendations(true)
-      setMessage(`พบ ${optimizerPlans.length} รายการจาก Meta จริง แต่ยังไม่มี action ที่ต้องเขียน Meta`)
+      setMessage(`พบ ${optimizerPlans.length} รายการจาก Meta จริง แต่ยังไม่มีคำสั่งที่ต้องส่งไป Meta`)
       return
     }
     if (!optimizerWritablePlans.length) {
-      setMessage('กลยุทธ์นี้ยังไม่มีรายการที่ต้องเขียน Meta จริง ใช้เป็นรายการรีวิวเท่านั้น')
+      setMessage('กลุ่มนี้ยังไม่มีรายการที่ต้องส่งคำสั่งจริง ใช้เป็นรายการรีวิวเท่านั้น')
       return
     }
     setPendingOptimizerBatch({
@@ -3897,7 +4292,7 @@ function AutoAdsPage({
   const executeOptimizerBatch = async () => {
     if (!pendingOptimizerBatch || isExecutingOptimizerBatch) return
     if (normalizedAutomationMode !== 'ต้องอนุมัติก่อน') {
-      setMessage('ต้องเปิด Auto ก่อนให้ Optimizer เขียน Meta แล้วรันอีกครั้ง')
+      setMessage('ต้องเปิด Auto ก่อนส่งคำสั่งจริง แล้วลองอีกครั้ง')
       setPendingOptimizerBatch(null)
       return
     }
@@ -3925,10 +4320,10 @@ function AutoAdsPage({
         })
       }
       await onMutationComplete()
-      setMessage(`Optimizer อัปเดตสถานะจริงใน Meta แล้ว ${writablePlans.length} รายการ`)
+      setMessage(`อัปเดตสถานะจริงใน Meta แล้ว ${writablePlans.length} รายการ`)
       setPendingOptimizerBatch(null)
     } catch (error) {
-      setMessage(error instanceof Error ? formatApiMessage(error.message) : 'Optimizer เขียนข้อมูลไป Meta ไม่สำเร็จ')
+      setMessage(error instanceof Error ? formatApiMessage(error.message) : 'ส่งคำสั่งไป Meta ไม่สำเร็จ')
     } finally {
       setIsExecutingOptimizerBatch(false)
     }
@@ -3944,8 +4339,8 @@ function AutoAdsPage({
               <p>ตรวจข้อมูล Meta ล่าสุด จัดลำดับแผน และให้ยืนยันก่อนส่งคำสั่งจริง</p>
             </div>
             <StatusBadge
-              label={isOptimizerAiRunning ? 'กำลังตรวจข้อมูล' : optimizerAi ? 'วิเคราะห์ล่าสุดแล้ว' : 'พร้อมตรวจ'}
-              tone={isOptimizerAiRunning ? 'info' : optimizerAi ? 'good' : 'watch'}
+              label={isOptimizerAiRunning ? 'กำลังตรวจข้อมูล' : optimizerAi ? (optimizerUsedFallback ? 'ผลตรวจเบื้องต้น' : 'วิเคราะห์ล่าสุดแล้ว') : 'พร้อมตรวจ'}
+              tone={isOptimizerAiRunning ? 'info' : optimizerAi ? (optimizerUsedFallback ? 'watch' : 'good') : 'watch'}
             />
           </div>
           <div className="optimizer-control-panel">
@@ -3954,7 +4349,9 @@ function AutoAdsPage({
               <strong>{optimizerPlanSummary}</strong>
                 <small>
                 {optimizerAi
-                  ? `วิเคราะห์ ${fmtNum(aiAnalyzedCount)} โฆษณา · ${optimizerAiCheckedAt} · ${optimizerAi.model}`
+                  ? optimizerUsedFallback
+                    ? `ตรวจ ${fmtNum(aiAnalyzedCount)} โฆษณา · ${optimizerAiCheckedAt} · แสดงผลตรวจเบื้องต้นก่อน ระหว่างรอตรวจการเชื่อมต่อระบบวิเคราะห์ในหน้า ตั้งค่า`
+                    : `วิเคราะห์ ${fmtNum(aiAnalyzedCount)} โฆษณา · ${optimizerAiCheckedAt} · พร้อมใช้แผนที่แสดงด้านล่าง`
                   : 'ระบบจะแสดงเฉพาะแผนที่ผ่านการตรวจ พร้อมเหตุผลและเงื่อนไขก่อนดำเนินการ'}
               </small>
             </div>
@@ -4003,7 +4400,7 @@ function AutoAdsPage({
                 {isOptimizerAiRunning ? 'กำลังตรวจข้อมูล...' : 'วิเคราะห์ข้อมูลล่าสุด'}
               </button>
               <button
-                aria-label={approvalMode ? 'เปิดหน้าต่างยืนยัน Optimizer batch ก่อนส่ง Meta' : 'เปิด Auto เพื่อใช้ Optimizer'}
+                aria-label={approvalMode ? 'เปิดหน้าต่างยืนยันรายการก่อนส่ง Meta' : 'เปิด Auto เพื่อส่งคำสั่ง'}
                 className={optimizerButtonClass}
                 type="button"
                 onClick={startOptimizerBatch}
@@ -4111,10 +4508,10 @@ function AutoAdsPage({
           <section className="optimizer-panel optimizer-condition-panel">
             <div className="optimizer-panel-head">
               <div>
-                <h2>เหตุผลและเงื่อนไข</h2>
-                <p>สรุปเป็นภาษาคนจาก spend, ROAS, CTR, booking และสถานะจริง</p>
+                <h2>เหตุผลที่ระบบตรวจพบ</h2>
+                <p>อ่านจากค่าใช้จ่าย ผลตอบแทน อัตราคลิก ยอดจอง และสถานะโฆษณาจริง</p>
               </div>
-              <StatusBadge label={`${aiConditionCards.length} เงื่อนไข`} tone={aiConditionCards.length ? 'info' : 'neutral'} />
+              <StatusBadge label={`${aiConditionCards.length} ประเด็น`} tone={aiConditionCards.length ? 'info' : 'neutral'} />
             </div>
             {isOptimizerAiRunning ? (
               <div className="optimizer-ai-loading" aria-busy="true" aria-live="polite">
@@ -4143,7 +4540,7 @@ function AutoAdsPage({
               </div>
             ) : (
               <EmptyState
-                title="ยังไม่มีเหตุผลและเงื่อนไข"
+                title="ยังไม่มีเหตุผลที่ตรวจพบ"
                 detail={workspace ? 'กดวิเคราะห์ข้อมูลล่าสุด เพื่อสร้างเหตุผลให้แต่ละแผน' : 'ต้องเชื่อมต่อ Meta API ก่อน'}
               />
             )}
@@ -4206,17 +4603,17 @@ function OptimizerActionModal({
         <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดการยืนยัน" disabled={isExecuting}>
           <X size={18} />
         </button>
-        <StatusBadge label="Meta write" tone={plan.targetStatus === 'PAUSED' ? 'critical' : 'good'} />
+        <StatusBadge label="ส่งคำสั่งจริง" tone={plan.targetStatus === 'PAUSED' ? 'critical' : 'good'} />
         <h2 id="optimizer-action-title">ใช้คำแนะนำนี้กับ Meta</h2>
-        <p>ระบบจะเปลี่ยนสถานะระดับ Ad นี้ทันทีหลังยืนยัน ตรวจชื่อและเหตุผลก่อนดำเนินการ</p>
+        <p>หลังยืนยัน ระบบจะเปลี่ยนสถานะโฆษณานี้ใน Meta ตรวจชื่อโฆษณาและเหตุผลให้ครบก่อนดำเนินการ</p>
         <div className="confirm-grid">
-          <MetricLine label="Ad" value={plan.ad.name} />
+          <MetricLine label="โฆษณา" value={plan.ad.name} />
           <MetricLine label="Meta ID" value={shortMetaId(plan.ad.id)} />
-          <MetricLine label="Action" value={actionLabel} />
-          <MetricLine label="Spend / ROAS" value={`${fmtMoney(plan.ad.spend)} · ${plan.ad.roas.toFixed(2)}x`} />
-          <MetricLine label="Booking" value={fmtNum(plan.ad.bookings)} />
-          <MetricLine label="เหตุผล" value={plan.reason} />
-          <MetricLine label="Rollback" value="เปิด/ปิดกลับได้จาก Ads Manager หลังซิงก์" />
+          <MetricLine label="คำสั่งที่จะส่ง" value={actionLabel} />
+          <MetricLine label="ค่าใช้จ่าย / ROAS" value={`${fmtMoney(plan.ad.spend)} · ${plan.ad.roas.toFixed(2)}x`} />
+          <MetricLine label="ยอดจอง" value={fmtNum(plan.ad.bookings)} />
+          <MetricLine label="เหตุผล" value={optimizerUiText(plan.reason, plan.reason)} />
+          <MetricLine label="ถ้าต้องย้อนกลับ" value="เปิดหรือปิดกลับได้จาก Ads Manager หลังซิงก์ข้อมูลใหม่" />
         </div>
         <div className="modal-actions">
           <button className="outline-button" type="button" onClick={onCancel} disabled={isExecuting}>
@@ -4242,7 +4639,7 @@ function OptimizerPlanDetailModal({
   onEnableApproval: () => void
   plan: AutoAdPlan
 }) {
-  const actionLabel = plan.targetStatus ? mutationStatusLabel(plan.targetStatus) : 'ไม่ต้องเขียน Meta'
+  const actionLabel = plan.targetStatus ? mutationStatusLabel(plan.targetStatus) : 'ยังไม่ต้องส่งคำสั่ง'
   const cpa = plan.ad.bookings > 0 ? plan.ad.spend / plan.ad.bookings : 0
 
   return (
@@ -4253,23 +4650,23 @@ function OptimizerPlanDetailModal({
         </button>
         <StatusBadge label={optimizerPlanStatusLabel(plan)} tone={plan.targetStatus === 'PAUSED' ? 'critical' : plan.targetStatus === 'ACTIVE' ? 'good' : plan.tone} />
         <h2 id="optimizer-detail-title">{optimizerRecommendationTitle(plan)}</h2>
-        <p>รายละเอียดนี้ใช้ Meta metrics รอบล่าสุดเท่านั้น และยังไม่เขียนข้อมูลกลับ Meta จนกว่าจะผ่านหน้าต่างยืนยัน</p>
+        <p>รายละเอียดนี้อ้างอิงข้อมูล Meta รอบล่าสุด และจะยังไม่เปลี่ยนสถานะจริงจนกว่าคุณจะกดยืนยัน</p>
         <div className="confirm-grid">
-          <MetricLine label="Ad" value={plan.ad.name} />
-          <MetricLine label="Campaign" value={plan.campaign?.name ?? shortMetaId(plan.ad.campaignId)} />
+          <MetricLine label="โฆษณา" value={plan.ad.name} />
+          <MetricLine label="แคมเปญ" value={plan.campaign?.name ?? shortMetaId(plan.ad.campaignId)} />
           <MetricLine label="Meta ID" value={shortMetaId(plan.ad.id)} />
           <MetricLine label="สถานะปัจจุบัน" value={deliveryLabel(plan.ad.status)} />
-          <MetricLine label="Action ที่แนะนำ" value={actionLabel} />
-          <MetricLine label="Spend / ROAS" value={`${fmtMoney(plan.ad.spend)} · ${plan.ad.roas.toFixed(2)}x`} />
-          <MetricLine label="Booking / CPA" value={`${fmtNum(plan.ad.bookings)} · ${cpa ? fmtMoney(cpa) : 'ยังไม่มี booking'}`} />
+          <MetricLine label="สิ่งที่แนะนำ" value={actionLabel} />
+          <MetricLine label="ค่าใช้จ่าย / ROAS" value={`${fmtMoney(plan.ad.spend)} · ${plan.ad.roas.toFixed(2)}x`} />
+          <MetricLine label="ยอดจอง / CPA" value={`${fmtNum(plan.ad.bookings)} · ${cpa ? fmtMoney(cpa) : 'ยังไม่มียอดจอง'}`} />
           <MetricLine label="CTR / Score" value={`${plan.ad.ctr.toFixed(2)}% · ${plan.ad.score.toFixed(1)}`} />
-          <MetricLine label="เหตุผล" value={plan.reason} />
-          <MetricLine label="Guardrail" value={plan.guardrail} />
-          <MetricLine label="ขั้นถัดไป" value={plan.nextStep} />
+          <MetricLine label="เหตุผล" value={optimizerUiText(plan.reason, plan.reason)} />
+          <MetricLine label="เงื่อนไขก่อนทำ" value={optimizerUiText(plan.guardrail, plan.guardrail)} />
+          <MetricLine label="ขั้นถัดไป" value={optimizerUiText(plan.nextStep, plan.nextStep)} />
         </div>
         <div className="optimizer-evidence-list" aria-label="หลักฐานจาก Meta metrics">
           {plan.evidence.slice(0, 8).map((item) => (
-            <span key={`${plan.id}-${item}`}>{item}</span>
+            <span key={`${plan.id}-${item}`}>{optimizerUiText(item, item)}</span>
           ))}
         </div>
         <div className="modal-actions">
@@ -4306,18 +4703,18 @@ function OptimizerBatchModal({
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="confirm-modal optimizer-batch-modal" role="dialog" aria-modal="true" aria-labelledby="optimizer-batch-title">
-        <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดการยืนยัน Optimizer" disabled={isExecuting}>
+        <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดการยืนยันรายการ" disabled={isExecuting}>
           <X size={18} />
         </button>
-        <StatusBadge label="Meta write batch" tone={pauseCount > 0 ? 'critical' : 'good'} />
-        <h2 id="optimizer-batch-title">ยืนยัน Optimizer Batch</h2>
-        <p>ระบบจะส่งคำสั่งระดับ Ad ไป Meta Marketing API จริงตามรายการที่ผ่าน guardrail แล้วเท่านั้น</p>
+        <StatusBadge label="ส่งคำสั่งหลายรายการ" tone={pauseCount > 0 ? 'critical' : 'good'} />
+        <h2 id="optimizer-batch-title">ยืนยันรายการปรับแคมเปญ</h2>
+        <p>หลังยืนยัน ระบบจะส่งคำสั่งไป Meta เฉพาะรายการที่ผ่านเงื่อนไขและตรวจแล้วเท่านั้น</p>
         <div className="confirm-grid">
           <MetricLine label="กลยุทธ์" value={optimizerStrategyLabel(batch.strategy)} />
-          <MetricLine label="รายการที่จะเขียน Meta" value={`${writablePlans.length} ads`} />
-          <MetricLine label="ปิด Ad" value={`${pauseCount} รายการ`} />
-          <MetricLine label="เปิด Ad" value={`${activateCount} รายการ`} />
-          <MetricLine label="Spend ที่ตรวจ" value={fmtMoneyShort(checkedSpend)} />
+          <MetricLine label="รายการที่จะส่งคำสั่ง" value={`${writablePlans.length} โฆษณา`} />
+          <MetricLine label="ปิดโฆษณา" value={`${pauseCount} รายการ`} />
+          <MetricLine label="เปิดโฆษณา" value={`${activateCount} รายการ`} />
+          <MetricLine label="ค่าใช้จ่ายที่ตรวจ" value={fmtMoneyShort(checkedSpend)} />
           <MetricLine label="สร้างเมื่อ" value={new Date(batch.generatedAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} />
         </div>
         <div className="rule-run-list">
@@ -4328,9 +4725,9 @@ function OptimizerBatchModal({
                 <StatusBadge label={shortMetaId(plan.ad.id)} tone="neutral" />
               </div>
               <strong>{plan.ad.name}</strong>
-              <span>{plan.campaign?.name ?? 'Meta campaign'} · {plan.reason}</span>
+              <span>{plan.campaign?.name ?? 'แคมเปญ'} · {optimizerUiText(plan.reason, plan.reason)}</span>
               <small>
-                Spend {fmtMoney(plan.ad.spend)} · ROAS {plan.ad.roas.toFixed(2)}x · Booking {fmtNum(plan.ad.bookings)}
+                ค่าใช้จ่าย {fmtMoney(plan.ad.spend)} · ROAS {plan.ad.roas.toFixed(2)}x · ยอดจอง {fmtNum(plan.ad.bookings)}
               </small>
             </article>
           ))}
@@ -4340,7 +4737,7 @@ function OptimizerBatchModal({
             ยกเลิก
           </button>
           <button className={pauseCount > 0 ? 'danger-button' : 'primary-button'} type="button" onClick={onConfirm} disabled={isExecuting || writablePlans.length === 0}>
-            {isExecuting ? 'กำลังส่ง Meta...' : `ยืนยันส่ง Meta ${writablePlans.length} รายการ`}
+            {isExecuting ? 'กำลังส่งคำสั่ง...' : `ยืนยันส่งคำสั่ง ${writablePlans.length} รายการ`}
           </button>
         </div>
       </section>
@@ -4349,27 +4746,27 @@ function OptimizerBatchModal({
 }
 
 function optimizerRecommendationTitle(plan: AutoAdPlan) {
-  if (plan.decision === 'pause') return 'ปิด Ad ประสิทธิภาพต่ำ'
-  if (plan.decision === 'activate') return 'เปิด Ad ที่มีสัญญาณดี'
+  if (plan.decision === 'pause') return 'ปิดโฆษณาประสิทธิภาพต่ำ'
+  if (plan.decision === 'activate') return 'เปิดโฆษณาที่มีสัญญาณดี'
   if (plan.decision === 'keep') return 'เปิดต่อเป็นตัวชนะ'
   return 'เฝ้าดูและปรับครีเอทีฟ'
 }
 
 function optimizerImpactText(plan: AutoAdPlan) {
-  return `Meta จริง: Spend ${fmtMoneyShort(plan.ad.spend)} · ROAS ${plan.ad.roas.toFixed(2)}x · Booking ${fmtNum(plan.ad.bookings)}`
+  return `ข้อมูล Meta จริง: ค่าใช้จ่าย ${fmtMoneyShort(plan.ad.spend)} · ROAS ${plan.ad.roas.toFixed(2)}x · ยอดจอง ${fmtNum(plan.ad.bookings)}`
 }
 
 function optimizerPlanStatusLabel(plan: AutoAdPlan) {
-  if (plan.targetStatus === 'ACTIVE') return 'พร้อมเปิด Ad'
-  if (plan.targetStatus === 'PAUSED') return 'พร้อมปิด Ad'
+  if (plan.targetStatus === 'ACTIVE') return 'พร้อมเปิดโฆษณา'
+  if (plan.targetStatus === 'PAUSED') return 'พร้อมปิดโฆษณา'
   if (plan.decision === 'keep') return 'เปิดต่อ'
   return 'ดูข้อมูลก่อน'
 }
 
 function optimizerPlanButtonLabel(plan: AutoAdPlan, approvalMode: boolean, automationPaused: boolean) {
   if (automationPaused && plan.targetStatus) return 'พักอยู่'
-  if (plan.targetStatus === 'ACTIVE') return approvalMode ? 'ยืนยันเปิด Ad' : 'ดูเหตุผลเปิด'
-  if (plan.targetStatus === 'PAUSED') return approvalMode ? 'ยืนยันปิด Ad' : 'ดูเหตุผลปิด'
+  if (plan.targetStatus === 'ACTIVE') return approvalMode ? 'ยืนยันเปิดโฆษณา' : 'ดูเหตุผลเปิด'
+  if (plan.targetStatus === 'PAUSED') return approvalMode ? 'ยืนยันปิดโฆษณา' : 'ดูเหตุผลปิด'
   return 'ดูรายละเอียด'
 }
 
@@ -4382,10 +4779,10 @@ function optimizerStrategyLabel(strategy: OptimizerStrategy) {
 }
 
 function optimizerStrategyDetail(strategy: OptimizerStrategy) {
-  if (strategy === 'pause') return 'เฉพาะโฆษณาที่เปิดอยู่และเข้าเงื่อนไขหยุดจาก spend, ROAS หรือ booking'
+  if (strategy === 'pause') return 'เฉพาะโฆษณาที่เปิดอยู่และเข้าเงื่อนไขหยุดจากค่าใช้จ่าย, ROAS หรือยอดจอง'
   if (strategy === 'activate') return 'เฉพาะโฆษณาที่หยุดอยู่แต่มีสัญญาณชนะจากข้อมูล Meta ล่าสุด'
   if (strategy === 'keep') return 'โฆษณาที่เปิดอยู่และผ่านเกณฑ์ตัวชนะ ใช้เป็นต้นแบบโดยไม่เขียน Meta'
-  if (strategy === 'watch') return 'โฆษณาที่ยังไม่ควรเปลี่ยนสถานะ แต่ควรติดตาม creative หรือ tracking'
+  if (strategy === 'watch') return 'โฆษณาที่ยังไม่ควรเปลี่ยนสถานะ แต่ควรติดตามครีเอทีฟหรือการวัดผล'
   return 'รวมทุกกลุ่มจากข้อมูล Meta ล่าสุด แล้วแยกเฉพาะรายการที่ส่งคำสั่ง Meta ได้จริง'
 }
 

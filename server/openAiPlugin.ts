@@ -568,31 +568,42 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
         const body = await readJsonBody(req)
         const workspace = normalizeWorkspacePayload(body.workspace)
         if (!hasWorkspaceSignal(workspace)) {
-          throw new AiApiError('ต้อง Sync Meta API ก่อนให้ AI Optimizer วิเคราะห์ข้อมูลจริง', 400)
+          throw new AiApiError('ต้องซิงก์ข้อมูล Meta ก่อน ระบบจึงจะตรวจแผนปรับแคมเปญได้', 400)
         }
 
         const candidates = normalizeOptimizerCandidates(body.candidates)
         if (!candidates.length) {
-          throw new AiApiError('ยังไม่มี ad-level candidate ให้ AI Optimizer วิเคราะห์', 400)
+          throw new AiApiError('ยังไม่มีข้อมูลโฆษณาที่พร้อมให้ตรวจ กรุณาซิงก์ Meta อีกครั้ง', 400)
         }
 
         const startedAt = Date.now()
-        const modelResult = await callOpenAiJson<AiOptimizerModelResult>({
-          config: {
-            ...config,
-            maxOutputTokens: Math.max(config.maxOutputTokens, 6500),
-          },
-          schemaName: 'pmc_ai_optimizer_result',
-          schema: aiOptimizerSchema,
-          systemPrompt: aiOptimizerSystemPrompt,
-          payload: {
-            instruction: 'Analyze optimizer actions for Thai clinic Meta Ads. Return concise Thai reasons and condition analysis only from supplied data.',
-            automationMode: cleanText(body.automationMode, 'แนะนำเท่านั้น'),
+        let modelFallback: string | null = null
+        let modelResult: AiOptimizerModelResult
+        try {
+          modelResult = await callOpenAiJson<AiOptimizerModelResult>({
+            config: {
+              ...config,
+              maxOutputTokens: Math.min(Math.max(config.maxOutputTokens, 2800), 4200),
+            },
+            schemaName: 'pmc_ai_optimizer_result',
+            schema: aiOptimizerSchema,
+            systemPrompt: aiOptimizerSystemPrompt,
+            payload: {
+              instruction: 'Analyze optimizer actions for Thai clinic Meta Ads. Return concise Thai reasons and condition analysis only from supplied data.',
+              automationMode: cleanText(body.automationMode, 'แนะนำเท่านั้น'),
+              candidates,
+              datePreset: cleanText(body.datePreset, 'current'),
+              workspace,
+            },
+          })
+        } catch (error) {
+          if (!canFallbackAiOptimizerModel(error)) throw error
+          modelFallback = error instanceof Error ? error.message : 'OpenAI response failed'
+          modelResult = buildFallbackAiOptimizerModelResult({
+            reason: modelFallback,
             candidates,
-            datePreset: cleanText(body.datePreset, 'current'),
-            workspace,
-          },
-        })
+          })
+        }
         const result = normalizeAiOptimizerResult(modelResult, candidates)
 
         writeJson(res, 200, {
@@ -601,6 +612,7 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
           model: config.model,
           durationMs: Date.now() - startedAt,
           checkedAt: new Date().toISOString(),
+          ...(modelFallback ? { modelFallback: { reason: modelFallback, mode: 'meta-metric-guardrail-output' } } : {}),
           ...result,
         })
         return
@@ -3108,7 +3120,7 @@ function normalizeAiOptimizerResult(
   }
 
   return {
-    summary: cleanText(input.summary, 'AI Optimizer วิเคราะห์ข้อมูล Meta จริงเสร็จแล้ว'),
+    summary: cleanText(input.summary, 'ตรวจข้อมูล Meta จริงเสร็จแล้ว เลือกรายการที่ควรทำต่อได้ทันที'),
     modelNotes: cleanStringList(input.modelNotes, 5),
     decisions: pickArray(input.decisions, (item): AiOptimizerModelDecision | null => {
       const record = sanitizeUnknownRecord(item)
@@ -3122,9 +3134,9 @@ function normalizeAiOptimizerResult(
           record.actionLabel,
           decision === 'pause' ? 'เพิ่มคิวปิด' : decision === 'activate' ? 'เพิ่มคิวเปิด' : 'ไม่ต้องเขียน Meta',
         ),
-        reason: cleanText(record.reason, 'AI ต้องการข้อมูลเพิ่มก่อนสรุปเหตุผล'),
-        conditionAnalysis: cleanText(record.conditionAnalysis, 'AI ยังไม่พบเงื่อนไขที่ชัดเจนพอ'),
-        guardrail: cleanText(record.guardrail, 'ต้องตรวจข้อมูลจริงก่อน execute'),
+        reason: cleanText(record.reason, 'ต้องมีข้อมูลเพิ่มก่อนสรุปเหตุผลให้ชัดเจน'),
+        conditionAnalysis: cleanText(record.conditionAnalysis, 'ยังไม่พบเงื่อนไขที่ชัดเจนพอสำหรับส่งคำสั่ง'),
+        guardrail: cleanText(record.guardrail, 'ต้องตรวจข้อมูลจริงก่อนดำเนินการ'),
         nextStep: cleanText(record.nextStep, 'รีวิวก่อนดำเนินการ'),
         confidence: clamp(Math.round(numberOf(record.confidence)), 0, 100),
         risk: normalizeRisk(record.risk),
@@ -3136,14 +3148,207 @@ function normalizeAiOptimizerResult(
       const analysis = cleanText(record.analysis, '')
       if (!title && !analysis) return null
       return {
-        title: title || 'เงื่อนไขจาก AI',
-        analysis: analysis || 'AI วิเคราะห์เงื่อนไขจากข้อมูลจริง',
+        title: title || 'เงื่อนไขที่พบ',
+        analysis: analysis || 'ตรวจจากข้อมูลจริงที่ซิงก์จาก Meta',
         matchedAdIds: cleanStringList(record.matchedAdIds, 12).filter((id) => candidateIds.has(id)),
         recommendedAction: cleanText(record.recommendedAction, 'รีวิวก่อน execute'),
         risk: normalizeRisk(record.risk),
       }
     }).slice(0, 6),
   }
+}
+
+function canFallbackAiOptimizerModel(error: unknown) {
+  return error instanceof AiApiError && (error.status === 429 || error.status >= 500)
+}
+
+function buildFallbackAiOptimizerModelResult({
+  reason,
+  candidates,
+}: {
+  reason: string
+  candidates: ReturnType<typeof normalizeOptimizerCandidates>
+}): AiOptimizerModelResult {
+  const decisions = candidates.map((candidate) => {
+    const decision = normalizeOptimizerFallbackDecision(candidate.deterministicDecision)
+    return {
+      adId: candidate.adId,
+      decision,
+      actionLabel: optimizerFallbackActionLabel(decision),
+      reason: optimizerFallbackReason(candidate, decision),
+      conditionAnalysis: optimizerFallbackConditionAnalysis(candidate, decision),
+      guardrail: candidate.deterministicGuardrail || optimizerFallbackGuardrail(decision),
+      nextStep: optimizerFallbackNextStep(decision),
+      confidence: optimizerFallbackConfidence(candidate, decision),
+      risk: optimizerFallbackRisk(candidate, decision),
+    }
+  })
+  const conditions = buildFallbackOptimizerConditions(candidates)
+  const pauseCount = decisions.filter((decision) => decision.decision === 'pause').length
+  const activateCount = decisions.filter((decision) => decision.decision === 'activate').length
+  const watchCount = decisions.filter((decision) => decision.decision === 'watch').length
+  const keepCount = decisions.filter((decision) => decision.decision === 'keep').length
+  const issueNote = optimizerFallbackIssueNote(reason)
+
+  return {
+    summary: `ตรวจข้อมูล Meta แล้ว พบ ${decisions.length} โฆษณาที่ควรรีวิว: ปิดเพื่อตัดงบ ${pauseCount}, เปิดตัวที่มีสัญญาณดี ${activateCount}, เปิดต่อ ${keepCount}, เฝ้าดู ${watchCount}`,
+    modelNotes: [
+      `${issueNote} จึงแสดงผลตรวจเบื้องต้นจากข้อมูล Meta จริงให้ก่อน`,
+      'หลังตรวจการเชื่อมต่อในหน้า ตั้งค่า แล้วกดวิเคราะห์อีกครั้ง ระบบจะแสดงคำแนะนำเชิงลึกเต็มรูปแบบ',
+    ],
+    decisions,
+    conditions,
+  }
+}
+
+function optimizerFallbackIssueNote(reason: string) {
+  const lower = reason.toLowerCase()
+  if (lower.includes('quota') || lower.includes('billing') || lower.includes('exceeded your current quota')) {
+    return 'การวิเคราะห์เชิงลึกยังไม่พร้อม เพราะเครดิตหรือแพ็กเกจของระบบวิเคราะห์ที่เชื่อมไว้ใช้งานไม่ได้'
+  }
+  if (lower.includes('api key') || lower.includes('authentication') || lower.includes('unauthorized')) {
+    return 'การวิเคราะห์เชิงลึกยังไม่พร้อม เพราะการเชื่อมต่อระบบวิเคราะห์ต้องตรวจสอบใหม่'
+  }
+  return 'การวิเคราะห์เชิงลึกยังไม่พร้อมชั่วคราว'
+}
+
+function normalizeOptimizerFallbackDecision(input: string): AiOptimizerModelDecision['decision'] {
+  return input === 'pause' || input === 'activate' || input === 'keep' || input === 'watch' ? input : 'watch'
+}
+
+function optimizerFallbackActionLabel(decision: AiOptimizerModelDecision['decision']) {
+  if (decision === 'pause') return 'เพิ่มคิวปิด'
+  if (decision === 'activate') return 'เพิ่มคิวเปิด'
+  if (decision === 'keep') return 'เปิดต่อ'
+  return 'เฝ้าดู'
+}
+
+function optimizerFallbackRisk(
+  candidate: ReturnType<typeof normalizeOptimizerCandidates>[number],
+  decision: AiOptimizerModelDecision['decision'],
+): RiskLevel {
+  if (decision === 'pause') return 'High'
+  if (decision === 'activate') return 'Medium'
+  if (decision === 'keep') return candidate.roas >= 1.5 || candidate.bookings > 0 ? 'Low' : 'Medium'
+  return candidate.spend >= 500 && (candidate.roas < 1 || candidate.bookings === 0) ? 'Medium' : 'Low'
+}
+
+function optimizerFallbackConfidence(
+  candidate: ReturnType<typeof normalizeOptimizerCandidates>[number],
+  decision: AiOptimizerModelDecision['decision'],
+) {
+  if (decision === 'pause') {
+    const leakScore = candidate.spend >= 500 && (candidate.bookings === 0 || candidate.roas < 1) ? 82 : 70
+    return clamp(Math.round(leakScore + Math.min(candidate.spend / 80_000, 8)), 62, 91)
+  }
+  if (decision === 'activate') {
+    const winnerScore = candidate.roas >= 3 || candidate.bookings >= 2 ? 80 : 70
+    return clamp(Math.round(winnerScore + Math.min(candidate.score, 8)), 64, 90)
+  }
+  if (decision === 'keep') {
+    const keepScore = candidate.roas >= 1.5 || candidate.bookings > 0 ? 76 : 62
+    return clamp(Math.round(keepScore + Math.min(candidate.score, 8)), 58, 88)
+  }
+  return clamp(Math.round(66 + Math.min(candidate.spend / 120_000, 7) + Math.min(candidate.score, 6)), 55, 82)
+}
+
+function optimizerFallbackReason(
+  candidate: ReturnType<typeof normalizeOptimizerCandidates>[number],
+  decision: AiOptimizerModelDecision['decision'],
+) {
+  if (candidate.deterministicReason) return candidate.deterministicReason
+  const metricText = `${candidate.adName}: ใช้จ่าย ${formatMoney(candidate.spend)}, ROAS ${candidate.roas.toFixed(2)}x, CTR ${candidate.ctr.toFixed(2)}%, booking ${candidate.bookings}`
+  if (decision === 'pause') return `${metricText} จึงควรหยุดเพื่อตัดงบที่ยังไม่สร้างผลลัพธ์`
+  if (decision === 'activate') return `${metricText} มีสัญญาณดีพอให้ทดสอบเปิดกลับแบบคุมความเสี่ยง`
+  if (decision === 'keep') return `${metricText} ควรเปิดต่อและใช้เป็นตัวอ้างอิงสำหรับรอบถัดไป`
+  return `${metricText} ยังไม่ควรส่งคำสั่งทันที ให้เฝ้าดูและตรวจสาเหตุก่อน`
+}
+
+function optimizerFallbackConditionAnalysis(
+  candidate: ReturnType<typeof normalizeOptimizerCandidates>[number],
+  decision: AiOptimizerModelDecision['decision'],
+) {
+  const evidence = candidate.evidence.length ? candidate.evidence.join(' · ') : ''
+  const metricText = `ใช้จ่าย ${formatMoney(candidate.spend)}, ROAS ${candidate.roas.toFixed(2)}x, CTR ${candidate.ctr.toFixed(2)}%, booking ${candidate.bookings}`
+  if (decision === 'pause') return `${metricText} เข้าเงื่อนไขกันงบไหล ต้องตรวจ tracking, offer และ creative ก่อนเปิดใหม่${evidence ? ` · ${evidence}` : ''}`
+  if (decision === 'activate') return `${metricText} เข้าเงื่อนไขตัวที่มีสัญญาณชนะ แต่ควรเปิดแบบคุมงบและติดตามรายวัน${evidence ? ` · ${evidence}` : ''}`
+  if (decision === 'keep') return `${metricText} ยังควรรักษาสถานะไว้ และใช้เป็น reference สำหรับ scale หรือ creative variation${evidence ? ` · ${evidence}` : ''}`
+  return `${metricText} ยังไม่ชัดพอให้เขียน Meta ควรเก็บข้อมูลเพิ่มหรือตรวจครีเอทีฟก่อน${evidence ? ` · ${evidence}` : ''}`
+}
+
+function optimizerFallbackGuardrail(decision: AiOptimizerModelDecision['decision']) {
+  if (decision === 'pause') return 'ก่อนปิดต้องตรวจว่า tracking ไม่หลุด และไม่ใช่ช่วงที่ข้อมูล conversion ยังตามมาช้า'
+  if (decision === 'activate') return 'ก่อนเปิดกลับต้องจำกัดงบและติดตาม CPA/ROAS รายวัน'
+  if (decision === 'keep') return 'ยังไม่ต้องเขียน Meta ให้ใช้เป็นรายการอ้างอิงสำหรับ scale รอบถัดไป'
+  return 'ยังไม่ส่งคำสั่งจนกว่าจะมี spend, ROAS, booking หรือ CTR ที่ชัดกว่าเดิม'
+}
+
+function optimizerFallbackNextStep(decision: AiOptimizerModelDecision['decision']) {
+  if (decision === 'pause') return 'เปิด Auto แล้วตรวจรายการก่อนยืนยันคำสั่ง PAUSED ไป Meta'
+  if (decision === 'activate') return 'เปิด Auto แล้วตรวจรายการก่อนยืนยันคำสั่ง ACTIVE ไป Meta'
+  if (decision === 'keep') return 'คงสถานะเดิมและใช้เป็นตัวอย่างสำหรับแผนครีเอทีฟหรือกลุ่มเป้าหมาย'
+  return 'รอข้อมูลเพิ่ม ตรวจครีเอทีฟ กลุ่มเป้าหมาย และ tracking ก่อนตัดสินใจรอบถัดไป'
+}
+
+function buildFallbackOptimizerConditions(candidates: ReturnType<typeof normalizeOptimizerCandidates>): AiOptimizerModelCondition[] {
+  const conditionDefs: Array<{
+    title: string
+    analysis: (items: ReturnType<typeof normalizeOptimizerCandidates>) => string
+    recommendedAction: string
+    risk: RiskLevel
+    match: (candidate: ReturnType<typeof normalizeOptimizerCandidates>[number]) => boolean
+  }> = [
+    {
+      title: 'งบไหลแต่ยังไม่เกิด booking',
+      match: (candidate) => candidate.spend >= 500 && candidate.bookings === 0,
+      risk: 'High',
+      analysis: (items) => `พบ ${items.length} โฆษณาที่ใช้จ่ายแล้วแต่ยังไม่มี booking ที่ track ได้ ควรตรวจ tracking และหยุดตัวที่เสี่ยงก่อนใช้งบต่อ`,
+      recommendedAction: 'ตรวจ tracking และพิจารณาปิดเฉพาะรายการที่ยัง active หลังรีวิว',
+    },
+    {
+      title: 'ผลตอบแทนต่ำกว่าเกณฑ์',
+      match: (candidate) => candidate.spend >= 500 && candidate.roas > 0 && candidate.roas < 1,
+      risk: 'High',
+      analysis: (items) => `พบ ${items.length} โฆษณาที่มี ROAS ต่ำกว่า 1 หลังมี spend แล้ว ต้องหาสาเหตุจาก offer, audience หรือ creative ก่อน scale`,
+      recommendedAction: 'หยุดเพิ่มงบและแยก diagnostic ก่อนเปิดกลับ',
+    },
+    {
+      title: 'ตัวที่มีสัญญาณดีควรรักษาไว้',
+      match: (candidate) => candidate.roas >= 3 || (candidate.bookings >= 2 && candidate.roas >= 1.5) || candidate.score >= 7.8,
+      risk: 'Low',
+      analysis: (items) => `พบ ${items.length} โฆษณาที่มี ROAS, booking หรือ metric score ดีพอให้ใช้เป็น reference สำหรับแผนต่อไป`,
+      recommendedAction: 'เปิดต่อหรือทดสอบเปิดกลับแบบคุมงบ แล้วใช้เป็นต้นแบบ creative/audience',
+    },
+    {
+      title: 'ครีเอทีฟหรือกลุ่มเป้าหมายเริ่มอ่อน',
+      match: (candidate) => (candidate.ctr > 0 && candidate.ctr < 0.8) || candidate.score < 5,
+      risk: 'Medium',
+      analysis: (items) => `พบ ${items.length} โฆษณาที่ CTR หรือ metric score อ่อน ควรตรวจ hook, offer, placement และ audience overlap`,
+      recommendedAction: 'ส่งต่อให้รีวิวครีเอทีฟและกลุ่มเป้าหมายก่อนตัดสินใจเขียน Meta',
+    },
+    {
+      title: 'ข้อมูลยังไม่พอให้ตัดสินใจแรง',
+      match: (candidate) => candidate.spend < 500,
+      risk: 'Low',
+      analysis: (items) => `พบ ${items.length} โฆษณาที่ยังมี spend น้อยเกินไป จึงไม่ควรสั่งเปิดหรือปิดด้วยความมั่นใจสูง`,
+      recommendedAction: 'เก็บข้อมูลเพิ่มและรอรอบวิเคราะห์ถัดไป',
+    },
+  ]
+
+  return conditionDefs
+    .map((definition) => {
+      const matches = candidates.filter(definition.match).slice(0, 12)
+      if (!matches.length) return null
+      return {
+        title: definition.title,
+        analysis: definition.analysis(matches),
+        matchedAdIds: matches.map((candidate) => candidate.adId),
+        recommendedAction: definition.recommendedAction,
+        risk: definition.risk,
+      }
+    })
+    .filter((condition): condition is AiOptimizerModelCondition => Boolean(condition))
+    .slice(0, 6)
 }
 
 function executionForAiAction(campaign: CampaignInsight, executionType: string): RecommendedAction['execution'] | undefined {
