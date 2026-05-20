@@ -3,6 +3,8 @@ import type { SharedAdsInsightForPageRecord } from './pageAutomationTypes.js'
 
 type RiskLevel = SharedAdsInsightForPageRecord['findings'][number]['risk']
 
+const DERIVED_FINDING_CONFIDENCE = 50
+
 const READ_ONLY_POLICY = {
   readOnly: true,
   noMetaWrites: true,
@@ -32,11 +34,10 @@ export function normalizeAdsInsightForPage({
   const ctr = averageBy(campaigns, (campaign) => campaign.ctr)
   const leads = sumBy(channelPerformance, (channel) => channel.leads)
   const bookings = sumBy(channelPerformance, (channel) => channel.bookings)
-  const topAds = [...ads].sort((left, right) => right.roas - left.roas).slice(0, 5)
+  const topAds = [...ads].sort((left, right) => safeNumber(right.roas) - safeNumber(left.roas)).slice(0, 5)
 
   return {
     source: {
-      workspaceId: workspace?.memoryItems.find((item) => item.id === 'meta-memory-account')?.title,
       datePreset,
       checkedAt: new Date().toISOString(),
       taskId: `page-automation-${Date.now()}`,
@@ -59,10 +60,16 @@ export function normalizeAdsInsightForPage({
     },
     findings: campaigns.slice(0, 3).map((campaign) => ({
       title: campaign.name,
-      summary: campaign.aiSummary || `ROAS ${campaign.roas.toFixed(2)}x, CPA ${Math.round(campaign.cpa).toLocaleString('th-TH')}`,
-      evidence: [`Spend ${campaign.spend}`, `CTR ${campaign.ctr}`, `Conversions ${campaign.conversions}`],
+      summary:
+        campaign.aiSummary ||
+        `ROAS ${safeNumber(campaign.roas).toFixed(2)}x, CPA ${Math.round(safeNumber(campaign.cpa)).toLocaleString('th-TH')}`,
+      evidence: [
+        `Spend ${safeNumber(campaign.spend)}`,
+        `CTR ${safeNumber(campaign.ctr)}`,
+        `Conversions ${safeNumber(campaign.conversions)}`,
+      ],
       risk: riskFromAiStatus(campaign.aiStatus),
-      confidence: campaign.aiStatus === 'healthy' ? 88 : 74,
+      confidence: DERIVED_FINDING_CONFIDENCE,
     })),
     recommendations: (workspace?.actions ?? []).slice(0, 5).map((action) => ({
       id: action.id,
@@ -77,10 +84,10 @@ export function normalizeAdsInsightForPage({
       adId: ad.id,
       campaignId: ad.campaignId,
       creative: ad.creative || ad.name,
-      score: ad.score,
-      ctr: ad.ctr,
-      roas: ad.roas,
-      bookings: ad.bookings,
+      score: safeNumber(ad.score),
+      ctr: safeNumber(ad.ctr),
+      roas: safeNumber(ad.roas),
+      bookings: safeNumber(ad.bookings),
     })),
     outcomeSignals: {
       alerts: [],

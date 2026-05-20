@@ -99,6 +99,87 @@ describe('normalizeAdsInsightForPage', () => {
     expect(insight.policy).toEqual(READ_ONLY_POLICY)
   })
 
+  it('creates findings with sanitized numbers and conservative derived confidence', () => {
+    const insight = normalizeAdsInsightForPage({
+      datePreset: 'last_7d',
+      workspace: workspaceData({
+        campaigns: [
+          campaign({
+            name: 'Campaign with invalid metrics',
+            spend: Number.NaN,
+            revenue: Number.POSITIVE_INFINITY,
+            roas: Number.NaN,
+            cpa: Number.POSITIVE_INFINITY,
+            ctr: Number.NEGATIVE_INFINITY,
+            conversions: Number.NaN,
+            aiSummary: '',
+            aiStatus: 'healthy',
+          }),
+        ],
+      }),
+    })
+
+    expect(insight.findings).toEqual([
+      {
+        title: 'Campaign with invalid metrics',
+        summary: 'ROAS 0.00x, CPA 0',
+        evidence: ['Spend 0', 'CTR 0', 'Conversions 0'],
+        risk: 'Low',
+        confidence: 50,
+      },
+    ])
+  })
+
+  it('sanitizes non-finite creative signal numbers', () => {
+    const insight = normalizeAdsInsightForPage({
+      datePreset: 'last_7d',
+      workspace: workspaceData({
+        adInsights: [
+          ad({
+            id: 'ad-invalid',
+            score: Number.NaN,
+            ctr: Number.POSITIVE_INFINITY,
+            roas: Number.NEGATIVE_INFINITY,
+            bookings: Number.NaN,
+          }),
+        ],
+      }),
+    })
+
+    expect(insight.creativeSignals).toEqual([
+      {
+        adId: 'ad-invalid',
+        campaignId: 'cmp-1',
+        creative: 'Creative 1',
+        score: 0,
+        ctr: 0,
+        roas: 0,
+        bookings: 0,
+      },
+    ])
+  })
+
+  it('omits source workspaceId when only an account memory title is available', () => {
+    const insight = normalizeAdsInsightForPage({
+      datePreset: 'last_7d',
+      workspace: workspaceData({
+        memoryItems: [
+          memoryItem({
+            id: 'meta-memory-account',
+            title: 'PMC Ads Account',
+          }),
+        ],
+      }),
+    })
+
+    expect(insight.source).toEqual({
+      datePreset: 'last_7d',
+      checkedAt: '2026-05-21T04:00:00.000Z',
+      taskId: 'page-automation-1779336000000',
+    })
+    expect(insight.source).not.toHaveProperty('workspaceId')
+  })
+
   it('creates creative signals from top ads sorted by ROAS and capped to five', () => {
     const insight = normalizeAdsInsightForPage({
       datePreset: 'last_7d',
@@ -255,6 +336,19 @@ function action(overrides: Partial<WorkspaceData['actions'][number]> = {}): Work
     risk: 'Low',
     confidence: 90,
     status: 'pending',
+    ...overrides,
+  }
+}
+
+function memoryItem(overrides: Partial<WorkspaceData['memoryItems'][number]> = {}): WorkspaceData['memoryItems'][number] {
+  return {
+    id: 'memory-1',
+    category: 'Insight',
+    title: 'Memory 1',
+    detail: 'Memory detail',
+    source: 'test',
+    confidence: 50,
+    updatedAt: '2026-05-21T04:00:00.000Z',
     ...overrides,
   }
 }
