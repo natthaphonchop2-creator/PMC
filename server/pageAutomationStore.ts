@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
@@ -33,7 +34,7 @@ export async function readJsonSnapshot<T>(filePath: string, fallback: T): Promis
 
 export async function writeJsonSnapshot(filePath: string, value: unknown) {
   await mkdir(dirname(filePath), { recursive: true })
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8')
   await rename(tempPath, filePath)
 }
