@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
 import {
@@ -36,6 +36,7 @@ const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 const DEFAULT_MAX_OUTPUT_TOKENS = 2800
 const MAX_AI_JSON_BODY_BYTES = 1_000_000
 const LOCAL_ENV_FILES = [resolve(process.cwd(), '.env.local'), resolve(process.cwd(), '.env')]
+const LOCAL_OPENAI_CONFIG_FILE = resolve(process.cwd(), '.openai-api.local.json')
 
 interface OpenAiPluginEnv {
   [key: string]: string | undefined
@@ -45,7 +46,14 @@ interface OpenAiConfig {
   apiKey: string
   model: string
   maxOutputTokens: number
-  tokenLocation: 'server-env' | 'local-env-file'
+  tokenLocation: 'server-env' | 'local-env-file' | 'web-settings'
+}
+
+interface PersistedOpenAiConfig {
+  apiKey: string
+  model?: string
+  maxOutputTokens?: number
+  savedAt?: string
 }
 
 interface AiApiRequest {
@@ -231,10 +239,87 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
           configured: Boolean(config),
           connected: Boolean(config),
           model: config?.model ?? readOpenAiModel(env),
+          maxOutputTokens: config?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
           source: 'OpenAI Responses API',
           tokenLocation: config?.tokenLocation ?? null,
+          settingsSource: config?.tokenLocation === 'web-settings' ? 'web-settings' : config?.tokenLocation === 'server-env' ? 'server-env' : config?.tokenLocation === 'local-env-file' ? 'local-env-file' : null,
+          canEditInWeb: true,
           requiredEnv: await buildOpenAiConfigChecks(env),
         })
+        return
+      }
+
+      if (requestUrl.pathname === '/api/ai/config') {
+        if (req.method === 'GET') {
+          writeJson(res, 200, await getOpenAiConfigState(env))
+          return
+        }
+
+        if (req.method === 'POST') {
+          assertJsonRequest(req)
+          const body = await readJsonBody(req)
+          const existing = await readLocalOpenAiConfig()
+          const nextConfig = normalizeSubmittedOpenAiConfig(body, existing)
+          if (!nextConfig.apiKey) {
+            writeJson(res, 400, {
+              ok: false,
+              error: 'กรุณาใส่ OpenAI API key หรือมี key ที่บันทึกไว้เดิม',
+              checkedAt: new Date().toISOString(),
+            })
+            return
+          }
+
+          const candidateConfig = buildOpenAiConfigFromPersisted(nextConfig, env)
+          const result = await checkOpenAiConnection(candidateConfig)
+          if (!result.ok) {
+            writeJson(res, 400, {
+              ...result,
+              configured: false,
+              settingsSource: null,
+              error: result.error || 'OpenAI API config validation failed. Credentials were not saved.',
+            })
+            return
+          }
+
+          await saveLocalOpenAiConfig(nextConfig)
+          writeJson(res, 200, {
+            ...result,
+            configured: true,
+            settingsSource: 'web-settings',
+            tokenLocation: 'web-settings',
+          })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          await clearLocalOpenAiConfig()
+          writeJson(res, 200, await getOpenAiConfigState(env))
+          return
+        }
+
+        writeJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (requestUrl.pathname === '/api/ai/check') {
+        const config = await readOpenAiConfig(env)
+        if (!config) {
+          writeJson(res, 400, {
+            ok: false,
+            checkedAt: new Date().toISOString(),
+            error: 'OpenAI API key ยังไม่ได้ตั้งค่า กรุณาใส่ OPENAI_API_KEY หรือบันทึกผ่านหน้า Settings',
+            checks: (await buildOpenAiConfigChecks(env)).map((item) => ({
+              key: item.key,
+              label: item.key,
+              status: item.present ? 'pass' : item.source === 'default' ? 'warn' : 'fail',
+              detail: item.present ? 'configured' : item.help,
+            })),
+          })
+          return
+        }
+
+        const result = await checkOpenAiConnection(config)
+        writeJson(res, result.ok ? 200 : 400, result)
         return
       }
 
@@ -534,41 +619,122 @@ async function requireOpenAiConfig(env: OpenAiPluginEnv) {
 }
 
 async function readOpenAiConfig(env: OpenAiPluginEnv): Promise<OpenAiConfig | null> {
+  const localConfig = await readLocalOpenAiConfig()
   const localEnv = await readLocalEnvFiles()
   const envKey = env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || ''
   const localKey = localEnv.OPENAI_API_KEY || ''
-  const apiKey = (envKey || localKey).trim()
+  const apiKey = (localConfig?.apiKey || envKey || localKey).trim()
   if (!apiKey) return null
 
-  const model = readOpenAiModel(env, localEnv)
-  const maxOutputTokens = Number(env.OPENAI_MAX_OUTPUT_TOKENS || process.env.OPENAI_MAX_OUTPUT_TOKENS || localEnv.OPENAI_MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS
+  const model = readOpenAiModel(env, localEnv, localConfig)
+  const maxOutputTokens = Number(localConfig?.maxOutputTokens || env.OPENAI_MAX_OUTPUT_TOKENS || process.env.OPENAI_MAX_OUTPUT_TOKENS || localEnv.OPENAI_MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS
   return {
     apiKey,
     model,
     maxOutputTokens,
-    tokenLocation: envKey ? 'server-env' : 'local-env-file',
+    tokenLocation: localConfig?.apiKey ? 'web-settings' : envKey ? 'server-env' : 'local-env-file',
   }
 }
 
-function readOpenAiModel(env: OpenAiPluginEnv, localEnv: Record<string, string> = {}) {
-  return (env.OPENAI_MODEL || process.env.OPENAI_MODEL || localEnv.OPENAI_MODEL || DEFAULT_OPENAI_MODEL).trim()
+function buildOpenAiConfigFromPersisted(config: PersistedOpenAiConfig, env: OpenAiPluginEnv): OpenAiConfig {
+  const model = (config.model || env.OPENAI_MODEL || process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL).trim()
+  const maxOutputTokens = Number(config.maxOutputTokens || env.OPENAI_MAX_OUTPUT_TOKENS || process.env.OPENAI_MAX_OUTPUT_TOKENS) || DEFAULT_MAX_OUTPUT_TOKENS
+  return {
+    apiKey: config.apiKey.trim(),
+    model,
+    maxOutputTokens,
+    tokenLocation: 'web-settings',
+  }
+}
+
+async function getOpenAiConfigState(env: OpenAiPluginEnv) {
+  const localConfig = await readLocalOpenAiConfig()
+  const config = await readOpenAiConfig(env)
+  return {
+    configured: Boolean(config),
+    connected: Boolean(config),
+    settingsSource: config?.tokenLocation ?? null,
+    tokenLocation: config?.tokenLocation ?? null,
+    hasSavedApiKey: Boolean(localConfig?.apiKey),
+    model: localConfig?.model ?? config?.model ?? readOpenAiModel(env),
+    maxOutputTokens: localConfig?.maxOutputTokens ?? config?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    source: 'OpenAI Responses API',
+    canEditInWeb: true,
+    requiredEnv: await buildOpenAiConfigChecks(env),
+  }
+}
+
+async function readLocalOpenAiConfig(): Promise<PersistedOpenAiConfig | null> {
+  try {
+    const raw = await readFile(LOCAL_OPENAI_CONFIG_FILE, 'utf-8')
+    const parsed = JSON.parse(raw) as PersistedOpenAiConfig
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+async function saveLocalOpenAiConfig(config: PersistedOpenAiConfig) {
+  await writeFile(
+    LOCAL_OPENAI_CONFIG_FILE,
+    JSON.stringify(
+      {
+        ...config,
+        apiKey: config.apiKey.trim(),
+        model: (config.model || DEFAULT_OPENAI_MODEL).trim(),
+        maxOutputTokens: Number(config.maxOutputTokens) || DEFAULT_MAX_OUTPUT_TOKENS,
+        savedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    ),
+    { encoding: 'utf-8', mode: 0o600 },
+  )
+}
+
+async function clearLocalOpenAiConfig() {
+  await rm(LOCAL_OPENAI_CONFIG_FILE, { force: true })
+}
+
+function normalizeSubmittedOpenAiConfig(body: Record<string, unknown>, existing: PersistedOpenAiConfig | null): PersistedOpenAiConfig {
+  const text = (key: string) => (typeof body[key] === 'string' ? (body[key] as string).trim() : '')
+  const apiKey = text('apiKey') || existing?.apiKey || ''
+  const model = text('model') || existing?.model || DEFAULT_OPENAI_MODEL
+  const maxOutputTokens = clampOpenAiTokens(Number(body.maxOutputTokens || existing?.maxOutputTokens || DEFAULT_MAX_OUTPUT_TOKENS))
+  return {
+    apiKey,
+    model,
+    maxOutputTokens,
+  }
+}
+
+function clampOpenAiTokens(value: number) {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_OUTPUT_TOKENS
+  return Math.min(8000, Math.max(256, Math.round(value)))
+}
+
+function readOpenAiModel(env: OpenAiPluginEnv, localEnv: Record<string, string> = {}, localConfig: PersistedOpenAiConfig | null = null) {
+  return (localConfig?.model || env.OPENAI_MODEL || process.env.OPENAI_MODEL || localEnv.OPENAI_MODEL || DEFAULT_OPENAI_MODEL).trim()
 }
 
 async function buildOpenAiConfigChecks(env: OpenAiPluginEnv) {
+  const localConfig = await readLocalOpenAiConfig()
   const localEnv = await readLocalEnvFiles()
   const hasEnvKey = Boolean((env.OPENAI_API_KEY || process.env.OPENAI_API_KEY || '').trim())
   const hasLocalKey = Boolean((localEnv.OPENAI_API_KEY || '').trim())
+  const hasWebSettingsKey = Boolean(localConfig?.apiKey?.trim())
   return [
     {
       key: 'OPENAI_API_KEY',
-      present: hasEnvKey || hasLocalKey,
-      source: hasEnvKey ? 'server-env' : hasLocalKey ? 'local-env-file' : 'missing',
+      present: hasWebSettingsKey || hasEnvKey || hasLocalKey,
+      source: hasWebSettingsKey ? 'web-settings' : hasEnvKey ? 'server-env' : hasLocalKey ? 'local-env-file' : 'missing',
       help: 'ใช้เรียก OpenAI Responses API จาก backend เท่านั้น ไม่ส่ง key ไป browser',
     },
     {
       key: 'OPENAI_MODEL',
-      present: Boolean(readOpenAiModel(env, localEnv)),
-      source: env.OPENAI_MODEL || process.env.OPENAI_MODEL || localEnv.OPENAI_MODEL ? 'configured' : 'default',
+      present: Boolean(readOpenAiModel(env, localEnv, localConfig)),
+      source: localConfig?.model || env.OPENAI_MODEL || process.env.OPENAI_MODEL || localEnv.OPENAI_MODEL ? 'configured' : 'default',
       help: `ไม่ใส่จะใช้ ${DEFAULT_OPENAI_MODEL}`,
     },
   ]
@@ -602,6 +768,111 @@ function parseEnvFile(raw: string) {
     output[key] = value
   }
   return output
+}
+
+async function checkOpenAiConnection(config: OpenAiConfig) {
+  const checkedAt = new Date().toISOString()
+  const startedAt = Date.now()
+  const checks = [
+    {
+      key: 'apiKey',
+      label: 'OpenAI API Key',
+      status: config.apiKey ? 'pass' : 'fail',
+      detail: config.apiKey ? 'มี key สำหรับเรียกจาก backend' : 'ยังไม่มี key',
+    },
+    {
+      key: 'model',
+      label: 'Model',
+      status: config.model ? 'pass' : 'fail',
+      detail: config.model || 'ยังไม่ได้ระบุ model',
+    },
+  ]
+
+  if (!config.apiKey || !config.model) {
+    return {
+      ok: false,
+      checkedAt,
+      checks,
+      error: 'OpenAI config ไม่ครบ',
+      source: 'OpenAI Responses API',
+    }
+  }
+
+  try {
+    const response = await fetch(OPENAI_RESPONSES_URL, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${config.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        input: 'Return exactly: OK',
+        max_output_tokens: 16,
+      }),
+    })
+    const json = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const requestId = response.headers.get('x-request-id')
+      const message = extractOpenAiError(json) || `OpenAI request failed (${response.status})`
+      return {
+        ok: false,
+        checkedAt,
+        durationMs: Date.now() - startedAt,
+        source: 'OpenAI Responses API',
+        model: config.model,
+        tokenLocation: config.tokenLocation,
+        checks: [
+          ...checks,
+          {
+            key: 'responses',
+            label: 'Responses API',
+            status: 'fail',
+            detail: requestId ? `${message} · request id ${requestId}` : message,
+          },
+        ],
+        error: message,
+      }
+    }
+
+    return {
+      ok: true,
+      checkedAt,
+      durationMs: Date.now() - startedAt,
+      source: 'OpenAI Responses API',
+      model: config.model,
+      maxOutputTokens: config.maxOutputTokens,
+      tokenLocation: config.tokenLocation,
+      checks: [
+        ...checks,
+        {
+          key: 'responses',
+          label: 'Responses API',
+          status: 'pass',
+          detail: 'เชื่อมต่อและเรียก model ได้',
+        },
+      ],
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      checkedAt,
+      durationMs: Date.now() - startedAt,
+      source: 'OpenAI Responses API',
+      model: config.model,
+      tokenLocation: config.tokenLocation,
+      checks: [
+        ...checks,
+        {
+          key: 'network',
+          label: 'Network',
+          status: 'fail',
+          detail: error instanceof Error ? error.message : 'เชื่อมต่อ OpenAI ไม่สำเร็จ',
+        },
+      ],
+      error: error instanceof Error ? error.message : 'เชื่อมต่อ OpenAI ไม่สำเร็จ',
+    }
+  }
 }
 
 async function callOpenAiJson<T>({

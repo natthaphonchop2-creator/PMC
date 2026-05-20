@@ -8,6 +8,7 @@ import {
   FileText,
   HelpCircle,
   ImageIcon,
+  Info,
   Layers3,
   LineChart,
   Menu,
@@ -259,6 +260,19 @@ type MetaStatusResponse = {
   requiredEnv?: Array<{ key: string; present: boolean; help?: string }>
 }
 
+type OpenAiStatusResponse = {
+  configured: boolean
+  connected: boolean
+  model?: string
+  maxOutputTokens?: number
+  source?: string
+  settingsSource?: string | null
+  tokenLocation?: string | null
+  hasSavedApiKey?: boolean
+  canEditInWeb?: boolean
+  requiredEnv?: Array<{ key: string; present: boolean; source?: string; help?: string }>
+}
+
 type MetaWorkspaceResponse = {
   workspace: WorkspaceData
   meta: {
@@ -328,6 +342,34 @@ const navItems: NavItem[] = [
 
 const datePresetOptions = ['ข้อมูลทั้งหมด', '7 วันล่าสุด', '30 วันล่าสุด', 'เดือนนี้', 'ไตรมาสนี้']
 const automationModeOptions = ['แนะนำเท่านั้น', 'ต้องอนุมัติก่อน', 'พัก automation']
+
+const toolbarTooltips = {
+  workspace: 'บัญชีหรือ workspace ที่กำลังใช้งานอยู่ ตรวจให้ถูกก่อนอ่านตัวเลขหรือส่งคำสั่ง',
+  datePreset: 'เลือกช่วงเวลาของข้อมูลที่ต้องการดู เช่น ข้อมูลทั้งหมดหรือ 30 วันล่าสุด',
+  sync: 'กดเพื่อดึงข้อมูลล่าสุดจาก Meta API เข้ามาในระบบ',
+  automationMode: 'กำหนดว่าระบบแค่แนะนำ ต้องอนุมัติก่อน หรือพัก automation ไว้',
+  report: 'สร้างสรุปรายงานจากข้อมูลล่าสุดและพาไปหน้า Reports',
+}
+
+const sectionTooltips: Record<string, string> = {
+  'ภาพรวม KPI': 'ดูตัวเลขหลักของบัญชี เช่น ค่าโฆษณา รายได้ ROAS CPA Lead และ Booking',
+  'Funnel คลินิก': 'ดูว่าลูกค้าหลุดตรงขั้นตอนไหน ตั้งแต่เห็นโฆษณาจนถึงเคสชำระเงิน',
+  'แนวโน้มผลงาน': 'ดูกราฟรายวันเพื่อเทียบค่าโฆษณากับรายได้',
+  'ผลงานแคมเปญ': 'ตารางสำหรับเลือกแคมเปญและดูสถานะ CPA ROAS frequency และสัญญาณ AI',
+  'คิวคำแนะนำและ Approval': 'รวม action ที่ระบบหรือ AI แนะนำให้ตรวจ ก่อนอนุมัติหรือปฏิเสธ',
+  'Audit Trail ล่าสุด': 'บันทึกเหตุการณ์สำคัญ เช่น sync, approval และผลการดำเนินการ',
+  'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
+  'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
+  'PMC Master Agent': 'เรียก AI ให้อ่าน WorkspaceData, หน้าเว็บปัจจุบัน และ memory แล้วสรุปแผน',
+  'ตัวสร้างรายงาน': 'เตรียมรายงานสรุปงานโฆษณาจากข้อมูลล่าสุด',
+  'Phase 4 Learning & Monitoring': 'รันระบบเรียนรู้ย้อนหลังและแจ้งเตือนจาก decision/memory เดิม',
+  'ตั้งค่า Workspace': 'เชื่อมต่อ Meta API และ OpenAI API ที่ backend ใช้ทำงาน',
+  'ศูนย์ช่วยเหลือ': 'คู่มือสั้นสำหรับเริ่มใช้งานและแก้ปัญหาเบื้องต้น',
+  'ผลงานครีเอทีฟ': 'ดูครีเอทีฟที่ชนะหรือควรรีเฟรชจากข้อมูล ads/insight',
+  'Segment กลุ่มเป้าหมาย': 'ดู audience และ segment ที่เชื่อมกับผลลัพธ์ใน funnel',
+  'ปริมาณของ Segment': 'เทียบค่าโฆษณาและ booking ตามกลุ่มเป้าหมาย',
+  'คลังโฆษณา': 'ตรวจ asset และ compliance ก่อนเปิดใช้งานจริง',
+}
 
 const fmtMoney = (value: number) =>
   new Intl.NumberFormat('th-TH', {
@@ -1170,14 +1212,13 @@ function App() {
       },
       (context) => {
         const conditions = context.conditions as { isDesktop: boolean; reduceMotion: boolean }
+        if (document.visibilityState === 'hidden') return undefined
         if (conditions.reduceMotion) return undefined
 
         const ctx = gsap.context(() => {
           const timeline = gsap.timeline({ defaults: { duration: 0.52, ease: 'power3.out' } })
-          timeline
-            .from('.sidebar', { x: conditions.isDesktop ? -18 : 0, y: conditions.isDesktop ? 0 : -10, autoAlpha: 0 })
-            .from('.topbar', { y: -16, autoAlpha: 0 }, '<0.08')
-            .from('.data-source-bar, .metric-card, .panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
+          gsap.set('.sidebar, .topbar', { clearProps: 'all' })
+          timeline.from('.data-source-bar, .metric-card, .panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
 
           gsap.to('.sidebar-mascot', {
             y: conditions.isDesktop ? -8 : -4,
@@ -1629,7 +1670,14 @@ function Sidebar({ activeTab, accountName, automationMode, dataState, onSelect, 
                 const Icon = item.icon
                 const isActive = item.id === activeTab
                 return (
-                  <button className={`nav-item ${isActive ? 'active' : ''}`} key={item.id} type="button" onClick={() => selectTab(item.id)}>
+                  <button
+                    className={`nav-item has-tooltip ${isActive ? 'active' : ''}`}
+                    aria-label={item.label}
+                    data-tooltip={item.description}
+                    key={item.id}
+                    type="button"
+                    onClick={() => selectTab(item.id)}
+                  >
                     <span className="nav-icon">
                       <Icon size={16} />
                     </span>
@@ -1703,25 +1751,35 @@ function Topbar({ activePage, automationMode, datePreset, onDateChange, onModeCh
         <p>{activePage.description}</p>
       </div>
       <div className="topbar-actions">
-        <PillButton icon={Database} label="Promed Clinic PMC" />
-        <select aria-label="ช่วงวันที่" value={datePreset} onChange={(event) => onDateChange(event.target.value)}>
-          {datePresetOptions.map((option) => (
-            <option key={option}>{option}</option>
-          ))}
-        </select>
-        <button className="pill-button good" type="button" onClick={onSync}>
-          <RefreshCw size={15} />
-          {syncStateLabel(syncState)}
-        </button>
-        <select aria-label="โหมด automation" value={automationMode} onChange={(event) => onModeChange(event.target.value)}>
-          {automationModeOptions.map((option) => (
-            <option key={option}>{option}</option>
-          ))}
-        </select>
-        <button className="pill-button blue" type="button" onClick={onPrepareReport}>
-          <FileText size={15} />
-          เตรียมรายงาน
-        </button>
+        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.workspace}>
+          <PillButton icon={Database} label="Promed Clinic PMC" />
+        </TooltipWrap>
+        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.datePreset}>
+          <select aria-label="ช่วงวันที่" value={datePreset} onChange={(event) => onDateChange(event.target.value)}>
+            {datePresetOptions.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </TooltipWrap>
+        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.sync}>
+          <button className="pill-button good" type="button" onClick={onSync}>
+            <RefreshCw size={15} />
+            {syncStateLabel(syncState)}
+          </button>
+        </TooltipWrap>
+        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.automationMode}>
+          <select aria-label="โหมด automation" value={automationMode} onChange={(event) => onModeChange(event.target.value)}>
+            {automationModeOptions.map((option) => (
+              <option key={option}>{option}</option>
+            ))}
+          </select>
+        </TooltipWrap>
+        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.report}>
+          <button className="pill-button blue" type="button" onClick={onPrepareReport}>
+            <FileText size={15} />
+            เตรียมรายงาน
+          </button>
+        </TooltipWrap>
       </div>
     </header>
   )
@@ -5745,9 +5803,16 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
   const account = metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อ Meta API'
   const [accessToken, setAccessToken] = useState('')
   const [adAccountId, setAdAccountId] = useState('')
+  const [openAiApiKey, setOpenAiApiKey] = useState('')
+  const [openAiModel, setOpenAiModel] = useState('gpt-5.5')
+  const [openAiMaxOutputTokens, setOpenAiMaxOutputTokens] = useState('2800')
+  const [openAiStatus, setOpenAiStatus] = useState<OpenAiStatusResponse | null>(null)
+  const [openAiMessage, setOpenAiMessage] = useState('')
   const [settingsMessage, setSettingsMessage] = useState('')
   const [isSavingConfig, setIsSavingConfig] = useState(false)
+  const [isSavingOpenAiConfig, setIsSavingOpenAiConfig] = useState(false)
   const [isConfirmingConfigSave, setIsConfirmingConfigSave] = useState(false)
+  const [isConfirmingOpenAiSave, setIsConfirmingOpenAiSave] = useState(false)
   const isSyncing = syncState === 'Syncing...'
   const stateTone: Tone = dataState === 'live' ? 'good' : dataState === 'error' ? 'critical' : dataState === 'loading' ? 'info' : 'watch'
   const savedCredentialLabel = metaInfo?.settingsSource
@@ -5771,6 +5836,44 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
           : dataState === 'setup-required'
             ? 'ต้องตั้งค่าก่อน'
             : 'ซิงก์ผิดพลาด'
+
+  const openAiCredentialLabel = openAiStatus?.configured
+    ? openAiStatus.tokenLocation === 'web-settings'
+      ? 'เชื่อม OpenAI จากหน้า Settings แล้ว'
+      : openAiStatus.tokenLocation === 'server-env'
+        ? 'เชื่อม OpenAI จาก Render/server env'
+        : 'เชื่อม OpenAI จาก .env.local'
+    : 'ยังไม่ได้เชื่อม OpenAI API'
+  const openAiTone: Tone = openAiStatus?.configured ? 'good' : 'watch'
+
+  const loadOpenAiStatus = useCallback(async () => {
+    try {
+      const status = await apiJson<OpenAiStatusResponse>('/api/ai/config')
+      setOpenAiStatus(status)
+      setOpenAiModel(status.model || 'gpt-5.5')
+      setOpenAiMaxOutputTokens(String(status.maxOutputTokens || 2800))
+    } catch (error) {
+      setOpenAiMessage(error instanceof Error ? error.message : 'โหลดสถานะ OpenAI ไม่สำเร็จ')
+    }
+  }, [])
+
+  const checkOpenAiConfig = async () => {
+    setOpenAiMessage('กำลังทดสอบ OpenAI Responses API...')
+    try {
+      const result = await apiJson<OpenAiStatusResponse & { ok?: boolean; durationMs?: number }>('/api/ai/check')
+      setOpenAiStatus(result)
+      setOpenAiMessage(`เชื่อมต่อ OpenAI สำเร็จ · ${result.model ?? openAiModel}`)
+    } catch (error) {
+      setOpenAiMessage(error instanceof Error ? error.message : 'ทดสอบ OpenAI ไม่สำเร็จ')
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadOpenAiStatus()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadOpenAiStatus])
 
   const saveMetaConfig = async () => {
     setIsSavingConfig(true)
@@ -5797,6 +5900,31 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
     }
   }
 
+  const saveOpenAiConfig = async () => {
+    setIsSavingOpenAiConfig(true)
+    setOpenAiMessage('กำลังตรวจและบันทึกค่า OpenAI API...')
+    try {
+      const result = await apiJson<OpenAiStatusResponse & { ok?: boolean }>('/api/ai/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: openAiApiKey,
+          model: openAiModel,
+          maxOutputTokens: Number(openAiMaxOutputTokens),
+        }),
+      })
+      setOpenAiStatus(result)
+      setOpenAiApiKey('')
+      setIsConfirmingOpenAiSave(false)
+      setOpenAiMessage('เชื่อมต่อ OpenAI API สำเร็จ และบันทึกไว้ฝั่ง server แล้ว')
+      void loadOpenAiStatus()
+    } catch (error) {
+      setOpenAiMessage(error instanceof Error ? error.message : 'บันทึกค่า OpenAI API ไม่สำเร็จ')
+    } finally {
+      setIsSavingOpenAiConfig(false)
+    }
+  }
+
   return (
     <>
       <TwoColumnPage
@@ -5809,7 +5937,7 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
           />
         }
       >
-        <SectionCard collapsible title="ตั้งค่า Workspace" subtitle="การเชื่อมต่อ Meta และความพร้อมของแหล่งข้อมูล">
+        <SectionCard collapsible title="ตั้งค่า Workspace" subtitle="การเชื่อมต่อ Meta, OpenAI และความพร้อมของแหล่งข้อมูล">
           <div className="settings-credential-state">
             <StatusBadge label={savedCredentialLabel} tone={metaInfo?.settingsSource ? 'good' : 'watch'} />
             <span>{tokenLocationLabel}</span>
@@ -5854,6 +5982,49 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
             </button>
           </div>
           {settingsMessage ? <p className="settings-message">{settingsMessage}</p> : null}
+
+          <div className="settings-divider" />
+          <div className="settings-credential-state">
+            <StatusBadge label={openAiCredentialLabel} tone={openAiTone} />
+            <span>{openAiStatus?.source ?? 'OpenAI Responses API'}</span>
+            <span>Model: {openAiModel || 'gpt-5.5'}</span>
+          </div>
+          <div className="form-grid">
+            <label>
+              OpenAI API Key
+              <input value={openAiApiKey} onChange={(event) => setOpenAiApiKey(event.target.value)} placeholder={openAiStatus?.hasSavedApiKey ? 'ใช้ key ที่บันทึกไว้เดิม หรือใส่ key ใหม่' : 'sk-proj-...'} type="password" />
+            </label>
+            <label>
+              OpenAI Model
+              <input value={openAiModel} onChange={(event) => setOpenAiModel(event.target.value)} placeholder="gpt-5.5" />
+            </label>
+            <label>
+              Max output tokens
+              <input value={openAiMaxOutputTokens} onChange={(event) => setOpenAiMaxOutputTokens(event.target.value)} inputMode="numeric" placeholder="2800" />
+            </label>
+            <label>
+              สถานะ AI
+              <select value={openAiStatus?.configured ? 'เชื่อมต่อแล้ว' : 'ยังไม่ได้เชื่อม'} disabled>
+                <option>เชื่อมต่อแล้ว</option>
+                <option>ยังไม่ได้เชื่อม</option>
+              </select>
+            </label>
+            <button className="primary-button" type="button" onClick={() => void checkOpenAiConfig()} disabled={isSavingOpenAiConfig || !openAiStatus?.configured}>
+              ตรวจสถานะ OpenAI
+            </button>
+            <button
+              className="outline-button"
+              type="button"
+              onClick={() => {
+                setOpenAiMessage('')
+                setIsConfirmingOpenAiSave(true)
+              }}
+              disabled={isSavingOpenAiConfig || (!openAiApiKey && !openAiStatus?.hasSavedApiKey && !openAiStatus?.configured)}
+            >
+              {isSavingOpenAiConfig ? 'กำลังบันทึก...' : 'บันทึกค่า OpenAI API'}
+            </button>
+          </div>
+          {openAiMessage ? <p className="settings-message">{openAiMessage}</p> : null}
         </SectionCard>
         <div className="split-grid">
           <StatePanel collapsible state="ต้องตั้งค่าก่อน" detail="แสดงเมื่อยังไม่มี API credential หรือ ad account" tone="watch" />
@@ -5877,6 +6048,16 @@ function SettingsPage({ dataState, metaInfo, onSync, syncState }: { dataState: D
           isSaving={isSavingConfig}
           onCancel={() => setIsConfirmingConfigSave(false)}
           onConfirm={saveMetaConfig}
+        />
+      ) : null}
+      {isConfirmingOpenAiSave ? (
+        <OpenAiSaveConfirmModal
+          hasApiKey={Boolean(openAiApiKey)}
+          isSaving={isSavingOpenAiConfig}
+          maxOutputTokens={openAiMaxOutputTokens}
+          model={openAiModel}
+          onCancel={() => setIsConfirmingOpenAiSave(false)}
+          onConfirm={saveOpenAiConfig}
         />
       ) : null}
     </>
@@ -5917,6 +6098,49 @@ function SettingsSaveConfirmModal({
           </button>
           <button className="primary-button" type="button" onClick={onConfirm} disabled={isSaving}>
             {isSaving ? 'กำลังบันทึก...' : 'ยืนยันและบันทึก'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function OpenAiSaveConfirmModal({
+  hasApiKey,
+  isSaving,
+  maxOutputTokens,
+  model,
+  onCancel,
+  onConfirm,
+}: {
+  hasApiKey: boolean
+  isSaving: boolean
+  maxOutputTokens: string
+  model: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="modal-backdrop">
+      <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="openai-save-title">
+        <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดการยืนยัน" disabled={isSaving}>
+          <X size={18} />
+        </button>
+        <StatusBadge label="บันทึก OpenAI API จริง" tone="watch" />
+        <h2 id="openai-save-title">ยืนยันการเชื่อมต่อ OpenAI API</h2>
+        <p>ระบบจะทดสอบ key กับ OpenAI Responses API แล้วบันทึกไว้ฝั่ง server เท่านั้น ไม่ส่ง key กลับไปแสดงใน browser</p>
+        <div className="confirm-grid">
+          <MetricLine label="OpenAI API Key" value={hasApiKey ? 'มี key ใหม่ในฟอร์ม' : 'ใช้ key ที่บันทึกไว้เดิม'} />
+          <MetricLine label="Model" value={model || 'gpt-5.5'} />
+          <MetricLine label="Max output tokens" value={maxOutputTokens || '2800'} />
+          <MetricLine label="ตำแหน่งบันทึก" value="server-local-file / Render env fallback" />
+        </div>
+        <div className="modal-actions">
+          <button className="outline-button" type="button" onClick={onCancel} disabled={isSaving}>
+            ยกเลิก
+          </button>
+          <button className="primary-button" type="button" onClick={onConfirm} disabled={isSaving}>
+            {isSaving ? 'กำลังตรวจ...' : 'ยืนยันและบันทึก'}
           </button>
         </div>
       </section>
@@ -6062,6 +6286,32 @@ function CollapsedPlaceholder({ title }: { title: string }) {
   )
 }
 
+function TooltipWrap({
+  as: Component = 'span',
+  children,
+  className = '',
+  text,
+}: {
+  as?: 'div' | 'span'
+  children: React.ReactNode
+  className?: string
+  text: string
+}) {
+  return (
+    <Component className={['tooltip-wrap', className].filter(Boolean).join(' ')} data-tooltip={text} title={text}>
+      {children}
+    </Component>
+  )
+}
+
+function HelpTooltip({ text }: { text: string }) {
+  return (
+    <span className="help-tooltip" data-tooltip={text} title={text} aria-label={text} tabIndex={0}>
+      <Info size={13} />
+    </span>
+  )
+}
+
 function SectionCard({
   action,
   children,
@@ -6088,12 +6338,16 @@ function SectionCard({
   const hasActions = Boolean(action) || collapsible
   const panelClassName = ['panel', className, isCollapsed ? 'is-collapsed' : ''].filter(Boolean).join(' ')
   const panelHeadClassName = ['panel-head', headClassName].filter(Boolean).join(' ')
+  const tooltip = sectionTooltips[title]
 
   return (
     <section className={panelClassName}>
       <div className={panelHeadClassName}>
         <div>
-          <h2>{title}</h2>
+          <div className="panel-title-row">
+            <h2>{title}</h2>
+            {tooltip ? <HelpTooltip text={tooltip} /> : null}
+          </div>
           <p>{subtitle}</p>
         </div>
         {hasActions ? (

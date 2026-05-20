@@ -58,6 +58,7 @@ Use Render or Railway. This project includes both `render.yaml` and `railway.jso
    - `APP_BASIC_AUTH_PASSWORD`
    - `META_ACCESS_TOKEN`
    - `META_AD_ACCOUNT_ID`
+   - `OPENAI_API_KEY`
 5. Deploy.
 
 Render build/start settings are already configured:
@@ -81,6 +82,9 @@ Health Check: /healthz
    - `META_GRAPH_VERSION=v21.0`
    - `META_DATE_PRESET=last_30d`
    - `META_MAX_PAGES=6`
+   - `OPENAI_API_KEY=<OpenAI project key>`
+   - `OPENAI_MODEL=gpt-5.5`
+   - `OPENAI_MAX_OUTPUT_TOKENS=2800`
 5. Deploy.
 
 ## Basic VPS Deploy

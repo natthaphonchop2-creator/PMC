@@ -22,3 +22,9 @@ services:
         value: last_30d
       - key: META_MAX_PAGES
         value: "6"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.5
+      - key: OPENAI_MAX_OUTPUT_TOKENS
+        value: "2800"

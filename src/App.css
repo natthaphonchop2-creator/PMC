@@ -183,6 +183,90 @@ input:focus-visible {
   color: #fff;
 }
 
+.has-tooltip,
+.tooltip-wrap,
+.help-tooltip {
+  position: relative;
+}
+
+.has-tooltip::after,
+.tooltip-wrap::after,
+.help-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 80;
+  width: min(260px, 78vw);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #fff;
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.18);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+  opacity: 0;
+  padding: 9px 10px;
+  pointer-events: none;
+  visibility: hidden;
+  white-space: normal;
+}
+
+.has-tooltip:hover::after,
+.has-tooltip:focus-visible::after,
+.tooltip-wrap:hover::after,
+.tooltip-wrap:focus-within::after,
+.help-tooltip:hover::after,
+.help-tooltip:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+.nav-item.has-tooltip::after {
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translate(4px, -50%);
+}
+
+.toolbar-tooltip {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.toolbar-tooltip::after {
+  right: 0;
+  top: calc(100% + 8px);
+  transform: translateY(4px);
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.panel-title-row h2 {
+  margin: 0;
+}
+
+.help-tooltip {
+  width: 22px;
+  height: 22px;
+  border: 1px solid #d7e2f0;
+  border-radius: 999px;
+  background: #f8fbff;
+  color: var(--blue);
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.help-tooltip::after {
+  left: 0;
+  top: calc(100% + 8px);
+  transform: translateY(4px);
+}
+
 .sidebar-card {
   margin-top: auto;
   border: 1px solid var(--border);
@@ -256,6 +340,11 @@ input:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.topbar-actions .toolbar-tooltip > select,
+.topbar-actions .toolbar-tooltip > .pill-button {
+  width: 100%;
 }
 
 .topbar select,
@@ -1771,6 +1860,12 @@ input:focus-visible {
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
+}
+
+.settings-divider {
+  height: 1px;
+  margin: 20px 0;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
 }
 
 .form-grid label {
@@ -3857,6 +3952,17 @@ input:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: flex-start;
     gap: 8px;
+  }
+
+  .toolbar-tooltip {
+    width: 100%;
+  }
+
+  .toolbar-tooltip::after,
+  .help-tooltip::after {
+    left: 0;
+    right: auto;
+    width: min(280px, calc(100vw - 42px));
   }
 
   .topbar select,
