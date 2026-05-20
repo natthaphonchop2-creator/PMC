@@ -11,8 +11,12 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { fetchAdsInsight, fetchManagedPages, fetchMessages, fetchPageAutomationStatus } from './api'
-import { PageAutomationMetric, PageAutomationPanel, PageAutomationState } from './components'
+import { PageAutomationMetric, PageAutomationState } from './components'
 import { PAGE_AUTOMATION_ROUTES } from './constants'
+import { AnalyticsDashboard } from './routes/AnalyticsDashboard'
+import { AutoPost } from './routes/AutoPost'
+import { Messages } from './routes/Messages'
+import { PageAnalysis } from './routes/PageAnalysis'
 import type { AutoMode, ManagedPage, PageAutomationRouteId, PageMessage, SharedAdsInsightForPage } from './types'
 import './styles.css'
 
@@ -110,6 +114,7 @@ export function PageAutomationApp() {
   }, [messages, pages])
 
   const activeRoute = PAGE_AUTOMATION_ROUTES.find((item) => item.id === route) ?? PAGE_AUTOMATION_ROUTES[0]
+  const sharedRouteProps = { adsInsight, autoMode, messages, pages, summary }
 
   return (
     <main className="pa-shell">
@@ -150,7 +155,9 @@ export function PageAutomationApp() {
           </div>
 
           <div className="pa-topbar-actions">
-            <span className={`pa-source-pill ${dataSource}`}>{sourceLabel(dataSource)}</span>
+            <span className={`pa-source-pill ${dataSource}`} title={statusCheckedAt ? `Status checked ${statusCheckedAt}` : sourceLabel(dataSource)}>
+              {sourceLabel(dataSource)}
+            </span>
             <button
               aria-pressed={autoMode === 'on'}
               className={`pa-auto-toggle ${autoMode}`}
@@ -201,249 +208,13 @@ export function PageAutomationApp() {
           <PageAutomationState detail="กำลังอ่าน status, pages, messages และ Ads AI insight ของเพจแรก" title="Loading Page Automation" />
         ) : null}
 
-        {route === 'auto-post' ? (
-          <AutoPostPlaceholder adsInsight={adsInsight} autoMode={autoMode} pages={pages} />
-        ) : route === 'pages' ? (
-          <PagesPlaceholder dataSource={dataSource} pages={pages} />
-        ) : route === 'messages' ? (
-          <MessagesPlaceholder messages={messages} pages={pages} />
-        ) : route === 'analytics' ? (
-          <AnalyticsPlaceholder adsInsight={adsInsight} pages={pages} summary={summary} />
-        ) : (
-          <DashboardPlaceholder
-            adsInsight={adsInsight}
-            dataSource={dataSource}
-            messages={messages}
-            pages={pages}
-            statusCheckedAt={statusCheckedAt}
-            summary={summary}
-          />
-        )}
+        {route === 'auto-post' ? <AutoPost {...sharedRouteProps} /> : null}
+        {route === 'pages' ? <PageAnalysis {...sharedRouteProps} /> : null}
+        {route === 'messages' ? <Messages {...sharedRouteProps} /> : null}
+        {route === 'analytics' ? <AnalyticsDashboard {...sharedRouteProps} view="analytics" /> : null}
+        {route === 'dashboard' ? <AnalyticsDashboard {...sharedRouteProps} view="dashboard" /> : null}
       </section>
     </main>
-  )
-}
-
-function DashboardPlaceholder({
-  adsInsight,
-  dataSource,
-  messages,
-  pages,
-  statusCheckedAt,
-  summary,
-}: {
-  adsInsight: SharedAdsInsightForPage | null
-  dataSource: DataSource
-  messages: PageMessage[]
-  pages: ManagedPage[]
-  statusCheckedAt: string
-  summary: Summary
-}) {
-  const firstPage = pages[0]
-
-  return (
-    <div className="pa-grid">
-      <PageAutomationPanel
-        className="pa-span-7"
-        subtitle="Page operations status, Auto guardrails, and first-page Ads AI context."
-        title="Command dashboard"
-      >
-        <div className="pa-state-grid">
-          <PageAutomationState
-            detail={statusCheckedAt ? `checked ${formatDateTime(statusCheckedAt)}` : 'waiting for status'}
-            tone="good"
-            title="Backend namespace"
-          />
-          <PageAutomationState
-            detail={sourceLabel(dataSource)}
-            tone={dataSource === 'meta' ? 'good' : dataSource === 'cache' ? 'watch' : 'critical'}
-            title="Pages source"
-          />
-          <PageAutomationState
-            detail={adsInsight ? `${adsInsight.source.datePreset} checked ${formatDateTime(adsInsight.source.checkedAt)}` : 'no connected page yet'}
-            tone={adsInsight ? 'good' : 'neutral'}
-            title="Ads AI bridge"
-          />
-        </div>
-      </PageAutomationPanel>
-
-      <PageAutomationPanel className="pa-span-5" subtitle="Queue view for messages that need operator attention." title="Unified inbox">
-        {messages.length ? (
-          <div className="pa-list">
-            {messages.slice(0, 4).map((message) => (
-              <MessageRow key={message.messageId} message={message} />
-            ))}
-          </div>
-        ) : (
-          <PageAutomationState detail="No messages returned by the polling endpoint." title="Inbox clear" />
-        )}
-      </PageAutomationPanel>
-
-      <PageAutomationPanel className="pa-span-5" subtitle="First connected page used for Task 7 Ads insight preview." title="Page context">
-        {firstPage ? <PageRow page={firstPage} /> : <PageAutomationState detail="Connect a Meta page to populate this panel." title="No page available" />}
-      </PageAutomationPanel>
-
-      <PageAutomationPanel className="pa-span-7" subtitle="Read-only metrics from the Ads AI bridge for the selected page scope." title="Ads-linked insight">
-        <div className="pa-insight-strip">
-          <span>Spend {adsInsight ? formatMoney(adsInsight.metrics.spend) : '-'}</span>
-          <span>CPA {adsInsight ? formatMoney(adsInsight.metrics.cpa) : '-'}</span>
-          <span>CTR {adsInsight ? `${adsInsight.metrics.ctr.toFixed(2)}%` : '-'}</span>
-          <span>Unread {summary.unread}</span>
-        </div>
-      </PageAutomationPanel>
-    </div>
-  )
-}
-
-function AutoPostPlaceholder({
-  adsInsight,
-  autoMode,
-  pages,
-}: {
-  adsInsight: SharedAdsInsightForPage | null
-  autoMode: AutoMode
-  pages: ManagedPage[]
-}) {
-  return (
-    <div className="pa-grid">
-      <PageAutomationPanel
-        className="pa-span-7"
-        subtitle="Draft composer and pipeline screens arrive in the route implementation task."
-        title="Draft pipeline"
-      >
-        <div className="pa-pipeline">
-          {['Draft', 'Ready', 'Needs Review', 'Scheduled', 'Posted'].map((label, index) => (
-            <PageAutomationState
-              detail={index === 0 ? `${pages.length} page targets available` : 'pending route screen'}
-              key={label}
-              title={label}
-              tone={index < 2 ? 'good' : index === 2 ? 'watch' : 'neutral'}
-            />
-          ))}
-        </div>
-      </PageAutomationPanel>
-
-      <PageAutomationPanel className="pa-span-5" subtitle="The toggle is local state only in Task 7." title="Auto policy">
-        <PageAutomationState
-          detail={autoMode === 'on' ? 'Local UI preview is ON. No Meta write endpoint is called.' : 'Suggest-only local UI state.'}
-          tone={autoMode === 'on' ? 'watch' : 'neutral'}
-          title={autoMode === 'on' ? 'Auto ON preview' : 'Auto OFF'}
-        />
-        <PageAutomationState
-          detail={adsInsight ? 'Ads insight is available for guardrail display.' : 'Ads insight waits for a connected page.'}
-          tone={adsInsight ? 'good' : 'neutral'}
-          title="Ads AI freshness"
-        />
-      </PageAutomationPanel>
-    </div>
-  )
-}
-
-function PagesPlaceholder({ dataSource, pages }: { dataSource: DataSource; pages: ManagedPage[] }) {
-  return (
-    <div className="pa-grid">
-      <PageAutomationPanel className="pa-span-12" subtitle={`Source: ${sourceLabel(dataSource)}`} title="Connected pages">
-        {pages.length ? (
-          <div className="pa-list">
-            {pages.map((page) => (
-              <PageRow key={page.id} page={page} />
-            ))}
-          </div>
-        ) : (
-          <PageAutomationState detail="No pages returned from Meta or cache." tone="watch" title="No connected pages" />
-        )}
-      </PageAutomationPanel>
-    </div>
-  )
-}
-
-function MessagesPlaceholder({ messages, pages }: { messages: PageMessage[]; pages: ManagedPage[] }) {
-  return (
-    <div className="pa-grid">
-      <PageAutomationPanel className="pa-span-7" subtitle="Polling-backed message preview for all connected pages." title="Inbox queue">
-        {messages.length ? (
-          <div className="pa-list">
-            {messages.map((message) => (
-              <MessageRow key={message.messageId} message={message} />
-            ))}
-          </div>
-        ) : (
-          <PageAutomationState detail="No messages returned by /api/page-automation/messages." title="No open messages" />
-        )}
-      </PageAutomationPanel>
-
-      <PageAutomationPanel className="pa-span-5" subtitle="Per-page unread count from the pages endpoint." title="Page SLA">
-        <div className="pa-list">
-          {pages.slice(0, 5).map((page) => (
-            <PageAutomationState
-              detail={`${page.unreadCount} unread, ${Math.round(page.responseRate)}% response rate`}
-              key={page.id}
-              tone={page.unreadCount > 0 ? 'watch' : 'good'}
-              title={page.name}
-            />
-          ))}
-          {!pages.length ? <PageAutomationState detail="Connect a page to show SLA state." title="No SLA data" /> : null}
-        </div>
-      </PageAutomationPanel>
-    </div>
-  )
-}
-
-function AnalyticsPlaceholder({
-  adsInsight,
-  pages,
-  summary,
-}: {
-  adsInsight: SharedAdsInsightForPage | null
-  pages: ManagedPage[]
-  summary: Summary
-}) {
-  return (
-    <div className="pa-grid">
-      <PageAutomationPanel className="pa-span-8" subtitle="Task 7 placeholder for the full analytics route." title="Analytics overview">
-        <div className="pa-insight-strip">
-          <span>{summary.pages} pages</span>
-          <span>{formatNumber(summary.followers)} followers</span>
-          <span>{adsInsight ? `${adsInsight.metrics.roas.toFixed(2)}x ROAS` : 'No Ads insight'}</span>
-          <span>{summary.avgHealth ? `${Math.round(summary.avgHealth)}% health` : 'No health data'}</span>
-        </div>
-      </PageAutomationPanel>
-
-      <PageAutomationPanel className="pa-span-4" subtitle="Current page-level metric availability." title="Data quality">
-        <div className="pa-list">
-          <PageAutomationState detail={`${pages.length} page records loaded`} tone={pages.length ? 'good' : 'watch'} title="Meta pages" />
-          <PageAutomationState detail={adsInsight ? adsInsight.source.datePreset : 'No first-page scope'} tone={adsInsight ? 'good' : 'neutral'} title="Ads bridge" />
-        </div>
-      </PageAutomationPanel>
-    </div>
-  )
-}
-
-function PageRow({ page }: { page: ManagedPage }) {
-  return (
-    <article className="pa-row">
-      <div>
-        <strong>{page.name}</strong>
-        <p>{page.handle}</p>
-      </div>
-      <span>{formatNumber(page.followers)} followers</span>
-      <span>{page.engagementRate.toFixed(1)}% engagement</span>
-      <span>{Math.round(page.healthScore)} health</span>
-    </article>
-  )
-}
-
-function MessageRow({ message }: { message: PageMessage }) {
-  return (
-    <article className="pa-row">
-      <div>
-        <strong>{message.customerDisplayName}</strong>
-        <p>{message.textExcerpt}</p>
-      </div>
-      <span>{message.intent}</span>
-      <span className={message.priority}>{message.priority}</span>
-      <span>{formatDateTime(message.receivedAt)}</span>
-    </article>
   )
 }
 
@@ -468,22 +239,4 @@ function sourceLabel(source: DataSource) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 }).format(value)
-}
-
-function formatMoney(value: number) {
-  return new Intl.NumberFormat('th-TH', {
-    currency: 'THB',
-    maximumFractionDigits: 0,
-    style: 'currency',
-  }).format(value)
-}
-
-function formatDateTime(value: string) {
-  const time = Date.parse(value)
-  if (!Number.isFinite(time)) return value || '-'
-
-  return new Intl.DateTimeFormat('th-TH', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(new Date(time))
 }
