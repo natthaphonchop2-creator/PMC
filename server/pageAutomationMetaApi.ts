@@ -200,7 +200,9 @@ async function graphGet<T>(
   try {
     response = await fetchImpl(url)
   } catch (error) {
-    throw new Error(sanitizeMetaErrorMessage(`Meta API request failed: ${errorMessage(error)}`, config.accessToken))
+    throw new Error(sanitizeMetaErrorMessage(`Meta API request failed: ${errorMessage(error)}`, config.accessToken), {
+      cause: error,
+    })
   }
 
   const responseBody = await response.text().catch(() => '')
