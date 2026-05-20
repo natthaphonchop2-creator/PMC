@@ -1,7 +1,9 @@
 import { CheckCircle2, CircleAlert } from 'lucide-react'
 import { PageAutomationPanel, PageAutomationState } from '../components'
-import { classifyAutoEligibility } from '../policy'
+import { classifyAutoEligibility, missingPermissionStates } from '../policy'
 import type {
+  AutoEligibilityAssetState,
+  AutoEligibilityContentType,
   AutoEligibilityResult,
   AutoMode,
   ManagedPage,
@@ -33,23 +35,41 @@ type PipelineItem = {
   tone: 'good' | 'watch' | 'critical' | 'neutral'
 }
 
+type DraftPolicyContext = {
+  adsAiConfidence: number
+  approvalState: 'cleared' | 'required' | 'unknown'
+  assetState: AutoEligibilityAssetState
+  contentType: AutoEligibilityContentType
+  hasExplicitAdsConfidence: boolean
+  hasPii: boolean
+  hasSensitiveHealthDetail: boolean
+}
+
+type PermissionStateSummary = {
+  detail: string
+  tone: 'good' | 'watch' | 'critical' | 'neutral'
+}
+
 const publishSurface: PostDraftChannel = 'facebook_feed'
+const unknownAdsConfidence = 0.7
 
 export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: AutoPostProps) {
   const selectedPage = pages[0]
   const permissionReports = selectedPage?.permissions ?? []
   const pageMapping = pageMappingFor(selectedPage, adsInsight)
-  const adsAiConfidence = confidenceFromInsight(adsInsight)
+  const draftPolicy = draftPolicyContextFor(adsInsight)
+  const adsAiConfidence = draftPolicy.adsAiConfidence
+  const permissionState = permissionStateFor(selectedPage)
   const now = new Date().toISOString()
   const guardrailScore = selectedPage ? Math.min(96, Math.max(78, Math.round(selectedPage.healthScore + 4))) : 70
   const eligibility = classifyAutoEligibility({
     adsAiConfidence,
     adsInsightCheckedAt: adsInsight?.source.checkedAt ?? '',
-    assetState: 'approved',
-    contentType: 'education',
+    assetState: draftPolicy.assetState,
+    contentType: draftPolicy.contentType,
     guardrailScore,
-    hasPii: false,
-    hasSensitiveHealthDetail: false,
+    hasPii: draftPolicy.hasPii,
+    hasSensitiveHealthDetail: draftPolicy.hasSensitiveHealthDetail,
     now,
     pageId: selectedPage?.id ?? '',
     pageMapping,
@@ -59,6 +79,10 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
     publishSurface,
   })
   const pipelineColumns = buildPipelineColumns({ adsInsight, eligibility, messages, selectedPage })
+  const canMarkEligible =
+    autoMode === 'on' &&
+    eligibility.state === 'auto_eligible' &&
+    draftPolicy.approvalState === 'cleared'
 
   return (
     <div className="pa-grid">
@@ -108,7 +132,7 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
         <div className="pa-guardrail-list">
           <GuardrailRow label="Auto mode" value={autoMode === 'on' ? 'ON, low-risk only' : 'OFF, suggest-only'} tone={autoMode === 'on' ? 'watch' : 'neutral'} />
           <GuardrailRow label="Surface" value="Facebook feed v1" tone="good" />
-          <GuardrailRow label="Ads confidence" value={adsInsight ? `${Math.round(adsAiConfidence * 100)}%` : 'missing'} tone={adsInsight ? 'good' : 'critical'} />
+          <GuardrailRow label="Ads confidence" value={adsConfidenceLabel(adsInsight, draftPolicy)} tone={adsConfidenceTone(adsInsight, draftPolicy)} />
           <GuardrailRow label="Guardrail score" value={`${guardrailScore}/100`} tone={guardrailScore >= 90 ? 'good' : 'watch'} />
           <GuardrailRow label="Unread inbox" value={`${summary.unread} pending`} tone={summary.unread > 0 ? 'watch' : 'good'} />
         </div>
@@ -159,7 +183,7 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
           <button className="pa-button primary" disabled={eligibility.state === 'blocked'} type="button">
             Send to approval
           </button>
-          <button className="pa-button" disabled={autoMode !== 'on' || eligibility.state !== 'auto_eligible'} type="button">
+          <button className="pa-button" disabled={!canMarkEligible} type="button">
             Mark eligible
           </button>
         </div>
@@ -178,8 +202,8 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
             title="Page data"
           />
           <PageAutomationState
-            detail={selectedPage ? permissionSummary(selectedPage) : 'No permission report'}
-            tone={permissionReports.some((report) => report.missing.length > 0) ? 'watch' : selectedPage ? 'good' : 'neutral'}
+            detail={permissionState.detail}
+            tone={permissionState.tone}
             title="Permission state"
           />
         </div>
@@ -252,13 +276,105 @@ function pageMappingFor(page: ManagedPage | undefined, adsInsight: SharedAdsInsi
   return 'inferred'
 }
 
-function confidenceFromInsight(adsInsight: SharedAdsInsightForPage | null) {
-  if (!adsInsight) return 0
+function draftPolicyContextFor(adsInsight: SharedAdsInsightForPage | null): DraftPolicyContext {
+  const confidence = explicitConfidenceFromInsight(adsInsight)
+  const sourceText = draftSourceText(adsInsight)
+  const approvalRequired = Boolean(
+    adsInsight?.policy.approvalRequired ||
+      adsInsight?.recommendations.some((recommendation) => recommendation.requiresApproval) ||
+      adsInsight?.creativeSignals.length,
+  )
+  const contentType = contentTypeFromDraftSource(adsInsight, sourceText)
+  const hasSensitiveHealthDetail =
+    contentType === 'medical_claim' || contentType === 'sensitive_before_after' || containsSensitiveHealthDetail(sourceText)
+
+  return {
+    adsAiConfidence: confidence ?? (adsInsight ? unknownAdsConfidence : 0),
+    approvalState: adsInsight ? (approvalRequired ? 'required' : 'cleared') : 'unknown',
+    assetState: assetStateFromDraftSource(adsInsight, approvalRequired),
+    contentType,
+    hasExplicitAdsConfidence: confidence !== null,
+    hasPii: containsPii(sourceText),
+    hasSensitiveHealthDetail,
+  }
+}
+
+function explicitConfidenceFromInsight(adsInsight: SharedAdsInsightForPage | null) {
+  if (!adsInsight) return null
   const confidences = [
     ...adsInsight.findings.map((finding) => finding.confidence),
     ...adsInsight.recommendations.map((recommendation) => recommendation.confidence),
-  ]
-  return confidences.length ? Math.max(...confidences) : 0.86
+  ].filter((confidence) => Number.isFinite(confidence))
+
+  return confidences.length ? Math.max(...confidences) : null
+}
+
+function draftSourceText(adsInsight: SharedAdsInsightForPage | null) {
+  if (!adsInsight) return ''
+
+  return [
+    ...adsInsight.creativeSignals.map((signal) => signal.creative),
+    ...adsInsight.recommendations.flatMap((recommendation) => [
+      recommendation.action,
+      recommendation.expectedImpact,
+      recommendation.guardrail,
+    ]),
+    ...adsInsight.findings.flatMap((finding) => [finding.title, finding.summary, ...finding.evidence]),
+    ...adsInsight.outcomeSignals.nextActions,
+  ].join(' ')
+}
+
+function contentTypeFromDraftSource(
+  adsInsight: SharedAdsInsightForPage | null,
+  sourceText: string,
+): AutoEligibilityContentType {
+  if (!adsInsight) return 'education'
+
+  const normalized = sourceText.toLowerCase()
+
+  if (/\bbefore\s*[-/]?\s*after\b/.test(normalized)) return 'sensitive_before_after'
+  if (/\b(guarantee|guaranteed)\b/.test(normalized)) return 'guarantee'
+  if (/\b(urgent|limited time|today only|last chance)\b/.test(normalized)) return 'urgent_offer'
+  if (/\b(price|cost|discount|promo|promotion|offer)\b/.test(normalized)) return 'price_mention'
+  if (/\b(cure|diagnos|medical claim|treats?)\b/.test(normalized)) return 'medical_claim'
+
+  if (adsInsight.creativeSignals.length || adsInsight.recommendations.length) {
+    return 'winning_ad_angle'
+  }
+
+  return adsInsight.policy.approvalRequired ? 'soft_promotion' : 'education'
+}
+
+function assetStateFromDraftSource(
+  adsInsight: SharedAdsInsightForPage | null,
+  approvalRequired: boolean,
+): AutoEligibilityAssetState {
+  if (!adsInsight) return 'approved'
+  return approvalRequired ? 'missing_optional_metadata' : 'approved'
+}
+
+function containsPii(sourceText: string) {
+  return /[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d\s().-]{7,}\d/i.test(sourceText)
+}
+
+function containsSensitiveHealthDetail(sourceText: string) {
+  return /\b(patient|symptom|diagnosis|condition|treatment plan|medical history)\b/i.test(sourceText)
+}
+
+function adsConfidenceLabel(adsInsight: SharedAdsInsightForPage | null, draftPolicy: DraftPolicyContext) {
+  if (!adsInsight) return 'missing'
+  if (!draftPolicy.hasExplicitAdsConfidence) return 'unknown, below auto threshold'
+  return `${Math.round(draftPolicy.adsAiConfidence * 100)}%`
+}
+
+function adsConfidenceTone(
+  adsInsight: SharedAdsInsightForPage | null,
+  draftPolicy: DraftPolicyContext,
+): 'good' | 'watch' | 'critical' {
+  if (!adsInsight) return 'critical'
+  if (!draftPolicy.hasExplicitAdsConfidence) return 'watch'
+  if (draftPolicy.adsAiConfidence < 0.7) return 'critical'
+  return draftPolicy.adsAiConfidence >= 0.85 ? 'good' : 'watch'
 }
 
 function latestPermissionSync(page: ManagedPage | undefined) {
@@ -280,10 +396,29 @@ function draftCaptionFromInsight(adsInsight: SharedAdsInsightForPage, page?: Man
   return `${pageName}: ${signal}\n\nโพสต์นี้เป็น draft สำหรับตรวจจากทีมก่อนใช้งานจริง โดยอิงจาก Ads AI แบบ read-only และข้อมูลเพจล่าสุด`
 }
 
-function permissionSummary(page: ManagedPage) {
-  const missing = page.permissions.flatMap((report) => report.missing)
-  if (!missing.length) return 'All reported permissions granted'
-  return `${missing.length} missing: ${missing.slice(0, 3).join(', ')}`
+function permissionStateFor(page: ManagedPage | undefined): PermissionStateSummary {
+  if (!page) {
+    return { detail: 'No page permission report loaded.', tone: 'neutral' }
+  }
+
+  if (!page.permissions.length) {
+    return {
+      detail: 'Permission state unknown: no permission report loaded for this page.',
+      tone: 'watch',
+    }
+  }
+
+  const missingStates = page.permissions.flatMap((report) => missingPermissionStates(report))
+  const missing = missingStates.flatMap((state) => state.missing)
+
+  if (!missing.length) {
+    return { detail: 'All required permissions reported granted', tone: 'good' }
+  }
+
+  return {
+    detail: `${missing.length} missing: ${missing.slice(0, 3).join(', ')}`,
+    tone: missingStates.some((state) => state.feature.includes('publishing')) ? 'critical' : 'watch',
+  }
 }
 
 function formatDateTime(value: string) {

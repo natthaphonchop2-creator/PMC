@@ -19,7 +19,9 @@ type PageAnalysisProps = {
 }
 
 export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }: PageAnalysisProps) {
+  const pagesWithUnknownPermissions = pages.filter((page) => page.permissions.length === 0)
   const pagesWithPermissionHints = pages.filter((page) => permissionHints(page).length > 0)
+  const hasPermissionNotices = pagesWithUnknownPermissions.length > 0 || pagesWithPermissionHints.length > 0
 
   return (
     <div className="pa-route-stack">
@@ -80,8 +82,14 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
         </PageAutomationPanel>
 
         <PageAutomationPanel className="pa-span-4" subtitle="Permission-specific degradation instead of one global error." title="Permission hints">
-          {pagesWithPermissionHints.length ? (
+          {hasPermissionNotices ? (
             <div className="pa-page-permissions">
+              {pagesWithUnknownPermissions.map((page) => (
+                <article className="pa-permission-hint" key={`${page.id}-unknown`}>
+                  <strong>{page.name}</strong>
+                  <p>Permission state unknown: no permission reports loaded.</p>
+                </article>
+              ))}
               {pagesWithPermissionHints.map((page) => (
                 <article className="pa-permission-hint" key={page.id}>
                   <strong>{page.name}</strong>
@@ -91,7 +99,7 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
             </div>
           ) : (
             <PageAutomationState
-              detail={pages.length ? 'No missing permissions in current page reports.' : 'No page permission reports loaded.'}
+              detail={pages.length ? 'All required permissions reported granted in current page reports.' : 'No page permission reports loaded.'}
               tone={pages.length ? 'good' : 'neutral'}
               title="Permission state"
             />

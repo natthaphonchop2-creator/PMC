@@ -1,5 +1,6 @@
 import { Inbox, ShieldAlert } from 'lucide-react'
 import { PageAutomationPanel, PageAutomationState } from '../components'
+import { missingPermissionStates } from '../policy'
 import type { AutoMode, ManagedPage, PageMessage, SharedAdsInsightForPage } from '../types'
 
 type Summary = {
@@ -19,8 +20,10 @@ type MessagesProps = {
 
 export function Messages({ adsInsight, autoMode, messages, pages, summary }: MessagesProps) {
   const pageById = new Map(pages.map((page) => [page.id, page]))
+  const unknownPermissionPages = pages.filter((page) => page.permissions.length === 0)
   const missingMessagingPages = pages.filter((page) => hasMissingMessagingPermission(page))
   const selectedMessage = messages[0]
+  const inboxPermissionNotice = inboxPermissionNoticeFor(unknownPermissionPages.length, missingMessagingPages.length)
 
   return (
     <div className="pa-grid">
@@ -37,13 +40,11 @@ export function Messages({ adsInsight, autoMode, messages, pages, summary }: Mes
           </div>
         ) : (
           <div className="pa-empty-state">
-            {missingMessagingPages.length ? <ShieldAlert size={20} /> : <Inbox size={20} />}
+            {inboxPermissionNotice ? <ShieldAlert size={20} /> : <Inbox size={20} />}
             <div>
-              <strong>{missingMessagingPages.length ? 'Messaging permission missing' : 'No message data yet'}</strong>
+              <strong>{inboxPermissionNotice?.title ?? 'No message data yet'}</strong>
               <p>
-                {missingMessagingPages.length
-                  ? `${missingMessagingPages.length} page record${missingMessagingPages.length === 1 ? '' : 's'} need Meta messaging permissions before polling can populate this inbox.`
-                  : 'The polling endpoint returned no messages for connected pages.'}
+                {inboxPermissionNotice?.detail ?? 'The polling endpoint returned no messages for connected pages.'}
               </p>
             </div>
           </div>
@@ -95,8 +96,8 @@ export function Messages({ adsInsight, autoMode, messages, pages, summary }: Mes
           </article>
         ) : (
           <PageAutomationState
-            detail="Select a message after polling returns data. Missing Meta messaging permissions block message content."
-            tone={missingMessagingPages.length ? 'watch' : 'neutral'}
+            detail={conversationEmptyDetail(unknownPermissionPages.length, missingMessagingPages.length)}
+            tone={unknownPermissionPages.length || missingMessagingPages.length ? 'watch' : 'neutral'}
             title="No conversation selected"
           />
         )}
@@ -127,10 +128,41 @@ function MessageItem({ message, pageName }: { message: PageMessage; pageName: st
 }
 
 function hasMissingMessagingPermission(page: ManagedPage) {
-  return page.permissions.some((report) => {
-    if (report.platform === 'facebook') return report.missing.includes('pages_messaging')
-    return report.missing.includes('instagram_manage_messages')
-  })
+  return page.permissions.some((report) =>
+    missingPermissionStates(report).some(
+      (state) => state.feature === 'facebook_messages' || state.feature === 'instagram_messages',
+    ),
+  )
+}
+
+function inboxPermissionNoticeFor(unknownCount: number, missingMessagingCount: number) {
+  if (unknownCount > 0) {
+    return {
+      title: 'Permission state unknown',
+      detail: `${unknownCount} page record${unknownCount === 1 ? '' : 's'} do not include permission reports yet, so inbox polling cannot be confirmed.`,
+    }
+  }
+
+  if (missingMessagingCount > 0) {
+    return {
+      title: 'Messaging permission missing',
+      detail: `${missingMessagingCount} page record${missingMessagingCount === 1 ? '' : 's'} need Meta messaging permissions before polling can populate this inbox.`,
+    }
+  }
+
+  return null
+}
+
+function conversationEmptyDetail(unknownCount: number, missingMessagingCount: number) {
+  if (unknownCount > 0) {
+    return 'Permission state unknown for connected pages. Confirm Meta permission reports before treating this as an empty inbox.'
+  }
+
+  if (missingMessagingCount > 0) {
+    return 'Missing Meta messaging permissions block message content.'
+  }
+
+  return 'Select a message after polling returns data.'
 }
 
 function channelLabel(channel: PageMessage['channel']) {
