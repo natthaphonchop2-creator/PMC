@@ -80,6 +80,33 @@ describe('Page Automation policy', () => {
     })
   })
 
+  it('blocks Facebook feed auto publishing when engagement read permission is missing', () => {
+    expect(
+      classifyAutoEligibility({
+        ...baseInput,
+        permissionReports: [
+          {
+            pageId: 'page-1',
+            platform: 'facebook',
+            granted: ['pages_show_list', 'pages_manage_posts'],
+            missing: [],
+            checkedAt: '2026-05-21T04:00:00.000Z',
+          },
+        ],
+      }),
+    ).toEqual({
+      state: 'blocked',
+      reason: 'permission ไม่ครบสำหรับ Auto ON publishing surface',
+    })
+  })
+
+  it('keeps Facebook video out of v1 auto eligibility', () => {
+    expect(classifyAutoEligibility({ ...baseInput, publishSurface: 'facebook_video' })).toEqual({
+      state: 'needs_approval',
+      reason: 'publishing surface ยังไม่รองรับ Auto ON v1',
+    })
+  })
+
   it('keeps unsupported v1 auto publish surfaces out of auto eligibility', () => {
     const unsupportedSurfaces = ['instagram_feed', 'instagram_reels', 'story_preview'] as const
 

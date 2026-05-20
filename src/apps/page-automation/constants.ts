@@ -49,12 +49,10 @@ export const PLATFORM_PERMISSION_FEATURES: Record<PageAutomationPlatform, PageAu
 
 export const AUTO_SUPPORTED_V1_PUBLISH_SURFACES: ReadonlySet<PostDraftChannel> = new Set([
   'facebook_feed',
-  'facebook_video',
 ])
 
-export const AUTO_PUBLISH_SURFACE_REQUIRED_FEATURES: Partial<Record<PostDraftChannel, PageAutomationFeature>> = {
-  facebook_feed: 'facebook_publishing',
-  facebook_video: 'facebook_publishing',
+export const AUTO_PUBLISH_SURFACE_REQUIRED_PERMISSIONS: Partial<Record<PostDraftChannel, PageAutomationPermission[]>> = {
+  facebook_feed: ['pages_read_engagement', 'pages_manage_posts'],
 }
 
 export const ADS_AI_AUTO_STALE_MS = 6 * 60 * 60 * 1000

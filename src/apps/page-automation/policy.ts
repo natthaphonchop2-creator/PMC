@@ -1,6 +1,6 @@
 import {
   ADS_AI_AUTO_STALE_MS,
-  AUTO_PUBLISH_SURFACE_REQUIRED_FEATURES,
+  AUTO_PUBLISH_SURFACE_REQUIRED_PERMISSIONS,
   AUTO_SUPPORTED_V1_PUBLISH_SURFACES,
   FEATURE_PERMISSION_REQUIREMENTS,
   PAGE_SYNC_AUTO_STALE_MS,
@@ -113,9 +113,9 @@ export function missingPermissionStates(report: PageAutomationPermissionReport):
 }
 
 function missingAutoPublishPermissions(input: AutoEligibilityInput) {
-  const requiredFeature = AUTO_PUBLISH_SURFACE_REQUIRED_FEATURES[input.publishSurface]
+  const requiredPermissions = AUTO_PUBLISH_SURFACE_REQUIRED_PERMISSIONS[input.publishSurface]
 
-  if (!requiredFeature) {
+  if (!requiredPermissions) {
     return []
   }
 
@@ -126,7 +126,7 @@ function missingAutoPublishPermissions(input: AutoEligibilityInput) {
       .flatMap((report) => report.granted),
   )
 
-  return FEATURE_PERMISSION_REQUIREMENTS[requiredFeature].filter((permission) => !granted.has(permission))
+  return requiredPermissions.filter((permission) => !granted.has(permission))
 }
 
 function platformForPublishSurface(publishSurface: PostDraftChannel) {
