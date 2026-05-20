@@ -57,6 +57,16 @@ src/
 
 `src/App.tsx` should become a small top-level route switch rather than the home for both large apps.
 
+Route mapping:
+
+| Route | Component | Purpose |
+| --- | --- | --- |
+| `/page-automation` | `AnalyticsDashboard.tsx` | Default command dashboard for Auto state, Page, Inbox, and Ads-linked insight. |
+| `/page-automation/auto-post` | `AutoPost.tsx` | Content pipeline, calendar, draft composer, guardrails, and publish monitor. |
+| `/page-automation/pages` | `PageAnalysis.tsx` | Cross-page analysis, page health, content performance, and Ads AI context. |
+| `/page-automation/messages` | `Messages.tsx` | Unified inbox for page messages, comments, mentions, reviews, and SLA triage. |
+| `/page-automation/analytics` | `AnalyticsDashboard.tsx` | Full analytics view. Same component as default route, with analytics tab selected. |
+
 ## Visual Direction
 
 Use the approved visual reference generated at:
@@ -89,7 +99,7 @@ Required backend namespace:
 
 The server module should sit beside the existing Meta and OpenAI plugins, for example `server/pageAutomationPlugin.ts`, and should be wired into Vite dev middleware and production server.
 
-Exact Meta permissions must be verified during implementation. Expected permission areas include page list/profile, page insights, publishing/scheduling, comments, messages, Instagram messaging, and ads insights. If a permission is missing, the UI must show a partial-permissions state rather than inventing data.
+Meta permissions are feature gates, not one global pass/fail. The backend must report granted/missing permissions per connected page and platform so the frontend can degrade individual features. See "Appendix A: Meta Permissions Matrix" for the v1 permission contract.
 
 ## Ads AI Insight Bridge
 
@@ -168,6 +178,13 @@ type SharedAdsInsightForPage = {
 
 The bridge resolves page-to-ads scope through explicit config first. Campaign/ad naming can be a fallback only when clearly marked as inferred.
 
+Ads AI staleness policy:
+
+- Ads AI insights older than 6 hours are stale for Auto decisions.
+- Ads AI insights older than 24 hours are stale for dashboard claims.
+- `Auto ON` must not schedule or publish from stale Ads AI insight.
+- If only page data is fresh but Ads AI is stale, the UI can still show Page Analysis in read-only mode and can create drafts marked `Needs Review`.
+
 ## Auto Policy
 
 Use one global Auto toggle in the Page Automation top bar.
@@ -187,6 +204,20 @@ Use one global Auto toggle in the Page Automation top bar.
 
 Auto must never send customer replies directly without human approval in the first implementation. Reply suggestions are draft-only.
 
+Low-risk eligibility matrix for `Auto ON`:
+
+| Dimension | Low-risk, auto-eligible | Needs approval | Blocked until edited |
+| --- | --- | --- | --- |
+| Ads AI confidence | `>= 0.85` | `0.70` to `0.84` | `< 0.70` |
+| Guardrail score | `>= 90` | `75` to `89` | `< 75` |
+| Page mapping | Explicit configured page-to-campaign/ad scope | Inferred from naming | Missing or conflicting |
+| Data freshness | Ads AI `<= 6h`, page sync `<= 1h`, permissions sync `<= 15m` | Any freshness warning | Stale required source |
+| Content type | Educational, FAQ, service reminder, brand awareness, neutral engagement prompt | Soft promotion, reused winning ad angle, price mention | Medical/beauty outcome claim, guarantee, aggressive urgency, sensitive before/after claim |
+| Customer data | No PII or customer-specific health detail | Redacted excerpt used for draft context | Unredacted PII or sensitive health detail |
+| Asset state | Approved asset, correct aspect ratio, page-safe caption | Missing optional asset metadata | Missing required asset or rejected asset |
+
+Only low-risk rows across every dimension are auto-eligible. Any `Needs approval` dimension moves the item to `Needs Approval`. Any `Blocked` dimension prevents scheduling/publishing until fixed.
+
 ## Core Screens
 
 ### Auto Post
@@ -204,6 +235,18 @@ Expected components:
 - Publish monitor with retry/cancel states
 
 Ads AI should influence content angles, winning creative references, fatigued ad warnings, recommended posting windows, and compliance risk.
+
+Platform publishing matrix for v1:
+
+| Surface | v1 support | Auto ON support | Required permissions | Notes |
+| --- | --- | --- | --- | --- |
+| Facebook Page feed text/link/image post | Create draft, schedule, publish, monitor | Yes, low-risk only | `pages_read_engagement`, `pages_manage_posts` | Primary v1 publishing path. |
+| Facebook Page video post | Create draft, publish after asset validation | Needs approval | `pages_read_engagement`, `pages_manage_posts` | Video upload failures must retry safely. |
+| Facebook Page reels/stories | Draft and preview only | No | Not supported for v1 publishing | Not auto-published in v1. |
+| Instagram feed image/carousel | Draft and schedule proposal | No by default | `instagram_basic`, `instagram_content_publish`, linked Page permissions | Publishing can be enabled later behind explicit feature flag after permissions pass. |
+| Instagram reels | Draft and schedule proposal | No by default | `instagram_basic`, `instagram_content_publish`, linked Page permissions | Reels requirements vary by media type; v1 keeps this approval-only. |
+| Instagram stories | Draft and preview only | No | Not supported for v1 publishing | Not auto-published in v1. |
+| Ads creative/ad launch | Draft insight only | No | Ads writes stay in PMC Ads Agent | Page Automation must not create or mutate ads. |
 
 ### Page Analysis
 
@@ -236,6 +279,15 @@ Expected components:
 
 Ads AI should help prioritize messages tied to high-spend campaigns, weak response rates, high-risk offers, negative sentiment spikes, or strong lead intent.
 
+Messages sync strategy for v1:
+
+- Use polling, not webhooks, as the v1 decision.
+- Active inbox view polls every 30 seconds.
+- Background page message summary polls every 2 minutes.
+- Page analytics and content performance refresh every 15 minutes.
+- The UI must show last sync time and mark inbox data stale if no successful message poll has completed within 2 minutes while the Messages screen is open.
+- Webhook endpoints may be scaffolded later, but they are not required for v1 behavior. If webhook ingestion is later added, it must verify Meta signatures before accepting events.
+
 ### Analytics Dashboard
 
 Purpose: show joint Ads + Page + Inbox performance.
@@ -250,6 +302,33 @@ Expected components:
 - Outcome alerts and next actions from Ads AI
 
 Dashboard claims must be traceable to Meta data, Ads AI output, or page automation records.
+
+## Persistent Storage
+
+V1 uses a server-side persistent file store because the current repo has no database dependency. Store Page Automation state under:
+
+```txt
+knowledge-base/runtime/page-automation/
+  pages.json
+  post-drafts.jsonl
+  schedules.jsonl
+  publish-events.jsonl
+  message-cache.jsonl
+  audit-log.jsonl
+  page-ads-mapping.json
+```
+
+Storage rules:
+
+- Use append-only JSONL for audit, schedule, publish, and message events.
+- Use atomic write for snapshot files such as `pages.json` and `page-ads-mapping.json`.
+- Keep audit logs indefinitely unless the user adds a retention setting later.
+- Retain message excerpts for 90 days by default.
+- Retain published post and schedule records for 18 months.
+- Never store Meta access tokens in this folder.
+- If the file store is unavailable, Auto must turn OFF and the UI must show `Sync error` or `Storage unavailable`.
+
+Production can later migrate this storage to Postgres or another database without changing the frontend contract.
 
 ## Data And State Rules
 
@@ -270,6 +349,16 @@ Every data-heavy panel needs a visible state:
 - Needs approval
 
 No panel may silently replace missing Meta data with invented values. Sample data is allowed only when explicitly labeled as sample.
+
+Freshness thresholds:
+
+| Data source | Fresh for read-only UI | Fresh for Auto ON |
+| --- | --- | --- |
+| Meta page/profile and permissions | 24 hours | 15 minutes |
+| Meta page insights | 24 hours | 1 hour |
+| Messages/comments | 2 minutes in active Messages view, 15 minutes elsewhere | 2 minutes for inbox-driven prioritization |
+| Ads AI bridge insight | 24 hours | 6 hours |
+| Page-to-ads mapping | 30 days if explicit | 15 minutes if inferred, and inferred mapping is not auto-eligible |
 
 ## Safety And Privacy
 
@@ -295,13 +384,40 @@ Use separate agents/workstreams during implementation:
 
 Each workstream should have an isolated file ownership boundary to avoid merging Page Automation back into the PMC Ads Agent code path.
 
-## Open Implementation Checks
+## Implementation Validation Checks
 
-- Verify exact Meta Graph API and Marketing API permissions for page publishing, scheduled posts, comments, messaging, Instagram messaging, and page insights.
 - Confirm how page IDs map to campaigns/ad sets/ads in the current Meta workspace.
-- Decide where persistent Page Automation state lives beyond local mock data.
-- Define webhook strategy for messages/comments if real-time inbox is required.
-- Confirm whether first implementation can perform Meta publish writes or should start with read + scheduled draft simulation until permissions are verified.
+- Before enabling live Meta publish writes, run a backend permission check against the connected token and page. If the check fails, keep Auto Post in draft/schedule-simulation mode for that surface.
+
+## Appendix A: Meta Permissions Matrix
+
+Permission names are based on Meta's current permissions and product documentation as checked on 2026-05-21. Implementation must verify the current App Review surface again before requesting production access.
+
+| Permission | Required for | Required or optional | Graceful degradation if missing |
+| --- | --- | --- | --- |
+| `pages_show_list` | List managed Pages and choose which Pages Page Automation can connect. | Required | Setup stops at `Partial permissions`; no page selection. |
+| `pages_read_engagement` | Read Page profile, engagement, and support Page posting prerequisites. | Required | Page profile and Page insights panels disabled. |
+| `pages_read_user_content` | Read Page posts and user-generated content for content performance analysis. | Required for content leaderboard | Hide content leaderboard; keep page profile if available. |
+| `pages_manage_posts` | Create, schedule, publish, and manage Facebook Page posts. | Required for Facebook publishing | Auto Post becomes draft-only for Facebook. |
+| `pages_manage_metadata` | Manage Page metadata, support Page messaging setup, and subscribe apps to Page events when webhook support is added. | Required for Page messaging installs; optional for publishing-only installs | Messenger/Webhook setup disabled; publishing-only surfaces can continue if their permissions pass. |
+| `pages_manage_engagement` | Moderate or reply to comments as the Page where supported. | Optional for v1 | Comments become read-only; reply/moderation controls hidden. |
+| `pages_messaging` | Facebook Page Messenger inbox access and reply capability. | Required for Facebook message inbox | Facebook messages hidden; show missing permission state. |
+| `instagram_basic` | Identify linked Instagram professional accounts and read basic profile/media context. | Required for Instagram features | Instagram pages and media hidden. |
+| `instagram_manage_insights` | Read Instagram account and media insights. | Required for Instagram analytics | Instagram analytics disabled; Facebook analytics remains. |
+| `instagram_content_publish` | Publish Instagram media where API supports it. | Optional in v1 | Instagram remains draft/schedule-proposal only. |
+| `instagram_manage_comments` | Read/manage Instagram comments. | Optional in v1 | Instagram comments hidden or read-only depending on granted access. |
+| `instagram_manage_messages` | Read and manage Instagram DMs. | Required for Instagram DM inbox | Instagram DMs hidden; Facebook inbox can remain. |
+| `ads_read` | Read ads account, campaigns, ad sets, ads, and insights for Ads AI bridge. | Required for Ads-linked insight | Page Automation works without Ads context; Ads AI bridge panels show unavailable. |
+| `business_management` | Manage or read Business assets where Business Manager access is needed. | Optional unless required by the connected Business setup | Business-scoped asset mapping disabled; direct Page access can still work if available. |
+| `leads_retrieval` | Read lead forms if later added. | Out of v1 scope | Lead-form widgets hidden. |
+
+## Appendix B: Meta Documentation References
+
+- Meta Permissions Reference: https://developers.facebook.com/docs/permissions/
+- Facebook Pages API posts: https://developers.facebook.com/docs/pages-api/posts/
+- Messenger webhook message events: https://developers.facebook.com/docs/messenger-platform/reference/webhook-events/messages/
+- Instagram content publishing: https://developers.facebook.com/docs/instagram-platform/content-publishing/
+- Meta Marketing API access and ads insights references: https://developers.facebook.com/docs/marketing-api/
 
 ## Approval Gate
 
