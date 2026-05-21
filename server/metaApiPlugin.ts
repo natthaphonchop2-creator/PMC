@@ -519,6 +519,14 @@ export function createMetaApiMiddleware(env: MetaApiPluginEnv) {
   }
 }
 
+export async function readMetaWorkspaceForPageAutomation(env: MetaApiPluginEnv, datePreset: string): Promise<WorkspaceData | null> {
+  const config = await readMetaConfig(env)
+  if (!config) return null
+
+  const result = await fetchMetaWorkspace(config, datePreset)
+  return result.workspace
+}
+
 async function readMetaConfig(env: MetaApiPluginEnv): Promise<MetaConfig | null> {
   const localConfig = await readLocalConfig()
   if (localConfig?.disconnected) return null

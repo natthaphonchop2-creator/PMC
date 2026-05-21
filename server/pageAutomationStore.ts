@@ -8,6 +8,7 @@ export function createPageAutomationStore(root = resolve(process.cwd(), 'knowled
   return {
     root,
     files: {
+      status: resolve(root, 'status.json'),
       pages: resolve(root, 'pages.json'),
       postDrafts: resolve(root, 'post-drafts.jsonl'),
       schedules: resolve(root, 'schedules.jsonl'),
@@ -42,6 +43,20 @@ export async function writeJsonSnapshot(filePath: string, value: unknown) {
 export async function appendJsonlRecord(filePath: string, value: unknown) {
   await mkdir(dirname(filePath), { recursive: true })
   await appendFile(filePath, `${JSON.stringify(value)}\n`, 'utf-8')
+}
+
+export async function readJsonlRecords<T>(filePath: string, fallback: T[] | null = []): Promise<T[] | null> {
+  try {
+    const raw = await readFile(filePath, 'utf-8')
+    return raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as T)
+  } catch (error) {
+    if (isNotFound(error)) return fallback
+    throw error
+  }
 }
 
 function isNotFound(error: unknown) {

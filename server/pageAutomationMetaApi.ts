@@ -120,7 +120,7 @@ export async function fetchPageAutomationPages(
   fetchImpl: typeof fetch = fetch,
 ): Promise<ManagedPageRecord[]> {
   const requestConfig = graphRequestConfig(config)
-  if (!requestConfig) return []
+  if (!requestConfig) throw new Error('Meta API access token is required for Page Automation pages')
 
   const payload = await graphGet<PageAccountsPayload>(requestConfig, `/${requestConfig.graphVersion}/me/accounts`, fetchImpl, {
     fields: FACEBOOK_PAGE_FIELDS,
@@ -147,7 +147,7 @@ export async function fetchPageAutomationPages(
 
 export async function fetchPageInsights(config: PageAutomationMetaConfig, pageId: string, fetchImpl: typeof fetch = fetch) {
   const requestConfig = graphRequestConfig(config)
-  if (!requestConfig) return { reach: 0, engagementRate: 0 }
+  if (!requestConfig) throw new Error('Meta API access token is required for Page Automation page insights')
 
   const payload = await graphGet<PageInsightsPayload>(
     requestConfig,

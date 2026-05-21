@@ -36,10 +36,17 @@ describe('pageAutomationMetaApi', () => {
     vi.clearAllMocks()
   })
 
-  it('returns no pages when no access token is configured', async () => {
+  it('fails closed without fetching pages when no access token is configured', async () => {
     const fetchImpl = vi.fn()
 
-    await expect(fetchPageAutomationPages({}, fetchImpl)).resolves.toEqual([])
+    await expect(fetchPageAutomationPages({}, fetchImpl)).rejects.toThrow('Meta API access token is required')
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('fails closed without fetching page insights when no access token is configured', async () => {
+    const fetchImpl = vi.fn()
+
+    await expect(fetchPageInsights({}, 'page-1', fetchImpl)).rejects.toThrow('Meta API access token is required')
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 

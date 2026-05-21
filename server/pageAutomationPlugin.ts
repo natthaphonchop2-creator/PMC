@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
+import { readMetaWorkspaceForPageAutomation as readMetaWorkspaceForPageAutomationDefault } from './metaApiPlugin.js'
 import { normalizeAdsInsightForPage as normalizeAdsInsightForPageDefault } from './pageAutomationAdsBridge.js'
 import {
   fetchPageAutomationPages as fetchPageAutomationPagesDefault,
@@ -12,10 +13,12 @@ import {
   createPageAutomationStore,
   ensureStore as ensureStoreDefault,
   readJsonSnapshot as readJsonSnapshotDefault,
+  readJsonlRecords as readJsonlRecordsDefault,
   writeJsonSnapshot as writeJsonSnapshotDefault,
   type PageAutomationStore,
 } from './pageAutomationStore.js'
 import type { ManagedPageRecord, PageAutomationStatus } from './pageAutomationTypes.js'
+import type { PageMessage, PostDraft } from '../src/apps/page-automation/types'
 
 const MAX_JSON_BODY_BYTES = 1_000_000
 
@@ -31,7 +34,9 @@ type PageAutomationMiddlewareOptions = {
   readJsonSnapshot?: typeof readJsonSnapshotDefault
   writeJsonSnapshot?: typeof writeJsonSnapshotDefault
   appendJsonlRecord?: typeof appendJsonlRecordDefault
+  readJsonlRecords?: typeof readJsonlRecordsDefault
   normalizeAdsInsightForPage?: typeof normalizeAdsInsightForPageDefault
+  readAdsWorkspace?: typeof readMetaWorkspaceForPageAutomationDefault
 }
 
 type PageAutomationResponse = Pick<ServerResponse, 'statusCode' | 'setHeader' | 'end'>
@@ -66,7 +71,9 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
     readJsonSnapshot: options.readJsonSnapshot ?? readJsonSnapshotDefault,
     writeJsonSnapshot: options.writeJsonSnapshot ?? writeJsonSnapshotDefault,
     appendJsonlRecord: options.appendJsonlRecord ?? appendJsonlRecordDefault,
+    readJsonlRecords: options.readJsonlRecords ?? readJsonlRecordsDefault,
     normalizeAdsInsightForPage: options.normalizeAdsInsightForPage ?? normalizeAdsInsightForPageDefault,
+    readAdsWorkspace: options.readAdsWorkspace ?? readMetaWorkspaceForPageAutomationDefault,
   }
 
   return async function pageAutomationMiddleware(req: IncomingMessage, res: ServerResponse, next: () => void = () => undefined) {
@@ -83,11 +90,37 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
       metaConfig = await deps.readMetaConfig(env)
 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/status') {
+        const savedStatus = await deps
+          .readJsonSnapshot<Pick<PageAutomationStatus, 'autoMode'> | null>(deps.store.files.status, null)
+          .catch(() => null)
         writeJson(res, 200, {
           ok: true,
-          autoMode: 'off',
+          autoMode: normalizeAutoMode(savedStatus?.autoMode),
           storage: 'ready',
           checkedAt: deps.now(),
+        } satisfies PageAutomationStatus)
+        return
+      }
+
+      if (req.method === 'PUT' && requestUrl.pathname === '/api/page-automation/status') {
+        assertJsonContentType(req)
+        const body = await readJsonBody(req)
+        const autoMode = validateAutoModeBody(body)
+        const updatedAt = deps.now()
+        await deps.appendJsonlRecord(deps.store.files.auditLog, {
+          id: `audit-${Date.now()}`,
+          actor: 'user',
+          action: 'intent_update_auto_mode',
+          target: 'global-auto-mode',
+          reason: `operator set Page Automation auto mode ${autoMode}`,
+          createdAt: updatedAt,
+        })
+        await deps.writeJsonSnapshot(deps.store.files.status, { autoMode, updatedAt })
+        writeJson(res, 200, {
+          ok: true,
+          autoMode,
+          storage: 'ready',
+          checkedAt: updatedAt,
         } satisfies PageAutomationStatus)
         return
       }
@@ -95,16 +128,17 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/pages') {
         const livePages = await deps.fetchPages(metaConfig).catch(() => null)
         if (livePages) {
-          await deps.writeJsonSnapshot(deps.store.files.pages, livePages).catch(() => undefined)
+          const enrichedPages = await enrichPagesWithInsights(livePages, metaConfig, deps.fetchPageInsights)
+          await deps.writeJsonSnapshot(deps.store.files.pages, enrichedPages).catch(() => undefined)
           writeJson(res, 200, {
-            pages: livePages,
+            pages: enrichedPages,
             source: 'meta',
           })
           return
         }
 
         const cachedPages = await deps
-          .readJsonSnapshot<ManagedPageRecord[]>(deps.store.files.pages, [])
+          .readJsonSnapshot<ManagedPageRecord[] | null>(deps.store.files.pages, null)
           .catch(() => null)
 
         writeJson(res, 200, {
@@ -127,7 +161,12 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/post-drafts') {
-        writeJson(res, 200, { drafts: [] })
+        const drafts = await deps.readJsonlRecords<PostDraft>(deps.store.files.postDrafts, null).catch(() => null)
+        writeJson(res, 200, {
+          drafts: drafts ?? [],
+          source: drafts ? 'cache' : 'unavailable',
+          checkedAt: deps.now(),
+        })
         return
       }
 
@@ -147,30 +186,43 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
         await deps.appendJsonlRecord(deps.store.files.postDrafts, {
           ...body,
           ...draft,
-          status: 'draft',
+          status: draft.status,
           createdAt,
+          updatedAt: createdAt,
         })
         writeJson(res, 200, { ok: true })
         return
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/messages') {
+        const messages = await deps.readJsonlRecords<PageMessage>(deps.store.files.messageCache, null).catch(() => null)
         writeJson(res, 200, {
-          messages: [],
-          source: 'polling',
+          messages: messages ?? [],
+          source: messages ? 'cache' : 'unavailable',
           checkedAt: deps.now(),
         })
         return
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/ads-insights') {
+        const datePreset = requestUrl.searchParams.get('datePreset') || 'last_7d'
+        const workspace = await deps.readAdsWorkspace(env, datePreset).catch(() => null)
+        if (!workspace) {
+          writeJson(res, 200, {
+            insight: null,
+            source: 'unavailable',
+          })
+          return
+        }
+
         writeJson(res, 200, {
           insight: deps.normalizeAdsInsightForPage({
-            datePreset: requestUrl.searchParams.get('datePreset') || 'last_7d',
+            datePreset,
             pageId: requestUrl.searchParams.get('pageId') || undefined,
             pageName: requestUrl.searchParams.get('pageName') || undefined,
-            workspace: null,
+            workspace,
           }),
+          source: 'ads-workspace',
         })
         return
       }
@@ -240,7 +292,65 @@ function validatePostDraftBody(body: Record<string, unknown>) {
   return {
     id,
     pageId,
+    status: objectString(body, 'status') || 'draft',
   }
+}
+
+function validateAutoModeBody(body: Record<string, unknown>): PageAutomationStatus['autoMode'] {
+  const autoMode = objectString(body, 'autoMode')
+  if (autoMode !== 'on' && autoMode !== 'off') {
+    throw new PageAutomationApiError('Auto mode must be on or off', 400)
+  }
+
+  return autoMode
+}
+
+function normalizeAutoMode(autoMode: unknown): PageAutomationStatus['autoMode'] {
+  return autoMode === 'on' ? 'on' : 'off'
+}
+
+async function enrichPagesWithInsights(
+  pages: ManagedPageRecord[],
+  metaConfig: PageAutomationMetaConfig,
+  fetchPageInsights: typeof fetchPageInsightsDefault,
+) {
+  return Promise.all(
+    pages.map(async (page) => {
+      const insights = await fetchPageInsights(metaConfig, page.id).catch(() => null)
+      const reach = insights?.reach ?? page.reach
+      const engagementRate = insights?.engagementRate ?? page.engagementRate
+
+      return {
+        ...page,
+        reach,
+        engagementRate,
+        healthScore: scorePageHealth({
+          engagementRate,
+          permissionsMissing: page.permissions.reduce((sum, report) => sum + report.missing.length, 0),
+          reach,
+        }),
+      }
+    }),
+  )
+}
+
+function scorePageHealth({
+  engagementRate,
+  permissionsMissing,
+  reach,
+}: {
+  engagementRate: number
+  permissionsMissing: number
+  reach: number
+}) {
+  const reachScore = reach > 0 ? 24 : 0
+  const engagementScore = Math.min(28, Math.round(Math.max(0, engagementRate) * 2))
+  const permissionPenalty = Math.min(36, permissionsMissing * 6)
+  return clamp(Math.round(54 + reachScore + engagementScore - permissionPenalty), 0, 100)
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
 }
 
 function writeJson(res: PageAutomationResponse, status: number, payload: unknown) {

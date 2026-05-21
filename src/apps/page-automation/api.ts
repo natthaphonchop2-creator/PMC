@@ -14,12 +14,19 @@ export type ManagedPagesResponse = {
 
 export type PageMessagesResponse = {
   messages: PageMessage[]
-  source: 'polling'
+  source: 'polling' | 'cache' | 'unavailable'
   checkedAt: string
 }
 
 export type AdsInsightResponse = {
-  insight: SharedAdsInsightForPage
+  insight: SharedAdsInsightForPage | null
+  source: 'ads-workspace' | 'unavailable'
+}
+
+export type PostDraftsResponse = {
+  drafts: PostDraft[]
+  source: 'cache' | 'unavailable'
+  checkedAt: string
 }
 
 export async function pageAutomationApiJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -37,6 +44,14 @@ export function fetchPageAutomationStatus() {
   return pageAutomationApiJson<PageAutomationStatusResponse>('/api/page-automation/status')
 }
 
+export function updatePageAutomationStatus(autoMode: AutoMode) {
+  return pageAutomationApiJson<PageAutomationStatusResponse>('/api/page-automation/status', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ autoMode }),
+  })
+}
+
 export function fetchManagedPages() {
   return pageAutomationApiJson<ManagedPagesResponse>('/api/page-automation/pages')
 }
@@ -48,6 +63,10 @@ export function fetchMessages() {
 export function fetchAdsInsight(pageId: string, pageName: string) {
   const params = new URLSearchParams({ pageId, pageName, datePreset: 'last_7d' })
   return pageAutomationApiJson<AdsInsightResponse>(`/api/page-automation/ads-insights?${params}`)
+}
+
+export function fetchPostDrafts() {
+  return pageAutomationApiJson<PostDraftsResponse>('/api/page-automation/post-drafts')
 }
 
 export function createPostDraft(draft: PostDraft) {

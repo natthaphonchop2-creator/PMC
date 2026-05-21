@@ -10,7 +10,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { fetchAdsInsight, fetchManagedPages, fetchMessages, fetchPageAutomationStatus } from './api'
+import { fetchAdsInsight, fetchManagedPages, fetchMessages, fetchPageAutomationStatus, updatePageAutomationStatus } from './api'
 import { PageAutomationMetric, PageAutomationState } from './components'
 import { PAGE_AUTOMATION_ROUTES } from './constants'
 import { AnalyticsDashboard } from './routes/AnalyticsDashboard'
@@ -41,6 +41,7 @@ const routeIcons: Record<PageAutomationRouteId, typeof BarChart3> = {
 export function PageAutomationApp() {
   const [route, setRoute] = useState<PageAutomationRouteId>(() => routeFromPath(currentPathname()))
   const [autoMode, setAutoMode] = useState<AutoMode>('off')
+  const [autoModeSaving, setAutoModeSaving] = useState(false)
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [dataSource, setDataSource] = useState<DataSource>('loading')
   const [statusCheckedAt, setStatusCheckedAt] = useState('')
@@ -116,6 +117,22 @@ export function PageAutomationApp() {
   const activeRoute = PAGE_AUTOMATION_ROUTES.find((item) => item.id === route) ?? PAGE_AUTOMATION_ROUTES[0]
   const sharedRouteProps = { adsInsight, autoMode, messages, pages, summary }
 
+  async function handleAutoToggle() {
+    const nextMode: AutoMode = autoMode === 'on' ? 'off' : 'on'
+    setAutoModeSaving(true)
+    setError('')
+
+    try {
+      const status = await updatePageAutomationStatus(nextMode)
+      setAutoMode(status.autoMode)
+      setStatusCheckedAt(status.checkedAt)
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'บันทึก Auto mode ไม่สำเร็จ')
+    } finally {
+      setAutoModeSaving(false)
+    }
+  }
+
   return (
     <main className="pa-shell">
       <aside className="pa-dock" aria-label="Page Automation navigation">
@@ -161,12 +178,13 @@ export function PageAutomationApp() {
             <button
               aria-pressed={autoMode === 'on'}
               className={`pa-auto-toggle ${autoMode}`}
-              onClick={() => setAutoMode((current) => (current === 'on' ? 'off' : 'on'))}
+              disabled={autoModeSaving}
+              onClick={() => void handleAutoToggle()}
               type="button"
             >
               <Power size={16} />
               <span>{autoMode === 'on' ? 'Auto ON' : 'Auto OFF'}</span>
-              <small>UI only</small>
+              <small>{autoModeSaving ? 'Saving' : 'Guarded'}</small>
             </button>
           </div>
         </header>

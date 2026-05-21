@@ -1,4 +1,6 @@
 import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { useState } from 'react'
+import { createPostDraft } from '../api'
 import { PageAutomationPanel, PageAutomationState } from '../components'
 import { classifyAutoEligibility, missingPermissionStates } from '../policy'
 import type {
@@ -9,6 +11,8 @@ import type {
   ManagedPage,
   PageMessage,
   PageMappingState,
+  PostDraft,
+  PostDraftStatus,
   PostDraftChannel,
   SharedAdsInsightForPage,
 } from '../types'
@@ -54,6 +58,8 @@ const publishSurface: PostDraftChannel = 'facebook_feed'
 const unknownAdsConfidence = 0.7
 
 export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: AutoPostProps) {
+  const [draftIntentState, setDraftIntentState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [draftIntentMessage, setDraftIntentMessage] = useState('')
   const selectedPage = pages[0]
   const permissionReports = selectedPage?.permissions ?? []
   const pageMapping = pageMappingFor(selectedPage, adsInsight)
@@ -83,6 +89,33 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
     autoMode === 'on' &&
     eligibility.state === 'auto_eligible' &&
     draftPolicy.approvalState === 'cleared'
+  const draftCaption = adsInsight
+    ? draftCaptionFromInsight(adsInsight, selectedPage)
+    : 'รอ Ads AI insight และข้อมูลเพจก่อนสร้าง draft ที่พร้อมตรวจ'
+
+  async function handleCreateDraft(status: Extract<PostDraftStatus, 'draft' | 'needs_review' | 'ready'>) {
+    if (!selectedPage) return
+
+    setDraftIntentState('saving')
+    setDraftIntentMessage('')
+
+    try {
+      await createPostDraft(buildPostDraft({
+        adsInsight,
+        adsAiConfidence,
+        autoEligible: canMarkEligible,
+        caption: draftCaption,
+        guardrailScore,
+        page: selectedPage,
+        status,
+      }))
+      setDraftIntentState('saved')
+      setDraftIntentMessage(status === 'draft' ? 'Draft saved for operator review.' : 'Draft intent sent to approval queue.')
+    } catch (error) {
+      setDraftIntentState('error')
+      setDraftIntentMessage(error instanceof Error ? error.message : 'Draft intent failed')
+    }
+  }
 
   return (
     <div className="pa-grid">
@@ -159,11 +192,7 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
             <textarea
               readOnly
               rows={5}
-              value={
-                adsInsight
-                  ? draftCaptionFromInsight(adsInsight, selectedPage)
-                  : 'รอ Ads AI insight และข้อมูลเพจก่อนสร้าง draft ที่พร้อมตรวจ'
-              }
+              value={draftCaption}
             />
           </label>
           <label className="pa-field">
@@ -177,16 +206,29 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
         </div>
 
         <div className="pa-action-row">
-          <button className="pa-button" disabled={!selectedPage} type="button">
+          <button className="pa-button" disabled={!selectedPage || draftIntentState === 'saving'} onClick={() => void handleCreateDraft('draft')} type="button">
             Save draft
           </button>
-          <button className="pa-button primary" disabled={eligibility.state === 'blocked'} type="button">
+          <button
+            className="pa-button primary"
+            disabled={eligibility.state === 'blocked' || !selectedPage || draftIntentState === 'saving'}
+            onClick={() => void handleCreateDraft('needs_review')}
+            type="button"
+          >
             Send to approval
           </button>
-          <button className="pa-button" disabled={!canMarkEligible} type="button">
+          <button className="pa-button" disabled={!canMarkEligible || draftIntentState === 'saving'} onClick={() => void handleCreateDraft('ready')} type="button">
             Mark eligible
           </button>
         </div>
+
+        {draftIntentMessage ? (
+          <PageAutomationState
+            detail={draftIntentMessage}
+            tone={draftIntentState === 'error' ? 'critical' : 'good'}
+            title={draftIntentState === 'error' ? 'Draft intent failed' : 'Draft intent recorded'}
+          />
+        ) : null}
       </PageAutomationPanel>
 
       <PageAutomationPanel className="pa-span-5" subtitle="Freshness, permission, and source checks for the draft candidate." title="Decision context">
@@ -227,6 +269,45 @@ function GuardrailRow({
       <strong>{value}</strong>
     </div>
   )
+}
+
+function buildPostDraft({
+  adsAiConfidence,
+  adsInsight,
+  autoEligible,
+  caption,
+  guardrailScore,
+  page,
+  status,
+}: {
+  adsAiConfidence: number
+  adsInsight: SharedAdsInsightForPage | null
+  autoEligible: boolean
+  caption: string
+  guardrailScore: number
+  page: ManagedPage
+  status: Extract<PostDraftStatus, 'draft' | 'needs_review' | 'ready'>
+}): PostDraft {
+  const now = new Date().toISOString()
+
+  return {
+    id: `page-auto-${page.id}-${Date.now()}`,
+    pageId: page.id,
+    pageName: page.name,
+    channel: publishSurface,
+    title: adsInsight ? 'Educational post from current Ads + Page signal' : 'Page education draft',
+    objective: adsInsight ? 'Ads-informed page education' : 'Page education',
+    captionTh: caption,
+    cta: 'Inbox for consultation',
+    destination: page.handle,
+    status,
+    autoEligible,
+    guardrailScore,
+    aiConfidence: adsAiConfidence,
+    adsInsightId: adsInsight?.source.taskId,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
 
 function buildPipelineColumns({

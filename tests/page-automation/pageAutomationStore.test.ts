@@ -2,7 +2,13 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appendJsonlRecord, createPageAutomationStore, readJsonSnapshot, writeJsonSnapshot } from '../../server/pageAutomationStore'
+import {
+  appendJsonlRecord,
+  createPageAutomationStore,
+  readJsonSnapshot,
+  readJsonlRecords,
+  writeJsonSnapshot,
+} from '../../server/pageAutomationStore'
 
 let tempRoot = ''
 
@@ -48,5 +54,18 @@ describe('pageAutomationStore', () => {
       { id: 'audit-1', action: 'auto_off' },
       { id: 'audit-2', action: 'auto_on' },
     ])
+  })
+
+  it('reads JSONL records back and returns null when requested for a missing file', async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'page-automation-'))
+    const store = createPageAutomationStore(tempRoot)
+    await appendJsonlRecord(store.files.postDrafts, { id: 'draft-1', status: 'draft' })
+    await appendJsonlRecord(store.files.postDrafts, { id: 'draft-2', status: 'needs_review' })
+
+    await expect(readJsonlRecords(store.files.postDrafts)).resolves.toEqual([
+      { id: 'draft-1', status: 'draft' },
+      { id: 'draft-2', status: 'needs_review' },
+    ])
+    await expect(readJsonlRecords(`${tempRoot}/missing.jsonl`, null)).resolves.toBeNull()
   })
 })

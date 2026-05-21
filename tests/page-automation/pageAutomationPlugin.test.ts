@@ -2,6 +2,7 @@ import { Readable } from 'node:stream'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPageAutomationMiddleware } from '../../server/pageAutomationPlugin'
 import type { ManagedPageRecord, SharedAdsInsightForPageRecord } from '../../server/pageAutomationTypes'
+import type { WorkspaceData } from '../../src/types'
 
 const FIXED_NOW = '2026-05-21T04:00:00.000Z'
 
@@ -43,6 +44,65 @@ describe('pageAutomationPlugin middleware', () => {
     })
   })
 
+  it('returns persisted Auto mode status when configured', async () => {
+    const deps = baseDeps({
+      readJsonSnapshot: vi.fn(async () => ({ autoMode: 'on' })),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/status'), res)
+
+    expect(deps.readJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/status.json', null)
+    expect(JSON.parse(res.body)).toEqual({
+      ok: true,
+      autoMode: 'on',
+      storage: 'ready',
+      checkedAt: FIXED_NOW,
+    })
+  })
+
+  it('persists Auto mode changes with an audit intent', async () => {
+    const deps = baseDeps()
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('PUT', '/api/page-automation/status', { autoMode: 'on' }), res)
+
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith(
+      '/tmp/page-automation/audit-log.jsonl',
+      expect.objectContaining({
+        actor: 'user',
+        action: 'intent_update_auto_mode',
+        target: 'global-auto-mode',
+        reason: 'operator set Page Automation auto mode on',
+        createdAt: FIXED_NOW,
+      }),
+    )
+    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/status.json', {
+      autoMode: 'on',
+      updatedAt: FIXED_NOW,
+    })
+    expect(JSON.parse(res.body)).toEqual({
+      ok: true,
+      autoMode: 'on',
+      storage: 'ready',
+      checkedAt: FIXED_NOW,
+    })
+  })
+
+  it('rejects invalid Auto mode values', async () => {
+    const deps = baseDeps()
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('PUT', '/api/page-automation/status', { autoMode: 'autoPilot' }), res)
+
+    expect(res.statusCode).toBe(400)
+    expect(deps.writeJsonSnapshot).not.toHaveBeenCalled()
+    expect(JSON.parse(res.body)).toEqual({ error: 'Auto mode must be on or off' })
+  })
+
   it('returns cached pages when Meta fetch fails', async () => {
     const cachedPages = [managedPage({ id: 'cached-page', name: 'Cached Clinic' })]
     const deps = baseDeps({
@@ -56,7 +116,7 @@ describe('pageAutomationPlugin middleware', () => {
 
     await middleware(mockRequest('GET', '/api/page-automation/pages'), res)
 
-    expect(deps.readJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/pages.json', [])
+    expect(deps.readJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/pages.json', null)
     expect(deps.writeJsonSnapshot).not.toHaveBeenCalled()
     expect(JSON.parse(res.body)).toEqual({
       pages: cachedPages,
@@ -89,6 +149,7 @@ describe('pageAutomationPlugin middleware', () => {
     const livePages = [managedPage({ id: 'live-page', name: 'Live Clinic' })]
     const deps = baseDeps({
       fetchPages: vi.fn(async () => livePages),
+      fetchPageInsights: vi.fn(async () => ({ reach: 2500, engagementRate: 8 })),
     })
     const res = mockResponse()
     const middleware = createPageAutomationMiddleware({}, deps)
@@ -96,9 +157,13 @@ describe('pageAutomationPlugin middleware', () => {
     await middleware(mockRequest('GET', '/api/page-automation/pages'), res)
 
     expect(deps.readJsonSnapshot).not.toHaveBeenCalled()
-    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/pages.json', livePages)
+    expect(deps.fetchPageInsights).toHaveBeenCalledWith({ accessToken: 'meta-token', graphVersion: 'v88.0' }, 'live-page')
+    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith(
+      '/tmp/page-automation/pages.json',
+      [expect.objectContaining({ engagementRate: 8, healthScore: 94, id: 'live-page', reach: 2500 })],
+    )
     expect(JSON.parse(res.body)).toEqual({
-      pages: livePages,
+      pages: [expect.objectContaining({ engagementRate: 8, healthScore: 94, id: 'live-page', reach: 2500 })],
       source: 'meta',
     })
   })
@@ -116,10 +181,13 @@ describe('pageAutomationPlugin middleware', () => {
 
     await middleware(mockRequest('GET', '/api/page-automation/pages'), res)
 
-    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/pages.json', livePages)
+    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith(
+      '/tmp/page-automation/pages.json',
+      [expect.objectContaining({ id: 'live-page' })],
+    )
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body)).toEqual({
-      pages: livePages,
+      pages: [expect.objectContaining({ id: 'live-page' })],
       source: 'meta',
     })
   })
@@ -239,11 +307,72 @@ describe('pageAutomationPlugin middleware', () => {
         id: 'draft-1',
         pageId: 'page-1',
         caption: 'New service reminder',
-        status: 'draft',
+        status: 'ready',
         createdAt: FIXED_NOW,
+        updatedAt: FIXED_NOW,
       }),
     )
     expect(JSON.parse(res.body)).toEqual({ ok: true })
+  })
+
+  it('reads persisted post drafts back from JSONL storage', async () => {
+    const drafts = [
+      {
+        id: 'draft-1',
+        pageId: 'page-1',
+        captionTh: 'Draft copy',
+        status: 'draft',
+      },
+    ]
+    const deps = baseDeps({
+      readJsonlRecords: vi.fn(async () => drafts),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/post-drafts'), res)
+
+    expect(deps.readJsonlRecords).toHaveBeenCalledWith('/tmp/page-automation/post-drafts.jsonl', null)
+    expect(JSON.parse(res.body)).toEqual({
+      drafts,
+      source: 'cache',
+      checkedAt: FIXED_NOW,
+    })
+  })
+
+  it('reads message cache instead of inventing polling results', async () => {
+    const messages = [
+      {
+        conversationId: 'conversation-1',
+        messageId: 'message-1',
+        pageId: 'page-1',
+        channel: 'facebook_message',
+        customerDisplayName: 'Customer',
+        textExcerpt: 'Hello',
+        receivedAt: FIXED_NOW,
+        unread: true,
+        priority: 'high',
+        status: 'new',
+        sentiment: 'neutral',
+        intent: 'general',
+        slaDueAt: FIXED_NOW,
+        privacyFlags: [],
+      },
+    ]
+    const deps = baseDeps({
+      readJsonlRecords: vi.fn(async () => messages),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/messages'), res)
+
+    expect(deps.readJsonlRecords).toHaveBeenCalledWith('/tmp/page-automation/message-cache.jsonl', null)
+    expect(JSON.parse(res.body)).toEqual({
+      messages,
+      source: 'cache',
+      checkedAt: FIXED_NOW,
+    })
   })
 
   it('does not append a post draft when audit intent append fails', async () => {
@@ -275,9 +404,24 @@ describe('pageAutomationPlugin middleware', () => {
     )
   })
 
-  it('returns a normalized read-only Ads insight with a null workspace by default', async () => {
-    const insight = adsInsight()
+  it('returns unavailable Ads insight when the Ads workspace is not configured', async () => {
     const deps = baseDeps({
+      readAdsWorkspace: vi.fn(async () => null),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/ads-insights?pageId=page-1&pageName=Fifth%20Clinic'), res)
+
+    expect(deps.normalizeAdsInsightForPage).not.toHaveBeenCalled()
+    expect(JSON.parse(res.body)).toEqual({ insight: null, source: 'unavailable' })
+  })
+
+  it('normalizes read-only Ads insight from the PMC Ads workspace', async () => {
+    const insight = adsInsight()
+    const workspace = workspaceData()
+    const deps = baseDeps({
+      readAdsWorkspace: vi.fn(async () => workspace),
       normalizeAdsInsightForPage: vi.fn(() => insight),
     })
     const res = mockResponse()
@@ -285,13 +429,14 @@ describe('pageAutomationPlugin middleware', () => {
 
     await middleware(mockRequest('GET', '/api/page-automation/ads-insights?pageId=page-1&pageName=Fifth%20Clinic'), res)
 
+    expect(deps.readAdsWorkspace).toHaveBeenCalledWith({}, 'last_7d')
     expect(deps.normalizeAdsInsightForPage).toHaveBeenCalledWith({
       datePreset: 'last_7d',
       pageId: 'page-1',
       pageName: 'Fifth Clinic',
-      workspace: null,
+      workspace,
     })
-    expect(JSON.parse(res.body)).toEqual({ insight })
+    expect(JSON.parse(res.body)).toEqual({ insight, source: 'ads-workspace' })
   })
 
   it('returns 404 JSON for unknown Page Automation endpoints', async () => {
@@ -336,6 +481,7 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
       root: '/tmp/page-automation',
       files: {
         pages: '/tmp/page-automation/pages.json',
+        status: '/tmp/page-automation/status.json',
         postDrafts: '/tmp/page-automation/post-drafts.jsonl',
         schedules: '/tmp/page-automation/schedules.jsonl',
         publishEvents: '/tmp/page-automation/publish-events.jsonl',
@@ -350,9 +496,11 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
     fetchPages: vi.fn(async () => []),
     fetchPageInsights: vi.fn(async () => ({ reach: 0, engagementRate: 0 })),
     readJsonSnapshot: vi.fn(async (_filePath: string, fallback: unknown) => fallback),
+    readJsonlRecords: vi.fn(async (_filePath: string, fallback: unknown) => fallback),
     writeJsonSnapshot: vi.fn(async () => undefined),
     appendJsonlRecord: vi.fn(async () => undefined),
     normalizeAdsInsightForPage: vi.fn(() => adsInsight()),
+    readAdsWorkspace: vi.fn(async () => workspaceData()),
     ...overrides,
   }
 }
@@ -451,5 +599,28 @@ function adsInsight(): SharedAdsInsightForPageRecord {
       noInventedMetrics: true,
       approvalRequired: true,
     },
+  }
+}
+
+function workspaceData(): WorkspaceData {
+  return {
+    campaigns: [],
+    serviceLines: [],
+    appointmentStages: [],
+    complianceReviews: [],
+    insights: [],
+    insightComponents: [],
+    adSets: [],
+    adInsights: [],
+    actions: [],
+    autoAds: [],
+    tasks: [],
+    memoryItems: [],
+    auditTrail: [],
+    trendData: [],
+    channelPerformance: [],
+    funnelMetrics: [],
+    autoMode: 'suggest',
+    updatedAt: FIXED_NOW,
   }
 }
