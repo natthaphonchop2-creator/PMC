@@ -17,6 +17,7 @@ lerna-debug.log*
 .openai-api.local.json
 .mcp.local.json
 knowledge-base/runtime/
+.superpowers/
 
 node_modules
 dist
