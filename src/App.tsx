@@ -407,7 +407,7 @@ const sectionTooltips: Record<string, string> = {
   'ภาพรวม KPI': 'ดูตัวเลขหลักของบัญชี เช่น ค่าโฆษณา รายได้ ROAS CPA Lead และ Booking',
   'Funnel คลินิก': 'ดูว่าลูกค้าหลุดตรงขั้นตอนไหน ตั้งแต่เห็นโฆษณาจนถึงเคสชำระเงิน',
   'แนวโน้มผลงาน': 'ดูกราฟรายวันเพื่อเทียบค่าโฆษณากับรายได้',
-  'ผลงานแคมเปญ': 'ตารางสำหรับเลือกแคมเปญและดูสถานะ CPA ROAS frequency และสัญญาณ AI',
+  'กราฟข้อมูลแคมเปญ': 'กราฟเปรียบเทียบค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแต่ละแคมเปญ',
   'คำแนะนำและ Approval': 'รวมรายการที่ระบบหรือ AI แนะนำให้ตรวจ ก่อนอนุมัติหรือปฏิเสธ',
   'Audit Trail ล่าสุด': 'บันทึกเหตุการณ์สำคัญ เช่น sync, approval และผลการดำเนินการ',
   'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
@@ -694,14 +694,6 @@ function campaignStatusLabel(status: Campaign['status']) {
   if (status === 'Active') return 'ปกติ'
   if (status === 'Watch') return 'เฝ้าดู'
   return 'วิกฤต'
-}
-
-function aiTagLabel(tag: string) {
-  if (tag === 'Scale') return 'ขยายผล'
-  if (tag === 'Pause') return 'ควรพัก'
-  if (tag === 'Watch') return 'เฝ้าดู'
-  if (tag === 'Healthy') return 'แข็งแรง'
-  return tag
 }
 
 function aiStatusLabel(status: CampaignInsight['aiStatus'] | undefined) {
@@ -1065,7 +1057,7 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['ภาพรวม KPI', 'Funnel คลินิก', 'แนวโน้มผลงาน', 'ผลงานแคมเปญ', 'คำแนะนำและ Approval'],
+    analytics: ['ภาพรวม KPI', 'Funnel คลินิก', 'แนวโน้มผลงาน', 'กราฟข้อมูลแคมเปญ', 'คำแนะนำและ Approval'],
     audience: ['Segment กลุ่มเป้าหมาย', 'ปริมาณของ Segment'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
@@ -1138,7 +1130,6 @@ function PmcAdsAgentApp() {
   const activePage = navItems.find((item) => item.id === activeTab) ?? navItems[0]
   const filteredCampaigns = displayCampaigns.filter((campaign) => campaign.name.toLowerCase().includes(searchQuery.toLowerCase()))
   const effectiveSelectedCampaignId = displayCampaigns.some((campaign) => campaign.id === selectedCampaignId) ? selectedCampaignId : displayCampaigns[0]?.id ?? ''
-  const visibleSelectedCampaign = filteredCampaigns.find((campaign) => campaign.id === effectiveSelectedCampaignId) ?? filteredCampaigns[0]
   const summary = useMemo(() => buildSummaryFromWorkspace(workspace, displayCampaigns), [displayCampaigns, workspace])
   const trendPoints = useMemo(() => mapTrendData(workspace?.trendData ?? []), [workspace])
   const funnelMetrics = workspace?.funnelMetrics ?? []
@@ -1607,17 +1598,12 @@ function PmcAdsAgentApp() {
             <>
           {activeTab === 'analytics' && (
             <AnalyticsPage
-              auditTrail={activeAuditTrail}
               campaigns={filteredCampaigns}
               funnelMetrics={funnelMetrics}
               onApprove={approveRecommendation}
               onReject={rejectRecommendation}
-              onSelectCampaign={setSelectedCampaignId}
               recommendations={activeRecommendations}
               recommendationStates={recommendationStates}
-              searchQuery={searchQuery}
-              selectedCampaignId={visibleSelectedCampaign?.id ?? ''}
-              setSearchQuery={setSearchQuery}
               summary={summary}
               trendData={trendPoints}
             />
@@ -1999,32 +1985,22 @@ function Topbar({ activePage, automationMode, datePreset, metaInfo, onDateChange
   )
 }
 
-function AnalyticsPage({
-  auditTrail,
+export function AnalyticsPage({
   campaigns,
   funnelMetrics,
   onApprove,
   onReject,
-  onSelectCampaign,
   recommendations,
   recommendationStates,
-  searchQuery,
-  selectedCampaignId,
-  setSearchQuery,
   summary,
   trendData,
 }: {
-  auditTrail: AuditEvent[]
   campaigns: Campaign[]
   funnelMetrics: MetaFunnelMetric[]
   onApprove: (id: string) => void
   onReject: (id: string) => void
-  onSelectCampaign: (id: string) => void
   recommendations: Recommendation[]
   recommendationStates: Record<string, ActionState>
-  searchQuery: string
-  selectedCampaignId: string
-  setSearchQuery: (value: string) => void
   summary: Summary
   trendData: TrendDatum[]
 }) {
@@ -2073,17 +2049,10 @@ function AnalyticsPage({
           <ClinicFunnel funnelMetrics={funnelMetrics} summary={summary} />
           <PerformanceTrend trendData={trendData} />
         </div>
-        <CampaignTable
-          campaigns={campaigns}
-          onSelectCampaign={onSelectCampaign}
-          searchQuery={searchQuery}
-          selectedCampaignId={selectedCampaignId}
-          setSearchQuery={setSearchQuery}
-        />
+        <CampaignDataChart campaigns={campaigns} />
       </section>
       <aside className="right-rail">
         <AiQueue onApprove={onApprove} onReject={onReject} recommendations={recommendations} recommendationStates={recommendationStates} />
-        <AuditPanel auditTrail={auditTrail} compact />
       </aside>
     </div>
   )
@@ -2213,76 +2182,98 @@ function TrendTooltip({
   )
 }
 
-function CampaignTable({
-  campaigns,
-  onSelectCampaign,
-  searchQuery,
-  selectedCampaignId,
-  setSearchQuery,
-}: {
-  campaigns: Campaign[]
-  onSelectCampaign: (id: string) => void
-  searchQuery: string
-  selectedCampaignId: string
-  setSearchQuery: (value: string) => void
-}) {
+function CampaignDataChart({ campaigns }: { campaigns: Campaign[] }) {
+  const chartData = useMemo(
+    () =>
+      campaigns
+        .map((campaign) => ({
+          cpa: Math.round(campaign.cpa),
+          frequency: Number(campaign.frequency.toFixed(1)),
+          id: campaign.id,
+          name: shortCampaignLabel(campaign.name),
+          revenue: Math.round(campaign.revenue),
+          roas: Number(campaign.roas.toFixed(2)),
+          spend: Math.round(campaign.spend),
+        }))
+        .sort((left, right) => right.spend - left.spend)
+        .slice(0, 6),
+    [campaigns],
+  )
+  const bestRoas = chartData.reduce((best, item) => (item.roas > best.roas ? item : best), chartData[0])
+  const averageFrequency = chartData.length ? chartData.reduce((total, item) => total + item.frequency, 0) / chartData.length : 0
+
   return (
     <SectionCard
       action={
-        <div className="table-tools">
-          <label className="search-box">
-            <Search size={15} />
-            <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="ค้นหาแคมเปญ" />
-          </label>
-          <StatusBadge label="เฉพาะที่เปิดอยู่" tone="neutral" />
+        <div className="campaign-chart-legend">
+          <StatusBadge label="ค่าใช้จ่าย" tone="info" />
+          <StatusBadge label="รายได้" tone="good" />
+          <StatusBadge label="CPA" tone="watch" />
         </div>
       }
-      className="table-panel"
+      className="campaign-chart-panel"
       collapsible
-      headClassName="table-head"
-      title="ผลงานแคมเปญ"
-      subtitle="สถานะ ค่าใช้จ่าย CPA, ROAS, frequency และความเสี่ยงจาก AI"
+      title="กราฟข้อมูลแคมเปญ"
+      subtitle="ค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแคมเปญ"
     >
-      <div className="campaign-table-wrap">
-        <div className="campaign-table" role="table" aria-label="ผลงานแคมเปญ">
-          <div className="campaign-row header" role="row">
-            <span>แคมเปญ / ชุดโฆษณา</span>
-            <span>สถานะ</span>
-            <span>งบประมาณ</span>
-            <span>ใช้จ่าย</span>
-            <span>CPA</span>
-            <span>ROAS</span>
-            <span>Freq.</span>
-            <span>AI</span>
+      {chartData.length > 0 ? (
+        <div className="campaign-chart-stack">
+          <div className="campaign-chart-canvas" role="img" aria-label="กราฟข้อมูลแคมเปญ">
+            <ResponsiveContainer height={300} width="100%">
+              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 14, bottom: 0, left: 0 }}>
+                <CartesianGrid stroke="#e7edf5" horizontal={false} />
+                <XAxis
+                  axisLine={false}
+                  tick={{ fontSize: 11, fill: '#667085' }}
+                  tickFormatter={fmtChartMoney}
+                  tickLine={false}
+                  type="number"
+                />
+                <YAxis
+                  axisLine={false}
+                  dataKey="name"
+                  tick={{ fontSize: 11, fill: '#334155' }}
+                  tickLine={false}
+                  type="category"
+                  width={142}
+                />
+                <Tooltip contentStyle={{ border: '1px solid #e1e7f0', borderRadius: 8 }} formatter={campaignChartTooltipValue} />
+                <Bar dataKey="spend" fill="#9fd0ff" isAnimationActive={false} name="ค่าใช้จ่าย" radius={[0, 6, 6, 0]} />
+                <Bar dataKey="revenue" fill="#30d5a8" isAnimationActive={false} name="รายได้" radius={[0, 6, 6, 0]} />
+                <Bar dataKey="cpa" fill="#f3c766" isAnimationActive={false} name="CPA" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
-          {campaigns.length > 0 ? (
-            campaigns.map((campaign) => (
-              <button
-                className={`campaign-row ${campaign.id === selectedCampaignId ? 'selected' : ''}`}
-                key={campaign.id}
-                type="button"
-                onClick={() => onSelectCampaign(campaign.id)}
-              >
-                <span>
-                  <strong>{campaign.name}</strong>
-                  <small>ซิงก์จาก Meta API · CTR {campaign.ctr}% · Conversion {fmtNum(campaign.conversions)}</small>
-                </span>
-                <StatusBadge label={campaignStatusLabel(campaign.status)} tone={campaign.tone} />
-                <span>{fmtMoney(campaign.budget)}</span>
-                <span>{fmtMoney(campaign.spend)}</span>
-                <span>{fmtMoney(campaign.cpa)}</span>
-                <span>{campaign.roas.toFixed(1)}x</span>
-                <span>{campaign.frequency.toFixed(1)}</span>
-                <StatusBadge label={aiTagLabel(campaign.aiTag)} tone={campaign.tone} />
-              </button>
-            ))
-          ) : (
-            <EmptyState title="ไม่พบแคมเปญ" detail="ล้างคำค้นหาหรือเปลี่ยนช่วงวันที่เพื่อรีวิวการส่งโฆษณา" />
-          )}
+          <div className="campaign-chart-readout" aria-label="สรุปข้อมูลกราฟแคมเปญ">
+            <span>
+              <small>แคมเปญในกราฟ</small>
+              <strong>{fmtNum(chartData.length)}</strong>
+            </span>
+            <span>
+              <small>ROAS สูงสุด</small>
+              <strong>{bestRoas ? `${bestRoas.roas.toFixed(2)}x` : '0.00x'}</strong>
+            </span>
+            <span>
+              <small>Frequency เฉลี่ย</small>
+              <strong>{averageFrequency.toFixed(1)}x</strong>
+            </span>
+          </div>
         </div>
-      </div>
+      ) : (
+        <EmptyState title="ยังไม่มีกราฟข้อมูลแคมเปญ" detail="กราฟจะแสดงหลังซิงก์แคมเปญจาก Meta API ในช่วงวันที่นี้" />
+      )}
     </SectionCard>
   )
+}
+
+function shortCampaignLabel(name: string) {
+  return name.length > 24 ? `${name.slice(0, 24)}...` : name
+}
+
+function campaignChartTooltipValue(value: unknown, name: unknown): [string, string] {
+  const amount = Number(value)
+  const label = name === 'spend' ? 'ค่าใช้จ่าย' : name === 'revenue' ? 'รายได้' : name === 'cpa' ? 'CPA' : name
+  return [Number.isFinite(amount) ? fmtMoney(amount) : String(value ?? ''), String(label)]
 }
 
 function AiQueue({

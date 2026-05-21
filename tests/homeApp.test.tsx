@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App from '../src/App'
+import App, { AnalyticsPage } from '../src/App'
 import { HomeApp } from '../src/apps/home/HomeApp'
 import { PageAutomationApp } from '../src/apps/page-automation/PageAutomationApp'
 
@@ -54,6 +54,83 @@ describe('Home app shell', () => {
       expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
       expect(html).not.toContain('ศูนย์รวม App')
     })
+  })
+
+  it('shows campaign data as a chart on Ads analytics instead of the campaign performance list', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[
+          {
+            aiTag: 'จับตา',
+            budget: 99000,
+            conversions: 96,
+            cpa: 758,
+            ctr: 5.9,
+            deliveryStatus: 'active',
+            frequency: 4.1,
+            id: 'campaign-1',
+            name: 'ตัวรี MSG เติมไขมัน 9900',
+            revenue: 138324,
+            roas: 1.9,
+            spend: 72807,
+            status: 'Watch',
+            tone: 'watch',
+          },
+        ]}
+        funnelMetrics={[]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 96,
+          cac: 0,
+          cpa: 758,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 138324,
+          roas: 1.9,
+          spend: 72807,
+        }}
+        trendData={[]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('กราฟข้อมูลแคมเปญ')
+    expect(text).toContain('ค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแคมเปญ')
+    expect(html).toContain('aria-label="กราฟข้อมูลแคมเปญ"')
+    expect(text).not.toContain('ผลงานแคมเปญ')
+    expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
+  })
+
+  it('does not show the audit trail panel on Ads analytics', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).not.toContain('Audit Trail ล่าสุด')
+    expect(text).not.toContain('การอนุมัติ เหตุการณ์ซิงก์ และผลการดำเนินการ')
+    expect(html).not.toContain('audit-panel')
   })
 
   it('uses generated product logos for Ads and Page Auto entries on Home', () => {
