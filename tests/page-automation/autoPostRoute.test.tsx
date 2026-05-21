@@ -42,7 +42,9 @@ describe('Page Automation route guardrails', () => {
       <AutoPost
         adsInsight={adsInsight}
         autoMode="on"
+        drafts={[]}
         messages={[]}
+        onDraftsChanged={() => undefined}
         pages={[page]}
         summary={{ avgHealth: 96, followers: 1200, pages: 1, unread: 0 }}
       />,
@@ -73,7 +75,9 @@ describe('Page Automation route guardrails', () => {
       <AutoPost
         adsInsight={adsInsight}
         autoMode="on"
+        drafts={[]}
         messages={[]}
+        onDraftsChanged={() => undefined}
         pages={[page]}
         summary={{ avgHealth: 96, followers: 1200, pages: 1, unread: 0 }}
       />,
@@ -91,7 +95,9 @@ describe('Page Automation route guardrails', () => {
       <AutoPost
         adsInsight={null}
         autoMode="on"
+        drafts={[]}
         messages={[]}
+        onDraftsChanged={() => undefined}
         pages={[page]}
         summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
       />,
@@ -99,6 +105,62 @@ describe('Page Automation route guardrails', () => {
 
     expect(html).toContain('Permission state unknown')
     expect(html).not.toContain('All reported permissions granted')
+  })
+
+  it('renders persisted draft pipeline records instead of only suggested cards', () => {
+    const page = makePage()
+
+    const html = renderToStaticMarkup(
+      <AutoPost
+        adsInsight={null}
+        autoMode="off"
+        drafts={[
+          {
+            id: 'draft-ready',
+            pageId: 'page-1',
+            pageName: 'Fifth Clinic',
+            channel: 'facebook_feed',
+            title: 'Persisted ready draft',
+            objective: 'Education',
+            captionTh: 'Caption',
+            cta: 'Inbox',
+            destination: '@fifthclinic',
+            status: 'ready',
+            autoEligible: true,
+            guardrailScore: 91,
+            aiConfidence: 0.9,
+            createdAt: recentIso(3),
+            updatedAt: recentIso(2),
+          },
+          {
+            id: 'draft-scheduled',
+            pageId: 'page-1',
+            pageName: 'Fifth Clinic',
+            channel: 'facebook_feed',
+            title: 'Persisted scheduled draft',
+            objective: 'Education',
+            captionTh: 'Caption',
+            cta: 'Inbox',
+            destination: '@fifthclinic',
+            scheduledAt: recentIso(-60),
+            status: 'scheduled',
+            autoEligible: true,
+            guardrailScore: 91,
+            aiConfidence: 0.9,
+            createdAt: recentIso(3),
+            updatedAt: recentIso(2),
+          },
+        ]}
+        messages={[]}
+        onDraftsChanged={() => undefined}
+        pages={[page]}
+        summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
+      />,
+    )
+
+    expect(html).toContain('Persisted ready draft')
+    expect(html).toContain('Persisted scheduled draft')
+    expect(html).toContain('Schedule ready draft')
   })
 
   it('shows unknown permission state in PageAnalysis permission hints', () => {

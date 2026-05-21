@@ -375,6 +375,98 @@ describe('pageAutomationPlugin middleware', () => {
     })
   })
 
+  it('polls live Meta messages, caches them, and reports meta source', async () => {
+    const messages = [pageMessage({ messageId: 'message-live', textExcerpt: 'Live hello' })]
+    const deps = baseDeps({
+      fetchMessages: vi.fn(async () => messages),
+      readJsonSnapshot: vi.fn(async (filePath: string, fallback: unknown) =>
+        filePath.endsWith('/pages.json') ? [managedPage({ id: 'page-1' })] : fallback,
+      ),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/messages'), res)
+
+    expect(deps.fetchMessages).toHaveBeenCalledWith({ accessToken: 'meta-token', graphVersion: 'v88.0' }, [expect.objectContaining({ id: 'page-1' })])
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith('/tmp/page-automation/message-cache.jsonl', messages[0])
+    expect(JSON.parse(res.body)).toEqual({
+      messages,
+      source: 'meta',
+      checkedAt: FIXED_NOW,
+    })
+  })
+
+  it('falls back to live pages before polling messages when the page cache is empty', async () => {
+    const page = managedPage({ id: 'page-live' })
+    const messages = [pageMessage({ messageId: 'message-live', pageId: 'page-live', textExcerpt: 'Live hello' })]
+    const deps = baseDeps({
+      fetchPages: vi.fn(async () => [page]),
+      fetchMessages: vi.fn(async () => messages),
+      readJsonSnapshot: vi.fn(async (_filePath: string, fallback: unknown) => fallback),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('GET', '/api/page-automation/messages'), res)
+
+    expect(deps.fetchPages).toHaveBeenCalledWith({ accessToken: 'meta-token', graphVersion: 'v88.0' })
+    expect(deps.writeJsonSnapshot).toHaveBeenCalledWith('/tmp/page-automation/pages.json', [page])
+    expect(deps.fetchMessages).toHaveBeenCalledWith({ accessToken: 'meta-token', graphVersion: 'v88.0' }, [page])
+    expect(JSON.parse(res.body)).toEqual({
+      messages,
+      source: 'meta',
+      checkedAt: FIXED_NOW,
+    })
+  })
+
+  it('schedules a ready post draft as an operator intent and reads the scheduled status back', async () => {
+    const draft = postDraft({ id: 'draft-ready', status: 'ready' })
+    const deps = baseDeps({
+      readJsonlRecords: vi.fn(async (filePath: string, fallback: unknown) => {
+        if (filePath.endsWith('/post-drafts.jsonl')) return [draft]
+        if (filePath.endsWith('/schedules.jsonl')) return []
+        if (filePath.endsWith('/publish-events.jsonl')) return []
+        return fallback
+      }),
+    })
+    const scheduleRes = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(
+      mockRequest('POST', '/api/page-automation/post-drafts/draft-ready/schedule', {
+        scheduledAt: '2026-05-21T09:00:00.000Z',
+      }),
+      scheduleRes,
+    )
+
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith(
+      '/tmp/page-automation/audit-log.jsonl',
+      expect.objectContaining({
+        actor: 'user',
+        action: 'intent_schedule_post_draft',
+        target: 'draft-ready',
+      }),
+    )
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith(
+      '/tmp/page-automation/schedules.jsonl',
+      expect.objectContaining({
+        draftId: 'draft-ready',
+        pageId: 'page-1',
+        scheduledAt: '2026-05-21T09:00:00.000Z',
+        status: 'scheduled',
+      }),
+    )
+    expect(JSON.parse(scheduleRes.body)).toEqual({
+      ok: true,
+      draft: expect.objectContaining({
+        id: 'draft-ready',
+        scheduledAt: '2026-05-21T09:00:00.000Z',
+        status: 'scheduled',
+      }),
+    })
+  })
+
   it('does not append a post draft when audit intent append fails', async () => {
     const deps = baseDeps({
       appendJsonlRecord: vi.fn(async (filePath: string) => {
@@ -495,6 +587,9 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
     readMetaConfig: vi.fn(async () => ({ accessToken: 'meta-token', graphVersion: 'v88.0' })),
     fetchPages: vi.fn(async () => []),
     fetchPageInsights: vi.fn(async () => ({ reach: 0, engagementRate: 0 })),
+    fetchMessages: vi.fn(async () => {
+      throw new Error('Meta messages unavailable')
+    }),
     readJsonSnapshot: vi.fn(async (_filePath: string, fallback: unknown) => fallback),
     readJsonlRecords: vi.fn(async (_filePath: string, fallback: unknown) => fallback),
     writeJsonSnapshot: vi.fn(async () => undefined),
@@ -558,6 +653,47 @@ function managedPage(overrides: Partial<ManagedPageRecord> = {}): ManagedPageRec
     healthScore: 88,
     permissions: [],
     lastSyncedAt: FIXED_NOW,
+    ...overrides,
+  }
+}
+
+function pageMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    conversationId: 'conversation-1',
+    messageId: 'message-1',
+    pageId: 'page-1',
+    channel: 'facebook_message',
+    customerDisplayName: 'Customer',
+    textExcerpt: 'Hello',
+    receivedAt: FIXED_NOW,
+    unread: true,
+    priority: 'medium',
+    status: 'new',
+    sentiment: 'neutral',
+    intent: 'general',
+    slaDueAt: FIXED_NOW,
+    privacyFlags: [],
+    ...overrides,
+  }
+}
+
+function postDraft(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'draft-1',
+    pageId: 'page-1',
+    pageName: 'Fifth Clinic',
+    channel: 'facebook_feed',
+    title: 'Draft title',
+    objective: 'Education',
+    captionTh: 'Draft caption',
+    cta: 'Inbox',
+    destination: '@fifthclinic',
+    status: 'draft',
+    autoEligible: false,
+    guardrailScore: 82,
+    aiConfidence: 0.8,
+    createdAt: FIXED_NOW,
+    updatedAt: FIXED_NOW,
     ...overrides,
   }
 }

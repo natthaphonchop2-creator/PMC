@@ -1,6 +1,6 @@
 import { CheckCircle2, CircleAlert } from 'lucide-react'
 import { useState } from 'react'
-import { createPostDraft } from '../api'
+import { createPostDraft, schedulePostDraft } from '../api'
 import { PageAutomationPanel, PageAutomationState } from '../components'
 import { classifyAutoEligibility, missingPermissionStates } from '../policy'
 import type {
@@ -27,13 +27,16 @@ type Summary = {
 type AutoPostProps = {
   adsInsight: SharedAdsInsightForPage | null
   autoMode: AutoMode
+  drafts: PostDraft[]
   messages: PageMessage[]
+  onDraftsChanged: () => Promise<void> | void
   pages: ManagedPage[]
   summary: Summary
 }
 
 type PipelineItem = {
   detail: string
+  id: string
   meta: string
   title: string
   tone: 'good' | 'watch' | 'critical' | 'neutral'
@@ -57,9 +60,11 @@ type PermissionStateSummary = {
 const publishSurface: PostDraftChannel = 'facebook_feed'
 const unknownAdsConfidence = 0.7
 
-export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: AutoPostProps) {
+export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChanged, pages, summary }: AutoPostProps) {
   const [draftIntentState, setDraftIntentState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [draftIntentMessage, setDraftIntentMessage] = useState('')
+  const [scheduleIntentState, setScheduleIntentState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [scheduleIntentMessage, setScheduleIntentMessage] = useState('')
   const selectedPage = pages[0]
   const permissionReports = selectedPage?.permissions ?? []
   const pageMapping = pageMappingFor(selectedPage, adsInsight)
@@ -84,7 +89,8 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
     permissionsSyncedAt: latestPermissionSync(selectedPage),
     publishSurface,
   })
-  const pipelineColumns = buildPipelineColumns({ adsInsight, eligibility, messages, selectedPage })
+  const pipelineColumns = buildPipelineColumns({ adsInsight, drafts, eligibility, messages, selectedPage })
+  const readyDraft = drafts.find((draft) => draft.status === 'ready')
   const canMarkEligible =
     autoMode === 'on' &&
     eligibility.state === 'auto_eligible' &&
@@ -109,11 +115,29 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
         page: selectedPage,
         status,
       }))
+      await onDraftsChanged()
       setDraftIntentState('saved')
       setDraftIntentMessage(status === 'draft' ? 'Draft saved for operator review.' : 'Draft intent sent to approval queue.')
     } catch (error) {
       setDraftIntentState('error')
       setDraftIntentMessage(error instanceof Error ? error.message : 'Draft intent failed')
+    }
+  }
+
+  async function handleScheduleReadyDraft() {
+    if (!readyDraft) return
+
+    setScheduleIntentState('saving')
+    setScheduleIntentMessage('')
+
+    try {
+      const result = await schedulePostDraft(readyDraft.id, defaultScheduleTime())
+      await onDraftsChanged()
+      setScheduleIntentState('saved')
+      setScheduleIntentMessage(`Scheduled ${result.draft.title} for ${formatDateTime(result.draft.scheduledAt ?? '')}.`)
+    } catch (error) {
+      setScheduleIntentState('error')
+      setScheduleIntentMessage(error instanceof Error ? error.message : 'Schedule intent failed')
     }
   }
 
@@ -134,7 +158,7 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
               <div className="pa-pipeline-list">
                 {column.items.length ? (
                   column.items.map((item) => (
-                    <article className={`pa-pipeline-card ${item.tone}`} key={`${column.title}-${item.title}`}>
+                    <article className={`pa-pipeline-card ${item.tone}`} key={`${column.title}-${item.id}`}>
                       <strong>{item.title}</strong>
                       <p>{item.detail}</p>
                       <footer>{item.meta}</footer>
@@ -220,6 +244,9 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
           <button className="pa-button" disabled={!canMarkEligible || draftIntentState === 'saving'} onClick={() => void handleCreateDraft('ready')} type="button">
             Mark eligible
           </button>
+          <button className="pa-button" disabled={!readyDraft || scheduleIntentState === 'saving'} onClick={() => void handleScheduleReadyDraft()} type="button">
+            Schedule ready draft
+          </button>
         </div>
 
         {draftIntentMessage ? (
@@ -227,6 +254,14 @@ export function AutoPost({ adsInsight, autoMode, messages, pages, summary }: Aut
             detail={draftIntentMessage}
             tone={draftIntentState === 'error' ? 'critical' : 'good'}
             title={draftIntentState === 'error' ? 'Draft intent failed' : 'Draft intent recorded'}
+          />
+        ) : null}
+
+        {scheduleIntentMessage ? (
+          <PageAutomationState
+            detail={scheduleIntentMessage}
+            tone={scheduleIntentState === 'error' ? 'critical' : 'good'}
+            title={scheduleIntentState === 'error' ? 'Schedule intent failed' : 'Schedule intent recorded'}
           />
         ) : null}
       </PageAutomationPanel>
@@ -312,42 +347,84 @@ function buildPostDraft({
 
 function buildPipelineColumns({
   adsInsight,
+  drafts,
   eligibility,
   messages,
   selectedPage,
 }: {
   adsInsight: SharedAdsInsightForPage | null
+  drafts: PostDraft[]
   eligibility: AutoEligibilityResult
   messages: PageMessage[]
   selectedPage?: ManagedPage
 }) {
   const baseDraft: PipelineItem = {
     detail: selectedPage ? `${selectedPage.name} education post from page health and Ads signal` : 'Waiting for connected page data',
+    id: 'suggested-service-education',
     meta: adsInsight ? `ROAS ${adsInsight.metrics.roas.toFixed(2)}x` : 'No Ads scope',
     title: 'Service education draft',
     tone: selectedPage ? 'neutral' : 'watch',
   }
   const inboxDraft: PipelineItem = {
     detail: `${messages.filter((message) => message.unread).length} unread inbox items remain human-reply only`,
+    id: 'suggested-inbox-faq',
     meta: 'Reply suggestions are draft-only',
     title: 'Inbox FAQ angle',
     tone: messages.some((message) => message.priority === 'high') ? 'watch' : 'neutral',
   }
   const eligibilityItem: PipelineItem = {
     detail: eligibility.reason,
+    id: 'policy-facebook-feed-candidate',
     meta: eligibility.state.replace('_', ' '),
     title: 'Facebook feed candidate',
     tone: eligibility.state === 'auto_eligible' ? 'good' : eligibility.state === 'needs_approval' ? 'watch' : 'critical',
   }
+  const draftItems = drafts.map(pipelineItemFromDraft)
+  const draftColumnItems = [baseDraft, inboxDraft, ...draftItems.filter((draft) => draft.meta === 'draft')]
+  const readyItems = [
+    ...draftItems.filter((draft) => draft.meta === 'ready'),
+    ...(eligibility.state === 'auto_eligible' ? [eligibilityItem] : []),
+  ]
+  const reviewItems = [
+    ...draftItems.filter((draft) => draft.meta === 'needs review'),
+    ...(eligibility.state === 'needs_approval' ? [eligibilityItem] : []),
+  ]
+  const failedItems = [
+    ...draftItems.filter((draft) => draft.meta === 'failed' || draft.meta === 'blocked'),
+    ...(eligibility.state === 'blocked' ? [eligibilityItem] : []),
+  ]
 
   return [
-    { items: [baseDraft, inboxDraft], title: 'Draft' },
-    { items: eligibility.state === 'auto_eligible' ? [eligibilityItem] : [], title: 'Ready' },
-    { items: eligibility.state === 'needs_approval' ? [eligibilityItem] : [], title: 'Needs Review' },
-    { items: [], title: 'Scheduled' },
-    { items: [], title: 'Posted' },
-    { items: eligibility.state === 'blocked' ? [eligibilityItem] : [], title: 'Failed' },
+    { items: draftColumnItems, title: 'Draft' },
+    { items: readyItems, title: 'Ready' },
+    { items: reviewItems, title: 'Needs Review' },
+    { items: draftItems.filter((draft) => draft.meta === 'scheduled'), title: 'Scheduled' },
+    { items: draftItems.filter((draft) => draft.meta === 'posted'), title: 'Posted' },
+    { items: failedItems, title: 'Failed' },
   ]
+}
+
+function pipelineItemFromDraft(draft: PostDraft): PipelineItem {
+  return {
+    detail: draft.captionTh || draft.objective || `${draft.channel.replaceAll('_', ' ')} content`,
+    id: draft.id,
+    meta: draft.status.replace('_', ' '),
+    title: draft.title,
+    tone: pipelineToneForDraft(draft),
+  }
+}
+
+function pipelineToneForDraft(draft: PostDraft): PipelineItem['tone'] {
+  if (draft.status === 'ready' || draft.status === 'posted') return 'good'
+  if (draft.status === 'needs_review' || draft.status === 'scheduled') return 'watch'
+  if (draft.status === 'failed' || draft.status === 'blocked') return 'critical'
+  return 'neutral'
+}
+
+function defaultScheduleTime() {
+  const scheduledAt = new Date()
+  scheduledAt.setHours(scheduledAt.getHours() + 1, 0, 0, 0)
+  return scheduledAt.toISOString()
 }
 
 function pageMappingFor(page: ManagedPage | undefined, adsInsight: SharedAdsInsightForPage | null): PageMappingState {

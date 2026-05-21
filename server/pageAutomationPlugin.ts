@@ -5,6 +5,7 @@ import { normalizeAdsInsightForPage as normalizeAdsInsightForPageDefault } from 
 import {
   fetchPageAutomationPages as fetchPageAutomationPagesDefault,
   fetchPageInsights as fetchPageInsightsDefault,
+  fetchPageMessages as fetchPageMessagesDefault,
   readPageAutomationMetaConfig as readPageAutomationMetaConfigDefault,
   type PageAutomationMetaConfig,
 } from './pageAutomationMetaApi.js'
@@ -31,6 +32,7 @@ type PageAutomationMiddlewareOptions = {
   readMetaConfig?: typeof readPageAutomationMetaConfigDefault
   fetchPages?: typeof fetchPageAutomationPagesDefault
   fetchPageInsights?: typeof fetchPageInsightsDefault
+  fetchMessages?: typeof fetchPageMessagesDefault
   readJsonSnapshot?: typeof readJsonSnapshotDefault
   writeJsonSnapshot?: typeof writeJsonSnapshotDefault
   appendJsonlRecord?: typeof appendJsonlRecordDefault
@@ -40,6 +42,25 @@ type PageAutomationMiddlewareOptions = {
 }
 
 type PageAutomationResponse = Pick<ServerResponse, 'statusCode' | 'setHeader' | 'end'>
+
+type PostScheduleRecord = {
+  id: string
+  draftId: string
+  pageId: string
+  scheduledAt: string
+  status: 'scheduled' | 'cancelled'
+  mode: 'operator' | 'auto_low_risk'
+  createdAt: string
+}
+
+type PublishEventRecord = {
+  id: string
+  draftId: string
+  status: 'posted' | 'failed'
+  platformPostId?: string
+  publishError?: string
+  createdAt: string
+}
 
 class PageAutomationApiError extends Error {
   status: number
@@ -68,6 +89,7 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
     readMetaConfig: options.readMetaConfig ?? readPageAutomationMetaConfigDefault,
     fetchPages: options.fetchPages ?? fetchPageAutomationPagesDefault,
     fetchPageInsights: options.fetchPageInsights ?? fetchPageInsightsDefault,
+    fetchMessages: options.fetchMessages ?? fetchPageMessagesDefault,
     readJsonSnapshot: options.readJsonSnapshot ?? readJsonSnapshotDefault,
     writeJsonSnapshot: options.writeJsonSnapshot ?? writeJsonSnapshotDefault,
     appendJsonlRecord: options.appendJsonlRecord ?? appendJsonlRecordDefault,
@@ -161,7 +183,7 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/post-drafts') {
-        const drafts = await deps.readJsonlRecords<PostDraft>(deps.store.files.postDrafts, null).catch(() => null)
+        const drafts = await readMaterializedPostDrafts(deps).catch(() => null)
         writeJson(res, 200, {
           drafts: drafts ?? [],
           source: drafts ? 'cache' : 'unavailable',
@@ -194,7 +216,66 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
         return
       }
 
+      const scheduleMatch = requestUrl.pathname.match(/^\/api\/page-automation\/post-drafts\/([^/]+)\/schedule$/)
+      if (req.method === 'POST' && scheduleMatch) {
+        assertJsonContentType(req)
+        const draftId = decodeURIComponent(scheduleMatch[1] ?? '')
+        const body = await readJsonBody(req)
+        const scheduledAt = validateScheduledAtBody(body)
+        const drafts = await readMaterializedPostDrafts(deps)
+        if (!drafts) throw new PageAutomationApiError('Post drafts unavailable', 503)
+        const draft = drafts.find((item) => item.id === draftId)
+        if (!draft) throw new PageAutomationApiError('Post draft not found', 404)
+        if (draft.status !== 'ready') {
+          throw new PageAutomationApiError('Only ready post drafts can be scheduled', 409)
+        }
+
+        const createdAt = deps.now()
+        await deps.appendJsonlRecord(deps.store.files.auditLog, {
+          id: `audit-${Date.now()}`,
+          actor: 'user',
+          action: 'intent_schedule_post_draft',
+          target: draft.id,
+          reason: 'operator scheduled ready Page Automation post draft',
+          createdAt,
+        })
+        await deps.appendJsonlRecord(deps.store.files.schedules, {
+          id: `schedule-${Date.now()}`,
+          draftId: draft.id,
+          pageId: draft.pageId,
+          scheduledAt,
+          status: 'scheduled',
+          mode: 'operator',
+          createdAt,
+        } satisfies PostScheduleRecord)
+
+        writeJson(res, 200, {
+          ok: true,
+          draft: {
+            ...draft,
+            scheduledAt,
+            status: 'scheduled',
+            updatedAt: createdAt,
+          },
+        })
+        return
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/messages') {
+        const messagePages = await resolvePagesForMessages(deps, metaConfig)
+        const liveMessages = await deps.fetchMessages(metaConfig, messagePages).catch(() => null)
+        if (liveMessages) {
+          await Promise.all(
+            liveMessages.map((message) => deps.appendJsonlRecord(deps.store.files.messageCache, message).catch(() => undefined)),
+          )
+          writeJson(res, 200, {
+            messages: liveMessages,
+            source: 'meta',
+            checkedAt: deps.now(),
+          })
+          return
+        }
+
         const messages = await deps.readJsonlRecords<PageMessage>(deps.store.files.messageCache, null).catch(() => null)
         writeJson(res, 200, {
           messages: messages ?? [],
@@ -305,8 +386,128 @@ function validateAutoModeBody(body: Record<string, unknown>): PageAutomationStat
   return autoMode
 }
 
+function validateScheduledAtBody(body: Record<string, unknown>) {
+  const scheduledAt = objectString(body, 'scheduledAt').trim()
+  const time = Date.parse(scheduledAt)
+  if (!scheduledAt || !Number.isFinite(time)) {
+    throw new PageAutomationApiError('Schedule requires a valid scheduledAt ISO timestamp', 400)
+  }
+
+  return new Date(time).toISOString()
+}
+
 function normalizeAutoMode(autoMode: unknown): PageAutomationStatus['autoMode'] {
   return autoMode === 'on' ? 'on' : 'off'
+}
+
+async function resolvePagesForMessages(
+  deps: {
+    fetchPages: typeof fetchPageAutomationPagesDefault
+    readJsonSnapshot: typeof readJsonSnapshotDefault
+    store: PageAutomationStore
+    writeJsonSnapshot: typeof writeJsonSnapshotDefault
+  },
+  metaConfig: PageAutomationMetaConfig,
+) {
+  const cachedPages = await deps
+    .readJsonSnapshot<ManagedPageRecord[] | null>(deps.store.files.pages, null)
+    .catch(() => null)
+  if (cachedPages) return cachedPages
+
+  const livePages = await deps.fetchPages(metaConfig).catch(() => null)
+  if (!livePages) return []
+
+  await deps.writeJsonSnapshot(deps.store.files.pages, livePages).catch(() => undefined)
+  return livePages
+}
+
+async function readMaterializedPostDrafts(deps: {
+  readJsonlRecords: typeof readJsonlRecordsDefault
+  store: PageAutomationStore
+}) {
+  const drafts = await deps.readJsonlRecords<PostDraft>(deps.store.files.postDrafts, null)
+  if (!drafts) return null
+
+  const schedules = (await deps.readJsonlRecords<PostScheduleRecord>(deps.store.files.schedules, []).catch(() => [])) ?? []
+  const publishEvents = (await deps.readJsonlRecords<PublishEventRecord>(deps.store.files.publishEvents, []).catch(() => [])) ?? []
+  return materializePostDrafts(drafts, schedules, publishEvents)
+}
+
+function materializePostDrafts(
+  drafts: PostDraft[],
+  schedules: PostScheduleRecord[],
+  publishEvents: PublishEventRecord[],
+) {
+  const latestScheduleByDraft = new Map<string, PostScheduleRecord>()
+  const latestPublishEventByDraft = new Map<string, PublishEventRecord>()
+
+  for (const schedule of schedules) {
+    if (!isValidScheduleRecord(schedule)) continue
+    const previous = latestScheduleByDraft.get(schedule.draftId)
+    if (!previous || Date.parse(schedule.createdAt) >= Date.parse(previous.createdAt)) {
+      latestScheduleByDraft.set(schedule.draftId, schedule)
+    }
+  }
+
+  for (const event of publishEvents) {
+    if (!isValidPublishEventRecord(event)) continue
+    const previous = latestPublishEventByDraft.get(event.draftId)
+    if (!previous || Date.parse(event.createdAt) >= Date.parse(previous.createdAt)) {
+      latestPublishEventByDraft.set(event.draftId, event)
+    }
+  }
+
+  return drafts.map((draft) => {
+    const schedule = latestScheduleByDraft.get(draft.id)
+    const publishEvent = latestPublishEventByDraft.get(draft.id)
+    const scheduledDraft: PostDraft =
+      schedule?.status === 'scheduled'
+        ? {
+            ...draft,
+            scheduledAt: schedule.scheduledAt,
+            status: 'scheduled',
+            updatedAt: schedule.createdAt,
+          }
+        : draft
+
+    if (!publishEvent) return scheduledDraft
+    if (publishEvent.status === 'posted') {
+      return {
+        ...scheduledDraft,
+        platformPostId: publishEvent.platformPostId,
+        status: 'posted',
+        updatedAt: publishEvent.createdAt,
+      }
+    }
+
+    return {
+      ...scheduledDraft,
+      publishError: publishEvent.publishError,
+      status: 'failed',
+      updatedAt: publishEvent.createdAt,
+    }
+  })
+}
+
+function isValidScheduleRecord(record: PostScheduleRecord) {
+  return Boolean(
+    record &&
+      typeof record.draftId === 'string' &&
+      typeof record.pageId === 'string' &&
+      typeof record.scheduledAt === 'string' &&
+      Number.isFinite(Date.parse(record.scheduledAt)) &&
+      typeof record.createdAt === 'string' &&
+      (record.status === 'scheduled' || record.status === 'cancelled'),
+  )
+}
+
+function isValidPublishEventRecord(record: PublishEventRecord) {
+  return Boolean(
+    record &&
+      typeof record.draftId === 'string' &&
+      typeof record.createdAt === 'string' &&
+      (record.status === 'posted' || record.status === 'failed'),
+  )
 }
 
 async function enrichPagesWithInsights(

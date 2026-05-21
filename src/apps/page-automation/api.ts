@@ -14,7 +14,7 @@ export type ManagedPagesResponse = {
 
 export type PageMessagesResponse = {
   messages: PageMessage[]
-  source: 'polling' | 'cache' | 'unavailable'
+  source: 'meta' | 'polling' | 'cache' | 'unavailable'
   checkedAt: string
 }
 
@@ -74,5 +74,13 @@ export function createPostDraft(draft: PostDraft) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(draft),
+  })
+}
+
+export function schedulePostDraft(draftId: string, scheduledAt: string) {
+  return pageAutomationApiJson<{ ok: true; draft: PostDraft }>(`/api/page-automation/post-drafts/${encodeURIComponent(draftId)}/schedule`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scheduledAt }),
   })
 }

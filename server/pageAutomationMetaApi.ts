@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { ManagedPageRecord, PageAutomationPermission, PageAutomationPermissionReport } from './pageAutomationTypes.js'
+import type { PageMessage, PageMessageIntent, PageMessagePriority, PageMessageSentiment } from '../src/apps/page-automation/types'
 
 const DEFAULT_GRAPH_HOST = 'https://graph.facebook.com'
 const DEFAULT_GRAPH_VERSION = 'v21.0'
@@ -73,6 +74,24 @@ type PageInsightsPayload = {
   data?: Array<{
     name: string
     values?: Array<{ value?: number | string }>
+  }>
+}
+
+type PageConversationsPayload = {
+  data?: Array<{
+    id?: string
+    updated_time?: string
+    unread_count?: number | string
+    messages?: {
+      data?: Array<{
+        id?: string
+        message?: string
+        created_time?: string
+        from?: {
+          name?: string
+        }
+      }>
+    }
   }>
 }
 
@@ -167,6 +186,34 @@ export async function fetchPageInsights(config: PageAutomationMetaConfig, pageId
   }
 }
 
+export async function fetchPageMessages(
+  config: PageAutomationMetaConfig,
+  pages: ManagedPageRecord[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<PageMessage[]> {
+  const requestConfig = graphRequestConfig(config)
+  if (!requestConfig) throw new Error('Meta API access token is required for Page Automation messages')
+
+  const messagePages = pages.filter((page) => page.platform === 'facebook' && hasGrantedPermission(page, 'pages_messaging'))
+  const messages = await Promise.all(
+    messagePages.map(async (page) => {
+      const payload = await graphGet<PageConversationsPayload>(
+        requestConfig,
+        `/${requestConfig.graphVersion}/${encodeURIComponent(page.id)}/conversations`,
+        fetchImpl,
+        {
+          fields: 'id,updated_time,unread_count,messages.limit(1){id,message,created_time,from}',
+          limit: 25,
+        },
+      )
+
+      return (payload.data ?? []).flatMap((conversation) => messageFromConversation(page, conversation))
+    }),
+  )
+
+  return messages.flat()
+}
+
 export function buildPermissionReport(
   pageId: string,
   platform: PageAutomationPermissionReport['platform'],
@@ -182,6 +229,103 @@ export function buildPermissionReport(
     missing: required.filter((permission) => !granted.includes(permission)),
     checkedAt,
   }
+}
+
+function hasGrantedPermission(page: ManagedPageRecord, permission: PageAutomationPermission) {
+  return page.permissions.some((report) => report.granted.includes(permission))
+}
+
+function messageFromConversation(
+  page: ManagedPageRecord,
+  conversation: NonNullable<PageConversationsPayload['data']>[number],
+): PageMessage[] {
+  const latestMessage = conversation.messages?.data?.[0]
+  if (!conversation.id || !latestMessage?.id) return []
+
+  const receivedAt = normalizeIsoDate(latestMessage.created_time || conversation.updated_time)
+  const redacted = redactMessageText(latestMessage.message ?? '')
+  const intent = classifyMessageIntent(redacted.text)
+  const sentiment = classifyMessageSentiment(redacted.text)
+  const unread = numericValue(conversation.unread_count) > 0
+
+  return [
+    {
+      conversationId: conversation.id,
+      messageId: latestMessage.id,
+      pageId: page.id,
+      channel: 'facebook_message',
+      customerDisplayName: latestMessage.from?.name?.trim() || 'Customer',
+      textExcerpt: redacted.text,
+      receivedAt,
+      unread,
+      priority: classifyMessagePriority({ intent, privacyFlags: redacted.flags, sentiment, unread }),
+      status: unread ? 'new' : 'open',
+      sentiment,
+      intent,
+      slaDueAt: addMinutesIso(receivedAt, 30),
+      privacyFlags: redacted.flags,
+    },
+  ]
+}
+
+function redactMessageText(value: string) {
+  const flags: string[] = []
+  let text = value.trim()
+
+  text = text.replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, () => {
+    if (!flags.includes('email')) flags.push('email')
+    return '[email]'
+  })
+  text = text.replace(/\+?\d[\d\s().-]{7,}\d/g, () => {
+    if (!flags.includes('phone')) flags.push('phone')
+    return '[phone]'
+  })
+
+  return {
+    flags,
+    text: text || 'No message text',
+  }
+}
+
+function classifyMessageIntent(text: string): PageMessageIntent {
+  if (/(ราคา|เท่าไร|เท่าไหร่|price|cost|fee)/i.test(text)) return 'price'
+  if (/(จอง|นัด|booking|book|appointment)/i.test(text)) return 'booking'
+  if (/(รีวิว|review)/i.test(text)) return 'review_request'
+  if (/(ร้องเรียน|complaint|เสียใจ|แย่|refund|คืนเงิน)/i.test(text)) return 'complaint'
+  return 'general'
+}
+
+function classifyMessageSentiment(text: string): PageMessageSentiment {
+  if (/(ร้องเรียน|complaint|เสียใจ|แย่|refund|คืนเงิน|angry|bad)/i.test(text)) return 'negative'
+  if (/(ขอบคุณ|thank|ดีมาก|great|love)/i.test(text)) return 'positive'
+  return 'neutral'
+}
+
+function classifyMessagePriority({
+  intent,
+  privacyFlags,
+  sentiment,
+  unread,
+}: {
+  intent: PageMessageIntent
+  privacyFlags: string[]
+  sentiment: PageMessageSentiment
+  unread: boolean
+}): PageMessagePriority {
+  if (sentiment === 'negative' || intent === 'complaint' || (unread && (intent === 'price' || privacyFlags.length > 0))) return 'high'
+  if (unread) return 'medium'
+  return 'low'
+}
+
+function normalizeIsoDate(value: string | undefined) {
+  const time = Date.parse(value || '')
+  return Number.isFinite(time) ? new Date(time).toISOString() : new Date().toISOString()
+}
+
+function addMinutesIso(value: string, minutes: number) {
+  const time = Date.parse(value)
+  const base = Number.isFinite(time) ? time : Date.now()
+  return new Date(base + minutes * 60_000).toISOString()
 }
 
 async function graphGet<T>(

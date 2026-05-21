@@ -10,6 +10,7 @@ import {
   buildPermissionReport,
   fetchPageAutomationPages,
   fetchPageInsights,
+  fetchPageMessages,
   readPageAutomationMetaConfig,
   type PageAutomationMetaConfig,
 } from '../../server/pageAutomationMetaApi'
@@ -29,6 +30,26 @@ function graphTextResponse(body: string, init: ResponseInit = {}) {
     status: 500,
     ...init,
   })
+}
+
+function managedPage(overrides: Partial<ManagedPageRecord> = {}): ManagedPageRecord {
+  return {
+    id: 'page-1',
+    name: 'Fifth Clinic',
+    handle: '@fifthclinic',
+    platform: 'facebook',
+    followers: 1000,
+    followerDelta: 0,
+    reach: 0,
+    engagementRate: 0,
+    unreadCount: 0,
+    responseRate: 0,
+    avgFirstResponseMins: 0,
+    healthScore: 50,
+    permissions: [],
+    lastSyncedAt: '2026-05-21T04:00:00.000Z',
+    ...overrides,
+  }
 }
 
 describe('pageAutomationMetaApi', () => {
@@ -219,6 +240,68 @@ describe('pageAutomationMetaApi', () => {
       reach: 250,
       engagementRate: 20,
     })
+  })
+
+  it('polls Facebook conversations only for pages with messaging permission and redacts message excerpts', async () => {
+    const config: PageAutomationMetaConfig = {
+      accessToken: 'secret-token',
+      graphVersion: 'v77.0',
+    }
+    const fetchImpl = vi.fn(async () =>
+      graphResponse({
+        data: [
+          {
+            id: 'conversation-1',
+            updated_time: '2026-05-21T03:58:00+0000',
+            unread_count: 1,
+            messages: {
+              data: [
+                {
+                  id: 'message-1',
+                  message: 'สนใจครับ โทร 081-234-5678 ราคาเท่าไร',
+                  created_time: '2026-05-21T03:57:00+0000',
+                  from: { name: 'Customer A' },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    )
+
+    const messages = await fetchPageMessages(
+      config,
+      [
+        managedPage({
+          id: 'page-1',
+          permissions: [buildPermissionReport('page-1', 'facebook', ['pages_messaging'])],
+        }),
+        managedPage({
+          id: 'page-2',
+          permissions: [buildPermissionReport('page-2', 'facebook', [])],
+        }),
+      ],
+      fetchImpl,
+    )
+    const requestedUrl = new URL(String(fetchImpl.mock.calls[0]?.[0]))
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(requestedUrl.pathname).toBe('/v77.0/page-1/conversations')
+    expect(requestedUrl.searchParams.get('fields')).toContain('messages.limit(1)')
+    expect(messages).toEqual([
+      expect.objectContaining({
+        conversationId: 'conversation-1',
+        messageId: 'message-1',
+        pageId: 'page-1',
+        channel: 'facebook_message',
+        customerDisplayName: 'Customer A',
+        textExcerpt: 'สนใจครับ โทร [phone] ราคาเท่าไร',
+        unread: true,
+        priority: 'high',
+        intent: 'price',
+        privacyFlags: ['phone'],
+      }),
+    ])
   })
 
   it('throws Graph errors without leaking the access token', async () => {

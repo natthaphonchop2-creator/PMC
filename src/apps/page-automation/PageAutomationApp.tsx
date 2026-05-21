@@ -2,6 +2,7 @@ import {
   BarChart3,
   CalendarClock,
   CheckCircle2,
+  Home,
   Inbox,
   LineChart,
   MessageSquareText,
@@ -10,14 +11,14 @@ import {
   Users,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { fetchAdsInsight, fetchManagedPages, fetchMessages, fetchPageAutomationStatus, updatePageAutomationStatus } from './api'
+import { fetchAdsInsight, fetchManagedPages, fetchMessages, fetchPageAutomationStatus, fetchPostDrafts, updatePageAutomationStatus } from './api'
 import { PageAutomationMetric, PageAutomationState } from './components'
 import { PAGE_AUTOMATION_ROUTES } from './constants'
 import { AnalyticsDashboard } from './routes/AnalyticsDashboard'
 import { AutoPost } from './routes/AutoPost'
 import { Messages } from './routes/Messages'
 import { PageAnalysis } from './routes/PageAnalysis'
-import type { AutoMode, ManagedPage, PageAutomationRouteId, PageMessage, SharedAdsInsightForPage } from './types'
+import type { AutoMode, ManagedPage, PageAutomationRouteId, PageMessage, PostDraft, SharedAdsInsightForPage } from './types'
 import './styles.css'
 
 type LoadState = 'loading' | 'ready' | 'error'
@@ -47,6 +48,7 @@ export function PageAutomationApp() {
   const [statusCheckedAt, setStatusCheckedAt] = useState('')
   const [pages, setPages] = useState<ManagedPage[]>([])
   const [messages, setMessages] = useState<PageMessage[]>([])
+  const [drafts, setDrafts] = useState<PostDraft[]>([])
   const [adsInsight, setAdsInsight] = useState<SharedAdsInsightForPage | null>(null)
   const [error, setError] = useState('')
 
@@ -64,10 +66,11 @@ export function PageAutomationApp() {
       setError('')
 
       try {
-        const [status, pageResult, messageResult] = await Promise.all([
+        const [status, pageResult, messageResult, draftResult] = await Promise.all([
           fetchPageAutomationStatus(),
           fetchManagedPages(),
           fetchMessages(),
+          fetchPostDrafts(),
         ])
 
         if (!active) return
@@ -77,6 +80,7 @@ export function PageAutomationApp() {
         setDataSource(pageResult.source)
         setPages(pageResult.pages)
         setMessages(messageResult.messages)
+        setDrafts(draftResult.drafts)
         setLoadState('ready')
 
         const firstPage = pageResult.pages[0]
@@ -101,6 +105,28 @@ export function PageAutomationApp() {
     }
   }, [])
 
+  useEffect(() => {
+    if (route !== 'messages') return undefined
+
+    let active = true
+    const pollMessages = async () => {
+      try {
+        const result = await fetchMessages()
+        if (active) setMessages(result.messages)
+      } catch {
+        // Keep the last known cache visible; the top-level load path owns user-facing errors.
+      }
+    }
+
+    const timer = window.setInterval(() => void pollMessages(), 30_000)
+    void pollMessages()
+
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [route])
+
   const summary = useMemo<Summary>(() => {
     const followers = pages.reduce((sum, page) => sum + page.followers, 0)
     const unread = messages.filter((message) => message.unread).length
@@ -116,6 +142,11 @@ export function PageAutomationApp() {
 
   const activeRoute = PAGE_AUTOMATION_ROUTES.find((item) => item.id === route) ?? PAGE_AUTOMATION_ROUTES[0]
   const sharedRouteProps = { adsInsight, autoMode, messages, pages, summary }
+
+  async function refreshDrafts() {
+    const draftResult = await fetchPostDrafts()
+    setDrafts(draftResult.drafts)
+  }
 
   async function handleAutoToggle() {
     const nextMode: AutoMode = autoMode === 'on' ? 'off' : 'on'
@@ -136,9 +167,21 @@ export function PageAutomationApp() {
   return (
     <main className="pa-shell">
       <aside className="pa-dock" aria-label="Page Automation navigation">
-        <a className="pa-back-link" href="/" title="กลับ PMC Ads Agent">
-          PMC
-        </a>
+        <div className="pa-brand-stack">
+          <a className="pa-brand-link" href="/page-automation" title="หน้าแรก Page Automation">
+            <span className="pa-brand-logo-wrap">
+              <img src="/pmc-page-auto-logo.png?v=transparent" alt="PMC Page Auto" />
+            </span>
+            <span>
+              <strong>PMC Page Automation</strong>
+              <small>Meta API operations</small>
+            </span>
+          </a>
+          <a className="pa-home-link" href="/" aria-label="กลับหน้า Home">
+            <Home size={15} />
+            <span>กลับ Home</span>
+          </a>
+        </div>
         <nav className="pa-dock-nav">
           {PAGE_AUTOMATION_ROUTES.map((item) => {
             const Icon = routeIcons[item.id]
@@ -226,7 +269,7 @@ export function PageAutomationApp() {
           <PageAutomationState detail="กำลังอ่าน status, pages, messages และ Ads AI insight ของเพจแรก" title="Loading Page Automation" />
         ) : null}
 
-        {route === 'auto-post' ? <AutoPost {...sharedRouteProps} /> : null}
+        {route === 'auto-post' ? <AutoPost {...sharedRouteProps} drafts={drafts} onDraftsChanged={refreshDrafts} /> : null}
         {route === 'pages' ? <PageAnalysis {...sharedRouteProps} /> : null}
         {route === 'messages' ? <Messages {...sharedRouteProps} /> : null}
         {route === 'analytics' ? <AnalyticsDashboard {...sharedRouteProps} view="analytics" /> : null}

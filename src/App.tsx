@@ -7,6 +7,7 @@ import {
   Database,
   FileText,
   HelpCircle,
+  Home,
   ImageIcon,
   Info,
   Layers3,
@@ -1832,15 +1833,21 @@ function Sidebar({ activeTab, accountName, automationMode, dataState, mascotNoti
   return (
     <aside className={`sidebar ${isMenuOpen ? 'menu-open' : ''}`}>
       <div className="sidebar-header">
-        <button className="brand" type="button" onClick={() => selectTab('analytics')} aria-label="เปิดหน้าวิเคราะห์">
-          <span className="brand-logo-wrap">
-            <img src="/promedclinicpmc-logo.png" alt="" />
-          </span>
-          <span>
-            <strong>PMC Ads Agent</strong>
-            <small>ศูนย์ควบคุมสื่อคลินิก</small>
-          </span>
-        </button>
+        <div className="sidebar-brand-stack">
+          <button className="brand" type="button" onClick={() => selectTab('analytics')} aria-label="เปิดหน้าวิเคราะห์">
+            <span className="brand-logo-wrap">
+              <img src="/pmc-ads-logo.png?v=transparent" alt="PMC Ads" />
+            </span>
+            <span>
+              <strong>PMC Ads Agent</strong>
+              <small>ศูนย์ควบคุมสื่อคลินิก</small>
+            </span>
+          </button>
+          <a className="sidebar-home-link" href="/" aria-label="กลับหน้า Home">
+            <Home size={15} />
+            <span>กลับ Home</span>
+          </a>
+        </div>
         <button
           className="mobile-nav-toggle"
           type="button"
@@ -6296,7 +6303,7 @@ function AutomationModeConfirmModal({
   )
 }
 
-function PlanExecutionModal({
+export function PlanExecutionModal({
   draft,
   error,
   isExecuting,
@@ -6315,6 +6322,10 @@ function PlanExecutionModal({
   const isRunning = draft.status === 'running'
   const execution = rec.execution
   const statusLabel = execution?.status ? mutationStatusLabel(execution.status) : execution?.operation ? 'อัปเดต object' : 'ไม่มีคำสั่ง Meta'
+  const modalTitle = execution ? 'ตรวจคำสั่ง Meta ก่อนส่งจริง' : 'ทำตาม checklist ของแผน'
+  const modalIntro = execution
+    ? 'แผนนี้อนุมัติแล้ว ด้านล่างแยกให้ชัดว่าอะไรคือแผนที่ใช้ตัดสินใจ และอะไรคือคำสั่งที่จะส่งผ่าน Meta API เมื่อคุณกดยืนยันเท่านั้น'
+    : 'แผนนี้เป็นงานตรวจสอบ/วิเคราะห์ที่ยังไม่มีคำสั่ง Meta ชัดพอ ระบบจะไม่เดาเอง ให้ทำตาม checklist แล้วบันทึกผลไว้ใน audit trail'
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -6322,27 +6333,33 @@ function PlanExecutionModal({
         <button className="modal-close" type="button" onClick={onClose} aria-label="ปิดขั้นตอนดำเนินการแผน" disabled={isExecuting}>
           <X size={18} />
         </button>
-        <StatusBadge label={isExecuting ? 'กำลังส่งคำสั่งไป Meta' : isRunning ? 'กำลังดำเนินการแผน' : 'แผนพร้อมดำเนินการ'} tone={isExecuting ? 'critical' : isRunning ? 'info' : 'good'} />
-        <h2 id="plan-execution-title">ดำเนินการแผนต่อ</h2>
-        <p>
-          {execution
-            ? 'แผนนี้อนุมัติแล้วและมีคำสั่ง Meta ที่ระบุได้ชัดเจน กดดำเนินการเพื่อส่งคำสั่งจริงผ่าน Meta API แล้วระบบจะซิงก์ผลกลับมา'
-            : 'แผนนี้เป็นงานตรวจสอบ/วิเคราะห์ที่ยังไม่มีคำสั่ง Meta ชัดพอ ระบบจะไม่เดาเอง ให้ทำตาม checklist แล้วบันทึกผลไว้ใน audit trail'}
-        </p>
+        <StatusBadge label={isExecuting ? 'กำลังส่งคำสั่งไป Meta' : execution ? 'พร้อมให้ยืนยันคำสั่ง Meta' : isRunning ? 'กำลังทำ checklist' : 'แผนพร้อมตรวจ'} tone={isExecuting ? 'critical' : execution ? 'watch' : isRunning ? 'info' : 'good'} />
+        <h2 id="plan-execution-title">{modalTitle}</h2>
+        <p>{modalIntro}</p>
         <div className="plan-execution-target">
-          <MetricLine label="แผน" value={rec.action} />
-          <MetricLine label="ความเสี่ยง" value={riskLabel(rec.risk)} />
-          <MetricLine label="Confidence" value={`${rec.confidence}%`} />
+          <section className="plan-execution-section" aria-label="แผนที่อนุมัติ">
+            <h3>แผนที่อนุมัติ</h3>
+            <MetricLine label="แผน" value={rec.action} />
+            <MetricLine label="เหตุผลของแผน" value={rec.evidence} />
+            <MetricLine label="ความเสี่ยง" value={riskLabel(rec.risk)} />
+            <MetricLine label="Confidence" value={`${rec.confidence}%`} />
+            <MetricLine label="เงื่อนไขควบคุม" value={rec.guardrail} />
+          </section>
           {execution ? (
-            <>
-              <MetricLine label="Action ใน Meta" value={execution.label} />
-              <MetricLine label="Meta object" value={`${objectTypeLabel(execution.objectType)} ${execution.objectId}`} />
-              <MetricLine label="คำสั่งที่จะส่ง" value={statusLabel} />
-            </>
+            <section className="plan-execution-section danger" aria-label="คำสั่ง Meta ที่จะส่ง">
+              <h3>คำสั่ง Meta ที่จะส่ง</h3>
+              <MetricLine label="คำสั่ง" value={execution.label} />
+              <MetricLine label="เป้าหมายใน Meta" value={`${objectTypeLabel(execution.objectType)} ${execution.objectId}`} />
+              <MetricLine label="สถานะที่จะตั้ง" value={statusLabel} />
+            </section>
           ) : (
-            <MetricLine label="Action ใน Meta" value="ยังไม่มีคำสั่งที่ปลอดภัยพอให้ execute อัตโนมัติ" />
+            <section className="plan-execution-section" aria-label="สถานะคำสั่ง Meta">
+              <h3>คำสั่ง Meta</h3>
+              <MetricLine label="สถานะ" value="ยังไม่มีคำสั่งที่ปลอดภัยพอให้ execute อัตโนมัติ" />
+            </section>
           )}
         </div>
+        <h3 className="plan-execution-steps-title">ลำดับการตรวจ</h3>
         <ol className="plan-execution-steps">
           {draft.steps.map((step) => (
             <li key={step}>{step}</li>
@@ -6351,11 +6368,11 @@ function PlanExecutionModal({
         {error ? <div className="plan-execution-error" role="alert">{error}</div> : null}
         <div className="modal-actions">
           <button className="outline-button" type="button" onClick={onClose} disabled={isExecuting}>
-            ทำทีหลัง
+            กลับไปดูรายการแผน
           </button>
           {execution ? (
             <button className="danger-button" type="button" onClick={onStart} disabled={isExecuting}>
-              {isExecuting ? 'กำลังส่งคำสั่งไป Meta...' : 'ดำเนินการใน Meta'}
+              {isExecuting ? 'กำลังส่งคำสั่งไป Meta...' : 'ยืนยันส่งคำสั่งไป Meta'}
             </button>
           ) : isRunning ? (
             <button className="primary-button" type="button" onClick={onComplete} disabled={isExecuting}>
@@ -6363,7 +6380,7 @@ function PlanExecutionModal({
             </button>
           ) : (
             <button className="primary-button" type="button" onClick={onStart} disabled={isExecuting}>
-              เริ่มดำเนินการแผน
+              เริ่มทำตาม checklist
             </button>
           )}
         </div>

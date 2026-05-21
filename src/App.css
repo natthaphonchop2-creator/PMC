@@ -81,6 +81,12 @@ input:focus-visible {
   gap: 12px;
 }
 
+.sidebar-brand-stack {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
 .brand {
   display: grid;
   grid-template-columns: 40px 1fr;
@@ -91,6 +97,30 @@ input:focus-visible {
   background: transparent;
   color: var(--ink);
   text-align: left;
+}
+
+.sidebar-home-link {
+  min-height: 34px;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid rgba(117, 103, 216, 0.22);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #4f46a6;
+  font-size: 12px;
+  font-weight: 900;
+  text-decoration: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.sidebar-home-link:hover {
+  transform: translateY(-1px);
+  border-color: rgba(117, 103, 216, 0.44);
+  box-shadow: 0 10px 24px rgba(47, 134, 235, 0.12);
 }
 
 .brand-logo-wrap {
@@ -3967,6 +3997,29 @@ input:focus-visible {
   background: var(--surface-soft);
   padding: 12px;
   margin: 18px 0 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.plan-execution-section {
+  border: 1px solid rgba(47, 134, 235, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 12px;
+}
+
+.plan-execution-section.danger {
+  border-color: rgba(220, 38, 38, 0.2);
+  background: #fff7f7;
+}
+
+.plan-execution-section h3,
+.plan-execution-steps-title {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.3;
+  margin: 0 0 10px;
 }
 
 .plan-execution-steps {
@@ -4197,6 +4250,7 @@ input:focus-visible {
   }
 
   .brand span:not(.brand-logo-wrap),
+  .sidebar-home-link span,
   .nav-item span:last-child,
   .nav-group-title,
   .sidebar-mascot-message,
@@ -4210,6 +4264,16 @@ input:focus-visible {
   .nav-item {
     grid-template-columns: 1fr;
     justify-items: center;
+  }
+
+  .sidebar-brand-stack {
+    justify-items: center;
+  }
+
+  .sidebar-home-link {
+    width: 40px;
+    height: 34px;
+    padding: 0;
   }
 
   .sidebar-card {
@@ -4293,6 +4357,19 @@ input:focus-visible {
 
   .brand span:not(.brand-logo-wrap) {
     display: block;
+  }
+
+  .sidebar-brand-stack {
+    justify-items: start;
+  }
+
+  .sidebar-home-link {
+    width: fit-content;
+    padding: 0 11px;
+  }
+
+  .sidebar-home-link span {
+    display: inline;
   }
 
   .mobile-nav-toggle {
@@ -4480,6 +4557,11 @@ input:focus-visible {
     left: 0;
     right: auto;
     width: min(280px, calc(100vw - 42px));
+  }
+
+  .topbar-actions .toolbar-tooltip:nth-child(even)::after {
+    left: auto;
+    right: 0;
   }
 
   .topbar select,
