@@ -45,6 +45,7 @@ import type {
   WebsiteContext,
   WorkspaceData,
 } from './types'
+import { HomeApp } from './apps/home/HomeApp'
 import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
 import './App.css'
 
@@ -445,7 +446,8 @@ const fmtChartMoney = (value: number | string) => {
 function App() {
   const pathname = typeof window === 'undefined' ? '/' : window.location.pathname
   if (pathname.startsWith('/page-automation')) return <PageAutomationApp />
-  return <PmcAdsAgentApp />
+  if (pathname.startsWith('/ads-agent')) return <PmcAdsAgentApp />
+  return <HomeApp />
 }
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
