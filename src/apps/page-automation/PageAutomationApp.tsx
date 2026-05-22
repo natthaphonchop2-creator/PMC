@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Home,
   Inbox,
-  LineChart,
   MessageSquareText,
   Power,
   Search,
@@ -16,7 +15,7 @@ import { PageAutomationMetric, PageAutomationState } from './components'
 import { PAGE_AUTOMATION_ROUTES } from './constants'
 import { AnalyticsDashboard } from './routes/AnalyticsDashboard'
 import { AutoPost } from './routes/AutoPost'
-import { Messages } from './routes/Messages'
+import { InboxWorkspace } from './routes/InboxWorkspace'
 import { PageAnalysis } from './routes/PageAnalysis'
 import type { AutoMode, ManagedPage, PageAutomationRouteId, PageMessage, PostDraft, SharedAdsInsightForPage } from './types'
 import './styles.css'
@@ -32,12 +31,14 @@ type Summary = {
 }
 
 const routeIcons: Record<PageAutomationRouteId, typeof BarChart3> = {
-  dashboard: BarChart3,
+  dashboard: Inbox,
   'auto-post': CalendarClock,
   pages: Search,
   messages: Inbox,
-  analytics: LineChart,
+  analytics: BarChart3,
 }
+
+const navRoutes = PAGE_AUTOMATION_ROUTES.filter((item) => item.id !== 'messages')
 
 export function PageAutomationApp() {
   const [route, setRoute] = useState<PageAutomationRouteId>(() => routeFromPath(currentPathname()))
@@ -50,6 +51,7 @@ export function PageAutomationApp() {
   const [messages, setMessages] = useState<PageMessage[]>([])
   const [drafts, setDrafts] = useState<PostDraft[]>([])
   const [adsInsight, setAdsInsight] = useState<SharedAdsInsightForPage | null>(null)
+  const [selectedMessageId, setSelectedMessageId] = useState<string | undefined>()
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -106,7 +108,7 @@ export function PageAutomationApp() {
   }, [])
 
   useEffect(() => {
-    if (route !== 'messages') return undefined
+    if (route !== 'dashboard' && route !== 'messages') return undefined
 
     let active = true
     const pollMessages = async () => {
@@ -140,7 +142,6 @@ export function PageAutomationApp() {
     }
   }, [messages, pages])
 
-  const activeRoute = PAGE_AUTOMATION_ROUTES.find((item) => item.id === route) ?? PAGE_AUTOMATION_ROUTES[0]
   const sharedRouteProps = { adsInsight, autoMode, messages, pages, summary }
 
   async function refreshDrafts() {
@@ -166,29 +167,25 @@ export function PageAutomationApp() {
 
   return (
     <main className="pa-shell">
-      <aside className="pa-dock" aria-label="Page Automation navigation">
-        <div className="pa-brand-stack">
-          <a className="pa-brand-link" href="/page-automation" title="หน้าแรก Page Automation">
-            <span className="pa-brand-logo-wrap">
-              <img src="/pmc-page-auto-logo.png?v=transparent" alt="PMC Page Auto" />
-            </span>
-            <span>
-              <strong>PMC Page Automation</strong>
-              <small>Meta API operations</small>
-            </span>
-          </a>
-          <a className="pa-home-link" href="/" aria-label="กลับหน้า Home">
-            <Home size={15} />
-            <span>กลับ Home</span>
-          </a>
-        </div>
-        <nav className="pa-dock-nav">
-          {PAGE_AUTOMATION_ROUTES.map((item) => {
+      <header className="pa-app-topbar">
+        <a className="pa-brand-link" href="/" title="กลับ Home">
+          <span className="pa-brand-logo-wrap">
+            <img src="/pmc-page-auto-logo.png?v=transparent" alt="PMC Page Auto" />
+          </span>
+          <span>
+            <strong>PMC Page Auto</strong>
+            <small>ศูนย์จัดการเพจและข้อความ</small>
+          </span>
+        </a>
+
+        <nav className="pa-app-nav" aria-label="เมนู Page Automation">
+          {navRoutes.map((item) => {
             const Icon = routeIcons[item.id]
+            const active = route === item.id || (item.id === 'dashboard' && route === 'messages')
             return (
               <a
-                aria-current={route === item.id ? 'page' : undefined}
-                className={route === item.id ? 'active' : ''}
+                aria-current={active ? 'page' : undefined}
+                className={active ? 'active' : ''}
                 href={item.href}
                 key={item.id}
                 onClick={(event) => {
@@ -204,60 +201,56 @@ export function PageAutomationApp() {
             )
           })}
         </nav>
-      </aside>
+
+        <div className="pa-topbar-actions">
+          <span className={`pa-source-pill ${dataSource}`} title={statusCheckedAt ? `ตรวจสถานะล่าสุด ${statusCheckedAt}` : sourceLabel(dataSource)}>
+            {sourceLabel(dataSource)}
+          </span>
+          <button
+            aria-pressed={autoMode === 'on'}
+            className={`pa-auto-toggle ${autoMode}`}
+            disabled={autoModeSaving}
+            onClick={() => void handleAutoToggle()}
+            type="button"
+          >
+            <Power size={16} />
+            <span>{autoMode === 'on' ? 'Auto เปิด' : 'Auto ปิด'}</span>
+            <small>{autoModeSaving ? 'กำลังบันทึก' : 'ทีมตรวจได้ก่อนส่ง'}</small>
+          </button>
+          <a className="pa-home-link" href="/" aria-label="กลับหน้า Home">
+            <Home size={15} />
+            <span>กลับ Home</span>
+          </a>
+        </div>
+      </header>
 
       <section className="pa-main">
-        <header className="pa-topbar">
-          <div>
-            <span className="pa-eyebrow">Meta API page operations</span>
-            <h1>{activeRoute.label}</h1>
-            <p>Page Automation แยกจาก PMC Ads Agent สำหรับ Auto Post, วิเคราะห์เพจ, unified inbox และ analytics.</p>
-          </div>
-
-          <div className="pa-topbar-actions">
-            <span className={`pa-source-pill ${dataSource}`} title={statusCheckedAt ? `Status checked ${statusCheckedAt}` : sourceLabel(dataSource)}>
-              {sourceLabel(dataSource)}
-            </span>
-            <button
-              aria-pressed={autoMode === 'on'}
-              className={`pa-auto-toggle ${autoMode}`}
-              disabled={autoModeSaving}
-              onClick={() => void handleAutoToggle()}
-              type="button"
-            >
-              <Power size={16} />
-              <span>{autoMode === 'on' ? 'Auto ON' : 'Auto OFF'}</span>
-              <small>{autoModeSaving ? 'Saving' : 'Guarded'}</small>
-            </button>
-          </div>
-        </header>
-
         {error ? <div className="pa-error" role="alert">{error}</div> : null}
 
         <section className="pa-metric-grid" aria-label="Page Automation summary">
           <PageAutomationMetric
-            detail={dataSource === 'unavailable' ? 'Meta unavailable' : `${summary.pages} connected pages`}
+            detail={dataSource === 'unavailable' ? 'เชื่อมต่อ Meta ไม่สำเร็จ' : `${formatNumber(summary.pages)} เพจที่เชื่อมต่อ`}
             icon={Users}
             label="ผู้ติดตามรวม"
             tone={summary.pages > 0 ? 'good' : 'watch'}
             value={formatNumber(summary.followers)}
           />
           <PageAutomationMetric
-            detail="unread across channels"
+            detail="ข้อความที่ยังไม่ได้อ่าน"
             icon={MessageSquareText}
             label="ข้อความรอตอบ"
             tone={summary.unread > 0 ? 'watch' : 'good'}
             value={formatNumber(summary.unread)}
           />
           <PageAutomationMetric
-            detail="average page health"
+            detail="คะแนนสุขภาพเพจเฉลี่ย"
             icon={CheckCircle2}
             label="สุขภาพเพจ"
             tone={summary.avgHealth >= 80 ? 'good' : summary.avgHealth > 0 ? 'watch' : 'neutral'}
             value={summary.avgHealth ? `${Math.round(summary.avgHealth)}%` : '-'}
           />
           <PageAutomationMetric
-            detail={adsInsight ? 'read-only Ads AI bridge' : 'waiting for first page'}
+            detail={adsInsight ? 'ใช้เป็นบริบทประกอบคำแนะนำ' : 'รอข้อมูลเพจแรก'}
             icon={BarChart3}
             label="Ads ROAS"
             tone={adsInsight ? 'good' : 'neutral'}
@@ -266,14 +259,18 @@ export function PageAutomationApp() {
         </section>
 
         {loadState === 'loading' ? (
-          <PageAutomationState detail="กำลังอ่าน status, pages, messages และ Ads AI insight ของเพจแรก" title="Loading Page Automation" />
+          <PageAutomationState detail="กำลังดึงข้อมูลเพจ ข้อความ และสถานะ Auto ล่าสุด" title="กำลังโหลดข้อมูลเพจ" />
         ) : null}
 
         {route === 'auto-post' ? <AutoPost {...sharedRouteProps} drafts={drafts} onDraftsChanged={refreshDrafts} /> : null}
         {route === 'pages' ? <PageAnalysis {...sharedRouteProps} /> : null}
-        {route === 'messages' ? <Messages {...sharedRouteProps} /> : null}
+        {route === 'messages' ? (
+          <InboxWorkspace {...sharedRouteProps} onSelectedMessageChange={setSelectedMessageId} selectedMessageId={selectedMessageId} />
+        ) : null}
         {route === 'analytics' ? <AnalyticsDashboard {...sharedRouteProps} view="analytics" /> : null}
-        {route === 'dashboard' ? <AnalyticsDashboard {...sharedRouteProps} view="dashboard" /> : null}
+        {route === 'dashboard' ? (
+          <InboxWorkspace {...sharedRouteProps} onSelectedMessageChange={setSelectedMessageId} selectedMessageId={selectedMessageId} />
+        ) : null}
       </section>
     </main>
   )
@@ -292,10 +289,10 @@ function currentPathname() {
 }
 
 function sourceLabel(source: DataSource) {
-  if (source === 'meta') return 'Meta live'
-  if (source === 'cache') return 'Cache'
-  if (source === 'unavailable') return 'Unavailable'
-  return 'Loading'
+  if (source === 'meta') return 'เชื่อมต่อ Meta แล้ว'
+  if (source === 'cache') return 'ใช้ข้อมูลล่าสุดที่บันทึกไว้'
+  if (source === 'unavailable') return 'เชื่อมต่อ Meta ไม่สำเร็จ'
+  return 'กำลังโหลด'
 }
 
 function formatNumber(value: number) {

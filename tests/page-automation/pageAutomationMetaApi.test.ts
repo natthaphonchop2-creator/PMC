@@ -128,7 +128,7 @@ describe('pageAutomationMetaApi', () => {
     expect(new Date(pages[0]?.permissions[0]?.checkedAt ?? '').toString()).not.toBe('Invalid Date')
   })
 
-  it('maps only exact Graph permission strings and does not infer permissions from task names', async () => {
+  it('maps Graph page tasks into Page Automation permissions', async () => {
     const config: PageAutomationMetaConfig = {
       accessToken: 'secret-token',
       graphVersion: 'v88.0',
@@ -140,7 +140,7 @@ describe('pageAutomationMetaApi', () => {
             id: 'page-1',
             name: 'Fifth Clinic',
             perms: ['pages_show_list', 'pages_manage_posts', 'unknown_permission'],
-            tasks: ['CREATE_CONTENT', 'MESSAGING'],
+            tasks: ['ANALYZE', 'CREATE_CONTENT', 'MESSAGING', 'MODERATE', 'MANAGE'],
           },
         ],
       }),
@@ -151,9 +151,18 @@ describe('pageAutomationMetaApi', () => {
     expect(pages[0]?.permissions[0]).toMatchObject({
       pageId: 'page-1',
       platform: 'facebook',
-      granted: ['pages_show_list', 'pages_manage_posts'],
-      missing: ['pages_read_engagement', 'pages_read_user_content', 'pages_messaging'],
+      missing: [],
     })
+    expect(pages[0]?.permissions[0]?.granted).toEqual(
+      expect.arrayContaining([
+        'pages_show_list',
+        'pages_manage_posts',
+        'pages_read_engagement',
+        'pages_read_user_content',
+        'pages_messaging',
+        'pages_manage_metadata',
+      ]),
+    )
   })
 
   it('marks required Facebook permissions missing when absent', () => {
@@ -247,8 +256,18 @@ describe('pageAutomationMetaApi', () => {
       accessToken: 'secret-token',
       graphVersion: 'v77.0',
     }
-    const fetchImpl = vi.fn(async () =>
-      graphResponse({
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/v77.0/me/accounts') {
+        return graphResponse({
+          data: [
+            { id: 'page-1', access_token: 'page-token-1' },
+            { id: 'page-2', access_token: 'page-token-2' },
+          ],
+        })
+      }
+
+      return graphResponse({
         data: [
           {
             id: 'conversation-1',
@@ -260,14 +279,20 @@ describe('pageAutomationMetaApi', () => {
                   id: 'message-1',
                   message: 'สนใจครับ โทร 081-234-5678 ราคาเท่าไร',
                   created_time: '2026-05-21T03:57:00+0000',
-                  from: { name: 'Customer A' },
+                  from: { id: 'customer-1', name: 'Customer A' },
+                },
+                {
+                  id: 'message-0',
+                  message: 'ทีมได้รับข้อมูลแล้วค่ะ',
+                  created_time: '2026-05-21T03:56:00+0000',
+                  from: { id: 'page-1', name: 'Fifth Clinic' },
                 },
               ],
             },
           },
         ],
-      }),
-    )
+      })
+    })
 
     const messages = await fetchPageMessages(
       config,
@@ -283,11 +308,15 @@ describe('pageAutomationMetaApi', () => {
       ],
       fetchImpl,
     )
-    const requestedUrl = new URL(String(fetchImpl.mock.calls[0]?.[0]))
+    const tokenLookupUrl = new URL(String(fetchImpl.mock.calls[0]?.[0]))
+    const requestedUrl = new URL(String(fetchImpl.mock.calls[1]?.[0]))
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(tokenLookupUrl.pathname).toBe('/v77.0/me/accounts')
+    expect(tokenLookupUrl.searchParams.get('fields')).toBe('id,access_token')
     expect(requestedUrl.pathname).toBe('/v77.0/page-1/conversations')
-    expect(requestedUrl.searchParams.get('fields')).toContain('messages.limit(1)')
+    expect(requestedUrl.searchParams.get('access_token')).toBe('page-token-1')
+    expect(requestedUrl.searchParams.get('fields')).toContain('messages.limit(20)')
     expect(messages).toEqual([
       expect.objectContaining({
         conversationId: 'conversation-1',
@@ -300,6 +329,20 @@ describe('pageAutomationMetaApi', () => {
         priority: 'high',
         intent: 'price',
         privacyFlags: ['phone'],
+        history: [
+          expect.objectContaining({
+            messageId: 'message-0',
+            senderName: 'Fifth Clinic',
+            senderRole: 'page',
+            text: 'ทีมได้รับข้อมูลแล้วค่ะ',
+          }),
+          expect.objectContaining({
+            messageId: 'message-1',
+            senderName: 'Customer A',
+            senderRole: 'customer',
+            text: 'สนใจครับ โทร [phone] ราคาเท่าไร',
+          }),
+        ],
       }),
     ])
   })

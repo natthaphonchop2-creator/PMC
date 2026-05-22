@@ -114,6 +114,14 @@ export type PageMessageSentiment = 'positive' | 'neutral' | 'negative'
 
 export type PageMessageIntent = 'booking' | 'price' | 'review_request' | 'complaint' | 'general'
 
+export type PageMessageHistoryItem = {
+  messageId: string
+  senderName: string
+  senderRole: 'customer' | 'page' | 'unknown'
+  text: string
+  createdAt: string
+}
+
 export type PageMessage = {
   conversationId: string
   messageId: string
@@ -130,6 +138,7 @@ export type PageMessage = {
   slaDueAt: string
   privacyFlags: string[]
   aiSummary?: string
+  history?: PageMessageHistoryItem[]
 }
 
 export type SharedAdsInsightForPage = {

@@ -4,6 +4,8 @@ import {
   BrainCircuit,
   ChevronDown,
   ChevronRight,
+  CalendarCheck,
+  CircleDollarSign,
   Database,
   FileText,
   HelpCircle,
@@ -14,6 +16,7 @@ import {
   LineChart,
   Menu,
   Megaphone,
+  Percent,
   Pencil,
   Power,
   RefreshCw,
@@ -24,13 +27,13 @@ import {
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import * as echarts from 'echarts'
+import type { EChartsOption } from 'echarts'
 import gsap from 'gsap'
 import {
-  Area,
   Bar,
   BarChart,
   CartesianGrid,
-  ComposedChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -38,7 +41,6 @@ import {
 } from 'recharts'
 import type {
   AiBrainResponse,
-  AiPhase4Response,
   CampaignInsight,
   FunnelMetric as MetaFunnelMetric,
   RecommendedAction as MetaRecommendedAction,
@@ -160,12 +162,7 @@ type Summary = {
   aov: number
 }
 
-type TrendDatum = { date: string; day: string; spend: number; revenue: number; bookings: number }
-type TrendTooltipItem = {
-  dataKey?: string | number
-  value?: number | string
-  payload?: TrendDatum
-}
+type TrendDatum = { date: string; day: string; spend: number; revenue: number; bookings: number; treatments?: number }
 
 type DataSourceState = 'loading' | 'live' | 'setup-required' | 'empty' | 'error'
 type AutomationMode = 'แนะนำเท่านั้น' | 'ต้องอนุมัติก่อน' | 'พัก automation'
@@ -317,13 +314,6 @@ type AiBrainApiResponse = AiBrainResponse & {
 
 type AiBrainSpecialistReport = NonNullable<AiBrainResponse['specialistOutputs']['campaignAnalyst']>
 
-type Phase4ApiResponse = AiPhase4Response & {
-  ok: boolean
-  source: string
-  checkedAt: string
-  durationMs: number
-}
-
 type BrainDeepDiveState = {
   actionId: string
   target: string
@@ -374,7 +364,7 @@ const navItems: NavItem[] = [
   { id: 'creative', label: 'สตูดิโอครีเอทีฟ', group: 'Creative', icon: Layers3, description: 'ผลงานครีเอทีฟจาก ads และ insight ที่ซิงก์มา' },
   { id: 'audience', label: 'กลุ่มเป้าหมาย', group: 'Creative', icon: Users, description: 'Segment, placement, พื้นที่ และคุณภาพ lead' },
   { id: 'library', label: 'คลังโฆษณา', group: 'Creative', icon: ImageIcon, description: 'Asset, compliance และความพร้อมก่อนเปิดใช้งาน' },
-  { id: 'reports', label: 'รายงาน', group: 'System', icon: FileText, description: 'Audit trail และการเตรียมรายงานสำหรับรีวิว' },
+  { id: 'reports', label: 'รายงาน', group: 'System', icon: FileText, description: 'เตรียมรายงานสรุปผลงานโฆษณาให้ทีมตรวจและนำไปใช้งานต่อ' },
   { id: 'settings', label: 'ตั้งค่า', group: 'System', icon: Settings, description: 'การเชื่อมต่อ Meta, workspace และความพร้อมของ API' },
   { id: 'help', label: 'ศูนย์ช่วยเหลือ', group: 'System', icon: HelpCircle, description: 'คู่มือ setup, สถานะระบบ และ playbook การใช้งาน' },
 ]
@@ -404,17 +394,16 @@ function automationDisplayLabel(mode: string) {
 }
 
 const sectionTooltips: Record<string, string> = {
-  'ภาพรวม KPI': 'ดูตัวเลขหลักของบัญชี เช่น ค่าโฆษณา รายได้ ROAS CPA Lead และ Booking',
+  Overview: 'ดูตัวเลขรายได้และผลลัพธ์หลักจากข้อมูลที่ซิงก์แล้ว',
+  'Revenue Overview': 'ดูแนวโน้มรายได้เทียบค่าโฆษณาตามช่วงวันที่ที่เลือก',
+  'Revenue by Campaign': 'ดูสัดส่วนรายได้ตามแคมเปญที่ซิงก์เข้ามา',
   'Funnel คลินิก': 'ดูว่าลูกค้าหลุดตรงขั้นตอนไหน ตั้งแต่เห็นโฆษณาจนถึงเคสชำระเงิน',
-  'แนวโน้มผลงาน': 'ดูกราฟรายวันเพื่อเทียบค่าโฆษณากับรายได้',
   'กราฟข้อมูลแคมเปญ': 'กราฟเปรียบเทียบค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแต่ละแคมเปญ',
-  'คำแนะนำและ Approval': 'รวมรายการที่ระบบหรือ AI แนะนำให้ตรวจ ก่อนอนุมัติหรือปฏิเสธ',
-  'Audit Trail ล่าสุด': 'บันทึกเหตุการณ์สำคัญ เช่น sync, approval และผลการดำเนินการ',
+  'คำแนะนำที่รออนุมัติ': 'รายการที่ AI คัดมาให้คุณตรวจ ก่อนกดอนุมัติหรือปฏิเสธ',
   'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
   'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
   'PMC Master Agent': 'เรียก AI ให้อ่าน WorkspaceData, หน้าเว็บปัจจุบัน และ memory แล้วสรุปแผน',
   'ตัวสร้างรายงาน': 'เตรียมรายงานสรุปงานโฆษณาจากข้อมูลล่าสุด',
-  'Phase 4 Learning & Monitoring': 'รันระบบเรียนรู้ย้อนหลังและแจ้งเตือนจาก decision/memory เดิม',
   'ตั้งค่า Workspace': 'เชื่อมต่อ Meta API และ OpenAI API ที่ backend ใช้ทำงาน',
   'ศูนย์ช่วยเหลือ': 'คู่มือสั้นสำหรับเริ่มใช้งานและแก้ปัญหาเบื้องต้น',
   'ผลงานครีเอทีฟ': 'ดูครีเอทีฟที่ชนะหรือควรรีเฟรชจากข้อมูล ads/insight',
@@ -709,26 +698,6 @@ function complianceStatusLabel(status: WorkspaceData['complianceReviews'][number
   return 'ผ่านแล้ว'
 }
 
-function actorLabel(actor: string) {
-  if (actor === 'System') return 'ระบบ'
-  if (actor === 'Operator') return 'ผู้ใช้งาน'
-  return actor
-}
-
-function auditActionLabel(action: string) {
-  const labels: Record<string, string> = {
-    'Meta API refreshed': 'รีเฟรช Meta API แล้ว',
-    'Workspace synced': 'ซิงก์ workspace แล้ว',
-    'Rejected recommendation': 'ปฏิเสธคำแนะนำ',
-    'Execution failed': 'ดำเนินการไม่สำเร็จ',
-    'Post-write refresh failed': 'รีเฟรชหลังเขียนข้อมูลไม่สำเร็จ',
-    'Meta write succeeded': 'เขียนข้อมูลไป Meta สำเร็จ',
-    'Review completed': 'รีวิวเสร็จแล้ว',
-    'Report prepared': 'เตรียมรายงานแล้ว',
-  }
-  return labels[action] ?? action
-}
-
 function mutationStatusLabel(status: string) {
   if (status === 'ACTIVE') return 'เปิดใช้งาน'
   if (status === 'PAUSED') return 'หยุดใช้งาน'
@@ -812,9 +781,6 @@ const PLAN_PAUSE_PATTERNS = [
   'pause campaign',
   'pause',
   'paused',
-  'keep paused',
-  'คงสถานะพัก',
-  'พักไว้',
   'หยุดใช้งาน',
   'หยุดโฆษณา',
   'หยุดแคมเปญ',
@@ -823,6 +789,17 @@ const PLAN_PAUSE_PATTERNS = [
   'ปิดโฆษณา',
   'ห้ามเปิด',
   'ไม่เปิด',
+]
+
+const PLAN_NO_WRITE_STATUS_PATTERNS = [
+  'keep paused',
+  'keep active',
+  'คงสถานะพัก',
+  'คงสถานะเปิด',
+  'พักอยู่แล้ว',
+  'เปิดอยู่แล้ว',
+  'ตรวจสาเหตุก่อนเปิดกลับ',
+  'ก่อนเปิดกลับ',
 ]
 
 const PLAN_ACTIVATE_PATTERNS = [
@@ -857,6 +834,7 @@ function inferPlanMetaStatus(recommendation: Recommendation): 'ACTIVE' | 'PAUSED
     recommendation.targetName,
   ].join(' ').toLowerCase()
 
+  if (hasAnyPattern(text, PLAN_NO_WRITE_STATUS_PATTERNS)) return null
   if (hasAnyPattern(text, PLAN_PAUSE_PATTERNS)) return 'PAUSED'
   if (hasAnyPattern(text, PLAN_ACTIVATE_PATTERNS) && !hasAnyPattern(text, PLAN_ACTIVATE_BLOCKERS)) return 'ACTIVE'
   return null
@@ -897,24 +875,49 @@ function findPlanExecutionTarget(recommendation: Recommendation, workspace: Work
   return null
 }
 
+function findExecutionTarget(execution: NonNullable<Recommendation['execution']>, workspace: WorkspaceData | null): PlanExecutionTarget | null {
+  if (!workspace || !execution.status) return null
+
+  if (execution.objectType === 'campaign') {
+    const campaign = workspace.campaigns.find((item) => item.id === execution.objectId)
+    return campaign ? { objectType: 'campaign', objectId: campaign.id, objectName: campaign.name, deliveryStatus: campaign.deliveryStatus } : null
+  }
+
+  if (execution.objectType === 'adset') {
+    const adSet = workspace.adSets.find((item) => item.id === execution.objectId)
+    return adSet ? { objectType: 'adset', objectId: adSet.id, objectName: adSet.name, deliveryStatus: adSet.deliveryStatus } : null
+  }
+
+  if (execution.objectType === 'ad') {
+    const ad = workspace.adInsights.find((item) => item.id === execution.objectId)
+    return ad ? { objectType: 'ad', objectId: ad.id, objectName: ad.name, deliveryStatus: ad.status } : null
+  }
+
+  return null
+}
+
+function statusAlreadyMatches(status: 'ACTIVE' | 'PAUSED', target: PlanExecutionTarget) {
+  return (status === 'ACTIVE' && target.deliveryStatus === 'active') || (status === 'PAUSED' && target.deliveryStatus === 'paused')
+}
+
 function resolvePlanExecution(recommendation: Recommendation, workspace: WorkspaceData | null): Recommendation['execution'] | undefined {
-  if (recommendation.execution) return recommendation.execution
+  if (recommendation.execution) {
+    const explicitTarget = findExecutionTarget(recommendation.execution, workspace)
+    if (recommendation.execution.status && explicitTarget && statusAlreadyMatches(recommendation.execution.status, explicitTarget)) return undefined
+    return recommendation.execution
+  }
 
   const status = inferPlanMetaStatus(recommendation)
   const target = findPlanExecutionTarget(recommendation, workspace)
   if (!status || !target) return undefined
 
   const objectLabel = objectTypeLabel(target.objectType)
-  const alreadySameStatus =
-    (status === 'ACTIVE' && target.deliveryStatus === 'active') || (status === 'PAUSED' && target.deliveryStatus === 'paused')
+  const alreadySameStatus = statusAlreadyMatches(status, target)
+  if (alreadySameStatus) return undefined
   const statusLabel =
     status === 'ACTIVE'
-      ? alreadySameStatus
-        ? `คงสถานะเปิดใช้งาน${objectLabel}ใน Meta`
-        : `เปิดใช้งาน${objectLabel}ใน Meta`
-      : alreadySameStatus
-        ? `คงสถานะพัก${objectLabel}ใน Meta`
-        : `พัก${objectLabel}ใน Meta`
+      ? `เปิดใช้งาน${objectLabel}ใน Meta`
+      : `พัก${objectLabel}ใน Meta`
 
   return {
     endpoint: '/api/meta/object-status',
@@ -926,8 +929,14 @@ function resolvePlanExecution(recommendation: Recommendation, workspace: Workspa
   }
 }
 
-function withResolvedPlanExecution(recommendation: Recommendation, workspace: WorkspaceData | null): Recommendation {
+// eslint-disable-next-line react-refresh/only-export-components
+export function withResolvedPlanExecution(recommendation: Recommendation, workspace: WorkspaceData | null): Recommendation {
   const execution = resolvePlanExecution(recommendation, workspace)
+  if (!execution && recommendation.execution) {
+    const withoutExecution = { ...recommendation }
+    delete withoutExecution.execution
+    return withoutExecution
+  }
   return execution && execution !== recommendation.execution ? { ...recommendation, execution } : recommendation
 }
 
@@ -989,6 +998,7 @@ function mapTrendData(points: TrendPoint[]): TrendDatum[] {
     spend: Math.round(point.spend),
     revenue: Math.round(point.revenue),
     bookings: point.bookings,
+    treatments: point.treatments,
   }))
 }
 
@@ -1057,33 +1067,17 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['ภาพรวม KPI', 'Funnel คลินิก', 'แนวโน้มผลงาน', 'กราฟข้อมูลแคมเปญ', 'คำแนะนำและ Approval'],
+    analytics: ['Overview', 'Revenue Overview', 'Revenue by Campaign', 'Funnel คลินิก', 'กราฟข้อมูลแคมเปญ', 'คำแนะนำที่รออนุมัติ'],
     audience: ['Segment กลุ่มเป้าหมาย', 'ปริมาณของ Segment'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
     library: ['คลังโฆษณา', 'Compliance'],
     marketer: ['AI Marketer', 'PMC Master Agent', 'สิ่งที่ควรดูตอนนี้', 'แผนที่เลือกทำต่อ'],
     optimization: ['Optimizer & Automation', 'Decision Board', 'คิวคำสั่ง Auto Ads'],
-    reports: ['ตัวสร้างรายงาน', 'Audit Trail ล่าสุด'],
+    reports: ['ตัวสร้างรายงาน', 'รายงานฉบับร่าง'],
     settings: ['ตั้งค่า Workspace', 'สถานะ API'],
   }
   return cards[activeTab]
-}
-
-function mapWorkspaceAuditEvent(event: WorkspaceData['auditTrail'][number]): AuditEvent {
-  return {
-    id: event.id,
-    action: event.action,
-    detail: `${event.target} · ${event.after}`,
-    actor: event.actor,
-    time: new Date(event.timestamp).toLocaleString('th-TH', {
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      month: 'short',
-    }),
-    tone: event.action.toLowerCase().includes('failed') ? 'critical' : 'good',
-  }
 }
 
 function toneForRisk(risk: Recommendation['risk']): Tone {
@@ -1114,18 +1108,14 @@ function PmcAdsAgentApp() {
   const [activePlanExecution, setActivePlanExecution] = useState<PlanExecutionDraft | null>(null)
   const [executingPlanId, setExecutingPlanId] = useState<string | null>(null)
   const [planExecutionError, setPlanExecutionError] = useState('')
-  const [auditTrail, setAuditTrail] = useState<AuditEvent[]>([])
+  const [, setAuditTrail] = useState<AuditEvent[]>([])
   const [preparedReport, setPreparedReport] = useState(false)
   const [mascotNotice, setMascotNotice] = useState<MascotNotice | null>(null)
 
   const displayCampaigns = useMemo(() => (workspace ? workspace.campaigns.map(mapMetaCampaign) : []), [workspace])
   const activeRecommendations = useMemo(
-    () => [...brainApprovalActions, ...(workspace?.actions ?? [])].slice(0, 4).map(mapMetaRecommendation),
-    [brainApprovalActions, workspace],
-  )
-  const activeAuditTrail = useMemo(
-    () => (workspace ? [...auditTrail, ...workspace.auditTrail.map(mapWorkspaceAuditEvent)].slice(0, 8) : auditTrail),
-    [auditTrail, workspace],
+    () => brainApprovalActions.slice(0, 4).map(mapMetaRecommendation),
+    [brainApprovalActions],
   )
   const activePage = navItems.find((item) => item.id === activeTab) ?? navItems[0]
   const filteredCampaigns = displayCampaigns.filter((campaign) => campaign.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -1364,7 +1354,7 @@ function PmcAdsAgentApp() {
         const ctx = gsap.context(() => {
           const timeline = gsap.timeline({ defaults: { duration: 0.52, ease: 'power3.out' } })
           gsap.set('.sidebar, .topbar', { clearProps: 'all' })
-          timeline.from('.data-source-bar, .metric-card, .panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
+          timeline.from('.data-source-bar, .revenue-metric-card, .panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
 
           gsap.to('.sidebar-mascot', {
             y: conditions.isDesktop ? -8 : -4,
@@ -1650,17 +1640,14 @@ function PmcAdsAgentApp() {
           {activeTab === 'library' && <AdLibraryPage reviews={workspace?.complianceReviews ?? []} />}
           {activeTab === 'reports' && (
             <ReportsPage
-              auditTrail={activeAuditTrail}
               datePreset={datePreset}
               metaInfo={metaInfo}
               preparedReport={preparedReport}
               recommendations={activeRecommendations}
-	              setPreparedReport={setPreparedReport}
-	              summary={summary}
-	              syncState={syncState}
-	              websiteContext={websiteContext}
-	              workspace={workspace}
-	            />
+              setPreparedReport={setPreparedReport}
+              summary={summary}
+              syncState={syncState}
+            />
           )}
           {activeTab === 'settings' && <SettingsPage dataState={dataState} metaInfo={metaInfo} onSync={syncWorkspace} syncState={syncState} />}
           {activeTab === 'help' && <HelpCenterPage dataState={dataState} onOpenSettings={() => handleTabSelect('settings')} onSync={syncWorkspace} syncState={syncState} />}
@@ -1708,7 +1695,7 @@ function PmcAdsAgentApp() {
 function PageSkeleton({ activeTab }: { activeTab: TabId }) {
   const titles: Record<TabId, string> = {
     ads: 'กำลังโหลดตัวจัดการโฆษณา',
-    analytics: 'กำลังโหลดภาพรวม KPI',
+    analytics: 'กำลังโหลด Revenue Overview',
     audience: 'กำลังโหลดกลุ่มเป้าหมาย',
     creative: 'กำลังโหลดครีเอทีฟ',
     help: 'กำลังโหลดศูนย์ช่วยเหลือ',
@@ -1727,12 +1714,12 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
     library: 5,
     marketer: 3,
     optimization: 5,
-    reports: 4,
+    reports: 2,
     settings: 3,
   }
-  const showChart = activeTab === 'analytics' || activeTab === 'optimization' || activeTab === 'reports'
+  const showChart = activeTab === 'analytics' || activeTab === 'optimization'
   const showTable = activeTab === 'ads' || activeTab === 'library' || activeTab === 'audience' || activeTab === 'settings'
-  const showAiPanel = activeTab === 'marketer' || activeTab === 'creative' || activeTab === 'reports'
+  const showAiPanel = activeTab === 'marketer' || activeTab === 'creative'
 
   return (
     <div className="page-skeleton" aria-live="polite" aria-busy="true">
@@ -2004,52 +1991,14 @@ export function AnalyticsPage({
   summary: Summary
   trendData: TrendDatum[]
 }) {
-  const kpis = [
-    { label: 'ค่าโฆษณา', value: fmtMoneyShort(summary.spend), trend: 'ยอดใช้จ่าย Meta', tone: summary.spend > 0 ? ('info' as Tone) : ('neutral' as Tone) },
-    { label: 'รายได้', value: fmtMoneyShort(summary.revenue), trend: 'รายได้ที่ track ได้', tone: summary.revenue > 0 ? ('good' as Tone) : ('neutral' as Tone) },
-    { label: 'ROAS', value: `${summary.roas.toFixed(1)}x`, trend: 'รายได้ / ค่าโฆษณา', tone: summary.roas >= 2 ? ('good' as Tone) : summary.roas > 0 ? ('watch' as Tone) : ('neutral' as Tone) },
-    { label: 'CPA / Booking', value: fmtMoney(summary.cpa), trend: 'ค่าโฆษณา / booking', tone: summary.cpa > 0 ? ('watch' as Tone) : ('neutral' as Tone) },
-    { label: 'Lead', value: fmtNum(summary.leads), trend: 'Lead จาก Meta', tone: summary.leads > 0 ? ('info' as Tone) : ('neutral' as Tone) },
-    { label: 'Booking', value: fmtNum(summary.bookings), trend: 'Booking ที่ track ได้', tone: summary.bookings > 0 ? ('good' as Tone) : ('neutral' as Tone) },
-    { label: 'เคสชำระเงิน', value: fmtNum(summary.paidTreatments), trend: 'ผลลัพธ์จากคลินิก', tone: summary.paidTreatments > 0 ? ('good' as Tone) : ('neutral' as Tone) },
-    { label: 'CAC', value: fmtMoney(summary.cac), trend: 'ค่าโฆษณา / เคสจ่ายจริง', tone: summary.cac > 0 ? ('watch' as Tone) : ('neutral' as Tone) },
-  ]
-  const [kpisCollapsed, setKpisCollapsed] = useState(false)
-  const kpiContentId = useId()
-
   return (
     <div className="analytics-layout">
+      <RevenueOverview campaigns={campaigns} summary={summary} trendData={trendData} />
       <section className="main-stack">
-        <section className="data-strip">
-          <div className="data-strip-head">
-            <div>
-              <h2>ภาพรวม KPI</h2>
-              <p>ค่าโฆษณา รายได้ และผลลัพธ์จากคลินิก</p>
-            </div>
-            <CollapseButton
-              collapsed={kpisCollapsed}
-              controlsId={kpiContentId}
-              label="ภาพรวม KPI"
-              onToggle={() => setKpisCollapsed((value) => !value)}
-            />
-          </div>
-          <div id={kpiContentId} role="region" aria-label="ภาพรวม KPI">
-            {kpisCollapsed ? (
-              <CollapsedPlaceholder title="ภาพรวม KPI" />
-            ) : (
-              <div className="kpi-grid">
-                {kpis.map((kpi) => (
-                  <MetricCard key={kpi.label} {...kpi} />
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
         <div className="split-grid">
           <ClinicFunnel funnelMetrics={funnelMetrics} summary={summary} />
-          <PerformanceTrend trendData={trendData} />
+          <CampaignDataChart campaigns={campaigns} />
         </div>
-        <CampaignDataChart campaigns={campaigns} />
       </section>
       <aside className="right-rail">
         <AiQueue onApprove={onApprove} onReject={onReject} recommendations={recommendations} recommendationStates={recommendationStates} />
@@ -2058,127 +2007,693 @@ export function AnalyticsPage({
   )
 }
 
-function MetricCard({ label, value, trend, tone }: { label: string; value: string; trend: string; tone: Tone }) {
+type RevenueMetric = {
+  change: MetricChange
+  helper: string
+  icon: LucideIcon
+  label: string
+  tone: Tone
+  value: string
+}
+
+type MetricChange = {
+  detail: string
+  label: string
+  tone: Tone
+}
+
+function RevenueOverview({ campaigns, summary, trendData }: { campaigns: Campaign[]; summary: Summary; trendData: TrendDatum[] }) {
+  const paidConversionRate = summary.bookings > 0 ? (summary.paidTreatments / summary.bookings) * 100 : 0
+  const metrics: RevenueMetric[] = [
+    {
+      change: periodChange(metricTrendValues(trendData, (point) => point.revenue), 'จาก revenue รายวัน'),
+      helper: 'ยอดรวม revenue ที่ซิงก์',
+      icon: CircleDollarSign,
+      label: 'Total Revenue',
+      tone: summary.revenue > 0 ? 'violet' : 'neutral',
+      value: fmtMoneyShort(summary.revenue),
+    },
+    {
+      change: periodChange(metricTrendValues(trendData, (point) => point.bookings), 'จาก booking รายวัน'),
+      helper: 'ยอดรวม booking ที่ซิงก์',
+      icon: CalendarCheck,
+      label: 'Bookings',
+      tone: summary.bookings > 0 ? 'info' : 'neutral',
+      value: fmtNum(summary.bookings),
+    },
+    {
+      change: periodChange(metricTrendValues(trendData, (point) => point.treatments), 'จาก paid cases รายวัน'),
+      helper: 'ยอดรวม paid cases ที่ซิงก์',
+      icon: Users,
+      label: 'Paid Cases',
+      tone: summary.paidTreatments > 0 ? 'good' : 'neutral',
+      value: fmtNum(summary.paidTreatments),
+    },
+    {
+      change: conversionRatePeriodChange(trendData),
+      helper: 'paid cases / booking จากยอดรวม',
+      icon: Percent,
+      label: 'Conversion Rate',
+      tone: paidConversionRate >= 80 ? 'good' : paidConversionRate > 0 ? 'watch' : 'neutral',
+      value: `${paidConversionRate.toFixed(1)}%`,
+    },
+  ]
+
   return (
-    <article className="metric-card">
-      <span className={`metric-dot ${tone}`} />
-      <span className="metric-label">{label}</span>
-      <strong>{value}</strong>
-      <small className={tone}>{trend}</small>
+    <section className="revenue-dashboard" aria-label="Revenue Overview">
+      <div className="revenue-dashboard-head">
+        <div>
+          <h2>Overview</h2>
+          <p>ภาพรวมรายได้จากข้อมูลที่ซิงก์ในช่วงวันที่ที่เลือก</p>
+        </div>
+        <StatusBadge label="ข้อมูลที่ซิงก์" tone={summary.revenue > 0 ? 'good' : 'neutral'} />
+      </div>
+      <div className="revenue-metric-grid">
+        {metrics.map((metric) => (
+          <RevenueMetricCard key={metric.label} metric={metric} />
+        ))}
+      </div>
+      <div className="revenue-overview-grid">
+        <RevenueOverviewChart trendData={trendData} />
+        <RevenueCampaignMix campaigns={campaigns} totalRevenue={summary.revenue} />
+      </div>
+    </section>
+  )
+}
+
+function RevenueMetricCard({ metric }: { metric: RevenueMetric }) {
+  const Icon = metric.icon
+  const change = metric.change
+
+  return (
+    <article className="revenue-metric-card">
+      <div className={`revenue-metric-icon ${metric.tone}`}>
+        <Icon size={20} />
+      </div>
+      <div className="revenue-metric-copy">
+        <span>{metric.label}</span>
+        <strong>{metric.value}</strong>
+        <small>{metric.helper}</small>
+      </div>
+      <div className="revenue-metric-change">
+        <span className={change.tone}>{change.label}</span>
+        <small>{change.detail}</small>
+      </div>
     </article>
   )
 }
 
-function ClinicFunnel({ funnelMetrics, summary }: { funnelMetrics: MetaFunnelMetric[]; summary: Summary }) {
-  const stages = funnelMetrics.map((metric, index) => ({
-    label: metric.stage,
-    value: fmtNum(metric.count),
-    width: index === 0 ? 100 : Math.max(8, Math.min(100, metric.conversionRate)),
-    tone: metric.conversionRate < 5 && index > 0 ? ('critical' as Tone) : metric.conversionRate < 25 && index > 0 ? ('watch' as Tone) : index === 1 ? ('violet' as Tone) : ('good' as Tone),
+function metricTrendValues(trendData: TrendDatum[], getValue: (point: TrendDatum) => number | undefined) {
+  if (trendData.length < 2) return []
+  const values = trendData.map((point) => getValue(point))
+  return values.every((value) => Number.isFinite(value)) ? (values as number[]) : []
+}
+
+function periodChange(values: number[], detail: string): MetricChange {
+  const usableValues = values.filter((value) => Number.isFinite(value))
+  if (usableValues.length < 2) return { label: 'รอข้อมูล', tone: 'neutral' as Tone, detail: 'ยังไม่มีข้อมูลรายวันพอ' }
+
+  const midpoint = Math.max(1, Math.floor(usableValues.length / 2))
+  const previous = usableValues.slice(0, midpoint).reduce((sum, value) => sum + value, 0)
+  const current = usableValues.slice(midpoint).reduce((sum, value) => sum + value, 0)
+  if (previous <= 0) return current > 0 ? { label: 'มีข้อมูลใหม่', tone: 'good' as Tone, detail } : { label: 'รอข้อมูล', tone: 'neutral' as Tone, detail: 'ยังไม่มีข้อมูลรายวันพอ' }
+
+  const change = ((current - previous) / previous) * 100
+  const prefix = change >= 0 ? '↑' : '↓'
+  const tone: Tone = change > 0 ? 'good' : change < 0 ? 'critical' : 'neutral'
+  return { label: `${prefix} ${Math.abs(change).toFixed(1)}%`, tone, detail }
+}
+
+function conversionRatePeriodChange(trendData: TrendDatum[]): MetricChange {
+  if (trendData.length < 2 || trendData.some((point) => !Number.isFinite(point.treatments))) {
+    return { label: 'รอข้อมูล', tone: 'neutral', detail: 'ต้องมี paid cases รายวัน' }
+  }
+
+  const midpoint = Math.max(1, Math.floor(trendData.length / 2))
+  const previousPoints = trendData.slice(0, midpoint)
+  const currentPoints = trendData.slice(midpoint)
+  const previousBookings = previousPoints.reduce((sum, point) => sum + point.bookings, 0)
+  const currentBookings = currentPoints.reduce((sum, point) => sum + point.bookings, 0)
+  const previousPaidCases = previousPoints.reduce((sum, point) => sum + (point.treatments ?? 0), 0)
+  const currentPaidCases = currentPoints.reduce((sum, point) => sum + (point.treatments ?? 0), 0)
+  const detail = 'จาก paid / booking รายวัน'
+
+  if (previousBookings <= 0) return currentBookings > 0 ? { label: 'มีข้อมูลใหม่', tone: 'good', detail } : { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังไม่มี booking รายวันพอ' }
+  if (currentBookings <= 0) return { label: '↓ 100.0%', tone: 'critical', detail }
+
+  const previousRate = previousPaidCases / previousBookings
+  const currentRate = currentPaidCases / currentBookings
+  if (previousRate <= 0) return currentRate > 0 ? { label: 'มีข้อมูลใหม่', tone: 'good', detail } : { label: 'รอข้อมูล', tone: 'neutral', detail }
+
+  const change = ((currentRate - previousRate) / previousRate) * 100
+  const prefix = change >= 0 ? '↑' : '↓'
+  const tone: Tone = change > 0 ? 'good' : change < 0 ? 'critical' : 'neutral'
+  return { label: `${prefix} ${Math.abs(change).toFixed(1)}%`, tone, detail }
+}
+
+function EChart({
+  ariaLabel,
+  className = '',
+  chartStyle,
+  option,
+}: {
+  ariaLabel: string
+  className?: string
+  chartStyle?: string
+  option: EChartsOption
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return undefined
+
+    const chart = echarts.init(container, undefined, { renderer: 'canvas' })
+    chart.setOption(option, true)
+
+    const resizeChart = () => chart.resize()
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => {
+            resizeChart()
+          })
+        : null
+
+    resizeObserver?.observe(container)
+    window.addEventListener('resize', resizeChart)
+
+    return () => {
+      window.removeEventListener('resize', resizeChart)
+      resizeObserver?.disconnect()
+      chart.dispose()
+    }
+  }, [option])
+
+  return (
+    <div
+      aria-label={ariaLabel}
+      className={`echart-canvas ${className}`.trim()}
+      data-chart-engine="echarts"
+      data-chart-source="real"
+      data-chart-style={chartStyle}
+      ref={containerRef}
+      role="img"
+    />
+  )
+}
+
+type EChartTooltipParam = {
+  data?: unknown
+  marker?: string
+  name?: string
+  seriesName?: string
+  value?: unknown
+}
+
+type CampaignRevenueSlice = {
+  color: string
+  id: string
+  name: string
+  revenue: number
+  share: number
+}
+
+type FunnelStage = {
+  count: number
+  conversionRate: number
+  label: string
+  tone: Tone
+  width: number
+}
+
+type CampaignChartDatum = {
+  cpa: number
+  frequency: number
+  id: string
+  name: string
+  revenue: number
+  roas: number
+  spend: number
+}
+
+function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
+  return {
+    animation: false,
+    aria: { enabled: true },
+    backgroundColor: 'transparent',
+    color: ['#24b6a2', '#2684ff'],
+    grid: { bottom: 34, containLabel: true, left: 8, right: 18, top: 42 },
+    legend: {
+      data: ['Revenue', 'Spend'],
+      icon: 'roundRect',
+      itemGap: 18,
+      itemHeight: 6,
+      itemWidth: 22,
+      left: 0,
+      textStyle: { color: '#53667f', fontSize: 12, fontWeight: 700 },
+      top: 0,
+    },
+    series: [
+      {
+        data: trendData.map((point) => point.revenue),
+        emphasis: { focus: 'series' },
+        itemStyle: { color: '#24b6a2' },
+        lineStyle: { color: '#24b6a2', width: 2.5 },
+        name: 'Revenue',
+        showSymbol: true,
+        smooth: false,
+        symbol: 'rect',
+        symbolSize: 5,
+        type: 'line',
+      },
+      {
+        data: trendData.map((point) => point.spend),
+        emphasis: { focus: 'series' },
+        itemStyle: { color: '#2684ff' },
+        lineStyle: { color: '#2684ff', type: 'dashed', width: 2.25 },
+        name: 'Spend',
+        showSymbol: false,
+        smooth: false,
+        type: 'line',
+      },
+    ],
+    tooltip: {
+      appendToBody: true,
+      borderColor: '#dce6f2',
+      borderWidth: 1,
+      className: 'echart-tooltip-surface',
+      confine: true,
+      formatter: (params: unknown) => formatRevenueTrendTooltip(params, trendData),
+      trigger: 'axis',
+    },
+    xAxis: {
+      axisLabel: { color: '#667792', fontSize: 11, fontWeight: 700 },
+      axisLine: { lineStyle: { color: '#dce6f2' } },
+      axisTick: { show: false },
+      boundaryGap: false,
+      data: trendData.map((point) => point.day || point.date),
+      type: 'category',
+    },
+    yAxis: {
+      axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: '#e7edf5' } },
+      type: 'value',
+    },
+  }
+}
+
+function buildCampaignMixOption(slices: CampaignRevenueSlice[], displayedRevenue: number): EChartsOption {
+  return {
+    animation: false,
+    aria: { enabled: true },
+    backgroundColor: 'transparent',
+    graphic: [
+      {
+        left: 'center',
+        style: {
+          align: 'center',
+          fill: '#667792',
+          font: '700 12px Inter, sans-serif',
+          text: 'Total',
+        },
+        top: '42%',
+        type: 'text',
+      },
+      {
+        left: 'center',
+        style: {
+          align: 'center',
+          fill: '#0f233a',
+          font: '900 22px Inter, sans-serif',
+          text: fmtMoneyShort(displayedRevenue),
+        },
+        top: '52%',
+        type: 'text',
+      },
+    ],
+    series: [
+      {
+        avoidLabelOverlap: true,
+        data: slices.map((slice) => ({
+          itemStyle: { color: slice.color },
+          name: slice.name,
+          share: slice.share,
+          value: slice.revenue,
+        })),
+        emphasis: {
+          itemStyle: { shadowBlur: 18, shadowColor: 'rgba(15, 35, 58, 0.18)' },
+          scale: true,
+        },
+        itemStyle: { borderColor: '#ffffff', borderRadius: 6, borderWidth: 4 },
+        label: { show: false },
+        labelLine: { show: false },
+        name: 'Revenue by Campaign',
+        radius: ['58%', '82%'],
+        type: 'pie',
+      },
+    ],
+    tooltip: {
+      appendToBody: true,
+      borderColor: '#dce6f2',
+      borderWidth: 1,
+      className: 'echart-tooltip-surface',
+      confine: true,
+      formatter: formatCampaignMixTooltip,
+      trigger: 'item',
+    },
+  }
+}
+
+function buildFunnelOption(stages: FunnelStage[]): EChartsOption {
+  return {
+    animation: false,
+    aria: { enabled: true },
+    backgroundColor: 'transparent',
+    series: [
+      {
+        bottom: 8,
+        data: stages.map((stage) => ({
+          count: stage.count,
+          conversionRate: stage.conversionRate,
+          itemStyle: { color: chartToneColor(stage.tone) },
+          name: stage.label,
+          value: stage.width,
+        })),
+        emphasis: { focus: 'self' },
+        gap: 5,
+        height: '88%',
+        label: {
+          align: 'left',
+          color: '#0f233a',
+          formatter: (param: unknown) => {
+            const data = (param as { data?: { count?: number; name?: string } }).data
+            return `${data?.name ?? ''}\n${fmtNum(Number(data?.count ?? 0))}`
+          },
+          fontSize: 12,
+          fontWeight: 800,
+          overflow: 'truncate',
+          position: 'right',
+          width: 88,
+        },
+        left: 12,
+        maxSize: '76%',
+        minSize: '20%',
+        name: 'Funnel คลินิก',
+        right: 104,
+        sort: 'none',
+        top: 6,
+        type: 'funnel',
+      },
+    ],
+    tooltip: {
+      appendToBody: true,
+      borderColor: '#dce6f2',
+      borderWidth: 1,
+      className: 'echart-tooltip-surface',
+      confine: true,
+      formatter: formatFunnelTooltip,
+      trigger: 'item',
+    },
+  }
+}
+
+function buildCampaignBarsOption(chartData: CampaignChartDatum[]): EChartsOption {
+  return {
+    animation: false,
+    aria: { enabled: true },
+    backgroundColor: 'transparent',
+    color: ['#2684ff', '#24b6a2', '#f7a928'],
+    grid: { bottom: 36, containLabel: true, left: 8, right: 18, top: 36 },
+    legend: {
+      data: ['ค่าใช้จ่าย', 'รายได้', 'CPA'],
+      icon: 'roundRect',
+      itemGap: 14,
+      itemHeight: 7,
+      itemWidth: 22,
+      left: 0,
+      textStyle: { color: '#53667f', fontSize: 12, fontWeight: 800 },
+      top: 0,
+    },
+    series: [
+      {
+        barMaxWidth: 14,
+        data: chartData.map((campaign) => campaign.spend),
+        emphasis: { focus: 'series' },
+        itemStyle: { borderRadius: [0, 7, 7, 0], color: '#2684ff' },
+        name: 'ค่าใช้จ่าย',
+        type: 'bar',
+      },
+      {
+        barMaxWidth: 14,
+        data: chartData.map((campaign) => campaign.revenue),
+        emphasis: { focus: 'series' },
+        itemStyle: { borderRadius: [0, 7, 7, 0], color: '#24b6a2' },
+        name: 'รายได้',
+        type: 'bar',
+      },
+      {
+        barMaxWidth: 10,
+        data: chartData.map((campaign) => campaign.cpa),
+        emphasis: { focus: 'series' },
+        itemStyle: { borderRadius: [0, 6, 6, 0], color: '#f7a928' },
+        name: 'CPA',
+        type: 'bar',
+      },
+    ],
+    tooltip: {
+      appendToBody: true,
+      borderColor: '#dce6f2',
+      borderWidth: 1,
+      className: 'echart-tooltip-surface',
+      confine: true,
+      formatter: (params: unknown) => formatCampaignBarsTooltip(params, chartData),
+      trigger: 'axis',
+    },
+    xAxis: {
+      axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
+      axisLine: { lineStyle: { color: '#dce6f2' } },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: '#e7edf5' } },
+      type: 'value',
+    },
+    yAxis: {
+      axisLabel: { color: '#334155', fontSize: 11, fontWeight: 800, overflow: 'truncate', width: 124 },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      data: chartData.map((campaign) => campaign.name),
+      inverse: true,
+      type: 'category',
+    },
+  }
+}
+
+function chartToneColor(tone: Tone) {
+  switch (tone) {
+    case 'good':
+      return '#24b6a2'
+    case 'watch':
+      return '#f7a928'
+    case 'critical':
+      return '#e55353'
+    case 'violet':
+      return '#7a5bf5'
+    case 'info':
+      return '#2684ff'
+    default:
+      return '#94a3b8'
+  }
+}
+
+function asEChartParams(params: unknown): EChartTooltipParam[] {
+  if (Array.isArray(params)) return params as EChartTooltipParam[]
+  return params ? [params as EChartTooltipParam] : []
+}
+
+function eChartParamNumber(value: unknown) {
+  if (Array.isArray(value)) {
+    const lastValue = value[value.length - 1]
+    return Number(lastValue)
+  }
+  if (value && typeof value === 'object' && 'value' in value) {
+    return Number((value as { value?: unknown }).value)
+  }
+  return Number(value)
+}
+
+function formatRevenueTrendTooltip(params: unknown, trendData: TrendDatum[]) {
+  const rows = asEChartParams(params)
+  const title = rows[0]?.name ?? ''
+  const point = trendData.find((item) => (item.day || item.date) === title)
+  const revenue = point?.revenue ?? eChartParamNumber(rows.find((row) => row.seriesName === 'Revenue')?.value)
+  const spend = point?.spend ?? eChartParamNumber(rows.find((row) => row.seriesName === 'Spend')?.value)
+  const bookings = point?.bookings ?? 0
+  const roas = spend > 0 ? revenue / spend : 0
+
+  return eChartTooltip(
+    point?.date && point.date !== '-' ? point.date : title,
+    [
+      ['Revenue', fmtMoney(revenue), rows.find((row) => row.seriesName === 'Revenue')?.marker],
+      ['Spend', fmtMoney(spend), rows.find((row) => row.seriesName === 'Spend')?.marker],
+      ['ROAS', `${roas.toFixed(2)}x`, undefined],
+      ['Booking', fmtNum(bookings), undefined],
+    ],
+  )
+}
+
+function formatCampaignMixTooltip(param: unknown) {
+  const data = (param as { data?: { name?: string; share?: number; value?: number } }).data
+  return eChartTooltip(data?.name ?? '', [
+    ['Revenue', fmtMoney(Number(data?.value ?? 0)), undefined],
+    ['Share', `${Number(data?.share ?? 0).toFixed(1)}%`, undefined],
+  ])
+}
+
+function formatFunnelTooltip(param: unknown) {
+  const data = (param as { data?: { conversionRate?: number; count?: number; name?: string } }).data
+  return eChartTooltip(data?.name ?? '', [
+    ['จำนวน', fmtNum(Number(data?.count ?? 0)), undefined],
+    ['Conversion', `${Number(data?.conversionRate ?? 0).toFixed(1)}%`, undefined],
+  ])
+}
+
+function formatCampaignBarsTooltip(params: unknown, chartData: CampaignChartDatum[]) {
+  const rows = asEChartParams(params)
+  const title = rows[0]?.name ?? ''
+  const campaign = chartData.find((item) => item.name === title)
+
+  return eChartTooltip(
+    title,
+    [
+      ['ค่าใช้จ่าย', fmtMoney(campaign?.spend ?? eChartParamNumber(rows.find((row) => row.seriesName === 'ค่าใช้จ่าย')?.value)), rows.find((row) => row.seriesName === 'ค่าใช้จ่าย')?.marker],
+      ['รายได้', fmtMoney(campaign?.revenue ?? eChartParamNumber(rows.find((row) => row.seriesName === 'รายได้')?.value)), rows.find((row) => row.seriesName === 'รายได้')?.marker],
+      ['CPA', fmtMoney(campaign?.cpa ?? eChartParamNumber(rows.find((row) => row.seriesName === 'CPA')?.value)), rows.find((row) => row.seriesName === 'CPA')?.marker],
+      ['ROAS', `${(campaign?.roas ?? 0).toFixed(2)}x`, undefined],
+      ['Frequency', `${(campaign?.frequency ?? 0).toFixed(1)}x`, undefined],
+    ],
+  )
+}
+
+function eChartTooltip(title: string, rows: Array<[string, string, string | undefined]>) {
+  const renderedRows = rows
+    .map(
+      ([label, value, marker]) =>
+        `<span class="echart-tooltip-row">${marker ?? '<i></i>'}<small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></span>`,
+    )
+    .join('')
+  return `<div class="echart-tooltip"><strong>${escapeHtml(title)}</strong>${renderedRows}</div>`
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function RevenueOverviewChart({ trendData }: { trendData: TrendDatum[] }) {
+  const option = useMemo(() => buildRevenueTrendOption(trendData), [trendData])
+
+  return (
+    <SectionCard
+      action={<StatusBadge label="Daily" tone="info" />}
+      className="revenue-chart-panel"
+      collapsible
+      title="Revenue Overview"
+      subtitle="รายได้เทียบค่าโฆษณารายวันจากข้อมูลที่ซิงก์แล้ว"
+    >
+      {trendData.length > 0 ? (
+        <div className="revenue-chart-wrap">
+          <EChart ariaLabel="Revenue Overview chart" chartStyle="sharp-lines" className="revenue-echart" option={option} />
+        </div>
+      ) : (
+        <EmptyState title="ยังไม่มี Revenue Overview" detail="กราฟรายได้จะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
+      )}
+    </SectionCard>
+  )
+}
+
+function RevenueCampaignMix({ campaigns, totalRevenue }: { campaigns: Campaign[]; totalRevenue: number }) {
+  const slices = useMemo(() => buildCampaignRevenueSlices(campaigns), [campaigns])
+  const campaignRevenue = slices.reduce((sum, slice) => sum + slice.revenue, 0)
+  const displayedRevenue = totalRevenue || campaignRevenue
+  const option = useMemo(() => buildCampaignMixOption(slices, displayedRevenue), [displayedRevenue, slices])
+
+  return (
+    <SectionCard className="revenue-mix-panel" collapsible title="Revenue by Campaign" subtitle="สัดส่วนรายได้ตามแคมเปญ">
+      {slices.length > 0 ? (
+        <div className="revenue-mix-content">
+          <EChart ariaLabel="Revenue by Campaign chart" className="revenue-mix-echart" option={option} />
+          <div className="revenue-mix-list">
+            {slices.map((slice) => (
+              <div className="revenue-mix-row" key={slice.id}>
+                <span className="revenue-mix-dot" style={{ background: slice.color }} />
+                <strong>{slice.name}</strong>
+                <span>{slice.share.toFixed(0)}%</span>
+                <small>{fmtMoney(slice.revenue)}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <EmptyState title="ยังไม่มีรายได้ตามแคมเปญ" detail="สัดส่วนรายได้จะแสดงหลังซิงก์แคมเปญที่มี revenue" />
+      )}
+    </SectionCard>
+  )
+}
+
+function buildCampaignRevenueSlices(campaigns: Campaign[]): CampaignRevenueSlice[] {
+  const colors = ['#2f86eb', '#7567d8', '#30d5a8', '#f59e0b', '#ef476f']
+  const revenueCampaigns = campaigns
+    .filter((campaign) => campaign.revenue > 0)
+    .sort((left, right) => right.revenue - left.revenue)
+    .slice(0, 5)
+  const total = revenueCampaigns.reduce((sum, campaign) => sum + campaign.revenue, 0)
+
+  return revenueCampaigns.map((campaign, index) => ({
+    color: colors[index % colors.length],
+    id: campaign.id,
+    name: campaign.name,
+    revenue: campaign.revenue,
+    share: total > 0 ? (campaign.revenue / total) * 100 : 0,
   }))
+}
+
+function ClinicFunnel({ funnelMetrics, summary }: { funnelMetrics: MetaFunnelMetric[]; summary: Summary }) {
+  const stages = useMemo<FunnelStage[]>(
+    () =>
+      funnelMetrics.map((metric, index) => ({
+        conversionRate: metric.conversionRate,
+        count: metric.count,
+        label: metric.stage,
+        width: index === 0 ? 100 : Math.max(8, Math.min(100, metric.conversionRate)),
+        tone:
+          metric.conversionRate < 5 && index > 0
+            ? ('critical' as Tone)
+            : metric.conversionRate < 25 && index > 0
+              ? ('watch' as Tone)
+              : index === 1
+                ? ('violet' as Tone)
+                : ('good' as Tone),
+      })),
+    [funnelMetrics],
+  )
+  const option = useMemo(() => buildFunnelOption(stages), [stages])
 
   return (
     <SectionCard collapsible title="Funnel คลินิก" subtitle="จาก impression ถึงเคสชำระเงิน พร้อมจุดหลุดในแต่ละขั้น">
       {stages.length > 0 ? (
         <>
-          <div className="funnel-list">
-            {stages.map((stage) => (
-              <div className="funnel-row" key={stage.label}>
-                <strong>{stage.label}</strong>
-                <span className="funnel-track">
-                  <span className={`funnel-fill ${stage.tone}`} style={{ width: `${stage.width}%` }} />
-                </span>
-                <span>{stage.value}</span>
-              </div>
-            ))}
-          </div>
+          <EChart ariaLabel="Funnel คลินิก chart" className="funnel-echart" option={option} />
           <StatusBadge label={`${stages.length} ขั้นตอนจากข้อมูลจริง`} tone={summary.bookings > 0 ? 'good' : 'neutral'} />
         </>
       ) : (
         <EmptyState title="ยังไม่มีข้อมูล funnel" detail="Meta API ยังไม่ส่ง metric ของ funnel ในช่วงวันที่นี้" />
       )}
     </SectionCard>
-  )
-}
-
-function PerformanceTrend({ trendData }: { trendData: TrendDatum[] }) {
-  const yDomain = useMemo(() => {
-    const maxValue = Math.max(...trendData.flatMap((point) => [point.spend, point.revenue]), 0)
-    return [0, Math.max(1000, Math.ceil(maxValue * 1.15))]
-  }, [trendData])
-
-  return (
-    <SectionCard
-      collapsible
-      action={
-        <>
-          <StatusBadge label="รายได้" tone="violet" />
-          <StatusBadge label="ค่าโฆษณา" tone="info" />
-        </>
-      }
-      title="แนวโน้มผลงาน"
-      subtitle="ค่าโฆษณาและรายได้รายวัน"
-    >
-      {trendData.length > 0 ? (
-        <div className="chart-box">
-          <ResponsiveContainer height={238} width="100%">
-            <ComposedChart data={trendData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke="#e7edf5" vertical={false} />
-              <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#667085' }} axisLine={false} tickLine={false} />
-              <YAxis
-                axisLine={false}
-                domain={yDomain}
-                tick={{ fontSize: 11, fill: '#667085' }}
-                tickFormatter={fmtChartMoney}
-                tickLine={false}
-                width={48}
-              />
-              <Tooltip content={<TrendTooltip />} cursor={{ fill: 'rgba(47, 128, 237, 0.08)' }} />
-              <Bar dataKey="spend" fill="#a8d3ff" isAnimationActive={false} maxBarSize={22} name="ค่าโฆษณา" radius={[6, 6, 0, 0]} />
-              <Area
-                activeDot={{ r: 5 }}
-                dataKey="revenue"
-                dot={{ r: 3, strokeWidth: 0 }}
-                fill="rgba(117, 103, 216, 0.12)"
-                isAnimationActive={false}
-                name="รายได้"
-                stroke="#7567d8"
-                strokeWidth={3}
-                type="monotone"
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <EmptyState title="ยังไม่มีข้อมูลแนวโน้ม" detail="Meta API ยังไม่มีค่าโฆษณาหรือรายได้รายวันในช่วงวันที่นี้" />
-      )}
-    </SectionCard>
-  )
-}
-
-function TrendTooltip({
-  active,
-  label,
-  payload,
-}: {
-  active?: boolean
-  label?: string | number
-  payload?: TrendTooltipItem[]
-}) {
-  if (!active || !payload?.length) return null
-  const point = payload.find((item) => item.payload)?.payload
-  const spend = point?.spend ?? Number(payload.find((item) => item.dataKey === 'spend')?.value ?? 0)
-  const revenue = point?.revenue ?? Number(payload.find((item) => item.dataKey === 'revenue')?.value ?? 0)
-  const bookings = point?.bookings ?? 0
-  const roas = spend > 0 ? revenue / spend : 0
-
-  return (
-    <div className="trend-chart-tooltip">
-      <span>{point?.date && point.date !== '-' ? point.date : label}</span>
-      <strong>ค่าโฆษณา {fmtMoney(spend)}</strong>
-      <strong>รายได้ {fmtMoney(revenue)}</strong>
-      <small>ROAS {roas.toFixed(2)}x · Booking {fmtNum(bookings)}</small>
-    </div>
   )
 }
 
@@ -2201,6 +2716,7 @@ function CampaignDataChart({ campaigns }: { campaigns: Campaign[] }) {
   )
   const bestRoas = chartData.reduce((best, item) => (item.roas > best.roas ? item : best), chartData[0])
   const averageFrequency = chartData.length ? chartData.reduce((total, item) => total + item.frequency, 0) / chartData.length : 0
+  const option = buildCampaignBarsOption(chartData)
 
   return (
     <SectionCard
@@ -2218,32 +2734,7 @@ function CampaignDataChart({ campaigns }: { campaigns: Campaign[] }) {
     >
       {chartData.length > 0 ? (
         <div className="campaign-chart-stack">
-          <div className="campaign-chart-canvas" role="img" aria-label="กราฟข้อมูลแคมเปญ">
-            <ResponsiveContainer height={300} width="100%">
-              <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 14, bottom: 0, left: 0 }}>
-                <CartesianGrid stroke="#e7edf5" horizontal={false} />
-                <XAxis
-                  axisLine={false}
-                  tick={{ fontSize: 11, fill: '#667085' }}
-                  tickFormatter={fmtChartMoney}
-                  tickLine={false}
-                  type="number"
-                />
-                <YAxis
-                  axisLine={false}
-                  dataKey="name"
-                  tick={{ fontSize: 11, fill: '#334155' }}
-                  tickLine={false}
-                  type="category"
-                  width={142}
-                />
-                <Tooltip contentStyle={{ border: '1px solid #e1e7f0', borderRadius: 8 }} formatter={campaignChartTooltipValue} />
-                <Bar dataKey="spend" fill="#9fd0ff" isAnimationActive={false} name="ค่าใช้จ่าย" radius={[0, 6, 6, 0]} />
-                <Bar dataKey="revenue" fill="#30d5a8" isAnimationActive={false} name="รายได้" radius={[0, 6, 6, 0]} />
-                <Bar dataKey="cpa" fill="#f3c766" isAnimationActive={false} name="CPA" radius={[0, 6, 6, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          <EChart ariaLabel="กราฟข้อมูลแคมเปญ" className="campaign-echart" option={option} />
           <div className="campaign-chart-readout" aria-label="สรุปข้อมูลกราฟแคมเปญ">
             <span>
               <small>แคมเปญในกราฟ</small>
@@ -2270,12 +2761,6 @@ function shortCampaignLabel(name: string) {
   return name.length > 24 ? `${name.slice(0, 24)}...` : name
 }
 
-function campaignChartTooltipValue(value: unknown, name: unknown): [string, string] {
-  const amount = Number(value)
-  const label = name === 'spend' ? 'ค่าใช้จ่าย' : name === 'revenue' ? 'รายได้' : name === 'cpa' ? 'CPA' : name
-  return [Number.isFinite(amount) ? fmtMoney(amount) : String(value ?? ''), String(label)]
-}
-
 function AiQueue({
   onApprove,
   onReject,
@@ -2287,16 +2772,18 @@ function AiQueue({
   recommendations: Recommendation[]
   recommendationStates: Record<string, ActionState>
 }) {
+  const aiRecommendations = recommendations.filter((rec) => rec.source === 'ai_brain')
+
   return (
     <SectionCard
-      action={<StatusBadge label="คำแนะนำ" tone="violet" />}
+      action={<StatusBadge label="รออนุมัติ" tone="violet" />}
       className="ai-queue"
       collapsible
-      title="คำแนะนำและ Approval"
-      subtitle="รายการที่ระบบวิเคราะห์จากข้อมูล Meta และ PMC Master Agent"
+      title="คำแนะนำที่รออนุมัติ"
+      subtitle="รายการที่ AI คัดมาให้คุณตรวจ ก่อนกดอนุมัติหรือปฏิเสธ"
     >
       <div className="recommendation-list">
-        {recommendations.length > 0 ? recommendations.map((rec, index) => {
+        {aiRecommendations.length > 0 ? aiRecommendations.map((rec, index) => {
           const state = recommendationStates[rec.id] ?? 'Suggested'
           const isFinal = state === 'Approved' || state === 'Executed' || state === 'Rejected' || state === 'Failed'
           const isExecuting = state === 'Executing'
@@ -2304,7 +2791,7 @@ function AiQueue({
           return (
             <article className={`recommendation-card ${index === 0 ? 'primary' : ''}`} key={rec.id}>
               <div className="recommendation-badges">
-                <StatusBadge label={rec.source === 'ai_brain' ? 'AI Brain' : 'Meta metrics'} tone={rec.source === 'ai_brain' ? 'violet' : 'info'} />
+                <StatusBadge label="จาก AI" tone="violet" />
                 <StatusBadge label={actionStateLabelForPlan(state, rec.execution)} tone={state === 'Rejected' || state === 'Failed' ? 'critical' : state === 'Executed' || state === 'Approved' ? 'good' : 'watch'} />
                 <StatusBadge label={riskLabel(rec.risk)} tone={toneForRisk(rec.risk)} />
               </div>
@@ -2329,32 +2816,7 @@ function AiQueue({
             </article>
           )
         }) : (
-          <EmptyState title="ยังไม่มีคำแนะนำจากข้อมูลจริง" detail="Meta API ยังไม่มีรายการที่เข้าเงื่อนไข guardrail ในช่วงวันที่นี้" />
-        )}
-      </div>
-    </SectionCard>
-  )
-}
-
-function AuditPanel({ auditTrail, compact = false }: { auditTrail: AuditEvent[]; compact?: boolean }) {
-  return (
-    <SectionCard
-      className={`audit-panel ${compact ? 'compact' : ''}`}
-      collapsible
-      title="Audit Trail ล่าสุด"
-      subtitle="การอนุมัติ เหตุการณ์ซิงก์ และผลการดำเนินการ"
-    >
-      <div className="audit-list">
-        {auditTrail.length > 0 ? (
-          auditTrail.map((event) => (
-            <div className="audit-row" key={event.id}>
-              <StatusBadge label={auditActionLabel(event.action)} tone={event.tone} />
-              <strong>{event.detail}</strong>
-              <span>{actorLabel(event.actor)} · {event.time}</span>
-            </div>
-          ))
-        ) : (
-          <EmptyState title="ยังไม่มี audit event" detail="เหตุการณ์ซิงก์และการเขียนข้อมูลไป Meta จะแสดงที่นี่หลังเกิดรายการ" />
+          <EmptyState title="ยังไม่มีรายการที่ต้องอนุมัติ" detail="เมื่อคุณให้ AI วิเคราะห์ข้อมูลล่าสุด รายการที่ต้องตัดสินใจจะมาแสดงที่นี่" />
         )}
       </div>
     </SectionCard>
@@ -3641,11 +4103,18 @@ function buildOptimizerAiCandidatePayload(plans: AutoAdPlan[]) {
   }))
 }
 
-function applyOptimizerAiDecisionToPlan(plan: AutoAdPlan, decision?: OptimizerAiDecision): AutoAdPlan {
+// eslint-disable-next-line react-refresh/only-export-components
+export function applyOptimizerAiDecisionToPlan(plan: AutoAdPlan, decision?: OptimizerAiDecision): AutoAdPlan {
   if (!decision) return plan
 
   const targetStatus = decision.decision === 'pause' ? 'PAUSED' : decision.decision === 'activate' ? 'ACTIVE' : undefined
   const writable = targetStatus === 'PAUSED' ? plan.ad.status === 'active' : targetStatus === 'ACTIVE' ? plan.ad.status === 'paused' : false
+  const duplicateStatusReason =
+    targetStatus === 'PAUSED' && plan.ad.status === 'paused'
+      ? 'โฆษณานี้พักอยู่แล้ว จึงไม่ส่งคำสั่งปิดซ้ำ'
+      : targetStatus === 'ACTIVE' && plan.ad.status === 'active'
+        ? 'โฆษณานี้เปิดใช้งานอยู่แล้ว จึงไม่ส่งคำสั่งเปิดซ้ำ'
+        : ''
   const tone: Tone =
     decision.decision === 'pause'
       ? 'critical'
@@ -3655,6 +4124,25 @@ function applyOptimizerAiDecisionToPlan(plan: AutoAdPlan, decision?: OptimizerAi
           ? 'critical'
           : 'watch'
   const conditionEvidence = decision.conditionAnalysis ? `AI condition: ${decision.conditionAnalysis}` : ''
+
+  if (targetStatus && !writable && duplicateStatusReason) {
+    return {
+      ...plan,
+      decision: 'watch',
+      targetStatus: undefined,
+      actionLabel: 'ตรวจสอบ ไม่ส่งคำสั่งซ้ำ',
+      reason: `${duplicateStatusReason} ใช้เป็น checklist ตรวจข้อมูลก่อนเปลี่ยนสถานะครั้งถัดไป`,
+      guardrail: decision.guardrail || plan.guardrail,
+      nextStep: 'ตรวจสาเหตุและซิงก์ข้อมูลล่าสุดก่อนตัดสินใจอีกครั้ง',
+      confidence: decision.confidence || plan.confidence,
+      risk: decision.risk || plan.risk,
+      tone: 'watch',
+      canQueue: false,
+      blockedReason: duplicateStatusReason,
+      evidence: [conditionEvidence, duplicateStatusReason, ...plan.evidence].filter(Boolean).slice(0, 10),
+      sortScore: plan.sortScore,
+    }
+  }
 
   return {
     ...plan,
@@ -5190,18 +5678,14 @@ function AdLibraryPage({ reviews }: { reviews: WorkspaceData['complianceReviews'
 }
 
 function buildReportText({
-  auditTrail,
   datePreset,
   metaInfo,
-  phase4Result,
   recommendations,
   summary,
   syncState,
 }: {
-  auditTrail: AuditEvent[]
   datePreset: string
   metaInfo: MetaInfo | null
-  phase4Result?: Phase4ApiResponse | null
   recommendations: Recommendation[]
   summary: Summary
   syncState: string
@@ -5209,18 +5693,6 @@ function buildReportText({
   const recommendationLines = recommendations.length
     ? recommendations.map((rec, index) => `${index + 1}. ${rec.title} (${riskLabel(rec.risk)}) - ${rec.evidence}`).join('\n')
     : 'ยังไม่มีคำแนะนำจาก AI ในช่วงข้อมูลนี้'
-  const auditLines = auditTrail.length
-    ? auditTrail.slice(0, 5).map((event, index) => `${index + 1}. ${auditActionLabel(event.action)} - ${event.detail} (${event.time})`).join('\n')
-    : 'ยังไม่มี audit event'
-  const phase4Lines = phase4Result
-    ? [
-      phase4Result.report.summary,
-      `- Outcome observations: ${phase4Result.outcomes.length}`,
-      `- Learning records: ${phase4Result.learnings.length}`,
-      `- Open alerts: ${phase4Result.alerts.length}`,
-      ...phase4Result.report.nextActions.slice(0, 3).map((action) => `- ${action}`),
-    ].join('\n')
-    : 'ยังไม่ได้รัน Phase 4 Learning & Monitoring'
 
   return [
     'รายงาน PMC Ads Agent',
@@ -5239,17 +5711,10 @@ function buildReportText({
     '',
     'งานจาก AI',
     recommendationLines,
-    '',
-    'Phase 4 Outcome Learning',
-    phase4Lines,
-    '',
-    'ประวัติการตรวจสอบ',
-    auditLines,
   ].join('\n')
 }
 
-function ReportsPage({
-  auditTrail,
+export function ReportsPage({
   datePreset,
   metaInfo,
   preparedReport,
@@ -5257,10 +5722,7 @@ function ReportsPage({
   setPreparedReport,
   summary,
   syncState,
-  websiteContext,
-  workspace,
 }: {
-  auditTrail: AuditEvent[]
   datePreset: string
   metaInfo: MetaInfo | null
   preparedReport: boolean
@@ -5268,40 +5730,12 @@ function ReportsPage({
   setPreparedReport: (value: boolean) => void
   summary: Summary
   syncState: string
-  websiteContext: WebsiteContext
-  workspace: WorkspaceData | null
 }) {
   const [reportMessage, setReportMessage] = useState('')
-  const [phase4Result, setPhase4Result] = useState<Phase4ApiResponse | null>(null)
-  const [phase4Error, setPhase4Error] = useState('')
-  const [isPhase4Running, setIsPhase4Running] = useState(false)
   const reportText = useMemo(
-    () => buildReportText({ auditTrail, datePreset, metaInfo, phase4Result, recommendations, summary, syncState }),
-    [auditTrail, datePreset, metaInfo, phase4Result, recommendations, summary, syncState],
+    () => buildReportText({ datePreset, metaInfo, recommendations, summary, syncState }),
+    [datePreset, metaInfo, recommendations, summary, syncState],
   )
-  const runPhase4 = useCallback(async () => {
-    if (!workspace || isPhase4Running) return
-    setIsPhase4Running(true)
-    setPhase4Error('')
-    try {
-      const result = await apiJson<Phase4ApiResponse>('/api/ai/outcomes', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          datePreset,
-          websiteContext,
-          workspace,
-        }),
-      })
-      setPhase4Result(result)
-      setPreparedReport(true)
-      setReportMessage('Phase 4 วิเคราะห์ outcome และ monitoring แล้ว')
-    } catch (error) {
-      setPhase4Error(error instanceof Error ? formatApiMessage(error.message) : 'Phase 4 วิเคราะห์ไม่สำเร็จ')
-    } finally {
-      setIsPhase4Running(false)
-    }
-  }, [datePreset, isPhase4Running, setPreparedReport, websiteContext, workspace])
   const prepareReport = () => {
     setPreparedReport(true)
     setReportMessage('สร้างรายงานจากข้อมูลล่าสุดแล้ว')
@@ -5342,7 +5776,7 @@ function ReportsPage({
         <div className="report-preview">
           <StatusBadge label={preparedReport ? 'พร้อม' : 'ฉบับร่าง'} tone={preparedReport ? 'good' : 'neutral'} />
           <h3>{preparedReport ? 'รายงานข้อมูลทั้งหมดพร้อมแล้ว' : 'เตรียมรายงานจากหน้า Analytics'}</h3>
-          <p>รวมค่าโฆษณา รายได้ ROAS, funnel คลินิก, action จาก AI และ audit trail</p>
+          <p>รวมค่าโฆษณา รายได้ ROAS, funnel คลินิก และคำแนะนำจาก AI ที่เกี่ยวกับการตัดสินใจ</p>
           <div className="report-actions">
             <button className="primary-button" type="button" onClick={prepareReport}>
               เตรียมรายงาน
@@ -5358,70 +5792,6 @@ function ReportsPage({
           <pre className="report-text-preview">{reportText}</pre>
         </div>
       </SectionCard>
-      <SectionCard
-        action={
-          <>
-            <StatusBadge label={phase4Result ? `${phase4Result.alerts.length} alerts` : 'Phase 4'} tone={phase4Result ? phase4Result.alerts.some((alert) => alert.severity === 'critical') ? 'critical' : 'good' : 'violet'} />
-            <button className="primary-button" type="button" onClick={() => void runPhase4()} disabled={!workspace || isPhase4Running}>
-              {isPhase4Running ? 'กำลังเรียนรู้...' : 'รัน Outcome Learning'}
-            </button>
-          </>
-        }
-        collapsible
-        title="Phase 4 Learning & Monitoring"
-        subtitle="อ่าน decision log, memory และ workspace ล่าสุดเพื่อสรุป outcome, learning, alert และรายงาน"
-      >
-        {phase4Result ? (
-          <div className="phase4-panel">
-            <div className="phase4-metrics">
-              <MetricLine label="Outcome" value={`${phase4Result.outcomes.length} observations`} />
-              <MetricLine label="Learning" value={`${phase4Result.learnings.length} records`} />
-              <MetricLine label="Alerts" value={`${phase4Result.alerts.length} open`} />
-              <MetricLine label="Direct execution" value={phase4Result.policy.approvedForDirectExecution ? 'อนุญาต' : 'ปิดไว้'} />
-            </div>
-            <article className="phase4-report-card">
-              <StatusBadge label={phase4Result.report.outcomeStatus} tone={phase4Result.report.outcomeStatus === 'blocked' || phase4Result.report.outcomeStatus === 'declined' ? 'critical' : phase4Result.report.outcomeStatus === 'improved' ? 'good' : 'watch'} />
-              <strong>{phase4Result.report.summary}</strong>
-              <p>{phase4Result.report.nextActions.slice(0, 2).join(' · ')}</p>
-            </article>
-            <div className="phase4-grid">
-              <div>
-                <h3>Agents</h3>
-                {phase4Result.agents.slice(0, 4).map((agent) => (
-                  <article className="phase4-row" key={agent.agentName}>
-                    <StatusBadge label={agent.agentName.replace(' Agent', '')} tone="violet" />
-                    <strong>{agent.summary}</strong>
-                    <small>{agent.nextStep}</small>
-                  </article>
-                ))}
-              </div>
-              <div>
-                <h3>Alerts & Learnings</h3>
-                {phase4Result.alerts.slice(0, 3).map((alert) => (
-                  <article className="phase4-row" key={alert.id}>
-                    <StatusBadge label={alert.severity} tone={alert.severity === 'critical' ? 'critical' : alert.severity === 'watch' ? 'watch' : 'info'} />
-                    <strong>{alert.title}</strong>
-                    <small>{alert.detail}</small>
-                  </article>
-                ))}
-                {phase4Result.learnings.slice(0, 2).map((learning) => (
-                  <article className="phase4-row" key={learning.id}>
-                    <StatusBadge label="learning" tone="good" />
-                    <strong>{learning.title}</strong>
-                    <small>{learning.summary}</small>
-                  </article>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <EmptyState
-            title={phase4Error || 'ยังไม่ได้รัน Outcome Learning'}
-            detail={workspace ? 'รัน Phase 4 เพื่อดู outcome, learning และ monitoring alerts จากข้อมูลล่าสุด' : 'ต้องซิงก์ Meta workspace ก่อน'}
-          />
-        )}
-      </SectionCard>
-      <AuditPanel auditTrail={auditTrail} />
     </TwoColumnPage>
   )
 }

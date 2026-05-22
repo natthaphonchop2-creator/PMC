@@ -34,28 +34,28 @@ export function AnalyticsDashboard({
     <div className="pa-route-stack">
       <section className="pa-route-metrics" aria-label="Analytics dashboard metrics">
         <MetricCard
-          detail={autoMode === 'on' ? 'low-risk publishing guardrails active' : 'suggestions require operator click'}
+          detail={autoMode === 'on' ? 'เปิดเฉพาะงานความเสี่ยงต่ำ' : 'คำแนะนำรอให้ทีมกดเอง'}
           icon={Power}
-          label="Auto mode"
+          label="สถานะ Auto"
           tone={autoMode === 'on' ? 'good' : 'neutral'}
-          value={autoMode === 'on' ? 'ON' : 'OFF'}
+          value={autoMode === 'on' ? 'เปิด' : 'ปิด'}
         />
         <MetricCard
-          detail={`${summary.pages} connected page${summary.pages === 1 ? '' : 's'}`}
+          detail={`${summary.pages} เพจที่เชื่อมต่อ`}
           icon={Users}
-          label="Followers"
+          label="ผู้ติดตาม"
           tone={summary.followers > 0 ? 'good' : 'watch'}
           value={formatNumber(summary.followers)}
         />
         <MetricCard
-          detail={`${highPriorityUnread} high priority unread`}
+          detail={`${highPriorityUnread} รายการควรตอบก่อน`}
           icon={Inbox}
-          label="Unread"
+          label="ข้อความรอตอบ"
           tone={summary.unread > 0 ? 'watch' : 'good'}
           value={formatNumber(summary.unread)}
         />
         <MetricCard
-          detail={adsInsight ? `Ads bridge ${adsInsight.source.datePreset}` : 'waiting for Ads AI bridge'}
+          detail={adsInsight ? `ช่วงข้อมูล ${adsInsight.source.datePreset}` : 'รอข้อมูล Ads สำหรับประกอบรายงาน'}
           icon={BarChart3}
           label="Ads ROAS"
           tone={adsInsight ? 'good' : 'neutral'}
@@ -66,8 +66,8 @@ export function AnalyticsDashboard({
       <div className="pa-grid">
         <PageAutomationPanel
           className="pa-span-7"
-          subtitle="Page health combined with read-only Ads AI performance for the active page scope."
-          title="Joint Ads + Page insight"
+          subtitle="อ่านสุขภาพเพจร่วมกับข้อมูลโฆษณาที่เกี่ยวข้อง"
+          title="ภาพรวม Ads + Page"
         >
           {adsInsight && leadingPage ? (
             <div className="pa-insight-card">
@@ -75,8 +75,8 @@ export function AnalyticsDashboard({
                 <span className="pa-kicker">{leadingPage.name}</span>
                 <h3>{jointInsightTitle(leadingPage, adsInsight.metrics.roas)}</h3>
                 <p>
-                  {formatNumber(leadingPage.followers)} followers, {leadingPage.engagementRate.toFixed(1)}% engagement,
-                  and {formatMoney(adsInsight.metrics.spend)} spend in the Ads AI bridge.
+                  {formatNumber(leadingPage.followers)} ผู้ติดตาม, การมีส่วนร่วม {leadingPage.engagementRate.toFixed(1)}%,
+                  และใช้งบ {formatMoney(adsInsight.metrics.spend)} ในข้อมูล Ads ล่าสุด
                 </p>
               </div>
               <div className="pa-insight-stats">
@@ -88,38 +88,38 @@ export function AnalyticsDashboard({
             </div>
           ) : (
             <PageAutomationState
-              detail={pages.length ? 'Ads AI bridge has not returned a page scope yet.' : 'Connect a Meta page to unlock page and Ads-linked analytics.'}
+              detail={pages.length ? 'ยังไม่มีข้อมูล Ads ที่จับคู่กับเพจนี้' : 'เชื่อมต่อเพจก่อนเพื่อดูรายงานร่วมกับข้อมูล Ads'}
               tone={pages.length ? 'watch' : 'neutral'}
-              title="No joint insight available"
+              title="ยังไม่มีภาพรวมร่วม"
             />
           )}
         </PageAutomationPanel>
 
         <PageAutomationPanel
           className="pa-span-5"
-          subtitle="Operational signals for dashboard triage."
-          title={view === 'analytics' ? 'Analytics quality' : 'Command queue'}
+          subtitle="สัญญาณสำคัญที่ช่วยจัดลำดับงานประจำวัน"
+          title={view === 'analytics' ? 'คุณภาพข้อมูลรายงาน' : 'คิวงานวันนี้'}
         >
           <div className="pa-list">
             <PageAutomationState
-              detail={summary.avgHealth ? `${Math.round(summary.avgHealth)}% average page health` : 'No page health returned'}
+              detail={summary.avgHealth ? `สุขภาพเพจเฉลี่ย ${Math.round(summary.avgHealth)}%` : 'ยังไม่มีข้อมูลสุขภาพเพจ'}
               tone={summary.avgHealth >= 80 ? 'good' : summary.avgHealth > 0 ? 'watch' : 'neutral'}
-              title="Page health"
+              title="สุขภาพเพจ"
             />
             <PageAutomationState
-              detail={messages.length ? `${messages.length} inbox items loaded` : 'No message data returned by polling'}
+              detail={messages.length ? `โหลดข้อความแล้ว ${messages.length} รายการ` : 'ยังไม่มีข้อความจาก Meta ในช่วงนี้'}
               tone={summary.unread > 0 ? 'watch' : 'good'}
-              title="Inbox data"
+              title="ข้อมูลข้อความ"
             />
             <PageAutomationState
-              detail={adsInsight ? `${adsInsight.recommendations.length} approval-required Ads recommendations` : 'No Ads recommendations available'}
+              detail={adsInsight ? `${adsInsight.recommendations.length} คำแนะนำจาก Ads ที่ควรตรวจ` : 'ยังไม่มีคำแนะนำจาก Ads'}
               tone={adsInsight ? 'good' : 'neutral'}
-              title="Ads AI context"
+              title="บริบทจาก Ads"
             />
           </div>
         </PageAutomationPanel>
 
-        <PageAutomationPanel className="pa-span-12" subtitle="Top pages by current Page Automation health score." title="Page health scan">
+        <PageAutomationPanel className="pa-span-12" subtitle="เรียงเพจตามคะแนนสุขภาพล่าสุด" title="สุขภาพเพจทั้งหมด">
           {pages.length ? (
             <div className="pa-page-health-list compact">
               {pages.slice(0, view === 'analytics' ? 8 : 4).map((page) => (
@@ -128,8 +128,8 @@ export function AnalyticsDashboard({
                     <strong>{page.name}</strong>
                     <p>{page.handle}</p>
                   </div>
-                  <span>{formatNumber(page.followers)} followers</span>
-                  <span>{page.engagementRate.toFixed(1)}% engagement</span>
+                  <span>{formatNumber(page.followers)} ผู้ติดตาม</span>
+                  <span>{page.engagementRate.toFixed(1)}% การมีส่วนร่วม</span>
                   <div className="pa-health-meter" aria-label={`${page.name} health ${Math.round(page.healthScore)} percent`}>
                     <span style={{ width: `${Math.max(0, Math.min(100, page.healthScore))}%` }} />
                   </div>
@@ -140,8 +140,8 @@ export function AnalyticsDashboard({
             <div className="pa-empty-state">
               <CheckCircle2 size={18} />
               <div>
-                <strong>No pages to analyze</strong>
-                <p>Meta page data or cache data is required before this dashboard can rank page health.</p>
+                <strong>ยังไม่มีเพจให้วิเคราะห์</strong>
+                <p>เชื่อมต่อเพจก่อน ระบบจึงจะจัดอันดับสุขภาพเพจได้</p>
               </div>
             </div>
           )}
@@ -180,18 +180,18 @@ function MetricCard({
 
 function jointInsightTitle(page: ManagedPage, roas: number) {
   if (page.healthScore >= 85 && roas >= 3) {
-    return 'Healthy page with strong paid demand'
+    return 'เพจแข็งแรงและโฆษณามีแรงตอบรับดี'
   }
 
   if (page.healthScore < 70 && roas >= 3) {
-    return 'Paid demand is stronger than page health'
+    return 'โฆษณาดี แต่เพจยังต้องปรับการดูแล'
   }
 
   if (page.unreadCount > 0) {
-    return 'Inbox pressure may be holding back conversion'
+    return 'ข้อความค้างอาจกระทบโอกาสปิดการขาย'
   }
 
-  return 'Page and Ads signals are ready for review'
+  return 'ข้อมูลเพจและ Ads พร้อมให้ทีมตรวจ'
 }
 
 function formatNumber(value: number) {

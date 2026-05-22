@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App, { AnalyticsPage, CreativeStudioPage } from '../src/App'
+import App, { AnalyticsPage, CreativeStudioPage, ReportsPage } from '../src/App'
 import { HomeApp } from '../src/apps/home/HomeApp'
 import { PageAutomationApp } from '../src/apps/page-automation/PageAutomationApp'
 
@@ -104,6 +104,199 @@ describe('Home app shell', () => {
     expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
   })
 
+  it('shows a Revenue Overview from real analytics data instead of reference placeholders', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[
+          {
+            aiTag: 'แข็งแรง',
+            budget: 120000,
+            conversions: 140,
+            cpa: 520,
+            ctr: 6.1,
+            deliveryStatus: 'active',
+            frequency: 3.8,
+            id: 'campaign-1',
+            name: 'ตัวรี MSG เติมไขมัน 9900',
+            revenue: 138324,
+            roas: 1.9,
+            spend: 72807,
+            status: 'Active',
+            tone: 'good',
+          },
+          {
+            aiTag: 'เฝ้าดู',
+            budget: 60000,
+            conversions: 30,
+            cpa: 780,
+            ctr: 4.2,
+            deliveryStatus: 'active',
+            frequency: 5.1,
+            id: 'campaign-2',
+            name: 'Review Botox Lead',
+            revenue: 42000,
+            roas: 1.2,
+            spend: 35000,
+            status: 'Watch',
+            tone: 'watch',
+          },
+        ]}
+        funnelMetrics={[]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[
+          { bookings: 18, date: '2026-05-16', day: 'May 16', revenue: 38000, spend: 22000 },
+          { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
+          { bookings: 52, date: '2026-05-18', day: 'May 18', revenue: 80324, spend: 54807 },
+        ]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('Revenue Overview')
+    expect(text).toContain('Total Revenue')
+    expect(text).toContain('Bookings')
+    expect(text).toContain('Paid Cases')
+    expect(text).toContain('Conversion Rate')
+    expect(text).toContain('Revenue by Campaign')
+    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900')
+    expect(text).toContain('฿180k')
+    expect(html).not.toContain('revenue-sparkline')
+    expect(html).not.toContain('แนวโน้มย่อ')
+    expect(text).not.toContain('Welcome back, James')
+    expect(text).not.toContain('$24,560')
+    expect(text).not.toContain('Website')
+    expect(text).not.toContain('Mobile App')
+  })
+
+  it('uses the selected ECharts engine for Ads analytics charts without placeholder data', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[
+          {
+            aiTag: 'แข็งแรง',
+            budget: 120000,
+            conversions: 140,
+            cpa: 520,
+            ctr: 6.1,
+            deliveryStatus: 'active',
+            frequency: 3.8,
+            id: 'campaign-1',
+            name: 'ตัวรี MSG เติมไขมัน 9900',
+            revenue: 138324,
+            roas: 1.9,
+            spend: 72807,
+            status: 'Active',
+            tone: 'good',
+          },
+          {
+            aiTag: 'เฝ้าดู',
+            budget: 60000,
+            conversions: 30,
+            cpa: 780,
+            ctr: 4.2,
+            deliveryStatus: 'active',
+            frequency: 5.1,
+            id: 'campaign-2',
+            name: 'Review Botox Lead',
+            revenue: 42000,
+            roas: 1.2,
+            spend: 35000,
+            status: 'Watch',
+            tone: 'watch',
+          },
+        ]}
+        funnelMetrics={[
+          { count: 20000, conversionRate: 100, dropOffRate: 0, stage: 'Impressions' },
+          { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
+          { count: 170, conversionRate: 13.9, dropOffRate: 86.1, stage: 'Bookings' },
+        ]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[
+          { bookings: 18, date: '2026-05-16', day: 'May 16', revenue: 38000, spend: 22000 },
+          { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
+          { bookings: 52, date: '2026-05-18', day: 'May 18', revenue: 80324, spend: 54807 },
+        ]}
+      />,
+    )
+
+    expect(countOccurrences(html, 'data-chart-engine="echarts"')).toBe(4)
+    expect(countOccurrences(html, 'data-chart-source="real"')).toBe(4)
+    expect(html).toContain('data-chart-style="sharp-lines"')
+    expect(html).toContain('aria-label="Revenue Overview chart"')
+    expect(html).toContain('aria-label="Revenue by Campaign chart"')
+    expect(html).toContain('aria-label="Funnel คลินิก chart"')
+    expect(html).toContain('aria-label="กราฟข้อมูลแคมเปญ"')
+    expect(html).not.toContain('$24,560')
+    expect(html).not.toContain('Website')
+    expect(html).not.toContain('Mobile App')
+  })
+
+  it('shows period changes from each metric own real trend instead of reusing booking trend', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 600,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 200,
+          revenue: 600,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[
+          { bookings: 100, date: '2026-05-16', day: 'May 16', revenue: 100, spend: 0, treatments: 20 },
+          { bookings: 100, date: '2026-05-17', day: 'May 17', revenue: 100, spend: 0, treatments: 20 },
+          { bookings: 200, date: '2026-05-18', day: 'May 18', revenue: 200, spend: 0, treatments: 80 },
+          { bookings: 200, date: '2026-05-19', day: 'May 19', revenue: 200, spend: 0, treatments: 80 },
+        ]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('Paid Cases')
+    expect(text).toContain('↑ 300.0%')
+    expect(text).toContain('จาก paid cases รายวัน')
+    expect(text).toContain('Conversion Rate')
+    expect(text).toContain('33.3%')
+    expect(text).toContain('↑ 100.0%')
+    expect(text).toContain('จาก paid / booking รายวัน')
+    expect(countOccurrences(text, '↑ 100.0%')).toBe(3)
+    expect(text).not.toContain('จริง')
+  })
+
   it('does not show the audit trail panel on Ads analytics', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
@@ -131,6 +324,96 @@ describe('Home app shell', () => {
     expect(text).not.toContain('Audit Trail ล่าสุด')
     expect(text).not.toContain('การอนุมัติ เหตุการณ์ซิงก์ และผลการดำเนินการ')
     expect(html).not.toContain('audit-panel')
+  })
+
+  it('keeps Reports focused on report creation instead of system monitoring panels', () => {
+    const html = renderToStaticMarkup(
+      <ReportsPage
+        datePreset="7 วันล่าสุด"
+        metaInfo={{
+          accountName: 'PMC Meta Account',
+          adAccountId: 'act_123',
+          fetchedAt: '2026-05-22T00:00:00.000Z',
+          graphVersion: 'v23.0',
+          source: 'test',
+          workspaceLabel: 'PMC Workspace',
+        }}
+        preparedReport={false}
+        recommendations={[]}
+        setPreparedReport={() => undefined}
+        summary={{
+          aov: 0,
+          bookings: 0,
+          budget: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        syncState="Synced"
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('ตัวสร้างรายงาน')
+    expect(text).toContain('รายงานฉบับร่าง')
+    expect(html).toContain('report-text-preview')
+    expect(text).not.toContain('Phase 4 Learning & Monitoring')
+    expect(text).not.toContain('รัน Outcome Learning')
+    expect(text).not.toContain('Audit Trail ล่าสุด')
+    expect(text).not.toContain('การอนุมัติ เหตุการณ์ซิงก์ และผลการดำเนินการ')
+    expect(html).not.toContain('audit-panel')
+  })
+
+  it('does not present deterministic Meta guardrail actions as AI approval items', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[
+          {
+            action: 'ลดงบ 10-15%',
+            confidence: 80,
+            evidence: 'ROAS 0.84x ต่ำกว่าเกณฑ์',
+            guardrail: 'ตรวจข้อมูลล่าสุดก่อนดำเนินการ',
+            id: 'meta-action-campaign-1-budget-protection',
+            impact: 'ลด spend leakage',
+            risk: 'Medium',
+            targetName: 'ป้องกันงบและตรวจ Tracking',
+            title: 'ป้องกันงบและตรวจ Tracking',
+          },
+        ]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('คำแนะนำที่รออนุมัติ')
+    expect(text).toContain('รายการที่ AI คัดมาให้คุณตรวจ')
+    expect(text).toContain('ยังไม่มีรายการที่ต้องอนุมัติ')
+    expect(text).toContain('เมื่อคุณให้ AI วิเคราะห์ข้อมูลล่าสุด')
+    expect(text).not.toContain('ป้องกันงบและตรวจ Tracking')
+    expect(text).not.toContain('Meta metrics')
+    expect(text).not.toContain('PMC Master Agent')
+    expect(text).not.toContain('หลังผู้ใช้')
+    expect(text).not.toContain('AI เท่านั้น')
+    expect(text).not.toContain('AI จริง')
   })
 
   it('shows Creative Studio as updating while the full workspace is paused', () => {
@@ -212,19 +495,35 @@ describe('Home app shell', () => {
     expect(html).not.toContain('home-action-mark')
   })
 
-  it('uses the same PMC logo treatment on Page Automation', () => {
-    withPathname('/page-automation/messages', () => {
-      const html = renderToStaticMarkup(<PageAutomationApp />)
+  it('renders the inbox-first Page Automation shell at root and messages routes', () => {
+    for (const pathname of ['/page-automation', '/page-automation/messages']) {
+      withPathname(pathname, () => {
+        const html = renderToStaticMarkup(<PageAutomationApp />)
 
-      expect(countOccurrences(html, 'src="/pmc-page-auto-logo.png?v=transparent"')).toBe(1)
-      expect(html).toContain('PMC Page Automation')
-      expect(html).toContain('href="/page-automation"')
-      expect(html).toContain('href="/"')
-      expect(html).toContain('กลับ Home')
-      expect(html).toContain('aria-label="กลับหน้า Home"')
-      expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
-      expect(html).not.toContain('<a class="pa-back-link" href="/" title="กลับ PMC Ads Agent">PMC</a>')
-    })
+        expect(countOccurrences(html, 'src="/pmc-page-auto-logo.png?v=transparent"')).toBe(1)
+        expect(html).toContain('PMC Page Auto')
+        expect(html).toContain('ศูนย์จัดการเพจและข้อความ')
+        expect(html).toContain('ข้อความ')
+        expect(html).toContain('โพสต์')
+        expect(html).toContain('วิเคราะห์เพจ')
+        expect(html).toContain('รายงาน')
+        expect(countOccurrences(html, 'href="/page-automation"')).toBe(1)
+        expect(html).not.toContain('href="/page-automation/messages"')
+        expect(html).toContain('href="/"')
+        expect(html).toContain('กลับ Home')
+        expect(html).toContain('aria-label="กลับหน้า Home"')
+        expect(html).toContain('กำลังโหลด')
+        expect(html).toContain('Auto ปิด')
+        expect(html).toContain('ทีมตรวจได้ก่อนส่ง')
+        expect(html).toContain('pa-inbox-workspace')
+        expect(html).toContain('ข้อความที่ควรดู')
+        expect(html).not.toContain('Meta API operations')
+        expect(html).not.toContain('Unified inbox')
+        expect(html).not.toContain('Dashboard')
+        expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
+        expect(html).not.toContain('<a class="pa-back-link" href="/" title="กลับ PMC Ads Agent">PMC</a>')
+      })
+    }
   })
 
   it('keeps Home and Page Automation on the PMC Ads palette', () => {
@@ -236,6 +535,9 @@ describe('Home app shell', () => {
       expect(css).toContain('#2f86eb')
       expect(css).toContain('#30d5a8')
     }
+    expect(pageCss).toContain('.pa-inbox-workspace')
+    expect(pageCss).toContain('grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.42fr) minmax(250px, 0.8fr)')
+    expect(pageCss).toContain('@media (max-width: 760px)')
     expect(pageCss).not.toContain('#242424')
     expect(pageCss).not.toContain('#e16447')
   })
@@ -244,6 +546,18 @@ describe('Home app shell', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 
     expect(html).not.toContain('home-count')
+  })
+
+  it('keeps the Ads sidebar AI notice from overlapping the mascot image', () => {
+    const appCss = readText('../src/App.css')
+    const mascotStageRule = appCss.match(/\.sidebar-mascot-stage\s*\{[^}]+\}/)?.[0] ?? ''
+    const mascotMessageRule = appCss.match(/\.sidebar-mascot-message\s*\{[^}]+\}/)?.[0] ?? ''
+
+    expect(mascotStageRule).toContain('grid-template-rows: auto auto')
+    expect(mascotStageRule).toContain('gap: 20px')
+    expect(mascotMessageRule).toContain('position: relative')
+    expect(mascotMessageRule).not.toContain('position: absolute')
+    expect(mascotMessageRule).not.toContain('transform: translateX(-50%)')
   })
 
   it('has dedicated compact Home rules for tablet, phone, and narrow phone widths', () => {

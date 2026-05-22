@@ -7,11 +7,11 @@ import type {
 } from './types'
 
 export const PAGE_AUTOMATION_ROUTES: Array<{ id: PageAutomationRouteId; href: string; label: string }> = [
-  { id: 'dashboard', href: '/page-automation', label: 'Dashboard' },
-  { id: 'auto-post', href: '/page-automation/auto-post', label: 'Ads Auto Post' },
+  { id: 'dashboard', href: '/page-automation', label: 'ข้อความ' },
+  { id: 'auto-post', href: '/page-automation/auto-post', label: 'โพสต์' },
   { id: 'pages', href: '/page-automation/pages', label: 'วิเคราะห์เพจ' },
-  { id: 'messages', href: '/page-automation/messages', label: 'กล่องข้อความรวม' },
-  { id: 'analytics', href: '/page-automation/analytics', label: 'Analytics' },
+  { id: 'messages', href: '/page-automation/messages', label: 'ข้อความ' },
+  { id: 'analytics', href: '/page-automation/analytics', label: 'รายงาน' },
 ]
 
 export const FEATURE_PERMISSION_REQUIREMENTS: Record<PageAutomationFeature, PageAutomationPermission[]> = {

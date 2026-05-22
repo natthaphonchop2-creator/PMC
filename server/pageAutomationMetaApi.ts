@@ -1,11 +1,18 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { ManagedPageRecord, PageAutomationPermission, PageAutomationPermissionReport } from './pageAutomationTypes.js'
-import type { PageMessage, PageMessageIntent, PageMessagePriority, PageMessageSentiment } from '../src/apps/page-automation/types'
+import type {
+  PageMessage,
+  PageMessageHistoryItem,
+  PageMessageIntent,
+  PageMessagePriority,
+  PageMessageSentiment,
+} from '../src/apps/page-automation/types'
 
 const DEFAULT_GRAPH_HOST = 'https://graph.facebook.com'
 const DEFAULT_GRAPH_VERSION = 'v21.0'
 const LOCAL_CONFIG_FILE = resolve(process.cwd(), '.meta-api.local.json')
+const CONVERSATION_HISTORY_LIMIT = 20
 
 const FACEBOOK_REQUIRED: PageAutomationPermission[] = [
   'pages_show_list',
@@ -27,6 +34,14 @@ const FACEBOOK_PERMISSION_VALUES = new Set<PageAutomationPermission>([
   'leads_retrieval',
 ])
 const GRAPH_PAGE_PERMISSION_KEYS = ['perms', 'permissions', 'granted_permissions', 'tasks'] as const
+const GRAPH_PAGE_TASK_PERMISSION_MAP: Partial<Record<string, PageAutomationPermission[]>> = {
+  ADVERTISE: ['ads_read'],
+  ANALYZE: ['pages_read_engagement'],
+  CREATE_CONTENT: ['pages_manage_posts'],
+  MANAGE: ['pages_show_list', 'pages_manage_metadata'],
+  MESSAGING: ['pages_messaging'],
+  MODERATE: ['pages_read_user_content'],
+}
 
 export type PageAutomationMetaConfig = {
   accessToken?: string
@@ -70,6 +85,13 @@ type PageAccountsPayload = {
   data?: MetaPageRecord[]
 }
 
+type PageAccessTokensPayload = {
+  data?: Array<{
+    id?: string
+    access_token?: string
+  }>
+}
+
 type PageInsightsPayload = {
   data?: Array<{
     name: string
@@ -88,7 +110,14 @@ type PageConversationsPayload = {
         message?: string
         created_time?: string
         from?: {
+          id?: string
           name?: string
+        }
+        to?: {
+          data?: Array<{
+            id?: string
+            name?: string
+          }>
         }
       }>
     }
@@ -195,14 +224,20 @@ export async function fetchPageMessages(
   if (!requestConfig) throw new Error('Meta API access token is required for Page Automation messages')
 
   const messagePages = pages.filter((page) => page.platform === 'facebook' && hasGrantedPermission(page, 'pages_messaging'))
+  if (!messagePages.length) return []
+
+  const pageAccessTokens = await fetchPageAccessTokens(requestConfig, fetchImpl)
   const messages = await Promise.all(
     messagePages.map(async (page) => {
+      const pageAccessToken = pageAccessTokens.get(page.id)
+      if (!pageAccessToken) return []
+
       const payload = await graphGet<PageConversationsPayload>(
-        requestConfig,
+        { ...requestConfig, accessToken: pageAccessToken },
         `/${requestConfig.graphVersion}/${encodeURIComponent(page.id)}/conversations`,
         fetchImpl,
         {
-          fields: 'id,updated_time,unread_count,messages.limit(1){id,message,created_time,from}',
+          fields: `id,updated_time,unread_count,messages.limit(${CONVERSATION_HISTORY_LIMIT}){id,message,created_time,from,to}`,
           limit: 25,
         },
       )
@@ -212,6 +247,19 @@ export async function fetchPageMessages(
   )
 
   return messages.flat()
+}
+
+async function fetchPageAccessTokens(config: GraphRequestConfig, fetchImpl: typeof fetch) {
+  const payload = await graphGet<PageAccessTokensPayload>(config, `/${config.graphVersion}/me/accounts`, fetchImpl, {
+    fields: 'id,access_token',
+    limit: 100,
+  })
+
+  return new Map(
+    (payload.data ?? [])
+      .filter((page) => typeof page.id === 'string' && typeof page.access_token === 'string' && page.access_token.trim())
+      .map((page) => [page.id as string, (page.access_token as string).trim()]),
+  )
 }
 
 export function buildPermissionReport(
@@ -239,14 +287,18 @@ function messageFromConversation(
   page: ManagedPageRecord,
   conversation: NonNullable<PageConversationsPayload['data']>[number],
 ): PageMessage[] {
-  const latestMessage = conversation.messages?.data?.[0]
+  const graphMessages = conversation.messages?.data ?? []
+  const latestMessage = latestGraphMessage(graphMessages)
   if (!conversation.id || !latestMessage?.id) return []
 
   const receivedAt = normalizeIsoDate(latestMessage.created_time || conversation.updated_time)
   const redacted = redactMessageText(latestMessage.message ?? '')
+  const history = conversationHistoryFromGraph(page, graphMessages)
+  const privacyFlags = uniqueStrings([...redacted.flags, ...graphMessages.flatMap((message) => redactMessageText(message.message ?? '').flags)])
   const intent = classifyMessageIntent(redacted.text)
   const sentiment = classifyMessageSentiment(redacted.text)
   const unread = numericValue(conversation.unread_count) > 0
+  const customerDisplayName = history.find((item) => item.senderRole === 'customer')?.senderName || latestCustomerName(page, latestMessage)
 
   return [
     {
@@ -254,18 +306,60 @@ function messageFromConversation(
       messageId: latestMessage.id,
       pageId: page.id,
       channel: 'facebook_message',
-      customerDisplayName: latestMessage.from?.name?.trim() || 'Customer',
+      customerDisplayName,
       textExcerpt: redacted.text,
       receivedAt,
       unread,
-      priority: classifyMessagePriority({ intent, privacyFlags: redacted.flags, sentiment, unread }),
+      priority: classifyMessagePriority({ intent, privacyFlags, sentiment, unread }),
       status: unread ? 'new' : 'open',
       sentiment,
       intent,
       slaDueAt: addMinutesIso(receivedAt, 30),
-      privacyFlags: redacted.flags,
+      privacyFlags,
+      history,
     },
   ]
+}
+
+type GraphConversationMessages = NonNullable<NonNullable<PageConversationsPayload['data']>[number]['messages']>
+type GraphConversationMessage = NonNullable<GraphConversationMessages['data']>[number]
+
+function latestGraphMessage(messages: GraphConversationMessage[] = []) {
+  return [...messages].sort((left, right) => timestampForSort(right.created_time) - timestampForSort(left.created_time))[0]
+}
+
+function conversationHistoryFromGraph(page: ManagedPageRecord, messages: GraphConversationMessage[] = []): PageMessageHistoryItem[] {
+  return messages
+    .filter((message) => typeof message.id === 'string' && message.id.trim())
+    .map((message) => {
+      const redacted = redactMessageText(message.message ?? '')
+      const role = messageSenderRole(page, message)
+
+      return {
+        messageId: message.id as string,
+        senderName: message.from?.name?.trim() || (role === 'page' ? page.name : 'Customer'),
+        senderRole: role,
+        text: redacted.text,
+        createdAt: normalizeIsoDate(message.created_time),
+      }
+    })
+    .sort((left, right) => timestampForSort(left.createdAt) - timestampForSort(right.createdAt))
+}
+
+function messageSenderRole(page: ManagedPageRecord, message: GraphConversationMessage): PageMessageHistoryItem['senderRole'] {
+  const fromId = message.from?.id?.trim()
+  const fromName = message.from?.name?.trim().toLowerCase()
+  const pageName = page.name.trim().toLowerCase()
+
+  if ((fromId && fromId === page.id) || (fromName && fromName === pageName)) return 'page'
+  if (fromId || fromName) return 'customer'
+  return 'unknown'
+}
+
+function latestCustomerName(page: ManagedPageRecord, message: GraphConversationMessage) {
+  const role = messageSenderRole(page, message)
+  if (role === 'customer') return message.from?.name?.trim() || 'Customer'
+  return 'Customer'
 }
 
 function redactMessageText(value: string) {
@@ -322,10 +416,19 @@ function normalizeIsoDate(value: string | undefined) {
   return Number.isFinite(time) ? new Date(time).toISOString() : new Date().toISOString()
 }
 
+function timestampForSort(value: string | undefined) {
+  const time = Date.parse(value || '')
+  return Number.isFinite(time) ? time : Number.NEGATIVE_INFINITY
+}
+
 function addMinutesIso(value: string, minutes: number) {
   const time = Date.parse(value)
   const base = Number.isFinite(time) ? time : Date.now()
   return new Date(base + minutes * 60_000).toISOString()
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))]
 }
 
 async function graphGet<T>(
@@ -483,6 +586,11 @@ function extractGrantedFacebookPermissions(page: MetaPageRecord) {
       const normalized = permission.trim()
       if (FACEBOOK_PERMISSION_VALUES.has(normalized as PageAutomationPermission)) {
         granted.add(normalized as PageAutomationPermission)
+        continue
+      }
+
+      for (const mappedPermission of GRAPH_PAGE_TASK_PERMISSION_MAP[normalized.toUpperCase()] ?? []) {
+        granted.add(mappedPermission)
       }
     }
   }

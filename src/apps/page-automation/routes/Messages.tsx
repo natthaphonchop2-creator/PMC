@@ -29,49 +29,49 @@ export function Messages({ adsInsight, autoMode, messages, pages, summary }: Mes
     <div className="pa-grid">
       <PageAutomationPanel
         className="pa-span-8"
-        subtitle="Cross-page queue for messages, comments, mentions, reviews, and ad comments."
-        title="Unified inbox"
+        subtitle="รวมข้อความ คอมเมนต์ และรายการที่ควรตอบจากทุกเพจ"
+        title="กล่องข้อความรวม"
       >
         {messages.length ? (
           <div className="pa-message-list">
             {messages.map((message) => (
-              <MessageItem key={message.messageId} message={message} pageName={pageById.get(message.pageId)?.name ?? 'Unknown page'} />
+              <MessageItem key={message.messageId} message={message} pageName={pageById.get(message.pageId)?.name ?? 'เพจที่เชื่อมต่อ'} />
             ))}
           </div>
         ) : (
           <div className="pa-empty-state">
             {inboxPermissionNotice ? <ShieldAlert size={20} /> : <Inbox size={20} />}
             <div>
-              <strong>{inboxPermissionNotice?.title ?? 'No message data yet'}</strong>
+              <strong>{inboxPermissionNotice?.title ?? 'ยังไม่มีข้อความใหม่จาก Meta ในช่วงนี้'}</strong>
               <p>
-                {inboxPermissionNotice?.detail ?? 'The polling endpoint returned no messages for connected pages.'}
+                {inboxPermissionNotice?.detail ?? 'เมื่อมีข้อความใหม่ ระบบจะแสดงรายการที่ควรตอบก่อน'}
               </p>
             </div>
           </div>
         )}
       </PageAutomationPanel>
 
-      <PageAutomationPanel className="pa-span-4" subtitle="Inbox decisions remain operator-controlled in v1." title="Triage panel">
+      <PageAutomationPanel className="pa-span-4" subtitle="คำตอบจาก AI เป็นร่างให้ทีมตรวจ ไม่ส่งแทนทีม" title="การจัดลำดับข้อความ">
         <div className="pa-list">
           <PageAutomationState
-            detail={autoMode === 'on' ? 'Auto ON does not send customer replies directly' : 'Reply suggestions require human send'}
+            detail={autoMode === 'on' ? 'Auto เปิดอยู่ แต่ไม่ส่งข้อความลูกค้าแทนทีม' : 'คำแนะนำต้องให้ทีมกดส่งเอง'}
             tone="neutral"
-            title="Reply policy"
+            title="กติกาการตอบ"
           />
           <PageAutomationState
-            detail={`${summary.unread} unread across ${summary.pages} page${summary.pages === 1 ? '' : 's'}`}
+            detail={`${summary.unread} รายการยังไม่ได้อ่าน จาก ${summary.pages} เพจ`}
             tone={summary.unread > 0 ? 'watch' : 'good'}
-            title="Unread queue"
+            title="ข้อความรอตอบ"
           />
           <PageAutomationState
-            detail={adsInsight ? `Ads ROAS ${adsInsight.metrics.roas.toFixed(2)}x may inform triage context` : 'No Ads bridge context loaded'}
+            detail={adsInsight ? `ROAS ${adsInsight.metrics.roas.toFixed(2)}x ใช้ประกอบการจัดลำดับ` : 'ยังไม่มีข้อมูล Ads สำหรับประกอบการจัดลำดับ'}
             tone={adsInsight ? 'good' : 'neutral'}
-            title="Ads context"
+            title="บริบทจาก Ads"
           />
         </div>
       </PageAutomationPanel>
 
-      <PageAutomationPanel className="pa-span-12" subtitle="Selected conversation preview with AI summary and SLA state." title="Conversation detail">
+      <PageAutomationPanel className="pa-span-12" subtitle="ดูข้อความที่เลือก พร้อมสรุปและร่างคำตอบจาก AI" title="รายละเอียดข้อความ">
         {selectedMessage ? (
           <article className="pa-message-detail">
             <div>
@@ -80,17 +80,17 @@ export function Messages({ adsInsight, autoMode, messages, pages, summary }: Mes
               <p>{selectedMessage.aiSummary ?? selectedMessage.textExcerpt}</p>
             </div>
             <div className="pa-message-detail-grid">
-              <span>Intent {intentLabel(selectedMessage.intent)}</span>
-              <span>Status {statusLabel(selectedMessage.status)}</span>
-              <span>SLA {formatDateTime(selectedMessage.slaDueAt)}</span>
-              <span>{selectedMessage.privacyFlags.length ? selectedMessage.privacyFlags.join(', ') : 'No privacy flag'}</span>
+              <span>ประเภท {intentLabel(selectedMessage.intent)}</span>
+              <span>สถานะ {statusLabel(selectedMessage.status)}</span>
+              <span>ควรตอบก่อน {formatDateTime(selectedMessage.slaDueAt)}</span>
+              <span>{selectedMessage.privacyFlags.length ? selectedMessage.privacyFlags.join(', ') : 'ไม่มีข้อมูลส่วนตัวที่ระบบพบ'}</span>
             </div>
             <label className="pa-field wide">
-              <span>Reply draft</span>
+              <span>ร่างคำตอบ</span>
               <textarea
                 readOnly
                 rows={4}
-                value="Draft-only response area. Operators review and send from the approved Meta messaging flow."
+                value="พื้นที่ร่างคำตอบเท่านั้น ทีมต้องตรวจ แก้ และกดส่งเองผ่านขั้นตอนที่อนุมัติไว้"
               />
             </label>
           </article>
@@ -98,7 +98,7 @@ export function Messages({ adsInsight, autoMode, messages, pages, summary }: Mes
           <PageAutomationState
             detail={conversationEmptyDetail(unknownPermissionPages.length, missingMessagingPages.length)}
             tone={unknownPermissionPages.length || missingMessagingPages.length ? 'watch' : 'neutral'}
-            title="No conversation selected"
+            title="ยังไม่ได้เลือกข้อความ"
           />
         )}
       </PageAutomationPanel>
@@ -138,15 +138,15 @@ function hasMissingMessagingPermission(page: ManagedPage) {
 function inboxPermissionNoticeFor(unknownCount: number, missingMessagingCount: number) {
   if (unknownCount > 0) {
     return {
-      title: 'Permission state unknown',
-      detail: `${unknownCount} page record${unknownCount === 1 ? '' : 's'} do not include permission reports yet, so inbox polling cannot be confirmed.`,
+      title: 'ยังตรวจสิทธิ์ข้อความไม่ได้',
+      detail: `มี ${unknownCount} เพจที่ยังไม่มีรายงานสิทธิ์ จึงยังยืนยันการอ่านกล่องข้อความไม่ได้`,
     }
   }
 
   if (missingMessagingCount > 0) {
     return {
-      title: 'Messaging permission missing',
-      detail: `${missingMessagingCount} page record${missingMessagingCount === 1 ? '' : 's'} need Meta messaging permissions before polling can populate this inbox.`,
+      title: 'สิทธิ์ข้อความยังไม่ครบ',
+      detail: `มี ${missingMessagingCount} เพจที่ต้องเพิ่มสิทธิ์ข้อความก่อน ระบบจึงจะอ่านกล่องข้อความได้`,
     }
   }
 
@@ -155,14 +155,14 @@ function inboxPermissionNoticeFor(unknownCount: number, missingMessagingCount: n
 
 function conversationEmptyDetail(unknownCount: number, missingMessagingCount: number) {
   if (unknownCount > 0) {
-    return 'Permission state unknown for connected pages. Confirm Meta permission reports before treating this as an empty inbox.'
+    return 'ยังไม่มีรายงานสิทธิ์ของบางเพจ ตรวจสิทธิ์ Meta ก่อนสรุปว่าไม่มีข้อความใหม่'
   }
 
   if (missingMessagingCount > 0) {
-    return 'Missing Meta messaging permissions block message content.'
+    return 'ยังอ่านข้อความไม่ได้ เพราะสิทธิ์ข้อความของ Meta ยังไม่ครบ'
   }
 
-  return 'Select a message after polling returns data.'
+  return 'เลือกข้อความหลังจากระบบโหลดข้อมูลจาก Meta'
 }
 
 function channelLabel(channel: PageMessage['channel']) {

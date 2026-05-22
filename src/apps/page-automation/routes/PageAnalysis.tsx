@@ -26,32 +26,32 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
   return (
     <div className="pa-route-stack">
       <section className="pa-route-metrics" aria-label="Page analysis metrics">
-        <MetricCard detail={`${summary.pages} connected`} icon={Users} label="Pages" tone={summary.pages ? 'good' : 'watch'} value={formatNumber(summary.pages)} />
+        <MetricCard detail={`${summary.pages} เพจที่เชื่อมต่อ`} icon={Users} label="เพจ" tone={summary.pages ? 'good' : 'watch'} value={formatNumber(summary.pages)} />
         <MetricCard
-          detail="combined page audience"
+          detail="ผู้ติดตามรวมจากทุกเพจ"
           icon={Activity}
-          label="Followers"
+          label="ผู้ติดตาม"
           tone={summary.followers ? 'good' : 'neutral'}
           value={formatNumber(summary.followers)}
         />
         <MetricCard
-          detail={`${messages.filter((message) => message.priority === 'high').length} high priority`}
+          detail={`${messages.filter((message) => message.priority === 'high').length} รายการควรตอบก่อน`}
           icon={ShieldCheck}
-          label="Unread"
+          label="ข้อความรอตอบ"
           tone={summary.unread > 0 ? 'watch' : 'good'}
           value={formatNumber(summary.unread)}
         />
         <MetricCard
-          detail={autoMode === 'on' ? 'guarded by permissions and freshness' : 'analysis only'}
+          detail={autoMode === 'on' ? 'เปิดเฉพาะรายการความเสี่ยงต่ำ' : 'แนะนำเท่านั้น'}
           icon={BarChart3}
-          label="Auto context"
+          label="สถานะ Auto"
           tone={autoMode === 'on' ? 'watch' : 'neutral'}
-          value={autoMode === 'on' ? 'ON' : 'OFF'}
+          value={autoMode === 'on' ? 'เปิด' : 'ปิด'}
         />
       </section>
 
       <div className="pa-grid">
-        <PageAutomationPanel className="pa-span-8" subtitle="Followers, engagement, unread load, and health by connected page." title="Page health matrix">
+        <PageAutomationPanel className="pa-span-8" subtitle="ดูผู้ติดตาม การมีส่วนร่วม ข้อความรอตอบ และคะแนนสุขภาพของแต่ละเพจ" title="สุขภาพเพจ">
           {pages.length ? (
             <div className="pa-page-health-list">
               {pages.map((page) => (
@@ -60,9 +60,9 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
                     <strong>{page.name}</strong>
                     <p>{page.handle} · {page.platform}</p>
                   </div>
-                  <span>{formatNumber(page.followers)} followers</span>
-                  <span>{page.engagementRate.toFixed(1)}% engagement</span>
-                  <span>{page.unreadCount} unread</span>
+                  <span>{formatNumber(page.followers)} ผู้ติดตาม</span>
+                  <span>{page.engagementRate.toFixed(1)}% การมีส่วนร่วม</span>
+                  <span>{page.unreadCount} ข้อความรอตอบ</span>
                   <div className="pa-health-meter" aria-label={`${page.name} health ${Math.round(page.healthScore)} percent`}>
                     <span style={{ width: `${Math.max(0, Math.min(100, page.healthScore))}%` }} />
                   </div>
@@ -74,20 +74,20 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
             <div className="pa-empty-state">
               <Users size={20} />
               <div>
-                <strong>No connected pages</strong>
-                <p>Meta page data or cache data is required before Page Analysis can calculate health.</p>
+                <strong>ยังไม่มีเพจที่เชื่อมต่อ</strong>
+                <p>เชื่อมต่อเพจก่อน ระบบจึงจะวิเคราะห์สุขภาพเพจได้</p>
               </div>
             </div>
           )}
         </PageAutomationPanel>
 
-        <PageAutomationPanel className="pa-span-4" subtitle="Permission-specific degradation instead of one global error." title="Permission hints">
+        <PageAutomationPanel className="pa-span-4" subtitle="แสดงสิทธิ์ที่ต้องตรวจเพิ่มแยกตามเพจ" title="สิทธิ์ที่ต้องตรวจ">
           {hasPermissionNotices ? (
             <div className="pa-page-permissions">
               {pagesWithUnknownPermissions.map((page) => (
                 <article className="pa-permission-hint" key={`${page.id}-unknown`}>
                   <strong>{page.name}</strong>
-                  <p>Permission state unknown: no permission reports loaded.</p>
+                  <p>ยังไม่มีรายงานสิทธิ์ของเพจนี้</p>
                 </article>
               ))}
               {pagesWithPermissionHints.map((page) => (
@@ -101,18 +101,18 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
             <PageAutomationState
               detail={pages.length ? 'All required permissions reported granted in current page reports.' : 'No page permission reports loaded.'}
               tone={pages.length ? 'good' : 'neutral'}
-              title="Permission state"
+              title="สิทธิ์พร้อมใช้งาน"
             />
           )}
         </PageAutomationPanel>
 
-        <PageAutomationPanel className="pa-span-7" subtitle="Read-only paid media context used to enrich Page Analysis." title="Ads AI context">
+        <PageAutomationPanel className="pa-span-7" subtitle="ใช้ข้อมูล Ads ที่มีอยู่เพื่อช่วยอ่านสุขภาพเพจ ไม่ดำเนินการแทนทีม" title="บริบทจาก Ads">
           {adsInsight ? (
             <div className="pa-insight-card compact">
               <div>
-                <span className="pa-kicker">{adsInsight.scope.pageName ?? 'Mapped page scope'}</span>
-                <h3>{adsInsight.findings[0]?.title ?? 'Ads bridge loaded'}</h3>
-                <p>{adsInsight.findings[0]?.summary ?? 'Paid media metrics are available for page-level analysis.'}</p>
+                <span className="pa-kicker">{adsInsight.scope.pageName ?? 'เพจที่เชื่อมกับข้อมูล Ads'}</span>
+                <h3>{adsInsight.findings[0]?.title ?? 'มีข้อมูล Ads สำหรับประกอบการวิเคราะห์'}</h3>
+                <p>{adsInsight.findings[0]?.summary ?? 'มีข้อมูลแคมเปญสำหรับช่วยอ่านภาพรวมของเพจนี้'}</p>
               </div>
               <div className="pa-insight-stats">
                 <span>ROAS {adsInsight.metrics.roas.toFixed(2)}x</span>
@@ -121,21 +121,21 @@ export function PageAnalysis({ adsInsight, autoMode, messages, pages, summary }:
               </div>
             </div>
           ) : (
-            <PageAutomationState detail="Page health can load without Ads AI, but Ads-linked recommendations need the bridge." title="No Ads AI context" />
+            <PageAutomationState detail="ยังไม่มีข้อมูล Ads สำหรับเพจนี้ ระบบยังวิเคราะห์สุขภาพเพจจากข้อมูล Meta ได้" title="ยังไม่มีบริบทจาก Ads" />
           )}
         </PageAutomationPanel>
 
-        <PageAutomationPanel className="pa-span-5" subtitle="Operational load that can affect page health." title="Inbox pressure">
+        <PageAutomationPanel className="pa-span-5" subtitle="ภาระข้อความที่อาจกระทบคุณภาพการดูแลเพจ" title="ภาระข้อความ">
           <div className="pa-list">
             <PageAutomationState
-              detail={`${summary.unread} unread messages across connected pages`}
+              detail={`${summary.unread} ข้อความยังไม่ได้อ่านจากทุกเพจ`}
               tone={summary.unread > 0 ? 'watch' : 'good'}
-              title="Unread messages"
+              title="ข้อความรอตอบ"
             />
             <PageAutomationState
-              detail={`${messages.filter((message) => message.intent === 'complaint').length} complaint intent items`}
+              detail={`${messages.filter((message) => message.intent === 'complaint').length} รายการที่อาจเป็นเรื่องร้องเรียน`}
               tone={messages.some((message) => message.intent === 'complaint') ? 'critical' : 'good'}
-              title="Complaint load"
+              title="เรื่องที่ควรระวัง"
             />
           </div>
         </PageAutomationPanel>

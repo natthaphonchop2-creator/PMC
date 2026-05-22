@@ -117,10 +117,10 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
       }))
       await onDraftsChanged()
       setDraftIntentState('saved')
-      setDraftIntentMessage(status === 'draft' ? 'Draft saved for operator review.' : 'Draft intent sent to approval queue.')
+      setDraftIntentMessage(status === 'draft' ? 'บันทึกแบบร่างแล้ว ทีมสามารถกลับมาตรวจต่อได้' : 'ส่งรายการเข้าคิวให้ทีมอนุมัติแล้ว')
     } catch (error) {
       setDraftIntentState('error')
-      setDraftIntentMessage(error instanceof Error ? error.message : 'Draft intent failed')
+      setDraftIntentMessage(error instanceof Error ? error.message : 'บันทึกร่างโพสต์ไม่สำเร็จ')
     }
   }
 
@@ -134,10 +134,10 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
       const result = await schedulePostDraft(readyDraft.id, defaultScheduleTime())
       await onDraftsChanged()
       setScheduleIntentState('saved')
-      setScheduleIntentMessage(`Scheduled ${result.draft.title} for ${formatDateTime(result.draft.scheduledAt ?? '')}.`)
+      setScheduleIntentMessage(`ตั้งเวลา ${result.draft.title} ไว้ที่ ${formatDateTime(result.draft.scheduledAt ?? '')}`)
     } catch (error) {
       setScheduleIntentState('error')
-      setScheduleIntentMessage(error instanceof Error ? error.message : 'Schedule intent failed')
+      setScheduleIntentMessage(error instanceof Error ? error.message : 'ตั้งเวลาโพสต์ไม่สำเร็จ')
     }
   }
 
@@ -145,8 +145,8 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
     <div className="pa-grid">
       <PageAutomationPanel
         className="pa-span-8"
-        subtitle="Draft, review, scheduled, posted, and failed states for page-level content work."
-        title="Content pipeline"
+        subtitle="ติดตามแบบร่าง รายการรออนุมัติ รายการตั้งเวลา และผลลัพธ์หลังเผยแพร่"
+        title="โพสต์ที่กำลังเตรียม"
       >
         <div className="pa-pipeline-board">
           {pipelineColumns.map((column) => (
@@ -165,7 +165,7 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
                     </article>
                   ))
                 ) : (
-                  <div className="pa-pipeline-empty">No items</div>
+                  <div className="pa-pipeline-empty">ยังไม่มีรายการ</div>
                 )}
               </div>
             </section>
@@ -175,8 +175,8 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
 
       <PageAutomationPanel
         className="pa-span-4"
-        subtitle="Auto ON remains limited to low-risk eligible page posts."
-        title="Policy guardrail"
+        subtitle="Auto เปิดได้เฉพาะโพสต์ความเสี่ยงต่ำ รายการไม่ชัดเจนต้องให้ทีมอนุมัติ"
+        title="กติกาก่อนโพสต์"
       >
         <div className="pa-guardrail-card">
           {eligibility.state === 'auto_eligible' ? <CheckCircle2 size={19} /> : <CircleAlert size={19} />}
@@ -187,32 +187,32 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
         </div>
 
         <div className="pa-guardrail-list">
-          <GuardrailRow label="Auto mode" value={autoMode === 'on' ? 'ON, low-risk only' : 'OFF, suggest-only'} tone={autoMode === 'on' ? 'watch' : 'neutral'} />
-          <GuardrailRow label="Surface" value="Facebook feed v1" tone="good" />
-          <GuardrailRow label="Ads confidence" value={adsConfidenceLabel(adsInsight, draftPolicy)} tone={adsConfidenceTone(adsInsight, draftPolicy)} />
-          <GuardrailRow label="Guardrail score" value={`${guardrailScore}/100`} tone={guardrailScore >= 90 ? 'good' : 'watch'} />
-          <GuardrailRow label="Unread inbox" value={`${summary.unread} pending`} tone={summary.unread > 0 ? 'watch' : 'good'} />
+          <GuardrailRow label="สถานะ Auto" value={autoMode === 'on' ? 'เปิดเฉพาะความเสี่ยงต่ำ' : 'ปิด แนะนำเท่านั้น'} tone={autoMode === 'on' ? 'watch' : 'neutral'} />
+          <GuardrailRow label="ช่องทางโพสต์" value="Facebook feed" tone="good" />
+          <GuardrailRow label="ความมั่นใจจาก Ads" value={adsConfidenceLabel(adsInsight, draftPolicy)} tone={adsConfidenceTone(adsInsight, draftPolicy)} />
+          <GuardrailRow label="คะแนนความปลอดภัย" value={`${guardrailScore}/100`} tone={guardrailScore >= 90 ? 'good' : 'watch'} />
+          <GuardrailRow label="ข้อความรอตอบ" value={`${summary.unread} รายการ`} tone={summary.unread > 0 ? 'watch' : 'good'} />
         </div>
 
         <PageAutomationState
-          detail="Replies and Ads changes stay draft-only here. Meta write actions require the dedicated backend path and policy result."
+          detail="ระบบช่วยเตรียมโพสต์ได้ แต่รายการที่มีความเสี่ยงหรือข้อมูลไม่ครบต้องให้ทีมตรวจ"
           tone="neutral"
-          title="No direct Meta write from this screen"
+          title="ไม่มีการเผยแพร่รายการเสี่ยงเอง"
         />
       </PageAutomationPanel>
 
-      <PageAutomationPanel className="pa-span-7" subtitle="Operator-edited draft fields before any schedule or approval queue step." title="Draft composer">
+      <PageAutomationPanel className="pa-span-7" subtitle="ทีมตรวจและแก้ข้อความก่อนส่งเข้าคิวอนุมัติหรือตั้งเวลา" title="ร่างโพสต์">
         <div className="pa-form-grid">
           <label className="pa-field">
-            <span>Page</span>
-            <input readOnly value={selectedPage ? `${selectedPage.name} (${selectedPage.handle})` : 'No connected page'} />
+            <span>เพจ</span>
+            <input readOnly value={selectedPage ? `${selectedPage.name} (${selectedPage.handle})` : 'ยังไม่ได้เชื่อมต่อเพจ'} />
           </label>
           <label className="pa-field">
-            <span>Objective</span>
-            <input readOnly value={adsInsight ? 'Educational post from current Ads + Page signal' : 'Page education draft'} />
+            <span>เป้าหมาย</span>
+            <input readOnly value={adsInsight ? 'โพสต์ให้ความรู้จากข้อมูล Ads และเพจล่าสุด' : 'โพสต์ให้ความรู้สำหรับเพจ'} />
           </label>
           <label className="pa-field wide">
-            <span>Caption draft</span>
+            <span>ข้อความร่าง</span>
             <textarea
               readOnly
               rows={5}
@@ -221,17 +221,17 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
           </label>
           <label className="pa-field">
             <span>CTA</span>
-            <input readOnly value="Inbox for consultation" />
+            <input readOnly value="ทักแชทเพื่อปรึกษา" />
           </label>
           <label className="pa-field">
-            <span>Destination</span>
-            <input readOnly value={selectedPage ? selectedPage.handle : 'Select page first'} />
+            <span>ปลายทาง</span>
+            <input readOnly value={selectedPage ? selectedPage.handle : 'เลือกเพจก่อน'} />
           </label>
         </div>
 
         <div className="pa-action-row">
           <button className="pa-button" disabled={!selectedPage || draftIntentState === 'saving'} onClick={() => void handleCreateDraft('draft')} type="button">
-            Save draft
+            บันทึกแบบร่าง
           </button>
           <button
             className="pa-button primary"
@@ -239,13 +239,13 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
             onClick={() => void handleCreateDraft('needs_review')}
             type="button"
           >
-            Send to approval
+            ส่งให้ทีมอนุมัติ
           </button>
           <button className="pa-button" disabled={!canMarkEligible || draftIntentState === 'saving'} onClick={() => void handleCreateDraft('ready')} type="button">
-            Mark eligible
+            ทำเครื่องหมายว่าพร้อมตั้งเวลา
           </button>
           <button className="pa-button" disabled={!readyDraft || scheduleIntentState === 'saving'} onClick={() => void handleScheduleReadyDraft()} type="button">
-            Schedule ready draft
+            ตั้งเวลาโพสต์ที่พร้อมแล้ว
           </button>
         </div>
 
@@ -253,7 +253,7 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
           <PageAutomationState
             detail={draftIntentMessage}
             tone={draftIntentState === 'error' ? 'critical' : 'good'}
-            title={draftIntentState === 'error' ? 'Draft intent failed' : 'Draft intent recorded'}
+            title={draftIntentState === 'error' ? 'บันทึกร่างไม่สำเร็จ' : 'บันทึกร่างแล้ว'}
           />
         ) : null}
 
@@ -261,27 +261,27 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
           <PageAutomationState
             detail={scheduleIntentMessage}
             tone={scheduleIntentState === 'error' ? 'critical' : 'good'}
-            title={scheduleIntentState === 'error' ? 'Schedule intent failed' : 'Schedule intent recorded'}
+            title={scheduleIntentState === 'error' ? 'ตั้งเวลาไม่สำเร็จ' : 'ตั้งเวลาแล้ว'}
           />
         ) : null}
       </PageAutomationPanel>
 
-      <PageAutomationPanel className="pa-span-5" subtitle="Freshness, permission, and source checks for the draft candidate." title="Decision context">
+      <PageAutomationPanel className="pa-span-5" subtitle="ตรวจความสดของข้อมูล สิทธิ์เพจ และบริบทจาก Ads ก่อนสร้างโพสต์" title="ข้อมูลประกอบการตัดสินใจ">
         <div className="pa-list">
           <PageAutomationState
-            detail={adsInsight ? `checked ${formatDateTime(adsInsight.source.checkedAt)}` : 'Ads AI bridge not available'}
+            detail={adsInsight ? `ตรวจล่าสุด ${formatDateTime(adsInsight.source.checkedAt)}` : 'ยังไม่มีข้อมูล Ads สำหรับเพจนี้'}
             tone={adsInsight ? 'good' : 'critical'}
-            title="Ads AI source"
+            title="ข้อมูล Ads"
           />
           <PageAutomationState
-            detail={selectedPage ? `page synced ${formatDateTime(selectedPage.lastSyncedAt)}` : 'No page record loaded'}
+            detail={selectedPage ? `ซิงก์ล่าสุด ${formatDateTime(selectedPage.lastSyncedAt)}` : 'ยังไม่มีข้อมูลเพจ'}
             tone={selectedPage ? 'good' : 'watch'}
-            title="Page data"
+            title="ข้อมูลเพจ"
           />
           <PageAutomationState
             detail={permissionState.detail}
             tone={permissionState.tone}
-            title="Permission state"
+            title="สิทธิ์ของเพจ"
           />
         </div>
       </PageAutomationPanel>
@@ -330,10 +330,10 @@ function buildPostDraft({
     pageId: page.id,
     pageName: page.name,
     channel: publishSurface,
-    title: adsInsight ? 'Educational post from current Ads + Page signal' : 'Page education draft',
-    objective: adsInsight ? 'Ads-informed page education' : 'Page education',
+    title: adsInsight ? 'โพสต์ให้ความรู้จากข้อมูล Ads และเพจ' : 'โพสต์ให้ความรู้จากข้อมูลเพจ',
+    objective: adsInsight ? 'ให้ความรู้จากข้อมูล Ads และเพจ' : 'ให้ความรู้และชวนทักแชท',
     captionTh: caption,
-    cta: 'Inbox for consultation',
+    cta: 'ทักแชทเพื่อปรึกษา',
     destination: page.handle,
     status,
     autoEligible,
@@ -359,57 +359,60 @@ function buildPipelineColumns({
   selectedPage?: ManagedPage
 }) {
   const baseDraft: PipelineItem = {
-    detail: selectedPage ? `${selectedPage.name} education post from page health and Ads signal` : 'Waiting for connected page data',
+    detail: selectedPage ? `โพสต์ให้ความรู้สำหรับ ${selectedPage.name} จากสุขภาพเพจและสัญญาณ Ads` : 'รอข้อมูลเพจที่เชื่อมต่อ',
     id: 'suggested-service-education',
-    meta: adsInsight ? `ROAS ${adsInsight.metrics.roas.toFixed(2)}x` : 'No Ads scope',
-    title: 'Service education draft',
+    meta: adsInsight ? `ROAS ${adsInsight.metrics.roas.toFixed(2)}x` : 'ยังไม่มีบริบท Ads',
+    title: 'ร่างโพสต์ให้ความรู้บริการ',
     tone: selectedPage ? 'neutral' : 'watch',
   }
   const inboxDraft: PipelineItem = {
-    detail: `${messages.filter((message) => message.unread).length} unread inbox items remain human-reply only`,
+    detail: `มีข้อความยังไม่ได้อ่าน ${messages.filter((message) => message.unread).length} รายการ คำตอบยังต้องให้ทีมตรวจ`,
     id: 'suggested-inbox-faq',
-    meta: 'Reply suggestions are draft-only',
-    title: 'Inbox FAQ angle',
+    meta: 'คำตอบจาก AI เป็นร่างเท่านั้น',
+    title: 'แนวทางตอบคำถามจากแชท',
     tone: messages.some((message) => message.priority === 'high') ? 'watch' : 'neutral',
   }
   const eligibilityItem: PipelineItem = {
     detail: eligibility.reason,
     id: 'policy-facebook-feed-candidate',
-    meta: eligibility.state.replace('_', ' '),
-    title: 'Facebook feed candidate',
+    meta: eligibilityStateLabel(eligibility.state),
+    title: 'โพสต์สำหรับ Facebook feed',
     tone: eligibility.state === 'auto_eligible' ? 'good' : eligibility.state === 'needs_approval' ? 'watch' : 'critical',
   }
-  const draftItems = drafts.map(pipelineItemFromDraft)
-  const draftColumnItems = [baseDraft, inboxDraft, ...draftItems.filter((draft) => draft.meta === 'draft')]
+  const draftColumnItems = [baseDraft, inboxDraft, ...pipelineItemsFromDraftStatus(drafts, ['draft'])]
   const readyItems = [
-    ...draftItems.filter((draft) => draft.meta === 'ready'),
+    ...pipelineItemsFromDraftStatus(drafts, ['ready']),
     ...(eligibility.state === 'auto_eligible' ? [eligibilityItem] : []),
   ]
   const reviewItems = [
-    ...draftItems.filter((draft) => draft.meta === 'needs review'),
+    ...pipelineItemsFromDraftStatus(drafts, ['needs_review']),
     ...(eligibility.state === 'needs_approval' ? [eligibilityItem] : []),
   ]
   const failedItems = [
-    ...draftItems.filter((draft) => draft.meta === 'failed' || draft.meta === 'blocked'),
+    ...pipelineItemsFromDraftStatus(drafts, ['failed', 'blocked']),
     ...(eligibility.state === 'blocked' ? [eligibilityItem] : []),
   ]
 
   return [
-    { items: draftColumnItems, title: 'Draft' },
-    { items: readyItems, title: 'Ready' },
-    { items: reviewItems, title: 'Needs Review' },
-    { items: draftItems.filter((draft) => draft.meta === 'scheduled'), title: 'Scheduled' },
-    { items: draftItems.filter((draft) => draft.meta === 'posted'), title: 'Posted' },
-    { items: failedItems, title: 'Failed' },
+    { items: draftColumnItems, title: 'แบบร่าง' },
+    { items: readyItems, title: 'พร้อมตั้งเวลา' },
+    { items: reviewItems, title: 'รออนุมัติ' },
+    { items: pipelineItemsFromDraftStatus(drafts, ['scheduled']), title: 'ตั้งเวลาแล้ว' },
+    { items: pipelineItemsFromDraftStatus(drafts, ['posted']), title: 'เผยแพร่แล้ว' },
+    { items: failedItems, title: 'ต้องแก้ไข' },
   ]
+}
+
+function pipelineItemsFromDraftStatus(drafts: PostDraft[], statuses: PostDraftStatus[]) {
+  return drafts.filter((draft) => statuses.includes(draft.status)).map(pipelineItemFromDraft)
 }
 
 function pipelineItemFromDraft(draft: PostDraft): PipelineItem {
   return {
-    detail: draft.captionTh || draft.objective || `${draft.channel.replaceAll('_', ' ')} content`,
+    detail: userFacingDraftText(draft.captionTh || draft.objective || draft.channel),
     id: draft.id,
-    meta: draft.status.replace('_', ' '),
-    title: draft.title,
+    meta: draftStatusLabel(draft.status),
+    title: userFacingDraftText(draft.title),
     tone: pipelineToneForDraft(draft),
   }
 }
@@ -520,8 +523,8 @@ function containsSensitiveHealthDetail(sourceText: string) {
 }
 
 function adsConfidenceLabel(adsInsight: SharedAdsInsightForPage | null, draftPolicy: DraftPolicyContext) {
-  if (!adsInsight) return 'missing'
-  if (!draftPolicy.hasExplicitAdsConfidence) return 'unknown, below auto threshold'
+  if (!adsInsight) return 'ยังไม่มีข้อมูล'
+  if (!draftPolicy.hasExplicitAdsConfidence) return 'ยังไม่พอสำหรับ Auto'
   return `${Math.round(draftPolicy.adsAiConfidence * 100)}%`
 }
 
@@ -543,25 +546,25 @@ function latestPermissionSync(page: ManagedPage | undefined) {
 }
 
 function eligibilityLabel(eligibility: AutoEligibilityResult) {
-  if (eligibility.state === 'auto_eligible') return 'Eligible for low-risk Auto ON'
-  if (eligibility.state === 'needs_approval') return 'Needs human approval'
-  return 'Blocked until fixed'
+  if (eligibility.state === 'auto_eligible') return 'พร้อมสำหรับ Auto ความเสี่ยงต่ำ'
+  if (eligibility.state === 'needs_approval') return 'ต้องให้ทีมอนุมัติก่อน'
+  return 'ต้องแก้ไขก่อนใช้งาน'
 }
 
 function draftCaptionFromInsight(adsInsight: SharedAdsInsightForPage, page?: ManagedPage) {
   const pageName = page?.name ?? adsInsight.scope.pageName ?? 'เพจ'
   const signal = adsInsight.creativeSignals[0]?.creative ?? adsInsight.recommendations[0]?.action ?? 'หัวข้อให้ความรู้'
-  return `${pageName}: ${signal}\n\nโพสต์นี้เป็น draft สำหรับตรวจจากทีมก่อนใช้งานจริง โดยอิงจาก Ads AI แบบ read-only และข้อมูลเพจล่าสุด`
+  return `${pageName}: ${signal}\n\nโพสต์นี้เป็นแบบร่างสำหรับให้ทีมตรวจก่อนใช้งานจริง โดยอิงจากข้อมูล Ads และข้อมูลเพจล่าสุด`
 }
 
 function permissionStateFor(page: ManagedPage | undefined): PermissionStateSummary {
   if (!page) {
-    return { detail: 'No page permission report loaded.', tone: 'neutral' }
+    return { detail: 'ยังไม่มีรายงานสิทธิ์ของเพจ', tone: 'neutral' }
   }
 
   if (!page.permissions.length) {
     return {
-      detail: 'Permission state unknown: no permission report loaded for this page.',
+      detail: 'ยังตรวจสิทธิ์ของเพจไม่ได้ เพราะไม่มีรายงานสิทธิ์สำหรับเพจนี้',
       tone: 'watch',
     }
   }
@@ -570,13 +573,39 @@ function permissionStateFor(page: ManagedPage | undefined): PermissionStateSumma
   const missing = missingStates.flatMap((state) => state.missing)
 
   if (!missing.length) {
-    return { detail: 'All required permissions reported granted', tone: 'good' }
+    return { detail: 'สิทธิ์ที่จำเป็นพร้อมใช้งาน', tone: 'good' }
   }
 
   return {
-    detail: `${missing.length} missing: ${missing.slice(0, 3).join(', ')}`,
+    detail: `ยังขาดสิทธิ์ ${missing.length} รายการ: ${missing.slice(0, 3).join(', ')}`,
     tone: missingStates.some((state) => state.feature.includes('publishing')) ? 'critical' : 'watch',
   }
+}
+
+function draftStatusLabel(status: PostDraftStatus) {
+  if (status === 'draft') return 'แบบร่าง'
+  if (status === 'ready') return 'พร้อมตั้งเวลา'
+  if (status === 'needs_review') return 'รออนุมัติ'
+  if (status === 'scheduled') return 'ตั้งเวลาแล้ว'
+  if (status === 'posted') return 'เผยแพร่แล้ว'
+  if (status === 'failed') return 'ไม่สำเร็จ'
+  return 'ถูกบล็อก'
+}
+
+function eligibilityStateLabel(state: AutoEligibilityResult['state']) {
+  if (state === 'auto_eligible') return 'พร้อม Auto'
+  if (state === 'needs_approval') return 'รออนุมัติ'
+  return 'ต้องแก้ไข'
+}
+
+function userFacingDraftText(value: string) {
+  if (value === 'Educational post from current Ads + Page signal') return 'โพสต์ให้ความรู้จากข้อมูล Ads และเพจ'
+  if (value === 'Ads-informed page education') return 'ให้ความรู้จากข้อมูล Ads และเพจ'
+  if (value === 'Page education draft') return 'โพสต์ให้ความรู้จากข้อมูลเพจ'
+  if (value === 'Page education') return 'ให้ความรู้และชวนทักแชท'
+  if (value === 'Inbox for consultation') return 'ทักแชทเพื่อปรึกษา'
+  if (value === 'facebook_feed') return 'โพสต์บน Facebook feed'
+  return value
 }
 
 function formatDateTime(value: string) {

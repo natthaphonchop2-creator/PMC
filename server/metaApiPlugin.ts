@@ -1853,12 +1853,20 @@ function buildAiInsights(campaigns: CampaignInsight[]): AIInsight[] {
   }))
 }
 
-function buildRecommendedActions(campaigns: CampaignInsight[]): RecommendedAction[] {
+export function buildRecommendedActions(campaigns: CampaignInsight[]): RecommendedAction[] {
   return campaigns
     .flatMap((campaign) => {
       const actions: RecommendedAction[] = []
       if (campaign.spend > 0 && campaign.conversions === 0) {
-        actions.push(makeAction(campaign, 'Tracking / budget protection', 'มี spend แต่ไม่มี conversion ใน Meta dataset', 'Pause or reduce spend until tracking and offer are verified', 'High', 84))
+        const isPaused = campaign.deliveryStatus === 'paused'
+        actions.push(makeAction(
+          campaign,
+          isPaused ? 'Tracking / reopen review' : 'Tracking / budget protection',
+          isPaused ? 'แคมเปญถูกพักอยู่แล้ว ตรวจ tracking, offer และ creative ก่อนเปิดกลับ' : 'มี spend แต่ไม่มี conversion ใน Meta dataset',
+          isPaused ? 'ตรวจสาเหตุก่อนเปิดกลับและอย่าส่งคำสั่งพักซ้ำ' : 'Pause or reduce spend until tracking and offer are verified',
+          'High',
+          84,
+        ))
       }
       if (campaign.roas > 0 && campaign.roas < 1.5) {
         actions.push(makeAction(campaign, 'Budget protection', `ROAS ${campaign.roas.toFixed(2)}x ต่ำกว่าเกณฑ์`, 'Reduce budget 10-15% and test new offer/creative', 'Medium', 80))
@@ -1890,12 +1898,14 @@ function makeAction(campaign: CampaignInsight, type: string, summary: string, af
     risk,
     confidence,
     status: 'pending',
+    source: 'meta_metrics',
     ...(execution ? { execution } : {}),
   }
 }
 
 function executionForRecommendedAction(campaign: CampaignInsight, type: string): RecommendedAction['execution'] | undefined {
   const normalizedType = type.toLowerCase()
+  if (campaign.deliveryStatus !== 'active') return undefined
   if (normalizedType.includes('budget protection') || normalizedType.includes('tracking')) {
     return {
       endpoint: '/api/meta/object-status',

@@ -1,10 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { AutoPost } from '../../src/apps/page-automation/routes/AutoPost'
+import { InboxWorkspace } from '../../src/apps/page-automation/routes/InboxWorkspace'
 import { Messages } from '../../src/apps/page-automation/routes/Messages'
 import { PageAnalysis } from '../../src/apps/page-automation/routes/PageAnalysis'
 import type {
   ManagedPage,
+  PageMessage,
   PageAutomationPermission,
   PageAutomationPermissionReport,
   SharedAdsInsightForPage,
@@ -50,9 +52,9 @@ describe('Page Automation route guardrails', () => {
       />,
     )
 
-    expect(html).toContain('Needs human approval')
-    expect(html).not.toContain('Eligible for low-risk Auto ON')
-    expect(html).toMatch(/<button(?=[^>]*disabled)[^>]*>\s*Mark eligible\s*<\/button>/)
+    expect(html).toContain('ต้องให้ทีมอนุมัติก่อน')
+    expect(html).not.toContain('พร้อมสำหรับ Auto ความเสี่ยงต่ำ')
+    expect(html).toMatch(/<button(?=[^>]*disabled)[^>]*>\s*ทำเครื่องหมายว่าพร้อมตั้งเวลา\s*<\/button>/)
   })
 
   it('uses an unknown Ads confidence state for creative signals without finding confidence', () => {
@@ -83,9 +85,9 @@ describe('Page Automation route guardrails', () => {
       />,
     )
 
-    expect(html).toContain('unknown, below auto threshold')
-    expect(html).toContain('Needs human approval')
-    expect(html).toMatch(/<button(?=[^>]*disabled)[^>]*>\s*Mark eligible\s*<\/button>/)
+    expect(html).toContain('ยังไม่พอสำหรับ Auto')
+    expect(html).toContain('ต้องให้ทีมอนุมัติก่อน')
+    expect(html).toMatch(/<button(?=[^>]*disabled)[^>]*>\s*ทำเครื่องหมายว่าพร้อมตั้งเวลา\s*<\/button>/)
   })
 
   it('shows unknown permission state in AutoPost instead of reporting all permissions granted', () => {
@@ -103,8 +105,8 @@ describe('Page Automation route guardrails', () => {
       />,
     )
 
-    expect(html).toContain('Permission state unknown')
-    expect(html).not.toContain('All reported permissions granted')
+    expect(html).toContain('ยังตรวจสิทธิ์ของเพจไม่ได้')
+    expect(html).not.toContain('สิทธิ์ที่จำเป็นพร้อมใช้งาน')
   })
 
   it('renders persisted draft pipeline records instead of only suggested cards', () => {
@@ -160,10 +162,10 @@ describe('Page Automation route guardrails', () => {
 
     expect(html).toContain('Persisted ready draft')
     expect(html).toContain('Persisted scheduled draft')
-    expect(html).toContain('Schedule ready draft')
+    expect(html).toContain('ตั้งเวลาโพสต์ที่พร้อมแล้ว')
   })
 
-  it('shows unknown permission state in PageAnalysis permission hints', () => {
+  it('shows Thai unknown permission state in PageAnalysis permission hints', () => {
     const page = makePage({ permissions: [] })
 
     const html = renderToStaticMarkup(
@@ -176,11 +178,11 @@ describe('Page Automation route guardrails', () => {
       />,
     )
 
-    expect(html).toContain('Permission state unknown')
+    expect(html).toContain('ยังไม่มีรายงานสิทธิ์ของเพจนี้')
     expect(html).not.toContain('No missing permissions in current page reports.')
   })
 
-  it('shows unknown permission state in Messages before treating an empty inbox as message data', () => {
+  it('shows Thai unknown permission state in Messages before treating an empty inbox as message data', () => {
     const page = makePage({ permissions: [] })
 
     const html = renderToStaticMarkup(
@@ -193,8 +195,188 @@ describe('Page Automation route guardrails', () => {
       />,
     )
 
-    expect(html).toContain('Permission state unknown')
+    expect(html).toContain('ยังตรวจสิทธิ์ข้อความไม่ได้')
     expect(html).not.toContain('The polling endpoint returned no messages for connected pages.')
+  })
+
+  it('renders the inbox-first workspace with user-facing Thai copy', () => {
+    const page = makePage({ name: 'Promed Clinic' })
+    const messages = [
+      makeMessage({
+        customerDisplayName: 'Yossaya Komonrat',
+        messageId: 'message-1',
+        pageId: page.id,
+        priority: 'high',
+        textExcerpt: 'สนใจเติมไขมันหน้า อยากทราบราคา',
+        unread: true,
+        history: [
+          {
+            messageId: 'history-1',
+            senderName: 'Yossaya Komonrat',
+            senderRole: 'customer',
+            text: 'สนใจเติมไขมันหน้า อยากทราบราคา',
+            createdAt: recentIso(12),
+          },
+          {
+            messageId: 'history-2',
+            senderName: 'Promed Clinic',
+            senderRole: 'page',
+            text: 'ทีมรับเรื่องแล้วค่ะ',
+            createdAt: recentIso(9),
+          },
+        ],
+      }),
+    ]
+
+    const html = renderToStaticMarkup(
+      <InboxWorkspace
+        adsInsight={null}
+        autoMode="on"
+        messages={messages}
+        pages={[page]}
+        summary={{ avgHealth: 54, followers: 102025, pages: 16, unread: 160 }}
+      />,
+    )
+
+    expect(html).toContain('ข้อความที่ควรดู')
+    expect(html).toContain('AI ร่างคำตอบให้ทีมตรวจ')
+    expect(html).toContain('Yossaya Komonrat')
+    expect(html).toContain('Promed Clinic')
+    expect(html).toContain('ประวัติแชท')
+    expect(html).toContain('ทีมรับเรื่องแล้วค่ะ')
+    expect(html).toContain('ยังไม่ได้อ่าน')
+    expect(html).toContain('ต้องให้ทีมกดส่งเอง')
+    expect(html).not.toContain('Unified inbox')
+    expect(html).not.toContain('operator-controlled')
+    expect(html).not.toContain('No data')
+  })
+
+  it('does not expose a fake automatic send action in the inbox workspace', () => {
+    const html = renderToStaticMarkup(
+      <InboxWorkspace
+        adsInsight={null}
+        autoMode="on"
+        messages={[makeMessage()]}
+        pages={[makePage()]}
+        summary={{ avgHealth: 54, followers: 102025, pages: 16, unread: 1 }}
+      />,
+    )
+
+    expect(html).toContain('คัดลอกคำตอบ')
+    expect(html).toContain('แก้ก่อนส่ง')
+    expect(html).toContain('ทำเครื่องหมายว่าตรวจแล้ว')
+    expect(html).not.toContain('ส่งอัตโนมัติ')
+    expect(html).not.toContain('Auto send')
+  })
+
+  it('uses a latest-message fallback when older chat history is not loaded yet', () => {
+    const html = renderToStaticMarkup(
+      <InboxWorkspace
+        adsInsight={null}
+        autoMode="off"
+        messages={[makeMessage({ history: undefined, textExcerpt: 'ข้อความล่าสุดจาก Meta' })]}
+        pages={[makePage()]}
+        summary={{ avgHealth: 54, followers: 102025, pages: 16, unread: 1 }}
+      />,
+    )
+
+    expect(html).toContain('ประวัติแชท')
+    expect(html).toContain('ข้อความล่าสุดจาก Meta')
+    expect(html).toContain('มีเฉพาะข้อความล่าสุดจากข้อมูลที่โหลดมา')
+  })
+
+  it('marks the selected inbox row with an accessible current indicator', () => {
+    const html = renderToStaticMarkup(
+      <InboxWorkspace
+        adsInsight={null}
+        autoMode="off"
+        messages={[
+          makeMessage({ customerDisplayName: 'Customer First', messageId: 'message-1', receivedAt: recentIso(5) }),
+          makeMessage({ customerDisplayName: 'Customer Selected', messageId: 'message-2', receivedAt: recentIso(2) }),
+        ]}
+        pages={[makePage()]}
+        selectedMessageId="message-2"
+        summary={{ avgHealth: 54, followers: 102025, pages: 16, unread: 2 }}
+      />,
+    )
+
+    expect(html).toMatch(/<button[^>]+aria-current="true"[^>]*>[\s\S]*Customer Selected[\s\S]*<\/button>/)
+  })
+
+  it('uses the rendered inbox unread count in the message status detail', () => {
+    const html = renderToStaticMarkup(
+      <InboxWorkspace
+        adsInsight={null}
+        autoMode="off"
+        messages={[makeMessage()]}
+        pages={[makePage()]}
+        summary={{ avgHealth: 54, followers: 102025, pages: 16, unread: 160 }}
+      />,
+    )
+
+    expect(html).toContain('1 รายการยังไม่ได้อ่าน')
+    expect(html).not.toContain('160 รายการยังไม่ได้อ่าน')
+  })
+
+  it('uses user-facing Thai copy on Auto Post and keeps approval gating clear', () => {
+    const html = renderToStaticMarkup(
+      <AutoPost
+        adsInsight={null}
+        autoMode="on"
+        drafts={[]}
+        messages={[]}
+        onDraftsChanged={() => undefined}
+        pages={[makePage()]}
+        summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
+      />,
+    )
+
+    expect(html).toContain('โพสต์ที่กำลังเตรียม')
+    expect(html).toContain('กติกาก่อนโพสต์')
+    expect(html).toContain('บันทึกแบบร่าง')
+    expect(html).toContain('ส่งให้ทีมอนุมัติ')
+    expect(html).not.toContain('Content pipeline')
+    expect(html).not.toContain('Policy guardrail')
+    expect(html).not.toContain('Operator-edited')
+    expect(html).not.toContain('Decision context')
+  })
+
+  it('renders persisted drafts with Thai text instead of stored English creation labels', () => {
+    const html = renderToStaticMarkup(
+      <AutoPost
+        adsInsight={null}
+        autoMode="off"
+        drafts={[
+          {
+            id: 'draft-created-by-auto-post',
+            pageId: 'page-1',
+            pageName: 'Fifth Clinic',
+            channel: 'facebook_feed',
+            title: 'Educational post from current Ads + Page signal',
+            objective: 'Ads-informed page education',
+            captionTh: '',
+            cta: 'Inbox for consultation',
+            destination: '@fifthclinic',
+            status: 'draft',
+            autoEligible: false,
+            guardrailScore: 91,
+            aiConfidence: 0.7,
+            createdAt: recentIso(3),
+            updatedAt: recentIso(2),
+          },
+        ]}
+        messages={[]}
+        onDraftsChanged={() => undefined}
+        pages={[makePage()]}
+        summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
+      />,
+    )
+
+    expect(html).toContain('โพสต์ให้ความรู้จากข้อมูล Ads และเพจ')
+    expect(html).toContain('ให้ความรู้จากข้อมูล Ads และเพจ')
+    expect(html).not.toContain('Educational post from current Ads + Page signal')
+    expect(html).not.toContain('Ads-informed page education')
+    expect(html).not.toContain('Inbox for consultation')
   })
 })
 
@@ -225,6 +407,26 @@ function makePermissionReport(overrides: Partial<PageAutomationPermissionReport>
     granted: fullFacebookPermissions,
     missing: [],
     checkedAt: recentIso(1),
+    ...overrides,
+  }
+}
+
+function makeMessage(overrides: Partial<PageMessage> = {}): PageMessage {
+  return {
+    conversationId: 'conversation-1',
+    messageId: 'message-1',
+    pageId: 'page-1',
+    channel: 'facebook_message',
+    customerDisplayName: 'Customer A',
+    textExcerpt: 'สนใจค่ะ อยากทราบราคา',
+    receivedAt: recentIso(3),
+    unread: true,
+    priority: 'medium',
+    status: 'new',
+    sentiment: 'neutral',
+    intent: 'price',
+    slaDueAt: recentIso(-27),
+    privacyFlags: [],
     ...overrides,
   }
 }
