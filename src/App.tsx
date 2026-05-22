@@ -4983,34 +4983,34 @@ function AutoAdsConfirmModal({
   )
 }
 
-function CreativeStudioPage({ components }: { components: WorkspaceData['insightComponents'] }) {
+export function CreativeStudioPage({ components }: { components: WorkspaceData['insightComponents'] }) {
+  const syncedCount = components.length
+
   return (
     <TwoColumnPage
       aside={
-        <AssistantPanel
-          title="ผู้ช่วยครีเอทีฟ"
-          text="ใช้หลักฐานจากตัวชนะ hook ใหม่ และข้อความที่ปลอดภัยด้าน compliance ก่อนปรับงบ"
+        <StatePanel
+          state="กลับมาทำต่อเร็ว ๆ นี้"
+          detail="หน้านี้ถูกพักไว้ชั่วคราวเพื่อปรับ workflow ครีเอทีฟให้ชัดกว่าเดิม ก่อนเปิดใช้งานอีกครั้ง"
+          tone="watch"
         />
       }
     >
-      <SectionCard collapsible title="ผลงานครีเอทีฟ" subtitle="ตัวชนะและรายการที่ควรรีเฟรชแยกตามบริการ">
-        <div className="card-grid">
-          {components.length > 0 ? (
-            components.map((asset) => (
-              <article className="mini-card" key={asset.id}>
-                <StatusBadge label={`คะแนน ${asset.score.toFixed(1)}`} tone={asset.tone} />
-                <h3>{asset.title}</h3>
-                <p>{asset.service}</p>
-                <MetricLine label="CTR" value={`${asset.ctr.toFixed(2)}%`} />
-                <MetricLine label="ต้นทุน / ผลลัพธ์" value={fmtMoney(asset.costPerResult)} />
-              </article>
-            ))
-          ) : (
-            <EmptyState title="ยังไม่มีข้อมูลครีเอทีฟ" detail="การ์ดผลงานครีเอทีฟจะแสดงหลังซิงก์ Meta ads และ insights สำเร็จ" />
-          )}
+      <section className="panel creative-updating-panel">
+        <StatusBadge label="กำลังอัพเดท" tone="watch" />
+        <h2>สตูดิโอครีเอทีฟกำลังอัพเดท</h2>
+        <p>ทีมกำลังปรับหน้า Creative Studio ให้ใช้งานได้ครบขึ้น ระหว่างนี้ข้อมูลครีเอทีฟและการทำงานต่อจากครีเอทีฟจะถูกพักไว้ก่อน</p>
+        <div className="creative-updating-meta" aria-label="สถานะข้อมูลครีเอทีฟ">
+          <MetricLine label="ข้อมูลครีเอทีฟที่ซิงก์ไว้" value={`${fmtNum(syncedCount)} รายการ`} />
+          <MetricLine label="สถานะหน้า" value="พักการใช้งานชั่วคราว" />
+          <MetricLine label="Action ใน Meta" value="ไม่มีการเขียนข้อมูลอัตโนมัติ" />
         </div>
-      </SectionCard>
-      <StatePanel state={`${components.length} ครีเอทีฟจากข้อมูลจริง`} detail="รายการครีเอทีฟมาจาก Meta ads และ insight rows ที่ซิงก์มา" tone={components.length > 0 ? 'info' : 'neutral'} />
+      </section>
+      <StatePanel
+        state="ข้อมูลครีเอทีฟที่ซิงก์ไว้ยังปลอดภัย"
+        detail="ข้อมูลจาก Meta ยังอยู่ใน workspace แต่หน้านี้จะไม่แนะนำหรือสร้างงานครีเอทีฟจนกว่าจะปรับ workflow เสร็จ"
+        tone={syncedCount > 0 ? 'info' : 'neutral'}
+      />
     </TwoColumnPage>
   )
 }
@@ -6113,17 +6113,6 @@ function SectionCard({
       <div id={contentId} className="panel-collapsible-content" role={collapsible ? 'region' : undefined} aria-label={collapsible ? title : undefined}>
         {isCollapsed ? <CollapsedPlaceholder title={title} /> : children}
       </div>
-    </section>
-  )
-}
-
-function AssistantPanel({ text, title }: { text: string; title: string }) {
-  return (
-    <section className="panel assistant-panel">
-      <img src="/pmc-ai-mascot.png" alt="" />
-      <h2>{title}</h2>
-      <p>{text}</p>
-      <StatusBadge label="คำแนะนำ" tone="violet" />
     </section>
   )
 }

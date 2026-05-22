@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App, { AnalyticsPage } from '../src/App'
+import App, { AnalyticsPage, CreativeStudioPage } from '../src/App'
 import { HomeApp } from '../src/apps/home/HomeApp'
 import { PageAutomationApp } from '../src/apps/page-automation/PageAutomationApp'
 
@@ -131,6 +131,41 @@ describe('Home app shell', () => {
     expect(text).not.toContain('Audit Trail ล่าสุด')
     expect(text).not.toContain('การอนุมัติ เหตุการณ์ซิงก์ และผลการดำเนินการ')
     expect(html).not.toContain('audit-panel')
+  })
+
+  it('shows Creative Studio as updating while the full workspace is paused', () => {
+    const html = renderToStaticMarkup(
+      <CreativeStudioPage
+        components={[
+          {
+            ads: 1,
+            campaignId: 'campaign-1',
+            clicks: 640,
+            costPerResult: 742,
+            ctr: 6.39,
+            id: 'creative-1',
+            purchaseValue: 138324,
+            results: 96,
+            roas: 3.2,
+            score: 8.5,
+            service: 'เติมไขมัน',
+            spend: 72000,
+            thumbTone: 'blue',
+            title: 'เติมไขมัน 9900',
+            tone: 'good',
+          },
+        ]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('สตูดิโอครีเอทีฟกำลังอัพเดท')
+    expect(text).toContain('ทีมกำลังปรับหน้า Creative Studio')
+    expect(text).toContain('ข้อมูลครีเอทีฟที่ซิงก์ไว้')
+    expect(text).toContain('กลับมาทำต่อเร็ว ๆ นี้')
+    expect(html).not.toContain('placeholder="ค้นหาครีเอทีฟ"')
+    expect(text).not.toContain('บรีฟครีเอทีฟ')
+    expect(text).not.toContain('ใช้เป็นต้นแบบ')
   })
 
   it('uses generated product logos for Ads and Page Auto entries on Home', () => {
