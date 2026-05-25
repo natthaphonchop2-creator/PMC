@@ -43,14 +43,14 @@ const adsLogoSrc = '/pmc-ads-logo.png?v=transparent'
 const pageAutoLogoSrc = '/pmc-page-auto-logo.png?v=transparent'
 
 const appDescriptions: Record<HomeTool['id'], string> = {
-  ads: 'ดูโฆษณาและคำแนะนำที่รออนุมัติ',
-  crm: 'ลูกค้าและงานติดตาม',
-  erp: 'งานหลังบ้าน เอกสาร และสต็อก',
-  knowledge: 'เอกสารและฐานความรู้สำหรับ AI',
-  page: 'จัดการข้อความ เพจ และโพสต์',
+  ads: 'ดูภาพรวมโฆษณาและคำแนะนำก่อนอนุมัติ',
+  crm: 'ดูข้อมูลลูกค้า งานติดตาม และโอกาสการขาย',
+  erp: 'จัดการงานปฏิบัติการ สต็อก เอกสาร และงานหลังบ้าน',
+  knowledge: 'ค้นหาเอกสารองค์กรและฐานความรู้สำหรับ AI',
+  page: 'จัดการโพสต์ ข้อความทุกเพจ วิเคราะห์เพจ และรายงาน',
   reports: 'สรุปผลและรายงาน',
   settings: 'ตั้งค่า Meta, AI และการเชื่อมต่อ',
-  website: 'พฤติกรรมผู้ใช้งานเว็บไซต์',
+  website: 'ดูพฤติกรรมผู้ใช้งานเว็บไซต์และเส้นทางก่อนติดต่อ',
 }
 
 export function HomeApp() {
