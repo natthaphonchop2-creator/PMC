@@ -474,8 +474,8 @@ describe('Home app shell', () => {
     expect(readPngColorType('../public/pmc-page-auto-logo.png')).toBe(6)
     expect(productLogoRule).not.toContain('box-shadow')
     expect(productLogoRule).not.toContain('background')
-    expect(homeCss).toMatch(/\.home-suggestion-icon,[\s\S]*?background:\s*transparent;/)
-    expect(homeCss).toMatch(/\.home-app-icon\.blue[\s\S]*?color:\s*#1877f2;/)
+    expect(homeCss).not.toContain('.home-suggestion-icon')
+    expect(homeCss).toMatch(/\.home-app-icon\.blue\s*\{\s*background:\s*#e6f0fb;\s*color:\s*#2f86eb;\s*\}/)
   })
 
   it('marks future modules as setup launchers instead of pretending they are live routes', () => {
@@ -536,15 +536,16 @@ describe('Home app shell', () => {
     }
   })
 
-  it('keeps Home and Page Automation on the PMC Ads palette', () => {
+  it('keeps Page Automation on the PMC Ads palette and Home on the soft launcher palette', () => {
     const homeCss = readText('../src/apps/home/styles.css')
     const pageCss = readText('../src/apps/page-automation/styles.css')
 
-    for (const css of [homeCss, pageCss]) {
-      expect(css).toContain('#7567d8')
-      expect(css).toContain('#2f86eb')
-      expect(css).toContain('#30d5a8')
-    }
+    expect(homeCss).toContain('#fbfaf8')
+    expect(homeCss).toContain('#aa8358')
+    expect(homeCss).toContain('#167047')
+    expect(pageCss).toContain('#7567d8')
+    expect(pageCss).toContain('#2f86eb')
+    expect(pageCss).toContain('#30d5a8')
     expect(pageCss).toContain('.pa-inbox-workspace')
     expect(pageCss).toContain('grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.42fr) minmax(250px, 0.8fr)')
     expect(pageCss).toContain('@media (max-width: 760px)')
@@ -570,16 +571,21 @@ describe('Home app shell', () => {
     expect(mascotMessageRule).not.toContain('transform: translateX(-50%)')
   })
 
-  it('has dedicated compact Home rules for tablet, phone, and narrow phone widths', () => {
+  it('has responsive Home rules for slanted desktop panel and stacked mobile layout', () => {
     const homeCss = readText('../src/apps/home/styles.css')
 
+    expect(homeCss).toContain('.home-stage')
+    expect(homeCss).toContain('.home-clinic-media')
+    expect(homeCss).toContain('.home-launcher-panel')
+    expect(homeCss).toContain('clip-path: polygon(12% 0, 100% 0, 100% 100%, 0 100%)')
+    expect(homeCss).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))')
+    expect(homeCss).toContain('@media (max-width: 1120px)')
+    expect(homeCss).toContain('clip-path: none')
     expect(homeCss).toContain('@media (max-width: 760px)')
     expect(homeCss).toContain('@media (max-width: 480px)')
-    expect(homeCss).toContain('@media (max-width: 380px)')
     expect(homeCss).toContain('overflow-wrap: anywhere')
-    expect(homeCss).toContain('grid-template-columns: minmax(0, 1fr)')
-    expect(homeCss).toContain('.home-app-grid')
-    expect(homeCss).toContain('.home-app-card')
+    expect(homeCss).not.toContain('radial-gradient(circle at 15% 0%')
+    expect(homeCss).not.toContain('home-ai-note')
   })
 })
 
