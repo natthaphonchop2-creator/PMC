@@ -249,9 +249,9 @@ function HomeLauncherPanel({
     <section className="home-launcher-panel" aria-label="เลือก App เพื่อเริ่มงาน">
       <div className="home-launcher-inner">
         <div className="home-top-controls">
-          <button className="home-round-button" type="button" aria-label="เปลี่ยนธีม">
+          <span className="home-round-button" aria-hidden="true">
             <Moon size={18} />
-          </button>
+          </span>
           <button
             className="home-user-pill"
             type="button"
@@ -521,7 +521,7 @@ function AppCard({ onOpenSettings, tool }: { onOpenSettings: () => void; tool: H
 
   if (disabled) {
     return (
-      <div className="home-app-card is-disabled" role="group" aria-disabled="true" aria-label={`${tool.title}: ${tool.statusText}`}>
+      <div className="home-app-card is-disabled" role="group" aria-disabled="true" aria-label={`${tool.title}: ${tool.setupLabel ?? tool.statusText}`}>
         {content}
       </div>
     )
