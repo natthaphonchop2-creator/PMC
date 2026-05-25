@@ -39,10 +39,12 @@ type HomeToolState = { state: HomeStatusState; text: string }
 const initialToolStateById = {
   ads: { state: 'loading', text: loadingStatus },
   page: { state: 'loading', text: loadingStatus },
-  erp: { state: 'setup', text: 'รอตั้งค่า' },
+  settings: { state: 'ready', text: 'พร้อมใช้งาน' },
   crm: { state: 'setup', text: 'รอตั้งค่า' },
-  website: { state: 'setup', text: 'รอตั้งค่า' },
-  knowledge: { state: 'loading', text: loadingStatus },
+  erp: { state: 'setup', text: 'กำลังมา' },
+  knowledge: { state: 'setup', text: 'รอตั้งค่า' },
+  website: { state: 'setup', text: 'กำลังมา' },
+  reports: { state: 'setup', text: 'กำลังมา' },
 } satisfies Record<HomeToolId, HomeToolState>
 
 export const initialHomeSnapshot: HomeSnapshot = {
@@ -165,13 +167,15 @@ function composeHomeSnapshot({
       state: pageToolStatus,
       text: pageToolText,
     },
-    erp: { state: 'setup' as const, text: 'รอตั้งค่า' },
+    settings: { state: 'ready' as const, text: 'พร้อมใช้งาน' },
     crm: { state: 'setup' as const, text: 'รอตั้งค่า' },
-    website: { state: 'setup' as const, text: 'รอตั้งค่า' },
+    erp: { state: 'setup' as const, text: 'กำลังมา' },
     knowledge: {
       state: knowledgeStatus.state,
       text: knowledgeStatus.value,
     },
+    website: { state: 'setup' as const, text: 'กำลังมา' },
+    reports: { state: 'setup' as const, text: 'กำลังมา' },
   } satisfies Record<HomeToolId, HomeToolState>
   const tools = homeToolDefinitions.map((definition) => {
     const state = toolStateById[definition.id]

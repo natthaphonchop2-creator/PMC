@@ -1,9 +1,9 @@
 export type HomeStatusState = 'loading' | 'connected' | 'ready' | 'setup' | 'unavailable'
 
-export type HomeToolId = 'ads' | 'page' | 'erp' | 'crm' | 'website' | 'knowledge'
+export type HomeToolId = 'ads' | 'page' | 'settings' | 'crm' | 'erp' | 'knowledge' | 'website' | 'reports'
 
-export type HomeRouteState = 'enabled' | 'setup' | 'disabled'
-
+export type HomeRouteState = 'enabled' | 'modal' | 'setup' | 'coming-soon'
+export type HomeIconTone = 'sand' | 'coral' | 'lavender' | 'blue' | 'green' | 'gold' | 'purple' | 'neutral'
 export type HomeRisk = 'สูง' | 'ปานกลาง' | 'ต่ำ'
 
 export type HomeSystemStatus = {
@@ -28,7 +28,7 @@ export type HomePriority = {
 export type HomeTool = {
   id: HomeToolId
   href: string
-  iconTone: 'blue' | 'green' | 'purple' | 'orange'
+  iconTone: HomeIconTone
   routeState: HomeRouteState
   setupLabel?: string
   status: HomeStatusState
