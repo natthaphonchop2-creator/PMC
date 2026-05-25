@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { fetchHomeSnapshot, fetchHomeStatusSnapshot, initialHomeSnapshot } from './api'
 import {
   checkHomeAiSettings,
@@ -193,7 +193,7 @@ export function HomeApp() {
 
   return (
     <div className="home-shell">
-      <main className="home-stage" aria-label="PMC App Launcher">
+      <main className="home-stage" aria-label="PMC App Launcher" aria-hidden={isSettingsOpen || undefined}>
         <HomeHeroMedia />
         <HomeLauncherPanel
           isSettingsOpen={isSettingsOpen}
@@ -255,6 +255,7 @@ function HomeLauncherPanel({
           <button
             className="home-user-pill"
             type="button"
+            aria-label="เปิด Settings สำหรับ PMC Team"
             aria-expanded={isSettingsOpen}
             aria-haspopup="dialog"
             onClick={onOpenSettings}
@@ -348,11 +349,50 @@ function HomeSettingsModal({
   settings,
 }: HomeSettingsModalProps) {
   const activeWorkspace = settings.meta?.workspaces?.find((workspace) => workspace.active)
+  const modalRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    closeButtonRef.current?.focus()
+
+    return () => {
+      previousFocus?.focus()
+    }
+  }, [])
+
+  function handleModalKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+      return
+    }
+
+    if (event.key !== 'Tab') return
+
+    const focusableElements = Array.from(
+      modalRef.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    ).filter((element) => element.offsetParent !== null)
+
+    const firstElement = focusableElements[0]
+    const lastElement = focusableElements.at(-1)
+    if (!firstElement || !lastElement) return
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault()
+      lastElement.focus()
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault()
+      firstElement.focus()
+    }
+  }
 
   return (
     <div className="home-settings-backdrop">
-      <section className="home-settings-modal" role="dialog" aria-modal="true" aria-labelledby="home-settings-title">
-        <button className="home-settings-close" type="button" onClick={onClose} aria-label="ปิดหน้าตั้งค่า">
+      <section className="home-settings-modal" role="dialog" aria-modal="true" aria-labelledby="home-settings-title" ref={modalRef} onKeyDown={handleModalKeyDown}>
+        <button ref={closeButtonRef} className="home-settings-close" type="button" onClick={onClose} aria-label="ปิดหน้าตั้งค่า">
           <X size={19} />
         </button>
 

@@ -486,10 +486,12 @@ describe('Home app shell', () => {
     expect(html).toContain('รอตั้งค่าฐานความรู้')
     expect(html).toContain('กำลังเตรียมข้อมูลเว็บไซต์')
     expect(html).toContain('กำลังเตรียมรายงานรวม')
-    expect(html).not.toContain('<a class="home-tool-tile" href="#erp"')
-    expect(html).not.toContain('<a class="home-tool-tile" href="#crm"')
-    expect(html).not.toContain('<a class="home-tool-tile" href="#website-insight"')
-    expect(html).not.toContain('<a class="home-tool-tile" href="#knowledge"')
+    expect(countOccurrences(html, 'class="home-app-card is-disabled"')).toBe(5)
+    expect(html).not.toContain('<a class="home-app-card" href="#crm"')
+    expect(html).not.toContain('<a class="home-app-card" href="#erp"')
+    expect(html).not.toContain('<a class="home-app-card" href="#knowledge"')
+    expect(html).not.toContain('<a class="home-app-card" href="#website-insight"')
+    expect(html).not.toContain('<a class="home-app-card" href="#reports"')
   })
 
   it('uses clinic media and product logos without repeated PMC brand decoration', () => {
