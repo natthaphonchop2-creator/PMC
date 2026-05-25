@@ -44,7 +44,7 @@ describe('Home app shell', () => {
   it('routes / to Home and /ads-agent to the existing PMC Ads Agent shell', () => {
     withPathname('/', () => {
       const html = renderToStaticMarkup(<App />)
-      expect(html).toContain('Home')
+      expect(html).toContain('PMC App Launcher')
       expect(html).toContain('Smart Clinic Workspace')
       expect(html).toContain('เลือก App เพื่อเริ่มงาน')
       expect(html).not.toContain('PMC Ads Agent</strong>')
@@ -492,11 +492,14 @@ describe('Home app shell', () => {
     expect(html).not.toContain('<a class="home-tool-tile" href="#knowledge"')
   })
 
-  it('uses the PMC logo only in the Home brand slot, not as repeated decoration', () => {
+  it('uses clinic media and product logos without repeated PMC brand decoration', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 
-    expect(countOccurrences(html, 'src="/promedclinicpmc-logo.png"')).toBe(1)
-    expect(html).toContain('alt="PMC"')
+    expect(countOccurrences(html, 'src="/pmc-clinic-reception.png"')).toBe(1)
+    expect(html).toContain('alt="PMC Aesthetic Clinic reception"')
+    expect(countOccurrences(html, 'src="/pmc-ads-logo.png?v=transparent"')).toBe(1)
+    expect(countOccurrences(html, 'src="/pmc-page-auto-logo.png?v=transparent"')).toBe(1)
+    expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
     expect(html).not.toContain('home-tool-watermark')
     expect(html).not.toContain('home-chip-mark')
     expect(html).not.toContain('home-action-mark')

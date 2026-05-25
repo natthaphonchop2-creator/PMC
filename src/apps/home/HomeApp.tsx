@@ -4,12 +4,12 @@ import {
   BookOpen,
   Building2,
   ChevronRight,
-  FileText,
   Grid2X2,
   InfinityIcon,
   MessageCircle,
+  Moon,
   Settings,
-  Sparkles,
+  UserRound,
   Users,
   X,
 } from 'lucide-react'
@@ -25,7 +25,7 @@ import {
   type HomeMetaConfigState,
   type HomeSettingsState,
 } from './settingsApi'
-import type { HomePriority, HomeSnapshot, HomeStatusState, HomeTool } from './types'
+import type { HomeSnapshot, HomeStatusState, HomeTool } from './types'
 import './styles.css'
 
 const toolIcons: Record<HomeTool['id'], LucideIcon> = {
@@ -39,18 +39,19 @@ const toolIcons: Record<HomeTool['id'], LucideIcon> = {
   website: Activity,
 }
 
+const clinicImageSrc = '/pmc-clinic-reception.png'
 const adsLogoSrc = '/pmc-ads-logo.png?v=transparent'
 const pageAutoLogoSrc = '/pmc-page-auto-logo.png?v=transparent'
 
 const appDescriptions: Record<HomeTool['id'], string> = {
-  ads: 'ดูภาพรวมโฆษณาและคำแนะนำก่อนอนุมัติ',
-  crm: 'ดูข้อมูลลูกค้า งานติดตาม และโอกาสการขาย',
-  erp: 'จัดการงานปฏิบัติการ สต็อก เอกสาร และงานหลังบ้าน',
-  knowledge: 'ค้นหาเอกสารองค์กรและฐานความรู้สำหรับ AI',
-  page: 'จัดการโพสต์ ข้อความทุกเพจ วิเคราะห์เพจ และรายงาน',
+  ads: 'ดูโฆษณาและคำแนะนำที่รออนุมัติ',
+  crm: 'ลูกค้าและงานติดตาม',
+  erp: 'งานหลังบ้าน เอกสาร และสต็อก',
+  knowledge: 'เอกสารและฐานความรู้สำหรับ AI',
+  page: 'จัดการข้อความ เพจ และโพสต์',
   reports: 'สรุปผลและรายงาน',
   settings: 'ตั้งค่า Meta, AI และการเชื่อมต่อ',
-  website: 'ดูพฤติกรรมผู้ใช้งานเว็บไซต์และเส้นทางก่อนติดต่อ',
+  website: 'พฤติกรรมผู้ใช้งานเว็บไซต์',
 }
 
 export function HomeApp() {
@@ -62,7 +63,6 @@ export function HomeApp() {
   const [settingsMessage, setSettingsMessage] = useState('')
   const [metaForm, setMetaForm] = useState({ accessToken: '', adAccountId: '', workspaceLabel: '' })
   const [aiForm, setAiForm] = useState({ apiKey: '', maxOutputTokens: '2800', model: 'gpt-5.5' })
-  const primarySuggestion = snapshot.priorities[0]
 
   const refreshHomeSnapshot = useCallback(async () => {
     try {
@@ -193,66 +193,13 @@ export function HomeApp() {
 
   return (
     <div className="home-shell">
-      <header className="home-header">
-        <a className="home-brand" href="/" aria-label="PMC Home">
-          <span className="home-brand-logo-wrap">
-            <img src="/promedclinicpmc-logo.png" alt="PMC" />
-          </span>
-          <span>
-            <strong>PMC Home</strong>
-            <small>ศูนย์รวม App</small>
-          </span>
-        </a>
-
-        <div className="home-header-controls">
-          <div className="home-status-chips" aria-label="สถานะการเชื่อมต่อ">
-            {snapshot.headerStatuses.map((status) => (
-              <StatusChip key={status.id} label={status.label} state={status.state} value={status.value} />
-            ))}
-          </div>
-          <button
-            className="home-settings-button"
-            type="button"
-            aria-expanded={isSettingsOpen}
-            aria-haspopup="dialog"
-            onClick={() => void openSettings()}
-          >
-            <Settings size={18} />
-            ตั้งค่า API Key
-          </button>
-        </div>
-      </header>
-
-      <main className="home-main">
-        <section className="home-hero" aria-label="PMC app launcher">
-          <div>
-            <p className="home-kicker">เริ่มงานของคุณที่นี่</p>
-            <h1>เลือก App เพื่อเริ่มงาน</h1>
-            <p>เข้าสู่ระบบที่ต้องใช้วันนี้ ดูสถานะการเชื่อมต่อ และเปิด App ที่เกี่ยวข้องกับงานของคุณได้จากหน้านี้</p>
-          </div>
-          {primarySuggestion ? <SuggestionCard priority={primarySuggestion} /> : null}
-        </section>
-
-        <section className="home-apps-section" aria-label="เลือก App">
-          <div className="home-section-head">
-            <Grid2X2 size={24} />
-            <div>
-              <h2>App ทั้งหมด</h2>
-              <p>เลือกงานที่ต้องการทำ แล้วเปิด App ที่เกี่ยวข้อง</p>
-            </div>
-          </div>
-          <div className="home-app-grid">
-            {snapshot.tools.map((tool) => <AppCard key={tool.id} tool={tool} />)}
-          </div>
-        </section>
-
-        <section className="home-ai-note" aria-label="AI safety note">
-          <Sparkles size={19} />
-          <div>
-            <strong>AI ช่วยแนะนำเท่านั้น</strong>
-            <p>ระบบจะแสดงเป็นคำแนะนำ คุณเป็นผู้กดอนุมัติหรือดำเนินการขั้นสำคัญเองเสมอ</p>
-          </div>
-        </section>
+      <main className="home-stage" aria-label="PMC App Launcher">
+        <HomeHeroMedia />
+        <HomeLauncherPanel
+          isSettingsOpen={isSettingsOpen}
+          onOpenSettings={() => void openSettings()}
+          snapshot={snapshot}
+        />
       </main>
       {isSettingsOpen ? (
         <HomeSettingsModal
@@ -274,6 +221,94 @@ export function HomeApp() {
         />
       ) : null}
     </div>
+  )
+}
+
+function HomeHeroMedia() {
+  return (
+    <section className="home-clinic-media" aria-label="PMC Aesthetic Clinic">
+      <img src={clinicImageSrc} alt="PMC Aesthetic Clinic reception" />
+      <div className="home-clinic-copy">
+        <strong>Smart Clinic Workspace</strong>
+        <p>ศูนย์รวม App สำหรับทีม PMC เพื่อเริ่มงานจากระบบที่ต้องใช้จริงในแต่ละวัน</p>
+      </div>
+    </section>
+  )
+}
+
+function HomeLauncherPanel({
+  isSettingsOpen,
+  onOpenSettings,
+  snapshot,
+}: {
+  isSettingsOpen: boolean
+  onOpenSettings: () => void
+  snapshot: HomeSnapshot
+}) {
+  return (
+    <section className="home-launcher-panel" aria-label="เลือก App เพื่อเริ่มงาน">
+      <div className="home-launcher-inner">
+        <div className="home-top-controls">
+          <button className="home-round-button" type="button" aria-label="เปลี่ยนธีม">
+            <Moon size={18} />
+          </button>
+          <button
+            className="home-user-pill"
+            type="button"
+            aria-expanded={isSettingsOpen}
+            aria-haspopup="dialog"
+            onClick={onOpenSettings}
+          >
+            <span className="home-user-avatar">
+              <UserRound size={17} />
+            </span>
+            <span>
+              <small>Signed in as</small>
+              <strong>PMC Team</strong>
+            </span>
+            <ChevronRight size={15} />
+          </button>
+        </div>
+
+        <div className="home-launcher-heading">
+          <h1>ยินดีต้อนรับกลับ</h1>
+          <p>เลือก App เพื่อเริ่มงาน</p>
+        </div>
+
+        <div className="home-app-grid">
+          {snapshot.tools.map((tool) => (
+            <AppCard key={tool.id} onOpenSettings={onOpenSettings} tool={tool} />
+          ))}
+        </div>
+
+        <HomeConnectionBanner onOpenSettings={onOpenSettings} snapshot={snapshot} />
+
+        <footer className="home-footer">
+          <span>© 2026 PMC Aesthetic Clinic</span>
+          <span>Help Center · Privacy · Terms</span>
+        </footer>
+      </div>
+    </section>
+  )
+}
+
+function HomeConnectionBanner({ onOpenSettings, snapshot }: { onOpenSettings: () => void; snapshot: HomeSnapshot }) {
+  const needsSetup = snapshot.headerStatuses.some((status) => status.state === 'setup' || status.state === 'unavailable' || status.state === 'loading')
+
+  return (
+    <section className="home-connection-banner" aria-label="ตั้งค่าการเชื่อมต่อ">
+      <span className="home-banner-mark">
+        <Settings size={18} />
+      </span>
+      <span>
+        <strong>{needsSetup ? 'ตั้งค่า API เพื่อให้ App แสดงข้อมูลจริง' : 'ระบบหลักพร้อมใช้งาน'}</strong>
+        <small>Meta และ AI ใช้ร่วมกับ Ads Agent และ Page Auto</small>
+      </span>
+      <button type="button" onClick={onOpenSettings}>
+        เปิด Settings
+        <ChevronRight size={15} />
+      </button>
+    </section>
   )
 }
 
@@ -454,47 +489,39 @@ function aiStatusLabel(status: HomeAiConfigState | null) {
   return 'ยังไม่ได้ตั้งค่า'
 }
 
-function SuggestionCard({ priority }: { priority: HomePriority }) {
-  return (
-    <a className="home-suggestion-card" href={priority.href}>
-      <span className={`home-suggestion-icon ${priority.iconTone}`}>
-        {renderPriorityIcon(priority)}
-      </span>
-      <span>
-        <small>คำแนะนำล่าสุดจาก AI</small>
-        <strong>{priority.title}</strong>
-      </span>
-      <ChevronRight size={18} />
-    </a>
-  )
-}
-
-function AppCard({ tool }: { tool: HomeTool }) {
+function AppCard({ onOpenSettings, tool }: { onOpenSettings: () => void; tool: HomeTool }) {
   const Icon = toolIcons[tool.id] ?? Grid2X2
-  const isSetup = tool.routeState !== 'enabled'
+  const disabled = tool.routeState === 'setup' || tool.routeState === 'coming-soon'
   const content = (
     <>
-      <div className={`home-app-icon ${tool.iconTone}`}>
+      <span className={`home-app-icon ${tool.iconTone}`}>
         {tool.id === 'ads' ? <ProductLogo alt="PMC Ads" src={adsLogoSrc} /> : null}
         {tool.id === 'page' ? <ProductLogo alt="PMC Page Auto" src={pageAutoLogoSrc} /> : null}
-        {tool.id !== 'ads' && tool.id !== 'page' ? <Icon size={30} /> : null}
-      </div>
-      <div className="home-app-copy">
+        {tool.id !== 'ads' && tool.id !== 'page' ? <Icon size={25} /> : null}
+      </span>
+      <span className="home-app-copy">
         <strong>{tool.title}</strong>
-        <p>{appDescriptions[tool.id]}</p>
-        <span><i className={`home-dot ${statusStateClass(tool.status)}`} />{tool.statusText}</span>
-        {tool.setupLabel ? <em>{tool.setupLabel}</em> : null}
-      </div>
-      <b className="home-app-action">
-        {isSetup ? 'ยังไม่พร้อม' : 'เปิดใช้งาน'}
+        <span>{appDescriptions[tool.id]}</span>
+        <em className={`home-app-status ${statusStateClass(tool.status)}`}>{tool.statusText}</em>
+        {tool.setupLabel ? <small>{tool.setupLabel}</small> : null}
+      </span>
+      <b className="home-app-arrow" aria-hidden="true">
         <ChevronRight size={16} />
       </b>
     </>
   )
 
-  if (isSetup) {
+  if (tool.routeState === 'modal') {
     return (
-      <div className="home-app-card is-setup" role="group" aria-label={`${tool.title}: ${tool.setupLabel ?? tool.statusText}`}>
+      <button className="home-app-card" type="button" onClick={onOpenSettings}>
+        {content}
+      </button>
+    )
+  }
+
+  if (disabled) {
+    return (
+      <div className="home-app-card is-disabled" role="group" aria-disabled="true" aria-label={`${tool.title}: ${tool.statusText}`}>
         {content}
       </div>
     )
@@ -505,26 +532,6 @@ function AppCard({ tool }: { tool: HomeTool }) {
       {content}
     </a>
   )
-}
-
-function StatusChip({ label, state, value }: { label: string; state: HomeStatusState; value: string }) {
-  return (
-    <div className="home-status-chip">
-      <span className={`home-dot ${statusStateClass(state)}`} />
-      <div>
-        <strong>{label}</strong>
-        <span>{value}</span>
-      </div>
-    </div>
-  )
-}
-
-function renderPriorityIcon(priority: HomePriority) {
-  if (priority.id.includes('draft')) return <FileText size={28} />
-  if (priority.source === 'Page Automation') return <ProductLogo alt="PMC Page Auto" src={pageAutoLogoSrc} />
-  if (priority.source === 'Ads Agent') return <ProductLogo alt="PMC Ads" src={adsLogoSrc} />
-  if (priority.source === 'Knowledge') return <BookOpen size={28} />
-  return <Sparkles size={28} />
 }
 
 function ProductLogo({ alt, src }: { alt: string; src: string }) {
