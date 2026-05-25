@@ -160,7 +160,6 @@
   border-radius: 50%;
   background: #fff;
   color: #475467;
-  cursor: pointer;
 }
 
 .home-user-pill {
@@ -352,6 +351,28 @@ button.home-app-card:hover {
 .home-app-status.critical {
   background: #fff0f1;
   color: var(--home-red);
+}
+
+.home-dot {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--home-subtle);
+}
+
+.home-dot.good,
+.home-dot.ready {
+  background: var(--home-green);
+}
+
+.home-dot.watch {
+  background: var(--home-orange);
+}
+
+.home-dot.critical {
+  background: var(--home-red);
 }
 
 .home-app-arrow {
@@ -685,6 +706,17 @@ button.home-app-card:hover {
   font-size: 13px;
   font-weight: 760;
   line-height: 1.45;
+}
+
+@media (max-width: 1400px) and (min-width: 1121px) {
+  .home-clinic-copy {
+    width: min(260px, 21vw);
+    left: 34px;
+  }
+
+  .home-clinic-copy p {
+    display: none;
+  }
 }
 
 @media (max-width: 1120px) {

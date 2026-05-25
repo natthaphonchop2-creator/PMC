@@ -587,6 +587,16 @@ describe('Home app shell', () => {
     expect(homeCss).not.toContain('radial-gradient(circle at 15% 0%')
     expect(homeCss).not.toContain('home-ai-note')
   })
+
+  it('keeps Home launcher regression fixes for status dots, desktop copy, and static controls', () => {
+    const homeCss = readText('../src/apps/home/styles.css')
+    const roundButtonRule = homeCss.match(/\.home-round-button\s*\{[^}]+\}/)?.[0] ?? ''
+
+    expect(homeCss).toContain('.home-dot.good')
+    expect(homeCss).toContain('@media (max-width: 1400px) and (min-width: 1121px)')
+    expect(homeCss).toContain('.home-clinic-copy p')
+    expect(roundButtonRule).not.toContain('cursor: pointer')
+  })
 })
 
 function countOccurrences(value: string, needle: string) {
