@@ -5873,7 +5873,7 @@ input:focus-visible {
   gap: 18px;
   overflow: hidden;
   border: 1px solid var(--clinic-border);
-  border-radius: 8px;
+  border-radius: 30px;
   background: rgba(255, 253, 249, 0.94);
   box-shadow: 0 18px 42px rgba(77, 57, 32, 0.11);
   padding: 18px;
@@ -5902,7 +5902,7 @@ input:focus-visible {
 .ads-toolbar-status-card strong,
 .ads-dashboard-panel-head h2,
 .ads-top-campaign-row strong,
-.approval-insight-card strong {
+.ads-workspace-shell .approval-insight-card strong {
   overflow-wrap: anywhere;
 }
 
@@ -6077,7 +6077,7 @@ input:focus-visible {
 .ads-main-panel {
   min-height: calc(100vh - 44px);
   border: 1px solid var(--clinic-border);
-  border-radius: 8px;
+  border-radius: 30px;
   background: rgba(255, 253, 249, 0.9);
   box-shadow: 0 22px 60px rgba(77, 57, 32, 0.12);
   overflow: clip;
@@ -6123,7 +6123,7 @@ input:focus-visible {
 }
 
 .ads-dashboard-actions,
-.approval-insight-actions {
+.ads-workspace-shell .approval-insight-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -6131,8 +6131,8 @@ input:focus-visible {
   flex-wrap: wrap;
 }
 
-.clinic-primary-button,
-.clinic-secondary-button {
+.ads-workspace-shell .clinic-primary-button,
+.ads-workspace-shell .clinic-secondary-button {
   min-height: 38px;
   min-width: 0;
   border-radius: 8px;
@@ -6147,20 +6147,20 @@ input:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.clinic-primary-button {
+.ads-workspace-shell .clinic-primary-button {
   border: 1px solid rgba(110, 73, 37, 0.18);
   background: #8f5f31;
   color: #fffdf9;
   box-shadow: 0 10px 22px rgba(110, 73, 37, 0.18);
 }
 
-.clinic-primary-button:disabled,
-.clinic-secondary-button:disabled {
+.ads-workspace-shell .clinic-primary-button:disabled,
+.ads-workspace-shell .clinic-secondary-button:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
 
-.clinic-secondary-button {
+.ads-workspace-shell .clinic-secondary-button {
   border: 1px solid rgba(130, 104, 73, 0.2);
   background: #fffaf2;
   color: var(--clinic-bronze-dark);
@@ -6333,7 +6333,7 @@ input:focus-visible {
 }
 
 .ads-top-campaign-list,
-.approval-insight-list {
+.ads-workspace-shell .approval-insight-list {
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -6393,7 +6393,7 @@ input:focus-visible {
   background: #dc2626;
 }
 
-.approval-insight-card {
+.ads-workspace-shell .approval-insight-card {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6405,11 +6405,11 @@ input:focus-visible {
   padding: 12px;
 }
 
-.approval-insight-card > div {
+.ads-workspace-shell .approval-insight-card > div {
   min-width: 0;
 }
 
-.approval-insight-card strong {
+.ads-workspace-shell .approval-insight-card strong {
   display: block;
   margin-top: 8px;
   color: var(--clinic-ink);
@@ -6417,7 +6417,7 @@ input:focus-visible {
   line-height: 1.35;
 }
 
-.approval-insight-card p {
+.ads-workspace-shell .approval-insight-card p {
   margin: 5px 0 0;
   color: var(--clinic-muted);
   font-size: 12px;
@@ -6430,7 +6430,7 @@ input:focus-visible {
   align-content: space-between;
 }
 
-.ads-insight-panel .clinic-primary-button {
+.ads-workspace-shell .ads-insight-panel .clinic-primary-button {
   justify-self: start;
 }
 
@@ -6444,7 +6444,12 @@ input:focus-visible {
   .ads-outer-toolbar {
     top: 16px;
     height: calc(100vh - 32px);
+    border-radius: 24px;
     padding: 14px;
+  }
+
+  .ads-main-panel {
+    border-radius: 24px;
   }
 
   .ads-dashboard-metric-grid,
@@ -6500,7 +6505,7 @@ input:focus-visible {
 
   .ads-main-panel {
     min-height: auto;
-    border-radius: 8px;
+    border-radius: 24px;
   }
 
   .ads-main-panel .page-body {
@@ -6564,13 +6569,13 @@ input:focus-visible {
   }
 
   .ads-dashboard-actions,
-  .approval-insight-actions {
+  .ads-workspace-shell .approval-insight-actions {
     display: grid;
     grid-template-columns: 1fr;
   }
 
-  .clinic-primary-button,
-  .clinic-secondary-button {
+  .ads-workspace-shell .clinic-primary-button,
+  .ads-workspace-shell .clinic-secondary-button {
     width: 100%;
     min-height: 42px;
   }
@@ -6600,7 +6605,7 @@ input:focus-visible {
   }
 
   .ads-top-campaign-row,
-  .approval-insight-card {
+  .ads-workspace-shell .approval-insight-card {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
