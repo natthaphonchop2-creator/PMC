@@ -859,6 +859,15 @@ describe('Home app shell', () => {
     expect(pageCss).not.toContain('ads-workspace-shell')
   })
 
+  it('uses the clinic abstract image as a soft Ads Agent panel background', () => {
+    const appCss = readText('../src/App.css')
+    const backgroundBytes = readFileSync(new URL('../public/pmc-soft-dashboard-bg.png', import.meta.url))
+
+    expect(backgroundBytes.byteLength).toBeGreaterThan(100_000)
+    expect(appCss).toContain("url('/pmc-soft-dashboard-bg.png')")
+    expect(appCss).toMatch(/\.ads-main-panel\s*\{[^}]*background:[^}]*pmc-soft-dashboard-bg\.png/s)
+  })
+
   it('does not animate removed sidebar mascot targets in the Ads Agent shell', () => {
     const appSource = readText('../src/App.tsx')
 
