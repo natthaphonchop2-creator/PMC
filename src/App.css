@@ -6313,21 +6313,54 @@ input:focus-visible {
   justify-self: end;
   width: min(118px, 100%);
   height: 34px;
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, currentColor 0 0) left 72% / 100% 2px no-repeat;
   color: #aa7a3f;
-  opacity: 0.78;
-  overflow: hidden;
+  opacity: 0.9;
 }
 
-.ads-mini-sparkline::before {
-  content: "";
+.ads-mini-sparkline svg {
   display: block;
   width: 100%;
   height: 100%;
-  background: currentColor;
-  clip-path: polygon(0 72%, 10% 58%, 20% 66%, 32% 42%, 44% 62%, 56% 36%, 66% 52%, 78% 28%, 90% 46%, 100% 34%, 100% 40%, 90% 52%, 78% 34%, 66% 58%, 56% 42%, 44% 68%, 32% 48%, 20% 72%, 10% 64%, 0 78%);
+  overflow: visible;
+}
+
+.ads-sparkline-area {
+  fill: currentColor;
+  opacity: 0.12;
+}
+
+.ads-sparkline-baseline {
+  fill: none;
+  opacity: 0.2;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.ads-sparkline-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.7;
+}
+
+.ads-sparkline-dot {
+  fill: currentColor;
+  stroke: #fffdf9;
+  stroke-width: 2;
+}
+
+.ads-mini-sparkline.is-empty {
+  opacity: 0.45;
+}
+
+.ads-mini-sparkline.is-empty .ads-sparkline-area {
+  opacity: 0;
+}
+
+.ads-mini-sparkline.is-empty .ads-sparkline-line {
+  stroke-dasharray: 5 6;
 }
 
 .ads-mini-sparkline.blue {

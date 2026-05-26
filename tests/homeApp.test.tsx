@@ -399,6 +399,53 @@ describe('Home app shell', () => {
     expect(visibleText(clicksCard)).not.toContain('170')
   })
 
+  it('renders KPI sparklines from real dashboard series instead of decorative CSS lines', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[
+          { count: 20000, conversionRate: 100, dropOffRate: 0, stage: 'Impressions' },
+          { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
+          { count: 220, conversionRate: 18, dropOffRate: 82, stage: 'Leads' },
+          { count: 170, conversionRate: 77.3, dropOffRate: 22.7, stage: 'Bookings' },
+          { count: 128, conversionRate: 75.3, dropOffRate: 24.7, stage: 'Paid' },
+        ]}
+        recommendations={[]}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[
+          { bookings: 18, clicks: 400, date: '2026-05-16', day: 'May 16', leads: 58, revenue: 38000, spend: 22000, treatments: 10 },
+          { bookings: 35, clicks: 520, date: '2026-05-17', day: 'May 17', leads: 72, revenue: 62000, spend: 31000, treatments: 24 },
+          { bookings: 52, clicks: 610, date: '2026-05-18', day: 'May 18', leads: 90, revenue: 80324, spend: 54807, treatments: 38 },
+        ]}
+      />,
+    )
+
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+    const conversionsCard = dashboardMetricCardHtml(html, 'Conversions')
+    const costCard = dashboardMetricCardHtml(html, 'Cost')
+
+    expect(countOccurrences(html, 'data-sparkline="metric-summary"')).toBe(7)
+    expect(impressionsCard).toContain('data-sparkline-source="funnel"')
+    expect(impressionsCard).toContain('data-values="20000,1220,220,170,128"')
+    expect(clicksCard).toContain('data-sparkline-source="daily-trend"')
+    expect(clicksCard).toContain('data-values="400,520,610"')
+    expect(conversionsCard).toContain('data-values="18,35,52"')
+    expect(costCard).toContain('data-values="22000,31000,54807"')
+    expect(impressionsCard).toContain('<svg')
+    expect(clicksCard).toContain('<path')
+    expect(html).not.toContain('ads-mini-sparkline" aria-hidden="true"')
+  })
+
   it('preserves zero funnel metric counts as real Impressions and Clicks data', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage

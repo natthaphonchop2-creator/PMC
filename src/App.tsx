@@ -162,7 +162,7 @@ type Summary = {
   aov: number
 }
 
-type TrendDatum = { date: string; day: string; spend: number; revenue: number; bookings: number; treatments?: number }
+type TrendDatum = { bookings: number; clicks?: number; date: string; day: string; leads?: number; revenue: number; spend: number; treatments?: number }
 
 type DataSourceState = 'loading' | 'live' | 'setup-required' | 'empty' | 'error'
 type AutomationMode = 'แนะนำเท่านั้น' | 'ต้องอนุมัติก่อน' | 'พัก automation'
@@ -977,11 +977,13 @@ function buildSummaryFromWorkspace(workspace: WorkspaceData | null, campaignList
 function mapTrendData(points: TrendPoint[]): TrendDatum[] {
   if (!points.length) return []
   return points.slice(-12).map((point, index) => ({
+    bookings: point.bookings,
+    clicks: point.clicks,
     date: point.date,
     day: formatTrendDay(point.date, index),
-    spend: Math.round(point.spend),
+    leads: point.leads,
     revenue: Math.round(point.revenue),
-    bookings: point.bookings,
+    spend: Math.round(point.spend),
     treatments: point.treatments,
   }))
 }
@@ -1906,11 +1908,19 @@ export function AnalyticsPage({
   const unavailableMetaMetricChange: MetricChange = { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังไม่มีข้อมูลจาก Meta' }
   const impressionsCount = funnelMetricCount(funnelMetrics, 'Impressions')
   const clicksCount = funnelMetricCount(funnelMetrics, 'Clicks')
+  const funnelSparkline = sparklineFromFunnel(funnelMetrics, ['Impressions', 'Clicks', 'Leads', 'Bookings', 'Paid'])
+  const clicksTrendSparkline = sparklineFromTrend(trendData, (point) => point.clicks)
+  const conversionTrendSparkline = sparklineFromTrend(trendData, (point) => point.bookings)
+  const spendTrendSparkline = sparklineFromTrend(trendData, (point) => point.spend)
+  const cpaTrendSparkline = sparklineFromTrend(trendData, (point) => (point.bookings > 0 ? point.spend / point.bookings : undefined))
+  const campaignCtrSparkline = sparklineFromCampaigns(campaigns, (campaign) => campaign.ctr)
+  const roasTrendSparkline = sparklineFromTrend(trendData, (point) => (point.spend > 0 ? point.revenue / point.spend : undefined))
+  const campaignRoasSparkline = sparklineFromCampaigns(campaigns, (campaign) => campaign.roas)
   const metricCards: DashboardMetric[] = [
-    { icon: Eye, label: 'Impressions', tone: 'green', value: impressionsCount !== null ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: impressionsCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
-    { icon: MousePointerClick, label: 'Clicks', tone: 'blue', value: clicksCount !== null ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: clicksCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
-    { icon: BarChart3, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData) },
-    { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ยอด spend รวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จาก spend รายวัน') },
+    { icon: Eye, label: 'Impressions', tone: 'green', value: impressionsCount !== null ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: impressionsCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange, sparkline: { label: 'สรุปจาก funnel จริง', source: 'funnel', values: funnelSparkline } },
+    { icon: MousePointerClick, label: 'Clicks', tone: 'blue', value: clicksCount !== null ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: clicksCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange, sparkline: { label: clicksTrendSparkline.length ? 'สรุปคลิกจาก trend รายวัน' : 'สรุปจาก funnel จริง', source: clicksTrendSparkline.length ? 'daily-trend' : 'funnel', values: clicksTrendSparkline.length ? clicksTrendSparkline : sparklineFromFunnel(funnelMetrics, ['Clicks', 'Leads', 'Bookings', 'Paid']) } },
+    { icon: BarChart3, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData), sparkline: { label: 'สรุป booking รายวัน', source: conversionTrendSparkline.length ? 'daily-trend' : 'empty', values: conversionTrendSparkline } },
+    { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ยอด spend รวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จาก spend รายวัน'), sparkline: { label: 'สรุป spend รายวัน', source: spendTrendSparkline.length ? 'daily-trend' : 'empty', values: spendTrendSparkline } },
   ]
 
   return (
@@ -1947,9 +1957,9 @@ export function AnalyticsPage({
       </section>
 
       <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
-        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'green', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'spend / booking', change: { label: summary.cpa > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
-        <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: averageCtr > 0 ? `${averageCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'ค่าเฉลี่ย CTR ของแคมเปญ', change: { label: averageCtr > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: averageCtr > 0 ? 'good' : 'neutral', detail: 'จาก campaign insights' } }} />
-        <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'revenue / spend', change: { label: summary.roas > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
+        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'green', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'spend / booking', change: { label: summary.cpa > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' }, sparkline: { label: 'สรุป CPA รายวัน', source: cpaTrendSparkline.length ? 'daily-trend' : 'empty', values: cpaTrendSparkline } }} />
+        <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: averageCtr > 0 ? `${averageCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'ค่าเฉลี่ย CTR ของแคมเปญ', change: { label: averageCtr > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: averageCtr > 0 ? 'good' : 'neutral', detail: 'จาก campaign insights' }, sparkline: { label: 'สรุป CTR ตามแคมเปญ', source: campaignCtrSparkline.length ? 'campaign-summary' : 'empty', values: campaignCtrSparkline } }} />
+        <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'revenue / spend', change: { label: summary.roas > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' }, sparkline: { label: roasTrendSparkline.length ? 'สรุป ROAS รายวัน' : 'สรุป ROAS ตามแคมเปญ', source: roasTrendSparkline.length ? 'daily-trend' : campaignRoasSparkline.length ? 'campaign-summary' : 'empty', values: roasTrendSparkline.length ? roasTrendSparkline : campaignRoasSparkline } }} />
         <DashboardPanel className="ads-insight-panel" title="PMC Insights" subtitle="สรุปจากข้อมูลล่าสุด">
           <DashboardInsightsBanner recommendations={recommendations} />
         </DashboardPanel>
@@ -1959,12 +1969,20 @@ export function AnalyticsPage({
 }
 
 type DashboardMetricTone = 'green' | 'sand' | 'blue' | 'purple' | 'gold'
+type SparklineSource = 'daily-trend' | 'funnel' | 'campaign-summary' | 'empty'
+
+type MetricSparkline = {
+  label: string
+  source: SparklineSource
+  values: number[]
+}
 
 type DashboardMetric = {
   change: MetricChange
   helper: string
   icon: LucideIcon
   label: string
+  sparkline: MetricSparkline
   tone: DashboardMetricTone
   value: string
 }
@@ -1988,12 +2006,39 @@ function DashboardMetricCard({ metric }: { metric: DashboardMetric }) {
         <strong>{metric.value}</strong>
         <small>{metric.helper}</small>
       </div>
-      <span className={`ads-mini-sparkline ${metric.tone}`} aria-hidden="true" />
+      <MetricSparklineGraph label={metric.label} sparkline={metric.sparkline} tone={metric.tone} />
       <div className="ads-dashboard-metric-change">
         <em className={metric.change.tone}>{metric.change.label}</em>
         <small>{metric.change.detail}</small>
       </div>
     </article>
+  )
+}
+
+function MetricSparklineGraph({ label, sparkline, tone }: { label: string; sparkline: MetricSparkline; tone: DashboardMetricTone }) {
+  const rawValues = compactSparklineValues(sparkline.values)
+  const hasSeries = rawValues.length >= 2
+  const source = hasSeries ? sparkline.source : 'empty'
+  const visual = buildSparklineVisual(rawValues)
+  const values = rawValues.map(formatSparklineValue).join(',')
+
+  return (
+    <span
+      aria-label={`${label}: ${sparkline.label}`}
+      className={`ads-mini-sparkline ${tone}${hasSeries ? '' : ' is-empty'}`}
+      data-sparkline="metric-summary"
+      data-sparkline-scale={visual.scale}
+      data-sparkline-source={source}
+      data-values={values}
+      role="img"
+    >
+      <svg aria-hidden="true" focusable="false" viewBox="0 0 112 38">
+        <path className="ads-sparkline-area" d={visual.areaPath} />
+        <path className="ads-sparkline-baseline" d="M4 32 L108 32" />
+        <path className="ads-sparkline-line" d={visual.linePath} />
+        <circle className="ads-sparkline-dot" cx={visual.lastPoint.x} cy={visual.lastPoint.y} r="3.4" />
+      </svg>
+    </span>
   )
 }
 
@@ -2103,6 +2148,84 @@ function funnelMetricCount(funnelMetrics: MetaFunnelMetric[], stage: string) {
 
 function normalizeFunnelStage(stage: string) {
   return stage.trim().toLowerCase()
+}
+
+function sparklineFromFunnel(funnelMetrics: MetaFunnelMetric[], stages: string[]) {
+  const values = stages
+    .map((stage) => funnelMetricCount(funnelMetrics, stage))
+    .filter((value): value is number => value !== null)
+  return values.length >= 2 ? values : []
+}
+
+function sparklineFromTrend(trendData: TrendDatum[], getValue: (point: TrendDatum) => number | undefined) {
+  return compactSparklineValues(trendData.map((point) => getValue(point)))
+}
+
+function sparklineFromCampaigns(campaigns: Campaign[], getValue: (campaign: Campaign) => number | undefined) {
+  return compactSparklineValues(campaigns.slice(0, 8).map((campaign) => getValue(campaign)))
+}
+
+function compactSparklineValues(values: Array<number | undefined | null>) {
+  const usableValues = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  return usableValues.length >= 2 ? usableValues : []
+}
+
+type SparklineVisual = {
+  areaPath: string
+  lastPoint: { x: string; y: string }
+  linePath: string
+  scale: 'linear' | 'log'
+}
+
+function buildSparklineVisual(rawValues: number[]): SparklineVisual {
+  const width = 112
+  const height = 38
+  const padX = 4
+  const padTop = 5
+  const padBottom = 6
+  const fallbackValues = rawValues.length >= 2 ? rawValues : [0, 0]
+  const minPositive = fallbackValues.filter((value) => value > 0).reduce((lowest, value) => Math.min(lowest, value), Number.POSITIVE_INFINITY)
+  const maxValue = Math.max(...fallbackValues)
+  const shouldUseLog = Number.isFinite(minPositive) && minPositive > 0 && maxValue / minPositive > 25
+  const renderValues = shouldUseLog ? fallbackValues.map((value) => Math.log10(Math.max(0, value) + 1)) : fallbackValues
+  const minValue = Math.min(...renderValues)
+  const maxRenderValue = Math.max(...renderValues)
+  const range = maxRenderValue - minValue || 1
+  const availableWidth = width - padX * 2
+  const availableHeight = height - padTop - padBottom
+  const points = renderValues.map((value, index) => {
+    const x = padX + (availableWidth * index) / Math.max(1, renderValues.length - 1)
+    const y = padTop + availableHeight - ((value - minValue) / range) * availableHeight
+    return { x, y }
+  })
+  const linePath = buildSmoothPath(points)
+  const areaPath = `${linePath} L ${formatSparklineCoord(points[points.length - 1].x)} ${height - padBottom} L ${formatSparklineCoord(points[0].x)} ${height - padBottom} Z`
+  const lastPoint = points[points.length - 1]
+
+  return {
+    areaPath,
+    lastPoint: { x: formatSparklineCoord(lastPoint.x), y: formatSparklineCoord(lastPoint.y) },
+    linePath,
+    scale: shouldUseLog ? 'log' : 'linear',
+  }
+}
+
+function buildSmoothPath(points: Array<{ x: number; y: number }>) {
+  const [firstPoint, ...nextPoints] = points
+  return nextPoints.reduce((path, point, index) => {
+    const previous = points[index]
+    const midX = (previous.x + point.x) / 2
+    return `${path} C ${formatSparklineCoord(midX)} ${formatSparklineCoord(previous.y)}, ${formatSparklineCoord(midX)} ${formatSparklineCoord(point.y)}, ${formatSparklineCoord(point.x)} ${formatSparklineCoord(point.y)}`
+  }, `M ${formatSparklineCoord(firstPoint.x)} ${formatSparklineCoord(firstPoint.y)}`)
+}
+
+function formatSparklineCoord(value: number) {
+  return Number(value.toFixed(2)).toString()
+}
+
+function formatSparklineValue(value: number) {
+  if (Number.isInteger(value)) return String(value)
+  return Number(value.toFixed(2)).toString()
 }
 
 function metricTrendValues(trendData: TrendDatum[], getValue: (point: TrendDatum) => number | undefined) {
