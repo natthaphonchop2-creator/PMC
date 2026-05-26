@@ -1974,10 +1974,10 @@ export function AnalyticsPage({
     .slice(0, 5)
   const averageCtr = campaigns.length > 0 ? campaigns.reduce((sum, campaign) => sum + campaign.ctr, 0) / campaigns.length : 0
   const totalConversions = campaigns.reduce((sum, campaign) => sum + campaign.conversions, 0)
-  const totalImpressionsLabel = summary.leads > 0 ? fmtNum(summary.leads) : campaigns.length > 0 ? `${campaigns.length} แคมเปญ` : 'รอข้อมูล'
+  const unavailableMetaMetricChange: MetricChange = { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังไม่มีข้อมูลจาก Meta' }
   const metricCards: DashboardMetric[] = [
-    { icon: Info, label: 'Impressions', tone: 'sand', value: totalImpressionsLabel, helper: summary.leads > 0 ? 'จาก lead ที่ซิงก์' : 'ใช้จำนวนแคมเปญแทนจนกว่า Meta จะส่ง impressions', change: periodChange(metricTrendValues(trendData, (point) => point.bookings), 'เทียบช่วงก่อนหน้า') },
-    { icon: Megaphone, label: 'Clicks', tone: 'blue', value: summary.bookings > 0 ? fmtNum(summary.bookings) : 'รอข้อมูล', helper: 'ใช้ booking เป็น click-through proxy จากข้อมูลเดิม', change: periodChange(metricTrendValues(trendData, (point) => point.bookings), 'จาก booking รายวัน') },
+    { icon: Info, label: 'Impressions', tone: 'sand', value: 'รอข้อมูล', helper: 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: unavailableMetaMetricChange },
+    { icon: Megaphone, label: 'Clicks', tone: 'blue', value: 'รอข้อมูล', helper: 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: unavailableMetaMetricChange },
     { icon: Users, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData) },
     { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ยอด spend รวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จาก spend รายวัน') },
   ]

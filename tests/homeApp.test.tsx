@@ -244,6 +244,78 @@ describe('Home app shell', () => {
     expect(text).not.toContain('Mobile App')
   })
 
+  it('keeps unavailable Impressions and Clicks honest instead of showing lead, campaign, or booking proxies', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[
+          {
+            aiTag: 'แข็งแรง',
+            budget: 120000,
+            conversions: 140,
+            cpa: 520,
+            ctr: 6.1,
+            deliveryStatus: 'active',
+            frequency: 3.8,
+            id: 'campaign-1',
+            name: 'ตัวรี MSG เติมไขมัน 9900',
+            revenue: 138324,
+            roas: 1.9,
+            spend: 72807,
+            status: 'Active',
+            tone: 'good',
+          },
+          {
+            aiTag: 'เฝ้าดู',
+            budget: 60000,
+            conversions: 30,
+            cpa: 780,
+            ctr: 4.2,
+            deliveryStatus: 'active',
+            frequency: 5.1,
+            id: 'campaign-2',
+            name: 'Review Botox Lead',
+            revenue: 42000,
+            roas: 1.2,
+            spend: 35000,
+            status: 'Watch',
+            tone: 'watch',
+          },
+        ]}
+        funnelMetrics={[]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[
+          { bookings: 18, date: '2026-05-16', day: 'May 16', revenue: 38000, spend: 22000 },
+          { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
+          { bookings: 52, date: '2026-05-18', day: 'May 18', revenue: 80324, spend: 54807 },
+        ]}
+      />,
+    )
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+
+    expect(visibleText(impressionsCard)).toContain('รอข้อมูล')
+    expect(visibleText(impressionsCard)).toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
+    expect(visibleText(impressionsCard)).not.toContain('220')
+    expect(visibleText(impressionsCard)).not.toContain('2 แคมเปญ')
+
+    expect(visibleText(clicksCard)).toContain('รอข้อมูล')
+    expect(visibleText(clicksCard)).toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
+    expect(visibleText(clicksCard)).not.toContain('170')
+  })
+
   it('uses the selected ECharts engine for Ads Dashboard performance chart without placeholder data', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
@@ -684,6 +756,12 @@ function readText(relativePath: string) {
 
 function visibleText(html: string) {
   return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function dashboardMetricCardHtml(html: string, label: string) {
+  const match = html.match(new RegExp(`<article class="ads-dashboard-metric-card">(?:(?!</article>)[\\s\\S])*<span>${label}</span>(?:(?!</article>)[\\s\\S])*</article>`))
+  expect(match?.[0]).toBeTruthy()
+  return match?.[0] ?? ''
 }
 
 function readPngColorType(relativePath: string) {
