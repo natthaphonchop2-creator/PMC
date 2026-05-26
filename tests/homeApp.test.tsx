@@ -71,6 +71,7 @@ describe('Home app shell', () => {
       expect(countOccurrences(html, 'class="ads-toolbar-item')).toBe(8)
       expect(html).toContain('aria-current="page"')
       expect(html).not.toContain('class="nav-groups"')
+      expect(html).not.toContain('Optimizer &amp; Automation')
       expect(text).not.toContain('Optimizer & Automation')
       expect(text).not.toContain('ศูนย์ช่วยเหลือ')
       expect(text).not.toContain('AI Brain')
