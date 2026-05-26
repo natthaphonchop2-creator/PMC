@@ -390,12 +390,11 @@ function automationDisplayLabel(mode: string) {
 }
 
 const sectionTooltips: Record<string, string> = {
-  Overview: 'ดูตัวเลขรายได้และผลลัพธ์หลักจากข้อมูลที่ซิงก์แล้ว',
-  'Revenue Overview': 'ดูแนวโน้มรายได้เทียบค่าโฆษณาตามช่วงวันที่ที่เลือก',
-  'Revenue by Campaign': 'ดูสัดส่วนรายได้ตามแคมเปญที่ซิงก์เข้ามา',
-  'Funnel คลินิก': 'ดูว่าลูกค้าหลุดตรงขั้นตอนไหน ตั้งแต่เห็นโฆษณาจนถึงเคสชำระเงิน',
-  'กราฟข้อมูลแคมเปญ': 'กราฟเปรียบเทียบค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแต่ละแคมเปญ',
-  'คำแนะนำที่รออนุมัติ': 'รายการที่ AI คัดมาให้คุณตรวจ ก่อนกดอนุมัติหรือปฏิเสธ',
+  'Ads Dashboard': 'ภาพรวมแคมเปญ คำแนะนำ และ KPI ที่ควรตรวจวันนี้',
+  'Performance Overview': 'ดูแนวโน้ม spend, revenue และ booking จากข้อมูลที่ซิงก์',
+  'Top Campaigns': 'แคมเปญที่ทำผลงานดีที่สุดตาม conversion และ ROAS',
+  'คำแนะนำที่รออนุมัติ': 'รายการที่ควรตรวจวันนี้ก่อนกดรีวิวหรือปฏิเสธ',
+  'PMC Insights': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
   'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
   'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
   'PMC Master Agent': 'เรียก AI ให้อ่าน WorkspaceData, หน้าเว็บปัจจุบัน และ memory แล้วสรุปแผน',
@@ -1057,7 +1056,7 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['Overview', 'Revenue Overview', 'Revenue by Campaign', 'Funnel คลินิก', 'กราฟข้อมูลแคมเปญ', 'คำแนะนำที่รออนุมัติ'],
+    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'คำแนะนำที่รออนุมัติ', 'PMC Insights'],
     audience: ['Segment กลุ่มเป้าหมาย', 'ปริมาณของ Segment'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
@@ -2393,15 +2392,15 @@ function RevenueOverviewChart({ trendData }: { trendData: TrendDatum[] }) {
       action={<StatusBadge label="Daily" tone="info" />}
       className="revenue-chart-panel"
       collapsible
-      title="Revenue Overview"
-      subtitle="รายได้เทียบค่าโฆษณารายวันจากข้อมูลที่ซิงก์แล้ว"
+      title="Performance Overview"
+      subtitle="Spend, revenue และ booking รายวันจากข้อมูลที่ซิงก์แล้ว"
     >
       {trendData.length > 0 ? (
         <div className="revenue-chart-wrap">
-          <EChart ariaLabel="Revenue Overview chart" chartStyle="sharp-lines" className="revenue-echart" option={option} />
+          <EChart ariaLabel="Performance Overview chart" chartStyle="sharp-lines" className="revenue-echart" option={option} />
         </div>
       ) : (
-        <EmptyState title="ยังไม่มี Revenue Overview" detail="กราฟรายได้จะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
+        <EmptyState title="ยังไม่มี Performance Overview" detail="กราฟจะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
       )}
     </SectionCard>
   )
