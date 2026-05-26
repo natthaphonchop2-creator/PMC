@@ -865,7 +865,10 @@ describe('Home app shell', () => {
 
     expect(backgroundBytes.byteLength).toBeGreaterThan(100_000)
     expect(appCss).toContain("url('/pmc-soft-dashboard-bg.png')")
+    expect(appCss).toMatch(/\.ads-workspace-shell\s*\{[^}]*background:[^}]*pmc-soft-dashboard-bg\.png/s)
     expect(appCss).toMatch(/\.ads-main-panel\s*\{[^}]*background:[^}]*pmc-soft-dashboard-bg\.png/s)
+    expect(appCss).toContain('rgba(255, 253, 249, 0.66)')
+    expect(appCss).not.toContain('rgba(255, 253, 249, 0.9), rgba(255, 253, 249, 0.86)')
   })
 
   it('does not animate removed sidebar mascot targets in the Ads Agent shell', () => {

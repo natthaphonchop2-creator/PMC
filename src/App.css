@@ -5851,7 +5851,9 @@ input:focus-visible {
   gap: 22px;
   padding: 22px;
   background:
-    linear-gradient(135deg, #fbf7ef 0%, #f6efe5 44%, #eef6f8 100%);
+    linear-gradient(135deg, rgba(251, 247, 239, 0.62) 0%, rgba(246, 239, 229, 0.54) 44%, rgba(238, 246, 248, 0.62) 100%),
+    url('/pmc-soft-dashboard-bg.png') center / cover no-repeat,
+    #fbf7ef;
   color: var(--clinic-ink);
 }
 
@@ -6082,7 +6084,7 @@ input:focus-visible {
   border: 1px solid var(--clinic-border);
   border-radius: 30px;
   background:
-    linear-gradient(180deg, rgba(255, 253, 249, 0.9), rgba(255, 253, 249, 0.86)),
+    linear-gradient(180deg, rgba(255, 253, 249, 0.66), rgba(255, 253, 249, 0.56)),
     url('/pmc-soft-dashboard-bg.png') center top / cover no-repeat,
     rgba(255, 253, 249, 0.9);
   box-shadow: 0 22px 60px rgba(77, 57, 32, 0.12);
@@ -6091,7 +6093,7 @@ input:focus-visible {
 
 .ads-main-panel .topbar {
   border-bottom-color: rgba(130, 104, 73, 0.16);
-  background: rgba(255, 253, 249, 0.86);
+  background: rgba(255, 253, 249, 0.78);
   backdrop-filter: blur(10px);
 }
 
