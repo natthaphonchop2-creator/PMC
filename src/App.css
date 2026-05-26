@@ -511,6 +511,11 @@ input:focus-visible {
   gap: 10px;
 }
 
+.topbar-actions .api-check-button {
+  justify-content: center;
+  min-width: 118px;
+}
+
 .topbar-actions .toolbar-tooltip > select,
 .topbar-actions .toolbar-tooltip > .pill-button,
 .topbar-actions .toolbar-tooltip > .auto-toggle-control {
@@ -4892,9 +4897,8 @@ input:focus-visible {
   }
 
   .topbar-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: auto;
+    display: flex;
     justify-content: flex-start;
     gap: 8px;
   }
@@ -5229,7 +5233,6 @@ input:focus-visible {
 
 @media (max-width: 520px) {
   .topbar-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 

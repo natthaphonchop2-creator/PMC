@@ -72,6 +72,10 @@ describe('Home app shell', () => {
       expect(html).toMatch(
         /<button(?=[^>]*class="ads-toolbar-item active")(?=[^>]*aria-current="page")(?=[^>]*aria-label="Ads Dashboard")[^>]*>/,
       )
+      expect(html).toMatch(/<div class="topbar-actions"><button[^>]*aria-label="เช็ค API"[^>]*>[\s\S]*เช็ค API[\s\S]*<\/button><\/div>/)
+      expect(html).not.toContain('aria-label="ช่วงวันที่"')
+      expect(html).not.toContain('aria-label="เปิดหรือปิด Auto"')
+      expect(html).not.toContain('เตรียมรายงาน</button>')
       expect(html).not.toContain('class="nav-groups"')
       expect(html).not.toContain('Optimizer &amp; Automation')
       expect(text).not.toContain('Optimizer & Automation')

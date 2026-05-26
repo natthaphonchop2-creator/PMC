@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
-  Database,
   FileText,
   ImageIcon,
   Info,
@@ -367,14 +366,6 @@ const navItems: NavItem[] = [
 
 const datePresetOptions = ['ข้อมูลทั้งหมด', '7 วันล่าสุด', '30 วันล่าสุด', 'เดือนนี้', 'ไตรมาสนี้']
 const automationToggleOptions: AutomationToggleValue[] = ['เปิด Auto', 'ปิด Auto']
-
-const toolbarTooltips = {
-  workspace: 'บัญชีหรือ workspace ที่กำลังใช้งานอยู่ ตรวจให้ถูกก่อนอ่านตัวเลขหรือส่งคำสั่ง',
-  datePreset: 'เลือกช่วงเวลาของข้อมูลที่ต้องการดู เช่น ข้อมูลทั้งหมดหรือ 30 วันล่าสุด',
-  sync: 'กดเพื่อดึงข้อมูลล่าสุดจาก Meta API เข้ามาในระบบ',
-  automationMode: 'เปิด Auto เพื่อให้ระบบเตรียมคำสั่ง Meta พร้อมหน้าต่างยืนยัน หรือปิด Auto เพื่อดูคำแนะนำอย่างเดียว',
-  report: 'สร้างสรุปรายงานจากข้อมูลล่าสุดและพาไปหน้า Reports',
-}
 
 function normalizeAutomationMode(value: string): AutomationMode {
   if (value === 'เปิด Auto' || value === 'ต้องอนุมัติก่อน') return 'ต้องอนุมัติก่อน'
@@ -1555,22 +1546,6 @@ function PmcAdsAgentApp() {
       <main className="ads-main-panel app-main">
         <Topbar
           activePage={activePage}
-          automationMode={automationMode}
-          datePreset={datePreset}
-          metaInfo={metaInfo}
-          onDateChange={setDatePreset}
-          onModeChange={requestAutomationModeChange}
-          onPrepareReport={() => {
-            setPreparedReport(true)
-            handleTabSelect('reports')
-            showMascotNotice('เตรียมรายงานแล้ว เปิดหน้า Reports ให้ครับ', 'good')
-            appendAudit({
-              action: 'เตรียมรายงานแล้ว',
-              detail: `สรุปช่วง ${datePreset} พร้อมสำหรับรีวิว`,
-              actor: 'ผู้ใช้งาน',
-              tone: 'info',
-            })
-          }}
           onSync={syncWorkspace}
           syncState={syncState}
         />
@@ -1904,18 +1879,12 @@ function DataSourceBar({
 
 type TopbarProps = {
   activePage: NavItem
-  automationMode: string
-  datePreset: string
-  metaInfo: MetaInfo | null
-  onDateChange: (value: string) => void
-  onModeChange: (value: string) => void
-  onPrepareReport: () => void
   onSync: () => void
   syncState: string
 }
 
-function Topbar({ activePage, automationMode, datePreset, metaInfo, onDateChange, onModeChange, onPrepareReport, onSync, syncState }: TopbarProps) {
-  const workspaceLabel = metaInfo?.workspaceLabel || metaInfo?.accountName || 'ยังไม่ได้เชื่อมต่อ Meta'
+function Topbar({ activePage, onSync, syncState }: TopbarProps) {
+  const isSyncing = syncState === 'Syncing...'
   return (
     <header className="topbar">
       <div>
@@ -1923,31 +1892,10 @@ function Topbar({ activePage, automationMode, datePreset, metaInfo, onDateChange
         <p>{activePage.description}</p>
       </div>
       <div className="topbar-actions">
-        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.workspace}>
-          <PillButton icon={Database} label={workspaceLabel} />
-        </TooltipWrap>
-        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.datePreset}>
-          <select aria-label="ช่วงวันที่" value={datePreset} onChange={(event) => onDateChange(event.target.value)}>
-            {datePresetOptions.map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        </TooltipWrap>
-        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.sync}>
-          <button className="pill-button good" type="button" onClick={onSync}>
-            <RefreshCw size={15} />
-            {syncStateLabel(syncState)}
-          </button>
-        </TooltipWrap>
-        <div className="toolbar-tooltip auto-toolbar-tooltip" title={toolbarTooltips.automationMode}>
-          <AutomationToggleControl mode={automationMode} onModeChange={onModeChange} />
-        </div>
-        <TooltipWrap as="div" className="toolbar-tooltip" text={toolbarTooltips.report}>
-          <button className="pill-button blue" type="button" onClick={onPrepareReport}>
-            <FileText size={15} />
-            เตรียมรายงาน
-          </button>
-        </TooltipWrap>
+        <button className="pill-button good api-check-button" type="button" onClick={onSync} aria-label="เช็ค API" aria-busy={isSyncing}>
+          <RefreshCw size={15} />
+          เช็ค API
+        </button>
       </div>
     </header>
   )
@@ -6002,24 +5950,6 @@ function CollapsedPlaceholder({ title }: { title: string }) {
   )
 }
 
-function TooltipWrap({
-  as: Component = 'span',
-  children,
-  className = '',
-  text,
-}: {
-  as?: 'div' | 'span'
-  children: React.ReactNode
-  className?: string
-  text: string
-}) {
-  return (
-    <Component className={['tooltip-wrap', className].filter(Boolean).join(' ')} data-tooltip={text} title={text}>
-      {children}
-    </Component>
-  )
-}
-
 function HelpTooltip({ text }: { text: string }) {
   return (
     <span className="help-tooltip" data-tooltip={text} title={text} aria-label={text} tabIndex={0}>
@@ -6160,15 +6090,6 @@ function EmptyState({ detail, title }: { detail: string; title: string }) {
 
 function StatusBadge({ label, tone }: { label: string; tone: Tone | 'blue' }) {
   return <span className={`status-badge ${tone}`}>{label}</span>
-}
-
-function PillButton({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
-  return (
-    <span className="pill-button">
-      <Icon size={15} />
-      {label}
-    </span>
-  )
 }
 
 function AutomationToggleControl({
