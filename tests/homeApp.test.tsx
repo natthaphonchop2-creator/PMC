@@ -355,6 +355,43 @@ describe('Home app shell', () => {
     expect(visibleText(clicksCard)).not.toContain('170')
   })
 
+  it('preserves zero funnel metric counts as real Impressions and Clicks data', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[
+          { count: 0, conversionRate: 0, dropOffRate: 0, stage: 'Impressions' },
+          { count: 0, conversionRate: 0, dropOffRate: 0, stage: 'Clicks' },
+        ]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[]}
+      />,
+    )
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+
+    expect(visibleText(impressionsCard)).toContain('Impressions 0')
+    expect(visibleText(impressionsCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(impressionsCard)).not.toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
+
+    expect(visibleText(clicksCard)).toContain('Clicks 0')
+    expect(visibleText(clicksCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(clicksCard)).not.toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
+  })
+
   it('uses the selected ECharts engine for Ads Dashboard performance chart without placeholder data', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
