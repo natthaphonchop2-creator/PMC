@@ -182,6 +182,23 @@ describe('Page Automation route guardrails', () => {
     expect(html).not.toContain('No missing permissions in current page reports.')
   })
 
+  it('uses user-facing wording for page data freshness in AutoPost', () => {
+    const html = renderToStaticMarkup(
+      <AutoPost
+        adsInsight={null}
+        autoMode="off"
+        drafts={[]}
+        messages={[]}
+        onDraftsChanged={() => undefined}
+        pages={[makePage()]}
+        summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
+      />,
+    )
+
+    expect(html).toContain('อัปเดตล่าสุด')
+    expect(html).not.toMatch(/ซิงค์|ซิงก์|ที่ซิง/)
+  })
+
   it('shows Thai unknown permission state in Messages before treating an empty inbox as message data', () => {
     const page = makePage({ permissions: [] })
 

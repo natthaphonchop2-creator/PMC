@@ -274,7 +274,7 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
             title="ข้อมูล Ads"
           />
           <PageAutomationState
-            detail={selectedPage ? `ซิงก์ล่าสุด ${formatDateTime(selectedPage.lastSyncedAt)}` : 'ยังไม่มีข้อมูลเพจ'}
+            detail={selectedPage ? `อัปเดตล่าสุด ${formatDateTime(selectedPage.lastSyncedAt)}` : 'ยังไม่มีข้อมูลเพจ'}
             tone={selectedPage ? 'good' : 'watch'}
             title="ข้อมูลเพจ"
           />
