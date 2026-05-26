@@ -387,7 +387,6 @@ const sectionTooltips: Record<string, string> = {
   'Ads Dashboard': 'ภาพรวมแคมเปญ คำแนะนำ และ KPI ที่ควรตรวจวันนี้',
   'Performance Overview': 'ดูแนวโน้มค่าโฆษณา รายได้ และยอดนัดหมายจากข้อมูลล่าสุด',
   'Top Campaigns': 'แคมเปญที่ทำผลงานดีที่สุดตามผลลัพธ์และผลตอบแทน',
-  'Conversions by Region': 'ดูผลลัพธ์ตามพื้นที่เมื่อมีข้อมูลภูมิภาคจากบัญชีโฆษณา',
   'คำแนะนำที่รออนุมัติ': 'รายการที่ควรตรวจวันนี้ก่อนกดรีวิวหรือปฏิเสธ',
   'PMC Insights': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
   'ตัวจัดการโฆษณา': 'จัดการแคมเปญ ชุดโฆษณา และโฆษณา รวมเปิด ปิด แก้ไข หรือลบ',
@@ -1059,7 +1058,7 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'Conversions by Region', 'PMC Insights'],
+    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'PMC Insights'],
     audience: ['กลุ่มเป้าหมาย', 'ปริมาณของกลุ่มเป้าหมาย'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
@@ -1957,9 +1956,6 @@ export function AnalyticsPage({
         <DashboardPanel action={<button className="ads-dashboard-select-pill" type="button" disabled>ตามผลลัพธ์ <ChevronDown size={14} /></button>} title="Top Campaigns" subtitle="เรียงตามผลลัพธ์และผลตอบแทน">
           <TopCampaignsList campaigns={topCampaigns} />
         </DashboardPanel>
-        <DashboardPanel className="ads-region-panel" title="Conversions by Region" subtitle="รอข้อมูลพื้นที่จากบัญชีโฆษณา">
-          <RegionBreakdownPanel />
-        </DashboardPanel>
       </section>
 
       <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
@@ -2083,40 +2079,6 @@ function TopCampaignsList({ campaigns }: { campaigns: Campaign[] }) {
         </article>
       ))}
       <button className="ads-view-all-button" type="button" disabled>ดูแคมเปญทั้งหมด</button>
-    </div>
-  )
-}
-
-function RegionBreakdownPanel() {
-  const rows = [
-    { label: 'พื้นที่ที่ทำผลงาน', value: 'รอข้อมูล', tone: 'green' },
-    { label: 'จังหวัด / เมือง', value: 'รอข้อมูล', tone: 'mint' },
-    { label: 'สัดส่วนผลลัพธ์', value: 'รอข้อมูล', tone: 'soft' },
-    { label: 'ข้อมูลจากบัญชีโฆษณา', value: 'ยังไม่พร้อม', tone: 'muted' },
-  ]
-
-  return (
-    <div className="ads-region-content">
-      <div className="ads-region-list" aria-label="Conversions by Region data state">
-        {rows.map((row) => (
-          <div className="ads-region-row" key={row.label}>
-            <span className={`ads-region-dot ${row.tone}`} />
-            <strong>{row.label}</strong>
-            <em>{row.value}</em>
-          </div>
-        ))}
-        <p>รอข้อมูลพื้นที่จากบัญชีโฆษณาเพื่อแสดงผลลัพธ์ตามจังหวัดหรือเมือง</p>
-      </div>
-      <div className="ads-region-map" aria-hidden="true">
-        <span className="ads-map-land land-1" />
-        <span className="ads-map-land land-2" />
-        <span className="ads-map-land land-3" />
-        <span className="ads-map-land land-4" />
-        <span className="ads-map-land land-5" />
-        <span className="ads-map-pulse pulse-1" />
-        <span className="ads-map-pulse pulse-2" />
-        <span className="ads-map-pulse pulse-3" />
-      </div>
     </div>
   )
 }
