@@ -435,6 +435,8 @@ describe('Home app shell', () => {
     const costCard = dashboardMetricCardHtml(html, 'Cost')
 
     expect(countOccurrences(html, 'data-sparkline="metric-summary"')).toBe(7)
+    expect(countOccurrences(html, 'class="ads-dashboard-metric-footer"')).toBe(7)
+    expect(impressionsCard).toMatch(/ads-dashboard-metric-footer[\s\S]*ads-dashboard-metric-change[\s\S]*data-sparkline="metric-summary"/)
     expect(impressionsCard).toContain('data-sparkline-source="funnel"')
     expect(impressionsCard).toContain('data-values="20000,1220,220,170,128"')
     expect(clicksCard).toContain('data-sparkline-source="daily-trend"')

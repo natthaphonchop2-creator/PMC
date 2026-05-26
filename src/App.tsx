@@ -2001,15 +2001,17 @@ function DashboardMetricCard({ metric }: { metric: DashboardMetric }) {
       <span className={`ads-dashboard-metric-icon ${metric.tone}`}>
         <Icon size={22} />
       </span>
-      <div>
+      <div className="ads-dashboard-metric-main">
         <span>{metric.label}</span>
         <strong>{metric.value}</strong>
         <small>{metric.helper}</small>
       </div>
-      <MetricSparklineGraph label={metric.label} sparkline={metric.sparkline} tone={metric.tone} />
-      <div className="ads-dashboard-metric-change">
-        <em className={metric.change.tone}>{metric.change.label}</em>
-        <small>{metric.change.detail}</small>
+      <div className="ads-dashboard-metric-footer">
+        <div className="ads-dashboard-metric-change">
+          <em className={metric.change.tone}>{metric.change.label}</em>
+          <small>{metric.change.detail}</small>
+        </div>
+        <MetricSparklineGraph label={metric.label} sparkline={metric.sparkline} tone={metric.tone} />
       </div>
     </article>
   )
