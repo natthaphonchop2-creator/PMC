@@ -92,7 +92,9 @@ describe('Home app shell', () => {
       expect(text).toContain('Impressions')
       expect(text).toContain('Clicks')
       expect(text).toContain('Conversions')
-      expect(html).toContain('<span>Cost</span>')
+      expect(html).toMatch(
+        /<article[^>]*class="[^"]*ads-dashboard-metric-card[^"]*"[^>]*>[\s\S]*<span>Cost<\/span>[\s\S]*<\/article>/,
+      )
       expect(text).toContain('Performance Overview')
       expect(text).toContain('Top Campaigns')
       expect(text).toContain('คำแนะนำที่รออนุมัติ')
@@ -603,7 +605,7 @@ describe('Home app shell', () => {
     const pageCss = readText('../src/apps/page-automation/styles.css')
 
     expect(appCss).toContain('.ads-workspace-shell')
-    expect(appCss).toContain('grid-template-columns')
+    expect(appCss).toMatch(/\.ads-workspace-shell\s*\{[^}]*grid-template-columns:\s*[^;}]+/s)
     expect(appCss).toContain('.ads-outer-toolbar')
     expect(appCss).toContain('.ads-main-panel')
     expect(appCss).toContain('.ads-toolbar-item.active')
