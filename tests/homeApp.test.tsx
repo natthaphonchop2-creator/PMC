@@ -93,7 +93,7 @@ describe('Home app shell', () => {
       expect(text).toContain('Clicks')
       expect(text).toContain('Conversions')
       expect(html).toMatch(
-        /<article[^>]*class="[^"]*ads-dashboard-metric-card[^"]*"[^>]*>[\s\S]*<span>Cost<\/span>[\s\S]*<\/article>/,
+        /<article[^>]*class="[^"]*ads-dashboard-metric-card[^"]*"[^>]*>(?:(?!<\/article>)[\s\S])*<span>Cost<\/span>(?:(?!<\/article>)[\s\S])*<\/article>/,
       )
       expect(text).toContain('Performance Overview')
       expect(text).toContain('Top Campaigns')
