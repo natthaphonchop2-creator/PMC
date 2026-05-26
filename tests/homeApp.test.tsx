@@ -549,9 +549,10 @@ describe('Home app shell', () => {
 
     expect(countOccurrences(html, 'data-chart-engine="echarts"')).toBe(1)
     expect(countOccurrences(html, 'data-chart-source="real"')).toBe(1)
-    expect(html).toContain('data-chart-style="sharp-lines"')
+    expect(html).toContain('data-chart-style="separated-lines"')
+    expect(html).toContain('data-chart-layout="separated-lanes"')
     expect(html).toContain('Performance Overview')
-    expect(html).toContain('aria-label="กราฟภาพรวมผลงานรายวัน"')
+    expect(html).toContain('aria-label="กราฟรายวันแบบแยกเส้นรายได้ ค่าโฆษณา และยอดนัดหมาย"')
     expect(html).not.toContain('Revenue Overview')
     expect(html).not.toContain('aria-label="Revenue by Campaign chart"')
     expect(html).not.toContain('aria-label="Funnel คลินิก chart"')

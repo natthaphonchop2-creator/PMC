@@ -951,7 +951,7 @@ input:focus-visible {
 }
 
 .revenue-chart-wrap {
-  min-height: 338px;
+  min-height: 372px;
 }
 
 .echart-canvas {
@@ -960,7 +960,7 @@ input:focus-visible {
 }
 
 .revenue-echart {
-  height: 326px;
+  height: 360px;
 }
 
 .revenue-mix-echart {
@@ -6451,11 +6451,11 @@ input:focus-visible {
 }
 
 .ads-workspace-shell .performance-panel .revenue-chart-wrap {
-  min-height: 280px;
+  min-height: 372px;
 }
 
 .ads-workspace-shell .performance-panel .revenue-echart {
-  height: 280px;
+  height: 360px;
 }
 
 .performance-empty-chart {

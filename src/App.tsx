@@ -2249,11 +2249,13 @@ function conversionRatePeriodChange(trendData: TrendDatum[]): MetricChange {
 function EChart({
   ariaLabel,
   className = '',
+  chartLayout,
   chartStyle,
   option,
 }: {
   ariaLabel: string
   className?: string
+  chartLayout?: string
   chartStyle?: string
   option: EChartsOption
 }) {
@@ -2289,6 +2291,7 @@ function EChart({
       aria-label={ariaLabel}
       className={`echart-canvas ${className}`.trim()}
       data-chart-engine="echarts"
+      data-chart-layout={chartLayout}
       data-chart-source="real"
       data-chart-style={chartStyle}
       ref={containerRef}
@@ -2306,14 +2309,30 @@ type EChartTooltipParam = {
 }
 
 function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
+  const days = trendData.map((point) => point.day || point.date)
+  const xAxisBase = {
+    axisLine: { lineStyle: { color: '#dce6f2' } },
+    axisTick: { show: false },
+    boundaryGap: false,
+    data: days,
+    type: 'category' as const,
+  }
+
   return {
     animation: false,
-    aria: { enabled: true },
+    aria: { enabled: false },
     backgroundColor: 'transparent',
-    color: ['#aa7a3f', '#2684ff', '#b84cff'],
-    grid: { bottom: 34, containLabel: true, left: 8, right: 18, top: 42 },
+    color: ['#9b6f3d', '#2684ff', '#9b5cff'],
+    axisPointer: {
+      link: [{ xAxisIndex: 'all' }],
+    },
+    grid: [
+      { containLabel: true, height: 58, left: 8, right: 18, top: 42 },
+      { containLabel: true, height: 58, left: 8, right: 18, top: 128 },
+      { containLabel: true, height: 58, left: 8, right: 18, top: 214 },
+    ],
     legend: {
-      data: ['รายได้', 'ค่าโฆษณา', 'ยอดนัดหมาย'],
+      data: ['Revenue', 'Spend', 'Bookings'],
       icon: 'roundRect',
       itemGap: 18,
       itemHeight: 6,
@@ -2326,35 +2345,40 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
       {
         data: trendData.map((point) => point.revenue),
         emphasis: { focus: 'series' },
-        itemStyle: { color: '#aa7a3f' },
-        lineStyle: { color: '#aa7a3f', width: 2.5 },
-        name: 'รายได้',
-        showSymbol: true,
-        smooth: false,
+        itemStyle: { color: '#9b6f3d' },
+        lineStyle: { color: '#9b6f3d', width: 3 },
+        name: 'Revenue',
+        showSymbol: false,
+        smooth: true,
         symbol: 'rect',
         symbolSize: 5,
         type: 'line',
+        xAxisIndex: 0,
+        yAxisIndex: 0,
       },
       {
         data: trendData.map((point) => point.spend),
         emphasis: { focus: 'series' },
         itemStyle: { color: '#2684ff' },
-        lineStyle: { color: '#2684ff', type: 'dashed', width: 2.25 },
-        name: 'ค่าโฆษณา',
+        lineStyle: { color: '#2684ff', width: 3 },
+        name: 'Spend',
         showSymbol: false,
-        smooth: false,
+        smooth: true,
         type: 'line',
+        xAxisIndex: 1,
+        yAxisIndex: 1,
       },
       {
         data: trendData.map((point) => point.bookings),
         emphasis: { focus: 'series' },
-        itemStyle: { color: '#b84cff' },
-        lineStyle: { color: '#b84cff', width: 2.25 },
-        name: 'ยอดนัดหมาย',
+        itemStyle: { color: '#9b5cff' },
+        lineStyle: { color: '#9b5cff', width: 3 },
+        name: 'Bookings',
         showSymbol: false,
-        smooth: false,
+        smooth: true,
         type: 'line',
-        yAxisIndex: 1,
+        xAxisIndex: 2,
+        yAxisIndex: 2,
       },
     ],
     tooltip: {
@@ -2364,29 +2388,57 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
       className: 'echart-tooltip-surface',
       confine: true,
       formatter: (params: unknown) => formatRevenueTrendTooltip(params, trendData),
+      order: 'seriesAsc',
       trigger: 'axis',
     },
-    xAxis: {
-      axisLabel: { color: '#667792', fontSize: 11, fontWeight: 700 },
-      axisLine: { lineStyle: { color: '#dce6f2' } },
-      axisTick: { show: false },
-      boundaryGap: false,
-      data: trendData.map((point) => point.day || point.date),
-      type: 'category',
-    },
+    xAxis: [
+      {
+        ...xAxisBase,
+        axisLabel: { show: false },
+        gridIndex: 0,
+      },
+      {
+        ...xAxisBase,
+        axisLabel: { show: false },
+        gridIndex: 1,
+      },
+      {
+        ...xAxisBase,
+        axisLabel: { color: '#667792', fontSize: 11, fontWeight: 700 },
+        gridIndex: 2,
+      },
+    ],
     yAxis: [
       {
         axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
         axisLine: { show: false },
         axisTick: { show: false },
+        name: 'Revenue',
+        nameGap: 8,
+        nameTextStyle: { align: 'left', color: '#9b6f3d', fontSize: 11, fontWeight: 800 },
         splitLine: { lineStyle: { color: '#e7edf5' } },
         type: 'value',
       },
       {
-        axisLabel: { color: '#9aaaba', fontSize: 11, fontWeight: 700 },
+        axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
         axisLine: { show: false },
         axisTick: { show: false },
-        splitLine: { show: false },
+        gridIndex: 1,
+        name: 'Spend',
+        nameGap: 8,
+        nameTextStyle: { align: 'left', color: '#2684ff', fontSize: 11, fontWeight: 800 },
+        splitLine: { lineStyle: { color: '#e7edf5' } },
+        type: 'value',
+      },
+      {
+        axisLabel: { color: '#667792', fontSize: 11, fontWeight: 700 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        gridIndex: 2,
+        name: 'Bookings',
+        nameGap: 8,
+        nameTextStyle: { align: 'left', color: '#9b5cff', fontSize: 11, fontWeight: 800 },
+        splitLine: { lineStyle: { color: '#e7edf5' } },
         type: 'value',
       },
     ],
@@ -2413,18 +2465,18 @@ function formatRevenueTrendTooltip(params: unknown, trendData: TrendDatum[]) {
   const rows = asEChartParams(params)
   const title = rows[0]?.name ?? ''
   const point = trendData.find((item) => (item.day || item.date) === title)
-  const revenue = point?.revenue ?? eChartParamNumber(rows.find((row) => row.seriesName === 'รายได้')?.value)
-  const spend = point?.spend ?? eChartParamNumber(rows.find((row) => row.seriesName === 'ค่าโฆษณา')?.value)
+  const revenue = point?.revenue ?? eChartParamNumber(rows.find((row) => row.seriesName === 'Revenue')?.value)
+  const spend = point?.spend ?? eChartParamNumber(rows.find((row) => row.seriesName === 'Spend')?.value)
   const bookings = point?.bookings ?? 0
   const roas = spend > 0 ? revenue / spend : 0
 
   return eChartTooltip(
     point?.date && point.date !== '-' ? point.date : title,
     [
-      ['รายได้', fmtMoney(revenue), rows.find((row) => row.seriesName === 'รายได้')?.marker],
-      ['ค่าโฆษณา', fmtMoney(spend), rows.find((row) => row.seriesName === 'ค่าโฆษณา')?.marker],
+      ['Revenue', fmtMoney(revenue), rows.find((row) => row.seriesName === 'Revenue')?.marker],
+      ['Spend', fmtMoney(spend), rows.find((row) => row.seriesName === 'Spend')?.marker],
       ['ROAS', `${roas.toFixed(2)}x`, undefined],
-      ['ยอดนัดหมาย', fmtNum(bookings), undefined],
+      ['Bookings', fmtNum(bookings), rows.find((row) => row.seriesName === 'Bookings')?.marker],
     ],
   )
 }
@@ -2452,7 +2504,13 @@ function RevenueOverviewChart({ embedded = false, trendData }: { embedded?: bool
   const option = useMemo(() => buildRevenueTrendOption(trendData), [trendData])
   const content = trendData.length > 0 ? (
     <div className="revenue-chart-wrap">
-      <EChart ariaLabel="กราฟภาพรวมผลงานรายวัน" chartStyle="sharp-lines" className="revenue-echart" option={option} />
+      <EChart
+        ariaLabel="กราฟรายวันแบบแยกเส้นรายได้ ค่าโฆษณา และยอดนัดหมาย"
+        chartLayout="separated-lanes"
+        chartStyle="separated-lines"
+        className="revenue-echart"
+        option={option}
+      />
     </div>
   ) : (
     <div className="performance-empty-chart">
