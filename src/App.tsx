@@ -1953,6 +1953,7 @@ function Topbar({ activePage, automationMode, datePreset, metaInfo, onDateChange
 
 export function AnalyticsPage({
   campaigns,
+  funnelMetrics,
   onApprove,
   onReject,
   recommendations,
@@ -1975,9 +1976,11 @@ export function AnalyticsPage({
   const averageCtr = campaigns.length > 0 ? campaigns.reduce((sum, campaign) => sum + campaign.ctr, 0) / campaigns.length : 0
   const totalConversions = campaigns.reduce((sum, campaign) => sum + campaign.conversions, 0)
   const unavailableMetaMetricChange: MetricChange = { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังไม่มีข้อมูลจาก Meta' }
+  const impressionsCount = funnelMetricCount(funnelMetrics, 'Impressions')
+  const clicksCount = funnelMetricCount(funnelMetrics, 'Clicks')
   const metricCards: DashboardMetric[] = [
-    { icon: Info, label: 'Impressions', tone: 'sand', value: 'รอข้อมูล', helper: 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: unavailableMetaMetricChange },
-    { icon: Megaphone, label: 'Clicks', tone: 'blue', value: 'รอข้อมูล', helper: 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: unavailableMetaMetricChange },
+    { icon: Info, label: 'Impressions', tone: 'sand', value: impressionsCount > 0 ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount > 0 ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: impressionsCount > 0 ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
+    { icon: Megaphone, label: 'Clicks', tone: 'blue', value: clicksCount > 0 ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount > 0 ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: clicksCount > 0 ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
     { icon: Users, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData) },
     { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ยอด spend รวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จาก spend รายวัน') },
   ]
@@ -2137,6 +2140,17 @@ function ApprovalInsightCard({
       })}
     </div>
   )
+}
+
+function funnelMetricCount(funnelMetrics: MetaFunnelMetric[], stage: string) {
+  const normalizedStage = normalizeFunnelStage(stage)
+  const match = funnelMetrics.find((metric) => normalizeFunnelStage(metric.stage) === normalizedStage)
+  const count = Number(match?.count)
+  return Number.isFinite(count) && count > 0 ? count : 0
+}
+
+function normalizeFunnelStage(stage: string) {
+  return stage.trim().toLowerCase()
 }
 
 function metricTrendValues(trendData: TrendDatum[], getValue: (point: TrendDatum) => number | undefined) {

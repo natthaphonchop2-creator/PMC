@@ -316,6 +316,45 @@ describe('Home app shell', () => {
     expect(visibleText(clicksCard)).not.toContain('170')
   })
 
+  it('uses real funnel metric counts for Impressions and Clicks dashboard cards when available', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[
+          { count: 20000, conversionRate: 100, dropOffRate: 0, stage: 'Impressions' },
+          { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
+        ]}
+        onApprove={() => undefined}
+        onReject={() => undefined}
+        recommendations={[]}
+        recommendationStates={{}}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[]}
+      />,
+    )
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+
+    expect(visibleText(impressionsCard)).toContain('20,000')
+    expect(visibleText(impressionsCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(impressionsCard)).not.toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
+    expect(visibleText(impressionsCard)).not.toContain('220')
+
+    expect(visibleText(clicksCard)).toContain('1,220')
+    expect(visibleText(clicksCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(clicksCard)).not.toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
+    expect(visibleText(clicksCard)).not.toContain('170')
+  })
+
   it('uses the selected ECharts engine for Ads Dashboard performance chart without placeholder data', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
