@@ -6332,6 +6332,17 @@ input:focus-visible {
   line-height: 1.45;
 }
 
+.ads-workspace-shell .revenue-chart-panel.is-embedded {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+}
+
+.ads-workspace-shell .revenue-chart-inline-head {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .ads-top-campaign-list,
 .ads-workspace-shell .approval-insight-list {
   display: grid;

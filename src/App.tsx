@@ -397,7 +397,7 @@ const sectionTooltips: Record<string, string> = {
   'PMC Insights': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
   'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
   'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
-  'PMC Master Agent': 'เรียก AI ให้อ่าน WorkspaceData, หน้าเว็บปัจจุบัน และ memory แล้วสรุปแผน',
+  'ผู้ช่วย Insights': 'อ่านข้อมูลโฆษณา หน้าปัจจุบัน และข้อมูลที่บันทึกไว้ก่อนสรุปแผน',
   'ตัวสร้างรายงาน': 'เตรียมรายงานสรุปงานโฆษณาจากข้อมูลล่าสุด',
   'ตั้งค่า Workspace': 'เชื่อมต่อ Meta API และ OpenAI API ที่ backend ใช้ทำงาน',
   'ศูนย์ช่วยเหลือ': 'คู่มือสั้นสำหรับเริ่มใช้งานและแก้ปัญหาเบื้องต้น',
@@ -632,7 +632,7 @@ function buildMasterSummaryView(result: AiBrainApiResponse) {
     : 'ยังไม่มีสัญญาณผิดปกติชัดเจนจากข้อมูลรอบนี้'
 
   return {
-    title: 'สรุปจาก Master Agent',
+    title: 'สรุปจากผู้ช่วย Insights',
     items: [
       focus,
       decision,
@@ -1061,7 +1061,7 @@ function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
     library: ['คลังโฆษณา', 'Compliance'],
-    marketer: ['AI Marketer', 'PMC Master Agent', 'สิ่งที่ควรดูตอนนี้', 'แผนที่เลือกทำต่อ'],
+    marketer: ['Insights', 'ผู้ช่วย Insights', 'สิ่งที่ควรดูตอนนี้', 'แผนที่เลือกทำต่อ'],
     optimization: ['Optimizer & Automation', 'Decision Board', 'คิวคำสั่ง Auto Ads'],
     reports: ['ตัวสร้างรายงาน', 'รายงานฉบับร่าง'],
     settings: ['ตั้งค่า Workspace', 'สถานะ API'],
@@ -1177,9 +1177,9 @@ function PmcAdsAgentApp() {
     setBrainApprovalActions((current) => [action, ...current.filter((item) => item.id !== action.id)])
     setRecommendationStates((current) => ({ ...current, [action.id]: current[action.id] ?? 'Suggested' }))
     setConfirmingId(action.id)
-    showMascotNotice('Master Agent ส่ง action ให้ตรวจแล้วครับ', toneForRisk(action.risk))
+    showMascotNotice('ผู้ช่วย Insights ส่งแผนให้ตรวจแล้วครับ', toneForRisk(action.risk))
     appendAudit({
-      action: 'เปิด Action จาก Master Agent',
+      action: 'เปิดแผนจากผู้ช่วย Insights',
       detail: `${action.target} · ${action.summary}`,
       actor: 'ผู้ใช้งาน',
       tone: 'info',
@@ -1694,7 +1694,7 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
     creative: 'กำลังโหลดครีเอทีฟ',
     help: 'กำลังโหลดศูนย์ช่วยเหลือ',
     library: 'กำลังโหลดคลังโฆษณา',
-    marketer: 'กำลังโหลดนักการตลาด AI',
+    marketer: 'กำลังโหลด Insights',
     optimization: 'กำลังโหลด Optimizer',
     reports: 'กำลังโหลดรายงาน',
     settings: 'กำลังโหลดการตั้งค่า',
@@ -1995,7 +1995,9 @@ export function AnalyticsPage({
           <p>ภาพรวมแคมเปญ คำแนะนำ และตัวเลขที่ควรตรวจวันนี้</p>
         </div>
         <div className="ads-dashboard-actions">
-          <button className="clinic-secondary-button" type="button">Customize Dashboard</button>
+          <button className="clinic-secondary-button" type="button" disabled aria-label="Customize Dashboard ยังไม่พร้อมใช้งาน" title="Customize Dashboard ยังไม่พร้อมใช้งาน">
+            Customize Dashboard
+          </button>
           <button className="clinic-primary-button" type="button" disabled>New Campaign</button>
         </div>
       </section>
@@ -2008,7 +2010,7 @@ export function AnalyticsPage({
 
       <section className="ads-dashboard-main-grid">
         <DashboardPanel className="performance-panel" title="Performance Overview" subtitle="Spend, revenue และ booking จากข้อมูลที่ซิงก์">
-          <RevenueOverviewChart trendData={trendData} />
+          <RevenueOverviewChart embedded trendData={trendData} />
         </DashboardPanel>
         <DashboardPanel title="Top Campaigns" subtitle="เรียงตาม conversion และ ROAS">
           <div className="ads-top-campaign-list">
@@ -2387,8 +2389,26 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;')
 }
 
-function RevenueOverviewChart({ trendData }: { trendData: TrendDatum[] }) {
+function RevenueOverviewChart({ embedded = false, trendData }: { embedded?: boolean; trendData: TrendDatum[] }) {
   const option = useMemo(() => buildRevenueTrendOption(trendData), [trendData])
+  const content = trendData.length > 0 ? (
+    <div className="revenue-chart-wrap">
+      <EChart ariaLabel="Performance Overview chart" chartStyle="sharp-lines" className="revenue-echart" option={option} />
+    </div>
+  ) : (
+    <EmptyState title="ยังไม่มี Performance Overview" detail="กราฟจะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
+  )
+
+  if (embedded) {
+    return (
+      <div className="revenue-chart-panel is-embedded">
+        <div className="revenue-chart-inline-head">
+          <StatusBadge label="Daily" tone="info" />
+        </div>
+        {content}
+      </div>
+    )
+  }
 
   return (
     <SectionCard
@@ -2398,13 +2418,7 @@ function RevenueOverviewChart({ trendData }: { trendData: TrendDatum[] }) {
       title="Performance Overview"
       subtitle="Spend, revenue และ booking รายวันจากข้อมูลที่ซิงก์แล้ว"
     >
-      {trendData.length > 0 ? (
-        <div className="revenue-chart-wrap">
-          <EChart ariaLabel="Performance Overview chart" chartStyle="sharp-lines" className="revenue-echart" option={option} />
-        </div>
-      ) : (
-        <EmptyState title="ยังไม่มี Performance Overview" detail="กราฟจะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
-      )}
+      {content}
     </SectionCard>
   )
 }
@@ -3220,7 +3234,7 @@ function AiMarketerPage({
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          intent: 'Analyze the current AI Marketer page with live website context, runtime memory, and approval-only recommendations.',
+          intent: 'Analyze the current Insights page with live website context, runtime memory, and approval-only recommendations.',
           websiteContext,
           workspace,
         }),
@@ -3229,7 +3243,7 @@ function AiMarketerPage({
       onBrainApprovalActions(result.approvalActions ?? [])
       setBrainActionMessage(`สร้างแผนให้รีวิว ${result.approvalActions?.length ?? 0} รายการ และบันทึกความจำระบบ ${result.knowledge?.memoriesWritten ?? 0} รายการ`)
     } catch (error) {
-      setBrainError(error instanceof Error ? formatApiMessage(error.message) : 'PMC Master Agent วิเคราะห์ไม่สำเร็จ')
+      setBrainError(error instanceof Error ? formatApiMessage(error.message) : 'ผู้ช่วย Insights วิเคราะห์ไม่สำเร็จ')
     } finally {
       setIsBrainRunning(false)
     }
@@ -3276,15 +3290,15 @@ function AiMarketerPage({
 	      <SectionCard
         className="ai-brain-panel"
         collapsible
-        title="PMC Master Agent"
-        subtitle="อ่าน WorkspaceData, Website Context และ runtime knowledgebase ก่อนสรุปคำแนะนำ"
+        title="ผู้ช่วย Insights"
+        subtitle="อ่านข้อมูลโฆษณา หน้าปัจจุบัน และข้อมูลที่บันทึกไว้ก่อนสรุปคำแนะนำ"
       >
         <div className="master-agent-launch">
           <button className={`primary-button master-agent-cta ${isBrainRunning ? 'is-running' : ''}`} type="button" onClick={() => void runMasterAgent()} disabled={!workspace || isBrainRunning}>
             <BrainCircuit size={18} />
             <span className="master-agent-cta-copy">
-              <strong>{isBrainRunning ? 'กำลังวิเคราะห์' : 'เรียก Master Agent'}</strong>
-              <small>{isBrainRunning ? 'กำลังอ่านข้อมูลจริงและ memory' : 'ให้ AI วิเคราะห์ตอนนี้'}</small>
+              <strong>{isBrainRunning ? 'กำลังวิเคราะห์' : 'วิเคราะห์ด้วยผู้ช่วย Insights'}</strong>
+              <small>{isBrainRunning ? 'กำลังอ่านข้อมูลจริงและข้อมูลที่บันทึกไว้' : 'ให้ระบบสรุปสิ่งที่ควรตรวจตอนนี้'}</small>
             </span>
           </button>
         </div>
@@ -3295,7 +3309,7 @@ function AiMarketerPage({
             <div className="ai-brain-summary">
               <BrainCircuit size={22} />
               <div>
-                <strong>{masterSummaryView?.title ?? 'สรุปจาก Master Agent'}</strong>
+                <strong>{masterSummaryView?.title ?? 'สรุปจากผู้ช่วย Insights'}</strong>
                 <ul>
                   {(masterSummaryView?.items ?? []).map((item) => (
                     <li key={item}>{item}</li>
@@ -3428,8 +3442,8 @@ function AiMarketerPage({
 	          </div>
 	        ) : (
           <EmptyState
-            title={brainError || 'ยังไม่ได้เรียก Master Agent'}
-            detail={workspace ? 'กดเรียก Master Agent เพื่อให้ AI อ่านหน้าเว็บปัจจุบันและ memory ก่อนสรุป' : 'ต้องซิงก์ Meta workspace ก่อนเรียก AI Brain'}
+            title={brainError || 'ยังไม่ได้วิเคราะห์ Insights'}
+            detail={workspace ? 'กดวิเคราะห์เพื่อให้ระบบอ่านหน้าปัจจุบันและข้อมูลที่บันทึกไว้ก่อนสรุป' : 'ต้องซิงก์ Meta workspace ก่อนใช้ผู้ช่วย Insights'}
           />
         )}
       </SectionCard>
@@ -3440,7 +3454,7 @@ function AiMarketerPage({
 function MasterAgentSkeleton() {
   return (
     <div className="ai-brain-skeleton" aria-live="polite" aria-busy="true">
-      <p className="ai-brain-skeleton-status">AI กำลังอ่านข้อมูลโฆษณาและสรุปคำแนะนำ</p>
+      <p className="ai-brain-skeleton-status">ระบบกำลังอ่านข้อมูลโฆษณาและสรุปคำแนะนำ</p>
       <div className="ai-brain-skeleton-summary">
         <span className="skeleton-chip" />
         <span className="skeleton-line wide" />
@@ -5866,7 +5880,7 @@ function HelpCenterPage({
     dataState === 'live'
       ? {
           state: 'ระบบพร้อมใช้งาน',
-          detail: 'ข้อมูล Meta API ซิงก์สำเร็จแล้ว ใช้ Analytics, Ads Manager และ AI Marketer ได้ตามปกติ',
+          detail: 'ข้อมูล Meta API ซิงก์สำเร็จแล้ว ใช้ Analytics, Ads Manager และ Insights ได้ตามปกติ',
           tone: 'good' as Tone,
           action: 'ซิงก์อีกครั้ง',
           onAction: onSync,

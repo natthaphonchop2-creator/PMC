@@ -88,6 +88,9 @@ describe('Home app shell', () => {
 
       expect(text).toContain('Ads Dashboard')
       expect(text).toContain('Customize Dashboard')
+      expect(html).toMatch(
+        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="Customize Dashboard ยังไม่พร้อมใช้งาน")[^>]*>Customize Dashboard<\/button>/,
+      )
       expect(text).toContain('New Campaign')
       expect(text).toContain('Impressions')
       expect(text).toContain('Clicks')
@@ -95,7 +98,8 @@ describe('Home app shell', () => {
       expect(html).toMatch(
         /<article[^>]*class="[^"]*ads-dashboard-metric-card[^"]*"[^>]*>(?:(?!<\/article>)[\s\S])*<span>Cost<\/span>(?:(?!<\/article>)[\s\S])*<\/article>/,
       )
-      expect(text).toContain('Performance Overview')
+      expect(countOccurrences(html, '<h2>Performance Overview</h2>')).toBe(1)
+      expect(html).not.toContain('class="panel revenue-chart-panel"')
       expect(text).toContain('Top Campaigns')
       expect(text).toContain('คำแนะนำที่รออนุมัติ')
       expect(text).toContain('Cost per Result')
@@ -783,6 +787,15 @@ describe('Home app shell', () => {
 
     expect(appSource).not.toContain("'.sidebar-mascot'")
     expect(appSource).toContain("'.ads-toolbar-brand-mark'")
+  })
+
+  it('keeps Insights copy user-facing instead of internal agent labels', () => {
+    const appSource = readText('../src/App.tsx')
+
+    expect(appSource).toContain('ผู้ช่วย Insights')
+    expect(appSource).not.toContain('PMC Master Agent')
+    expect(appSource).not.toContain('เรียก Master Agent')
+    expect(appSource).not.toContain('AI Brain')
   })
 
   it('does not show hardcoded sidebar alert or task counts as if they were live data', () => {
