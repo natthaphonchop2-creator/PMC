@@ -41,10 +41,10 @@ describe('PlanExecutionModal', () => {
       />,
     )
 
-    expect(html).toContain('ตรวจคำสั่ง Meta ก่อนส่งจริง')
+    expect(html).toContain('ตรวจคำสั่งก่อนส่งจริง')
     expect(html).toContain('แผนที่อนุมัติ')
-    expect(html).toContain('คำสั่ง Meta ที่จะส่ง')
-    expect(html).toContain('ยืนยันส่งคำสั่งไป Meta')
+    expect(html).toContain('คำสั่งที่จะส่ง')
+    expect(html).toContain('ยืนยันส่งคำสั่ง')
     expect(html).toContain('กลับไปดูรายการแผน')
     expect(html).not.toContain('ดำเนินการแผนต่อ')
     expect(html).not.toContain('Action ใน Meta')
@@ -95,10 +95,10 @@ describe('PlanExecutionModal', () => {
     )
 
     expect(recommendation.execution).toBeUndefined()
-    expect(html).toContain('ทำตาม checklist ของแผน')
-    expect(html).toContain('ไม่มีคำสั่ง Meta')
-    expect(html).not.toContain('คำสั่ง Meta ที่จะส่ง')
-    expect(html).not.toContain('ยืนยันส่งคำสั่งไป Meta')
+    expect(html).toContain('ทำตามรายการตรวจของแผน')
+    expect(html).toContain('ยังไม่มีคำสั่งที่ปลอดภัยพอให้ทำอัตโนมัติ')
+    expect(html).not.toContain('คำสั่งที่จะส่ง')
+    expect(html).not.toContain('ยืนยันส่งคำสั่ง')
     expect(html).not.toContain('คงสถานะพักแคมเปญใน Meta')
   })
 })

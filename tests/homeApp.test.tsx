@@ -93,7 +93,7 @@ describe('Home app shell', () => {
       expect(text).toContain('Ads Dashboard')
       expect(text).toContain('Customize Dashboard')
       expect(html).toMatch(
-        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="Customize Dashboard ยังไม่พร้อมใช้งาน")[^>]*>Customize Dashboard<\/button>/,
+        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน")[^>]*>Customize Dashboard<\/button>/,
       )
       expect(text).toContain('New Campaign')
       expect(text).toContain('Impressions')
@@ -156,7 +156,7 @@ describe('Home app shell', () => {
     expect(text).toContain('Ads Dashboard')
     expect(text).toContain('Top Campaigns')
     expect(text).toContain('ตัวรี MSG เติมไขมัน 9900')
-    expect(text).toContain('96 conversions · ROAS 1.90x')
+    expect(text).toContain('96 ผลลัพธ์ · ROAS 1.90x')
     expect(html).toContain('ads-top-campaign-list')
     expect(html).toContain('ads-top-campaign-row')
     expect(text).not.toContain('กราฟข้อมูลแคมเปญ')
@@ -283,7 +283,7 @@ describe('Home app shell', () => {
     expect(text).toContain('Performance Overview')
     expect(text).toContain('Top Campaigns')
     expect(text).toContain('Conversions by Region')
-    expect(text).toContain('รอข้อมูลภูมิภาคจาก Meta')
+    expect(text).toContain('รอข้อมูลพื้นที่จากบัญชีโฆษณา')
     expect(text).toContain('PMC Insights')
     expect(text).toContain('Cost per Result')
     expect(text).toContain('CTR')
@@ -354,12 +354,12 @@ describe('Home app shell', () => {
     const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
 
     expect(visibleText(impressionsCard)).toContain('รอข้อมูล')
-    expect(visibleText(impressionsCard)).toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
+    expect(visibleText(impressionsCard)).toContain('รอข้อมูลการแสดงผลสำหรับช่วงนี้')
     expect(visibleText(impressionsCard)).not.toContain('220')
     expect(visibleText(impressionsCard)).not.toContain('2 แคมเปญ')
 
     expect(visibleText(clicksCard)).toContain('รอข้อมูล')
-    expect(visibleText(clicksCard)).toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
+    expect(visibleText(clicksCard)).toContain('รอข้อมูลการกดสำหรับช่วงนี้')
     expect(visibleText(clicksCard)).not.toContain('170')
   })
 
@@ -389,12 +389,12 @@ describe('Home app shell', () => {
     const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
 
     expect(visibleText(impressionsCard)).toContain('20,000')
-    expect(visibleText(impressionsCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(impressionsCard)).toContain('จำนวนครั้งที่โฆษณาถูกเห็น')
     expect(visibleText(impressionsCard)).not.toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
     expect(visibleText(impressionsCard)).not.toContain('220')
 
     expect(visibleText(clicksCard)).toContain('1,220')
-    expect(visibleText(clicksCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(clicksCard)).toContain('จำนวนครั้งที่คนกดจากโฆษณา')
     expect(visibleText(clicksCard)).not.toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
     expect(visibleText(clicksCard)).not.toContain('170')
   })
@@ -474,11 +474,11 @@ describe('Home app shell', () => {
     const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
 
     expect(visibleText(impressionsCard)).toContain('Impressions 0')
-    expect(visibleText(impressionsCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(impressionsCard)).toContain('จำนวนครั้งที่โฆษณาถูกเห็น')
     expect(visibleText(impressionsCard)).not.toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
 
     expect(visibleText(clicksCard)).toContain('Clicks 0')
-    expect(visibleText(clicksCard)).toContain('จาก Meta funnel ที่ซิงก์')
+    expect(visibleText(clicksCard)).toContain('จำนวนครั้งที่คนกดจากโฆษณา')
     expect(visibleText(clicksCard)).not.toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
   })
 
@@ -547,7 +547,7 @@ describe('Home app shell', () => {
     expect(countOccurrences(html, 'data-chart-source="real"')).toBe(1)
     expect(html).toContain('data-chart-style="sharp-lines"')
     expect(html).toContain('Performance Overview')
-    expect(html).toContain('aria-label="Performance Overview chart"')
+    expect(html).toContain('aria-label="กราฟภาพรวมผลงานรายวัน"')
     expect(html).not.toContain('Revenue Overview')
     expect(html).not.toContain('aria-label="Revenue by Campaign chart"')
     expect(html).not.toContain('aria-label="Funnel คลินิก chart"')
@@ -585,9 +585,9 @@ describe('Home app shell', () => {
 
     expect(text).toContain('Conversions')
     expect(text).toContain('↑ 100.0%')
-    expect(text).toContain('จาก paid / booking รายวัน')
+    expect(text).toContain('จากลูกค้าชำระเงินเทียบยอดนัดรายวัน')
     expect(text).toContain('Cost')
-    expect(text).toContain('จาก spend รายวัน')
+    expect(text).toContain('จากค่าโฆษณารายวัน')
     expect(text).toContain('รอข้อมูล')
     expect(text).not.toContain('AI จริง')
     expect(text).not.toContain('$24,680')
@@ -695,7 +695,7 @@ describe('Home app shell', () => {
     const text = visibleText(html)
 
     expect(text).toContain('PMC Insights')
-    expect(text).toContain('รอ insight ใหม่จากข้อมูลจริง')
+    expect(text).toContain('รอคำแนะนำใหม่จากข้อมูลจริง')
     expect(text).not.toContain('ป้องกันงบและตรวจ Tracking')
     expect(text).not.toContain('Meta metrics')
     expect(text).not.toContain('PMC Master Agent')
@@ -732,7 +732,7 @@ describe('Home app shell', () => {
 
     expect(text).toContain('สตูดิโอครีเอทีฟกำลังอัพเดท')
     expect(text).toContain('ทีมกำลังปรับหน้า Creative Studio')
-    expect(text).toContain('ข้อมูลครีเอทีฟที่ซิงก์ไว้')
+    expect(text).toContain('ข้อมูลครีเอทีฟที่บันทึกไว้')
     expect(text).toContain('กลับมาทำต่อเร็ว ๆ นี้')
     expect(html).not.toContain('placeholder="ค้นหาครีเอทีฟ"')
     expect(text).not.toContain('บรีฟครีเอทีฟ')
