@@ -778,6 +778,13 @@ describe('Home app shell', () => {
     expect(pageCss).not.toContain('ads-workspace-shell')
   })
 
+  it('does not animate removed sidebar mascot targets in the Ads Agent shell', () => {
+    const appSource = readText('../src/App.tsx')
+
+    expect(appSource).not.toContain("'.sidebar-mascot'")
+    expect(appSource).toContain("'.ads-toolbar-brand-mark'")
+  })
+
   it('does not show hardcoded sidebar alert or task counts as if they were live data', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 

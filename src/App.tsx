@@ -1343,17 +1343,20 @@ function PmcAdsAgentApp() {
 
         const ctx = gsap.context(() => {
           const timeline = gsap.timeline({ defaults: { duration: 0.52, ease: 'power3.out' } })
-          gsap.set('.sidebar, .topbar', { clearProps: 'all' })
-          timeline.from('.data-source-bar, .revenue-metric-card, .panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
+          gsap.set('.ads-outer-toolbar, .topbar', { clearProps: 'all' })
+          timeline.from('.ads-dashboard-metric-card, .ads-dashboard-panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
 
-          gsap.to('.sidebar-mascot', {
-            y: conditions.isDesktop ? -8 : -4,
-            rotation: conditions.isDesktop ? 2 : 1,
-            duration: 3.2,
-            ease: 'sine.inOut',
-            repeat: -1,
-            yoyo: true,
-          })
+          const brandMark = root.querySelector('.ads-toolbar-brand-mark')
+          if (brandMark) {
+            gsap.to(brandMark, {
+              y: conditions.isDesktop ? -4 : -2,
+              rotation: conditions.isDesktop ? 1 : 0.5,
+              duration: 3.2,
+              ease: 'sine.inOut',
+              repeat: -1,
+              yoyo: true,
+            })
+          }
         }, root)
 
         return () => ctx.revert()
