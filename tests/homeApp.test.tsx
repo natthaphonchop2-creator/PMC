@@ -69,6 +69,9 @@ describe('Home app shell', () => {
       expect(text).toContain('Insights')
       expect(text).toContain('Settings')
       expect(countOccurrences(html, 'class="ads-toolbar-item')).toBe(8)
+      expect(html).toContain('class="ads-toolbar-user-card"')
+      expect(html).not.toContain('ads-toolbar-status-card')
+      expect(html).not.toContain('data-source-bar')
       expect(html).toMatch(
         /<button(?=[^>]*class="ads-toolbar-item active")(?=[^>]*aria-current="page")(?=[^>]*aria-label="Ads Dashboard")[^>]*>/,
       )
@@ -93,7 +96,7 @@ describe('Home app shell', () => {
       expect(text).toContain('Ads Dashboard')
       expect(text).toContain('Customize Dashboard')
       expect(html).toMatch(
-        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน")[^>]*>Customize Dashboard<\/button>/,
+        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน")[^>]*>[\s\S]*Customize Dashboard[\s\S]*<\/button>/,
       )
       expect(text).toContain('New Campaign')
       expect(text).toContain('Impressions')
@@ -105,13 +108,14 @@ describe('Home app shell', () => {
       expect(countOccurrences(html, '<h2>Performance Overview</h2>')).toBe(1)
       expect(html).not.toContain('class="panel revenue-chart-panel"')
       expect(text).toContain('Top Campaigns')
-      expect(text).not.toContain('Conversions by Region')
+      expect(text).toContain('Conversions by Region')
       expect(text).toContain('Cost per Result')
       expect(text).toContain('CTR')
       expect(text).toContain('ROAS')
       expect(text).toContain('PMC Insights')
-      expect(html).not.toContain('ads-region-panel')
-      expect(html).not.toContain('ads-region-map')
+      expect(html).toContain('ads-region-panel')
+      expect(html).toContain('ads-region-map')
+      expect(countOccurrences(html, 'class="ads-dashboard-metric-card"')).toBe(7)
       expect(text).not.toContain('Revenue Overview')
       expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
     })
@@ -220,6 +224,40 @@ describe('Home app shell', () => {
           { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
           { bookings: 52, date: '2026-05-18', day: 'May 18', revenue: 80324, spend: 54807 },
         ]}
+        adSets={[
+          adSetForDashboard({
+            audienceTargeting: {
+              devicePlatforms: [],
+              exclusions: [],
+              genders: [],
+              geoLocations: [{ country: 'TH', name: 'Bangkok', type: 'city' }],
+              interests: [],
+              locales: [],
+              placements: [],
+              publisherPlatforms: [],
+              rawSummary: 'Bangkok',
+            },
+            bookings: 96,
+            spend: 72807,
+          }),
+          adSetForDashboard({
+            audienceTargeting: {
+              devicePlatforms: [],
+              exclusions: [],
+              genders: [],
+              geoLocations: [{ country: 'TH', name: 'Chiang Mai', type: 'city' }],
+              interests: [],
+              locales: [],
+              placements: [],
+              publisherPlatforms: [],
+              rawSummary: 'Chiang Mai',
+            },
+            bookings: 30,
+            id: 'set-2',
+            name: 'Chiang Mai Lookalike',
+            spend: 35000,
+          }),
+        ]}
       />,
     )
     const text = visibleText(html)
@@ -233,7 +271,9 @@ describe('Home app shell', () => {
     expect(text).toContain('Cost')
     expect(text).toContain('Performance Overview')
     expect(text).toContain('Top Campaigns')
-    expect(text).not.toContain('Conversions by Region')
+    expect(text).toContain('Conversions by Region')
+    expect(text).toContain('Bangkok')
+    expect(text).toContain('Chiang Mai')
     expect(text).toContain('PMC Insights')
     expect(text).toContain('Cost per Result')
     expect(text).toContain('CTR')
@@ -242,12 +282,12 @@ describe('Home app shell', () => {
     expect(text).toContain('฿108k')
     expect(html).toContain('ads-dashboard-layout')
     expect(countOccurrences(html, 'class="ads-dashboard-metric-card"')).toBe(7)
+    expect(html).toContain('class="ads-dashboard-main-grid"')
+    expect(html).toContain('class="ads-region-map"')
     expect(html).not.toContain('revenue-sparkline')
     expect(html).not.toContain('แนวโน้มย่อ')
     expect(text).not.toContain('Welcome back, James')
     expect(text).not.toContain('AeuxGlobal')
-    expect(text).not.toContain('North America')
-    expect(text).not.toContain('32%')
     expect(text).not.toContain('2.45M')
     expect(text).not.toContain('$24,680')
     expect(text).not.toContain('$24,560')
@@ -255,9 +295,10 @@ describe('Home app shell', () => {
     expect(text).not.toContain('Mobile App')
   })
 
-  it('omits unavailable regional placeholders from Ads Dashboard', () => {
+  it('keeps regional reporting user-facing without fake reference locations', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
+        adSets={[]}
         campaigns={[]}
         funnelMetrics={[]}
         recommendations={[]}
@@ -282,16 +323,15 @@ describe('Home app shell', () => {
     expect(html).toContain('ads-dashboard-lower-grid')
     expect(text).toContain('Performance Overview')
     expect(text).toContain('Top Campaigns')
+    expect(text).toContain('Conversions by Region')
     expect(text).toContain('PMC Insights')
     expect(text).toContain('Cost per Result')
     expect(text).toContain('CTR')
     expect(text).toContain('ROAS')
-    expect(html).not.toContain('ads-region-panel')
-    expect(html).not.toContain('ads-region-map')
-    expect(text).not.toContain('Conversions by Region')
-    expect(text).not.toContain('รอข้อมูลพื้นที่จากบัญชีโฆษณา')
-    expect(text).not.toContain('Region breakdown')
-    expect(text).not.toContain('Province / city')
+    expect(html).toContain('ads-region-panel')
+    expect(html).toContain('ads-region-map')
+    expect(text).toContain('ยังไม่มีข้อมูลพื้นที่จากบัญชีโฆษณา')
+    expect(text).toContain('เชื่อมต่อข้อมูลพื้นที่จากชุดโฆษณาเพื่อดูสัดส่วนผลลัพธ์ตามจังหวัดหรือเมือง')
     expect(text).not.toContain('AeuxGlobal')
     expect(text).not.toContain('North America')
     expect(text).not.toContain('$24,680')
@@ -853,7 +893,7 @@ describe('Home app shell', () => {
     expect(appCss).toContain('.ads-main-panel')
     expect(appCss).toContain('.ads-toolbar-item.active')
     expect(appCss).toContain('.ads-dashboard-metric-grid')
-    expect(appCss).toContain('@media (max-width: 980px)')
+    expect(appCss).toContain('@media (max-width: 760px)')
     expect(appCss).toContain('@media (max-width: 640px)')
     expect(homeCss).not.toContain('ads-workspace-shell')
     expect(pageCss).not.toContain('ads-workspace-shell')
@@ -867,7 +907,7 @@ describe('Home app shell', () => {
     expect(appCss).toContain("url('/pmc-soft-dashboard-bg.png')")
     expect(appCss).toMatch(/\.ads-workspace-shell\s*\{[^}]*background:[^}]*pmc-soft-dashboard-bg\.png/s)
     expect(appCss).toMatch(/\.ads-main-panel\s*\{[^}]*background:[^}]*pmc-soft-dashboard-bg\.png/s)
-    expect(appCss).toContain('rgba(255, 253, 249, 0.66)')
+    expect(appCss).toContain('rgba(255, 253, 249, 0.72)')
     expect(appCss).not.toContain('rgba(255, 253, 249, 0.9), rgba(255, 253, 249, 0.86)')
   })
 
@@ -939,6 +979,23 @@ function countOccurrences(value: string, needle: string) {
 
 function readText(relativePath: string) {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
+}
+
+function adSetForDashboard(overrides = {}) {
+  return {
+    audience: 'Bangkok skincare buyers',
+    budget: 50000,
+    bookings: 10,
+    campaignId: 'campaign-1',
+    cpa: 500,
+    deliveryStatus: 'active',
+    id: 'set-1',
+    name: 'Bangkok Core Audience',
+    roas: 1.5,
+    spend: 5000,
+    status: 'healthy',
+    ...overrides,
+  }
 }
 
 function visibleText(html: string) {

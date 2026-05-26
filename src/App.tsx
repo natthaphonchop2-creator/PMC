@@ -3,6 +3,7 @@ import {
   BarChart3,
   BookOpenCheck,
   BrainCircuit,
+  CalendarDays,
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
@@ -17,10 +18,12 @@ import {
   MousePointerClick,
   Percent,
   Pencil,
+  Plus,
   Power,
   RefreshCw,
   Search,
   Settings,
+  SlidersHorizontal,
   Trash2,
   Users,
   X,
@@ -1058,7 +1061,7 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'PMC Insights'],
+    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'Conversions by Region', 'PMC Insights'],
     audience: ['กลุ่มเป้าหมาย', 'ปริมาณของกลุ่มเป้าหมาย'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
@@ -1109,7 +1112,6 @@ function PmcAdsAgentApp() {
     () => brainApprovalActions.slice(0, 4).map(mapMetaRecommendation),
     [brainApprovalActions],
   )
-  const activePage = navItems.find((item) => item.toolbarKey === activeToolbarKey) ?? navItems.find((item) => item.id === activeTab) ?? navItems[0]
   const filteredCampaigns = displayCampaigns.filter((campaign) => campaign.name.toLowerCase().includes(searchQuery.toLowerCase()))
   const effectiveSelectedCampaignId = displayCampaigns.some((campaign) => campaign.id === selectedCampaignId) ? selectedCampaignId : displayCampaigns[0]?.id ?? ''
   const summary = useMemo(() => buildSummaryFromWorkspace(workspace, displayCampaigns), [displayCampaigns, workspace])
@@ -1536,14 +1538,12 @@ function PmcAdsAgentApp() {
 
   return (
     <div className="ads-workspace-shell app-shell" ref={shellRef}>
-      <AdsOuterToolbar activeToolbarKey={activeToolbarKey} accountName={metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อบัญชีโฆษณา'} automationMode={automationMode} dataState={dataState} mascotNotice={mascotNotice} onSelect={handleTabSelect} syncState={syncState} />
+      <AdsOuterToolbar activeToolbarKey={activeToolbarKey} onSelect={handleTabSelect} />
       <main className="ads-main-panel app-main">
         <Topbar
-          activePage={activePage}
           onSync={syncWorkspace}
           syncState={syncState}
         />
-        {dataState === 'live' ? null : <DataSourceBar dataState={dataState} message={apiMessage} metaInfo={metaInfo} onRetry={syncWorkspace} />}
         <div className="page-body">
           {isPageLoading ? (
             <PageSkeleton activeTab={activeTab} />
@@ -1551,7 +1551,9 @@ function PmcAdsAgentApp() {
             <>
           {activeTab === 'analytics' && (
             <AnalyticsPage
+              adSets={workspace?.adSets ?? []}
               campaigns={filteredCampaigns}
+              dateLabel={datePreset}
               funnelMetrics={funnelMetrics}
               recommendations={activeRecommendations}
               summary={summary}
@@ -1735,28 +1737,11 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
 
 type AdsOuterToolbarProps = {
   activeToolbarKey: string
-  accountName: string
-  automationMode: string
-  dataState: DataSourceState
-  mascotNotice: MascotNotice | null
   onSelect: (tab: TabId, toolbarKey?: string) => void
-  syncState: string
 }
 
-function AdsOuterToolbar({ activeToolbarKey, accountName, automationMode, dataState, mascotNotice, onSelect, syncState }: AdsOuterToolbarProps) {
+function AdsOuterToolbar({ activeToolbarKey, onSelect }: AdsOuterToolbarProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
-  const statusTone: Tone = dataState === 'live' ? 'good' : dataState === 'error' ? 'critical' : dataState === 'loading' ? 'info' : 'watch'
-  const mascotMessage = mascotNotice?.message ?? mascotNoticeForState(dataState, syncState, automationMode)
-  const freshnessLabel =
-    dataState === 'live'
-      ? 'ข้อมูลล่าสุดพร้อมใช้'
-      : dataState === 'loading'
-        ? 'กำลังโหลดข้อมูล'
-        : dataState === 'empty'
-          ? 'ยังไม่มีข้อมูล'
-          : dataState === 'setup-required'
-            ? 'ต้องตั้งค่าก่อน'
-            : 'โหลดข้อมูลผิดพลาด'
   const selectTab = (tab: TabId, toolbarKey?: string) => {
     onSelect(tab, toolbarKey)
     setIsMenuOpen(false)
@@ -1815,73 +1800,19 @@ function AdsOuterToolbar({ activeToolbarKey, accountName, automationMode, dataSt
         </div>
         <ChevronDown size={16} aria-hidden="true" />
       </div>
-
-      <div className="ads-toolbar-status-card">
-        <StatusBadge label={syncStateLabel(syncState)} tone={statusTone} />
-        <strong>บัญชีโฆษณา: {accountName}</strong>
-        <span>{freshnessLabel}</span>
-        <small>{mascotMessage}</small>
-      </div>
     </aside>
   )
 }
 
-function mascotNoticeForState(dataState: DataSourceState, syncState: string, automationMode: string) {
-  if (dataState === 'loading' || syncState === 'Syncing...') return 'กำลังโหลดข้อมูลล่าสุดให้ครับ'
-  if (dataState === 'error') return 'โหลดข้อมูลสะดุด ลองตรวจข้อมูลเชื่อมต่อหรือสิทธิ์ของบัญชี'
-  if (dataState === 'setup-required') return 'ไปหน้า Settings เพื่อเชื่อมบัญชีโฆษณาก่อนเริ่มงาน'
-  if (dataState === 'empty') return 'ช่วงนี้ยังไม่มีข้อมูล ลองเปลี่ยนวันที่ดูครับ'
-  if (normalizeAutomationMode(automationMode) === 'พัก automation') return 'Auto ปิดอยู่ ผมจะแค่เฝ้าดูให้'
-  if (normalizeAutomationMode(automationMode) === 'ต้องอนุมัติก่อน') return 'Auto เปิดอยู่ ผมจะรอคุณยืนยันก่อนส่งคำสั่ง'
-  return 'ข้อมูลพร้อมแล้ว ผมเฝ้าดูแคมเปญให้อยู่'
-}
-
-function DataSourceBar({
-  dataState,
-  message,
-  metaInfo,
-  onRetry,
-}: {
-  dataState: DataSourceState
-  message: string
-  metaInfo: MetaInfo | null
-  onRetry: () => void
-}) {
-  const tone: Tone = dataState === 'live' ? 'good' : dataState === 'error' ? 'critical' : dataState === 'loading' ? 'info' : 'watch'
-  const label = dataState === 'live' ? 'ข้อมูลพร้อมใช้งาน' : dataState === 'loading' ? 'กำลังโหลดข้อมูล' : dataState === 'empty' ? 'ยังไม่มีข้อมูล' : dataState === 'setup-required' ? 'ต้องตั้งค่าก่อน' : 'โหลดข้อมูลผิดพลาด'
-
-  return (
-    <section className={`data-source-bar ${dataState}`}>
-      <div>
-        <StatusBadge label={label} tone={tone} />
-        <strong>{metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อบัญชีโฆษณา'}</strong>
-        <span>{message}</span>
-      </div>
-      <div className="data-source-meta">
-        <span>{metaInfo?.graphVersion ? `ระบบข้อมูล ${metaInfo.graphVersion}` : 'รอข้อมูลระบบ'}</span>
-        <span>{metaInfo?.counts ? `${metaInfo.counts.campaigns} แคมเปญ · ${metaInfo.counts.ads} โฆษณา` : 'รอข้อมูลเชื่อมต่อ'}</span>
-        <button className="outline-button" type="button" onClick={onRetry} disabled={dataState === 'loading'}>
-          โหลดอีกครั้ง
-        </button>
-      </div>
-    </section>
-  )
-}
-
 type TopbarProps = {
-  activePage: NavItem
   onSync: () => void
   syncState: string
 }
 
-function Topbar({ activePage, onSync, syncState }: TopbarProps) {
+function Topbar({ onSync, syncState }: TopbarProps) {
   const isSyncing = syncState === 'Syncing...'
   return (
-    <header className="topbar">
-      <div>
-        <h1>{activePage.id === 'analytics' ? 'แดชบอร์ดวิเคราะห์' : activePage.label}</h1>
-        <p>{activePage.description}</p>
-      </div>
+    <header className="topbar" aria-label="Ads Agent API tools">
       <div className="topbar-actions">
         <button className="pill-button good api-check-button" type="button" onClick={onSync} aria-label="เช็ค API" aria-busy={isSyncing}>
           <RefreshCw size={15} />
@@ -1893,13 +1824,17 @@ function Topbar({ activePage, onSync, syncState }: TopbarProps) {
 }
 
 export function AnalyticsPage({
+  adSets = [],
   campaigns,
+  dateLabel = 'ข้อมูลล่าสุด',
   funnelMetrics,
   recommendations,
   summary,
   trendData,
 }: {
+  adSets?: WorkspaceData['adSets']
   campaigns: Campaign[]
+  dateLabel?: string
   funnelMetrics: MetaFunnelMetric[]
   recommendations: Recommendation[]
   summary: Summary
@@ -1933,13 +1868,21 @@ export function AnalyticsPage({
       <section className="ads-dashboard-head" aria-label="Ads Dashboard actions">
         <div>
           <h2>Ads Dashboard</h2>
-          <p>ภาพรวมแคมเปญ คำแนะนำ และตัวเลขที่ควรตรวจวันนี้</p>
+          <span className="ads-dashboard-date-pill">
+            <CalendarDays size={15} />
+            {dateLabel}
+            <ChevronDown size={14} />
+          </span>
         </div>
         <div className="ads-dashboard-actions">
           <button className="clinic-secondary-button" type="button" disabled aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน" title="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน">
+            <SlidersHorizontal size={15} />
             Customize Dashboard
           </button>
-          <button className="clinic-primary-button" type="button" disabled>New Campaign</button>
+          <button className="clinic-primary-button" type="button" disabled>
+            <Plus size={15} />
+            New Campaign
+          </button>
         </div>
       </section>
 
@@ -1956,6 +1899,7 @@ export function AnalyticsPage({
         <DashboardPanel action={<button className="ads-dashboard-select-pill" type="button" disabled>ตามผลลัพธ์ <ChevronDown size={14} /></button>} title="Top Campaigns" subtitle="เรียงตามผลลัพธ์และผลตอบแทน">
           <TopCampaignsList campaigns={topCampaigns} />
         </DashboardPanel>
+        <DashboardRegionPanel adSets={adSets} />
       </section>
 
       <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
@@ -2080,6 +2024,122 @@ function TopCampaignsList({ campaigns }: { campaigns: Campaign[] }) {
       ))}
       <button className="ads-view-all-button" type="button" disabled>ดูแคมเปญทั้งหมด</button>
     </div>
+  )
+}
+
+type RegionBreakdownItem = {
+  conversions: number
+  id: string
+  name: string
+  percent: number
+  spend: number
+  x: number
+  y: number
+}
+
+const regionMapPositions = [
+  { x: 26, y: 45 },
+  { x: 48, y: 56 },
+  { x: 68, y: 38 },
+  { x: 78, y: 62 },
+  { x: 57, y: 74 },
+]
+
+function buildRegionBreakdown(adSets: WorkspaceData['adSets']): RegionBreakdownItem[] {
+  const groups = new Map<string, { conversions: number; name: string; spend: number }>()
+
+  for (const adSet of adSets) {
+    const geoLocations = adSet.audienceTargeting?.geoLocations ?? []
+    if (geoLocations.length === 0) continue
+
+    const sharedConversions = adSet.bookings / geoLocations.length
+    const sharedSpend = adSet.spend / geoLocations.length
+
+    for (const geo of geoLocations) {
+      const name = geo.name.trim()
+      if (!name) continue
+
+      const key = `${geo.type}:${name}`.toLowerCase()
+      const existing = groups.get(key) ?? { conversions: 0, name, spend: 0 }
+      existing.conversions += sharedConversions
+      existing.spend += sharedSpend
+      groups.set(key, existing)
+    }
+  }
+
+  const totalConversions = Array.from(groups.values()).reduce((sum, item) => sum + item.conversions, 0)
+
+  return Array.from(groups.entries())
+    .map(([id, item], index) => {
+      const position = regionMapPositions[index % regionMapPositions.length]
+      return {
+        conversions: item.conversions,
+        id,
+        name: item.name,
+        percent: totalConversions > 0 ? (item.conversions / totalConversions) * 100 : 0,
+        spend: item.spend,
+        x: position.x,
+        y: position.y,
+      }
+    })
+    .sort((left, right) => right.conversions - left.conversions || right.spend - left.spend)
+    .slice(0, 5)
+}
+
+function formatRegionPercent(percent: number) {
+  if (percent > 0 && percent < 1) return '<1%'
+  return `${percent.toFixed(0)}%`
+}
+
+function DashboardRegionPanel({ adSets }: { adSets: WorkspaceData['adSets'] }) {
+  const regions = useMemo(() => buildRegionBreakdown(adSets), [adSets])
+
+  return (
+    <DashboardPanel
+      className="ads-region-panel"
+      title="Conversions by Region"
+      subtitle={regions.length > 0 ? 'พื้นที่ที่สร้างผลลัพธ์จากชุดโฆษณา' : 'ยังไม่มีข้อมูลพื้นที่จากบัญชีโฆษณา'}
+    >
+      <div className="ads-region-content">
+        <div className="ads-region-list">
+          {regions.length > 0 ? (
+            regions.map((region) => (
+              <div className="ads-region-row" key={region.id}>
+                <span className="ads-region-rank-dot" aria-hidden="true" />
+                <div>
+                  <strong>{region.name}</strong>
+                  <small>{fmtNum(Math.round(region.conversions))} ผลลัพธ์</small>
+                </div>
+                <b>{formatRegionPercent(region.percent)}</b>
+              </div>
+            ))
+          ) : (
+            <p className="ads-region-empty">เชื่อมต่อข้อมูลพื้นที่จากชุดโฆษณาเพื่อดูสัดส่วนผลลัพธ์ตามจังหวัดหรือเมือง</p>
+          )}
+        </div>
+        <div className="ads-region-map" aria-label="แผนภาพสัดส่วนผลลัพธ์ตามพื้นที่" role="img">
+          <span className="ads-region-map-blob blob-1" />
+          <span className="ads-region-map-blob blob-2" />
+          <span className="ads-region-map-blob blob-3" />
+          <span className="ads-region-map-blob blob-4" />
+          {regions.map((region, index) => (
+            <span
+              aria-hidden="true"
+              className="ads-region-map-dot"
+              key={region.id}
+              style={{
+                height: `${Math.max(18, Math.min(34, 18 + region.percent / 2))}px`,
+                left: `${region.x}%`,
+                top: `${region.y}%`,
+                width: `${Math.max(18, Math.min(34, 18 + region.percent / 2))}px`,
+              }}
+            >
+              <i>{index + 1}</i>
+            </span>
+          ))}
+        </div>
+      </div>
+    </DashboardPanel>
   )
 }
 
@@ -2327,9 +2387,9 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
       link: [{ xAxisIndex: 'all' }],
     },
     grid: [
-      { containLabel: true, height: 58, left: 8, right: 18, top: 42 },
-      { containLabel: true, height: 58, left: 8, right: 18, top: 128 },
-      { containLabel: true, height: 58, left: 8, right: 18, top: 214 },
+      { containLabel: true, height: 46, left: 8, right: 18, top: 38 },
+      { containLabel: true, height: 46, left: 8, right: 18, top: 108 },
+      { containLabel: true, height: 46, left: 8, right: 18, top: 178 },
     ],
     legend: {
       data: ['Revenue', 'Spend', 'Bookings'],

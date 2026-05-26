@@ -5847,11 +5847,11 @@ input:focus-visible {
   --clinic-bronze-dark: #6e4925;
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 288px minmax(0, 1fr);
-  gap: 22px;
-  padding: 22px;
+  grid-template-columns: 292px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
   background:
-    linear-gradient(135deg, rgba(251, 247, 239, 0.62) 0%, rgba(246, 239, 229, 0.54) 44%, rgba(238, 246, 248, 0.62) 100%),
+    linear-gradient(135deg, rgba(251, 247, 239, 0.72) 0%, rgba(246, 239, 229, 0.58) 44%, rgba(238, 246, 248, 0.68) 100%),
     url('/pmc-soft-dashboard-bg.png') center / cover no-repeat,
     #fbf7ef;
   color: var(--clinic-ink);
@@ -5870,18 +5870,34 @@ input:focus-visible {
 
 .ads-outer-toolbar {
   position: sticky;
-  top: 22px;
+  top: 0;
   z-index: 130;
-  height: calc(100vh - 44px);
+  height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
   overflow: hidden;
-  border: 1px solid var(--clinic-border);
-  border-radius: 30px;
-  background: rgba(255, 253, 249, 0.94);
-  box-shadow: 0 18px 42px rgba(77, 57, 32, 0.11);
-  padding: 18px;
+  border: 0;
+  border-radius: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 249, 0.9), rgba(246, 235, 220, 0.82)),
+    url('/pmc-soft-dashboard-bg.png') left bottom / 210% auto no-repeat,
+    #f6eee4;
+  box-shadow: inset -1px 0 0 rgba(130, 104, 73, 0.12);
+  padding: 44px 30px 28px;
+}
+
+.ads-outer-toolbar::before {
+  content: "";
+  position: absolute;
+  inset: auto -18px 120px auto;
+  width: 168px;
+  height: 198px;
+  background:
+    radial-gradient(ellipse at 50% 100%, rgba(188, 148, 105, 0.18), transparent 64%);
+  clip-path: polygon(50% 0, 65% 32%, 92% 18%, 76% 48%, 100% 62%, 67% 65%, 78% 100%, 50% 74%, 22% 100%, 33% 65%, 0 62%, 24% 48%, 8% 18%, 35% 32%);
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .ads-toolbar-brand-row {
@@ -5895,9 +5911,9 @@ input:focus-visible {
 .ads-toolbar-brand {
   min-width: 0;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   color: var(--clinic-ink);
   text-decoration: none;
 }
@@ -5913,30 +5929,37 @@ input:focus-visible {
 
 .ads-toolbar-brand strong {
   display: block;
-  font-size: 17px;
-  line-height: 1.1;
+  color: #1d1a16;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 0.92;
 }
 
 .ads-toolbar-brand small {
   display: block;
-  margin-top: 3px;
-  color: var(--clinic-muted);
-  font-size: 11px;
-  font-weight: 800;
+  margin-top: 7px;
+  color: #6e4925;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
 .ads-toolbar-brand-mark {
-  width: 42px;
-  height: 42px;
-  border: 1px solid rgba(154, 106, 56, 0.22);
-  border-radius: 8px;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  border-radius: 999px;
   display: grid;
   place-items: center;
-  background: #fff8ec;
+  background: transparent;
   color: var(--clinic-bronze-dark);
-  font-size: 18px;
-  font-weight: 950;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 28px;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 2px rgba(154, 106, 56, 0.54);
 }
 
 .ads-mobile-menu-button {
@@ -5953,25 +5976,25 @@ input:focus-visible {
 
 .ads-toolbar-nav {
   display: grid;
-  gap: 6px;
+  gap: 14px;
   overflow-y: auto;
   padding-right: 2px;
 }
 
 .ads-toolbar-item {
   min-width: 0;
-  min-height: 46px;
+  min-height: 56px;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
-  color: #544a3f;
-  padding: 6px 10px;
+  color: #1f1a14;
+  padding: 6px 12px;
   text-align: left;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 850;
 }
 
@@ -5984,43 +6007,45 @@ input:focus-visible {
 
 .ads-toolbar-item:hover,
 .ads-toolbar-item:focus-visible {
-  border-color: rgba(154, 106, 56, 0.18);
-  background: rgba(255, 248, 236, 0.78);
+  border-color: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 253, 249, 0.64);
 }
 
 .ads-toolbar-item.active {
-  border-color: rgba(154, 106, 56, 0.28);
-  background: #f4e8d5;
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 253, 249, 0.72);
   color: var(--clinic-bronze-dark);
-  box-shadow: 0 10px 22px rgba(154, 106, 56, 0.12);
+  box-shadow: 0 12px 28px rgba(154, 106, 56, 0.16);
 }
 
 .ads-toolbar-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
-  background: #f2eee8;
+  background: #fffdf9;
   color: #80664d;
+  box-shadow: 0 8px 18px rgba(77, 57, 32, 0.08);
 }
 
 .ads-toolbar-item.active .ads-toolbar-icon {
-  background: #fffaf2;
-  color: var(--clinic-bronze-dark);
+  background: linear-gradient(135deg, #c99863, #9b6734);
+  color: #ffffff;
 }
 
 .ads-toolbar-user-card {
   margin-top: auto;
   min-width: 0;
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  border: 1px solid rgba(130, 104, 73, 0.16);
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 8px;
-  background: #fffaf2;
-  padding: 10px;
+  background: rgba(255, 253, 249, 0.74);
+  box-shadow: 0 18px 38px rgba(77, 57, 32, 0.12);
+  padding: 14px;
 }
 
 .ads-toolbar-user-card > div {
@@ -6037,22 +6062,24 @@ input:focus-visible {
 }
 
 .ads-toolbar-user-card strong {
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .ads-toolbar-user-card span {
   color: var(--clinic-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
 }
 
 .ads-toolbar-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
   background:
-    linear-gradient(135deg, rgba(47, 134, 235, 0.24), rgba(117, 103, 216, 0.18)),
-    #f7e8d3;
+    radial-gradient(circle at 50% 38%, #ffffff 0 16%, transparent 17%),
+    radial-gradient(circle at 50% 76%, #ffffff 0 28%, transparent 29%),
+    linear-gradient(135deg, rgba(154, 106, 56, 0.2), rgba(117, 103, 216, 0.12)),
+    #e9e5dc;
 }
 
 .ads-toolbar-status-card {
@@ -6080,11 +6107,13 @@ input:focus-visible {
 }
 
 .ads-main-panel {
-  min-height: calc(100vh - 44px);
-  border: 1px solid var(--clinic-border);
+  position: relative;
+  min-height: calc(100vh - 20px);
+  margin: 10px 10px 10px 0;
+  border: 1px solid rgba(130, 104, 73, 0.14);
   border-radius: 30px;
   background:
-    linear-gradient(180deg, rgba(255, 253, 249, 0.66), rgba(255, 253, 249, 0.56)),
+    linear-gradient(180deg, rgba(255, 253, 249, 0.72), rgba(255, 253, 249, 0.62)),
     url('/pmc-soft-dashboard-bg.png') center top / cover no-repeat,
     rgba(255, 253, 249, 0.9);
   box-shadow: 0 22px 60px rgba(77, 57, 32, 0.12);
@@ -6092,14 +6121,17 @@ input:focus-visible {
 }
 
 .ads-main-panel .topbar {
-  border-bottom-color: rgba(130, 104, 73, 0.16);
-  background: rgba(255, 253, 249, 0.78);
+  min-height: 56px;
+  justify-content: flex-end;
+  padding: 22px 34px 0;
+  border-bottom: 0;
+  background: transparent;
   backdrop-filter: blur(10px);
 }
 
 .ads-main-panel .page-body {
   width: min(100%, 1580px);
-  padding: 22px;
+  padding: 12px 34px 34px;
 }
 
 .ads-dashboard-layout {
@@ -6129,21 +6161,31 @@ input:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 2px 2px;
+  padding: 0 2px 4px;
 }
 
 .ads-dashboard-head h2 {
   margin: 0;
   color: var(--clinic-ink);
-  font-size: 32px;
+  font-size: 36px;
   line-height: 1.08;
 }
 
-.ads-dashboard-head p {
-  margin: 6px 0 0;
-  color: var(--clinic-muted);
+.ads-dashboard-date-pill {
+  width: fit-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 18px;
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.9);
+  color: #4f4133;
+  padding: 0 14px;
   font-size: 13px;
-  line-height: 1.45;
+  font-weight: 850;
+  box-shadow: 0 10px 24px rgba(77, 57, 32, 0.06);
 }
 
 .ads-dashboard-actions,
@@ -6157,15 +6199,15 @@ input:focus-visible {
 
 .ads-workspace-shell .clinic-primary-button,
 .ads-workspace-shell .clinic-secondary-button {
-  min-height: 38px;
+  min-height: 40px;
   min-width: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 14px;
-  font-size: 12px;
+  padding: 0 18px;
+  font-size: 13px;
   font-weight: 900;
   line-height: 1.2;
   overflow-wrap: anywhere;
@@ -6173,7 +6215,7 @@ input:focus-visible {
 
 .ads-workspace-shell .clinic-primary-button {
   border: 1px solid rgba(110, 73, 37, 0.18);
-  background: #8f5f31;
+  background: linear-gradient(135deg, #c18a55, #9c6433);
   color: #fffdf9;
   box-shadow: 0 10px 22px rgba(110, 73, 37, 0.18);
 }
@@ -6186,7 +6228,7 @@ input:focus-visible {
 
 .ads-workspace-shell .clinic-secondary-button {
   border: 1px solid rgba(130, 104, 73, 0.2);
-  background: #fffaf2;
+  background: rgba(255, 253, 249, 0.82);
   color: var(--clinic-bronze-dark);
 }
 
@@ -6205,8 +6247,8 @@ input:focus-visible {
   align-items: start;
   border: 1px solid rgba(130, 104, 73, 0.16);
   border-radius: 8px;
-  background: var(--clinic-surface);
-  box-shadow: 0 14px 30px rgba(77, 57, 32, 0.07);
+  background: rgba(255, 253, 249, 0.9);
+  box-shadow: 0 14px 30px rgba(77, 57, 32, 0.08);
   padding: 16px;
 }
 
@@ -6227,7 +6269,7 @@ input:focus-visible {
   display: block;
   margin-top: 6px;
   color: var(--clinic-ink);
-  font-size: 27px;
+  font-size: 28px;
   line-height: 1;
   overflow-wrap: normal;
   word-break: keep-all;
@@ -6399,7 +6441,7 @@ input:focus-visible {
 
 .ads-dashboard-main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr);
+  grid-template-columns: minmax(0, 1.18fr) minmax(270px, 0.86fr) minmax(330px, 1.1fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -6416,7 +6458,7 @@ input:focus-visible {
   gap: 14px;
   border: 1px solid rgba(130, 104, 73, 0.16);
   border-radius: 8px;
-  background: var(--clinic-surface);
+  background: rgba(255, 253, 249, 0.92);
   box-shadow: 0 14px 30px rgba(77, 57, 32, 0.07);
   padding: 16px;
 }
@@ -6457,16 +6499,16 @@ input:focus-visible {
 }
 
 .ads-workspace-shell .performance-panel .revenue-chart-wrap {
-  min-height: 372px;
+  min-height: 254px;
 }
 
 .ads-workspace-shell .performance-panel .revenue-echart {
-  height: 360px;
+  height: 252px;
 }
 
 .performance-empty-chart {
   position: relative;
-  min-height: 280px;
+  min-height: 252px;
   display: grid;
   place-items: center;
   border: 1px solid rgba(130, 104, 73, 0.12);
@@ -6639,6 +6681,145 @@ input:focus-visible {
   opacity: 0.78;
 }
 
+.ads-region-panel {
+  overflow: hidden;
+}
+
+.ads-region-content {
+  min-height: 220px;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.74fr) minmax(0, 1.26fr);
+  gap: 16px;
+  align-items: center;
+}
+
+.ads-region-list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ads-region-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.ads-region-rank-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #b9824a;
+}
+
+.ads-region-row strong,
+.ads-region-row small {
+  display: block;
+  min-width: 0;
+}
+
+.ads-region-row strong {
+  color: #403427;
+  font-size: 12px;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-region-row small {
+  margin-top: 3px;
+  color: var(--clinic-muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.ads-region-row b {
+  color: #4b3d2f;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.ads-region-empty {
+  margin: 0;
+  color: var(--clinic-muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.55;
+}
+
+.ads-region-map {
+  position: relative;
+  min-height: 190px;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 68% 48%, rgba(201, 153, 108, 0.16), transparent 0 8%, transparent 9%),
+    linear-gradient(180deg, rgba(250, 244, 237, 0.42), rgba(255, 255, 255, 0.08));
+  overflow: hidden;
+}
+
+.ads-region-map-blob {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(190, 155, 119, 0.34);
+  filter: blur(0.2px);
+}
+
+.ads-region-map-blob.blob-1 {
+  left: 10%;
+  top: 28%;
+  width: 34%;
+  height: 28%;
+  transform: rotate(-12deg);
+}
+
+.ads-region-map-blob.blob-2 {
+  left: 40%;
+  top: 38%;
+  width: 28%;
+  height: 33%;
+  transform: rotate(18deg);
+}
+
+.ads-region-map-blob.blob-3 {
+  left: 63%;
+  top: 23%;
+  width: 31%;
+  height: 29%;
+  transform: rotate(10deg);
+}
+
+.ads-region-map-blob.blob-4 {
+  left: 72%;
+  top: 54%;
+  width: 22%;
+  height: 26%;
+  background: rgba(154, 167, 162, 0.26);
+  transform: rotate(-18deg);
+}
+
+.ads-region-map-dot {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: rgba(128, 83, 42, 0.18);
+}
+
+.ads-region-map-dot i {
+  width: 42%;
+  height: 42%;
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: inherit;
+  background: #8f6a48;
+  color: transparent;
+}
+
 .ads-workspace-shell .approval-insight-card {
   min-width: 0;
   display: grid;
@@ -6785,20 +6966,62 @@ input:focus-visible {
 
 @media (max-width: 1180px) {
   .ads-workspace-shell {
-    grid-template-columns: 248px minmax(0, 1fr);
-    gap: 16px;
-    padding: 16px;
+    grid-template-columns: 232px minmax(0, 1fr);
   }
 
   .ads-outer-toolbar {
-    top: 16px;
-    height: calc(100vh - 32px);
-    border-radius: 24px;
-    padding: 14px;
+    height: 100vh;
+    padding: 26px 16px 20px;
+  }
+
+  .ads-toolbar-brand {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .ads-toolbar-brand-mark {
+    width: 40px;
+    height: 40px;
+    font-size: 23px;
+  }
+
+  .ads-toolbar-brand strong {
+    font-size: 25px;
+  }
+
+  .ads-toolbar-item {
+    grid-template-columns: 36px minmax(0, 1fr);
+    min-height: 48px;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .ads-toolbar-icon {
+    width: 36px;
+    height: 36px;
   }
 
   .ads-main-panel {
+    min-height: calc(100vh - 16px);
+    margin: 8px 8px 8px 0;
     border-radius: 24px;
+  }
+
+  .ads-main-panel .page-body {
+    padding: 8px 20px 24px;
+  }
+
+  .ads-dashboard-head h2 {
+    font-size: 32px;
+  }
+
+  .ads-dashboard-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ads-dashboard-actions {
+    justify-content: flex-start;
   }
 
   .ads-dashboard-metric-grid,
@@ -6809,9 +7032,13 @@ input:focus-visible {
   .ads-dashboard-main-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .ads-region-content {
+    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 760px) {
   .ads-workspace-shell {
     display: block;
     padding: 12px;
@@ -6825,19 +7052,18 @@ input:focus-visible {
     gap: 12px;
     padding: 12px;
     overflow: visible;
+    border-radius: 24px;
   }
 
   .ads-mobile-menu-button {
     display: grid;
   }
 
-  .ads-toolbar-nav,
-  .ads-toolbar-status-card {
+  .ads-toolbar-nav {
     display: none;
   }
 
-  .ads-outer-toolbar.menu-open .ads-toolbar-nav,
-  .ads-outer-toolbar.menu-open .ads-toolbar-status-card {
+  .ads-outer-toolbar.menu-open .ads-toolbar-nav {
     display: grid;
   }
 
@@ -6854,7 +7080,13 @@ input:focus-visible {
 
   .ads-main-panel {
     min-height: auto;
+    margin: 0;
     border-radius: 24px;
+  }
+
+  .ads-main-panel .topbar {
+    min-height: 52px;
+    padding: 14px 16px 0;
   }
 
   .ads-main-panel .page-body {
@@ -6933,6 +7165,14 @@ input:focus-visible {
   .ads-dashboard-main-grid,
   .ads-dashboard-lower-grid {
     grid-template-columns: 1fr;
+  }
+
+  .ads-region-content {
+    grid-template-columns: 1fr;
+  }
+
+  .ads-region-map {
+    min-height: 160px;
   }
 
   .ads-dashboard-metric-card {
