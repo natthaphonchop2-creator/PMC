@@ -101,12 +101,11 @@ describe('Home app shell', () => {
       expect(text).toContain('Cost per Result')
       expect(text).toContain('CTR')
       expect(text).toContain('ROAS')
-      expect(html).not.toContain('Revenue Overview')
       expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
     })
   })
 
-  it('shows campaign data as a chart on Ads analytics instead of the campaign performance list', () => {
+  it('shows top campaign rankings on Ads Dashboard instead of the campaign performance list', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[
@@ -147,14 +146,18 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('กราฟข้อมูลแคมเปญ')
-    expect(text).toContain('ค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแคมเปญ')
-    expect(html).toContain('aria-label="กราฟข้อมูลแคมเปญ"')
+    expect(text).toContain('Ads Dashboard')
+    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900')
+    expect(text).toContain('96 conversions · ROAS 1.90x')
+    expect(html).toContain('ads-top-campaign-list')
+    expect(html).toContain('ads-top-campaign-row')
+    expect(text).not.toContain('กราฟข้อมูลแคมเปญ')
     expect(text).not.toContain('ผลงานแคมเปญ')
     expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
   })
 
-  it('shows a Revenue Overview from real analytics data instead of reference placeholders', () => {
+  it('shows Ads Dashboard sections from real analytics data instead of reference placeholders', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[
@@ -215,14 +218,24 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('Revenue Overview')
-    expect(text).toContain('Total Revenue')
-    expect(text).toContain('Bookings')
-    expect(text).toContain('Paid Cases')
-    expect(text).toContain('Conversion Rate')
-    expect(text).toContain('Revenue by Campaign')
+    expect(text).toContain('Ads Dashboard')
+    expect(text).toContain('Customize Dashboard')
+    expect(text).toContain('New Campaign')
+    expect(text).toContain('Impressions')
+    expect(text).toContain('Clicks')
+    expect(text).toContain('Conversions')
+    expect(text).toContain('Cost')
+    expect(text).toContain('Performance Overview')
+    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('คำแนะนำที่รออนุมัติ')
+    expect(text).toContain('PMC Insights')
+    expect(text).toContain('Cost per Result')
+    expect(text).toContain('CTR')
+    expect(text).toContain('ROAS')
     expect(text).toContain('ตัวรี MSG เติมไขมัน 9900')
-    expect(text).toContain('฿180k')
+    expect(text).toContain('฿108k')
+    expect(html).toContain('ads-dashboard-layout')
+    expect(countOccurrences(html, 'class="ads-dashboard-metric-card"')).toBe(7)
     expect(html).not.toContain('revenue-sparkline')
     expect(html).not.toContain('แนวโน้มย่อ')
     expect(text).not.toContain('Welcome back, James')
@@ -231,7 +244,7 @@ describe('Home app shell', () => {
     expect(text).not.toContain('Mobile App')
   })
 
-  it('uses the selected ECharts engine for Ads analytics charts without placeholder data', () => {
+  it('uses the selected ECharts engine for Ads Dashboard performance chart without placeholder data', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[
@@ -295,19 +308,20 @@ describe('Home app shell', () => {
       />,
     )
 
-    expect(countOccurrences(html, 'data-chart-engine="echarts"')).toBe(4)
-    expect(countOccurrences(html, 'data-chart-source="real"')).toBe(4)
+    expect(countOccurrences(html, 'data-chart-engine="echarts"')).toBe(1)
+    expect(countOccurrences(html, 'data-chart-source="real"')).toBe(1)
     expect(html).toContain('data-chart-style="sharp-lines"')
+    expect(html).toContain('Performance Overview')
     expect(html).toContain('aria-label="Revenue Overview chart"')
-    expect(html).toContain('aria-label="Revenue by Campaign chart"')
-    expect(html).toContain('aria-label="Funnel คลินิก chart"')
-    expect(html).toContain('aria-label="กราฟข้อมูลแคมเปญ"')
+    expect(html).not.toContain('aria-label="Revenue by Campaign chart"')
+    expect(html).not.toContain('aria-label="Funnel คลินิก chart"')
+    expect(html).not.toContain('aria-label="กราฟข้อมูลแคมเปญ"')
     expect(html).not.toContain('$24,560')
     expect(html).not.toContain('Website')
     expect(html).not.toContain('Mobile App')
   })
 
-  it('shows period changes from each metric own real trend instead of reusing booking trend', () => {
+  it('shows dashboard period changes from real trend data without fake metric values', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[]}
@@ -324,26 +338,24 @@ describe('Home app shell', () => {
           paidTreatments: 200,
           revenue: 600,
           roas: 0,
-          spend: 0,
+          spend: 600,
         }}
         trendData={[
-          { bookings: 100, date: '2026-05-16', day: 'May 16', revenue: 100, spend: 0, treatments: 20 },
-          { bookings: 100, date: '2026-05-17', day: 'May 17', revenue: 100, spend: 0, treatments: 20 },
-          { bookings: 200, date: '2026-05-18', day: 'May 18', revenue: 200, spend: 0, treatments: 80 },
-          { bookings: 200, date: '2026-05-19', day: 'May 19', revenue: 200, spend: 0, treatments: 80 },
+          { bookings: 100, date: '2026-05-16', day: 'May 16', revenue: 100, spend: 100, treatments: 20 },
+          { bookings: 100, date: '2026-05-17', day: 'May 17', revenue: 100, spend: 100, treatments: 20 },
+          { bookings: 200, date: '2026-05-18', day: 'May 18', revenue: 200, spend: 200, treatments: 80 },
+          { bookings: 200, date: '2026-05-19', day: 'May 19', revenue: 200, spend: 200, treatments: 80 },
         ]}
       />,
     )
     const text = visibleText(html)
 
-    expect(text).toContain('Paid Cases')
-    expect(text).toContain('↑ 300.0%')
-    expect(text).toContain('จาก paid cases รายวัน')
-    expect(text).toContain('Conversion Rate')
-    expect(text).toContain('33.3%')
+    expect(text).toContain('Conversions')
     expect(text).toContain('↑ 100.0%')
     expect(text).toContain('จาก paid / booking รายวัน')
-    expect(countOccurrences(text, '↑ 100.0%')).toBe(3)
+    expect(text).toContain('Cost')
+    expect(text).toContain('จาก spend รายวัน')
+    expect(text).toContain('รอข้อมูล')
     expect(text).not.toContain('จริง')
   })
 
@@ -455,9 +467,9 @@ describe('Home app shell', () => {
     const text = visibleText(html)
 
     expect(text).toContain('คำแนะนำที่รออนุมัติ')
-    expect(text).toContain('รายการที่ AI คัดมาให้คุณตรวจ')
+    expect(text).toContain('รายการที่ควรตรวจวันนี้')
     expect(text).toContain('ยังไม่มีรายการที่ต้องอนุมัติ')
-    expect(text).toContain('เมื่อคุณให้ AI วิเคราะห์ข้อมูลล่าสุด')
+    expect(text).toContain('เมื่อ AI วิเคราะห์ข้อมูลล่าสุด')
     expect(text).not.toContain('ป้องกันงบและตรวจ Tracking')
     expect(text).not.toContain('Meta metrics')
     expect(text).not.toContain('PMC Master Agent')

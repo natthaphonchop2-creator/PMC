@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   BookOpenCheck,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
-  CalendarCheck,
   CircleDollarSign,
   Database,
   FileText,
@@ -1116,7 +1115,7 @@ function PmcAdsAgentApp() {
   const trendPoints = useMemo(() => mapTrendData(workspace?.trendData ?? []), [workspace])
   const funnelMetrics = workspace?.funnelMetrics ?? []
   const confirmingRecommendation = confirmingId ? activeRecommendations.find((item) => item.id === confirmingId) : undefined
-  const isPageLoading = dataState === 'loading'
+  const isPageLoading = dataState === 'loading' && activeTab !== 'analytics'
   const websiteContext = useMemo(
     () =>
       buildWebsiteContext({
@@ -1688,7 +1687,7 @@ function PmcAdsAgentApp() {
 function PageSkeleton({ activeTab }: { activeTab: TabId }) {
   const titles: Record<TabId, string> = {
     ads: 'กำลังโหลดตัวจัดการโฆษณา',
-    analytics: 'กำลังโหลด Revenue Overview',
+    analytics: 'กำลังโหลด Ads Dashboard',
     audience: 'กำลังโหลดกลุ่มเป้าหมาย',
     creative: 'กำลังโหลดครีเอทีฟ',
     help: 'กำลังโหลดศูนย์ช่วยเหลือ',
@@ -1954,7 +1953,6 @@ function Topbar({ activePage, automationMode, datePreset, metaInfo, onDateChange
 
 export function AnalyticsPage({
   campaigns,
-  funnelMetrics,
   onApprove,
   onReject,
   recommendations,
@@ -1971,28 +1969,84 @@ export function AnalyticsPage({
   summary: Summary
   trendData: TrendDatum[]
 }) {
+  const topCampaigns = [...campaigns]
+    .sort((left, right) => right.conversions - left.conversions || right.roas - left.roas)
+    .slice(0, 5)
+  const averageCtr = campaigns.length > 0 ? campaigns.reduce((sum, campaign) => sum + campaign.ctr, 0) / campaigns.length : 0
+  const totalConversions = campaigns.reduce((sum, campaign) => sum + campaign.conversions, 0)
+  const totalImpressionsLabel = summary.leads > 0 ? fmtNum(summary.leads) : campaigns.length > 0 ? `${campaigns.length} แคมเปญ` : 'รอข้อมูล'
+  const metricCards: DashboardMetric[] = [
+    { icon: Info, label: 'Impressions', tone: 'sand', value: totalImpressionsLabel, helper: summary.leads > 0 ? 'จาก lead ที่ซิงก์' : 'ใช้จำนวนแคมเปญแทนจนกว่า Meta จะส่ง impressions', change: periodChange(metricTrendValues(trendData, (point) => point.bookings), 'เทียบช่วงก่อนหน้า') },
+    { icon: Megaphone, label: 'Clicks', tone: 'blue', value: summary.bookings > 0 ? fmtNum(summary.bookings) : 'รอข้อมูล', helper: 'ใช้ booking เป็น click-through proxy จากข้อมูลเดิม', change: periodChange(metricTrendValues(trendData, (point) => point.bookings), 'จาก booking รายวัน') },
+    { icon: Users, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData) },
+    { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ยอด spend รวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จาก spend รายวัน') },
+  ]
+
   return (
-    <div className="analytics-layout">
-      <RevenueOverview campaigns={campaigns} summary={summary} trendData={trendData} />
-      <section className="main-stack">
-        <div className="split-grid">
-          <ClinicFunnel funnelMetrics={funnelMetrics} summary={summary} />
-          <CampaignDataChart campaigns={campaigns} />
+    <div className="ads-dashboard-layout">
+      <section className="ads-dashboard-head" aria-label="Ads Dashboard actions">
+        <div>
+          <h2>Ads Dashboard</h2>
+          <p>ภาพรวมแคมเปญ คำแนะนำ และตัวเลขที่ควรตรวจวันนี้</p>
+        </div>
+        <div className="ads-dashboard-actions">
+          <button className="clinic-secondary-button" type="button">Customize Dashboard</button>
+          <button className="clinic-primary-button" type="button" disabled>New Campaign</button>
         </div>
       </section>
-      <aside className="right-rail">
-        <AiQueue onApprove={onApprove} onReject={onReject} recommendations={recommendations} recommendationStates={recommendationStates} />
-      </aside>
+
+      <section className="ads-dashboard-metric-grid" aria-label="Ads Dashboard metrics">
+        {metricCards.map((metric) => (
+          <DashboardMetricCard key={metric.label} metric={metric} />
+        ))}
+      </section>
+
+      <section className="ads-dashboard-main-grid">
+        <DashboardPanel className="performance-panel" title="Performance Overview" subtitle="Spend, revenue และ booking จากข้อมูลที่ซิงก์">
+          <RevenueOverviewChart trendData={trendData} />
+        </DashboardPanel>
+        <DashboardPanel title="Top Campaigns" subtitle="เรียงตาม conversion และ ROAS">
+          <div className="ads-top-campaign-list">
+            {topCampaigns.length > 0 ? topCampaigns.map((campaign) => (
+              <article className="ads-top-campaign-row" key={campaign.id}>
+                <span className={`ads-campaign-rank-dot ${campaign.tone}`} />
+                <div>
+                  <strong>{campaign.name}</strong>
+                  <small>{fmtNum(campaign.conversions)} conversions · ROAS {campaign.roas.toFixed(2)}x</small>
+                </div>
+                <StatusBadge label={campaignStatusLabel(campaign.status)} tone={campaign.tone} />
+              </article>
+            )) : <EmptyState title="ยังไม่มีแคมเปญให้จัดอันดับ" detail="เมื่อซิงก์ข้อมูล Meta แล้ว แคมเปญที่ทำผลงานดีที่สุดจะแสดงที่นี่" />}
+          </div>
+        </DashboardPanel>
+        <DashboardPanel className="approval-panel" title="คำแนะนำที่รออนุมัติ" subtitle="รายการที่ควรตรวจวันนี้">
+          <ApprovalInsightCard onApprove={onApprove} onReject={onReject} recommendations={recommendations} recommendationStates={recommendationStates} />
+        </DashboardPanel>
+      </section>
+
+      <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
+        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'sand', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'spend / booking', change: { label: summary.cpa > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
+        <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: averageCtr > 0 ? `${averageCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'ค่าเฉลี่ย CTR ของแคมเปญ', change: { label: averageCtr > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: averageCtr > 0 ? 'good' : 'neutral', detail: 'จาก campaign insights' } }} />
+        <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'revenue / spend', change: { label: summary.roas > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
+        <DashboardPanel className="ads-insight-panel" title="PMC Insights" subtitle="สรุปจากข้อมูลล่าสุด">
+          <p>{recommendations.length > 0 ? 'มีคำแนะนำที่รอทีมตรวจและตัดสินใจ' : 'ยังไม่มีคำแนะนำใหม่ในช่วงนี้'}</p>
+          <button className="clinic-primary-button" type="button" disabled aria-label="Insights ใช้งานจากเมนูด้านซ้าย">
+            View Insights
+          </button>
+        </DashboardPanel>
+      </section>
     </div>
   )
 }
 
-type RevenueMetric = {
+type DashboardMetricTone = 'sand' | 'blue' | 'purple' | 'gold'
+
+type DashboardMetric = {
   change: MetricChange
   helper: string
   icon: LucideIcon
   label: string
-  tone: Tone
+  tone: DashboardMetricTone
   value: string
 }
 
@@ -2002,84 +2056,86 @@ type MetricChange = {
   tone: Tone
 }
 
-function RevenueOverview({ campaigns, summary, trendData }: { campaigns: Campaign[]; summary: Summary; trendData: TrendDatum[] }) {
-  const paidConversionRate = summary.bookings > 0 ? (summary.paidTreatments / summary.bookings) * 100 : 0
-  const metrics: RevenueMetric[] = [
-    {
-      change: periodChange(metricTrendValues(trendData, (point) => point.revenue), 'จาก revenue รายวัน'),
-      helper: 'ยอดรวม revenue ที่ซิงก์',
-      icon: CircleDollarSign,
-      label: 'Total Revenue',
-      tone: summary.revenue > 0 ? 'violet' : 'neutral',
-      value: fmtMoneyShort(summary.revenue),
-    },
-    {
-      change: periodChange(metricTrendValues(trendData, (point) => point.bookings), 'จาก booking รายวัน'),
-      helper: 'ยอดรวม booking ที่ซิงก์',
-      icon: CalendarCheck,
-      label: 'Bookings',
-      tone: summary.bookings > 0 ? 'info' : 'neutral',
-      value: fmtNum(summary.bookings),
-    },
-    {
-      change: periodChange(metricTrendValues(trendData, (point) => point.treatments), 'จาก paid cases รายวัน'),
-      helper: 'ยอดรวม paid cases ที่ซิงก์',
-      icon: Users,
-      label: 'Paid Cases',
-      tone: summary.paidTreatments > 0 ? 'good' : 'neutral',
-      value: fmtNum(summary.paidTreatments),
-    },
-    {
-      change: conversionRatePeriodChange(trendData),
-      helper: 'paid cases / booking จากยอดรวม',
-      icon: Percent,
-      label: 'Conversion Rate',
-      tone: paidConversionRate >= 80 ? 'good' : paidConversionRate > 0 ? 'watch' : 'neutral',
-      value: `${paidConversionRate.toFixed(1)}%`,
-    },
-  ]
-
-  return (
-    <section className="revenue-dashboard" aria-label="Revenue Overview">
-      <div className="revenue-dashboard-head">
-        <div>
-          <h2>Overview</h2>
-          <p>ภาพรวมรายได้จากข้อมูลที่ซิงก์ในช่วงวันที่ที่เลือก</p>
-        </div>
-        <StatusBadge label="ข้อมูลที่ซิงก์" tone={summary.revenue > 0 ? 'good' : 'neutral'} />
-      </div>
-      <div className="revenue-metric-grid">
-        {metrics.map((metric) => (
-          <RevenueMetricCard key={metric.label} metric={metric} />
-        ))}
-      </div>
-      <div className="revenue-overview-grid">
-        <RevenueOverviewChart trendData={trendData} />
-        <RevenueCampaignMix campaigns={campaigns} totalRevenue={summary.revenue} />
-      </div>
-    </section>
-  )
-}
-
-function RevenueMetricCard({ metric }: { metric: RevenueMetric }) {
+function DashboardMetricCard({ metric }: { metric: DashboardMetric }) {
   const Icon = metric.icon
-  const change = metric.change
 
   return (
-    <article className="revenue-metric-card">
-      <div className={`revenue-metric-icon ${metric.tone}`}>
-        <Icon size={20} />
-      </div>
-      <div className="revenue-metric-copy">
+    <article className="ads-dashboard-metric-card">
+      <span className={`ads-dashboard-metric-icon ${metric.tone}`}>
+        <Icon size={22} />
+      </span>
+      <div>
         <span>{metric.label}</span>
         <strong>{metric.value}</strong>
         <small>{metric.helper}</small>
       </div>
-      <div className="revenue-metric-change">
-        <span className={change.tone}>{change.label}</span>
-        <small>{change.detail}</small>
+      <div className="ads-dashboard-metric-change">
+        <em className={metric.change.tone}>{metric.change.label}</em>
+        <small>{metric.change.detail}</small>
       </div>
     </article>
+  )
+}
+
+function DashboardPanel({ children, className = '', subtitle, title }: { children: ReactNode; className?: string; subtitle: string; title: string }) {
+  return (
+    <section className={`ads-dashboard-panel ${className}`.trim()}>
+      <div className="ads-dashboard-panel-head">
+        <div>
+          <h2>{title}</h2>
+          <p>{subtitle}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function ApprovalInsightCard({
+  onApprove,
+  onReject,
+  recommendations,
+  recommendationStates,
+}: {
+  onApprove: (id: string) => void
+  onReject: (id: string) => void
+  recommendations: Recommendation[]
+  recommendationStates: Record<string, ActionState>
+}) {
+  const pendingRecommendations = recommendations.filter((rec) => rec.source === 'ai_brain').slice(0, 3)
+  if (pendingRecommendations.length === 0) {
+    return <EmptyState title="ยังไม่มีรายการที่ต้องอนุมัติ" detail="เมื่อ AI วิเคราะห์ข้อมูลล่าสุด รายการที่ต้องตัดสินใจจะแสดงที่นี่" />
+  }
+
+  return (
+    <div className="approval-insight-list">
+      {pendingRecommendations.map((rec) => {
+        const state = recommendationStates[rec.id] ?? 'Suggested'
+        const isFinal = state === 'Approved' || state === 'Executed' || state === 'Rejected' || state === 'Failed'
+        const isExecuting = state === 'Executing'
+        return (
+          <article className="approval-insight-card" key={rec.id}>
+            <div>
+              <StatusBadge label={riskLabel(rec.risk)} tone={toneForRisk(rec.risk)} />
+              <strong>{rec.title}</strong>
+              <p>{rec.evidence}</p>
+            </div>
+            {isFinal ? (
+              <StatusBadge label={actionStateLabelForPlan(state, rec.execution)} tone={state === 'Executed' || state === 'Approved' ? 'good' : 'critical'} />
+            ) : (
+              <div className="approval-insight-actions">
+                <button className="clinic-primary-button" type="button" onClick={() => onApprove(rec.id)} disabled={isExecuting}>
+                  {isExecuting ? 'กำลังดำเนินการ...' : 'รีวิว'}
+                </button>
+                <button className="clinic-secondary-button" type="button" onClick={() => onReject(rec.id)} disabled={isExecuting}>
+                  ปฏิเสธ
+                </button>
+              </div>
+            )}
+          </article>
+        )
+      })}
+    </div>
   )
 }
 
@@ -2190,32 +2246,6 @@ type EChartTooltipParam = {
   value?: unknown
 }
 
-type CampaignRevenueSlice = {
-  color: string
-  id: string
-  name: string
-  revenue: number
-  share: number
-}
-
-type FunnelStage = {
-  count: number
-  conversionRate: number
-  label: string
-  tone: Tone
-  width: number
-}
-
-type CampaignChartDatum = {
-  cpa: number
-  frequency: number
-  id: string
-  name: string
-  revenue: number
-  roas: number
-  spend: number
-}
-
 function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
   return {
     animation: false,
@@ -2284,208 +2314,6 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
   }
 }
 
-function buildCampaignMixOption(slices: CampaignRevenueSlice[], displayedRevenue: number): EChartsOption {
-  return {
-    animation: false,
-    aria: { enabled: true },
-    backgroundColor: 'transparent',
-    graphic: [
-      {
-        left: 'center',
-        style: {
-          align: 'center',
-          fill: '#667792',
-          font: '700 12px Inter, sans-serif',
-          text: 'Total',
-        },
-        top: '42%',
-        type: 'text',
-      },
-      {
-        left: 'center',
-        style: {
-          align: 'center',
-          fill: '#0f233a',
-          font: '900 22px Inter, sans-serif',
-          text: fmtMoneyShort(displayedRevenue),
-        },
-        top: '52%',
-        type: 'text',
-      },
-    ],
-    series: [
-      {
-        avoidLabelOverlap: true,
-        data: slices.map((slice) => ({
-          itemStyle: { color: slice.color },
-          name: slice.name,
-          share: slice.share,
-          value: slice.revenue,
-        })),
-        emphasis: {
-          itemStyle: { shadowBlur: 18, shadowColor: 'rgba(15, 35, 58, 0.18)' },
-          scale: true,
-        },
-        itemStyle: { borderColor: '#ffffff', borderRadius: 6, borderWidth: 4 },
-        label: { show: false },
-        labelLine: { show: false },
-        name: 'Revenue by Campaign',
-        radius: ['58%', '82%'],
-        type: 'pie',
-      },
-    ],
-    tooltip: {
-      appendToBody: true,
-      borderColor: '#dce6f2',
-      borderWidth: 1,
-      className: 'echart-tooltip-surface',
-      confine: true,
-      formatter: formatCampaignMixTooltip,
-      trigger: 'item',
-    },
-  }
-}
-
-function buildFunnelOption(stages: FunnelStage[]): EChartsOption {
-  return {
-    animation: false,
-    aria: { enabled: true },
-    backgroundColor: 'transparent',
-    series: [
-      {
-        bottom: 8,
-        data: stages.map((stage) => ({
-          count: stage.count,
-          conversionRate: stage.conversionRate,
-          itemStyle: { color: chartToneColor(stage.tone) },
-          name: stage.label,
-          value: stage.width,
-        })),
-        emphasis: { focus: 'self' },
-        gap: 5,
-        height: '88%',
-        label: {
-          align: 'left',
-          color: '#0f233a',
-          formatter: (param: unknown) => {
-            const data = (param as { data?: { count?: number; name?: string } }).data
-            return `${data?.name ?? ''}\n${fmtNum(Number(data?.count ?? 0))}`
-          },
-          fontSize: 12,
-          fontWeight: 800,
-          overflow: 'truncate',
-          position: 'right',
-          width: 88,
-        },
-        left: 12,
-        maxSize: '76%',
-        minSize: '20%',
-        name: 'Funnel คลินิก',
-        right: 104,
-        sort: 'none',
-        top: 6,
-        type: 'funnel',
-      },
-    ],
-    tooltip: {
-      appendToBody: true,
-      borderColor: '#dce6f2',
-      borderWidth: 1,
-      className: 'echart-tooltip-surface',
-      confine: true,
-      formatter: formatFunnelTooltip,
-      trigger: 'item',
-    },
-  }
-}
-
-function buildCampaignBarsOption(chartData: CampaignChartDatum[]): EChartsOption {
-  return {
-    animation: false,
-    aria: { enabled: true },
-    backgroundColor: 'transparent',
-    color: ['#2684ff', '#24b6a2', '#f7a928'],
-    grid: { bottom: 36, containLabel: true, left: 8, right: 18, top: 36 },
-    legend: {
-      data: ['ค่าใช้จ่าย', 'รายได้', 'CPA'],
-      icon: 'roundRect',
-      itemGap: 14,
-      itemHeight: 7,
-      itemWidth: 22,
-      left: 0,
-      textStyle: { color: '#53667f', fontSize: 12, fontWeight: 800 },
-      top: 0,
-    },
-    series: [
-      {
-        barMaxWidth: 14,
-        data: chartData.map((campaign) => campaign.spend),
-        emphasis: { focus: 'series' },
-        itemStyle: { borderRadius: [0, 7, 7, 0], color: '#2684ff' },
-        name: 'ค่าใช้จ่าย',
-        type: 'bar',
-      },
-      {
-        barMaxWidth: 14,
-        data: chartData.map((campaign) => campaign.revenue),
-        emphasis: { focus: 'series' },
-        itemStyle: { borderRadius: [0, 7, 7, 0], color: '#24b6a2' },
-        name: 'รายได้',
-        type: 'bar',
-      },
-      {
-        barMaxWidth: 10,
-        data: chartData.map((campaign) => campaign.cpa),
-        emphasis: { focus: 'series' },
-        itemStyle: { borderRadius: [0, 6, 6, 0], color: '#f7a928' },
-        name: 'CPA',
-        type: 'bar',
-      },
-    ],
-    tooltip: {
-      appendToBody: true,
-      borderColor: '#dce6f2',
-      borderWidth: 1,
-      className: 'echart-tooltip-surface',
-      confine: true,
-      formatter: (params: unknown) => formatCampaignBarsTooltip(params, chartData),
-      trigger: 'axis',
-    },
-    xAxis: {
-      axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
-      axisLine: { lineStyle: { color: '#dce6f2' } },
-      axisTick: { show: false },
-      splitLine: { lineStyle: { color: '#e7edf5' } },
-      type: 'value',
-    },
-    yAxis: {
-      axisLabel: { color: '#334155', fontSize: 11, fontWeight: 800, overflow: 'truncate', width: 124 },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      data: chartData.map((campaign) => campaign.name),
-      inverse: true,
-      type: 'category',
-    },
-  }
-}
-
-function chartToneColor(tone: Tone) {
-  switch (tone) {
-    case 'good':
-      return '#24b6a2'
-    case 'watch':
-      return '#f7a928'
-    case 'critical':
-      return '#e55353'
-    case 'violet':
-      return '#7a5bf5'
-    case 'info':
-      return '#2684ff'
-    default:
-      return '#94a3b8'
-  }
-}
-
 function asEChartParams(params: unknown): EChartTooltipParam[] {
   if (Array.isArray(params)) return params as EChartTooltipParam[]
   return params ? [params as EChartTooltipParam] : []
@@ -2518,39 +2346,6 @@ function formatRevenueTrendTooltip(params: unknown, trendData: TrendDatum[]) {
       ['Spend', fmtMoney(spend), rows.find((row) => row.seriesName === 'Spend')?.marker],
       ['ROAS', `${roas.toFixed(2)}x`, undefined],
       ['Booking', fmtNum(bookings), undefined],
-    ],
-  )
-}
-
-function formatCampaignMixTooltip(param: unknown) {
-  const data = (param as { data?: { name?: string; share?: number; value?: number } }).data
-  return eChartTooltip(data?.name ?? '', [
-    ['Revenue', fmtMoney(Number(data?.value ?? 0)), undefined],
-    ['Share', `${Number(data?.share ?? 0).toFixed(1)}%`, undefined],
-  ])
-}
-
-function formatFunnelTooltip(param: unknown) {
-  const data = (param as { data?: { conversionRate?: number; count?: number; name?: string } }).data
-  return eChartTooltip(data?.name ?? '', [
-    ['จำนวน', fmtNum(Number(data?.count ?? 0)), undefined],
-    ['Conversion', `${Number(data?.conversionRate ?? 0).toFixed(1)}%`, undefined],
-  ])
-}
-
-function formatCampaignBarsTooltip(params: unknown, chartData: CampaignChartDatum[]) {
-  const rows = asEChartParams(params)
-  const title = rows[0]?.name ?? ''
-  const campaign = chartData.find((item) => item.name === title)
-
-  return eChartTooltip(
-    title,
-    [
-      ['ค่าใช้จ่าย', fmtMoney(campaign?.spend ?? eChartParamNumber(rows.find((row) => row.seriesName === 'ค่าใช้จ่าย')?.value)), rows.find((row) => row.seriesName === 'ค่าใช้จ่าย')?.marker],
-      ['รายได้', fmtMoney(campaign?.revenue ?? eChartParamNumber(rows.find((row) => row.seriesName === 'รายได้')?.value)), rows.find((row) => row.seriesName === 'รายได้')?.marker],
-      ['CPA', fmtMoney(campaign?.cpa ?? eChartParamNumber(rows.find((row) => row.seriesName === 'CPA')?.value)), rows.find((row) => row.seriesName === 'CPA')?.marker],
-      ['ROAS', `${(campaign?.roas ?? 0).toFixed(2)}x`, undefined],
-      ['Frequency', `${(campaign?.frequency ?? 0).toFixed(1)}x`, undefined],
     ],
   )
 }
@@ -2592,213 +2387,6 @@ function RevenueOverviewChart({ trendData }: { trendData: TrendDatum[] }) {
       ) : (
         <EmptyState title="ยังไม่มี Revenue Overview" detail="กราฟรายได้จะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
       )}
-    </SectionCard>
-  )
-}
-
-function RevenueCampaignMix({ campaigns, totalRevenue }: { campaigns: Campaign[]; totalRevenue: number }) {
-  const slices = useMemo(() => buildCampaignRevenueSlices(campaigns), [campaigns])
-  const campaignRevenue = slices.reduce((sum, slice) => sum + slice.revenue, 0)
-  const displayedRevenue = totalRevenue || campaignRevenue
-  const option = useMemo(() => buildCampaignMixOption(slices, displayedRevenue), [displayedRevenue, slices])
-
-  return (
-    <SectionCard className="revenue-mix-panel" collapsible title="Revenue by Campaign" subtitle="สัดส่วนรายได้ตามแคมเปญ">
-      {slices.length > 0 ? (
-        <div className="revenue-mix-content">
-          <EChart ariaLabel="Revenue by Campaign chart" className="revenue-mix-echart" option={option} />
-          <div className="revenue-mix-list">
-            {slices.map((slice) => (
-              <div className="revenue-mix-row" key={slice.id}>
-                <span className="revenue-mix-dot" style={{ background: slice.color }} />
-                <strong>{slice.name}</strong>
-                <span>{slice.share.toFixed(0)}%</span>
-                <small>{fmtMoney(slice.revenue)}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <EmptyState title="ยังไม่มีรายได้ตามแคมเปญ" detail="สัดส่วนรายได้จะแสดงหลังซิงก์แคมเปญที่มี revenue" />
-      )}
-    </SectionCard>
-  )
-}
-
-function buildCampaignRevenueSlices(campaigns: Campaign[]): CampaignRevenueSlice[] {
-  const colors = ['#2f86eb', '#7567d8', '#30d5a8', '#f59e0b', '#ef476f']
-  const revenueCampaigns = campaigns
-    .filter((campaign) => campaign.revenue > 0)
-    .sort((left, right) => right.revenue - left.revenue)
-    .slice(0, 5)
-  const total = revenueCampaigns.reduce((sum, campaign) => sum + campaign.revenue, 0)
-
-  return revenueCampaigns.map((campaign, index) => ({
-    color: colors[index % colors.length],
-    id: campaign.id,
-    name: campaign.name,
-    revenue: campaign.revenue,
-    share: total > 0 ? (campaign.revenue / total) * 100 : 0,
-  }))
-}
-
-function ClinicFunnel({ funnelMetrics, summary }: { funnelMetrics: MetaFunnelMetric[]; summary: Summary }) {
-  const stages = useMemo<FunnelStage[]>(
-    () =>
-      funnelMetrics.map((metric, index) => ({
-        conversionRate: metric.conversionRate,
-        count: metric.count,
-        label: metric.stage,
-        width: index === 0 ? 100 : Math.max(8, Math.min(100, metric.conversionRate)),
-        tone:
-          metric.conversionRate < 5 && index > 0
-            ? ('critical' as Tone)
-            : metric.conversionRate < 25 && index > 0
-              ? ('watch' as Tone)
-              : index === 1
-                ? ('violet' as Tone)
-                : ('good' as Tone),
-      })),
-    [funnelMetrics],
-  )
-  const option = useMemo(() => buildFunnelOption(stages), [stages])
-
-  return (
-    <SectionCard collapsible title="Funnel คลินิก" subtitle="จาก impression ถึงเคสชำระเงิน พร้อมจุดหลุดในแต่ละขั้น">
-      {stages.length > 0 ? (
-        <>
-          <EChart ariaLabel="Funnel คลินิก chart" className="funnel-echart" option={option} />
-          <StatusBadge label={`${stages.length} ขั้นตอนจากข้อมูลจริง`} tone={summary.bookings > 0 ? 'good' : 'neutral'} />
-        </>
-      ) : (
-        <EmptyState title="ยังไม่มีข้อมูล funnel" detail="Meta API ยังไม่ส่ง metric ของ funnel ในช่วงวันที่นี้" />
-      )}
-    </SectionCard>
-  )
-}
-
-function CampaignDataChart({ campaigns }: { campaigns: Campaign[] }) {
-  const chartData = useMemo(
-    () =>
-      campaigns
-        .map((campaign) => ({
-          cpa: Math.round(campaign.cpa),
-          frequency: Number(campaign.frequency.toFixed(1)),
-          id: campaign.id,
-          name: shortCampaignLabel(campaign.name),
-          revenue: Math.round(campaign.revenue),
-          roas: Number(campaign.roas.toFixed(2)),
-          spend: Math.round(campaign.spend),
-        }))
-        .sort((left, right) => right.spend - left.spend)
-        .slice(0, 6),
-    [campaigns],
-  )
-  const bestRoas = chartData.reduce((best, item) => (item.roas > best.roas ? item : best), chartData[0])
-  const averageFrequency = chartData.length ? chartData.reduce((total, item) => total + item.frequency, 0) / chartData.length : 0
-  const option = buildCampaignBarsOption(chartData)
-
-  return (
-    <SectionCard
-      action={
-        <div className="campaign-chart-legend">
-          <StatusBadge label="ค่าใช้จ่าย" tone="info" />
-          <StatusBadge label="รายได้" tone="good" />
-          <StatusBadge label="CPA" tone="watch" />
-        </div>
-      }
-      className="campaign-chart-panel"
-      collapsible
-      title="กราฟข้อมูลแคมเปญ"
-      subtitle="ค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแคมเปญ"
-    >
-      {chartData.length > 0 ? (
-        <div className="campaign-chart-stack">
-          <EChart ariaLabel="กราฟข้อมูลแคมเปญ" className="campaign-echart" option={option} />
-          <div className="campaign-chart-readout" aria-label="สรุปข้อมูลกราฟแคมเปญ">
-            <span>
-              <small>แคมเปญในกราฟ</small>
-              <strong>{fmtNum(chartData.length)}</strong>
-            </span>
-            <span>
-              <small>ROAS สูงสุด</small>
-              <strong>{bestRoas ? `${bestRoas.roas.toFixed(2)}x` : '0.00x'}</strong>
-            </span>
-            <span>
-              <small>Frequency เฉลี่ย</small>
-              <strong>{averageFrequency.toFixed(1)}x</strong>
-            </span>
-          </div>
-        </div>
-      ) : (
-        <EmptyState title="ยังไม่มีกราฟข้อมูลแคมเปญ" detail="กราฟจะแสดงหลังซิงก์แคมเปญจาก Meta API ในช่วงวันที่นี้" />
-      )}
-    </SectionCard>
-  )
-}
-
-function shortCampaignLabel(name: string) {
-  return name.length > 24 ? `${name.slice(0, 24)}...` : name
-}
-
-function AiQueue({
-  onApprove,
-  onReject,
-  recommendations,
-  recommendationStates,
-}: {
-  onApprove: (id: string) => void
-  onReject: (id: string) => void
-  recommendations: Recommendation[]
-  recommendationStates: Record<string, ActionState>
-}) {
-  const aiRecommendations = recommendations.filter((rec) => rec.source === 'ai_brain')
-
-  return (
-    <SectionCard
-      action={<StatusBadge label="รออนุมัติ" tone="violet" />}
-      className="ai-queue"
-      collapsible
-      title="คำแนะนำที่รออนุมัติ"
-      subtitle="รายการที่ AI คัดมาให้คุณตรวจ ก่อนกดอนุมัติหรือปฏิเสธ"
-    >
-      <div className="recommendation-list">
-        {aiRecommendations.length > 0 ? aiRecommendations.map((rec, index) => {
-          const state = recommendationStates[rec.id] ?? 'Suggested'
-          const isFinal = state === 'Approved' || state === 'Executed' || state === 'Rejected' || state === 'Failed'
-          const isExecuting = state === 'Executing'
-
-          return (
-            <article className={`recommendation-card ${index === 0 ? 'primary' : ''}`} key={rec.id}>
-              <div className="recommendation-badges">
-                <StatusBadge label="จาก AI" tone="violet" />
-                <StatusBadge label={actionStateLabelForPlan(state, rec.execution)} tone={state === 'Rejected' || state === 'Failed' ? 'critical' : state === 'Executed' || state === 'Approved' ? 'good' : 'watch'} />
-                <StatusBadge label={riskLabel(rec.risk)} tone={toneForRisk(rec.risk)} />
-              </div>
-              <h3>{rec.title}</h3>
-              <p>{rec.evidence}</p>
-              <p>เกณฑ์ก่อนดำเนินการ: {rec.guardrail}</p>
-              {index === 0 ? <p>{rec.impact}</p> : null}
-              <div className="recommendation-actions">
-                {isFinal ? (
-                  <StatusBadge label={actionStateLabelForPlan(state, rec.execution)} tone={state === 'Executed' || state === 'Approved' ? 'good' : 'critical'} />
-                ) : (
-                  <>
-                    <button className="danger-button" type="button" onClick={() => onApprove(rec.id)} disabled={isExecuting}>
-                      {isExecuting ? 'กำลังดำเนินการ...' : rec.execution ? rec.risk === 'High' ? 'รีวิวก่อนพัก' : 'รีวิว' : 'อนุมัติเป็นแผน'}
-                    </button>
-                    <button className="outline-button" type="button" onClick={() => onReject(rec.id)} disabled={isExecuting}>
-                      ปฏิเสธ
-                    </button>
-                  </>
-                )}
-              </div>
-            </article>
-          )
-        }) : (
-          <EmptyState title="ยังไม่มีรายการที่ต้องอนุมัติ" detail="เมื่อคุณให้ AI วิเคราะห์ข้อมูลล่าสุด รายการที่ต้องตัดสินใจจะมาแสดงที่นี่" />
-        )}
-      </div>
     </SectionCard>
   )
 }
