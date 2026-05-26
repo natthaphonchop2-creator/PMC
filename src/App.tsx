@@ -2217,7 +2217,7 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
     animation: false,
     aria: { enabled: true },
     backgroundColor: 'transparent',
-    color: ['#16b872', '#2684ff', '#b84cff'],
+    color: ['#aa7a3f', '#2684ff', '#b84cff'],
     grid: { bottom: 34, containLabel: true, left: 8, right: 18, top: 42 },
     legend: {
       data: ['Revenue', 'Spend', 'Conversions'],
@@ -2233,8 +2233,8 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
       {
         data: trendData.map((point) => point.revenue),
         emphasis: { focus: 'series' },
-        itemStyle: { color: '#16b872' },
-        lineStyle: { color: '#16b872', width: 2.5 },
+        itemStyle: { color: '#aa7a3f' },
+        lineStyle: { color: '#aa7a3f', width: 2.5 },
         name: 'Revenue',
         showSymbol: true,
         smooth: false,
