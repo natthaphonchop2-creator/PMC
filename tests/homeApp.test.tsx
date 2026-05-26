@@ -105,10 +105,11 @@ describe('Home app shell', () => {
       expect(countOccurrences(html, '<h2>Performance Overview</h2>')).toBe(1)
       expect(html).not.toContain('class="panel revenue-chart-panel"')
       expect(text).toContain('Top Campaigns')
-      expect(text).toContain('คำแนะนำที่รออนุมัติ')
+      expect(text).toContain('Conversions by Region')
       expect(text).toContain('Cost per Result')
       expect(text).toContain('CTR')
       expect(text).toContain('ROAS')
+      expect(text).toContain('PMC Insights')
       expect(text).not.toContain('Revenue Overview')
       expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
     })
@@ -136,10 +137,7 @@ describe('Home app shell', () => {
           },
         ]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 96,
           cac: 0,
@@ -204,10 +202,7 @@ describe('Home app shell', () => {
           },
         ]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 170,
           cac: 640,
@@ -236,7 +231,7 @@ describe('Home app shell', () => {
     expect(text).toContain('Cost')
     expect(text).toContain('Performance Overview')
     expect(text).toContain('Top Campaigns')
-    expect(text).toContain('คำแนะนำที่รออนุมัติ')
+    expect(text).toContain('Conversions by Region')
     expect(text).toContain('PMC Insights')
     expect(text).toContain('Cost per Result')
     expect(text).toContain('CTR')
@@ -248,9 +243,55 @@ describe('Home app shell', () => {
     expect(html).not.toContain('revenue-sparkline')
     expect(html).not.toContain('แนวโน้มย่อ')
     expect(text).not.toContain('Welcome back, James')
+    expect(text).not.toContain('AeuxGlobal')
+    expect(text).not.toContain('North America')
+    expect(text).not.toContain('32%')
+    expect(text).not.toContain('2.45M')
+    expect(text).not.toContain('$24,680')
     expect(text).not.toContain('$24,560')
     expect(text).not.toContain('Website')
     expect(text).not.toContain('Mobile App')
+  })
+
+  it('arranges the Ads Dashboard report like the reference while keeping regional data honest', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        recommendations={[]}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(html).toContain('ads-dashboard-layout')
+    expect(html).toContain('ads-dashboard-metric-grid')
+    expect(html).toContain('ads-dashboard-main-grid')
+    expect(html).toContain('ads-dashboard-lower-grid')
+    expect(html).toContain('ads-region-panel')
+    expect(html).toContain('ads-region-map')
+    expect(text).toContain('Performance Overview')
+    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('Conversions by Region')
+    expect(text).toContain('รอข้อมูลภูมิภาคจาก Meta')
+    expect(text).toContain('PMC Insights')
+    expect(text).toContain('Cost per Result')
+    expect(text).toContain('CTR')
+    expect(text).toContain('ROAS')
+    expect(text).not.toContain('AeuxGlobal')
+    expect(text).not.toContain('North America')
+    expect(text).not.toContain('$24,680')
+    expect(text).not.toContain('2.45M')
   })
 
   it('keeps unavailable Impressions and Clicks honest instead of showing lead, campaign, or booking proxies', () => {
@@ -291,10 +332,7 @@ describe('Home app shell', () => {
           },
         ]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 170,
           cac: 640,
@@ -333,10 +371,7 @@ describe('Home app shell', () => {
           { count: 20000, conversionRate: 100, dropOffRate: 0, stage: 'Impressions' },
           { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
         ]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 170,
           cac: 640,
@@ -372,10 +407,7 @@ describe('Home app shell', () => {
           { count: 0, conversionRate: 0, dropOffRate: 0, stage: 'Impressions' },
           { count: 0, conversionRate: 0, dropOffRate: 0, stage: 'Clicks' },
         ]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 170,
           cac: 640,
@@ -443,10 +475,7 @@ describe('Home app shell', () => {
           { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
           { count: 170, conversionRate: 13.9, dropOffRate: 86.1, stage: 'Bookings' },
         ]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 170,
           cac: 640,
@@ -484,10 +513,7 @@ describe('Home app shell', () => {
       <AnalyticsPage
         campaigns={[]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 600,
           cac: 0,
@@ -514,7 +540,8 @@ describe('Home app shell', () => {
     expect(text).toContain('Cost')
     expect(text).toContain('จาก spend รายวัน')
     expect(text).toContain('รอข้อมูล')
-    expect(text).not.toContain('จริง')
+    expect(text).not.toContain('AI จริง')
+    expect(text).not.toContain('$24,680')
   })
 
   it('does not show the audit trail panel on Ads analytics', () => {
@@ -522,10 +549,7 @@ describe('Home app shell', () => {
       <AnalyticsPage
         campaigns={[]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 0,
           cac: 0,
@@ -593,8 +617,6 @@ describe('Home app shell', () => {
       <AnalyticsPage
         campaigns={[]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[
           {
             action: 'ลดงบ 10-15%',
@@ -608,7 +630,6 @@ describe('Home app shell', () => {
             title: 'ป้องกันงบและตรวจ Tracking',
           },
         ]}
-        recommendationStates={{}}
         summary={{
           bookings: 0,
           cac: 0,
@@ -624,10 +645,8 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('คำแนะนำที่รออนุมัติ')
-    expect(text).toContain('รายการที่ควรตรวจวันนี้')
-    expect(text).toContain('ยังไม่มีรายการที่ต้องอนุมัติ')
-    expect(text).toContain('เมื่อ AI วิเคราะห์ข้อมูลล่าสุด')
+    expect(text).toContain('PMC Insights')
+    expect(text).toContain('รอ insight ใหม่จากข้อมูลจริง')
     expect(text).not.toContain('ป้องกันงบและตรวจ Tracking')
     expect(text).not.toContain('Meta metrics')
     expect(text).not.toContain('PMC Master Agent')

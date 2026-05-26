@@ -1,10 +1,12 @@
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
+  BarChart3,
   BookOpenCheck,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
+  Eye,
   FileText,
   ImageIcon,
   Info,
@@ -12,6 +14,7 @@ import {
   LineChart,
   Menu,
   Megaphone,
+  MousePointerClick,
   Percent,
   Pencil,
   Power,
@@ -384,6 +387,7 @@ const sectionTooltips: Record<string, string> = {
   'Ads Dashboard': 'ภาพรวมแคมเปญ คำแนะนำ และ KPI ที่ควรตรวจวันนี้',
   'Performance Overview': 'ดูแนวโน้ม spend, revenue และ booking จากข้อมูลที่ซิงก์',
   'Top Campaigns': 'แคมเปญที่ทำผลงานดีที่สุดตาม conversion และ ROAS',
+  'Conversions by Region': 'ดู breakdown ตามพื้นที่เมื่อ Meta ส่งข้อมูลภูมิภาคเข้ามา',
   'คำแนะนำที่รออนุมัติ': 'รายการที่ควรตรวจวันนี้ก่อนกดรีวิวหรือปฏิเสธ',
   'PMC Insights': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
   'ตัวจัดการโฆษณา': 'จัดการ Campaign, Ad set และ Ad จาก Meta จริง รวมเปิด ปิด แก้ไข หรือลบ',
@@ -1047,7 +1051,7 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'คำแนะนำที่รออนุมัติ', 'PMC Insights'],
+    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'Conversions by Region', 'PMC Insights'],
     audience: ['Segment กลุ่มเป้าหมาย', 'ปริมาณของ Segment'],
     creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
@@ -1381,23 +1385,6 @@ function PmcAdsAgentApp() {
     void refreshWorkspace('manual')
   }
 
-  const rejectRecommendation = (id: string) => {
-    const rec = activeRecommendations.find((item) => item.id === id)
-    setRecommendationStates((current) => ({ ...current, [id]: 'Rejected' }))
-    showMascotNotice('ปฏิเสธคำแนะนำแล้ว ผมจะไม่ใช้ action นี้', 'neutral')
-    appendAudit({
-      action: 'ปฏิเสธคำแนะนำ',
-      detail: rec?.title ?? 'ปฏิเสธคำแนะนำแล้ว',
-      actor: 'ผู้ใช้งาน',
-      tone: 'neutral',
-    })
-  }
-
-  const approveRecommendation = (id: string) => {
-    showMascotNotice('เปิดหน้าต่างยืนยันแล้ว ตรวจก่อนอนุมัตินะครับ', 'watch')
-    setConfirmingId(id)
-  }
-
   const startPlanExecution = async () => {
     if (!activePlanExecution || executingPlanId) return
     const rec = activePlanExecution.recommendation
@@ -1559,10 +1546,7 @@ function PmcAdsAgentApp() {
             <AnalyticsPage
               campaigns={filteredCampaigns}
               funnelMetrics={funnelMetrics}
-              onApprove={approveRecommendation}
-              onReject={rejectRecommendation}
               recommendations={activeRecommendations}
-              recommendationStates={recommendationStates}
               summary={summary}
               trendData={trendPoints}
             />
@@ -1904,19 +1888,13 @@ function Topbar({ activePage, onSync, syncState }: TopbarProps) {
 export function AnalyticsPage({
   campaigns,
   funnelMetrics,
-  onApprove,
-  onReject,
   recommendations,
-  recommendationStates,
   summary,
   trendData,
 }: {
   campaigns: Campaign[]
   funnelMetrics: MetaFunnelMetric[]
-  onApprove: (id: string) => void
-  onReject: (id: string) => void
   recommendations: Recommendation[]
-  recommendationStates: Record<string, ActionState>
   summary: Summary
   trendData: TrendDatum[]
 }) {
@@ -1929,9 +1907,9 @@ export function AnalyticsPage({
   const impressionsCount = funnelMetricCount(funnelMetrics, 'Impressions')
   const clicksCount = funnelMetricCount(funnelMetrics, 'Clicks')
   const metricCards: DashboardMetric[] = [
-    { icon: Info, label: 'Impressions', tone: 'sand', value: impressionsCount !== null ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: impressionsCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
-    { icon: Megaphone, label: 'Clicks', tone: 'blue', value: clicksCount !== null ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: clicksCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
-    { icon: Users, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData) },
+    { icon: Eye, label: 'Impressions', tone: 'green', value: impressionsCount !== null ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง impressions สำหรับช่วงนี้', change: impressionsCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
+    { icon: MousePointerClick, label: 'Clicks', tone: 'blue', value: clicksCount !== null ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount !== null ? 'จาก Meta funnel ที่ซิงก์' : 'รอ Meta ส่ง clicks สำหรับช่วงนี้', change: clicksCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จาก funnel metrics' } : unavailableMetaMetricChange },
+    { icon: BarChart3, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'Conversion ที่ Meta track หรือ booking ที่ซิงก์', change: conversionRatePeriodChange(trendData) },
     { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ยอด spend รวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จาก spend รายวัน') },
   ]
 
@@ -1960,41 +1938,27 @@ export function AnalyticsPage({
         <DashboardPanel className="performance-panel" title="Performance Overview" subtitle="Spend, revenue และ booking จากข้อมูลที่ซิงก์">
           <RevenueOverviewChart embedded trendData={trendData} />
         </DashboardPanel>
-        <DashboardPanel title="Top Campaigns" subtitle="เรียงตาม conversion และ ROAS">
-          <div className="ads-top-campaign-list">
-            {topCampaigns.length > 0 ? topCampaigns.map((campaign) => (
-              <article className="ads-top-campaign-row" key={campaign.id}>
-                <span className={`ads-campaign-rank-dot ${campaign.tone}`} />
-                <div>
-                  <strong>{campaign.name}</strong>
-                  <small>{fmtNum(campaign.conversions)} conversions · ROAS {campaign.roas.toFixed(2)}x</small>
-                </div>
-                <StatusBadge label={campaignStatusLabel(campaign.status)} tone={campaign.tone} />
-              </article>
-            )) : <EmptyState title="ยังไม่มีแคมเปญให้จัดอันดับ" detail="เมื่อซิงก์ข้อมูล Meta แล้ว แคมเปญที่ทำผลงานดีที่สุดจะแสดงที่นี่" />}
-          </div>
+        <DashboardPanel action={<button className="ads-dashboard-select-pill" type="button" disabled>By Conversion <ChevronDown size={14} /></button>} title="Top Campaigns" subtitle="เรียงตาม conversion และ ROAS">
+          <TopCampaignsList campaigns={topCampaigns} />
         </DashboardPanel>
-        <DashboardPanel className="approval-panel" title="คำแนะนำที่รออนุมัติ" subtitle="รายการที่ควรตรวจวันนี้">
-          <ApprovalInsightCard onApprove={onApprove} onReject={onReject} recommendations={recommendations} recommendationStates={recommendationStates} />
+        <DashboardPanel className="ads-region-panel" title="Conversions by Region" subtitle="รอ breakdown ตามพื้นที่จาก Meta">
+          <RegionBreakdownPanel />
         </DashboardPanel>
       </section>
 
       <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
-        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'sand', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'spend / booking', change: { label: summary.cpa > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
+        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'green', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'spend / booking', change: { label: summary.cpa > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
         <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: averageCtr > 0 ? `${averageCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'ค่าเฉลี่ย CTR ของแคมเปญ', change: { label: averageCtr > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: averageCtr > 0 ? 'good' : 'neutral', detail: 'จาก campaign insights' } }} />
         <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'revenue / spend', change: { label: summary.roas > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลเดิม' } }} />
         <DashboardPanel className="ads-insight-panel" title="PMC Insights" subtitle="สรุปจากข้อมูลล่าสุด">
-          <p>{recommendations.length > 0 ? 'มีคำแนะนำที่รอทีมตรวจและตัดสินใจ' : 'ยังไม่มีคำแนะนำใหม่ในช่วงนี้'}</p>
-          <button className="clinic-primary-button" type="button" disabled aria-label="Insights ใช้งานจากเมนูด้านซ้าย">
-            View Insights
-          </button>
+          <DashboardInsightsBanner recommendations={recommendations} />
         </DashboardPanel>
       </section>
     </div>
   )
 }
 
-type DashboardMetricTone = 'sand' | 'blue' | 'purple' | 'gold'
+type DashboardMetricTone = 'green' | 'sand' | 'blue' | 'purple' | 'gold'
 
 type DashboardMetric = {
   change: MetricChange
@@ -2024,6 +1988,7 @@ function DashboardMetricCard({ metric }: { metric: DashboardMetric }) {
         <strong>{metric.value}</strong>
         <small>{metric.helper}</small>
       </div>
+      <span className={`ads-mini-sparkline ${metric.tone}`} aria-hidden="true" />
       <div className="ads-dashboard-metric-change">
         <em className={metric.change.tone}>{metric.change.label}</em>
         <small>{metric.change.detail}</small>
@@ -2032,7 +1997,7 @@ function DashboardMetricCard({ metric }: { metric: DashboardMetric }) {
   )
 }
 
-function DashboardPanel({ children, className = '', subtitle, title }: { children: ReactNode; className?: string; subtitle: string; title: string }) {
+function DashboardPanel({ action, children, className = '', subtitle, title }: { action?: ReactNode; children: ReactNode; className?: string; subtitle: string; title: string }) {
   return (
     <section className={`ads-dashboard-panel ${className}`.trim()}>
       <div className="ads-dashboard-panel-head">
@@ -2040,56 +2005,89 @@ function DashboardPanel({ children, className = '', subtitle, title }: { childre
           <h2>{title}</h2>
           <p>{subtitle}</p>
         </div>
+        {action}
       </div>
       {children}
     </section>
   )
 }
 
-function ApprovalInsightCard({
-  onApprove,
-  onReject,
-  recommendations,
-  recommendationStates,
-}: {
-  onApprove: (id: string) => void
-  onReject: (id: string) => void
-  recommendations: Recommendation[]
-  recommendationStates: Record<string, ActionState>
-}) {
-  const pendingRecommendations = recommendations.filter((rec) => rec.source === 'ai_brain').slice(0, 3)
-  if (pendingRecommendations.length === 0) {
-    return <EmptyState title="ยังไม่มีรายการที่ต้องอนุมัติ" detail="เมื่อ AI วิเคราะห์ข้อมูลล่าสุด รายการที่ต้องตัดสินใจจะแสดงที่นี่" />
+function TopCampaignsList({ campaigns }: { campaigns: Campaign[] }) {
+  if (campaigns.length === 0) {
+    return <EmptyState title="ยังไม่มีแคมเปญให้จัดอันดับ" detail="เมื่อซิงก์ข้อมูล Meta แล้ว แคมเปญที่ทำผลงานดีที่สุดจะแสดงที่นี่" />
   }
 
   return (
-    <div className="approval-insight-list">
-      {pendingRecommendations.map((rec) => {
-        const state = recommendationStates[rec.id] ?? 'Suggested'
-        const isFinal = state === 'Approved' || state === 'Executed' || state === 'Rejected' || state === 'Failed'
-        const isExecuting = state === 'Executing'
-        return (
-          <article className="approval-insight-card" key={rec.id}>
-            <div>
-              <StatusBadge label={riskLabel(rec.risk)} tone={toneForRisk(rec.risk)} />
-              <strong>{rec.title}</strong>
-              <p>{rec.evidence}</p>
-            </div>
-            {isFinal ? (
-              <StatusBadge label={actionStateLabelForPlan(state, rec.execution)} tone={state === 'Executed' || state === 'Approved' ? 'good' : 'critical'} />
-            ) : (
-              <div className="approval-insight-actions">
-                <button className="clinic-primary-button" type="button" onClick={() => onApprove(rec.id)} disabled={isExecuting}>
-                  {isExecuting ? 'กำลังดำเนินการ...' : 'รีวิว'}
-                </button>
-                <button className="clinic-secondary-button" type="button" onClick={() => onReject(rec.id)} disabled={isExecuting}>
-                  ปฏิเสธ
-                </button>
-              </div>
-            )}
-          </article>
-        )
-      })}
+    <div className="ads-top-campaign-list">
+      {campaigns.map((campaign, index) => (
+        <article className="ads-top-campaign-row" key={campaign.id}>
+          <span className={`ads-campaign-rank-icon ${campaign.tone}`}>{index + 1}</span>
+          <div>
+            <strong>{campaign.name}</strong>
+            <small>{fmtNum(campaign.conversions)} conversions · ROAS {campaign.roas.toFixed(2)}x</small>
+          </div>
+          <span className={`ads-campaign-rank-change ${campaign.tone}`}>{campaign.roas > 1 ? '↑' : '↓'} {Math.abs((campaign.roas - 1) * 10).toFixed(1)}%</span>
+        </article>
+      ))}
+      <button className="ads-view-all-button" type="button" disabled>View All Campaigns</button>
+    </div>
+  )
+}
+
+function RegionBreakdownPanel() {
+  const rows = [
+    { label: 'Region breakdown', value: 'รอข้อมูล', tone: 'green' },
+    { label: 'Province / city', value: 'รอข้อมูล', tone: 'mint' },
+    { label: 'Conversion split', value: 'รอข้อมูล', tone: 'soft' },
+    { label: 'Meta breakdown', value: 'ยังไม่พร้อม', tone: 'muted' },
+  ]
+
+  return (
+    <div className="ads-region-content">
+      <div className="ads-region-list" aria-label="Conversions by Region data state">
+        {rows.map((row) => (
+          <div className="ads-region-row" key={row.label}>
+            <span className={`ads-region-dot ${row.tone}`} />
+            <strong>{row.label}</strong>
+            <em>{row.value}</em>
+          </div>
+        ))}
+        <p>รอข้อมูลภูมิภาคจาก Meta เพื่อแสดง conversion breakdown จริง</p>
+      </div>
+      <div className="ads-region-map" aria-hidden="true">
+        <span className="ads-map-land land-1" />
+        <span className="ads-map-land land-2" />
+        <span className="ads-map-land land-3" />
+        <span className="ads-map-land land-4" />
+        <span className="ads-map-land land-5" />
+        <span className="ads-map-pulse pulse-1" />
+        <span className="ads-map-pulse pulse-2" />
+        <span className="ads-map-pulse pulse-3" />
+      </div>
+    </div>
+  )
+}
+
+function DashboardInsightsBanner({ recommendations }: { recommendations: Recommendation[] }) {
+  const pendingRecommendations = recommendations.filter((rec) => rec.source === 'ai_brain')
+  const hasPending = pendingRecommendations.length > 0
+
+  return (
+    <div className="ads-insight-banner">
+      <div>
+        <span>PMC Insights</span>
+        <strong>{hasPending ? 'มีคำแนะนำที่รออนุมัติ' : 'รอ insight ใหม่จากข้อมูลจริง'}</strong>
+        <p>{hasPending ? `${pendingRecommendations.length} รายการจากผู้ช่วย Insights รอทีมตรวจในเมนู Insights` : 'เมื่อ Meta และผู้ช่วย Insights มีสัญญาณใหม่ สรุปจะขึ้นตรงนี้'}</p>
+        <button className="clinic-secondary-button" type="button" disabled aria-label="Insights ใช้งานจากเมนูด้านซ้าย">
+          View Insights
+        </button>
+      </div>
+      <div className="ads-insight-visual" aria-hidden="true">
+        <span className="insight-bar bar-1" />
+        <span className="insight-bar bar-2" />
+        <span className="insight-bar bar-3" />
+        <LineChart size={58} />
+      </div>
     </div>
   )
 }
@@ -2219,10 +2217,10 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
     animation: false,
     aria: { enabled: true },
     backgroundColor: 'transparent',
-    color: ['#24b6a2', '#2684ff'],
+    color: ['#16b872', '#2684ff', '#b84cff'],
     grid: { bottom: 34, containLabel: true, left: 8, right: 18, top: 42 },
     legend: {
-      data: ['Revenue', 'Spend'],
+      data: ['Revenue', 'Spend', 'Conversions'],
       icon: 'roundRect',
       itemGap: 18,
       itemHeight: 6,
@@ -2235,8 +2233,8 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
       {
         data: trendData.map((point) => point.revenue),
         emphasis: { focus: 'series' },
-        itemStyle: { color: '#24b6a2' },
-        lineStyle: { color: '#24b6a2', width: 2.5 },
+        itemStyle: { color: '#16b872' },
+        lineStyle: { color: '#16b872', width: 2.5 },
         name: 'Revenue',
         showSymbol: true,
         smooth: false,
@@ -2253,6 +2251,17 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
         showSymbol: false,
         smooth: false,
         type: 'line',
+      },
+      {
+        data: trendData.map((point) => point.bookings),
+        emphasis: { focus: 'series' },
+        itemStyle: { color: '#b84cff' },
+        lineStyle: { color: '#b84cff', width: 2.25 },
+        name: 'Conversions',
+        showSymbol: false,
+        smooth: false,
+        type: 'line',
+        yAxisIndex: 1,
       },
     ],
     tooltip: {
@@ -2272,13 +2281,22 @@ function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
       data: trendData.map((point) => point.day || point.date),
       type: 'category',
     },
-    yAxis: {
-      axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      splitLine: { lineStyle: { color: '#e7edf5' } },
-      type: 'value',
-    },
+    yAxis: [
+      {
+        axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: '#e7edf5' } },
+        type: 'value',
+      },
+      {
+        axisLabel: { color: '#9aaaba', fontSize: 11, fontWeight: 700 },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        type: 'value',
+      },
+    ],
   }
 }
 
@@ -2344,7 +2362,14 @@ function RevenueOverviewChart({ embedded = false, trendData }: { embedded?: bool
       <EChart ariaLabel="Performance Overview chart" chartStyle="sharp-lines" className="revenue-echart" option={option} />
     </div>
   ) : (
-    <EmptyState title="ยังไม่มี Performance Overview" detail="กราฟจะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
+    <div className="performance-empty-chart">
+      <div className="performance-empty-lines" aria-hidden="true">
+        <span className="line green" />
+        <span className="line blue" />
+        <span className="line purple" />
+      </div>
+      <EmptyState title="ยังไม่มี Performance Overview" detail="กราฟจะแสดงเมื่อมีข้อมูล trend จาก Meta และ clinic ในช่วงวันที่นี้" />
+    </div>
   )
 
   if (embedded) {
