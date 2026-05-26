@@ -54,7 +54,7 @@ describe('Home app shell', () => {
       const html = renderToStaticMarkup(<App />)
       const text = visibleText(html)
 
-      expect(html).toContain('class="ads-workspace-shell"')
+      expect(html).toMatch(/class="[^"]*\bads-workspace-shell\b[^"]*"/)
       expect(html).toContain('class="ads-outer-toolbar')
       expect(html).toContain('aria-label="Ads Agent navigation"')
       expect(html).toContain('href="/"')

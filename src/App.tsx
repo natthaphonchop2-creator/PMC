@@ -8,8 +8,6 @@ import {
   CircleDollarSign,
   Database,
   FileText,
-  HelpCircle,
-  Home,
   ImageIcon,
   Info,
   Layers3,
@@ -69,6 +67,7 @@ type ActionState = 'Suggested' | 'Pending approval' | 'Approved' | 'Executing' |
 
 type NavItem = {
   id: TabId
+  toolbarKey: string
   label: string
   group: 'Main' | 'Creative' | 'System'
   icon: LucideIcon
@@ -357,16 +356,14 @@ type MetaConfigResponse = MetaStatusResponse & {
 }
 
 const navItems: NavItem[] = [
-  { id: 'analytics', label: 'วิเคราะห์', group: 'Main', icon: LineChart, description: 'ภาพรวมโฆษณา Meta, funnel คลินิก, งานจาก AI และสถานะ audit' },
-  { id: 'ads', label: 'ตัวจัดการโฆษณา', group: 'Main', icon: Megaphone, description: 'จัดการแคมเปญ ชุดโฆษณา และโฆษณาจากข้อมูล Meta จริง' },
-  { id: 'marketer', label: 'นักการตลาด AI', group: 'Main', icon: BrainCircuit, description: 'คำแนะนำ การอนุมัติ และ workflow ก่อนเขียนข้อมูลจริง' },
-  { id: 'optimization', label: 'Optimizer & Automation', group: 'Main', icon: Power, description: 'ตรวจแผนปรับแคมเปญ จัดลำดับรายการสำคัญ และยืนยันก่อนส่งคำสั่งจริง' },
-  { id: 'creative', label: 'สตูดิโอครีเอทีฟ', group: 'Creative', icon: Layers3, description: 'ผลงานครีเอทีฟจาก ads และ insight ที่ซิงก์มา' },
-  { id: 'audience', label: 'กลุ่มเป้าหมาย', group: 'Creative', icon: Users, description: 'Segment, placement, พื้นที่ และคุณภาพ lead' },
-  { id: 'library', label: 'คลังโฆษณา', group: 'Creative', icon: ImageIcon, description: 'Asset, compliance และความพร้อมก่อนเปิดใช้งาน' },
-  { id: 'reports', label: 'รายงาน', group: 'System', icon: FileText, description: 'เตรียมรายงานสรุปผลงานโฆษณาให้ทีมตรวจและนำไปใช้งานต่อ' },
-  { id: 'settings', label: 'ตั้งค่า', group: 'System', icon: Settings, description: 'การเชื่อมต่อ Meta, workspace และความพร้อมของ API' },
-  { id: 'help', label: 'ศูนย์ช่วยเหลือ', group: 'System', icon: HelpCircle, description: 'คู่มือ setup, สถานะระบบ และ playbook การใช้งาน' },
+  { id: 'analytics', toolbarKey: 'dashboard', label: 'Ads Dashboard', group: 'Main', icon: LineChart, description: 'ภาพรวมโฆษณาและคำแนะนำที่ควรตรวจวันนี้' },
+  { id: 'ads', toolbarKey: 'campaigns', label: 'Campaigns', group: 'Main', icon: Megaphone, description: 'จัดการ Campaign, Ad group และ Ad จากข้อมูล Meta จริง' },
+  { id: 'ads', toolbarKey: 'ad-groups', label: 'Ad Groups', group: 'Main', icon: Layers3, description: 'ตรวจชุดโฆษณาและกลุ่มงานที่อยู่ใต้ Campaign' },
+  { id: 'creative', toolbarKey: 'creatives', label: 'Creatives', group: 'Creative', icon: ImageIcon, description: 'ผลงานครีเอทีฟและ asset ที่ซิงก์มา' },
+  { id: 'audience', toolbarKey: 'audience', label: 'Audience', group: 'Creative', icon: Users, description: 'กลุ่มเป้าหมาย พื้นที่ และคุณภาพ lead' },
+  { id: 'reports', toolbarKey: 'reports', label: 'Reports', group: 'System', icon: FileText, description: 'รายงานสรุปผลงานโฆษณาให้ทีมตรวจและนำไปใช้ต่อ' },
+  { id: 'marketer', toolbarKey: 'insights', label: 'Insights', group: 'Main', icon: BrainCircuit, description: 'คำแนะนำและ insight ที่รอทีมตรวจ' },
+  { id: 'settings', toolbarKey: 'settings', label: 'Settings', group: 'System', icon: Settings, description: 'การเชื่อมต่อ Meta, workspace และความพร้อมของ API' },
 ]
 
 const datePresetOptions = ['ข้อมูลทั้งหมด', '7 วันล่าสุด', '30 วันล่าสุด', 'เดือนนี้', 'ไตรมาสนี้']
@@ -497,12 +494,6 @@ function objectTypeLabel(type: AdsObjectType) {
   if (type === 'campaign') return 'แคมเปญ'
   if (type === 'adset') return 'ชุดโฆษณา'
   return 'โฆษณา'
-}
-
-function navGroupLabel(group: NavItem['group']) {
-  if (group === 'Main') return 'หลัก'
-  if (group === 'Creative') return 'ครีเอทีฟ'
-  return 'ระบบ'
 }
 
 function syncStateLabel(state: string) {
@@ -1091,6 +1082,7 @@ function PmcAdsAgentApp() {
   const refreshRequestRef = useRef(0)
   const activeMetaWorkspaceRef = useRef<string | null>(null)
   const [activeTab, setActiveTab] = useState<TabId>('analytics')
+  const [activeToolbarKey, setActiveToolbarKey] = useState('dashboard')
   const [datePreset, setDatePreset] = useState('ข้อมูลทั้งหมด')
   const [automationMode, setAutomationMode] = useState<AutomationMode>('พัก automation')
   const [pendingAutomationMode, setPendingAutomationMode] = useState<AutomationMode | null>(null)
@@ -1117,7 +1109,7 @@ function PmcAdsAgentApp() {
     () => brainApprovalActions.slice(0, 4).map(mapMetaRecommendation),
     [brainApprovalActions],
   )
-  const activePage = navItems.find((item) => item.id === activeTab) ?? navItems[0]
+  const activePage = navItems.find((item) => item.toolbarKey === activeToolbarKey) ?? navItems.find((item) => item.id === activeTab) ?? navItems[0]
   const filteredCampaigns = displayCampaigns.filter((campaign) => campaign.name.toLowerCase().includes(searchQuery.toLowerCase()))
   const effectiveSelectedCampaignId = displayCampaigns.some((campaign) => campaign.id === selectedCampaignId) ? selectedCampaignId : displayCampaigns[0]?.id ?? ''
   const summary = useMemo(() => buildSummaryFromWorkspace(workspace, displayCampaigns), [displayCampaigns, workspace])
@@ -1373,18 +1365,19 @@ function PmcAdsAgentApp() {
     return () => media.revert()
   }, [])
 
-  const handleTabSelect = useCallback((tab: TabId) => {
+  const handleTabSelect = useCallback((tab: TabId, toolbarKey?: string) => {
     setActiveTab(tab)
+    setActiveToolbarKey(toolbarKey ?? navItems.find((item) => item.id === tab)?.toolbarKey ?? 'dashboard')
     const tabNotices: Record<TabId, { message: string; tone: Tone }> = {
-      ads: { message: 'เปิดตัวจัดการโฆษณาแล้ว ตรวจชื่อให้ชัดก่อนเขียน Meta นะครับ', tone: 'watch' },
-      analytics: { message: 'กลับมาดูภาพรวมล่าสุดแล้วครับ', tone: 'info' },
-      audience: { message: 'เปิดกลุ่มเป้าหมายแล้ว ใช้ดู segment ก่อนปรับแคมเปญ', tone: 'info' },
-      creative: { message: 'เปิดสตูดิโอครีเอทีฟแล้ว ดูสัญญาณงานโฆษณาได้ตรงนี้', tone: 'info' },
+      ads: { message: 'เปิด Campaigns แล้ว ตรวจชื่อให้ชัดก่อนเขียน Meta นะครับ', tone: 'watch' },
+      analytics: { message: 'กลับมาดู Ads Dashboard ล่าสุดแล้วครับ', tone: 'info' },
+      audience: { message: 'เปิด Audience แล้ว ใช้ดู segment ก่อนปรับแคมเปญ', tone: 'info' },
+      creative: { message: 'เปิด Creatives แล้ว ดูสัญญาณงานโฆษณาได้ตรงนี้', tone: 'info' },
       help: { message: 'เปิดศูนย์ช่วยเหลือแล้ว ถ้าติดตั้งค่าให้ไป Settings ได้เลย', tone: 'info' },
       library: { message: 'เปิดคลังโฆษณาแล้ว ตรวจ compliance ก่อนนำไปใช้ต่อครับ', tone: 'watch' },
-      marketer: { message: 'เปิดนักการตลาด AI แล้ว ให้ Master Agent สรุป action ก่อน', tone: 'info' },
+      marketer: { message: 'เปิด Insights แล้ว ตรวจคำแนะนำก่อนตัดสินใจ', tone: 'info' },
       optimization: { message: 'เปิด Optimizer แล้ว กดวิเคราะห์ล่าสุดก่อนดำเนินแผน', tone: 'info' },
-      reports: { message: 'เปิดรายงานแล้ว ใช้สรุปงานให้ทีมรีวิวได้', tone: 'good' },
+      reports: { message: 'เปิด Reports แล้ว ใช้สรุปงานให้ทีมรีวิวได้', tone: 'good' },
       settings: { message: 'เปิด Settings แล้ว ตั้งค่า Meta และ OpenAI API ได้ตรงนี้', tone: 'watch' },
     }
     const notice = tabNotices[tab]
@@ -1556,9 +1549,9 @@ function PmcAdsAgentApp() {
   }
 
   return (
-    <div className="app-shell" ref={shellRef}>
-      <Sidebar activeTab={activeTab} accountName={metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อ Meta'} automationMode={automationMode} dataState={dataState} mascotNotice={mascotNotice} onSelect={handleTabSelect} syncState={syncState} />
-      <main className="app-main">
+    <div className="ads-workspace-shell app-shell" ref={shellRef}>
+      <AdsOuterToolbar activeToolbarKey={activeToolbarKey} accountName={metaInfo?.accountName ?? 'ยังไม่ได้เชื่อมต่อ Meta'} automationMode={automationMode} dataState={dataState} mascotNotice={mascotNotice} onSelect={handleTabSelect} syncState={syncState} />
+      <main className="ads-main-panel app-main">
         <Topbar
           activePage={activePage}
           automationMode={automationMode}
@@ -1773,21 +1766,20 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
   )
 }
 
-type SidebarProps = {
-  activeTab: TabId
+type AdsOuterToolbarProps = {
+  activeToolbarKey: string
   accountName: string
   automationMode: string
   dataState: DataSourceState
   mascotNotice: MascotNotice | null
-  onSelect: (tab: TabId) => void
+  onSelect: (tab: TabId, toolbarKey?: string) => void
   syncState: string
 }
 
-function Sidebar({ activeTab, accountName, automationMode, dataState, mascotNotice, onSelect, syncState }: SidebarProps) {
+function AdsOuterToolbar({ activeToolbarKey, accountName, automationMode, dataState, mascotNotice, onSelect, syncState }: AdsOuterToolbarProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const statusTone: Tone = dataState === 'live' ? 'good' : dataState === 'error' ? 'critical' : dataState === 'loading' ? 'info' : 'watch'
   const mascotMessage = mascotNotice?.message ?? mascotNoticeForState(dataState, syncState, automationMode)
-  const mascotTone = mascotNotice?.tone ?? statusTone
   const freshnessLabel =
     dataState === 'live'
       ? 'ข้อมูลจริงจาก API'
@@ -1798,82 +1790,70 @@ function Sidebar({ activeTab, accountName, automationMode, dataState, mascotNoti
           : dataState === 'setup-required'
             ? 'ต้องตั้งค่าก่อน'
             : 'ซิงก์ผิดพลาด'
-  const selectTab = (tab: TabId) => {
-    onSelect(tab)
+  const selectTab = (tab: TabId, toolbarKey?: string) => {
+    onSelect(tab, toolbarKey)
     setIsMenuOpen(false)
   }
 
   return (
-    <aside className={`sidebar ${isMenuOpen ? 'menu-open' : ''}`}>
-      <div className="sidebar-header">
-        <div className="sidebar-brand-stack">
-          <button className="brand" type="button" onClick={() => selectTab('analytics')} aria-label="เปิดหน้าวิเคราะห์">
-            <span className="brand-logo-wrap">
-              <img src="/pmc-ads-logo.png?v=transparent" alt="PMC Ads" />
-            </span>
-            <span>
-              <strong>PMC Ads Agent</strong>
-              <small>ศูนย์ควบคุมสื่อคลินิก</small>
-            </span>
-          </button>
-          <a className="sidebar-home-link" href="/" aria-label="กลับหน้า Home">
-            <Home size={15} />
-            <span>กลับ Home</span>
-          </a>
-        </div>
+    <aside className={`ads-outer-toolbar ${isMenuOpen ? 'menu-open' : ''}`}>
+      <div className="ads-toolbar-brand-row">
+        <a className="ads-toolbar-brand" href="/" aria-label="กลับหน้า Home">
+          <span className="ads-toolbar-brand-mark">P</span>
+          <span>
+            <strong>PMC</strong>
+            <small>Aesthetic Clinic</small>
+          </span>
+        </a>
         <button
-          className="mobile-nav-toggle"
+          className="ads-mobile-menu-button"
           type="button"
-          aria-controls="dashboard-navigation"
+          aria-controls="ads-agent-navigation"
           aria-expanded={isMenuOpen}
-          aria-label={isMenuOpen ? 'ปิดเมนู' : 'เปิดเมนู'}
+          aria-label={isMenuOpen ? 'ปิดเมนู Ads Agent' : 'เปิดเมนู Ads Agent'}
           onClick={() => setIsMenuOpen((value) => !value)}
         >
           {isMenuOpen ? <X size={18} /> : <Menu size={18} />}
-          <span>เมนู</span>
         </button>
       </div>
 
-      <nav className="nav-groups" id="dashboard-navigation" aria-label="หน้าแดชบอร์ด">
-        {(['Main', 'Creative', 'System'] as const).map((group) => (
-          <div className="nav-group" key={group}>
-            <span className="nav-group-title">{navGroupLabel(group)}</span>
-            {navItems
-              .filter((item) => item.group === group)
-              .map((item) => {
-                const Icon = item.icon
-                const isActive = item.id === activeTab
-                return (
-                  <button
-                    className={`nav-item has-tooltip ${isActive ? 'active' : ''}`}
-                    aria-label={item.label}
-                    data-tooltip={item.description}
-                    key={item.id}
-                    type="button"
-                    onClick={() => selectTab(item.id)}
-                  >
-                    <span className="nav-icon">
-                      <Icon size={16} />
-                    </span>
-                    <span>{item.label}</span>
-                  </button>
-                )
-              })}
-          </div>
-        ))}
+      <nav className="ads-toolbar-nav" id="ads-agent-navigation" aria-label="Ads Agent navigation">
+        {navItems.map((item) => {
+          const Icon = item.icon
+          const isActive = item.toolbarKey === activeToolbarKey
+          return (
+            <button
+              className={`ads-toolbar-item ${isActive ? 'active' : ''}`}
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={item.label}
+              data-description={item.description}
+              key={item.label}
+              type="button"
+              onClick={() => selectTab(item.id, item.toolbarKey)}
+            >
+              <span className="ads-toolbar-icon">
+                <Icon size={18} />
+              </span>
+              <span>{item.label}</span>
+            </button>
+          )
+        })}
       </nav>
 
-      <div className="sidebar-card">
-        <div className={`sidebar-mascot-stage ${mascotNotice ? 'is-alerting' : ''}`}>
-          <p className={`sidebar-mascot-message ${mascotTone} ${mascotNotice ? 'is-notice' : ''}`} aria-live="polite" key={mascotNotice?.id ?? mascotMessage}>
-            {mascotMessage}
-          </p>
-          <img className="sidebar-mascot" src="/pmc-ai-mascot.png" alt="" />
+      <div className="ads-toolbar-user-card">
+        <div className="ads-toolbar-avatar" aria-hidden="true" />
+        <div>
+          <strong>PMC Team</strong>
+          <span>Marketing Manager</span>
         </div>
+        <ChevronDown size={16} aria-hidden="true" />
+      </div>
+
+      <div className="ads-toolbar-status-card">
         <StatusBadge label={syncStateLabel(syncState)} tone={statusTone} />
         <strong>บัญชีโฆษณา: {accountName}</strong>
-        <span>ความสดข้อมูล: {freshnessLabel}</span>
-        <span>โหมด: {automationDisplayLabel(automationMode)}</span>
+        <span>{freshnessLabel}</span>
+        <small>{mascotMessage}</small>
       </div>
     </aside>
   )
