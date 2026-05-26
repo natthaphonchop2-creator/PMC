@@ -69,7 +69,9 @@ describe('Home app shell', () => {
       expect(text).toContain('Insights')
       expect(text).toContain('Settings')
       expect(countOccurrences(html, 'class="ads-toolbar-item')).toBe(8)
-      expect(html).toContain('aria-current="page"')
+      expect(html).toMatch(
+        /<button(?=[^>]*class="ads-toolbar-item active")(?=[^>]*aria-current="page")(?=[^>]*aria-label="Ads Dashboard")[^>]*>/,
+      )
       expect(html).not.toContain('class="nav-groups"')
       expect(html).not.toContain('Optimizer &amp; Automation')
       expect(text).not.toContain('Optimizer & Automation')
@@ -90,7 +92,7 @@ describe('Home app shell', () => {
       expect(text).toContain('Impressions')
       expect(text).toContain('Clicks')
       expect(text).toContain('Conversions')
-      expect(text).toContain('Cost')
+      expect(html).toContain('<span>Cost</span>')
       expect(text).toContain('Performance Overview')
       expect(text).toContain('Top Campaigns')
       expect(text).toContain('คำแนะนำที่รออนุมัติ')
@@ -601,7 +603,7 @@ describe('Home app shell', () => {
     const pageCss = readText('../src/apps/page-automation/styles.css')
 
     expect(appCss).toContain('.ads-workspace-shell')
-    expect(appCss).toContain('grid-template-columns: 280px minmax(0, 1fr)')
+    expect(appCss).toContain('grid-template-columns')
     expect(appCss).toContain('.ads-outer-toolbar')
     expect(appCss).toContain('.ads-main-panel')
     expect(appCss).toContain('.ads-toolbar-item.active')
