@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" fill="none">
+  <defs>
+    <linearGradient id="bar-face" x1="0" y1="30" x2="0" y2="178" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF0D7"/>
+      <stop offset="1" stop-color="#D1A06C"/>
+    </linearGradient>
+    <linearGradient id="bar-side" x1="228" y1="68" x2="284" y2="180" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B98046"/>
+      <stop offset="1" stop-color="#865426"/>
+    </linearGradient>
+    <linearGradient id="line-gold" x1="38" y1="116" x2="284" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFE4B6"/>
+      <stop offset="0.58" stop-color="#F3B464"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(160 118) rotate(90) scale(116 154)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF6E9" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#FFF6E9" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft-shadow" x="22" y="26" width="276" height="188" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="16" flood-color="#4E2B11" flood-opacity="0.25" stdDeviation="12"/>
+    </filter>
+  </defs>
+
+  <ellipse cx="160" cy="126" rx="128" ry="78" fill="url(#glow)"/>
+  <path d="M54 190C88 207 232 210 270 186C223 178 93 177 54 190Z" fill="#5A3517" opacity="0.18"/>
+
+  <g class="chart-bars" filter="url(#soft-shadow)">
+    <path d="M75 131C75 125 80 120 86 120H122C128 120 133 125 133 131V183H75V131Z" fill="url(#bar-face)"/>
+    <path d="M133 131L153 121V173L133 183V131Z" fill="url(#bar-side)" opacity="0.9"/>
+    <path d="M86 120H122L153 121L133 131H75L86 120Z" fill="#FFF6E9" opacity="0.82"/>
+
+    <path d="M145 105C145 99 150 94 156 94H194C200 94 205 99 205 105V183H145V105Z" fill="url(#bar-face)"/>
+    <path d="M205 105L226 94V172L205 183V105Z" fill="url(#bar-side)" opacity="0.92"/>
+    <path d="M156 94H194L226 94L205 105H145L156 94Z" fill="#FFF6E9" opacity="0.86"/>
+
+    <path d="M219 72C219 66 224 61 230 61H268C274 61 279 66 279 72V183H219V72Z" fill="url(#bar-face)"/>
+    <path d="M279 72L296 63V174L279 183V72Z" fill="url(#bar-side)"/>
+    <path d="M230 61H268L296 63L279 72H219L230 61Z" fill="#FFF7EB" opacity="0.9"/>
+  </g>
+
+  <path class="growth-line" d="M43 151C76 125 92 137 118 111C144 84 167 104 194 77C218 53 240 59 278 30" stroke="url(#line-gold)" stroke-linecap="round" stroke-width="9"/>
+  <path d="M246 31L280 29L271 61" stroke="#FFF3D8" stroke-linecap="round" stroke-linejoin="round" stroke-width="9"/>
+  <path d="M43 151C76 125 92 137 118 111C144 84 167 104 194 77C218 53 240 59 278 30" stroke="#8B5A2B" stroke-linecap="round" stroke-width="3" opacity="0.36"/>
+
+  <g opacity="0.9">
+    <path d="M49 66L55 79L68 85L55 91L49 104L43 91L30 85L43 79L49 66Z" fill="#FFE9C4"/>
+    <path d="M212 30L216 39L225 43L216 47L212 56L208 47L199 43L208 39L212 30Z" fill="#FFF8E7"/>
+    <circle cx="80" cy="53" r="5" fill="#FFE1AF"/>
+    <circle cx="286" cy="111" r="4" fill="#FFF3DE"/>
+  </g>
+</svg>

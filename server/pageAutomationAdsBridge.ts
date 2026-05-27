@@ -23,17 +23,18 @@ export function normalizeAdsInsightForPage({
   pageName?: string
   workspace: WorkspaceData | null
 }): SharedAdsInsightForPageRecord {
-  const campaigns = workspace?.campaigns ?? []
-  const adSets = workspace?.adSets ?? []
-  const ads = workspace?.adInsights ?? []
-  const channelPerformance = workspace?.channelPerformance ?? []
+  const scopedWorkspace = scopeWorkspaceForPage(workspace, pageName)
+  const campaigns = scopedWorkspace.campaigns
+  const adSets = scopedWorkspace.adSets
+  const ads = scopedWorkspace.adInsights
+  const channelPerformance = scopedWorkspace.channelPerformance
 
   const spend = sumBy(campaigns, (campaign) => campaign.spend)
   const revenue = sumBy(campaigns, (campaign) => campaign.revenue)
   const conversions = sumBy(campaigns, (campaign) => campaign.conversions)
   const ctr = averageBy(campaigns, (campaign) => campaign.ctr)
-  const leads = sumBy(channelPerformance, (channel) => channel.leads)
-  const bookings = sumBy(channelPerformance, (channel) => channel.bookings)
+  const leads = channelPerformance.length ? sumBy(channelPerformance, (channel) => channel.leads) : sumBy(ads, (ad) => ad.leads)
+  const bookings = channelPerformance.length ? sumBy(channelPerformance, (channel) => channel.bookings) : sumBy(ads, (ad) => ad.bookings)
   const topAds = [...ads].sort((left, right) => safeNumber(right.roas) - safeNumber(left.roas)).slice(0, 5)
 
   return {
@@ -71,7 +72,7 @@ export function normalizeAdsInsightForPage({
       risk: riskFromAiStatus(campaign.aiStatus),
       confidence: DERIVED_FINDING_CONFIDENCE,
     })),
-    recommendations: (workspace?.actions ?? []).slice(0, 5).map((action) => ({
+    recommendations: scopedWorkspace.actions.slice(0, 5).map((action) => ({
       id: action.id,
       action: action.summary,
       expectedImpact: action.expectedImpact,
@@ -96,6 +97,103 @@ export function normalizeAdsInsightForPage({
     },
     policy: READ_ONLY_POLICY,
   }
+}
+
+function scopeWorkspaceForPage(workspace: WorkspaceData | null, pageName?: string) {
+  const empty = {
+    actions: [],
+    adInsights: [],
+    adSets: [],
+    campaigns: [],
+    channelPerformance: [],
+  }
+  if (!workspace) return empty
+
+  const tokens = pageScopeTokens(pageName)
+  if (!tokens.length) {
+    return {
+      actions: workspace.actions,
+      adInsights: workspace.adInsights,
+      adSets: workspace.adSets,
+      campaigns: workspace.campaigns,
+      channelPerformance: workspace.channelPerformance,
+    }
+  }
+
+  const matchedCampaignIds = new Set<string>()
+  const matchedAdSetIds = new Set<string>()
+  const matchedAdIds = new Set<string>()
+
+  for (const campaign of workspace.campaigns) {
+    if (matchesPageScope([campaign.name, campaign.objective, campaign.id], tokens)) matchedCampaignIds.add(campaign.id)
+  }
+
+  for (const adSet of workspace.adSets) {
+    if (matchedCampaignIds.has(adSet.campaignId) || matchesPageScope([adSet.name, adSet.audience, adSet.id], tokens)) {
+      matchedAdSetIds.add(adSet.id)
+      matchedCampaignIds.add(adSet.campaignId)
+    }
+  }
+
+  for (const ad of workspace.adInsights) {
+    if (
+      matchedCampaignIds.has(ad.campaignId) ||
+      matchedAdSetIds.has(ad.adSetId) ||
+      matchesPageScope([ad.name, ad.creative, ad.id], tokens)
+    ) {
+      matchedAdIds.add(ad.id)
+      matchedAdSetIds.add(ad.adSetId)
+      matchedCampaignIds.add(ad.campaignId)
+    }
+  }
+
+  const campaigns = workspace.campaigns.filter((campaign) => matchedCampaignIds.has(campaign.id))
+  const adSets = workspace.adSets.filter((adSet) => matchedCampaignIds.has(adSet.campaignId) || matchedAdSetIds.has(adSet.id))
+  const adInsights = workspace.adInsights.filter(
+    (ad) => matchedCampaignIds.has(ad.campaignId) || matchedAdSetIds.has(ad.adSetId) || matchedAdIds.has(ad.id),
+  )
+  const actions = workspace.actions.filter(
+    (action) => matchedCampaignIds.has(action.campaignId) || matchesPageScope([action.target, action.summary], tokens),
+  )
+  const channelPerformance = workspace.channelPerformance.filter((channel) => matchesPageScope([channel.channel], tokens))
+
+  return {
+    actions,
+    adInsights,
+    adSets,
+    campaigns,
+    channelPerformance,
+  }
+}
+
+function pageScopeTokens(pageName?: string) {
+  const normalized = normalizeScopeText(pageName ?? '')
+  if (!normalized) return []
+
+  const stopWords = new Set(['page', 'clinic', 'aesthetic', 'pmc', 'official', 'facebook', 'instagram', 'เพจ', 'คลินิก'])
+  return Array.from(
+    new Set(
+      normalized
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2 && !stopWords.has(token)),
+    ),
+  )
+}
+
+function matchesPageScope(values: Array<string | undefined>, tokens: string[]) {
+  const haystack = normalizeScopeText(values.filter(Boolean).join(' '))
+  if (!haystack) return false
+  const compactHaystack = haystack.replace(/\s+/g, '')
+  return tokens.some((token) => haystack.includes(token) || compactHaystack.includes(token.replace(/\s+/g, '')))
+}
+
+function normalizeScopeText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[_/|()[\]{}.,:;'"`~!@#$%^&*+=?<>\\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function sumBy<T>(items: T[], readValue: (item: T) => number) {

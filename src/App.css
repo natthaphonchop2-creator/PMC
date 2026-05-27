@@ -1865,6 +1865,37 @@ input:focus-visible {
   }
 }
 
+@keyframes clinicShellDrift {
+  from {
+    background-position: 0 0, 0 0;
+  }
+
+  to {
+    background-position: 180px 0, -160px 0;
+  }
+}
+
+@keyframes clinicSheenSweep {
+  from {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+
+  to {
+    transform: translateX(180%) skewX(-18deg);
+  }
+}
+
+@keyframes clinicLinePulse {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .skeleton-line,
   .skeleton-pill,
@@ -4106,7 +4137,7 @@ input:focus-visible {
   object-fit: cover;
 }
 
-.creative-updating-panel {
+.automation-ads-updating-panel {
   min-height: 360px;
   display: grid;
   align-content: center;
@@ -4114,14 +4145,14 @@ input:focus-visible {
   gap: 16px;
 }
 
-.creative-updating-panel h2 {
+.automation-ads-updating-panel h2 {
   margin: 0;
   color: var(--ink);
   font-size: clamp(28px, 4vw, 44px);
   line-height: 1.08;
 }
 
-.creative-updating-panel p {
+.automation-ads-updating-panel p {
   max-width: 680px;
   margin: 0;
   color: var(--muted);
@@ -4130,7 +4161,7 @@ input:focus-visible {
   line-height: 1.65;
 }
 
-.creative-updating-meta {
+.automation-ads-updating-meta {
   width: min(100%, 560px);
   display: grid;
   gap: 10px;
@@ -4340,6 +4371,40 @@ input:focus-visible {
 
 .plan-execution-modal {
   width: min(680px, 100%);
+}
+
+.campaign-composer-modal {
+  width: min(680px, 100%);
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  background:
+    linear-gradient(140deg, rgba(255, 249, 240, 0.96), rgba(255, 255, 255, 0.98)),
+    #fff;
+}
+
+.campaign-composer-modal h2 {
+  color: var(--clinic-ink);
+}
+
+.campaign-composer-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.campaign-composer-summary {
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.78);
+  color: var(--clinic-muted);
+  padding: 11px 12px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.campaign-composer-modal .modal-actions {
+  justify-content: flex-end;
+  margin-top: 2px;
 }
 
 .plan-execution-target {
@@ -5189,11 +5254,11 @@ input:focus-visible {
     grid-template-columns: 10px minmax(0, 1fr) 38px 76px;
   }
 
-  .creative-updating-panel {
+  .automation-ads-updating-panel {
     min-height: 300px;
   }
 
-  .creative-updating-panel h2 {
+  .automation-ads-updating-panel h2 {
     font-size: 30px;
   }
 
@@ -5840,25 +5905,49 @@ input:focus-visible {
   --clinic-bg: #f7f1e8;
   --clinic-surface: #fffdf9;
   --clinic-surface-soft: #fbf7ef;
-  --clinic-ink: #262018;
-  --clinic-muted: #766b5c;
-  --clinic-border: rgba(130, 104, 73, 0.18);
-  --clinic-bronze: #9a6a38;
-  --clinic-bronze-dark: #6e4925;
+  --clinic-ink: #241f18;
+  --clinic-muted: #776b5d;
+  --clinic-border: rgba(120, 92, 58, 0.16);
+  --clinic-bronze: #9d6e3e;
+  --clinic-bronze-dark: #6c4724;
+  --surface: #fffdf9;
+  --surface-soft: rgba(255, 250, 242, 0.84);
+  --ink: #241f18;
+  --ink-soft: #4f4133;
+  --muted: #776b5d;
+  --border: rgba(130, 104, 73, 0.16);
+  --border-strong: rgba(130, 104, 73, 0.24);
+  --blue: #2684ff;
+  --violet: #8b5cf6;
+  --green: #15803d;
+  --amber: #a16207;
+  --red: #b91c1c;
+  --shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  --gradient-accent: linear-gradient(90deg, #c18a55 0%, #9c6433 100%);
+  --gradient-surface: rgba(255, 253, 249, 0.86);
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
+  grid-template-columns: 286px minmax(0, 1fr);
   gap: 0;
   padding: 0;
-  background:
-    linear-gradient(135deg, rgba(251, 247, 239, 0.72) 0%, rgba(246, 239, 229, 0.58) 44%, rgba(238, 246, 248, 0.68) 100%),
-    url('/pmc-soft-dashboard-bg.png') center / cover no-repeat,
-    #fbf7ef;
+  background: #fbf7ef;
   color: var(--clinic-ink);
+  font-family: 'Noto Sans Thai', 'IBM Plex Sans Thai', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
 }
 
 .ads-workspace-shell::before {
-  display: none;
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(116deg, transparent 0 36%, rgba(255, 255, 255, 0.38) 44%, transparent 53%),
+    repeating-linear-gradient(104deg, rgba(154, 106, 56, 0.08) 0 1px, transparent 1px 18px);
+  background-size: 520px 100%, 220px 100%;
+  opacity: 0.22;
+  animation: clinicShellDrift 18s linear infinite;
 }
 
 .ads-outer-toolbar,
@@ -5875,21 +5964,19 @@ input:focus-visible {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 16px;
   overflow: hidden;
   border: 0;
   border-radius: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 253, 249, 0.9), rgba(246, 235, 220, 0.82)),
-    url('/pmc-soft-dashboard-bg.png') left bottom / 210% auto no-repeat,
-    #f6eee4;
-  box-shadow: inset -1px 0 0 rgba(130, 104, 73, 0.12);
-  padding: 44px 30px 28px;
+  background: url('/pmc-dashboard-shell-bg.png') left top / auto 100vh no-repeat #f3e5d6;
+  box-shadow: inset -1px 0 0 rgba(120, 92, 58, 0.12), 12px 0 32px rgba(83, 61, 39, 0.04);
+  padding: 38px 26px 18px;
 }
 
 .ads-outer-toolbar::before {
   content: "";
   position: absolute;
+  display: none;
   inset: auto -18px 120px auto;
   width: 168px;
   height: 198px;
@@ -5898,6 +5985,19 @@ input:focus-visible {
   clip-path: polygon(50% 0, 65% 32%, 92% 18%, 76% 48%, 100% 62%, 67% 65%, 78% 100%, 50% 74%, 22% 100%, 33% 65%, 0 62%, 24% 48%, 8% 18%, 35% 32%);
   opacity: 0.56;
   pointer-events: none;
+}
+
+.ads-outer-toolbar::after {
+  content: "";
+  position: absolute;
+  inset: 24px 16px;
+  border-radius: 26px;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 28%),
+    repeating-linear-gradient(106deg, transparent 0 20px, rgba(255, 255, 255, 0.22) 21px 22px, transparent 23px 44px);
+  mask-image: linear-gradient(180deg, transparent 0, #000 14%, #000 82%, transparent 100%);
+  opacity: 0.44;
 }
 
 .ads-toolbar-brand-row {
@@ -5911,9 +6011,9 @@ input:focus-visible {
 .ads-toolbar-brand {
   min-width: 0;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
+  gap: 0;
   color: var(--clinic-ink);
   text-decoration: none;
 }
@@ -5930,36 +6030,25 @@ input:focus-visible {
 .ads-toolbar-brand strong {
   display: block;
   color: #1d1a16;
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 30px;
-  font-weight: 700;
+  font-family: inherit;
+  font-size: 26px;
+  font-weight: 900;
   letter-spacing: 0;
-  line-height: 0.92;
+  line-height: 0.96;
 }
 
 .ads-toolbar-brand small {
   display: block;
-  margin-top: 7px;
+  margin-top: 8px;
   color: #6e4925;
-  font-size: 9px;
+  font-size: 8.5px;
   font-weight: 900;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .ads-toolbar-brand-mark {
-  width: 48px;
-  height: 48px;
-  border: 0;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: transparent;
-  color: var(--clinic-bronze-dark);
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 28px;
-  font-weight: 700;
-  box-shadow: inset 0 0 0 2px rgba(154, 106, 56, 0.54);
+  display: none;
 }
 
 .ads-mobile-menu-button {
@@ -5976,26 +6065,42 @@ input:focus-visible {
 
 .ads-toolbar-nav {
   display: grid;
-  gap: 14px;
+  gap: 8px;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
 }
 
 .ads-toolbar-item {
+  position: relative;
   min-width: 0;
-  min-height: 56px;
+  min-height: 50px;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
-  gap: 14px;
+  gap: 13px;
   border: 1px solid transparent;
   border-radius: 999px;
-  background: transparent;
-  color: #1f1a14;
-  padding: 6px 12px;
+  background: rgba(255, 253, 249, 0.3);
+  color: #2c241b;
+  padding: 6px 11px;
   text-align: left;
-  font-size: 15px;
+  font-size: 12.5px;
   font-weight: 850;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  overflow: hidden;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.ads-toolbar-item::after {
+  content: "";
+  position: absolute;
+  inset: 1px auto 1px -38%;
+  width: 38%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.62), transparent);
+  opacity: 0;
+  pointer-events: none;
 }
 
 .ads-toolbar-item span:last-child {
@@ -6009,24 +6114,33 @@ input:focus-visible {
 .ads-toolbar-item:focus-visible {
   border-color: rgba(255, 255, 255, 0.74);
   background: rgba(255, 253, 249, 0.64);
+  box-shadow: 0 10px 24px rgba(91, 66, 39, 0.08);
+  transform: translateX(2px);
+}
+
+.ads-toolbar-item:hover::after,
+.ads-toolbar-item:focus-visible::after,
+.ads-toolbar-item.active::after {
+  opacity: 1;
+  animation: clinicSheenSweep 1.8s ease-out;
 }
 
 .ads-toolbar-item.active {
   border-color: rgba(255, 255, 255, 0.9);
-  background: rgba(255, 253, 249, 0.72);
+  background: rgba(255, 253, 249, 0.78);
   color: var(--clinic-bronze-dark);
-  box-shadow: 0 12px 28px rgba(154, 106, 56, 0.16);
+  box-shadow: 0 14px 28px rgba(116, 83, 49, 0.14);
 }
 
 .ads-toolbar-icon {
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   border-radius: 999px;
   display: grid;
   place-items: center;
-  background: #fffdf9;
+  background: rgba(255, 253, 249, 0.88);
   color: #80664d;
-  box-shadow: 0 8px 18px rgba(77, 57, 32, 0.08);
+  box-shadow: 0 8px 18px rgba(77, 57, 32, 0.07);
 }
 
 .ads-toolbar-item.active .ads-toolbar-icon {
@@ -6036,24 +6150,51 @@ input:focus-visible {
 
 .ads-toolbar-user-card {
   margin-top: auto;
+  flex: 0 0 auto;
+  width: 100%;
   min-width: 0;
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) auto;
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 8px;
   background: rgba(255, 253, 249, 0.74);
-  box-shadow: 0 18px 38px rgba(77, 57, 32, 0.12);
-  padding: 14px;
+  box-shadow: 0 14px 28px rgba(77, 57, 32, 0.1);
+  padding: 10px 12px;
+  backdrop-filter: blur(8px);
+  color: var(--clinic-ink);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
-.ads-toolbar-user-card > div {
+.ads-page-selector-shell {
+  position: relative;
+  margin-top: auto;
+  flex: 0 0 auto;
   min-width: 0;
 }
 
-.ads-toolbar-user-card strong,
-.ads-toolbar-user-card span {
+.ads-toolbar-user-card:hover,
+.ads-toolbar-user-card:focus-visible,
+.ads-toolbar-user-card.open {
+  border-color: rgba(154, 106, 56, 0.28);
+  box-shadow: 0 18px 34px rgba(77, 57, 32, 0.14);
+  transform: translateY(-1px);
+}
+
+.ads-toolbar-user-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ads-toolbar-user-copy strong,
+.ads-toolbar-user-role {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -6061,25 +6202,153 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.ads-toolbar-user-card strong {
-  font-size: 15px;
+.ads-toolbar-user-copy strong {
+  font-size: 13px;
+  line-height: 1.18;
 }
 
-.ads-toolbar-user-card span {
+.ads-toolbar-user-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--clinic-muted);
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 800;
+  line-height: 1.2;
 }
 
 .ads-toolbar-avatar {
-  width: 52px;
-  height: 52px;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
   border-radius: 999px;
+  border: 1px solid rgba(154, 106, 56, 0.18);
   background:
-    radial-gradient(circle at 50% 38%, #ffffff 0 16%, transparent 17%),
-    radial-gradient(circle at 50% 76%, #ffffff 0 28%, transparent 29%),
-    linear-gradient(135deg, rgba(154, 106, 56, 0.2), rgba(117, 103, 216, 0.12)),
-    #e9e5dc;
+    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.88), transparent 36%),
+    linear-gradient(135deg, rgba(201, 152, 99, 0.3), rgba(142, 96, 51, 0.18)),
+    #efe2d2;
+  color: var(--clinic-bronze-dark);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74), 0 8px 18px rgba(77, 57, 32, 0.09);
+}
+
+.ads-toolbar-user-role svg {
+  flex: 0 0 auto;
+  color: rgba(110, 73, 37, 0.76);
+}
+
+.ads-toolbar-user-menu {
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  justify-self: end;
+  padding: 0;
+  background: rgba(255, 253, 249, 0.72);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-toolbar-user-card.open .ads-toolbar-user-menu svg {
+  transform: rotate(180deg);
+}
+
+.ads-toolbar-user-menu svg {
+  transition: transform 180ms ease;
+}
+
+.ads-page-selector-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 80;
+}
+
+.ads-page-selector-popover[hidden] {
+  display: none;
+}
+
+.ads-page-selector-menu {
+  display: grid;
+  gap: 6px;
+  max-height: min(430px, calc(100vh - 140px));
+  overflow-y: auto;
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 253, 249, 0.96);
+  box-shadow: 0 20px 44px rgba(77, 57, 32, 0.18);
+  padding: 8px;
+  backdrop-filter: blur(12px);
+}
+
+.ads-page-selector-option {
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  color: var(--clinic-ink);
+  padding: 8px;
+  text-align: left;
+}
+
+.ads-page-selector-option:hover,
+.ads-page-selector-option:focus-visible,
+.ads-page-selector-option.active {
+  border-color: rgba(154, 106, 56, 0.18);
+  background: rgba(255, 255, 255, 0.74);
+  outline: none;
+}
+
+.ads-page-selector-option-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(245, 236, 224, 0.86);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-page-selector-option-icon.page {
+  background: rgba(232, 244, 235, 0.86);
+  color: #1f8a5b;
+}
+
+.ads-page-selector-option > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ads-page-selector-option strong,
+.ads-page-selector-option small,
+.ads-page-selector-option em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-page-selector-option strong {
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.ads-page-selector-option small,
+.ads-page-selector-option em {
+  color: var(--clinic-muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
 .ads-toolbar-status-card {
@@ -6093,14 +6362,14 @@ input:focus-visible {
 
 .ads-toolbar-status-card strong {
   color: var(--clinic-ink);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.35;
 }
 
 .ads-toolbar-status-card span,
 .ads-toolbar-status-card small {
   color: var(--clinic-muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -6108,36 +6377,52 @@ input:focus-visible {
 
 .ads-main-panel {
   position: relative;
+  z-index: 1;
   min-height: calc(100vh - 20px);
   margin: 10px 10px 10px 0;
   border: 1px solid rgba(130, 104, 73, 0.14);
   border-radius: 30px;
-  background:
-    linear-gradient(180deg, rgba(255, 253, 249, 0.72), rgba(255, 253, 249, 0.62)),
-    url('/pmc-soft-dashboard-bg.png') center top / cover no-repeat,
-    rgba(255, 253, 249, 0.9);
-  box-shadow: 0 22px 60px rgba(77, 57, 32, 0.12);
+  background: url('/pmc-dashboard-shell-bg.png') center top / cover no-repeat rgba(255, 253, 249, 0.9);
+  box-shadow: 0 24px 64px rgba(77, 57, 32, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
   overflow: clip;
 }
 
+.ads-main-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(128deg, transparent 0 56%, rgba(255, 255, 255, 0.52) 62%, transparent 70%),
+    repeating-linear-gradient(172deg, transparent 0 18px, rgba(193, 138, 85, 0.08) 19px 20px, transparent 21px 38px);
+  background-size: 680px 100%, 260px 100%;
+  opacity: 0.34;
+  animation: clinicShellDrift 24s linear infinite;
+}
+
 .ads-main-panel .topbar {
-  min-height: 56px;
+  position: relative;
+  z-index: 1;
+  min-height: 46px;
   justify-content: flex-end;
-  padding: 22px 34px 0;
+  padding: 16px 32px 0;
   border-bottom: 0;
   background: transparent;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(6px);
 }
 
 .ads-main-panel .page-body {
+  position: relative;
+  z-index: 1;
   width: min(100%, 1580px);
-  padding: 12px 34px 34px;
+  padding: 4px 32px 30px;
 }
 
 .ads-dashboard-layout {
   position: relative;
   display: grid;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
   isolation: isolate;
 }
@@ -6158,34 +6443,59 @@ input:focus-visible {
 .ads-dashboard-head {
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 0 2px 4px;
+  padding: 0 2px;
 }
 
 .ads-dashboard-head h2 {
   margin: 0;
   color: var(--clinic-ink);
-  font-size: 36px;
-  line-height: 1.08;
+  font-size: 30px;
+  line-height: 1.04;
+  font-weight: 850;
 }
 
 .ads-dashboard-date-pill {
   width: fit-content;
-  min-height: 38px;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  margin-top: 18px;
+  margin-top: 10px;
   border: 1px solid rgba(130, 104, 73, 0.18);
   border-radius: 8px;
-  background: rgba(255, 253, 249, 0.9);
+  background: rgba(255, 253, 249, 0.82);
   color: #4f4133;
-  padding: 0 14px;
-  font-size: 13px;
+  padding: 0 13px;
+  font-size: 11px;
   font-weight: 850;
-  box-shadow: 0 10px 24px rgba(77, 57, 32, 0.06);
+  box-shadow: 0 8px 20px rgba(77, 57, 32, 0.05);
+}
+
+.ads-dashboard-date-pill select {
+  min-height: 34px;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 850;
+  line-height: 1.2;
+  outline: none;
+  padding: 0 18px 0 0;
+}
+
+.ads-dashboard-date-pill select:focus-visible {
+  outline: 2px solid rgba(30, 136, 229, 0.78);
+  outline-offset: 3px;
+}
+
+.ads-dashboard-date-pill svg:last-child {
+  margin-left: -18px;
+  pointer-events: none;
 }
 
 .ads-dashboard-actions,
@@ -6197,27 +6507,57 @@ input:focus-visible {
   flex-wrap: wrap;
 }
 
+.ads-dashboard-actions {
+  align-self: flex-start;
+  flex-wrap: nowrap;
+  padding-top: 15px;
+}
+
 .ads-workspace-shell .clinic-primary-button,
 .ads-workspace-shell .clinic-secondary-button {
-  min-height: 40px;
+  min-height: 38px;
   min-width: 0;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 18px;
-  font-size: 13px;
+  padding: 0 16px;
+  font-size: 11.5px;
   font-weight: 900;
   line-height: 1.2;
+  white-space: nowrap;
   overflow-wrap: anywhere;
 }
 
 .ads-workspace-shell .clinic-primary-button {
+  position: relative;
   border: 1px solid rgba(110, 73, 37, 0.18);
   background: linear-gradient(135deg, #c18a55, #9c6433);
   color: #fffdf9;
   box-shadow: 0 10px 22px rgba(110, 73, 37, 0.18);
+  overflow: hidden;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.ads-workspace-shell .clinic-primary-button::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -46%;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.38), transparent);
+  pointer-events: none;
+}
+
+.ads-workspace-shell .clinic-primary-button:hover:not(:disabled),
+.ads-workspace-shell .clinic-primary-button:focus-visible:not(:disabled) {
+  box-shadow: 0 14px 30px rgba(110, 73, 37, 0.22);
+  transform: translateY(-1px);
+}
+
+.ads-workspace-shell .clinic-primary-button:hover:not(:disabled)::after,
+.ads-workspace-shell .clinic-primary-button:focus-visible:not(:disabled)::after {
+  animation: clinicSheenSweep 1.6s ease-out;
 }
 
 .ads-workspace-shell .clinic-primary-button:disabled,
@@ -6235,21 +6575,66 @@ input:focus-visible {
 .ads-dashboard-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
 .ads-dashboard-metric-card {
-  min-height: 150px;
+  position: relative;
+  z-index: 0;
+  min-height: 134px;
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  grid-template-rows: auto minmax(42px, 1fr);
-  gap: 10px 12px;
+  grid-template-columns: 46px minmax(0, 1fr);
+  grid-template-rows: auto minmax(36px, 1fr);
+  gap: 9px 12px;
   align-items: start;
   border: 1px solid rgba(130, 104, 73, 0.16);
   border-radius: 8px;
-  background: rgba(255, 253, 249, 0.9);
-  box-shadow: 0 14px 30px rgba(77, 57, 32, 0.08);
-  padding: 16px;
+  background: rgba(255, 253, 249, 0.84);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.07);
+  padding: 14px;
+  backdrop-filter: blur(3px);
+  overflow: visible;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ads-dashboard-metric-card::after,
+.ads-dashboard-panel::after,
+.ads-workspace-shell .panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.72), transparent 32%),
+    linear-gradient(180deg, rgba(193, 138, 85, 0.1), transparent 44%);
+  opacity: 0.28;
+  transition: opacity 180ms ease;
+}
+
+.ads-dashboard-metric-card > *,
+.ads-dashboard-panel > *,
+.ads-workspace-shell .panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ads-dashboard-metric-card:hover,
+.ads-dashboard-metric-card:focus-within {
+  z-index: 5;
+  border-color: rgba(130, 104, 73, 0.22);
+  box-shadow: 0 16px 34px rgba(77, 57, 32, 0.09);
+  transform: translateY(-1px);
+}
+
+.ads-dashboard-metric-card:hover::after,
+.ads-dashboard-metric-card:focus-within::after,
+.ads-dashboard-panel:hover::after,
+.ads-dashboard-panel:focus-within::after,
+.ads-workspace-shell .panel:hover::after,
+.ads-workspace-shell .panel:focus-within::after {
+  opacity: 0.5;
 }
 
 .ads-dashboard-metric-main,
@@ -6260,16 +6645,16 @@ input:focus-visible {
 .ads-dashboard-metric-card span,
 .ads-dashboard-metric-card small {
   color: var(--clinic-muted);
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 850;
-  line-height: 1.45;
+  line-height: 1.42;
 }
 
 .ads-dashboard-metric-card strong {
   display: block;
   margin-top: 6px;
   color: var(--clinic-ink);
-  font-size: 28px;
+  font-size: 24px;
   line-height: 1;
   overflow-wrap: normal;
   word-break: keep-all;
@@ -6281,8 +6666,8 @@ input:focus-visible {
 }
 
 .ads-dashboard-metric-icon {
-  width: 48px;
-  height: 48px;
+  width: 46px;
+  height: 46px;
   border-radius: 8px;
   display: grid;
   place-items: center;
@@ -6334,7 +6719,7 @@ input:focus-visible {
 .ads-dashboard-metric-change em {
   flex: 0 0 auto;
   font-style: normal;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 950;
 }
 
@@ -6367,14 +6752,54 @@ input:focus-visible {
 }
 
 .ads-mini-sparkline {
+  position: relative;
   align-self: end;
   justify-self: end;
   width: min(118px, 100%);
   height: 40px;
   color: #aa7a3f;
+  cursor: help;
   font-size: 0;
   line-height: 0;
+  outline: none;
   opacity: 0.9;
+}
+
+.ads-mini-sparkline::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 9px);
+  z-index: 40;
+  width: max-content;
+  max-width: min(260px, 70vw);
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  border-radius: 8px;
+  background: rgba(37, 31, 23, 0.94);
+  color: #fffdf9;
+  box-shadow: 0 14px 30px rgba(37, 31, 23, 0.18);
+  font-size: 10.5px;
+  font-weight: 850;
+  line-height: 1.45;
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  white-space: normal;
+}
+
+.ads-mini-sparkline:hover::after,
+.ads-mini-sparkline:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ads-mini-sparkline:focus-visible {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(170, 122, 63, 0.18);
 }
 
 .ads-mini-sparkline svg {
@@ -6441,26 +6866,41 @@ input:focus-visible {
 
 .ads-dashboard-main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.18fr) minmax(270px, 0.86fr) minmax(330px, 1.1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+  gap: 12px;
   align-items: stretch;
 }
 
 .ads-dashboard-lower-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(280px, 0.95fr);
-  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(286px, 0.92fr);
+  gap: 12px;
+}
+
+.ads-dashboard-lower-grid .ads-dashboard-metric-card .ads-dashboard-metric-footer {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+
+.ads-dashboard-lower-grid .ads-mini-sparkline {
+  justify-self: center;
+  width: min(150px, 100%);
 }
 
 .ads-dashboard-panel {
+  position: relative;
+  z-index: 0;
   display: grid;
   align-content: start;
-  gap: 14px;
+  gap: 12px;
   border: 1px solid rgba(130, 104, 73, 0.16);
   border-radius: 8px;
-  background: rgba(255, 253, 249, 0.92);
-  box-shadow: 0 14px 30px rgba(77, 57, 32, 0.07);
-  padding: 16px;
+  background: rgba(255, 253, 249, 0.86);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  padding: 15px;
+  backdrop-filter: blur(3px);
+  overflow: visible;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
 }
 
 .ads-dashboard-panel-head {
@@ -6474,15 +6914,16 @@ input:focus-visible {
 .ads-dashboard-panel-head h2 {
   margin: 0;
   color: var(--clinic-ink);
-  font-size: 17px;
+  font-size: 14.5px;
   line-height: 1.2;
+  font-weight: 900;
 }
 
 .ads-dashboard-panel-head p,
 .ads-insight-panel > p {
   margin: 5px 0 0;
   color: var(--clinic-muted);
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 750;
   line-height: 1.45;
 }
@@ -6499,11 +6940,11 @@ input:focus-visible {
 }
 
 .ads-workspace-shell .performance-panel .revenue-chart-wrap {
-  min-height: 254px;
+  min-height: 236px;
 }
 
 .ads-workspace-shell .performance-panel .revenue-echart {
-  height: 252px;
+  height: 236px;
 }
 
 .performance-empty-chart {
@@ -6563,7 +7004,7 @@ input:focus-visible {
 .ads-top-campaign-list,
 .ads-workspace-shell .approval-insight-list {
   display: grid;
-  gap: 10px;
+  gap: 9px;
   min-width: 0;
 }
 
@@ -6575,8 +7016,8 @@ input:focus-visible {
   gap: 10px;
   border: 1px solid rgba(130, 104, 73, 0.12);
   border-radius: 8px;
-  background: #fffaf2;
-  padding: 9px;
+  background: rgba(255, 250, 242, 0.84);
+  padding: 9px 10px;
 }
 
 .ads-top-campaign-row > div {
@@ -6592,7 +7033,7 @@ input:focus-visible {
 .ads-top-campaign-row small {
   margin-top: 4px;
   color: var(--clinic-muted);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 800;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -6606,7 +7047,7 @@ input:focus-visible {
   place-items: center;
   background: #f2eee8;
   color: #80664d;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 950;
 }
 
@@ -6631,7 +7072,7 @@ input:focus-visible {
 }
 
 .ads-campaign-rank-change {
-  font-size: 11px;
+  font-size: 10.5px;
   font-style: normal;
   font-weight: 950;
   white-space: nowrap;
@@ -6654,14 +7095,14 @@ input:focus-visible {
 .ads-view-all-button {
   min-height: 32px;
   border: 1px solid rgba(130, 104, 73, 0.18);
-  border-radius: 8px;
-  background: #fffaf2;
+  border-radius: 999px;
+  background: rgba(255, 250, 242, 0.84);
   color: var(--clinic-bronze-dark);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 900;
   white-space: nowrap;
 }
@@ -6681,145 +7122,6 @@ input:focus-visible {
   opacity: 0.78;
 }
 
-.ads-region-panel {
-  overflow: hidden;
-}
-
-.ads-region-content {
-  min-height: 220px;
-  display: grid;
-  grid-template-columns: minmax(150px, 0.74fr) minmax(0, 1.26fr);
-  gap: 16px;
-  align-items: center;
-}
-
-.ads-region-list {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-
-.ads-region-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 9px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-}
-
-.ads-region-rank-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: #b9824a;
-}
-
-.ads-region-row strong,
-.ads-region-row small {
-  display: block;
-  min-width: 0;
-}
-
-.ads-region-row strong {
-  color: #403427;
-  font-size: 12px;
-  font-weight: 850;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ads-region-row small {
-  margin-top: 3px;
-  color: var(--clinic-muted);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.ads-region-row b {
-  color: #4b3d2f;
-  font-size: 12px;
-  font-weight: 950;
-}
-
-.ads-region-empty {
-  margin: 0;
-  color: var(--clinic-muted);
-  font-size: 12px;
-  font-weight: 750;
-  line-height: 1.55;
-}
-
-.ads-region-map {
-  position: relative;
-  min-height: 190px;
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at 68% 48%, rgba(201, 153, 108, 0.16), transparent 0 8%, transparent 9%),
-    linear-gradient(180deg, rgba(250, 244, 237, 0.42), rgba(255, 255, 255, 0.08));
-  overflow: hidden;
-}
-
-.ads-region-map-blob {
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(190, 155, 119, 0.34);
-  filter: blur(0.2px);
-}
-
-.ads-region-map-blob.blob-1 {
-  left: 10%;
-  top: 28%;
-  width: 34%;
-  height: 28%;
-  transform: rotate(-12deg);
-}
-
-.ads-region-map-blob.blob-2 {
-  left: 40%;
-  top: 38%;
-  width: 28%;
-  height: 33%;
-  transform: rotate(18deg);
-}
-
-.ads-region-map-blob.blob-3 {
-  left: 63%;
-  top: 23%;
-  width: 31%;
-  height: 29%;
-  transform: rotate(10deg);
-}
-
-.ads-region-map-blob.blob-4 {
-  left: 72%;
-  top: 54%;
-  width: 22%;
-  height: 26%;
-  background: rgba(154, 167, 162, 0.26);
-  transform: rotate(-18deg);
-}
-
-.ads-region-map-dot {
-  position: absolute;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  transform: translate(-50%, -50%);
-  border-radius: 999px;
-  background: rgba(128, 83, 42, 0.18);
-}
-
-.ads-region-map-dot i {
-  width: 42%;
-  height: 42%;
-  min-width: 8px;
-  min-height: 8px;
-  border-radius: inherit;
-  background: #8f6a48;
-  color: transparent;
-}
-
 .ads-workspace-shell .approval-insight-card {
   min-width: 0;
   display: grid;
@@ -6828,7 +7130,7 @@ input:focus-visible {
   gap: 12px;
   border: 1px solid rgba(130, 104, 73, 0.12);
   border-radius: 8px;
-  background: #fffaf2;
+  background: rgba(255, 250, 242, 0.84);
   padding: 12px;
 }
 
@@ -6840,14 +7142,14 @@ input:focus-visible {
   display: block;
   margin-top: 8px;
   color: var(--clinic-ink);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.35;
 }
 
 .ads-workspace-shell .approval-insight-card p {
   margin: 5px 0 0;
   color: var(--clinic-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 750;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -6856,8 +7158,7 @@ input:focus-visible {
 .ads-insight-panel {
   padding: 0;
   overflow: hidden;
-  background:
-    linear-gradient(135deg, #7d542c 0%, #8f5f31 58%, #bc9469 100%);
+  background: #8f6034;
   color: #ffffff;
 }
 
@@ -6868,22 +7169,35 @@ input:focus-visible {
 .ads-insight-banner {
   min-height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) 120px;
-  gap: 12px;
-  align-items: end;
-  padding: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 118px);
+  gap: 14px;
+  align-items: center;
+  padding: 18px 16px;
   position: relative;
   overflow: hidden;
+  background:
+    radial-gradient(circle at 84% 20%, rgba(255, 241, 212, 0.2), transparent 34%),
+    linear-gradient(135deg, #9a6a3a 0%, #8c582b 54%, #704019 100%);
 }
 
 .ads-insight-banner::before {
   content: "";
   position: absolute;
-  inset: auto -28px -58px auto;
-  width: 190px;
-  height: 190px;
+  inset: auto -38px -68px auto;
+  width: 210px;
+  height: 210px;
   border-radius: 999px;
-  background: rgba(255, 248, 236, 0.18);
+  background: rgba(255, 248, 236, 0.16);
+}
+
+.ads-insight-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(120deg, transparent 0 56%, rgba(255, 246, 232, 0.12) 56% 57%, transparent 57%),
+    radial-gradient(circle at 12% 18%, rgba(255, 255, 255, 0.12), transparent 22%);
+  pointer-events: none;
 }
 
 .ads-insight-banner > div {
@@ -6892,76 +7206,507 @@ input:focus-visible {
   z-index: 1;
 }
 
-.ads-insight-banner span {
-  display: block;
-  margin-bottom: 9px;
-  color: #ffe3bd;
-  font-size: 12px;
-  font-weight: 950;
+.ads-insight-copy {
+  align-self: center;
+  display: grid;
+  gap: 12px;
 }
 
 .ads-insight-banner strong {
   display: block;
   color: #ffffff;
   font-size: 21px;
-  line-height: 1.16;
+  font-weight: 950;
+  line-height: 1.12;
   overflow-wrap: anywhere;
 }
 
-.ads-insight-banner p {
-  margin: 8px 0 14px;
-  color: rgba(255, 250, 242, 0.84);
-  font-size: 12px;
-  font-weight: 750;
-  line-height: 1.45;
+.ads-insight-status {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 25px;
+  line-height: 1;
 }
 
-.ads-workspace-shell .ads-insight-banner .clinic-secondary-button {
-  min-height: 34px;
+.ads-insight-status.good {
+  color: #d9ffda;
+}
+
+.ads-insight-status.medium {
+  color: #ffe1b4;
+}
+
+.ads-insight-status.bad {
+  color: #ffd1c4;
+}
+
+.ads-workspace-shell .ads-insight-open-button,
+.ads-insight-open-button {
+  justify-self: start;
+  min-height: 30px;
   width: auto;
+  border-color: rgba(255, 236, 208, 0.5);
+  background: rgba(255, 248, 236, 0.92);
+  color: #7a4d22;
+  padding: 0 13px;
+  font-size: 11px;
+  box-shadow: 0 10px 18px rgba(57, 32, 13, 0.16);
+}
+
+.ads-workspace-shell .ads-insight-open-button:hover,
+.ads-insight-open-button:hover {
   background: #ffffff;
-  color: var(--clinic-bronze-dark);
 }
 
 .ads-insight-visual {
-  height: 124px;
+  height: 126px;
   align-self: stretch;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  align-items: end;
-  gap: 10px;
-  color: rgba(255, 255, 255, 0.84);
+  place-items: center;
 }
 
-.ads-insight-visual svg {
-  position: absolute;
-  right: 16px;
-  top: 18px;
-  color: rgba(255, 232, 201, 0.72);
-  transform: rotate(-18deg);
-}
-
-.insight-bar {
-  min-width: 22px;
-  border-radius: 8px 8px 0 0;
-  background: linear-gradient(180deg, #fff2dc, #d3a36d);
-  box-shadow: 0 12px 22px rgba(77, 57, 32, 0.2);
-}
-
-.insight-bar.bar-1 {
-  height: 42%;
-}
-
-.insight-bar.bar-2 {
-  height: 64%;
-}
-
-.insight-bar.bar-3 {
-  height: 86%;
+.ads-insight-visual img {
+  display: block;
+  width: min(130px, 100%);
+  max-height: 130px;
+  object-fit: contain;
+  filter: drop-shadow(0 18px 18px rgba(48, 29, 12, 0.28));
 }
 
 .ads-workspace-shell .ads-insight-panel .clinic-primary-button {
   justify-self: start;
+}
+
+.ads-workspace-shell .ads-tool-window {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
+  gap: 12px;
+  align-items: start;
+}
+
+.ads-workspace-shell .ads-tool-window .main-stack,
+.ads-workspace-shell .ads-tool-window .right-rail {
+  gap: 12px;
+}
+
+.ads-workspace-shell .panel,
+.ads-workspace-shell .mini-card,
+.ads-workspace-shell .asset-card,
+.ads-workspace-shell .report-preview,
+.ads-workspace-shell .audience-row,
+.ads-workspace-shell .help-item,
+.ads-workspace-shell .automation-ads-updating-meta,
+.ads-workspace-shell .ads-entity-group,
+.ads-workspace-shell .ads-entity-branch {
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.86);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  backdrop-filter: blur(3px);
+}
+
+.ads-workspace-shell .panel {
+  position: relative;
+  z-index: 0;
+  background: rgba(255, 253, 249, 0.86);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  padding: 15px;
+  overflow: visible;
+  transform: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ads-workspace-shell .panel::before {
+  display: none;
+}
+
+.ads-workspace-shell .panel:hover,
+.ads-workspace-shell .panel:focus-within {
+  border-color: rgba(130, 104, 73, 0.22);
+  box-shadow: 0 14px 30px rgba(77, 57, 32, 0.08);
+  transform: translateY(-1px);
+}
+
+.ads-workspace-shell .panel-head {
+  margin-bottom: 12px;
+  gap: 12px;
+}
+
+.ads-workspace-shell .panel-title-row {
+  gap: 7px;
+}
+
+.ads-workspace-shell .panel-title-row h2,
+.ads-workspace-shell .panel-head h2 {
+  margin: 0;
+  color: var(--clinic-ink);
+  font-size: 14.5px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .panel-head h2 {
+  font-size: 14.5px;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .panel-head p {
+  margin: 5px 0 0;
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.ads-workspace-shell .panel-actions {
+  gap: 8px;
+}
+
+.ads-workspace-shell .collapse-button,
+.ads-workspace-shell .primary-button,
+.ads-workspace-shell .outline-button,
+.ads-workspace-shell .danger-button {
+  min-height: 34px;
+  border-radius: 999px;
+  padding: 0 13px;
+  font-size: 10.8px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.ads-workspace-shell .collapse-button,
+.ads-workspace-shell .outline-button {
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  background: rgba(255, 253, 249, 0.82);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .collapse-button:hover,
+.ads-workspace-shell .outline-button:hover {
+  border-color: rgba(130, 104, 73, 0.32);
+  box-shadow: 0 10px 22px rgba(110, 73, 37, 0.08);
+  transform: none;
+}
+
+.ads-workspace-shell .primary-button {
+  border: 1px solid rgba(110, 73, 37, 0.18);
+  background: linear-gradient(135deg, #c18a55, #9c6433);
+  color: #fffdf9;
+  box-shadow: 0 10px 22px rgba(110, 73, 37, 0.18);
+}
+
+.ads-workspace-shell .danger-button {
+  border: 1px solid rgba(185, 28, 28, 0.18);
+  background: #b91c1c;
+  color: #fffdf9;
+  box-shadow: 0 10px 22px rgba(185, 28, 28, 0.14);
+}
+
+.ads-workspace-shell .status-badge {
+  min-height: 23px;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .collapsed-placeholder {
+  min-height: 62px;
+  border-color: rgba(130, 104, 73, 0.24);
+  background: rgba(255, 250, 242, 0.76);
+  color: var(--clinic-muted);
+}
+
+.ads-workspace-shell .collapsed-placeholder strong {
+  color: var(--clinic-ink);
+  font-size: 12px;
+}
+
+.ads-workspace-shell .collapsed-placeholder span {
+  font-size: 10.5px;
+  font-weight: 750;
+}
+
+.ads-workspace-shell .state-panel,
+.ads-workspace-shell .state-panel-content {
+  gap: 9px;
+}
+
+.ads-workspace-shell .state-panel p,
+.ads-workspace-shell .mini-card p,
+.ads-workspace-shell .asset-card p,
+.ads-workspace-shell .report-preview p {
+  color: var(--clinic-muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.ads-workspace-shell .metric-line {
+  border-color: rgba(130, 104, 73, 0.14);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ads-workspace-shell .metric-line strong {
+  color: var(--clinic-ink);
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.ads-workspace-shell .split-grid {
+  gap: 12px;
+}
+
+.ads-workspace-shell .ads-manager-toolbar {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ads-workspace-shell .ads-summary-grid {
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.ads-workspace-shell .ads-summary-grid .metric-line,
+.ads-workspace-shell .ads-type-legend,
+.ads-workspace-shell .ads-operation-message,
+.ads-workspace-shell .workspace-switcher,
+.ads-workspace-shell .settings-credential-state {
+  border: 1px solid rgba(130, 104, 73, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 250, 242, 0.82);
+}
+
+.ads-workspace-shell .ads-summary-grid .metric-line {
+  min-height: 52px;
+  padding: 9px 11px;
+}
+
+.ads-workspace-shell .ads-type-legend {
+  margin-bottom: 12px;
+}
+
+.ads-workspace-shell .ads-hierarchy {
+  gap: 9px;
+}
+
+.ads-workspace-shell .ads-entity-group,
+.ads-workspace-shell .ads-entity-branch {
+  overflow: hidden;
+}
+
+.ads-workspace-shell .ads-entity-row {
+  grid-template-columns: 32px minmax(190px, 1.45fr) auto minmax(188px, 0.85fr) auto;
+  gap: 9px;
+  border-bottom: 1px solid rgba(130, 104, 73, 0.12);
+  padding: 11px;
+}
+
+.ads-workspace-shell .ads-entity-row.campaign {
+  box-shadow: inset 4px 0 0 var(--clinic-bronze);
+  background:
+    linear-gradient(90deg, rgba(157, 110, 62, 0.12), transparent 58%),
+    rgba(255, 253, 249, 0.96);
+}
+
+.ads-workspace-shell .ads-entity-row.adset {
+  box-shadow: inset 4px 0 0 #2684ff;
+  background:
+    linear-gradient(90deg, rgba(38, 132, 255, 0.09), transparent 58%),
+    rgba(253, 251, 247, 0.96);
+}
+
+.ads-workspace-shell .ads-entity-row.ad {
+  box-shadow: inset 4px 0 0 #15803d;
+  background:
+    linear-gradient(90deg, rgba(21, 128, 61, 0.07), transparent 48%),
+    rgba(255, 253, 249, 0.95);
+}
+
+.ads-workspace-shell .ads-entity-main strong {
+  color: var(--clinic-ink);
+  font-size: 12.5px;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .ads-entity-main span,
+.ads-workspace-shell .ads-entity-metrics span,
+.ads-workspace-shell .ads-type-legend span {
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+.ads-workspace-shell .ads-entity-toggle,
+.ads-workspace-shell .icon-action {
+  border-color: rgba(130, 104, 73, 0.16);
+  background: rgba(255, 253, 249, 0.84);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .ads-entity-metrics span,
+.ads-workspace-shell .ads-object-id {
+  background: rgba(255, 250, 242, 0.9);
+  color: var(--clinic-muted);
+}
+
+.ads-workspace-shell .ads-entity-children {
+  background: rgba(255, 250, 242, 0.58);
+}
+
+.ads-workspace-shell .card-grid {
+  gap: 12px;
+}
+
+.ads-workspace-shell .mini-card,
+.ads-workspace-shell .asset-card,
+.ads-workspace-shell .report-preview {
+  padding: 13px;
+}
+
+.ads-workspace-shell .mini-card h3,
+.ads-workspace-shell .asset-card h3,
+.ads-workspace-shell .report-preview h3,
+.ads-workspace-shell .detail-stack h3 {
+  margin: 10px 0 6px;
+  color: var(--clinic-ink);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.ads-workspace-shell .asset-thumb {
+  height: 96px;
+  background:
+    linear-gradient(135deg, rgba(201, 152, 99, 0.16), rgba(38, 132, 255, 0.08)),
+    rgba(255, 253, 249, 0.9);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .automation-ads-updating-panel {
+  position: relative;
+  overflow: hidden;
+  min-height: 260px;
+  gap: 12px;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel::before {
+  content: "";
+  position: absolute;
+  inset: 18px 18px auto auto;
+  width: min(38%, 280px);
+  height: 132px;
+  border-radius: 8px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(38, 132, 255, 0.2) 0 2px, transparent 2px 100%),
+    linear-gradient(90deg, rgba(21, 128, 61, 0.18) 0 2px, transparent 2px 100%),
+    linear-gradient(90deg, rgba(157, 110, 62, 0.2) 0 2px, transparent 2px 100%);
+  background-size: 100% 24px, 82% 24px, 62% 24px;
+  background-position: 0 18px, 24px 56px, 58px 94px;
+  background-repeat: no-repeat;
+  opacity: 0.72;
+  animation: clinicLinePulse 3.8s ease-in-out infinite;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel h2 {
+  position: relative;
+  font-size: 24px;
+  line-height: 1.12;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel h2::after {
+  content: "";
+  display: block;
+  width: 96px;
+  height: 3px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #c18a55, #2684ff, #15803d);
+  animation: clinicLinePulse 3.2s ease-in-out infinite;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel p {
+  max-width: 620px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
+.ads-workspace-shell .audience-table {
+  gap: 9px;
+}
+
+.ads-workspace-shell .audience-row {
+  grid-template-columns: minmax(0, 1.45fr) minmax(96px, 0.72fr) minmax(96px, 0.72fr) auto minmax(88px, 0.66fr);
+  gap: 10px;
+  padding: 11px;
+}
+
+.ads-workspace-shell .audience-row strong,
+.ads-workspace-shell .help-item strong {
+  color: var(--clinic-ink);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.32;
+}
+
+.ads-workspace-shell .audience-segment-meta,
+.ads-workspace-shell .asset-source-note,
+.ads-workspace-shell .help-item p {
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.ads-workspace-shell .help-item {
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px;
+}
+
+.ads-workspace-shell .help-item svg {
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .report-actions {
+  gap: 8px;
+}
+
+.ads-workspace-shell .report-text-preview {
+  border-color: rgba(130, 104, 73, 0.14);
+  background: rgba(255, 253, 249, 0.88);
+  color: #4f4133;
+  font-size: 11px;
+}
+
+.ads-workspace-shell .form-grid label,
+.ads-workspace-shell .ads-edit-form label {
+  color: var(--clinic-muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.ads-workspace-shell .form-grid input,
+.ads-workspace-shell .form-grid select,
+.ads-workspace-shell .form-grid textarea,
+.ads-workspace-shell .ads-edit-form input,
+.ads-workspace-shell .workspace-switcher select {
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.88);
+  color: var(--clinic-ink);
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.ads-workspace-shell .settings-message {
+  border-color: rgba(130, 104, 73, 0.16);
+  background: rgba(255, 250, 242, 0.82);
+  color: var(--clinic-bronze-dark);
+  font-size: 11px;
 }
 
 @media (max-width: 1180px) {
@@ -6975,25 +7720,26 @@ input:focus-visible {
   }
 
   .ads-toolbar-brand {
-    grid-template-columns: 40px minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
   .ads-toolbar-brand-mark {
+    display: none;
     width: 40px;
     height: 40px;
     font-size: 23px;
   }
 
   .ads-toolbar-brand strong {
-    font-size: 25px;
+    font-size: 23px;
   }
 
   .ads-toolbar-item {
     grid-template-columns: 36px minmax(0, 1fr);
     min-height: 48px;
     gap: 10px;
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .ads-toolbar-icon {
@@ -7012,7 +7758,7 @@ input:focus-visible {
   }
 
   .ads-dashboard-head h2 {
-    font-size: 32px;
+    font-size: 28px;
   }
 
   .ads-dashboard-head {
@@ -7033,9 +7779,6 @@ input:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ads-region-content {
-    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
-  }
 }
 
 @media (max-width: 760px) {
@@ -7078,6 +7821,10 @@ input:focus-visible {
     margin-top: 0;
   }
 
+  .ads-page-selector-shell {
+    margin-top: 0;
+  }
+
   .ads-main-panel {
     min-height: auto;
     margin: 0;
@@ -7091,6 +7838,15 @@ input:focus-visible {
 
   .ads-main-panel .page-body {
     padding: 16px;
+  }
+
+  .ads-workspace-shell .ads-tool-window {
+    grid-template-columns: 1fr;
+  }
+
+  .ads-workspace-shell .ads-tool-window .main-stack,
+  .ads-workspace-shell .ads-tool-window .right-rail {
+    min-width: 0;
   }
 
   .ads-dashboard-head {
@@ -7109,8 +7865,12 @@ input:focus-visible {
   }
 
   .ads-toolbar-brand {
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 9px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .ads-toolbar-brand-mark {
+    display: none;
   }
 
   .ads-toolbar-brand-mark,
@@ -7120,20 +7880,22 @@ input:focus-visible {
   }
 
   .ads-toolbar-brand strong {
-    font-size: 15px;
+    font-size: 14px;
   }
 
   .ads-toolbar-brand small {
-    font-size: 10px;
+    font-size: 8.5px;
   }
 
   .ads-toolbar-user-card {
-    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-columns: 34px minmax(0, 1fr) 28px;
     gap: 8px;
+    padding: 8px 10px;
   }
 
-  .ads-toolbar-user-card > svg {
-    display: none;
+  .ads-toolbar-user-menu {
+    width: 28px;
+    height: 28px;
   }
 
   .ads-toolbar-avatar {
@@ -7145,8 +7907,19 @@ input:focus-visible {
     padding: 12px;
   }
 
+  .ads-workspace-shell .settings-credential-state {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 7px;
+  }
+
+  .ads-workspace-shell .settings-credential-state .status-badge {
+    justify-self: start;
+  }
+
   .ads-dashboard-head h2 {
-    font-size: 23px;
+    font-size: 21px;
   }
 
   .ads-dashboard-actions,
@@ -7167,21 +7940,13 @@ input:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .ads-region-content {
-    grid-template-columns: 1fr;
-  }
-
-  .ads-region-map {
-    min-height: 160px;
-  }
-
   .ads-dashboard-metric-card {
     min-height: 0;
     grid-template-columns: 44px minmax(0, 1fr);
   }
 
   .ads-dashboard-metric-card strong {
-    font-size: 25px;
+    font-size: 23px;
   }
 
   .ads-dashboard-metric-footer {
@@ -7200,11 +7965,26 @@ input:focus-visible {
   }
 
   .ads-insight-banner {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 84px;
+    gap: 10px;
   }
 
   .ads-insight-visual {
-    display: none;
+    display: grid;
+    height: 82px;
+  }
+
+  .ads-insight-visual img {
+    width: 84px;
+    max-height: 82px;
+  }
+
+  .ads-insight-banner strong {
+    font-size: 18px;
+  }
+
+  .ads-insight-status {
+    font-size: 21px;
   }
 
   .ads-top-campaign-row,

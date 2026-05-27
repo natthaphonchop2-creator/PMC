@@ -1,8 +1,9 @@
-import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenCheck,
   BrainCircuit,
+  BriefcaseBusiness,
   CalendarDays,
   ChevronDown,
   ChevronRight,
@@ -25,6 +26,7 @@ import {
   Settings,
   SlidersHorizontal,
   Trash2,
+  UserRound,
   Users,
   X,
 } from 'lucide-react'
@@ -50,8 +52,10 @@ import type {
   WebsiteContext,
   WorkspaceData,
 } from './types'
+import { buildRevenueTrendOption } from './adsDashboardChart'
 import { HomeApp } from './apps/home/HomeApp'
 import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
+import type { ManagedPage, SharedAdsInsightForPage } from './apps/page-automation/types'
 import './App.css'
 
 type TabId =
@@ -174,6 +178,16 @@ type MascotNotice = {
   id: number
   message: string
   tone: Tone
+}
+
+type PageScopeLoadState = 'idle' | 'loading' | 'ready' | 'empty' | 'error'
+
+type AdsPageSelectorOption = {
+  detail: string
+  id: string
+  kind: 'all' | 'page' | 'account'
+  label: string
+  meta?: string
 }
 
 type AutoAdDecision = 'pause' | 'keep' | 'activate' | 'watch'
@@ -300,6 +314,16 @@ type MetaWorkspaceResponse = {
   }
 }
 
+type ManagedPagesResponse = {
+  pages: ManagedPage[]
+  source: 'meta' | 'cache' | 'unavailable'
+}
+
+type AdsInsightResponse = {
+  insight: SharedAdsInsightForPage | null
+  source: 'ads-workspace' | 'unavailable'
+}
+
 type AiBrainApiResponse = AiBrainResponse & {
   ok: boolean
   taskId: string
@@ -363,10 +387,10 @@ const navItems: NavItem[] = [
   { id: 'analytics', toolbarKey: 'dashboard', label: 'Ads Dashboard', group: 'Main', icon: LineChart, description: 'ภาพรวมโฆษณาและคำแนะนำที่ควรตรวจวันนี้' },
   { id: 'ads', toolbarKey: 'campaigns', label: 'Campaigns', group: 'Main', icon: Megaphone, description: 'ดูและจัดการแคมเปญ ชุดโฆษณา และโฆษณาที่ใช้งานอยู่' },
   { id: 'ads', toolbarKey: 'ad-groups', label: 'Ad Groups', group: 'Main', icon: Layers3, description: 'ตรวจชุดโฆษณา กลุ่มเป้าหมาย และโฆษณาที่อยู่ในแต่ละแคมเปญ' },
-  { id: 'creative', toolbarKey: 'creatives', label: 'Creatives', group: 'Creative', icon: ImageIcon, description: 'ดูครีเอทีฟที่มีอยู่และสถานะความพร้อมก่อนนำไปใช้ต่อ' },
+  { id: 'marketer', toolbarKey: 'insights', label: 'Insights', group: 'Main', icon: BrainCircuit, description: 'คำแนะนำที่ควรตรวจและตัดสินใจต่อ' },
+  { id: 'creative', toolbarKey: 'automation-ads', label: 'Automation Ads', group: 'Creative', icon: RefreshCw, description: 'จัดการระบบโฆษณาอัตโนมัติและสถานะ workflow ก่อนเปิดใช้งานจริง' },
   { id: 'audience', toolbarKey: 'audience', label: 'Audience', group: 'Creative', icon: Users, description: 'ดูผู้ชม พื้นที่ และคุณภาพลูกค้าที่เข้ามาจากโฆษณา' },
   { id: 'reports', toolbarKey: 'reports', label: 'Reports', group: 'System', icon: FileText, description: 'รายงานสรุปผลงานโฆษณาให้ทีมตรวจและนำไปใช้ต่อ' },
-  { id: 'marketer', toolbarKey: 'insights', label: 'Insights', group: 'Main', icon: BrainCircuit, description: 'คำแนะนำที่ควรตรวจและตัดสินใจต่อ' },
   { id: 'settings', toolbarKey: 'settings', label: 'Settings', group: 'System', icon: Settings, description: 'ตั้งค่าบัญชีโฆษณาและระบบวิเคราะห์ให้พร้อมใช้งาน' },
 ]
 
@@ -413,16 +437,63 @@ const fmtMoney = (value: number) =>
 
 const fmtNum = (value: number) => new Intl.NumberFormat('th-TH').format(value)
 const fmtMoneyShort = (value: number) => (value >= 1000 ? `฿${Math.round(value / 1000)}k` : fmtMoney(value))
-const fmtChartMoney = (value: number | string) => {
-  const amount = Number(value)
-  if (!Number.isFinite(amount)) return String(value)
-  if (Math.abs(amount) >= 1_000_000) return `฿${(amount / 1_000_000).toFixed(amount >= 10_000_000 ? 0 : 1)}M`
-  if (Math.abs(amount) >= 1000) {
-    const scaled = amount / 1000
-    const label = scaled >= 10 ? String(Math.round(scaled)) : scaled.toFixed(1).replace(/\\.0$/, '')
-    return `฿${label}k`
-  }
-  return `฿${Math.round(amount)}`
+const ALL_PAGE_SCOPE_ID = 'all-pages'
+
+function buildAdsPageSelectorOptions(pages: ManagedPage[], metaInfo: MetaInfo | null): AdsPageSelectorOption[] {
+  const pageOptions = pages.map((page) => ({
+    detail: `${pagePlatformLabel(page.platform)} Page${page.followers > 0 ? ` · ${fmtNum(page.followers)} followers` : ''}`,
+    id: page.id,
+    kind: 'page' as const,
+    label: page.name || page.handle || 'Page ที่เชื่อมต่อ',
+    meta: page.handle ? page.handle : page.lastSyncedAt ? `อัปเดต ${formatShortDateTime(page.lastSyncedAt)}` : undefined,
+  }))
+
+  const connectedAccountLabel = firstUsefulText(metaInfo?.workspaceLabel, metaInfo?.accountName)
+  const accountOption = pageOptions.length === 0 && connectedAccountLabel
+    ? [
+        {
+          detail: 'บัญชีโฆษณาที่เชื่อมไว้',
+          id: `account:${metaInfo?.activeWorkspaceId || metaInfo?.adAccountId || connectedAccountLabel}`,
+          kind: 'account' as const,
+          label: connectedAccountLabel,
+          meta: metaInfo?.adAccountId ?? undefined,
+        },
+      ]
+    : []
+
+  return [
+    {
+      detail: pageOptions.length ? `${pageOptions.length} Page ที่เชื่อมไว้` : 'ทุกข้อมูลจากบัญชีที่เชื่อมไว้',
+      id: ALL_PAGE_SCOPE_ID,
+      kind: 'all',
+      label: 'ข้อมูลทั้งหมด',
+      meta: 'All pages',
+    },
+    ...pageOptions,
+    ...accountOption,
+  ]
+}
+
+function firstUsefulText(...values: Array<string | null | undefined>) {
+  return values.find((value) => {
+    const normalized = value?.trim()
+    return normalized && !normalized.includes('ยังไม่ได้ตั้งค่า') && !normalized.includes('ไม่สำเร็จ')
+  })?.trim()
+}
+
+function pagePlatformLabel(platform: ManagedPage['platform']) {
+  return platform === 'instagram' ? 'Instagram' : 'Facebook'
+}
+
+function formatShortDateTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('th-TH', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
 }
 
 function App() {
@@ -982,6 +1053,124 @@ function buildSummaryFromWorkspace(workspace: WorkspaceData | null, campaignList
   }
 }
 
+function buildPageScopedWorkspace(
+  workspace: WorkspaceData | null,
+  pageInsight: SharedAdsInsightForPage | null,
+  selectedPage: ManagedPage | undefined,
+  isScoped: boolean,
+): WorkspaceData | null {
+  if (!workspace || !isScoped) return workspace
+  if (!pageInsight) return emptyScopedWorkspace(workspace)
+
+  const campaignIds = new Set(pageInsight.scope.campaignIds)
+  const adSetIds = new Set(pageInsight.scope.adSetIds)
+  const adIds = new Set(pageInsight.scope.adIds)
+  const campaigns = workspace.campaigns.filter((campaign) => campaignIds.has(campaign.id))
+  const adSets = workspace.adSets.filter((adSet) => campaignIds.has(adSet.campaignId) || adSetIds.has(adSet.id))
+  const adInsights = workspace.adInsights.filter((ad) => adIds.has(ad.id) || adSetIds.has(ad.adSetId) || campaignIds.has(ad.campaignId))
+  const autoAds = workspace.autoAds.filter((ad) => adIds.has(ad.adId) || campaignIds.has(ad.campaignId))
+  const metrics = pageInsight.metrics
+  const spend = finiteOrZero(metrics.spend) || adInsights.reduce((sum, ad) => sum + finiteOrZero(ad.spend), 0)
+  const revenue = finiteOrZero(metrics.revenue) || campaigns.reduce((sum, campaign) => sum + finiteOrZero(campaign.revenue), 0)
+  const leads = finiteOrZero(metrics.leads) || adInsights.reduce((sum, ad) => sum + finiteOrZero(ad.leads), 0)
+  const bookings = finiteOrZero(metrics.bookings) || adInsights.reduce((sum, ad) => sum + finiteOrZero(ad.bookings), 0)
+  const impressions = adInsights.reduce((sum, ad) => sum + finiteOrZero(ad.impressions), 0)
+  const clicks = adInsights.reduce((sum, ad) => sum + finiteOrZero(ad.clicks), 0)
+  const channelLabel = selectedPage?.name || pageInsight.scope.pageName || 'Page ที่เลือก'
+
+  return {
+    ...workspace,
+    actions: workspace.actions.filter((action) => action.campaignId && campaignIds.has(action.campaignId)),
+    adInsights,
+    adSets,
+    auditTrail: [],
+    autoAds,
+    campaigns,
+    channelPerformance: [
+      {
+        bookings,
+        channel: channelLabel,
+        clicks,
+        firstTimePatients: 0,
+        impressions,
+        leadQuality: 0,
+        leads,
+        reach: selectedPage?.reach ?? 0,
+        revenue,
+        showUps: 0,
+        spend,
+        treatments: 0,
+      },
+    ],
+    complianceReviews: workspace.complianceReviews.filter((review) => review.campaignId && campaignIds.has(review.campaignId)),
+    funnelMetrics: buildScopedFunnelMetrics({ bookings, clicks, impressions, leads }),
+    insightComponents: workspace.insightComponents.filter((component) => campaignIds.has(component.campaignId)),
+    insights: workspace.insights.filter((insight) => campaignIds.has(insight.campaignId)),
+    memoryItems: [],
+    serviceLines: [],
+    tasks: [],
+    trendData: [],
+  }
+}
+
+function emptyScopedWorkspace(workspace: WorkspaceData): WorkspaceData {
+  return {
+    ...workspace,
+    actions: [],
+    adInsights: [],
+    adSets: [],
+    auditTrail: [],
+    autoAds: [],
+    campaigns: [],
+    channelPerformance: [],
+    complianceReviews: [],
+    funnelMetrics: [],
+    insightComponents: [],
+    insights: [],
+    memoryItems: [],
+    serviceLines: [],
+    tasks: [],
+    trendData: [],
+  }
+}
+
+function buildScopedFunnelMetrics({
+  bookings,
+  clicks,
+  impressions,
+  leads,
+}: {
+  bookings: number
+  clicks: number
+  impressions: number
+  leads: number
+}): MetaFunnelMetric[] {
+  const stages = [
+    { stage: 'Impressions', count: impressions },
+    { stage: 'Clicks', count: clicks },
+    { stage: 'Leads', count: leads },
+    { stage: 'Bookings', count: bookings },
+  ]
+  if (stages.every((stage) => stage.count <= 0)) return []
+
+  return stages.map((stage, index) => {
+    const previous = stages[index - 1]
+    const conversionRate = !previous ? 100 : previous.count > 0 ? (stage.count / previous.count) * 100 : 0
+    return {
+      benchmark: 'Page ที่เลือก',
+      conversionRate,
+      count: stage.count,
+      dropOffRate: !previous ? 0 : Math.max(0, 100 - conversionRate),
+      help: 'คำนวณจากโฆษณาที่จับคู่กับ Page นี้',
+      stage: stage.stage,
+    }
+  })
+}
+
+function finiteOrZero(value: number | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
 function mapTrendData(points: TrendPoint[]): TrendDatum[] {
   if (!points.length) return []
   return points.slice(-12).map((point, index) => ({
@@ -1061,9 +1250,9 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'Conversions by Region', 'PMC Insights'],
+    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'PMC Insights'],
     audience: ['กลุ่มเป้าหมาย', 'ปริมาณของกลุ่มเป้าหมาย'],
-    creative: ['ผลงานครีเอทีฟ', 'ครีเอทีฟจากข้อมูลจริง'],
+    creative: ['Automation Ads', 'workflow โฆษณาอัตโนมัติ'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
     library: ['คลังโฆษณา', 'ความเสี่ยงของข้อความ'],
     marketer: ['Insights', 'ผู้ช่วย Insights', 'สิ่งที่ควรดูตอนนี้', 'แผนที่เลือกทำต่อ'],
@@ -1094,6 +1283,10 @@ function PmcAdsAgentApp() {
   const [apiMessage, setApiMessage] = useState('กำลังตรวจการเชื่อมต่อบัญชีโฆษณา')
   const [workspace, setWorkspace] = useState<WorkspaceData | null>(null)
   const [metaInfo, setMetaInfo] = useState<MetaInfo | null>(null)
+  const [managedPages, setManagedPages] = useState<ManagedPage[]>([])
+  const [pageScopeState, setPageScopeState] = useState<PageScopeLoadState>('idle')
+  const [selectedPageId, setSelectedPageId] = useState(ALL_PAGE_SCOPE_ID)
+  const [pageAdsInsight, setPageAdsInsight] = useState<SharedAdsInsightForPage | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCampaignId, setSelectedCampaignId] = useState('')
   const [recommendationStates, setRecommendationStates] = useState<Record<string, ActionState>>({})
@@ -1107,16 +1300,25 @@ function PmcAdsAgentApp() {
   const [preparedReport, setPreparedReport] = useState(false)
   const [mascotNotice, setMascotNotice] = useState<MascotNotice | null>(null)
 
-  const displayCampaigns = useMemo(() => (workspace ? workspace.campaigns.map(mapMetaCampaign) : []), [workspace])
+  const pageSelectorOptions = useMemo(() => buildAdsPageSelectorOptions(managedPages, metaInfo), [managedPages, metaInfo])
+  const selectedPageExists = selectedPageId === ALL_PAGE_SCOPE_ID || pageSelectorOptions.some((option) => option.id === selectedPageId)
+  const effectiveSelectedPageId = selectedPageExists ? selectedPageId : ALL_PAGE_SCOPE_ID
+  const selectedManagedPage = managedPages.find((page) => page.id === effectiveSelectedPageId)
+  const isPageScoped = effectiveSelectedPageId !== ALL_PAGE_SCOPE_ID && Boolean(selectedManagedPage)
+  const visibleWorkspace = useMemo(
+    () => buildPageScopedWorkspace(workspace, pageAdsInsight, selectedManagedPage, isPageScoped),
+    [isPageScoped, pageAdsInsight, selectedManagedPage, workspace],
+  )
+  const displayCampaigns = useMemo(() => (visibleWorkspace ? visibleWorkspace.campaigns.map(mapMetaCampaign) : []), [visibleWorkspace])
   const activeRecommendations = useMemo(
     () => brainApprovalActions.slice(0, 4).map(mapMetaRecommendation),
     [brainApprovalActions],
   )
   const filteredCampaigns = displayCampaigns.filter((campaign) => campaign.name.toLowerCase().includes(searchQuery.toLowerCase()))
   const effectiveSelectedCampaignId = displayCampaigns.some((campaign) => campaign.id === selectedCampaignId) ? selectedCampaignId : displayCampaigns[0]?.id ?? ''
-  const summary = useMemo(() => buildSummaryFromWorkspace(workspace, displayCampaigns), [displayCampaigns, workspace])
-  const trendPoints = useMemo(() => mapTrendData(workspace?.trendData ?? []), [workspace])
-  const funnelMetrics = workspace?.funnelMetrics ?? []
+  const summary = useMemo(() => buildSummaryFromWorkspace(visibleWorkspace, displayCampaigns), [displayCampaigns, visibleWorkspace])
+  const trendPoints = useMemo(() => mapTrendData(visibleWorkspace?.trendData ?? []), [visibleWorkspace])
+  const funnelMetrics = visibleWorkspace?.funnelMetrics ?? []
   const confirmingRecommendation = confirmingId ? activeRecommendations.find((item) => item.id === confirmingId) : undefined
   const isPageLoading = dataState === 'loading' && activeTab !== 'analytics'
   const websiteContext = useMemo(
@@ -1128,9 +1330,9 @@ function PmcAdsAgentApp() {
         dataState,
         datePreset,
         selectedCampaignId: effectiveSelectedCampaignId,
-        workspace,
+        workspace: visibleWorkspace,
       }),
-    [activeTab, apiMessage, dataState, datePreset, effectiveSelectedCampaignId, filteredCampaigns, workspace],
+    [activeTab, apiMessage, dataState, datePreset, effectiveSelectedCampaignId, filteredCampaigns, visibleWorkspace],
   )
 
   const appendAudit = useCallback((event: Omit<AuditEvent, 'id' | 'time'>) => {
@@ -1321,6 +1523,67 @@ function PmcAdsAgentApp() {
   }, [refreshWorkspace])
 
   useEffect(() => {
+    let active = true
+
+    async function loadManagedPages() {
+      setPageScopeState('loading')
+      try {
+        const result = await apiJson<ManagedPagesResponse>('/api/page-automation/pages')
+        if (!active) return
+        setManagedPages(result.pages)
+        setPageScopeState('idle')
+      } catch {
+        if (!active) return
+        setManagedPages([])
+        setPageScopeState('error')
+      }
+    }
+
+    void loadManagedPages()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (effectiveSelectedPageId === ALL_PAGE_SCOPE_ID) {
+      return
+    }
+
+    const selectedPage = managedPages.find((page) => page.id === effectiveSelectedPageId)
+    if (!selectedPage) return
+    const pageForRequest = selectedPage
+
+    let active = true
+
+    async function loadPageInsight() {
+      setPageScopeState('loading')
+      try {
+        const params = new URLSearchParams({
+          datePreset: metaDatePresetForUi(datePreset),
+          pageId: pageForRequest.id,
+          pageName: pageForRequest.name,
+        })
+        const result = await apiJson<AdsInsightResponse>(`/api/page-automation/ads-insights?${params.toString()}`)
+        if (!active) return
+        setPageAdsInsight(result.insight)
+        setPageScopeState(result.insight ? 'ready' : 'empty')
+      } catch {
+        if (!active) return
+        setPageAdsInsight(null)
+        setPageScopeState('error')
+      }
+    }
+
+    void loadPageInsight()
+
+    return () => {
+      active = false
+    }
+  }, [datePreset, effectiveSelectedPageId, managedPages])
+
+  useEffect(() => {
     window.scrollTo({ left: 0, top: 0 })
   }, [activeTab])
 
@@ -1348,7 +1611,10 @@ function PmcAdsAgentApp() {
         const ctx = gsap.context(() => {
           const timeline = gsap.timeline({ defaults: { duration: 0.52, ease: 'power3.out' } })
           gsap.set('.ads-outer-toolbar, .topbar', { clearProps: 'all' })
-          timeline.from('.ads-dashboard-metric-card, .ads-dashboard-panel', { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
+          const dashboardAnimationTargets = root.querySelectorAll('.ads-dashboard-metric-card, .ads-dashboard-panel')
+          if (dashboardAnimationTargets.length > 0) {
+            timeline.from(dashboardAnimationTargets, { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
+          }
 
           const brandMark = root.querySelector('.ads-toolbar-brand-mark')
           if (brandMark) {
@@ -1377,7 +1643,7 @@ function PmcAdsAgentApp() {
       ads: { message: 'เปิด Campaigns แล้ว ตรวจชื่อและสถานะให้ชัดก่อนปรับแคมเปญนะครับ', tone: 'watch' },
       analytics: { message: 'กลับมาดู Ads Dashboard ล่าสุดแล้วครับ', tone: 'info' },
       audience: { message: 'เปิด Audience แล้ว ใช้ดูกลุ่มเป้าหมายก่อนปรับแคมเปญ', tone: 'info' },
-      creative: { message: 'เปิด Creatives แล้ว ดูสัญญาณงานโฆษณาได้ตรงนี้', tone: 'info' },
+      creative: { message: 'เปิด Automation Ads แล้ว ตรวจ workflow ก่อนให้ระบบทำงานต่อ', tone: 'info' },
       help: { message: 'เปิดศูนย์ช่วยเหลือแล้ว ถ้าติดตั้งค่าให้ไป Settings ได้เลย', tone: 'info' },
       library: { message: 'เปิดคลังโฆษณาแล้ว ตรวจความเสี่ยงของข้อความก่อนนำไปใช้ต่อครับ', tone: 'watch' },
       marketer: { message: 'เปิด Insights แล้ว ตรวจคำแนะนำก่อนตัดสินใจ', tone: 'info' },
@@ -1388,6 +1654,29 @@ function PmcAdsAgentApp() {
     const notice = tabNotices[tab]
     showMascotNotice(notice.message, notice.tone)
   }, [showMascotNotice])
+
+  const handlePageScopeSelect = useCallback((pageId: string) => {
+    const option = pageSelectorOptions.find((item) => item.id === pageId)
+    if (option?.kind === 'account') {
+      setSelectedPageId(ALL_PAGE_SCOPE_ID)
+      showMascotNotice(`แสดงข้อมูลทั้งหมดของ ${option.label}`, 'info')
+      return
+    }
+
+    setSelectedPageId(pageId)
+    setSelectedCampaignId('')
+    setSearchQuery('')
+    if (pageId === ALL_PAGE_SCOPE_ID) {
+      setPageAdsInsight(null)
+      setPageScopeState('idle')
+      showMascotNotice('แสดงข้อมูลทุก Page แล้วครับ', 'info')
+      return
+    }
+
+    setPageAdsInsight(null)
+    setPageScopeState('loading')
+    showMascotNotice(`กำลังเปิดข้อมูลของ ${option?.label ?? 'Page ที่เลือก'}`, 'info')
+  }, [pageSelectorOptions, showMascotNotice])
 
   const syncWorkspace = () => {
     showMascotNotice('กำลังโหลดข้อมูลล่าสุดจากบัญชีโฆษณาครับ', 'info')
@@ -1538,7 +1827,14 @@ function PmcAdsAgentApp() {
 
   return (
     <div className="ads-workspace-shell app-shell" ref={shellRef}>
-      <AdsOuterToolbar activeToolbarKey={activeToolbarKey} onSelect={handleTabSelect} />
+      <AdsOuterToolbar
+        activeToolbarKey={activeToolbarKey}
+        onPageSelect={handlePageScopeSelect}
+        onSelect={handleTabSelect}
+        pageOptions={pageSelectorOptions}
+        pageScopeState={pageScopeState}
+        selectedPageId={effectiveSelectedPageId}
+      />
       <main className="ads-main-panel app-main">
         <Topbar
           onSync={syncWorkspace}
@@ -1551,10 +1847,13 @@ function PmcAdsAgentApp() {
             <>
           {activeTab === 'analytics' && (
             <AnalyticsPage
-              adSets={workspace?.adSets ?? []}
+              adSets={visibleWorkspace?.adSets ?? []}
               campaigns={filteredCampaigns}
               dateLabel={datePreset}
               funnelMetrics={funnelMetrics}
+              onDatePresetChange={setDatePreset}
+              onOpenCampaigns={() => handleTabSelect('ads', 'campaigns')}
+              onOpenInsights={() => handleTabSelect('marketer')}
               recommendations={activeRecommendations}
               summary={summary}
               trendData={trendPoints}
@@ -1562,8 +1861,8 @@ function PmcAdsAgentApp() {
           )}
           {activeTab === 'ads' && (
             <AdsManagerPage
-              adSets={workspace?.adSets ?? []}
-              ads={workspace?.adInsights ?? []}
+              adSets={visibleWorkspace?.adSets ?? []}
+              ads={visibleWorkspace?.adInsights ?? []}
               campaigns={displayCampaigns}
               onMutationComplete={() => refreshWorkspace('execution')}
               onSelectCampaign={setSelectedCampaignId}
@@ -1579,27 +1878,27 @@ function PmcAdsAgentApp() {
 	              onQueueBrainAction={queueBrainAction}
               recommendationStates={recommendationStates}
               websiteContext={websiteContext}
-              workspace={workspace}
+              workspace={visibleWorkspace}
             />
           )}
           {activeTab === 'optimization' && (
             <AutoAdsPage
-              adSets={workspace?.adSets ?? []}
-              ads={workspace?.adInsights ?? []}
+              adSets={visibleWorkspace?.adSets ?? []}
+              ads={visibleWorkspace?.adInsights ?? []}
               automationMode={automationMode}
-              autoAds={workspace?.autoAds ?? []}
+              autoAds={visibleWorkspace?.autoAds ?? []}
               campaigns={displayCampaigns}
               datePreset={datePreset}
               onDateChange={setDatePreset}
               onModeChange={requestAutomationModeChange}
               onMutationComplete={() => refreshWorkspace('execution')}
-              trendData={workspace?.trendData ?? []}
-              workspace={workspace}
+              trendData={visibleWorkspace?.trendData ?? []}
+              workspace={visibleWorkspace}
             />
           )}
-          {activeTab === 'creative' && <CreativeStudioPage components={workspace?.insightComponents ?? []} />}
-          {activeTab === 'audience' && <AudienceInsightsPage adSets={workspace?.adSets ?? []} />}
-          {activeTab === 'library' && <AdLibraryPage reviews={workspace?.complianceReviews ?? []} />}
+          {activeTab === 'creative' && <AutomationAdsPage components={visibleWorkspace?.insightComponents ?? []} />}
+          {activeTab === 'audience' && <AudienceInsightsPage adSets={visibleWorkspace?.adSets ?? []} />}
+          {activeTab === 'library' && <AdLibraryPage reviews={visibleWorkspace?.complianceReviews ?? []} />}
           {activeTab === 'reports' && (
             <ReportsPage
               datePreset={datePreset}
@@ -1659,7 +1958,7 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
     ads: 'กำลังโหลดตัวจัดการโฆษณา',
     analytics: 'กำลังโหลด Ads Dashboard',
     audience: 'กำลังโหลดกลุ่มเป้าหมาย',
-    creative: 'กำลังโหลดครีเอทีฟ',
+    creative: 'กำลังโหลด Automation Ads',
     help: 'กำลังโหลดศูนย์ช่วยเหลือ',
     library: 'กำลังโหลดคลังโฆษณา',
     marketer: 'กำลังโหลด Insights',
@@ -1737,15 +2036,57 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
 
 type AdsOuterToolbarProps = {
   activeToolbarKey: string
+  onPageSelect: (pageId: string) => void
   onSelect: (tab: TabId, toolbarKey?: string) => void
+  pageOptions: AdsPageSelectorOption[]
+  pageScopeState: PageScopeLoadState
+  selectedPageId: string
 }
 
-function AdsOuterToolbar({ activeToolbarKey, onSelect }: AdsOuterToolbarProps) {
+function AdsOuterToolbar({ activeToolbarKey, onPageSelect, onSelect, pageOptions, pageScopeState, selectedPageId }: AdsOuterToolbarProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
+  const [isPageMenuOpen, setPageMenuOpen] = useState(false)
+  const pageSelectorRef = useRef<HTMLDivElement>(null)
+  const selectedPage = pageOptions.find((option) => option.id === selectedPageId) ?? pageOptions[0] ?? {
+    detail: 'ทุกข้อมูลจากบัญชีที่เชื่อมไว้',
+    id: ALL_PAGE_SCOPE_ID,
+    kind: 'all' as const,
+    label: 'ข้อมูลทั้งหมด',
+    meta: 'All pages',
+  }
+  const pageSelectorStatus =
+    pageScopeState === 'loading'
+      ? 'กำลังโหลด Page'
+      : pageScopeState === 'error'
+        ? 'เลือกได้เฉพาะข้อมูลทั้งหมด'
+        : selectedPage.detail
   const selectTab = (tab: TabId, toolbarKey?: string) => {
     onSelect(tab, toolbarKey)
     setIsMenuOpen(false)
   }
+  const selectPage = (pageId: string) => {
+    onPageSelect(pageId)
+    setPageMenuOpen(false)
+    setIsMenuOpen(false)
+  }
+
+  useEffect(() => {
+    if (!isPageMenuOpen) return undefined
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!pageSelectorRef.current?.contains(event.target as Node)) setPageMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPageMenuOpen(false)
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [isPageMenuOpen])
 
   return (
     <aside className={`ads-outer-toolbar ${isMenuOpen ? 'menu-open' : ''}`}>
@@ -1792,13 +2133,56 @@ function AdsOuterToolbar({ activeToolbarKey, onSelect }: AdsOuterToolbarProps) {
         })}
       </nav>
 
-      <div className="ads-toolbar-user-card">
-        <div className="ads-toolbar-avatar" aria-hidden="true" />
-        <div>
-          <strong>PMC Team</strong>
-          <span>Marketing Manager</span>
+      <div className="ads-page-selector-shell" ref={pageSelectorRef}>
+        <button
+          className={`ads-toolbar-user-card${isPageMenuOpen ? ' open' : ''}`}
+          type="button"
+          aria-controls="ads-page-selector-menu"
+          aria-expanded={isPageMenuOpen}
+          aria-haspopup="listbox"
+          aria-label="เลือก Page สำหรับดูข้อมูล"
+          onClick={() => setPageMenuOpen((value) => !value)}
+        >
+          <span className="ads-toolbar-avatar" aria-hidden="true">
+            {selectedPage.kind === 'all' ? <Layers3 size={19} /> : <UserRound size={20} />}
+          </span>
+          <div className="ads-toolbar-user-copy">
+            <strong>{selectedPage.label}</strong>
+            <span className="ads-toolbar-user-role">
+              <BriefcaseBusiness size={12} aria-hidden="true" />
+              เลือก Page · {pageSelectorStatus}
+            </span>
+          </div>
+          <span className="ads-toolbar-user-menu" aria-hidden="true">
+            <ChevronDown size={14} />
+          </span>
+        </button>
+        <div className="ads-page-selector-popover" hidden={!isPageMenuOpen}>
+          <div className="ads-page-selector-menu" id="ads-page-selector-menu" role="listbox" aria-label="Page ที่เชื่อมต่อ">
+            {pageOptions.map((option) => {
+              const isActive = option.id === selectedPage.id
+              return (
+                <button
+                  className={`ads-page-selector-option ${isActive ? 'active' : ''}`}
+                  key={option.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isActive}
+                  onClick={() => selectPage(option.id)}
+                >
+                  <span className={`ads-page-selector-option-icon ${option.kind}`}>
+                    {option.kind === 'all' ? <Layers3 size={16} /> : <UserRound size={16} />}
+                  </span>
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small>{option.detail}</small>
+                    {option.meta ? <em>{option.meta}</em> : null}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
-        <ChevronDown size={16} aria-hidden="true" />
       </div>
     </aside>
   )
@@ -1824,10 +2208,12 @@ function Topbar({ onSync, syncState }: TopbarProps) {
 }
 
 export function AnalyticsPage({
-  adSets = [],
   campaigns,
   dateLabel = 'ข้อมูลล่าสุด',
   funnelMetrics,
+  onDatePresetChange,
+  onOpenCampaigns,
+  onOpenInsights,
   recommendations,
   summary,
   trendData,
@@ -1836,13 +2222,24 @@ export function AnalyticsPage({
   campaigns: Campaign[]
   dateLabel?: string
   funnelMetrics: MetaFunnelMetric[]
+  onDatePresetChange?: (preset: string) => void
+  onOpenCampaigns?: () => void
+  onOpenInsights?: () => void
   recommendations: Recommendation[]
   summary: Summary
   trendData: TrendDatum[]
 }) {
+  const [isCampaignComposerOpen, setCampaignComposerOpen] = useState(false)
+  const [localDateLabel, setLocalDateLabel] = useState(dateLabel)
+  const selectedDateLabel = onDatePresetChange ? dateLabel : localDateLabel
+  const handleDatePresetChange = (nextPreset: string) => {
+    setLocalDateLabel(nextPreset)
+    onDatePresetChange?.(nextPreset)
+  }
+
   const topCampaigns = [...campaigns]
     .sort((left, right) => right.conversions - left.conversions || right.roas - left.roas)
-    .slice(0, 5)
+    .slice(0, 3)
   const averageCtr = campaigns.length > 0 ? campaigns.reduce((sum, campaign) => sum + campaign.ctr, 0) / campaigns.length : 0
   const totalConversions = campaigns.reduce((sum, campaign) => sum + campaign.conversions, 0)
   const unavailableMetaMetricChange: MetricChange = { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังไม่มีข้อมูลในช่วงนี้' }
@@ -1864,22 +2261,29 @@ export function AnalyticsPage({
   ]
 
   return (
-    <div className="ads-dashboard-layout">
+    <>
+      <div className="ads-dashboard-layout">
       <section className="ads-dashboard-head" aria-label="Ads Dashboard actions">
         <div>
           <h2>Ads Dashboard</h2>
-          <span className="ads-dashboard-date-pill">
+          <label className="ads-dashboard-date-pill">
             <CalendarDays size={15} />
-            {dateLabel}
+            <select aria-label="ช่วงข้อมูล Ads Dashboard" value={selectedDateLabel} onChange={(event) => handleDatePresetChange(event.currentTarget.value)}>
+              {datePresetOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
             <ChevronDown size={14} />
-          </span>
+          </label>
         </div>
         <div className="ads-dashboard-actions">
           <button className="clinic-secondary-button" type="button" disabled aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน" title="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน">
             <SlidersHorizontal size={15} />
             Customize Dashboard
           </button>
-          <button className="clinic-primary-button" type="button" disabled>
+          <button className="clinic-primary-button" type="button" onClick={() => setCampaignComposerOpen(true)} aria-haspopup="dialog" aria-label="สร้างแคมเปญใหม่">
             <Plus size={15} />
             New Campaign
           </button>
@@ -1897,9 +2301,8 @@ export function AnalyticsPage({
           <RevenueOverviewChart embedded trendData={trendData} />
         </DashboardPanel>
         <DashboardPanel action={<button className="ads-dashboard-select-pill" type="button" disabled>ตามผลลัพธ์ <ChevronDown size={14} /></button>} title="Top Campaigns" subtitle="เรียงตามผลลัพธ์และผลตอบแทน">
-          <TopCampaignsList campaigns={topCampaigns} />
+          <TopCampaignsList campaigns={topCampaigns} onOpenCampaigns={onOpenCampaigns} />
         </DashboardPanel>
-        <DashboardRegionPanel adSets={adSets} />
       </section>
 
       <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
@@ -1907,10 +2310,12 @@ export function AnalyticsPage({
         <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: averageCtr > 0 ? `${averageCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'อัตราคนเห็นแล้วกดโฆษณา', change: { label: averageCtr > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: averageCtr > 0 ? 'good' : 'neutral', detail: 'จากแคมเปญล่าสุด' }, sparkline: { label: 'สรุป CTR ตามแคมเปญ', source: campaignCtrSparkline.length ? 'campaign-summary' : 'empty', values: campaignCtrSparkline } }} />
         <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'รายได้เทียบกับค่าโฆษณา', change: { label: summary.roas > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลล่าสุด' }, sparkline: { label: roasTrendSparkline.length ? 'สรุปผลตอบแทนรายวัน' : 'สรุปผลตอบแทนตามแคมเปญ', source: roasTrendSparkline.length ? 'daily-trend' : campaignRoasSparkline.length ? 'campaign-summary' : 'empty', values: roasTrendSparkline.length ? roasTrendSparkline : campaignRoasSparkline } }} />
         <DashboardPanel className="ads-insight-panel" title="PMC Insights" subtitle="สรุปสิ่งที่ควรตรวจจากข้อมูลล่าสุด">
-          <DashboardInsightsBanner recommendations={recommendations} />
+          <DashboardInsightsBanner onOpenInsights={onOpenInsights} recommendations={recommendations} summary={summary} />
         </DashboardPanel>
       </section>
-    </div>
+      </div>
+      {isCampaignComposerOpen ? <NewCampaignComposer onClose={() => setCampaignComposerOpen(false)} /> : null}
+    </>
   )
 }
 
@@ -1969,16 +2374,20 @@ function MetricSparklineGraph({ label, sparkline, tone }: { label: string; spark
   const source = hasSeries ? sparkline.source : 'empty'
   const visual = buildSparklineVisual(rawValues)
   const values = rawValues.map(formatSparklineValue).join(',')
+  const tooltip = metricSparklineTooltip(label, sparkline.label, rawValues)
 
   return (
     <span
-      aria-label={`${label}: ${sparkline.label}`}
+      aria-label={tooltip}
       className={`ads-mini-sparkline ${tone}${hasSeries ? '' : ' is-empty'}`}
       data-sparkline="metric-summary"
       data-sparkline-scale={visual.scale}
       data-sparkline-source={source}
+      data-tooltip={tooltip}
       data-values={values}
       role="img"
+      tabIndex={0}
+      title={tooltip}
     >
       <svg aria-hidden="true" focusable="false" viewBox="0 0 112 38">
         <path className="ads-sparkline-area" d={visual.areaPath} />
@@ -1987,6 +2396,91 @@ function MetricSparklineGraph({ label, sparkline, tone }: { label: string; spark
         <circle className="ads-sparkline-dot" cx={visual.lastPoint.x} cy={visual.lastPoint.y} r="3.4" />
       </svg>
     </span>
+  )
+}
+
+type CampaignComposerDraft = {
+  audience: string
+  budget: string
+  name: string
+  note: string
+  objective: string
+}
+
+function NewCampaignComposer({ onClose }: { onClose: () => void }) {
+  const [draft, setDraft] = useState<CampaignComposerDraft>({
+    audience: '',
+    budget: '',
+    name: '',
+    note: '',
+    objective: 'ข้อความและนัดหมาย',
+  })
+  const [message, setMessage] = useState('')
+  const canPrepare = draft.name.trim().length > 0 && draft.budget.trim().length > 0
+  const updateDraft = (field: keyof CampaignComposerDraft, value: string) => {
+    setDraft((current) => ({ ...current, [field]: value }))
+    setMessage('')
+  }
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!canPrepare) return
+    setMessage('เตรียมแคมเปญไว้ในหน้านี้แล้ว ตรวจข้อมูลอีกครั้งก่อนส่งเข้าบัญชี Meta')
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-modal campaign-composer-modal" role="dialog" aria-modal="true" aria-labelledby="new-campaign-title">
+        <button className="modal-close" type="button" onClick={onClose} aria-label="ปิดหน้าสร้างแคมเปญ">
+          <X size={16} />
+        </button>
+        <span className="status-badge info">New Campaign</span>
+        <h2 id="new-campaign-title">สร้างแคมเปญใหม่</h2>
+        <p>กรอกข้อมูลหลักเพื่อเตรียมแคมเปญก่อนสร้างจริงในบัญชีโฆษณา</p>
+
+        <form className="campaign-composer-form" onSubmit={handleSubmit}>
+          <div className="form-grid">
+            <label>
+              ชื่อแคมเปญ
+              <input autoFocus value={draft.name} onChange={(event) => updateDraft('name', event.currentTarget.value)} placeholder="เช่น Botox Lead เดือนนี้" />
+            </label>
+            <label>
+              วัตถุประสงค์
+              <select value={draft.objective} onChange={(event) => updateDraft('objective', event.currentTarget.value)}>
+                <option>ข้อความและนัดหมาย</option>
+                <option>เพิ่มยอดจอง</option>
+                <option>เพิ่มคนรู้จักแบรนด์</option>
+                <option>รีมาร์เก็ตติ้ง</option>
+              </select>
+            </label>
+            <label>
+              งบต่อวัน
+              <input inputMode="numeric" value={draft.budget} onChange={(event) => updateDraft('budget', event.currentTarget.value)} placeholder="เช่น 3000" />
+            </label>
+            <label>
+              กลุ่มเป้าหมาย
+              <input value={draft.audience} onChange={(event) => updateDraft('audience', event.currentTarget.value)} placeholder="เช่น ผู้หญิง 25-45 กรุงเทพ" />
+            </label>
+            <label className="form-grid-wide">
+              โน้ตสำหรับทีม
+              <textarea value={draft.note} onChange={(event) => updateDraft('note', event.currentTarget.value)} placeholder="ข้อความหลัก โปรโมชัน หรือข้อควรระวังของแคมเปญนี้" />
+            </label>
+          </div>
+
+          <div className="campaign-composer-summary" aria-live="polite">
+            {message || 'ข้อมูลนี้ยังไม่ถูกส่งออกจากหน้า จนกว่าทีมจะตรวจและสร้างจริง'}
+          </div>
+
+          <div className="modal-actions">
+            <button className="clinic-secondary-button" type="button" onClick={onClose}>
+              ยกเลิก
+            </button>
+            <button className="clinic-primary-button" type="submit" disabled={!canPrepare}>
+              เตรียมแคมเปญ
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   )
 }
 
@@ -2005,7 +2499,7 @@ function DashboardPanel({ action, children, className = '', subtitle, title }: {
   )
 }
 
-function TopCampaignsList({ campaigns }: { campaigns: Campaign[] }) {
+function TopCampaignsList({ campaigns, onOpenCampaigns }: { campaigns: Campaign[]; onOpenCampaigns?: () => void }) {
   if (campaigns.length === 0) {
     return <EmptyState title="ยังไม่มีแคมเปญให้จัดอันดับ" detail="เมื่อโหลดข้อมูลบัญชีโฆษณาแล้ว แคมเปญที่ทำผลงานดีที่สุดจะแสดงที่นี่" />
   }
@@ -2022,146 +2516,48 @@ function TopCampaignsList({ campaigns }: { campaigns: Campaign[] }) {
           <span className={`ads-campaign-rank-change ${campaign.tone}`}>{campaign.roas > 1 ? '↑' : '↓'} {Math.abs((campaign.roas - 1) * 10).toFixed(1)}%</span>
         </article>
       ))}
-      <button className="ads-view-all-button" type="button" disabled>ดูแคมเปญทั้งหมด</button>
+      <button className="ads-view-all-button" type="button" onClick={() => onOpenCampaigns?.()} aria-label="เปิดหน้า Campaigns เพื่อดูแคมเปญทั้งหมด">ดูแคมเปญทั้งหมด</button>
     </div>
   )
 }
 
-type RegionBreakdownItem = {
-  conversions: number
-  id: string
-  name: string
-  percent: number
-  spend: number
-  x: number
-  y: number
+type AdsPerformanceState = {
+  label: 'Good' | 'Average' | 'Poor'
+  tone: 'good' | 'medium' | 'bad'
 }
 
-const regionMapPositions = [
-  { x: 26, y: 45 },
-  { x: 48, y: 56 },
-  { x: 68, y: 38 },
-  { x: 78, y: 62 },
-  { x: 57, y: 74 },
-]
+function dashboardPerformanceState(summary: Summary, recommendations: Recommendation[]): AdsPerformanceState {
+  const highRiskCount = recommendations.filter((rec) => rec.risk === 'High').length
+  const hasMeaningfulResults = summary.bookings > 0 || summary.paidTreatments > 0 || summary.revenue > 0
 
-function buildRegionBreakdown(adSets: WorkspaceData['adSets']): RegionBreakdownItem[] {
-  const groups = new Map<string, { conversions: number; name: string; spend: number }>()
-
-  for (const adSet of adSets) {
-    const geoLocations = adSet.audienceTargeting?.geoLocations ?? []
-    if (geoLocations.length === 0) continue
-
-    const sharedConversions = adSet.bookings / geoLocations.length
-    const sharedSpend = adSet.spend / geoLocations.length
-
-    for (const geo of geoLocations) {
-      const name = geo.name.trim()
-      if (!name) continue
-
-      const key = `${geo.type}:${name}`.toLowerCase()
-      const existing = groups.get(key) ?? { conversions: 0, name, spend: 0 }
-      existing.conversions += sharedConversions
-      existing.spend += sharedSpend
-      groups.set(key, existing)
-    }
+  if (!hasMeaningfulResults || highRiskCount >= 2 || (summary.spend > 0 && summary.roas < 0.65 && summary.bookings < 3)) {
+    return { label: 'Poor', tone: 'bad' }
   }
 
-  const totalConversions = Array.from(groups.values()).reduce((sum, item) => sum + item.conversions, 0)
+  if (summary.roas >= 1.5 && summary.bookings > 0 && highRiskCount === 0) {
+    return { label: 'Good', tone: 'good' }
+  }
 
-  return Array.from(groups.entries())
-    .map(([id, item], index) => {
-      const position = regionMapPositions[index % regionMapPositions.length]
-      return {
-        conversions: item.conversions,
-        id,
-        name: item.name,
-        percent: totalConversions > 0 ? (item.conversions / totalConversions) * 100 : 0,
-        spend: item.spend,
-        x: position.x,
-        y: position.y,
-      }
-    })
-    .sort((left, right) => right.conversions - left.conversions || right.spend - left.spend)
-    .slice(0, 5)
+  return { label: 'Average', tone: 'medium' }
 }
 
-function formatRegionPercent(percent: number) {
-  if (percent > 0 && percent < 1) return '<1%'
-  return `${percent.toFixed(0)}%`
-}
-
-function DashboardRegionPanel({ adSets }: { adSets: WorkspaceData['adSets'] }) {
-  const regions = useMemo(() => buildRegionBreakdown(adSets), [adSets])
+function DashboardInsightsBanner({ onOpenInsights, recommendations, summary }: { onOpenInsights?: () => void; recommendations: Recommendation[]; summary: Summary }) {
+  const performance = dashboardPerformanceState(summary, recommendations)
 
   return (
-    <DashboardPanel
-      className="ads-region-panel"
-      title="Conversions by Region"
-      subtitle={regions.length > 0 ? 'พื้นที่ที่สร้างผลลัพธ์จากชุดโฆษณา' : 'ยังไม่มีข้อมูลพื้นที่จากบัญชีโฆษณา'}
-    >
-      <div className="ads-region-content">
-        <div className="ads-region-list">
-          {regions.length > 0 ? (
-            regions.map((region) => (
-              <div className="ads-region-row" key={region.id}>
-                <span className="ads-region-rank-dot" aria-hidden="true" />
-                <div>
-                  <strong>{region.name}</strong>
-                  <small>{fmtNum(Math.round(region.conversions))} ผลลัพธ์</small>
-                </div>
-                <b>{formatRegionPercent(region.percent)}</b>
-              </div>
-            ))
-          ) : (
-            <p className="ads-region-empty">เชื่อมต่อข้อมูลพื้นที่จากชุดโฆษณาเพื่อดูสัดส่วนผลลัพธ์ตามจังหวัดหรือเมือง</p>
-          )}
-        </div>
-        <div className="ads-region-map" aria-label="แผนภาพสัดส่วนผลลัพธ์ตามพื้นที่" role="img">
-          <span className="ads-region-map-blob blob-1" />
-          <span className="ads-region-map-blob blob-2" />
-          <span className="ads-region-map-blob blob-3" />
-          <span className="ads-region-map-blob blob-4" />
-          {regions.map((region, index) => (
-            <span
-              aria-hidden="true"
-              className="ads-region-map-dot"
-              key={region.id}
-              style={{
-                height: `${Math.max(18, Math.min(34, 18 + region.percent / 2))}px`,
-                left: `${region.x}%`,
-                top: `${region.y}%`,
-                width: `${Math.max(18, Math.min(34, 18 + region.percent / 2))}px`,
-              }}
-            >
-              <i>{index + 1}</i>
-            </span>
-          ))}
-        </div>
-      </div>
-    </DashboardPanel>
-  )
-}
-
-function DashboardInsightsBanner({ recommendations }: { recommendations: Recommendation[] }) {
-  const pendingRecommendations = recommendations.filter((rec) => rec.source === 'ai_brain')
-  const hasPending = pendingRecommendations.length > 0
-
-  return (
-    <div className="ads-insight-banner">
-      <div>
-        <span>PMC Insights</span>
-        <strong>{hasPending ? 'มีคำแนะนำที่รออนุมัติ' : 'รอคำแนะนำใหม่จากข้อมูลจริง'}</strong>
-        <p>{hasPending ? `${pendingRecommendations.length} รายการรอทีมตรวจในเมนู Insights` : 'เมื่อมีสัญญาณสำคัญจากข้อมูลโฆษณา สรุปจะขึ้นตรงนี้'}</p>
-        <button className="clinic-secondary-button" type="button" disabled aria-label="เปิดเมนู Insights จากแถบด้านซ้าย">
+    <div className={`ads-insight-banner ${performance.tone}`} aria-label={`Your ads are performing ${performance.label}`} data-performance-state={performance.tone}>
+      <div className="ads-insight-copy">
+        <strong>
+          Your ads are
+          <br />
+          performing <b className={`ads-insight-status ${performance.tone}`}>{performance.label}</b>
+        </strong>
+        <button className="clinic-secondary-button ads-insight-open-button" type="button" onClick={() => onOpenInsights?.()} aria-label="เปิดเมนู Insights จากแถบด้านซ้าย">
           เปิด Insights
         </button>
       </div>
       <div className="ads-insight-visual" aria-hidden="true">
-        <span className="insight-bar bar-1" />
-        <span className="insight-bar bar-2" />
-        <span className="insight-bar bar-3" />
-        <LineChart size={58} />
+        <img alt="" loading="lazy" src="/pmc-insights-performance.svg" />
       </div>
     </div>
   )
@@ -2258,6 +2654,25 @@ function formatSparklineValue(value: number) {
   return Number(value.toFixed(2)).toString()
 }
 
+function metricSparklineTooltip(metricLabel: string, sparklineLabel: string, rawValues: number[]) {
+  if (rawValues.length < 2) return `${metricLabel}: ${sparklineLabel} · ยังไม่มีข้อมูลแนวโน้มเพียงพอ`
+
+  const latest = rawValues[rawValues.length - 1]
+  const high = Math.max(...rawValues)
+  const low = Math.min(...rawValues)
+
+  return [
+    `${metricLabel}: ${sparklineLabel}`,
+    `ล่าสุด ${formatSparklineTooltipValue(latest)}`,
+    `สูงสุด ${formatSparklineTooltipValue(high)}`,
+    `ต่ำสุด ${formatSparklineTooltipValue(low)}`,
+  ].join(' · ')
+}
+
+function formatSparklineTooltipValue(value: number) {
+  return new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(value)
+}
+
 function metricTrendValues(trendData: TrendDatum[], getValue: (point: TrendDatum) => number | undefined) {
   if (trendData.length < 2) return []
   const values = trendData.map((point) => getValue(point))
@@ -2281,7 +2696,7 @@ function periodChange(values: number[], detail: string): MetricChange {
 
 function conversionRatePeriodChange(trendData: TrendDatum[]): MetricChange {
   if (trendData.length < 2 || trendData.some((point) => !Number.isFinite(point.treatments))) {
-    return { label: 'รอข้อมูล', tone: 'neutral', detail: 'ต้องมีข้อมูลลูกค้าชำระเงินรายวัน' }
+    return { label: 'รอข้อมูล', tone: 'neutral', detail: 'รอข้อมูลชำระเงิน' }
   }
 
   const midpoint = Math.max(1, Math.floor(trendData.length / 2))
@@ -2291,9 +2706,9 @@ function conversionRatePeriodChange(trendData: TrendDatum[]): MetricChange {
   const currentBookings = currentPoints.reduce((sum, point) => sum + point.bookings, 0)
   const previousPaidCases = previousPoints.reduce((sum, point) => sum + (point.treatments ?? 0), 0)
   const currentPaidCases = currentPoints.reduce((sum, point) => sum + (point.treatments ?? 0), 0)
-  const detail = 'จากลูกค้าชำระเงินเทียบยอดนัดรายวัน'
+  const detail = 'เทียบยอดนัดรายวัน'
 
-  if (previousBookings <= 0) return currentBookings > 0 ? { label: 'มีข้อมูลใหม่', tone: 'good', detail } : { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังมียอดนัดรายวันไม่พอ' }
+  if (previousBookings <= 0) return currentBookings > 0 ? { label: 'มีข้อมูลใหม่', tone: 'good', detail } : { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยอดนัดยังไม่พอ' }
   if (currentBookings <= 0) return { label: '↓ 100.0%', tone: 'critical', detail }
 
   const previousRate = previousPaidCases / previousBookings
@@ -2358,206 +2773,6 @@ function EChart({
       role="img"
     />
   )
-}
-
-type EChartTooltipParam = {
-  data?: unknown
-  marker?: string
-  name?: string
-  seriesName?: string
-  value?: unknown
-}
-
-function buildRevenueTrendOption(trendData: TrendDatum[]): EChartsOption {
-  const days = trendData.map((point) => point.day || point.date)
-  const xAxisBase = {
-    axisLine: { lineStyle: { color: '#dce6f2' } },
-    axisTick: { show: false },
-    boundaryGap: false,
-    data: days,
-    type: 'category' as const,
-  }
-
-  return {
-    animation: false,
-    aria: { enabled: false },
-    backgroundColor: 'transparent',
-    color: ['#9b6f3d', '#2684ff', '#9b5cff'],
-    axisPointer: {
-      link: [{ xAxisIndex: 'all' }],
-    },
-    grid: [
-      { containLabel: true, height: 46, left: 8, right: 18, top: 38 },
-      { containLabel: true, height: 46, left: 8, right: 18, top: 108 },
-      { containLabel: true, height: 46, left: 8, right: 18, top: 178 },
-    ],
-    legend: {
-      data: ['Revenue', 'Spend', 'Bookings'],
-      icon: 'roundRect',
-      itemGap: 18,
-      itemHeight: 6,
-      itemWidth: 22,
-      left: 0,
-      textStyle: { color: '#53667f', fontSize: 12, fontWeight: 700 },
-      top: 0,
-    },
-    series: [
-      {
-        data: trendData.map((point) => point.revenue),
-        emphasis: { focus: 'series' },
-        itemStyle: { color: '#9b6f3d' },
-        lineStyle: { color: '#9b6f3d', width: 3 },
-        name: 'Revenue',
-        showSymbol: false,
-        smooth: true,
-        symbol: 'rect',
-        symbolSize: 5,
-        type: 'line',
-        xAxisIndex: 0,
-        yAxisIndex: 0,
-      },
-      {
-        data: trendData.map((point) => point.spend),
-        emphasis: { focus: 'series' },
-        itemStyle: { color: '#2684ff' },
-        lineStyle: { color: '#2684ff', width: 3 },
-        name: 'Spend',
-        showSymbol: false,
-        smooth: true,
-        type: 'line',
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-      },
-      {
-        data: trendData.map((point) => point.bookings),
-        emphasis: { focus: 'series' },
-        itemStyle: { color: '#9b5cff' },
-        lineStyle: { color: '#9b5cff', width: 3 },
-        name: 'Bookings',
-        showSymbol: false,
-        smooth: true,
-        type: 'line',
-        xAxisIndex: 2,
-        yAxisIndex: 2,
-      },
-    ],
-    tooltip: {
-      appendToBody: true,
-      borderColor: '#dce6f2',
-      borderWidth: 1,
-      className: 'echart-tooltip-surface',
-      confine: true,
-      formatter: (params: unknown) => formatRevenueTrendTooltip(params, trendData),
-      order: 'seriesAsc',
-      trigger: 'axis',
-    },
-    xAxis: [
-      {
-        ...xAxisBase,
-        axisLabel: { show: false },
-        gridIndex: 0,
-      },
-      {
-        ...xAxisBase,
-        axisLabel: { show: false },
-        gridIndex: 1,
-      },
-      {
-        ...xAxisBase,
-        axisLabel: { color: '#667792', fontSize: 11, fontWeight: 700 },
-        gridIndex: 2,
-      },
-    ],
-    yAxis: [
-      {
-        axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        name: 'Revenue',
-        nameGap: 8,
-        nameTextStyle: { align: 'left', color: '#9b6f3d', fontSize: 11, fontWeight: 800 },
-        splitLine: { lineStyle: { color: '#e7edf5' } },
-        type: 'value',
-      },
-      {
-        axisLabel: { color: '#667792', formatter: fmtChartMoney, fontSize: 11, fontWeight: 700 },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        gridIndex: 1,
-        name: 'Spend',
-        nameGap: 8,
-        nameTextStyle: { align: 'left', color: '#2684ff', fontSize: 11, fontWeight: 800 },
-        splitLine: { lineStyle: { color: '#e7edf5' } },
-        type: 'value',
-      },
-      {
-        axisLabel: { color: '#667792', fontSize: 11, fontWeight: 700 },
-        axisLine: { show: false },
-        axisTick: { show: false },
-        gridIndex: 2,
-        name: 'Bookings',
-        nameGap: 8,
-        nameTextStyle: { align: 'left', color: '#9b5cff', fontSize: 11, fontWeight: 800 },
-        splitLine: { lineStyle: { color: '#e7edf5' } },
-        type: 'value',
-      },
-    ],
-  }
-}
-
-function asEChartParams(params: unknown): EChartTooltipParam[] {
-  if (Array.isArray(params)) return params as EChartTooltipParam[]
-  return params ? [params as EChartTooltipParam] : []
-}
-
-function eChartParamNumber(value: unknown) {
-  if (Array.isArray(value)) {
-    const lastValue = value[value.length - 1]
-    return Number(lastValue)
-  }
-  if (value && typeof value === 'object' && 'value' in value) {
-    return Number((value as { value?: unknown }).value)
-  }
-  return Number(value)
-}
-
-function formatRevenueTrendTooltip(params: unknown, trendData: TrendDatum[]) {
-  const rows = asEChartParams(params)
-  const title = rows[0]?.name ?? ''
-  const point = trendData.find((item) => (item.day || item.date) === title)
-  const revenue = point?.revenue ?? eChartParamNumber(rows.find((row) => row.seriesName === 'Revenue')?.value)
-  const spend = point?.spend ?? eChartParamNumber(rows.find((row) => row.seriesName === 'Spend')?.value)
-  const bookings = point?.bookings ?? 0
-  const roas = spend > 0 ? revenue / spend : 0
-
-  return eChartTooltip(
-    point?.date && point.date !== '-' ? point.date : title,
-    [
-      ['Revenue', fmtMoney(revenue), rows.find((row) => row.seriesName === 'Revenue')?.marker],
-      ['Spend', fmtMoney(spend), rows.find((row) => row.seriesName === 'Spend')?.marker],
-      ['ROAS', `${roas.toFixed(2)}x`, undefined],
-      ['Bookings', fmtNum(bookings), rows.find((row) => row.seriesName === 'Bookings')?.marker],
-    ],
-  )
-}
-
-function eChartTooltip(title: string, rows: Array<[string, string, string | undefined]>) {
-  const renderedRows = rows
-    .map(
-      ([label, value, marker]) =>
-        `<span class="echart-tooltip-row">${marker ?? '<i></i>'}<small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b></span>`,
-    )
-    .join('')
-  return `<div class="echart-tooltip"><strong>${escapeHtml(title)}</strong>${renderedRows}</div>`
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
 }
 
 function RevenueOverviewChart({ embedded = false, trendData }: { embedded?: boolean; trendData: TrendDatum[] }) {
@@ -5255,7 +5470,7 @@ function AutoAdsConfirmModal({
   )
 }
 
-export function CreativeStudioPage({ components }: { components: WorkspaceData['insightComponents'] }) {
+export function AutomationAdsPage({ components }: { components: WorkspaceData['insightComponents'] }) {
   const syncedCount = components.length
 
   return (
@@ -5263,24 +5478,24 @@ export function CreativeStudioPage({ components }: { components: WorkspaceData['
       aside={
         <StatePanel
           state="กลับมาทำต่อเร็ว ๆ นี้"
-          detail="หน้านี้ถูกพักไว้ชั่วคราวเพื่อปรับ workflow ครีเอทีฟให้ชัดกว่าเดิม ก่อนเปิดใช้งานอีกครั้ง"
+          detail="ระบบ Automation Ads ถูกพักไว้ชั่วคราวเพื่อจัด workflow โฆษณาอัตโนมัติให้ชัดก่อนเปิดใช้งานจริง"
           tone="watch"
         />
       }
     >
-      <section className="panel creative-updating-panel">
+      <section className="panel automation-ads-updating-panel">
         <StatusBadge label="กำลังอัพเดท" tone="watch" />
-        <h2>สตูดิโอครีเอทีฟกำลังอัพเดท</h2>
-        <p>ทีมกำลังปรับหน้า Creative Studio ให้ใช้งานได้ครบขึ้น ระหว่างนี้ข้อมูลครีเอทีฟและการทำงานต่อจากครีเอทีฟจะถูกพักไว้ก่อน</p>
-        <div className="creative-updating-meta" aria-label="สถานะข้อมูลครีเอทีฟ">
-          <MetricLine label="ข้อมูลครีเอทีฟที่บันทึกไว้" value={`${fmtNum(syncedCount)} รายการ`} />
-          <MetricLine label="สถานะหน้า" value="พักการใช้งานชั่วคราว" />
+        <h2>Automation Ads กำลังอัพเดท</h2>
+        <p>ทีมกำลังจัดระบบ workflow โฆษณาอัตโนมัติให้ชัดขึ้น ระหว่างนี้ข้อมูลที่บันทึกไว้จะยังปลอดภัยและจะไม่สั่งเปลี่ยนข้อมูลจริงเอง</p>
+        <div className="automation-ads-updating-meta" aria-label="สถานะระบบ Automation Ads">
+          <MetricLine label="ข้อมูล Automation Ads ที่บันทึกไว้" value={`${fmtNum(syncedCount)} รายการ`} />
+          <MetricLine label="สถานะระบบ" value="พักการใช้งานชั่วคราว" />
           <MetricLine label="การเปลี่ยนข้อมูลจริง" value="ไม่มีการเปลี่ยนข้อมูลอัตโนมัติ" />
         </div>
       </section>
       <StatePanel
-        state="ข้อมูลครีเอทีฟที่บันทึกไว้ยังปลอดภัย"
-        detail="ข้อมูลครีเอทีฟที่โหลดไว้ยังอยู่ แต่หน้านี้จะไม่แนะนำหรือสร้างงานครีเอทีฟจนกว่าจะปรับการทำงานเสร็จ"
+        state="ข้อมูล Automation Ads ที่บันทึกไว้ยังปลอดภัย"
+        detail="ข้อมูลที่โหลดไว้ยังอยู่ แต่ระบบนี้จะไม่แนะนำหรือสั่งงานอัตโนมัติจนกว่าจะปรับ workflow เสร็จ"
         tone={syncedCount > 0 ? 'info' : 'neutral'}
       />
     </TwoColumnPage>
@@ -6139,7 +6354,7 @@ function HelpCenterPage({
 
 function TwoColumnPage({ aside, children }: { aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="two-column-page">
+    <div className="two-column-page ads-tool-window">
       <section className="main-stack">{children}</section>
       {aside ? <aside className="right-rail">{aside}</aside> : null}
     </div>
