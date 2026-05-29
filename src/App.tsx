@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenCheck,
@@ -53,6 +53,14 @@ import type {
   WorkspaceData,
 } from './types'
 import { buildRevenueTrendOption } from './adsDashboardChart'
+import {
+  buildAdGroupRows,
+  filterAdGroupRows,
+  groupAdGroupRowsByCampaign,
+  type AdGroupRow,
+  type AdGroupStatusFilter,
+  type AdGroupViewMode,
+} from './adGroupsWorkspace'
 import { HomeApp } from './apps/home/HomeApp'
 import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
 import type { ManagedPage, SharedAdsInsightForPage } from './apps/page-automation/types'
@@ -2833,13 +2841,188 @@ export function AdGroupsPage({
   onMutationComplete: () => Promise<void>
 }) {
   void onMutationComplete
+  const [searchQuery, setSearchQuery] = useState('')
+  const [campaignId, setCampaignId] = useState('')
+  const [statusFilter, setStatusFilter] = useState<AdGroupStatusFilter>('all')
+  const [viewMode, setViewMode] = useState<AdGroupViewMode>('groupedByCampaign')
+  const [selectedAdSetId, setSelectedAdSetId] = useState('')
+
+  const rows = useMemo(
+    () => buildAdGroupRows({ adSets, ads, campaigns, lastSyncedAt: '' }),
+    [adSets, ads, campaigns],
+  )
+  const filteredRows = useMemo(
+    () => filterAdGroupRows(rows, { campaignId, searchQuery, statusFilter }),
+    [campaignId, rows, searchQuery, statusFilter],
+  )
+  const groupedRows = useMemo(() => groupAdGroupRowsByCampaign(filteredRows), [filteredRows])
+  const selectedRow =
+    filteredRows.find((row) => row.id === selectedAdSetId) ??
+    rows.find((row) => row.id === selectedAdSetId) ??
+    filteredRows[0] ??
+    rows[0]
+  const activeCount = rows.filter((row) => row.deliveryStatus === 'active').length
+  const adsCount = rows.reduce((sum, row) => sum + row.adsCount, 0)
+  const selectedAds = selectedRow ? ads.filter((ad) => ad.adSetId === selectedRow.id) : []
+
+  const selectRow = (row: AdGroupRow) => {
+    setSelectedAdSetId(row.id)
+  }
+
+  const rowList = (listRows: AdGroupRow[]) => (
+    <div className="ad-groups-row-list">
+      {listRows.map((row) => (
+        <button
+          aria-pressed={selectedRow?.id === row.id}
+          className={`ad-groups-row ${selectedRow?.id === row.id ? 'selected' : ''}`}
+          key={row.id}
+          type="button"
+          onClick={() => selectRow(row)}
+        >
+          <span className="ad-groups-row-main">
+            <strong>{row.name}</strong>
+            <small>{row.campaignName} · {row.audience}</small>
+          </span>
+          <span className="ad-groups-row-side">
+            <StatusBadge label={deliveryLabel(row.deliveryStatus)} tone={deliveryTone(row.deliveryStatus)} />
+            <small>{row.adsCount} Ads</small>
+          </span>
+        </button>
+      ))}
+    </div>
+  )
 
   return (
-    <TwoColumnPage aside={<StatePanel state="Ad Groups" detail={`${adSets.length} ชุดโฆษณา · ${ads.length} โฆษณา`} tone="info" />}>
-      <SectionCard title="Ad Groups" subtitle={`${campaigns.length} แคมเปญที่เกี่ยวข้อง`}>
-        <p>กำลังเตรียม workspace สำหรับจัดการ Ad Set</p>
-      </SectionCard>
-    </TwoColumnPage>
+    <div className="ad-groups-workspace">
+      <section className="ad-groups-main">
+        <div className="ad-groups-header">
+          <div>
+            <span className="ad-groups-eyebrow">Ad Set operations</span>
+            <h2>Ad Groups</h2>
+            <p>ตรวจ Ad Set แยกจาก Campaigns ก่อนส่งคำสั่งไป Meta</p>
+          </div>
+          <div className="ad-groups-stats" aria-label="สรุป Ad Groups">
+            <MetricLine label="Ad Set ทั้งหมด" value={fmtNum(rows.length)} />
+            <MetricLine label="เปิดอยู่" value={fmtNum(activeCount)} />
+            <MetricLine label="Ads รวม" value={fmtNum(adsCount)} />
+          </div>
+        </div>
+
+        <div className="ad-groups-controls">
+          <label className="ad-groups-search search-box">
+            <Search size={15} />
+            <span>ค้นหา Ad Set หรือ Campaign</span>
+            <input
+              aria-label="ค้นหา Ad Set หรือ Campaign"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="พิมพ์ชื่อ Ad Set, Campaign หรือกลุ่มเป้าหมาย"
+            />
+          </label>
+          <label className="ad-groups-select">
+            <span>Campaign</span>
+            <select value={campaignId} onChange={(event) => setCampaignId(event.target.value)}>
+              <option value="">ทุก Campaign</option>
+              {campaigns.map((campaign) => (
+                <option key={campaign.id} value={campaign.id}>{campaign.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="ad-groups-select">
+            <span>Status</span>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as AdGroupStatusFilter)}>
+              <option value="all">ทุกสถานะ</option>
+              <option value="active">เปิดอยู่</option>
+              <option value="paused">หยุดอยู่</option>
+              <option value="pending">รอตรวจคำสั่ง</option>
+            </select>
+          </label>
+          <div className="ad-groups-view-toggle" role="group" aria-label="มุมมอง Ad Groups">
+            <button
+              aria-pressed={viewMode === 'flat'}
+              className={viewMode === 'flat' ? 'selected' : ''}
+              type="button"
+              onClick={() => setViewMode('flat')}
+            >
+              รายการรวม
+            </button>
+            <button
+              aria-pressed={viewMode === 'groupedByCampaign'}
+              className={viewMode === 'groupedByCampaign' ? 'selected' : ''}
+              type="button"
+              onClick={() => setViewMode('groupedByCampaign')}
+            >
+              จัดกลุ่มตาม Campaign
+            </button>
+          </div>
+        </div>
+
+        <div className="ad-groups-list-panel">
+          {filteredRows.length > 0 ? (
+            viewMode === 'groupedByCampaign' ? (
+              <div className="ad-groups-campaign-groups">
+                {groupedRows.map((group) => (
+                  <section className="ad-groups-campaign-group" key={group.campaignId}>
+                    <div className="ad-groups-group-head">
+                      <strong>{group.campaignName}</strong>
+                      <span>{group.rows.length} Ad Set</span>
+                    </div>
+                    {rowList(group.rows)}
+                  </section>
+                ))}
+              </div>
+            ) : (
+              rowList(filteredRows)
+            )
+          ) : (
+            <EmptyState title="ไม่พบ Ad Set" detail="ลองล้างคำค้นหา เปลี่ยน Campaign หรือเลือกสถานะอื่น" />
+          )}
+        </div>
+      </section>
+
+      <aside className="ad-groups-inspector" aria-label="รายละเอียด Ad Set ที่เลือก">
+        {selectedRow ? (
+          <>
+            <div className="ad-groups-inspector-head">
+              <StatusBadge label={deliveryLabel(selectedRow.deliveryStatus)} tone={deliveryTone(selectedRow.deliveryStatus)} />
+              <h3>{selectedRow.name}</h3>
+              <p>{selectedRow.audience}</p>
+            </div>
+            <div className="ad-groups-review-state">
+              <strong>ตรวจคำสั่งก่อนส่ง Meta</strong>
+              <p>พื้นที่นี้ยังเป็น static review สำหรับ Task 4 และยังไม่ส่งคำสั่งไป Meta</p>
+            </div>
+            <div className="ad-groups-detail-lines">
+              <MetricLine label="Campaign" value={selectedRow.campaignName} />
+              <MetricLine label="Status" value={deliveryLabel(selectedRow.deliveryStatus)} />
+              <MetricLine label="Budget" value={selectedRow.budgetDisplay} />
+              <MetricLine label="Spend" value={fmtMoney(selectedRow.spend)} />
+              <MetricLine label="Bookings" value={fmtNum(selectedRow.bookings)} />
+              <MetricLine label="ROAS" value={`${selectedRow.roas.toFixed(2)}x`} />
+            </div>
+            <section className="ad-groups-ads-summary">
+              <div className="ad-groups-group-head">
+                <strong>Ads summary</strong>
+                <span>{selectedRow.adsCount} Ads</span>
+              </div>
+              <MetricLine label="Active Ads" value={fmtNum(selectedRow.activeAdsCount)} />
+              <MetricLine label="Paused Ads" value={fmtNum(selectedRow.pausedAdsCount)} />
+              {selectedAds.length > 0 ? (
+                <div className="ad-groups-ad-chips">
+                  {selectedAds.map((ad) => (
+                    <span key={ad.id}>{ad.name}</span>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState title="ยังไม่มี Ads" detail="Ad Set นี้ยังไม่มีโฆษณาใน workspace ล่าสุด" />
+              )}
+            </section>
+          </>
+        ) : (
+          <EmptyState title="ยังไม่มี Ad Set" detail="เชื่อมข้อมูลจาก Meta เพื่อเริ่มตรวจ Ad Groups" />
+        )}
+      </aside>
+    </div>
   )
 }
 
@@ -3271,28 +3454,6 @@ function AdsManagerPage({
           )}
         </div>
       </SectionCard>
-      <div className="split-grid">
-        <StatePanel
-          collapsible
-          actionLabel="เปิดรีวิว"
-          state="ข้อมูลล่าสุดพร้อมตรวจ"
-          detail="ข้อมูลแคมเปญ ชุดโฆษณา และโฆษณาพร้อมสำหรับรีวิว"
-          tone="good"
-          onAction={() => setReviewTarget('live')}
-        />
-        <StatePanel
-          collapsible
-          actionLabel={isReviewSyncing ? 'กำลังตรวจซ้ำ...' : 'ตรวจข้อมูลซ้ำ'}
-          disabled={isReviewSyncing}
-          state="ข้อมูลอาจไม่ล่าสุด"
-          detail="ถ้าข้อมูลค้างนาน ควรตรวจข้อมูลอีกครั้งก่อนปรับแคมเปญ"
-          tone="watch"
-          onAction={() => {
-            setReviewTarget('stale')
-            void recheckReviewState()
-          }}
-        />
-      </div>
 
       {reviewTarget ? (
         <AdsReviewModal
@@ -6382,46 +6543,6 @@ function TwoColumnPage({ aside, children }: { aside?: React.ReactNode; children:
   )
 }
 
-function CollapseButton({
-  collapsed,
-  controlsId,
-  label = 'ข้อมูล',
-  onToggle,
-}: {
-  collapsed: boolean
-  controlsId?: string
-  label?: string
-  onToggle: () => void
-}) {
-  const Icon = collapsed ? ChevronRight : ChevronDown
-
-  return (
-    <button
-      className="collapse-button"
-      type="button"
-      aria-expanded={!collapsed}
-      aria-controls={controlsId}
-      aria-label={collapsed ? `ขยาย ${label}` : `พับ ${label}`}
-      onClick={onToggle}
-    >
-      <Icon size={15} />
-      {collapsed ? 'ขยายข้อมูล' : 'พับข้อมูล'}
-    </button>
-  )
-}
-
-function CollapsedPlaceholder({ title }: { title: string }) {
-  return (
-    <div className="collapsed-placeholder">
-      <div>
-        <strong>{title}</strong>
-        <span>ข้อมูลถูกพับเก็บไว้เพื่อลดความแน่นของหน้าจอ</span>
-      </div>
-      <ChevronRight size={18} />
-    </div>
-  )
-}
-
 function HelpTooltip({ text }: { text: string }) {
   return (
     <span className="help-tooltip" data-tooltip={text} title={text} aria-label={text} tabIndex={0}>
@@ -6434,9 +6555,6 @@ function SectionCard({
   action,
   children,
   className,
-  collapsible = false,
-  collapseLabel,
-  defaultCollapsed = false,
   headClassName,
   subtitle,
   title,
@@ -6451,10 +6569,8 @@ function SectionCard({
   subtitle: string
   title: string
 }) {
-  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed)
-  const contentId = useId()
-  const hasActions = Boolean(action) || collapsible
-  const panelClassName = ['panel', className, isCollapsed ? 'is-collapsed' : ''].filter(Boolean).join(' ')
+  const hasActions = Boolean(action)
+  const panelClassName = ['panel', className].filter(Boolean).join(' ')
   const panelHeadClassName = ['panel-head', headClassName].filter(Boolean).join(' ')
   const tooltip = sectionTooltips[title]
 
@@ -6471,27 +6587,16 @@ function SectionCard({
         {hasActions ? (
           <div className="panel-actions">
             {action}
-            {collapsible ? (
-              <CollapseButton
-                collapsed={isCollapsed}
-                controlsId={contentId}
-                label={collapseLabel ?? title}
-                onToggle={() => setIsCollapsed((value) => !value)}
-              />
-            ) : null}
           </div>
         ) : null}
       </div>
-      <div id={contentId} className="panel-collapsible-content" role={collapsible ? 'region' : undefined} aria-label={collapsible ? title : undefined}>
-        {isCollapsed ? <CollapsedPlaceholder title={title} /> : children}
-      </div>
+      <div className="panel-collapsible-content">{children}</div>
     </section>
   )
 }
 
 function StatePanel({
   actionLabel = 'ตรวจสถานะ',
-  collapsible = false,
   detail,
   disabled = false,
   onAction,
@@ -6506,37 +6611,16 @@ function StatePanel({
   state: string
   tone: Tone
 }) {
-  const [isCollapsed, setIsCollapsed] = useState(false)
-  const contentId = useId()
-
   return (
-    <section className={`panel state-panel ${isCollapsed ? 'is-collapsed' : ''}`}>
-      {collapsible ? (
-        <div className="state-panel-head">
-          <StatusBadge label={state} tone={tone} />
-          <CollapseButton
-            collapsed={isCollapsed}
-            controlsId={contentId}
-            label={state}
-            onToggle={() => setIsCollapsed((value) => !value)}
-          />
-        </div>
-      ) : (
-        <StatusBadge label={state} tone={tone} />
-      )}
-      <div id={contentId} className="state-panel-content" role={collapsible ? 'region' : undefined} aria-label={collapsible ? state : undefined}>
-        {isCollapsed ? (
-          <CollapsedPlaceholder title={state} />
-        ) : (
-          <>
-            <p>{detail}</p>
-            {onAction ? (
-              <button className="outline-button" type="button" onClick={onAction} disabled={disabled}>
-                {actionLabel}
-              </button>
-            ) : null}
-          </>
-        )}
+    <section className="panel state-panel">
+      <StatusBadge label={state} tone={tone} />
+      <div className="state-panel-content">
+        <p>{detail}</p>
+        {onAction ? (
+          <button className="outline-button" type="button" onClick={onAction} disabled={disabled}>
+            {actionLabel}
+          </button>
+        ) : null}
       </div>
     </section>
   )

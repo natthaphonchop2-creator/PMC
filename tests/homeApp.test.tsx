@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App, { AnalyticsPage, AutomationAdsPage, ReportsPage } from '../src/App'
+import App, { AdGroupsPage, AnalyticsPage, AutomationAdsPage, ReportsPage } from '../src/App'
 import { scopeWorkspaceByDatePreset } from '../src/adsDashboardDateScope'
 import { buildRevenueTrendOption } from '../src/adsDashboardChart'
 import { HomeApp } from '../src/apps/home/HomeApp'
@@ -121,6 +121,96 @@ describe('Home app shell', () => {
     expect(routeSource.indexOf('<AdGroupsPage')).toBeLessThan(routeSource.indexOf('<AdsManagerPage'))
     expect(tabSelectSource).toContain("nextToolbarKey === 'ad-groups'")
     expect(tabSelectSource).toContain('เปิด Ad Groups')
+  })
+
+  it('renders the static Ad Groups split inspector workspace', () => {
+    const campaigns = [
+      {
+        aiTag: 'ดี',
+        budget: 1200,
+        conversions: 14,
+        cpa: 42,
+        ctr: 2.6,
+        deliveryStatus: 'active' as const,
+        frequency: 1.4,
+        id: 'cmp-1',
+        name: 'Lead Botox',
+        revenue: 5400,
+        roas: 3.4,
+        spend: 520,
+        status: 'Active' as const,
+        tone: 'good' as const,
+      },
+    ]
+    const adSets: WorkspaceData['adSets'] = [
+      {
+        audience: 'Bangkok',
+        bookings: 10,
+        budget: 700,
+        campaignId: 'cmp-1',
+        cpa: 35,
+        deliveryStatus: 'active',
+        id: 'set-1',
+        name: 'Bangkok Core',
+        roas: 2.2,
+        spend: 350,
+        status: 'healthy',
+      },
+    ]
+    const ads: WorkspaceData['adInsights'] = [
+      {
+        adSetId: 'set-1',
+        bookings: 6,
+        campaignId: 'cmp-1',
+        clicks: 80,
+        cpc: 2.5,
+        creative: 'Image',
+        ctr: 4,
+        id: 'ad-1',
+        impressions: 2000,
+        leads: 12,
+        name: 'Botox A',
+        roas: 2.5,
+        score: 80,
+        showRate: 50,
+        spend: 200,
+        status: 'active',
+      },
+      {
+        adSetId: 'set-1',
+        bookings: 2,
+        campaignId: 'cmp-1',
+        clicks: 30,
+        cpc: 5,
+        creative: 'Video',
+        ctr: 2.5,
+        id: 'ad-2',
+        impressions: 1200,
+        leads: 4,
+        name: 'Botox B',
+        roas: 1.2,
+        score: 50,
+        showRate: 50,
+        spend: 150,
+        status: 'paused',
+      },
+    ]
+
+    const html = renderToStaticMarkup(
+      <AdGroupsPage adSets={adSets} ads={ads} campaigns={campaigns} onMutationComplete={async () => undefined} />,
+    )
+    const text = visibleText(html)
+
+    expect(html).toContain('ad-groups-workspace')
+    expect(text).toContain('Ad Groups')
+    expect(text).toContain('ค้นหา Ad Set หรือ Campaign')
+    expect(text).toContain('จัดกลุ่มตาม Campaign')
+    expect(text).toContain('Bangkok Core')
+    expect(text).toContain('Lead Botox')
+    expect(text).toContain('2 Ads')
+    expect(text).toContain('ตรวจคำสั่งก่อนส่ง Meta')
+    expect(text).not.toContain('ตัวจัดการโฆษณา')
+    expect(text).not.toContain('แคมเปญที่เลือก')
   })
 
   it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
@@ -328,6 +418,47 @@ describe('Home app shell', () => {
     expect(buttonMatch?.[0]).not.toContain('disabled')
     expect(source).toContain("onOpenCampaigns={() => handleTabSelect('ads', 'campaigns')}")
     expect(source).toContain('onOpenCampaigns?.()')
+  })
+
+  it('does not render panel collapse controls in Ads Agent tool windows', () => {
+    const automationHtml = renderToStaticMarkup(<AutomationAdsPage components={[]} />)
+    const reportsHtml = renderToStaticMarkup(
+      <ReportsPage
+        datePreset="ข้อมูลทั้งหมด"
+        metaInfo={null}
+        preparedReport={false}
+        recommendations={[]}
+        setPreparedReport={() => undefined}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        syncState="No data"
+      />,
+    )
+
+    const html = `${automationHtml}${reportsHtml}`
+    const text = visibleText(html)
+
+    expect(html).not.toContain('class="collapse-button"')
+    expect(text).not.toContain('พับข้อมูล')
+    expect(text).not.toContain('ข้อมูลถูกพับเก็บไว้')
+  })
+
+  it('does not render bottom review status cards in the Ads manager workspace', () => {
+    const source = readText('../src/App.tsx')
+    const managerSource = source.slice(source.indexOf('function AdsManagerPage'), source.indexOf('function AdsReviewModal'))
+
+    expect(managerSource).not.toContain('state="ข้อมูลล่าสุดพร้อมตรวจ"')
+    expect(managerSource).not.toContain('detail="ข้อมูลแคมเปญ ชุดโฆษณา และโฆษณาพร้อมสำหรับรีวิว"')
+    expect(managerSource).not.toContain('state="ข้อมูลอาจไม่ล่าสุด"')
+    expect(managerSource).not.toContain('detail="ถ้าข้อมูลค้างนาน ควรตรวจข้อมูลอีกครั้งก่อนปรับแคมเปญ"')
   })
 
   it('shows only the top 3 campaign rankings on Ads Dashboard', () => {
