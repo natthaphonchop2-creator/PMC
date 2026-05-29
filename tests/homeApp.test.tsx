@@ -2,9 +2,11 @@ import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import App, { AnalyticsPage, AutomationAdsPage, ReportsPage } from '../src/App'
+import { scopeWorkspaceByDatePreset } from '../src/adsDashboardDateScope'
 import { buildRevenueTrendOption } from '../src/adsDashboardChart'
 import { HomeApp } from '../src/apps/home/HomeApp'
 import { PageAutomationApp } from '../src/apps/page-automation/PageAutomationApp'
+import type { WorkspaceData } from '../src/types'
 
 describe('Home app shell', () => {
   it('renders Home as a soft clinic app launcher with honest readiness states', () => {
@@ -12,7 +14,7 @@ describe('Home app shell', () => {
     const text = visibleText(html)
 
     expect(html).toContain('class="home-clinic-media"')
-    expect(html).toContain('src="/pmc-clinic-reception.png"')
+    expect(html).toContain('src="/pmc-home-clinic-reception.png?v=clean"')
     expect(html).toContain('ยินดีต้อนรับกลับ')
     expect(html).toContain('เลือก App เพื่อเริ่มงาน')
     expect(html).toContain('Smart Clinic Workspace')
@@ -74,6 +76,7 @@ describe('Home app shell', () => {
       expect(text.indexOf('Insights')).toBeLessThan(text.indexOf('Automation Ads'))
       expect(html).toContain('class="ads-toolbar-user-card"')
       expect(html).toContain('class="ads-toolbar-avatar"')
+      expect(html).toContain('class="ads-toolbar-api-dot')
       expect(html).toContain('class="ads-toolbar-user-copy"')
       expect(html).toContain('class="ads-toolbar-user-role"')
       expect(text).toContain('ข้อมูลทั้งหมด')
@@ -87,7 +90,9 @@ describe('Home app shell', () => {
       expect(html).toMatch(
         /<button(?=[^>]*class="ads-toolbar-item active")(?=[^>]*aria-current="page")(?=[^>]*aria-label="Ads Dashboard")[^>]*>/,
       )
-      expect(html).toMatch(/<div class="topbar-actions"><button[^>]*aria-label="เช็ค API"[^>]*>[\s\S]*เช็ค API[\s\S]*<\/button><\/div>/)
+      expect(html).not.toContain('aria-label="Ads Agent API tools"')
+      expect(html).not.toContain('aria-label="เช็ค API"')
+      expect(text).not.toContain('เช็ค API')
       expect(html).not.toContain('aria-label="ช่วงวันที่"')
       expect(html).not.toContain('aria-label="เปิดหรือปิด Auto"')
       expect(html).not.toContain('เตรียมรายงาน</button>')
@@ -194,6 +199,42 @@ describe('Home app shell', () => {
     expect(html).not.toContain('<span class="ads-dashboard-date-pill"')
     expect(source).toContain('onDatePresetChange={setDatePreset}')
     expect(source).toContain('handleDatePresetChange(event.currentTarget.value)')
+  })
+
+  it('scopes Ads Dashboard metrics to the selected date preset from the latest available daily data', () => {
+    const scoped = scopeWorkspaceByDatePreset(workspaceForDateScoping(), '7 วันล่าสุด')
+
+    expect(scoped?.trendData.map((point) => point.date)).toEqual([
+      '2024-10-04',
+      '2024-10-05',
+      '2024-10-06',
+      '2024-10-07',
+      '2024-10-08',
+      '2024-10-09',
+      '2024-10-10',
+    ])
+    expect(scoped?.channelPerformance[0]).toEqual(expect.objectContaining({
+      bookings: 49,
+      clicks: 4900,
+      impressions: 49000,
+      revenue: 490,
+      spend: 49,
+    }))
+    expect(scoped?.campaigns[0]).toEqual(expect.objectContaining({
+      conversions: 49,
+      cpa: 10,
+      revenue: 980,
+      roas: 2,
+      spend: 490,
+    }))
+    expect(scoped?.adSets[0]).toEqual(expect.objectContaining({
+      bookings: 49,
+      cpa: 10,
+      spend: 490,
+    }))
+    expect(scoped?.funnelMetrics.find((metric) => metric.stage === 'Impressions')?.count).toBe(49000)
+    expect(scoped?.funnelMetrics.find((metric) => metric.stage === 'Clicks')?.count).toBe(4900)
+    expect(scoped?.funnelMetrics.find((metric) => metric.stage === 'Bookings')?.count).toBe(49)
   })
 
   it('wires the Ads Insights banner button to open the Insights workspace', () => {
@@ -853,7 +894,7 @@ describe('Home app shell', () => {
     expect(html).not.toContain('Mobile App')
   })
 
-  it('uses one visible X and Y numeric axis label set for Performance Overview lanes', () => {
+  it('uses per-lane Y numeric axis labels for Performance Overview lanes', () => {
     const option = buildRevenueTrendOption([
       { bookings: 18, date: '2026-05-16', day: 'May 16', revenue: 38000, spend: 22000 },
       { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
@@ -863,7 +904,7 @@ describe('Home app shell', () => {
       axisLabel?: { show?: boolean }
     }>
     const yAxes = (Array.isArray(option.yAxis) ? option.yAxis : [option.yAxis]) as Array<{
-      axisLabel?: { align?: string; formatter?: unknown; margin?: number; show?: boolean }
+      axisLabel?: { align?: string; formatter?: unknown; margin?: number; show?: boolean; width?: number }
       axisLine?: { show?: boolean }
       interval?: number
       max?: number
@@ -873,8 +914,16 @@ describe('Home app shell', () => {
     const grids = (Array.isArray(option.grid) ? option.grid : [option.grid]) as Array<{
       left?: number
     }>
+    const graphicLabels = (Array.isArray(option.graphic) ? option.graphic : [option.graphic]) as Array<{
+      left?: number
+      style?: { text?: string }
+      type?: string
+    }>
 
-    expect(grids.map((grid) => grid.left)).toEqual([58, 58, 58])
+    expect(grids.map((grid) => grid.left)).toEqual([96, 96, 96])
+    expect(graphicLabels.map((label) => label.style?.text)).toEqual(['Revenue', 'Spend', 'Bookings'])
+    expect(graphicLabels.map((label) => label.left)).toEqual([96, 96, 96])
+    expect(graphicLabels.every((label) => label.type === 'text')).toBe(true)
     expect(xAxes).toHaveLength(3)
     expect(xAxes.map((axis) => axis.axisLabel?.show ?? true)).toEqual([false, false, true])
     expect(yAxes).toHaveLength(3)
@@ -883,11 +932,13 @@ describe('Home app shell', () => {
       { interval: 25_000, max: 100_000, min: 0, splitNumber: 4 },
       { interval: 25, max: 100, min: 0, splitNumber: 4 },
     ])
-    expect(yAxes.map((axis) => axis.axisLabel?.show ?? true)).toEqual([true, false, false])
-    expect(yAxes[0]?.axisLabel?.align).toBe('right')
-    expect(yAxes[0]?.axisLabel?.margin).toBe(10)
-    expect(yAxes[0]?.axisLine?.show).toBe(true)
-    expect(yAxes.slice(1).map((axis) => axis.axisLine?.show ?? true)).toEqual([false, false])
+    expect(yAxes.map((axis) => axis.axisLabel?.show ?? true)).toEqual([true, true, true])
+    yAxes.forEach((axis) => {
+      expect(axis.axisLabel?.align).toBe('right')
+      expect(axis.axisLabel?.margin).toBe(12)
+      expect(axis.axisLabel?.width).toBe(46)
+      expect(axis.axisLine?.show).toBe(true)
+    })
     expect(yAxes[0]?.axisLabel?.formatter).toBe(yAxes[1]?.axisLabel?.formatter)
     expect(yAxes[1]?.axisLabel?.formatter).toBe(yAxes[2]?.axisLabel?.formatter)
     if (typeof yAxes[0]?.axisLabel?.formatter === 'function') {
@@ -1149,7 +1200,7 @@ describe('Home app shell', () => {
   it('uses clinic media without repeated PMC brand decoration', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 
-    expect(countOccurrences(html, 'src="/pmc-clinic-reception.png"')).toBe(1)
+    expect(countOccurrences(html, 'src="/pmc-home-clinic-reception.png?v=clean"')).toBe(1)
     expect(html).toContain('alt="PMC Aesthetic Clinic reception"')
     expect(html).not.toContain('src="/pmc-ads-logo.png?v=transparent"')
     expect(html).not.toContain('src="/pmc-page-auto-logo.png?v=transparent"')
@@ -1298,11 +1349,11 @@ describe('Home app shell', () => {
     expect(appCss).toMatch(/\.ads-dashboard-lower-grid \.ads-mini-sparkline\s*\{[^}]*justify-self:\s*center;[^}]*width:\s*min\(150px,\s*100%\);/)
   })
 
-  it('tightens the Ads Dashboard header spacing and keeps action buttons aligned', () => {
+  it('removes the Ads Agent API topbar gap and keeps dashboard actions aligned', () => {
     const appCss = readText('../src/App.css')
 
-    expect(appCss).toMatch(/\.ads-main-panel \.topbar\s*\{[^}]*min-height:\s*46px;[^}]*padding:\s*16px 32px 0;/)
-    expect(appCss).toMatch(/\.ads-main-panel \.page-body\s*\{[^}]*padding:\s*4px 32px 30px;/)
+    expect(appCss).not.toMatch(/\.ads-main-panel \.topbar\s*\{/)
+    expect(appCss).toMatch(/\.ads-main-panel \.page-body\s*\{[^}]*padding:\s*28px 32px 30px;/)
     expect(appCss).toMatch(/\.ads-dashboard-head\s*\{[^}]*align-items:\s*flex-start;/)
     expect(appCss).toMatch(/\.ads-dashboard-date-pill\s*\{[^}]*margin-top:\s*10px;/)
     expect(appCss).toMatch(/\.ads-dashboard-actions\s*\{[^}]*align-self:\s*flex-start;[^}]*flex-wrap:\s*nowrap;[^}]*padding-top:\s*15px;/)
@@ -1313,7 +1364,10 @@ describe('Home app shell', () => {
     const appCss = readText('../src/App.css')
 
     expect(appCss).toMatch(/\.ads-toolbar-user-card\s*\{[^}]*grid-template-columns:\s*42px minmax\(0,\s*1fr\) 30px;[^}]*padding:\s*10px 12px;/)
-    expect(appCss).toMatch(/\.ads-toolbar-avatar\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*width:\s*42px;[^}]*height:\s*42px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-avatar\s*\{[^}]*position:\s*relative;[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*width:\s*42px;[^}]*height:\s*42px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-api-dot\s*\{[^}]*position:\s*absolute;[^}]*right:\s*1px;[^}]*bottom:\s*1px;[^}]*width:\s*10px;[^}]*height:\s*10px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-api-dot\.live\s*\{[^}]*background:\s*#24b56b;/)
+    expect(appCss).toMatch(/\.ads-toolbar-api-dot\.error\s*\{[^}]*background:\s*#dc4b43;/)
     expect(appCss).toMatch(/\.ads-toolbar-user-copy\s*\{[^}]*display:\s*grid;[^}]*gap:\s*4px;/)
     expect(appCss).toMatch(/\.ads-toolbar-user-role\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*gap:\s*5px;/)
     expect(appCss).toMatch(/\.ads-toolbar-user-menu\s*\{[^}]*width:\s*30px;[^}]*height:\s*30px;[^}]*border-radius:\s*999px;/)
@@ -1448,6 +1502,115 @@ function adSetForDashboard(overrides = {}) {
   }
 }
 
+function workspaceForDateScoping(): WorkspaceData {
+  const trendData = Array.from({ length: 10 }, (_, index) => {
+    const value = index + 1
+    return {
+      bookings: value,
+      clicks: value * 100,
+      cpa: 1,
+      date: `2024-10-${String(value).padStart(2, '0')}`,
+      impressions: value * 1000,
+      leads: value * 10,
+      reach: value * 500,
+      revenue: value * 10,
+      showUps: value,
+      spend: value,
+      treatments: value,
+    }
+  })
+
+  return {
+    actions: [],
+    adInsights: [
+      {
+        adSetId: 'set-1',
+        bookings: 55,
+        campaignId: 'campaign-1',
+        clicks: 5500,
+        cpc: 0.1,
+        creative: 'creative-1',
+        ctr: 10,
+        id: 'ad-1',
+        impressions: 55000,
+        leads: 550,
+        name: 'Clinic Lead Ad',
+        roas: 2,
+        score: 80,
+        showRate: 50,
+        spend: 550,
+        status: 'active',
+      },
+    ],
+    adSets: [
+      {
+        audience: 'Bangkok skincare buyers',
+        bookings: 55,
+        budget: 1000,
+        campaignId: 'campaign-1',
+        cpa: 10,
+        deliveryStatus: 'active',
+        id: 'set-1',
+        name: 'Bangkok Core Audience',
+        roas: 2,
+        spend: 550,
+        status: 'healthy',
+      },
+    ],
+    appointmentStages: [],
+    auditTrail: [],
+    autoAds: [],
+    autoMode: 'suggest',
+    campaigns: [
+      {
+        aiStatus: 'healthy',
+        aiSummary: 'Stable test campaign',
+        budget: 1000,
+        conversions: 55,
+        cpa: 10,
+        ctr: 10,
+        deliveryStatus: 'active',
+        frequency: 1.2,
+        id: 'campaign-1',
+        name: 'Date scoped campaign',
+        objective: 'OUTCOME_LEADS',
+        revenue: 1100,
+        roas: 2,
+        spend: 550,
+      },
+    ],
+    channelPerformance: [
+      {
+        bookings: 55,
+        channel: 'Meta Ads',
+        clicks: 5500,
+        firstTimePatients: 55,
+        impressions: 55000,
+        leadQuality: 80,
+        leads: 550,
+        reach: 27500,
+        revenue: 550,
+        showUps: 55,
+        spend: 55,
+        treatments: 55,
+      },
+    ],
+    complianceReviews: [],
+    funnelMetrics: [
+      { benchmark: 'Meta delivery', conversionRate: 100, count: 55000, dropOffRate: 0, help: '', stage: 'Impressions' },
+      { benchmark: 'Clicks rate', conversionRate: 10, count: 5500, dropOffRate: 90, help: '', stage: 'Clicks' },
+      { benchmark: 'Bookings rate', conversionRate: 10, count: 55, dropOffRate: 90, help: '', stage: 'Bookings' },
+    ],
+    insightComponents: [],
+    insights: [],
+    memoryItems: [],
+    serviceLines: [],
+    tasks: [],
+    trendData,
+    updatedAt: 'Meta sync',
+  }
+}
+
 function visibleText(html: string) {
   return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 }
@@ -1456,13 +1619,6 @@ function dashboardMetricCardHtml(html: string, label: string) {
   const match = html.match(new RegExp(`<article class="ads-dashboard-metric-card">(?:(?!</article>)[\\s\\S])*<span>${label}</span>(?:(?!</article>)[\\s\\S])*</article>`))
   expect(match?.[0]).toBeTruthy()
   return match?.[0] ?? ''
-}
-
-function readPngColorType(relativePath: string) {
-  const bytes = readFileSync(new URL(relativePath, import.meta.url))
-  const signature = '89504e470d0a1a0a'
-  expect(bytes.subarray(0, 8).toString('hex')).toBe(signature)
-  return bytes[25]
 }
 
 function withPathname(pathname: string, callback: () => void) {

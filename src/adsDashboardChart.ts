@@ -113,6 +113,11 @@ export function buildRevenueTrendOption(trendData: AdsTrendDatum[]): EChartsOpti
   const revenueYAxisMax = nicePerformanceOverviewAxisMax(trendData.map((point) => point.revenue))
   const spendYAxisMax = nicePerformanceOverviewAxisMax(trendData.map((point) => point.spend))
   const bookingsYAxisMax = nicePerformanceOverviewAxisMax(trendData.map((point) => point.bookings))
+  const chartLeft = 96
+  const chartRight = 14
+  const laneHeight = 42
+  const laneTops = [54, 124, 194]
+  const laneLabelLeft = chartLeft
   const performanceOverviewYAxis = (axisMax: number) => ({
     axisLine: { show: false },
     axisTick: { show: false },
@@ -129,12 +134,11 @@ export function buildRevenueTrendOption(trendData: AdsTrendDatum[]): EChartsOpti
     formatter: fmtChartAxisNumber,
     fontSize: 11,
     fontWeight: 700,
-    margin: 10,
+    margin: 12,
     show: true,
+    width: 46,
   }
-  const hiddenYAxisLabel = { ...visibleYAxisLabel, show: false }
   const visibleYAxisLine = { show: true, lineStyle: { color: '#dce6f2' } }
-  const hiddenYAxisLine = { show: false }
   const xAxisBase = {
     axisLine: { lineStyle: { color: '#dce6f2' } },
     axisTick: { show: false },
@@ -152,9 +156,29 @@ export function buildRevenueTrendOption(trendData: AdsTrendDatum[]): EChartsOpti
       link: [{ xAxisIndex: 'all' }],
     },
     grid: [
-      { containLabel: false, height: 46, left: 58, right: 18, top: 38 },
-      { containLabel: false, height: 46, left: 58, right: 18, top: 108 },
-      { containLabel: false, height: 46, left: 58, right: 18, top: 178 },
+      { containLabel: false, height: laneHeight, left: chartLeft, right: chartRight, top: laneTops[0] },
+      { containLabel: false, height: laneHeight, left: chartLeft, right: chartRight, top: laneTops[1] },
+      { containLabel: false, height: laneHeight, left: chartLeft, right: chartRight, top: laneTops[2] },
+    ],
+    graphic: [
+      {
+        left: laneLabelLeft,
+        style: { fill: '#9b6f3d', font: '700 12px inherit', text: 'Revenue' },
+        top: laneTops[0] - 22,
+        type: 'text',
+      },
+      {
+        left: laneLabelLeft,
+        style: { fill: '#2684ff', font: '700 12px inherit', text: 'Spend' },
+        top: laneTops[1] - 22,
+        type: 'text',
+      },
+      {
+        left: laneLabelLeft,
+        style: { fill: '#9b5cff', font: '700 12px inherit', text: 'Bookings' },
+        top: laneTops[2] - 22,
+        type: 'text',
+      },
     ],
     legend: {
       data: ['Revenue', 'Spend', 'Bookings'],
@@ -238,27 +262,18 @@ export function buildRevenueTrendOption(trendData: AdsTrendDatum[]): EChartsOpti
         ...performanceOverviewYAxis(revenueYAxisMax),
         axisLabel: visibleYAxisLabel,
         axisLine: visibleYAxisLine,
-        name: 'Revenue',
-        nameGap: 8,
-        nameTextStyle: { align: 'left', color: '#9b6f3d', fontSize: 11, fontWeight: 800 },
       },
       {
         ...performanceOverviewYAxis(spendYAxisMax),
-        axisLabel: hiddenYAxisLabel,
-        axisLine: hiddenYAxisLine,
+        axisLabel: visibleYAxisLabel,
+        axisLine: visibleYAxisLine,
         gridIndex: 1,
-        name: 'Spend',
-        nameGap: 8,
-        nameTextStyle: { align: 'left', color: '#2684ff', fontSize: 11, fontWeight: 800 },
       },
       {
         ...performanceOverviewYAxis(bookingsYAxisMax),
-        axisLabel: hiddenYAxisLabel,
-        axisLine: hiddenYAxisLine,
+        axisLabel: visibleYAxisLabel,
+        axisLine: visibleYAxisLine,
         gridIndex: 2,
-        name: 'Bookings',
-        nameGap: 8,
-        nameTextStyle: { align: 'left', color: '#9b5cff', fontSize: 11, fontWeight: 800 },
       },
     ],
   }

@@ -779,7 +779,7 @@ button.home-app-card:hover .home-app-icon {
   .home-clinic-media img {
     width: 100%;
     height: 340px;
-    object-position: center 42%;
+    object-position: center top;
   }
 
   .home-clinic-copy {

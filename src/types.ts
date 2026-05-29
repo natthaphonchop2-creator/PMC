@@ -228,6 +228,8 @@ export interface TrendPoint {
   date: string
   spend: number
   revenue: number
+  impressions?: number
+  reach?: number
   cpa: number
   clicks: number
   leads: number

@@ -39,7 +39,7 @@ const toolIcons: Record<HomeTool['id'], LucideIcon> = {
   website: Activity,
 }
 
-const clinicImageSrc = '/pmc-clinic-reception.png'
+const clinicImageSrc = '/pmc-home-clinic-reception.png?v=clean'
 
 const appDescriptions: Record<HomeTool['id'], string> = {
   ads: 'ดูโฆษณาและคำแนะนำที่รออนุมัติ',

@@ -6218,6 +6218,7 @@ input:focus-visible {
 }
 
 .ads-toolbar-avatar {
+  position: relative;
   display: grid;
   place-items: center;
   width: 42px;
@@ -6230,6 +6231,48 @@ input:focus-visible {
     #efe2d2;
   color: var(--clinic-bronze-dark);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74), 0 8px 18px rgba(77, 57, 32, 0.09);
+}
+
+.ads-toolbar-api-dot {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(255, 253, 249, 0.98);
+  border-radius: 999px;
+  background: #d3c3b2;
+  box-shadow: 0 0 0 1px rgba(77, 57, 32, 0.08), 0 5px 12px rgba(77, 57, 32, 0.16);
+}
+
+.ads-toolbar-api-dot.live {
+  background: #24b56b;
+}
+
+.ads-toolbar-api-dot.loading {
+  background: #2f86eb;
+  animation: adsApiDotPulse 1.2s ease-in-out infinite;
+}
+
+.ads-toolbar-api-dot.waiting {
+  background: #d09a42;
+}
+
+.ads-toolbar-api-dot.error {
+  background: #dc4b43;
+}
+
+@keyframes adsApiDotPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 1px rgba(77, 57, 32, 0.08), 0 5px 12px rgba(77, 57, 32, 0.16);
+  }
+
+  50% {
+    transform: scale(0.86);
+    box-shadow: 0 0 0 5px rgba(47, 134, 235, 0.14), 0 5px 12px rgba(77, 57, 32, 0.16);
+  }
 }
 
 .ads-toolbar-user-role svg {
@@ -6401,22 +6444,11 @@ input:focus-visible {
   animation: clinicShellDrift 24s linear infinite;
 }
 
-.ads-main-panel .topbar {
-  position: relative;
-  z-index: 1;
-  min-height: 46px;
-  justify-content: flex-end;
-  padding: 16px 32px 0;
-  border-bottom: 0;
-  background: transparent;
-  backdrop-filter: blur(6px);
-}
-
 .ads-main-panel .page-body {
   position: relative;
   z-index: 1;
   width: min(100%, 1580px);
-  padding: 4px 32px 30px;
+  padding: 28px 32px 30px;
 }
 
 .ads-dashboard-layout {
@@ -6940,11 +6972,11 @@ input:focus-visible {
 }
 
 .ads-workspace-shell .performance-panel .revenue-chart-wrap {
-  min-height: 236px;
+  min-height: 258px;
 }
 
 .ads-workspace-shell .performance-panel .revenue-echart {
-  height: 236px;
+  height: 258px;
 }
 
 .performance-empty-chart {
@@ -7014,9 +7046,10 @@ input:focus-visible {
   grid-template-columns: 30px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  border: 1px solid rgba(130, 104, 73, 0.12);
+  border: 1px solid rgba(181, 126, 74, 0.22);
   border-radius: 8px;
-  background: rgba(255, 250, 242, 0.84);
+  background: linear-gradient(135deg, rgba(255, 251, 243, 0.94), rgba(252, 238, 220, 0.74));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82), 0 8px 18px rgba(132, 92, 54, 0.06);
   padding: 9px 10px;
 }
 
@@ -7045,30 +7078,31 @@ input:focus-visible {
   border-radius: 8px;
   display: grid;
   place-items: center;
-  background: #f2eee8;
-  color: #80664d;
+  background: #f6ead8;
+  color: #8f5f31;
   font-size: 10.5px;
   font-weight: 950;
 }
 
 .ads-campaign-rank-icon.good {
-  background: #f5ead8;
-  color: #80532a;
+  background: linear-gradient(135deg, #bf7b3d, #8f5f31);
+  color: #fff8ee;
+  box-shadow: 0 6px 14px rgba(143, 95, 49, 0.22);
 }
 
 .ads-campaign-rank-icon.info {
-  background: #e9f3ff;
-  color: #1f6fbd;
+  background: #f0e0cb;
+  color: #8f5f31;
 }
 
 .ads-campaign-rank-icon.watch {
-  background: #fff3d3;
-  color: #a16207;
+  background: #fff0c8;
+  color: #9a6500;
 }
 
 .ads-campaign-rank-icon.critical {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: #fde7dd;
+  color: #a4461f;
 }
 
 .ads-campaign-rank-change {
@@ -7080,15 +7114,15 @@ input:focus-visible {
 
 .ads-campaign-rank-change.good,
 .ads-campaign-rank-change.info {
-  color: #8f5f31;
+  color: #7f4f20;
 }
 
 .ads-campaign-rank-change.watch {
-  color: #a16207;
+  color: #9a6500;
 }
 
 .ads-campaign-rank-change.critical {
-  color: #b91c1c;
+  color: #a4461f;
 }
 
 .ads-dashboard-select-pill,
@@ -7829,11 +7863,6 @@ input:focus-visible {
     min-height: auto;
     margin: 0;
     border-radius: 24px;
-  }
-
-  .ads-main-panel .topbar {
-    min-height: 52px;
-    padding: 14px 16px 0;
   }
 
   .ads-main-panel .page-body {

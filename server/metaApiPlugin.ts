@@ -1573,6 +1573,8 @@ function buildWorkspaceFromMeta(args: {
         date: row.date_start ?? row.date_stop ?? '-',
         spend: metrics.spend,
         revenue: metrics.revenue,
+        impressions: metrics.impressions,
+        reach: metrics.reach,
         cpa: metrics.cpa,
         clicks: metrics.clicks,
         leads: metrics.leads,

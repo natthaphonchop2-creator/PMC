@@ -56,6 +56,7 @@ import { buildRevenueTrendOption } from './adsDashboardChart'
 import { HomeApp } from './apps/home/HomeApp'
 import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
 import type { ManagedPage, SharedAdsInsightForPage } from './apps/page-automation/types'
+import { metaDatePresetForUi, scopeWorkspaceByDatePreset } from './adsDashboardDateScope'
 import './App.css'
 
 type TabId =
@@ -169,7 +170,7 @@ type Summary = {
   aov: number
 }
 
-type TrendDatum = { bookings: number; clicks?: number; date: string; day: string; leads?: number; revenue: number; spend: number; treatments?: number }
+type TrendDatum = { bookings: number; clicks?: number; date: string; day: string; impressions?: number; leads?: number; revenue: number; spend: number; treatments?: number }
 
 type DataSourceState = 'loading' | 'live' | 'setup-required' | 'empty' | 'error'
 type AutomationMode = 'แนะนำเท่านั้น' | 'ต้องอนุมัติก่อน' | 'พัก automation'
@@ -438,6 +439,7 @@ const fmtMoney = (value: number) =>
 const fmtNum = (value: number) => new Intl.NumberFormat('th-TH').format(value)
 const fmtMoneyShort = (value: number) => (value >= 1000 ? `฿${Math.round(value / 1000)}k` : fmtMoney(value))
 const ALL_PAGE_SCOPE_ID = 'all-pages'
+const DEFAULT_META_WORKSPACE_DATE_PRESET = 'maximum'
 
 function buildAdsPageSelectorOptions(pages: ManagedPage[], metaInfo: MetaInfo | null): AdsPageSelectorOption[] {
   const pageOptions = pages.map((page) => ({
@@ -534,14 +536,6 @@ function renderPersistenceLabel(result?: MetaConfigResponse['renderPersistence']
   if (!result.enabled) return ' · บันทึกในเครื่องนี้แล้ว แต่ยังไม่ได้เปิดการบันทึกสำหรับระบบออนไลน์'
   const failed = result.updated?.find((item) => !item.ok)
   return failed ? ` · ระบบออนไลน์อัปเดตบางส่วนไม่สำเร็จ (${failed.key})` : ' · พร้อมใช้กับระบบออนไลน์แล้ว'
-}
-
-function metaDatePresetForUi(preset: string) {
-  if (preset === '7 วันล่าสุด' || preset === 'Last 7 days') return 'last_7d'
-  if (preset === 'เดือนนี้' || preset === 'This month') return 'this_month'
-  if (preset === 'ไตรมาสนี้' || preset === 'Quarter to date') return 'last_90d'
-  if (preset === 'ข้อมูลทั้งหมด' || preset === 'Maximum history') return 'maximum'
-  return 'last_30d'
 }
 
 function deliveryLabel(status: 'active' | 'paused') {
@@ -1178,6 +1172,7 @@ function mapTrendData(points: TrendPoint[]): TrendDatum[] {
     clicks: point.clicks,
     date: point.date,
     day: formatTrendDay(point.date, index),
+    impressions: point.impressions,
     leads: point.leads,
     revenue: Math.round(point.revenue),
     spend: Math.round(point.spend),
@@ -1305,9 +1300,10 @@ function PmcAdsAgentApp() {
   const effectiveSelectedPageId = selectedPageExists ? selectedPageId : ALL_PAGE_SCOPE_ID
   const selectedManagedPage = managedPages.find((page) => page.id === effectiveSelectedPageId)
   const isPageScoped = effectiveSelectedPageId !== ALL_PAGE_SCOPE_ID && Boolean(selectedManagedPage)
+  const dateScopedWorkspace = useMemo(() => scopeWorkspaceByDatePreset(workspace, datePreset), [datePreset, workspace])
   const visibleWorkspace = useMemo(
-    () => buildPageScopedWorkspace(workspace, pageAdsInsight, selectedManagedPage, isPageScoped),
-    [isPageScoped, pageAdsInsight, selectedManagedPage, workspace],
+    () => buildPageScopedWorkspace(dateScopedWorkspace, pageAdsInsight, selectedManagedPage, isPageScoped),
+    [dateScopedWorkspace, isPageScoped, pageAdsInsight, selectedManagedPage],
   )
   const displayCampaigns = useMemo(() => (visibleWorkspace ? visibleWorkspace.campaigns.map(mapMetaCampaign) : []), [visibleWorkspace])
   const activeRecommendations = useMemo(
@@ -1458,7 +1454,7 @@ function PmcAdsAgentApp() {
         return
       }
 
-      const datePresetParam = metaDatePresetForUi(datePreset)
+      const datePresetParam = DEFAULT_META_WORKSPACE_DATE_PRESET
       const result = await apiJson<MetaWorkspaceResponse>(`/api/meta/workspace?datePreset=${encodeURIComponent(datePresetParam)}`)
       if (!isLatestRequest()) return
 
@@ -1498,7 +1494,7 @@ function PmcAdsAgentApp() {
         showMascotNotice(source === 'execution' ? 'อัปเดตบัญชีโฆษณาแล้ว โหลดผลล่าสุดกลับมาเรียบร้อย' : `โหลดข้อมูลล่าสุดแล้ว ${result.meta.counts?.campaigns ?? 0} แคมเปญ`, 'good')
         appendAudit({
           action: source === 'execution' ? 'โหลดข้อมูลหลังดำเนินการแล้ว' : 'โหลดข้อมูลบัญชีโฆษณาแล้ว',
-          detail: `${datePreset} · ${result.meta.counts?.campaigns ?? 0} แคมเปญ · ${result.meta.counts?.adSets ?? 0} ชุดโฆษณา`,
+          detail: `${datePresetParam} · ${result.meta.counts?.campaigns ?? 0} แคมเปญ · ${result.meta.counts?.adSets ?? 0} ชุดโฆษณา`,
           actor: 'ระบบ',
           tone: 'good',
         })
@@ -1513,7 +1509,7 @@ function PmcAdsAgentApp() {
       setApiMessage(formattedMessage)
       showMascotNotice('โหลดข้อมูลสะดุดครับ ตรวจการเชื่อมต่อหรือข้อมูลบัญชีอีกครั้ง', 'critical')
     }
-  }, [appendAudit, datePreset, showMascotNotice])
+  }, [appendAudit, showMascotNotice])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1610,7 +1606,7 @@ function PmcAdsAgentApp() {
 
         const ctx = gsap.context(() => {
           const timeline = gsap.timeline({ defaults: { duration: 0.52, ease: 'power3.out' } })
-          gsap.set('.ads-outer-toolbar, .topbar', { clearProps: 'all' })
+          gsap.set('.ads-outer-toolbar', { clearProps: 'all' })
           const dashboardAnimationTargets = root.querySelectorAll('.ads-dashboard-metric-card, .ads-dashboard-panel')
           if (dashboardAnimationTargets.length > 0) {
             timeline.from(dashboardAnimationTargets, { y: 16, autoAlpha: 0, stagger: { amount: 0.34 } }, '<0.12')
@@ -1829,6 +1825,7 @@ function PmcAdsAgentApp() {
     <div className="ads-workspace-shell app-shell" ref={shellRef}>
       <AdsOuterToolbar
         activeToolbarKey={activeToolbarKey}
+        dataState={dataState}
         onPageSelect={handlePageScopeSelect}
         onSelect={handleTabSelect}
         pageOptions={pageSelectorOptions}
@@ -1836,10 +1833,6 @@ function PmcAdsAgentApp() {
         selectedPageId={effectiveSelectedPageId}
       />
       <main className="ads-main-panel app-main">
-        <Topbar
-          onSync={syncWorkspace}
-          syncState={syncState}
-        />
         <div className="page-body">
           {isPageLoading ? (
             <PageSkeleton activeTab={activeTab} />
@@ -2036,6 +2029,7 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
 
 type AdsOuterToolbarProps = {
   activeToolbarKey: string
+  dataState: DataSourceState
   onPageSelect: (pageId: string) => void
   onSelect: (tab: TabId, toolbarKey?: string) => void
   pageOptions: AdsPageSelectorOption[]
@@ -2043,7 +2037,7 @@ type AdsOuterToolbarProps = {
   selectedPageId: string
 }
 
-function AdsOuterToolbar({ activeToolbarKey, onPageSelect, onSelect, pageOptions, pageScopeState, selectedPageId }: AdsOuterToolbarProps) {
+function AdsOuterToolbar({ activeToolbarKey, dataState, onPageSelect, onSelect, pageOptions, pageScopeState, selectedPageId }: AdsOuterToolbarProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const [isPageMenuOpen, setPageMenuOpen] = useState(false)
   const pageSelectorRef = useRef<HTMLDivElement>(null)
@@ -2060,6 +2054,14 @@ function AdsOuterToolbar({ activeToolbarKey, onPageSelect, onSelect, pageOptions
       : pageScopeState === 'error'
         ? 'เลือกได้เฉพาะข้อมูลทั้งหมด'
         : selectedPage.detail
+  const apiStatus =
+    dataState === 'live'
+      ? { label: 'API พร้อมใช้งาน', tone: 'live' }
+      : dataState === 'loading'
+        ? { label: 'กำลังตรวจ API', tone: 'loading' }
+        : dataState === 'error'
+          ? { label: 'API มีปัญหา', tone: 'error' }
+          : { label: 'รอการตั้งค่า API', tone: 'waiting' }
   const selectTab = (tab: TabId, toolbarKey?: string) => {
     onSelect(tab, toolbarKey)
     setIsMenuOpen(false)
@@ -2145,6 +2147,7 @@ function AdsOuterToolbar({ activeToolbarKey, onPageSelect, onSelect, pageOptions
         >
           <span className="ads-toolbar-avatar" aria-hidden="true">
             {selectedPage.kind === 'all' ? <Layers3 size={19} /> : <UserRound size={20} />}
+            <span className={`ads-toolbar-api-dot ${apiStatus.tone}`} title={apiStatus.label} />
           </span>
           <div className="ads-toolbar-user-copy">
             <strong>{selectedPage.label}</strong>
@@ -2188,25 +2191,6 @@ function AdsOuterToolbar({ activeToolbarKey, onPageSelect, onSelect, pageOptions
   )
 }
 
-type TopbarProps = {
-  onSync: () => void
-  syncState: string
-}
-
-function Topbar({ onSync, syncState }: TopbarProps) {
-  const isSyncing = syncState === 'Syncing...'
-  return (
-    <header className="topbar" aria-label="Ads Agent API tools">
-      <div className="topbar-actions">
-        <button className="pill-button good api-check-button" type="button" onClick={onSync} aria-label="เช็ค API" aria-busy={isSyncing}>
-          <RefreshCw size={15} />
-          เช็ค API
-        </button>
-      </div>
-    </header>
-  )
-}
-
 export function AnalyticsPage({
   campaigns,
   dateLabel = 'ข้อมูลล่าสุด',
@@ -2240,23 +2224,25 @@ export function AnalyticsPage({
   const topCampaigns = [...campaigns]
     .sort((left, right) => right.conversions - left.conversions || right.roas - left.roas)
     .slice(0, 3)
-  const averageCtr = campaigns.length > 0 ? campaigns.reduce((sum, campaign) => sum + campaign.ctr, 0) / campaigns.length : 0
   const totalConversions = campaigns.reduce((sum, campaign) => sum + campaign.conversions, 0)
+  const dashboardConversions = summary.bookings || totalConversions
   const unavailableMetaMetricChange: MetricChange = { label: 'รอข้อมูล', tone: 'neutral', detail: 'ยังไม่มีข้อมูลในช่วงนี้' }
   const impressionsCount = funnelMetricCount(funnelMetrics, 'Impressions')
   const clicksCount = funnelMetricCount(funnelMetrics, 'Clicks')
+  const dashboardCtr = impressionsCount && clicksCount ? (clicksCount / impressionsCount) * 100 : campaigns.length > 0 ? campaigns.reduce((sum, campaign) => sum + campaign.ctr, 0) / campaigns.length : 0
   const funnelSparkline = sparklineFromFunnel(funnelMetrics, ['Impressions', 'Clicks', 'Leads', 'Bookings', 'Paid'])
   const clicksTrendSparkline = sparklineFromTrend(trendData, (point) => point.clicks)
   const conversionTrendSparkline = sparklineFromTrend(trendData, (point) => point.bookings)
   const spendTrendSparkline = sparklineFromTrend(trendData, (point) => point.spend)
   const cpaTrendSparkline = sparklineFromTrend(trendData, (point) => (point.bookings > 0 ? point.spend / point.bookings : undefined))
+  const ctrTrendSparkline = sparklineFromTrend(trendData, (point) => (point.impressions && point.impressions > 0 ? ((point.clicks ?? 0) / point.impressions) * 100 : undefined))
   const campaignCtrSparkline = sparklineFromCampaigns(campaigns, (campaign) => campaign.ctr)
   const roasTrendSparkline = sparklineFromTrend(trendData, (point) => (point.spend > 0 ? point.revenue / point.spend : undefined))
   const campaignRoasSparkline = sparklineFromCampaigns(campaigns, (campaign) => campaign.roas)
   const metricCards: DashboardMetric[] = [
-    { icon: Eye, label: 'Impressions', tone: 'green', value: impressionsCount !== null ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount !== null ? 'จำนวนครั้งที่โฆษณาถูกเห็น' : 'รอข้อมูลการแสดงผลสำหรับช่วงนี้', change: impressionsCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จากข้อมูลบัญชีโฆษณา' } : unavailableMetaMetricChange, sparkline: { label: 'สรุปเส้นทางลูกค้า', source: 'funnel', values: funnelSparkline } },
-    { icon: MousePointerClick, label: 'Clicks', tone: 'blue', value: clicksCount !== null ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount !== null ? 'จำนวนครั้งที่คนกดจากโฆษณา' : 'รอข้อมูลการกดสำหรับช่วงนี้', change: clicksCount !== null ? { label: 'พร้อมดู', tone: 'good', detail: 'จากข้อมูลบัญชีโฆษณา' } : unavailableMetaMetricChange, sparkline: { label: clicksTrendSparkline.length ? 'สรุปคลิกรายวัน' : 'สรุปเส้นทางลูกค้า', source: clicksTrendSparkline.length ? 'daily-trend' : 'funnel', values: clicksTrendSparkline.length ? clicksTrendSparkline : sparklineFromFunnel(funnelMetrics, ['Clicks', 'Leads', 'Bookings', 'Paid']) } },
-    { icon: BarChart3, label: 'Conversions', tone: 'purple', value: fmtNum(totalConversions || summary.bookings), helper: 'ผลลัพธ์ที่เกิดขึ้นจากโฆษณาและการนัดหมาย', change: conversionRatePeriodChange(trendData), sparkline: { label: 'สรุปยอดนัดหมายรายวัน', source: conversionTrendSparkline.length ? 'daily-trend' : 'empty', values: conversionTrendSparkline } },
+    { icon: Eye, label: 'Impressions', tone: 'green', value: impressionsCount !== null ? fmtNum(impressionsCount) : 'รอข้อมูล', helper: impressionsCount !== null ? 'จำนวนครั้งที่โฆษณาถูกเห็น' : 'รอข้อมูลการแสดงผลสำหรับช่วงนี้', change: impressionsCount !== null ? { label: 'ข้อมูลบัญชีโฆษณา', tone: 'good', detail: 'ตามช่วงที่เลือก' } : unavailableMetaMetricChange, sparkline: { label: 'สรุปเส้นทางลูกค้า', source: 'funnel', values: funnelSparkline } },
+    { icon: MousePointerClick, label: 'Clicks', tone: 'blue', value: clicksCount !== null ? fmtNum(clicksCount) : 'รอข้อมูล', helper: clicksCount !== null ? 'จำนวนครั้งที่คนกดจากโฆษณา' : 'รอข้อมูลการกดสำหรับช่วงนี้', change: clicksCount !== null ? { label: 'ข้อมูลบัญชีโฆษณา', tone: 'good', detail: 'ตามช่วงที่เลือก' } : unavailableMetaMetricChange, sparkline: { label: clicksTrendSparkline.length ? 'สรุปคลิกรายวัน' : 'สรุปเส้นทางลูกค้า', source: clicksTrendSparkline.length ? 'daily-trend' : 'funnel', values: clicksTrendSparkline.length ? clicksTrendSparkline : sparklineFromFunnel(funnelMetrics, ['Clicks', 'Leads', 'Bookings', 'Paid']) } },
+    { icon: BarChart3, label: 'Conversions', tone: 'purple', value: fmtNum(dashboardConversions), helper: 'ผลลัพธ์ที่เกิดขึ้นจากโฆษณาและการนัดหมาย', change: conversionRatePeriodChange(trendData), sparkline: { label: 'สรุปยอดนัดหมายรายวัน', source: conversionTrendSparkline.length ? 'daily-trend' : 'empty', values: conversionTrendSparkline } },
     { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ค่าโฆษณารวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จากค่าโฆษณารายวัน'), sparkline: { label: 'สรุปค่าโฆษณารายวัน', source: spendTrendSparkline.length ? 'daily-trend' : 'empty', values: spendTrendSparkline } },
   ]
 
@@ -2306,9 +2292,9 @@ export function AnalyticsPage({
       </section>
 
       <section className="ads-dashboard-lower-grid" aria-label="Ads Dashboard secondary metrics">
-        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'green', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'ค่าโฆษณาต่อหนึ่งผลลัพธ์', change: { label: summary.cpa > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลล่าสุด' }, sparkline: { label: 'สรุปต้นทุนต่อผลลัพธ์รายวัน', source: cpaTrendSparkline.length ? 'daily-trend' : 'empty', values: cpaTrendSparkline } }} />
-        <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: averageCtr > 0 ? `${averageCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'อัตราคนเห็นแล้วกดโฆษณา', change: { label: averageCtr > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: averageCtr > 0 ? 'good' : 'neutral', detail: 'จากแคมเปญล่าสุด' }, sparkline: { label: 'สรุป CTR ตามแคมเปญ', source: campaignCtrSparkline.length ? 'campaign-summary' : 'empty', values: campaignCtrSparkline } }} />
-        <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'รายได้เทียบกับค่าโฆษณา', change: { label: summary.roas > 0 ? 'พร้อมดู' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'คำนวณจากข้อมูลล่าสุด' }, sparkline: { label: roasTrendSparkline.length ? 'สรุปผลตอบแทนรายวัน' : 'สรุปผลตอบแทนตามแคมเปญ', source: roasTrendSparkline.length ? 'daily-trend' : campaignRoasSparkline.length ? 'campaign-summary' : 'empty', values: roasTrendSparkline.length ? roasTrendSparkline : campaignRoasSparkline } }} />
+        <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'green', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'ค่าโฆษณาต่อหนึ่งผลลัพธ์', change: { label: summary.cpa > 0 ? 'คำนวณแล้ว' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'จากช่วงที่เลือก' }, sparkline: { label: 'สรุปต้นทุนต่อผลลัพธ์รายวัน', source: cpaTrendSparkline.length ? 'daily-trend' : 'empty', values: cpaTrendSparkline } }} />
+        <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: dashboardCtr > 0 ? `${dashboardCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'อัตราคนเห็นแล้วกดโฆษณา', change: { label: dashboardCtr > 0 ? 'คำนวณแล้ว' : 'รอข้อมูล', tone: dashboardCtr > 0 ? 'good' : 'neutral', detail: impressionsCount && clicksCount ? 'จากช่วงที่เลือก' : 'จากแคมเปญล่าสุด' }, sparkline: { label: ctrTrendSparkline.length ? 'สรุป CTR รายวัน' : 'สรุป CTR ตามแคมเปญ', source: ctrTrendSparkline.length ? 'daily-trend' : campaignCtrSparkline.length ? 'campaign-summary' : 'empty', values: ctrTrendSparkline.length ? ctrTrendSparkline : campaignCtrSparkline } }} />
+        <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'รายได้เทียบกับค่าโฆษณา', change: { label: summary.roas > 0 ? 'คำนวณแล้ว' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'จากช่วงที่เลือก' }, sparkline: { label: roasTrendSparkline.length ? 'สรุปผลตอบแทนรายวัน' : 'สรุปผลตอบแทนตามแคมเปญ', source: roasTrendSparkline.length ? 'daily-trend' : campaignRoasSparkline.length ? 'campaign-summary' : 'empty', values: roasTrendSparkline.length ? roasTrendSparkline : campaignRoasSparkline } }} />
         <DashboardPanel className="ads-insight-panel" title="PMC Insights" subtitle="สรุปสิ่งที่ควรตรวจจากข้อมูลล่าสุด">
           <DashboardInsightsBanner onOpenInsights={onOpenInsights} recommendations={recommendations} summary={summary} />
         </DashboardPanel>
@@ -5410,7 +5396,7 @@ export function AutoAdsPageDraft({
             ) : ads.length > 0 ? (
               <EmptyState title="ไม่พบโฆษณาตามเงื่อนไข" detail="ล้างคำค้นหาหรือเปลี่ยนตัวกรองเพื่อดู Auto Ads ทั้งหมด" />
             ) : (
-              <EmptyState title="ยังไม่มีข้อมูลโฆษณา" detail="กดเช็ค API เพื่อโหลดโฆษณา แล้วให้ระบบวิเคราะห์ Auto Ads" />
+              <EmptyState title="ยังไม่มีข้อมูลโฆษณา" detail="รอข้อมูลจากบัญชีโฆษณาที่เชื่อมไว้ แล้วระบบจะวิเคราะห์ Auto Ads ให้ทันที" />
             )}
           </div>
         </SectionCard>
