@@ -32,3 +32,4 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added the Insights AI Analysis workspace implementation plan for replacing the old Insights page with an AI Brief First workspace, structured AI refresh payloads, formula-backed metrics, charts, evidence, confidence, and approval-gated recommendations.
 - Implemented the rebuilt Insights AI Analysis workspace with cached AI brief, structured AI refresh payloads, formula metrics, charts, evidence, confidence, and approval-gated recommendations.
 - Added the Automation Ads workspace implementation plan for replacing the paused placeholder with a Run Monitor, scheduled approval queue, configurable safe rules, conflict handling, and run history.
+- Implemented the Automation Ads workspace with a deterministic rule engine, manual run monitor, approval queue, configurable rule builder, run history, conflict/duplicate guards, and responsive browser QA.

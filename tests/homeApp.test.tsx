@@ -1422,9 +1422,18 @@ describe('Home app shell', () => {
     expect(text).not.toContain('AI จริง')
   })
 
-  it('shows Automation Ads as updating while the full workspace is paused', () => {
+  it('shows Automation Ads as a safe approval queue workspace', () => {
     const html = renderToStaticMarkup(
       <AutomationAdsPage
+        ads={[
+          { adSetId: 'set-1', bookings: 1, campaignId: 'campaign-1', clicks: 44, cpc: 24, creative: 'Video', ctr: 1.1, id: 'ad-1', impressions: 4000, leads: 3, name: 'Filler Loser', roas: 0.4, score: 38, showRate: 33, spend: 1050, status: 'active' },
+        ]}
+        adSets={[
+          { audience: 'Retarget', bookings: 1, budget: 1500, campaignId: 'campaign-1', cpa: 520, deliveryStatus: 'active', id: 'set-1', name: 'Retarget Filler', roas: 0.4, spend: 1300, status: 'watch' },
+        ]}
+        campaigns={[
+          { aiStatus: 'watch', aiSummary: 'ต้องจับตา creative fatigue', budget: 3000, conversions: 1, cpa: 520, ctr: 1.1, deliveryStatus: 'active', frequency: 4.7, id: 'campaign-1', name: 'Filler Review', objective: 'Leads', revenue: 520, roas: 0.4, spend: 1300 },
+        ]}
         components={[
           {
             ads: 1,
@@ -1447,16 +1456,27 @@ describe('Home app shell', () => {
       />,
     )
     const text = visibleText(html)
+    const source = readText('../src/App.tsx')
 
-    expect(text).toContain('Automation Ads กำลังอัพเดท')
-    expect(text).toContain('ทีมกำลังจัดระบบ workflow โฆษณาอัตโนมัติ')
-    expect(text).toContain('ข้อมูล Automation Ads ที่บันทึกไว้')
-    expect(text).toContain('กลับมาทำต่อเร็ว ๆ นี้')
+    expect(text).toContain('Automation Ads')
+    expect(text).toContain('ตรวจ Automation ตอนนี้')
+    expect(text).toContain('Approval Queue')
+    expect(text).toContain('Rule Builder')
+    expect(text).toContain('Run History')
+    expect(text).toContain('ต้องอนุมัติก่อนส่ง Meta')
+    expect(text).toContain('กฎที่เปิดใช้งาน')
+    expect(text).not.toContain('Automation Ads กำลังอัพเดท')
+    expect(text).not.toContain('ทีมกำลังจัดระบบ workflow โฆษณาอัตโนมัติ')
+    expect(text).not.toContain('กลับมาทำต่อเร็ว ๆ นี้')
     expect(html).not.toContain('placeholder="ค้นหาครีเอทีฟ"')
     expect(text).not.toContain('บรีฟครีเอทีฟ')
     expect(text).not.toContain('Creative Studio')
     expect(text).not.toContain('สตูดิโอครีเอทีฟ')
     expect(text).not.toContain('ใช้เป็นต้นแบบ')
+    expect(source).toContain('evaluateAutomationRules')
+    expect(source).toContain('workspace={visibleWorkspace}')
+    expect(source).toContain('ads={visibleWorkspace?.adInsights ?? []}')
+    expect(source).not.toMatch(/AutomationAdsPage[\s\S]{0,260}apiJson\('\/api\/meta/)
   })
 
   it('uses standard launcher icons for Ads and Page Auto entries on Home', () => {
@@ -1683,7 +1703,7 @@ describe('Home app shell', () => {
     expect(appCss).toMatch(/\.ads-toolbar-item::after\s*\{[\s\S]*?linear-gradient\(90deg,\s*transparent,\s*rgba\(255,\s*255,\s*255,\s*0\.62\),\s*transparent\)/)
     expect(appCss).toMatch(/\.ads-toolbar-item:hover::after,\s*\.ads-toolbar-item:focus-visible::after,\s*\.ads-toolbar-item\.active::after\s*\{[\s\S]*?animation:\s*clinicSheenSweep 1\.8s ease-out;/)
     expect(appCss).toMatch(/\.ads-dashboard-metric-card::after,\s*\.ads-dashboard-panel::after,\s*\.ads-workspace-shell \.panel::after\s*\{[\s\S]*?pointer-events:\s*none;/)
-    expect(appCss).toMatch(/\.ads-workspace-shell \.automation-ads-updating-panel::before\s*\{[\s\S]*?animation:\s*clinicLinePulse 3\.8s ease-in-out infinite;/)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.automation-run-monitor::before\s*\{[\s\S]*?animation:\s*clinicLinePulse 3\.8s ease-in-out infinite;/)
     expect(appCss).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?animation-duration:\s*0\.01ms !important;/)
   })
 
@@ -1696,7 +1716,7 @@ describe('Home app shell', () => {
     expect(appCss).toMatch(/\.ads-workspace-shell \.panel\s*\{[^}]*background:\s*rgba\(255,\s*253,\s*249,\s*0\.86\);[^}]*box-shadow:\s*0 12px 28px rgba\(77,\s*57,\s*32,\s*0\.065\);/s)
     expect(appCss).toMatch(/\.ads-workspace-shell \.panel-head h2\s*\{[^}]*font-size:\s*14\.5px;[^}]*font-weight:\s*900;/s)
     expect(appCss).toMatch(/\.ads-workspace-shell \.primary-button\s*\{[^}]*background:\s*linear-gradient\(135deg,\s*#c18a55,\s*#9c6433\);/s)
-    expect(appCss).toMatch(/\.ads-workspace-shell \.automation-ads-updating-panel h2\s*\{[^}]*font-size:\s*24px;/s)
+    expect(appCss).toMatch(/\.automation-tabs\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/s)
     expect(appCss).toMatch(/\.ads-workspace-shell \.ads-entity-row\.campaign\s*\{[^}]*rgba\(157,\s*110,\s*62,\s*0\.12\)/s)
     expect(appCss).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.ads-workspace-shell \.ads-tool-window\s*\{[^}]*grid-template-columns:\s*1fr;/)
   })

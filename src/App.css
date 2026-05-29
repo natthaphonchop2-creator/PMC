@@ -4750,6 +4750,330 @@ input:focus-visible {
   padding: 14px;
 }
 
+.automation-run-monitor {
+  overflow: hidden;
+}
+
+.automation-run-monitor .panel-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.automation-schedule-select {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 34px 0 13px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.automation-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.automation-run-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid rgba(117, 103, 216, 0.16);
+  border-radius: 8px;
+  background: rgba(117, 103, 216, 0.06);
+  color: var(--ink-soft);
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.automation-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.automation-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 5px;
+}
+
+.automation-tabs button {
+  min-height: 34px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.automation-tabs button.active {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 8px 18px rgba(35, 26, 18, 0.08);
+}
+
+.automation-queue-list,
+.automation-run-history {
+  display: grid;
+  gap: 10px;
+}
+
+.automation-queue-card,
+.automation-run-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 13px;
+}
+
+.automation-queue-card.conflict_review,
+.automation-queue-card.blocked {
+  border-color: rgba(185, 28, 28, 0.2);
+  background: rgba(255, 245, 245, 0.84);
+}
+
+.automation-queue-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 14px;
+  align-items: start;
+}
+
+.automation-card-kicker,
+.automation-evidence-list,
+.automation-queue-footer,
+.automation-rule-editor-head,
+.automation-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.automation-card-kicker {
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.automation-queue-main h3,
+.automation-rule-editor h3 {
+  margin: 8px 0 5px;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.automation-queue-main p,
+.automation-rule-editor p,
+.automation-run-row span {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.automation-risk-stack {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.automation-risk-stack strong {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 950;
+}
+
+.automation-change-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.automation-evidence-list {
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.automation-evidence-list span {
+  border: 1px solid rgba(130, 104, 73, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 250, 242, 0.9);
+  color: var(--muted);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.automation-evidence-list strong {
+  color: var(--ink);
+}
+
+.automation-queue-footer {
+  justify-content: space-between;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.automation-queue-footer > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.automation-queue-footer > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.automation-rule-builder {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.35fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.automation-rule-list {
+  display: grid;
+  gap: 8px;
+}
+
+.automation-rule-list button {
+  display: grid;
+  gap: 4px;
+  min-height: 76px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--muted);
+  padding: 10px;
+  text-align: left;
+}
+
+.automation-rule-list button.active {
+  border-color: rgba(117, 103, 216, 0.26);
+  background: rgba(117, 103, 216, 0.08);
+  color: var(--ink);
+}
+
+.automation-rule-list span,
+.automation-rule-list small {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.automation-rule-list strong {
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+.automation-rule-editor {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+  padding: 13px;
+}
+
+.automation-rule-editor-head {
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.automation-rule-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.automation-rule-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.automation-rule-form input,
+.automation-rule-form select {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.automation-rule-form input[readonly] {
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.automation-validation-message {
+  margin-top: 12px;
+  border: 1px solid rgba(185, 28, 28, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 245, 245, 0.9);
+  color: #a52222;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.automation-rule-actions {
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.automation-run-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) repeat(5, minmax(86px, 0.62fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.automation-run-row > div:first-child {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+}
+
+.automation-run-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.automation-side-summary {
+  display: grid;
+  gap: 9px;
+}
+
 .asset-source-note {
   margin-top: 4px;
   font-size: 11px;
@@ -8199,6 +8523,30 @@ input:focus-visible {
   color: var(--clinic-bronze-dark);
 }
 
+.ads-workspace-shell .automation-run-monitor {
+  position: relative;
+  overflow: hidden;
+}
+
+.ads-workspace-shell .automation-run-monitor::before {
+  content: "";
+  position: absolute;
+  inset: 18px 18px auto auto;
+  width: min(28%, 220px);
+  height: 116px;
+  border-radius: 8px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(38, 132, 255, 0.18) 0 2px, transparent 2px 100%),
+    linear-gradient(90deg, rgba(21, 128, 61, 0.16) 0 2px, transparent 2px 100%),
+    linear-gradient(90deg, rgba(157, 110, 62, 0.18) 0 2px, transparent 2px 100%);
+  background-size: 100% 24px, 82% 24px, 62% 24px;
+  background-position: 0 18px, 24px 54px, 58px 88px;
+  background-repeat: no-repeat;
+  opacity: 0.54;
+  animation: clinicLinePulse 3.8s ease-in-out infinite;
+}
+
 .ads-workspace-shell .automation-ads-updating-panel {
   position: relative;
   overflow: hidden;
@@ -8492,6 +8840,43 @@ input:focus-visible {
 
   .insights-brief-head h2 {
     font-size: 21px;
+  }
+
+  .automation-run-monitor .panel-actions,
+  .automation-queue-main,
+  .automation-queue-footer,
+  .automation-rule-editor-head {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .automation-monitor-grid,
+  .automation-change-grid,
+  .automation-rule-builder,
+  .automation-rule-form,
+  .automation-run-row {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-risk-stack {
+    justify-items: start;
+  }
+
+  .automation-queue-footer > div,
+  .automation-rule-actions {
+    justify-content: stretch;
+  }
+
+  .automation-queue-footer button,
+  .automation-rule-actions button,
+  .automation-schedule-select,
+  .automation-run-monitor .primary-button {
+    width: 100%;
   }
 }
 

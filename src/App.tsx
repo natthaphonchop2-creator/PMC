@@ -82,6 +82,21 @@ import {
   type InsightsMetrics,
   type InsightsRecommendation,
 } from './insightsWorkspace'
+import {
+  automationActionLabel,
+  automationFreshnessLabel,
+  automationQueueStatusLabel,
+  automationRiskLabel,
+  createDefaultAutomationRules,
+  evaluateAutomationRules,
+  nextRunLabel,
+  schedulePresetLabel,
+  validateAutomationRule,
+  type AutomationQueueItem,
+  type AutomationRunRecord,
+  type AutomationRule,
+  type AutomationSchedulePreset,
+} from './automationAdsWorkspace'
 import { HomeApp } from './apps/home/HomeApp'
 import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
 import type { ManagedPage, SharedAdsInsightForPage } from './apps/page-automation/types'
@@ -1818,7 +1833,15 @@ function PmcAdsAgentApp() {
               workspace={visibleWorkspace}
             />
           )}
-          {activeTab === 'creative' && <AutomationAdsPage components={visibleWorkspace?.insightComponents ?? []} />}
+          {activeTab === 'creative' && (
+            <AutomationAdsPage
+              ads={visibleWorkspace?.adInsights ?? []}
+              adSets={visibleWorkspace?.adSets ?? []}
+              campaigns={visibleWorkspace?.campaigns ?? []}
+              components={visibleWorkspace?.insightComponents ?? []}
+              workspace={visibleWorkspace}
+            />
+          )}
           {activeTab === 'audience' && <AudienceInsightsPage adSets={visibleWorkspace?.adSets ?? []} />}
           {activeTab === 'library' && <AdLibraryPage reviews={visibleWorkspace?.complianceReviews ?? []} />}
           {activeTab === 'reports' && (
@@ -5996,36 +6019,504 @@ function AutoAdsConfirmModal({
   )
 }
 
-export function AutomationAdsPage({ components }: { components: WorkspaceData['insightComponents'] }) {
-  const syncedCount = components.length
+type AutomationAdsTab = 'queue' | 'rules' | 'history'
+type AutomationNumberRuleField =
+  | 'budgetChangeLimit'
+  | 'confidenceThreshold'
+  | 'cpaThreshold'
+  | 'fatigueScoreThreshold'
+  | 'frequencyLimit'
+  | 'minClicks'
+  | 'minConversions'
+  | 'minImpressions'
+  | 'minSpend'
+  | 'roasThreshold'
+  | 'wasteScoreThreshold'
+
+const automationAdsTabs: Array<{ id: AutomationAdsTab; label: string }> = [
+  { id: 'queue', label: 'Approval Queue' },
+  { id: 'rules', label: 'Rule Builder' },
+  { id: 'history', label: 'Run History' },
+]
+
+const automationScheduleOptions: AutomationSchedulePreset[] = ['manual', 'every_6_hours', 'daily', 'business_days']
+
+const automationAdvancedFields: Array<{ key: AutomationNumberRuleField; label: string; step?: string }> = [
+  { key: 'minSpend', label: 'ค่าใช้จ่ายขั้นต่ำ' },
+  { key: 'minImpressions', label: 'Impressions ขั้นต่ำ' },
+  { key: 'minClicks', label: 'Clicks ขั้นต่ำ' },
+  { key: 'minConversions', label: 'Conversions ขั้นต่ำ' },
+  { key: 'confidenceThreshold', label: 'ความมั่นใจขั้นต่ำ' },
+  { key: 'budgetChangeLimit', label: 'ปรับงบสูงสุด %' },
+  { key: 'frequencyLimit', label: 'Frequency limit', step: '0.1' },
+  { key: 'cpaThreshold', label: 'CPA/CPL threshold' },
+  { key: 'roasThreshold', label: 'ROAS threshold', step: '0.1' },
+  { key: 'wasteScoreThreshold', label: 'Waste score' },
+  { key: 'fatigueScoreThreshold', label: 'Fatigue score' },
+]
+
+export function AutomationAdsPage({
+  ads = [],
+  adSets = [],
+  campaigns = [],
+  components = [],
+  workspace = null,
+}: {
+  ads?: WorkspaceData['adInsights']
+  adSets?: WorkspaceData['adSets']
+  campaigns?: WorkspaceData['campaigns']
+  components?: WorkspaceData['insightComponents']
+  workspace?: WorkspaceData | null
+}) {
+  const automationWorkspace = useMemo(
+    () => workspace ?? createAutomationWorkspaceFallback({ ads, adSets, campaigns, components }),
+    [ads, adSets, campaigns, components, workspace],
+  )
+  const initialRules = useMemo(() => createDefaultAutomationRules(automationWorkspace.updatedAt || new Date().toISOString()), [automationWorkspace.updatedAt])
+  const [activeTab, setActiveTab] = useState<AutomationAdsTab>('queue')
+  const [rules, setRules] = useState<AutomationRule[]>(initialRules)
+  const [schedulePreset, setSchedulePreset] = useState<AutomationSchedulePreset>('every_6_hours')
+  const [queueItems, setQueueItems] = useState<AutomationQueueItem[]>([])
+  const [runHistory, setRunHistory] = useState<AutomationRunRecord[]>([])
+  const [selectedRuleId, setSelectedRuleId] = useState(initialRules[0]?.id ?? '')
+  const [automationMessage, setAutomationMessage] = useState('ยังไม่ได้ตรวจรอบใหม่ กดตรวจเพื่อสร้างคิวจากข้อมูลล่าสุด')
+
+  const selectedRule = rules.find((rule) => rule.id === selectedRuleId) ?? rules[0]
+  const latestRun = runHistory[0]
+  const aiAvailable = components.length > 0 || automationWorkspace.insights.length > 0
+  const enabledRulesCount = rules.filter((rule) => rule.enabled).length
+  const failedQueueCount = queueItems.filter((item) => item.status === 'blocked' || item.status === 'conflict_review').length
+  const pendingQueueCount = queueItems.filter((item) => item.status === 'queued' || item.status === 'conflict_review').length
+  const approvedQueueCount = queueItems.filter((item) => item.status === 'approved').length
+  const previewFreshness = latestRun?.dataFreshness ?? 'fresh'
+
+  const runAutomationNow = () => {
+    const now = new Date().toISOString()
+    const result = evaluateAutomationRules({
+      aiAvailable,
+      existingQueueItems: queueItems,
+      now,
+      rules: rules.map((rule) => ({ ...rule, schedulePreset })),
+      schedulePreset,
+      trigger: 'manual',
+      workspace: automationWorkspace,
+    })
+
+    setQueueItems((current) => [...result.queueItems, ...current].slice(0, 24))
+    setRunHistory((current) => [result.run, ...current].slice(0, 12))
+    setAutomationMessage(`สร้างคิวแล้ว ${fmtNum(result.queueItems.length)} รายการ · ข้าม ${fmtNum(result.skippedReasons.length)} รายการ · conflict ${fmtNum(result.conflicts.length)} รายการ`)
+    setActiveTab('queue')
+  }
+
+  const approveQueueItem = (itemId: string) => {
+    setQueueItems((current) => current.map((item) => (item.id === itemId ? { ...item, blockedReason: 'อนุมัติแล้ว แต่ยังไม่ส่ง Meta จนกว่าจะเปิดขั้นตอนส่งคำสั่ง', metaWriteEligible: false, status: 'approved' } : item)))
+    setRunHistory((current) => current.map((run, index) => (index === 0 ? { ...run, approvedCount: run.approvedCount + 1 } : run)))
+    setAutomationMessage('อนุมัติรายการในคิวแล้ว ยังไม่มีการส่ง Meta อัตโนมัติ')
+  }
+
+  const rejectQueueItem = (itemId: string) => {
+    setQueueItems((current) => current.map((item) => (item.id === itemId ? { ...item, metaWriteEligible: false, status: 'rejected' } : item)))
+    setAutomationMessage('ปฏิเสธรายการแล้ว รายการนี้จะไม่ถูกส่งต่อเป็นคำสั่ง Meta')
+  }
+
+  const editRuleFromQueue = (ruleId: string) => {
+    setSelectedRuleId(ruleId)
+    setActiveTab('rules')
+  }
+
+  const updateSelectedRuleNumber = (key: AutomationNumberRuleField, rawValue: string) => {
+    const value = Number(rawValue)
+    setRules((current) => current.map((rule) => (rule.id === selectedRule?.id ? { ...rule, [key]: Number.isFinite(value) ? value : 0 } : rule)))
+  }
+
+  const updateSelectedRuleSchedule = (value: AutomationSchedulePreset) => {
+    setRules((current) => current.map((rule) => (rule.id === selectedRule?.id ? { ...rule, schedulePreset: value } : rule)))
+  }
+
+  const toggleSelectedRule = () => {
+    setRules((current) => current.map((rule) => (rule.id === selectedRule?.id ? { ...rule, enabled: !rule.enabled } : rule)))
+  }
+
+  const saveSelectedRule = () => {
+    if (!selectedRule) return
+    const validation = validateAutomationRule(selectedRule)
+    if (!validation.valid) {
+      setAutomationMessage(`ยังบันทึกกฎไม่ได้: ${validation.errors.join(', ')}`)
+      return
+    }
+    setAutomationMessage(`บันทึกเงื่อนไข "${selectedRule.name}" แล้ว`)
+  }
 
   return (
     <TwoColumnPage
       aside={
-        <StatePanel
-          state="กลับมาทำต่อเร็ว ๆ นี้"
-          detail="ระบบ Automation Ads ถูกพักไว้ชั่วคราวเพื่อจัด workflow โฆษณาอัตโนมัติให้ชัดก่อนเปิดใช้งานจริง"
-          tone="watch"
-        />
+        <>
+          <StatePanel
+            state="ต้องอนุมัติก่อนส่ง Meta"
+            detail="Automation Ads สร้างคิวจากกฎและข้อมูลล่าสุดได้ แต่คำสั่งเขียนทุกอย่างยังหยุดอยู่ที่ approval ในรอบใช้งานนี้"
+            tone="good"
+          />
+          <StatePanel
+            state={automationFreshnessLabel(previewFreshness)}
+            detail={`กฎที่เปิดใช้งาน ${fmtNum(enabledRulesCount)} กฎ · AI rationale ${aiAvailable ? 'พร้อมใช้' : 'ยังไม่พร้อม ใช้กฎ deterministic ก่อน'}`}
+            tone={previewFreshness === 'fresh' ? 'info' : 'watch'}
+          />
+          <section className="panel automation-side-summary">
+            <StatusBadge label="รอบถัดไป" tone="neutral" />
+            <MetricLine label="Schedule" value={schedulePresetLabel(schedulePreset)} />
+            <MetricLine label="Next" value={nextRunLabel(schedulePreset)} />
+            <MetricLine label="คิวรออนุมัติ" value={`${fmtNum(pendingQueueCount)} รายการ`} />
+            <MetricLine label="อนุมัติแล้ว" value={`${fmtNum(approvedQueueCount)} รายการ`} />
+          </section>
+        </>
       }
     >
-      <section className="panel automation-ads-updating-panel">
-        <StatusBadge label="กำลังอัพเดท" tone="watch" />
-        <h2>Automation Ads กำลังอัพเดท</h2>
-        <p>ทีมกำลังจัดระบบ workflow โฆษณาอัตโนมัติให้ชัดขึ้น ระหว่างนี้ข้อมูลที่บันทึกไว้จะยังปลอดภัยและจะไม่สั่งเปลี่ยนข้อมูลจริงเอง</p>
-        <div className="automation-ads-updating-meta" aria-label="สถานะระบบ Automation Ads">
-          <MetricLine label="ข้อมูล Automation Ads ที่บันทึกไว้" value={`${fmtNum(syncedCount)} รายการ`} />
-          <MetricLine label="สถานะระบบ" value="พักการใช้งานชั่วคราว" />
-          <MetricLine label="การเปลี่ยนข้อมูลจริง" value="ไม่มีการเปลี่ยนข้อมูลอัตโนมัติ" />
+      <SectionCard
+        action={(
+          <>
+            <select
+              aria-label="เลือกตารางตรวจ Automation"
+              className="automation-schedule-select"
+              value={schedulePreset}
+              onChange={(event) => setSchedulePreset(event.target.value as AutomationSchedulePreset)}
+            >
+              {automationScheduleOptions.map((option) => (
+                <option key={option} value={option}>{schedulePresetLabel(option)}</option>
+              ))}
+            </select>
+            <button className="primary-button" type="button" onClick={runAutomationNow}>
+              <RefreshCw size={14} />
+              ตรวจ Automation ตอนนี้
+            </button>
+          </>
+        )}
+        className="automation-run-monitor"
+        subtitle="ตรวจข้อมูลโฆษณาด้วยกฎที่ตั้งไว้ สร้างคิวรออนุมัติ และบันทึกประวัติทุกรอบ"
+        title="Automation Ads"
+      >
+        <div className="automation-monitor-grid">
+          <MetricLine label="รอบตรวจล่าสุด" value={latestRun ? formatAutomationDate(latestRun.completedAt) : 'ยังไม่เคยตรวจ'} />
+          <MetricLine label="รอบถัดไป" value={nextRunLabel(schedulePreset)} />
+          <MetricLine label="คิวรออนุมัติ" value={`${fmtNum(pendingQueueCount)} รายการ`} />
+          <MetricLine label="กฎที่เปิดใช้งาน" value={`${fmtNum(enabledRulesCount)} / ${fmtNum(rules.length)} กฎ`} />
+          <MetricLine label="รายการต้องตรวจ" value={`${fmtNum(failedQueueCount)} รายการ`} />
+          <MetricLine label="AI rationale" value={aiAvailable ? 'พร้อมใช้' : 'ใช้กฎ deterministic'} />
         </div>
+        <div className="automation-run-message" aria-live="polite">
+          <BrainCircuit size={15} />
+          <span>{automationMessage}</span>
+        </div>
+      </SectionCard>
+
+      <section className="automation-workspace panel">
+        <div className="automation-tabs" role="tablist" aria-label="Automation Ads workspace">
+          {automationAdsTabs.map((tab) => (
+            <button
+              aria-selected={activeTab === tab.id}
+              className={activeTab === tab.id ? 'active' : ''}
+              key={tab.id}
+              role="tab"
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'queue' ? (
+          <AutomationApprovalQueue
+            onApprove={approveQueueItem}
+            onEditRule={editRuleFromQueue}
+            onReject={rejectQueueItem}
+            queueItems={queueItems}
+          />
+        ) : null}
+
+        {activeTab === 'rules' && selectedRule ? (
+          <AutomationRuleBuilder
+            onSave={saveSelectedRule}
+            onScheduleChange={updateSelectedRuleSchedule}
+            onSelectRule={setSelectedRuleId}
+            onToggleRule={toggleSelectedRule}
+            onUpdateNumber={updateSelectedRuleNumber}
+            rules={rules}
+            selectedRule={selectedRule}
+          />
+        ) : null}
+
+        {activeTab === 'history' ? <AutomationRunHistory runs={runHistory} /> : null}
       </section>
-      <StatePanel
-        state="ข้อมูล Automation Ads ที่บันทึกไว้ยังปลอดภัย"
-        detail="ข้อมูลที่โหลดไว้ยังอยู่ แต่ระบบนี้จะไม่แนะนำหรือสั่งงานอัตโนมัติจนกว่าจะปรับ workflow เสร็จ"
-        tone={syncedCount > 0 ? 'info' : 'neutral'}
-      />
     </TwoColumnPage>
   )
+}
+
+function AutomationApprovalQueue({
+  onApprove,
+  onEditRule,
+  onReject,
+  queueItems,
+}: {
+  onApprove: (itemId: string) => void
+  onEditRule: (ruleId: string) => void
+  onReject: (itemId: string) => void
+  queueItems: AutomationQueueItem[]
+}) {
+  if (!queueItems.length) {
+    return (
+      <EmptyState
+        detail="กดตรวจ Automation ตอนนี้เพื่อให้ระบบประเมินกฎและสร้างรายการรออนุมัติจากข้อมูลล่าสุด"
+        title="ยังไม่มีคิวรออนุมัติ"
+      />
+    )
+  }
+
+  return (
+    <div className="automation-queue-list">
+      {queueItems.map((item) => {
+        const canApprove = item.status === 'queued' && item.requiresApproval && item.metaWriteEligible
+        const canReject = item.status === 'queued' || item.status === 'conflict_review' || item.status === 'blocked'
+        return (
+          <article className={`automation-queue-card ${item.status}`} key={item.id}>
+            <div className="automation-queue-main">
+              <div>
+                <div className="automation-card-kicker">
+                  <StatusBadge label={automationQueueStatusLabel(item.status)} tone={automationQueueTone(item.status)} />
+                  <span>{automationActionLabel(item.actionType)}</span>
+                  <span>{shortMetaId(item.targetId)}</span>
+                </div>
+                <h3>{item.targetName}</h3>
+                <p>{item.rationale}</p>
+              </div>
+              <div className="automation-risk-stack">
+                <StatusBadge label={`Risk ${automationRiskLabel(item.risk)}`} tone={automationRiskTone(item.risk)} />
+                <strong>{fmtNum(item.confidence)}%</strong>
+                <span>confidence</span>
+              </div>
+            </div>
+
+            <div className="automation-change-grid">
+              <MetricLine label="Current" value={item.currentValue} />
+              <MetricLine label="Proposed" value={item.proposedValue} />
+              <MetricLine label="Rule" value={`${item.ruleName} v${item.ruleVersion}`} />
+            </div>
+
+            <div className="automation-evidence-list" aria-label="Automation evidence">
+              {item.evidence.slice(0, 4).map((metric) => (
+                <span key={`${item.id}-${metric.label}`}>
+                  {metric.label}: <strong>{metric.value}</strong>
+                </span>
+              ))}
+            </div>
+
+            <div className="automation-queue-footer">
+              <span>{item.blockedReason ?? item.aiRationale}</span>
+              <div>
+                <button className="outline-button" type="button" onClick={() => onEditRule(item.ruleId)}>
+                  <SlidersHorizontal size={13} />
+                  ปรับเงื่อนไข
+                </button>
+                <button className="outline-button" type="button" onClick={() => onReject(item.id)} disabled={!canReject}>
+                  ปฏิเสธ
+                </button>
+                <button className="primary-button" type="button" onClick={() => onApprove(item.id)} disabled={!canApprove}>
+                  อนุมัติ
+                </button>
+              </div>
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
+function AutomationRuleBuilder({
+  onSave,
+  onScheduleChange,
+  onSelectRule,
+  onToggleRule,
+  onUpdateNumber,
+  rules,
+  selectedRule,
+}: {
+  onSave: () => void
+  onScheduleChange: (value: AutomationSchedulePreset) => void
+  onSelectRule: (ruleId: string) => void
+  onToggleRule: () => void
+  onUpdateNumber: (key: AutomationNumberRuleField, value: string) => void
+  rules: AutomationRule[]
+  selectedRule: AutomationRule
+}) {
+  const validation = validateAutomationRule(selectedRule)
+
+  return (
+    <div className="automation-rule-builder">
+      <div className="automation-rule-list" aria-label="Preset rules">
+        {rules.map((rule) => (
+          <button
+            aria-pressed={rule.id === selectedRule.id}
+            className={rule.id === selectedRule.id ? 'active' : ''}
+            key={rule.id}
+            type="button"
+            onClick={() => onSelectRule(rule.id)}
+          >
+            <span>{automationActionLabel(rule.presetType)}</span>
+            <strong>{rule.name}</strong>
+            <small>{rule.enabled ? 'เปิดใช้งาน' : 'ปิดไว้'} · {schedulePresetLabel(rule.schedulePreset)}</small>
+          </button>
+        ))}
+      </div>
+
+      <div className="automation-rule-editor">
+        <div className="automation-rule-editor-head">
+          <div>
+            <StatusBadge label={selectedRule.enabled ? 'เปิดใช้งาน' : 'ปิดไว้'} tone={selectedRule.enabled ? 'good' : 'neutral'} />
+            <h3>{selectedRule.name}</h3>
+            <p>แก้ได้เฉพาะเงื่อนไขที่ปลอดภัยและตรวจสอบได้ รายการนอกกรอบจะถูกส่งเป็นงานรีวิวก่อน</p>
+          </div>
+          <button className="outline-button" type="button" onClick={onToggleRule}>
+            <Power size={13} />
+            {selectedRule.enabled ? 'ปิดกฎ' : 'เปิดกฎ'}
+          </button>
+        </div>
+
+        <div className="automation-rule-form">
+          <label>
+            <span>Target scope</span>
+            <input readOnly value={selectedRule.targetScope} />
+          </label>
+          <label>
+            <span>Time window</span>
+            <input readOnly value={selectedRule.timeWindow} />
+          </label>
+          <label>
+            <span>Schedule preset</span>
+            <select value={selectedRule.schedulePreset} onChange={(event) => onScheduleChange(event.target.value as AutomationSchedulePreset)}>
+              {automationScheduleOptions.map((option) => (
+                <option key={option} value={option}>{schedulePresetLabel(option)}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Risk limit</span>
+            <input readOnly value={automationRiskLabel(selectedRule.riskLimit)} />
+          </label>
+          {automationAdvancedFields.map((field) => (
+            <label key={field.key}>
+              <span>{field.label}</span>
+              <input
+                min={0}
+                step={field.step ?? '1'}
+                type="number"
+                value={selectedRule[field.key]}
+                onChange={(event) => onUpdateNumber(field.key, event.target.value)}
+              />
+            </label>
+          ))}
+        </div>
+
+        {!validation.valid ? (
+          <div className="automation-validation-message" role="alert">
+            {validation.errors.join(' · ')}
+          </div>
+        ) : null}
+
+        <div className="automation-rule-actions">
+          <button className="primary-button" type="button" onClick={onSave}>
+            <Settings size={13} />
+            บันทึกเงื่อนไข
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AutomationRunHistory({ runs }: { runs: AutomationRunRecord[] }) {
+  if (!runs.length) {
+    return (
+      <EmptyState
+        detail="เมื่อกดตรวจ Automation ระบบจะบันทึก run ID, trigger, ข้อมูลที่ใช้, จำนวนคิว, skipped items และ conflicts ที่พบ"
+        title="ยังไม่มีประวัติการตรวจ"
+      />
+    )
+  }
+
+  return (
+    <div className="automation-run-history">
+      {runs.map((run) => (
+        <article className="automation-run-row" key={run.id}>
+          <div>
+            <strong>{run.id}</strong>
+            <span>{run.trigger === 'manual' ? 'ตรวจด้วยมือ' : 'ตรวจตามตาราง'} · {formatAutomationDate(run.completedAt)}</span>
+          </div>
+          <MetricLine label="ข้อมูล" value={automationFreshnessLabel(run.dataFreshness)} />
+          <MetricLine label="สร้างคิว" value={`${fmtNum(run.itemsGenerated)} รายการ`} />
+          <MetricLine label="ข้าม" value={`${fmtNum(run.itemsSkipped)} รายการ`} />
+          <MetricLine label="Conflict" value={`${fmtNum(run.conflicts)} รายการ`} />
+          <MetricLine label="อนุมัติ" value={`${fmtNum(run.approvedCount)} รายการ`} />
+        </article>
+      ))}
+    </div>
+  )
+}
+
+function createAutomationWorkspaceFallback({
+  ads,
+  adSets,
+  campaigns,
+  components,
+}: {
+  ads: WorkspaceData['adInsights']
+  adSets: WorkspaceData['adSets']
+  campaigns: WorkspaceData['campaigns']
+  components: WorkspaceData['insightComponents']
+}): WorkspaceData {
+  return {
+    actions: [],
+    adInsights: ads,
+    adSets,
+    appointmentStages: [],
+    auditTrail: [],
+    autoAds: [],
+    autoMode: 'suggest',
+    campaigns,
+    channelPerformance: [],
+    complianceReviews: [],
+    funnelMetrics: [],
+    insightComponents: components,
+    insights: [],
+    memoryItems: [],
+    serviceLines: [],
+    tasks: [],
+    trendData: [],
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function automationQueueTone(status: AutomationQueueItem['status']): Tone {
+  if (status === 'queued') return 'watch'
+  if (status === 'approved' || status === 'executed') return 'good'
+  if (status === 'blocked' || status === 'conflict_review') return 'critical'
+  return 'neutral'
+}
+
+function automationRiskTone(risk: AutomationQueueItem['risk']): Tone {
+  if (risk === 'high') return 'critical'
+  if (risk === 'medium') return 'watch'
+  return 'good'
+}
+
+function formatAutomationDate(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('th-TH', {
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    month: 'short',
+  })
 }
 
 type AudienceSegment = {
