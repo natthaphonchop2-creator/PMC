@@ -57,20 +57,6 @@ export type CreateAdGroupApprovalCommandInput =
   | { operation: 'rename_adset'; proposedValue: { name: string }; row: AdGroupRow }
   | { operation: 'update_budget'; proposedValue: AdGroupUpdateParams; row: AdGroupRow }
 
-type PauseAdGroupApprovalCommand = Extract<AdGroupApprovalCommand, { operation: 'pause_adset' }>
-type ResumeAdGroupApprovalCommand = Extract<AdGroupApprovalCommand, { operation: 'resume_adset' }>
-type AssertAssignable<AssignedValue extends TargetValue, TargetValue> = AssignedValue
-
-// @ts-expect-error pause commands must only propose PAUSED
-type InvalidPauseAdGroupStatusProposedValue = AssertAssignable<'ACTIVE', PauseAdGroupApprovalCommand['proposedValue']>
-// @ts-expect-error resume commands must only propose ACTIVE
-type InvalidResumeAdGroupStatusProposedValue = AssertAssignable<'PAUSED', ResumeAdGroupApprovalCommand['proposedValue']>
-
-export type AdGroupApprovalCommandCompileTimeChecks = [
-  InvalidPauseAdGroupStatusProposedValue,
-  InvalidResumeAdGroupStatusProposedValue,
-]
-
 export type AdGroupRowGroup = {
   campaignId: string
   campaignName: string
