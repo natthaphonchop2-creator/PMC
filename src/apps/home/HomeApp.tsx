@@ -40,8 +40,6 @@ const toolIcons: Record<HomeTool['id'], LucideIcon> = {
 }
 
 const clinicImageSrc = '/pmc-clinic-reception.png'
-const adsLogoSrc = '/pmc-ads-logo.png?v=transparent'
-const pageAutoLogoSrc = '/pmc-page-auto-logo.png?v=transparent'
 
 const appDescriptions: Record<HomeTool['id'], string> = {
   ads: 'ดูโฆษณาและคำแนะนำที่รออนุมัติ',
@@ -535,9 +533,7 @@ function AppCard({ onOpenSettings, tool }: { onOpenSettings: () => void; tool: H
   const content = (
     <>
       <span className={`home-app-icon ${tool.iconTone}`}>
-        {tool.id === 'ads' ? <ProductLogo alt="PMC Ads" src={adsLogoSrc} /> : null}
-        {tool.id === 'page' ? <ProductLogo alt="PMC Page Auto" src={pageAutoLogoSrc} /> : null}
-        {tool.id !== 'ads' && tool.id !== 'page' ? <Icon size={25} /> : null}
+        <Icon size={25} />
       </span>
       <span className="home-app-copy">
         <strong>{tool.title}</strong>
@@ -572,10 +568,6 @@ function AppCard({ onOpenSettings, tool }: { onOpenSettings: () => void; tool: H
       {content}
     </a>
   )
-}
-
-function ProductLogo({ alt, src }: { alt: string; src: string }) {
-  return <img className="home-product-logo" src={src} alt={alt} />
 }
 
 function statusStateClass(state: HomeStatusState) {

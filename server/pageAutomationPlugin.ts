@@ -261,6 +261,48 @@ export function createPageAutomationMiddleware(env: PageAutomationEnv, options: 
         return
       }
 
+      const cancelScheduleMatch = requestUrl.pathname.match(/^\/api\/page-automation\/post-drafts\/([^/]+)\/cancel-schedule$/)
+      if (req.method === 'POST' && cancelScheduleMatch) {
+        const draftId = decodeURIComponent(cancelScheduleMatch[1] ?? '')
+        const drafts = await readMaterializedPostDrafts(deps)
+        if (!drafts) throw new PageAutomationApiError('Post drafts unavailable', 503)
+        const draft = drafts.find((item) => item.id === draftId)
+        if (!draft) throw new PageAutomationApiError('Post draft not found', 404)
+        if (draft.status !== 'scheduled') {
+          throw new PageAutomationApiError('Only scheduled post drafts can be cancelled', 409)
+        }
+
+        const createdAt = deps.now()
+        await deps.appendJsonlRecord(deps.store.files.auditLog, {
+          id: `audit-${Date.now()}`,
+          actor: 'user',
+          action: 'intent_cancel_scheduled_post_draft',
+          target: draft.id,
+          reason: 'operator cancelled scheduled Page Automation post draft',
+          createdAt,
+        })
+        await deps.appendJsonlRecord(deps.store.files.schedules, {
+          id: `schedule-${Date.now()}`,
+          draftId: draft.id,
+          pageId: draft.pageId,
+          scheduledAt: draft.scheduledAt ?? createdAt,
+          status: 'cancelled',
+          mode: 'operator',
+          createdAt,
+        } satisfies PostScheduleRecord)
+
+        writeJson(res, 200, {
+          ok: true,
+          draft: {
+            ...draft,
+            scheduledAt: undefined,
+            status: 'ready',
+            updatedAt: createdAt,
+          },
+        })
+        return
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/api/page-automation/messages') {
         const messagePages = await resolvePagesForMessages(deps, metaConfig)
         const liveMessages = await deps.fetchMessages(metaConfig, messagePages).catch(() => null)

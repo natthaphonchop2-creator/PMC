@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AutoPost } from '../../src/apps/page-automation/routes/AutoPost'
 import { InboxWorkspace } from '../../src/apps/page-automation/routes/InboxWorkspace'
 import { Messages } from '../../src/apps/page-automation/routes/Messages'
@@ -9,6 +9,7 @@ import type {
   PageMessage,
   PageAutomationPermission,
   PageAutomationPermissionReport,
+  PostDraft,
   SharedAdsInsightForPage,
 } from '../../src/apps/page-automation/types'
 
@@ -163,6 +164,88 @@ describe('Page Automation route guardrails', () => {
     expect(html).toContain('Persisted ready draft')
     expect(html).toContain('Persisted scheduled draft')
     expect(html).toContain('ตั้งเวลาโพสต์ที่พร้อมแล้ว')
+  })
+
+  it('shows the cancel schedule action only as usable when a scheduled draft exists', () => {
+    const scheduledDraft = makePostDraft({ id: 'scheduled-draft', status: 'scheduled', scheduledAt: recentIso(-45) })
+
+    const withScheduledDraft = renderToStaticMarkup(
+      <AutoPost
+        adsInsight={null}
+        autoMode="off"
+        drafts={[scheduledDraft]}
+        messages={[]}
+        onDraftsChanged={() => undefined}
+        pages={[makePage()]}
+        summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
+      />,
+    )
+    const withoutScheduledDraft = renderToStaticMarkup(
+      <AutoPost
+        adsInsight={null}
+        autoMode="off"
+        drafts={[]}
+        messages={[]}
+        onDraftsChanged={() => undefined}
+        pages={[makePage()]}
+        summary={{ avgHealth: 92, followers: 1200, pages: 1, unread: 0 }}
+      />,
+    )
+
+    expect(withScheduledDraft).toMatch(/<button(?![^>]*disabled)[^>]*>\s*ยกเลิกเวลาที่ตั้งไว้\s*<\/button>/)
+    expect(withoutScheduledDraft).toMatch(/<button(?=[^>]*disabled)[^>]*>\s*ยกเลิกเวลาที่ตั้งไว้\s*<\/button>/)
+  })
+
+  it('cancels the first scheduled draft and refreshes the draft queue', async () => {
+    const cancelScheduledPostDraft = vi.fn(async () => ({ ok: true, draft: makePostDraft({ status: 'ready', scheduledAt: undefined }) }))
+    const schedulePostDraft = vi.fn()
+    const createPostDraft = vi.fn()
+    const stateUpdates: unknown[] = []
+
+    vi.resetModules()
+    vi.doMock('react', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('react')>()
+      return {
+        ...actual,
+        useState: <T,>(initialValue: T) => [initialValue, (nextValue: T) => stateUpdates.push(nextValue)] as const,
+      }
+    })
+    vi.doMock('../../src/apps/page-automation/api', () => ({
+      cancelScheduledPostDraft,
+      createPostDraft,
+      schedulePostDraft,
+    }))
+
+    try {
+      const { AutoPost: MockedAutoPost } = await import('../../src/apps/page-automation/routes/AutoPost')
+      const onDraftsChanged = vi.fn()
+      const scheduledDraft = makePostDraft({ id: 'scheduled-first', status: 'scheduled', scheduledAt: recentIso(-30) })
+      const readyDraft = makePostDraft({ id: 'ready-draft', status: 'ready' })
+      const tree = MockedAutoPost({
+        adsInsight: null,
+        autoMode: 'off',
+        drafts: [scheduledDraft, readyDraft],
+        messages: [],
+        onDraftsChanged,
+        pages: [makePage()],
+        summary: { avgHealth: 92, followers: 1200, pages: 1, unread: 0 },
+      })
+      const button = findButtonByText(tree, 'ยกเลิกเวลาที่ตั้งไว้')
+
+      await button.props.onClick()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(cancelScheduledPostDraft).toHaveBeenCalledWith('scheduled-first')
+      expect(onDraftsChanged).toHaveBeenCalledTimes(1)
+      expect(stateUpdates).toContain('saving')
+      expect(stateUpdates).toContain('saved')
+      expect(stateUpdates).toContain('ยกเลิกเวลาที่ตั้งไว้แล้ว รายการกลับไปรอพร้อมตั้งเวลา')
+    } finally {
+      vi.doUnmock('react')
+      vi.doUnmock('../../src/apps/page-automation/api')
+      vi.resetModules()
+    }
   })
 
   it('shows Thai unknown permission state in PageAnalysis permission hints', () => {
@@ -429,6 +512,61 @@ function makeMessage(overrides: Partial<PageMessage> = {}): PageMessage {
     privacyFlags: [],
     ...overrides,
   }
+}
+
+function makePostDraft(overrides: Partial<PostDraft> = {}): PostDraft {
+  return {
+    id: 'draft-1',
+    pageId: 'page-1',
+    pageName: 'Fifth Clinic',
+    channel: 'facebook_feed',
+    title: 'Persisted draft',
+    objective: 'Education',
+    captionTh: 'Caption',
+    cta: 'Inbox',
+    destination: '@fifthclinic',
+    status: 'ready',
+    autoEligible: true,
+    guardrailScore: 91,
+    aiConfidence: 0.9,
+    createdAt: recentIso(3),
+    updatedAt: recentIso(2),
+    ...overrides,
+  }
+}
+
+function findButtonByText(element: unknown, text: string): { props: { onClick: () => Promise<void> | void } } {
+  if (!isElementLike(element)) {
+    throw new Error(`Button "${text}" not found`)
+  }
+
+  if (element.type === 'button' && childrenText(element.props.children).trim() === text) {
+    return element as { props: { onClick: () => Promise<void> | void } }
+  }
+
+  const children = Array.isArray(element.props.children) ? element.props.children : [element.props.children]
+  for (const child of children) {
+    if (isElementLike(child)) {
+      try {
+        return findButtonByText(child, text)
+      } catch {
+        // Keep walking siblings until the target button is found.
+      }
+    }
+  }
+
+  throw new Error(`Button "${text}" not found`)
+}
+
+function isElementLike(value: unknown): value is { props: { children?: unknown }; type: unknown } {
+  return Boolean(value && typeof value === 'object' && 'props' in value && 'type' in value)
+}
+
+function childrenText(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (Array.isArray(value)) return value.map(childrenText).join('')
+  if (isElementLike(value)) return childrenText(value.props.children)
+  return ''
 }
 
 function makeAdsInsight(overrides: Partial<SharedAdsInsightForPage> = {}): SharedAdsInsightForPage {

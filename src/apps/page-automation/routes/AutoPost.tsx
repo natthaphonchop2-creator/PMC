@@ -1,6 +1,6 @@
 import { CheckCircle2, CircleAlert } from 'lucide-react'
 import { useState } from 'react'
-import { createPostDraft, schedulePostDraft } from '../api'
+import { cancelScheduledPostDraft, createPostDraft, schedulePostDraft } from '../api'
 import { PageAutomationPanel, PageAutomationState } from '../components'
 import { classifyAutoEligibility, missingPermissionStates } from '../policy'
 import type {
@@ -65,6 +65,8 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
   const [draftIntentMessage, setDraftIntentMessage] = useState('')
   const [scheduleIntentState, setScheduleIntentState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [scheduleIntentMessage, setScheduleIntentMessage] = useState('')
+  const [cancelIntentState, setCancelIntentState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [cancelIntentMessage, setCancelIntentMessage] = useState('')
   const selectedPage = pages[0]
   const permissionReports = selectedPage?.permissions ?? []
   const pageMapping = pageMappingFor(selectedPage, adsInsight)
@@ -91,6 +93,7 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
   })
   const pipelineColumns = buildPipelineColumns({ adsInsight, drafts, eligibility, messages, selectedPage })
   const readyDraft = drafts.find((draft) => draft.status === 'ready')
+  const scheduledDraft = drafts.find((draft) => draft.status === 'scheduled')
   const canMarkEligible =
     autoMode === 'on' &&
     eligibility.state === 'auto_eligible' &&
@@ -138,6 +141,23 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
     } catch (error) {
       setScheduleIntentState('error')
       setScheduleIntentMessage(error instanceof Error ? error.message : 'ตั้งเวลาโพสต์ไม่สำเร็จ')
+    }
+  }
+
+  async function handleCancelScheduledDraft() {
+    if (!scheduledDraft) return
+
+    setCancelIntentState('saving')
+    setCancelIntentMessage('')
+
+    try {
+      await cancelScheduledPostDraft(scheduledDraft.id)
+      await onDraftsChanged()
+      setCancelIntentState('saved')
+      setCancelIntentMessage('ยกเลิกเวลาที่ตั้งไว้แล้ว รายการกลับไปรอพร้อมตั้งเวลา')
+    } catch (error) {
+      setCancelIntentState('error')
+      setCancelIntentMessage(error instanceof Error ? error.message : 'ยกเลิกเวลาที่ตั้งไว้ไม่สำเร็จ')
     }
   }
 
@@ -247,6 +267,14 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
           <button className="pa-button" disabled={!readyDraft || scheduleIntentState === 'saving'} onClick={() => void handleScheduleReadyDraft()} type="button">
             ตั้งเวลาโพสต์ที่พร้อมแล้ว
           </button>
+          <button
+            className="pa-button"
+            disabled={!scheduledDraft || draftIntentState === 'saving' || scheduleIntentState === 'saving' || cancelIntentState === 'saving'}
+            onClick={() => void handleCancelScheduledDraft()}
+            type="button"
+          >
+            ยกเลิกเวลาที่ตั้งไว้
+          </button>
         </div>
 
         {draftIntentMessage ? (
@@ -262,6 +290,14 @@ export function AutoPost({ adsInsight, autoMode, drafts, messages, onDraftsChang
             detail={scheduleIntentMessage}
             tone={scheduleIntentState === 'error' ? 'critical' : 'good'}
             title={scheduleIntentState === 'error' ? 'ตั้งเวลาไม่สำเร็จ' : 'ตั้งเวลาแล้ว'}
+          />
+        ) : null}
+
+        {cancelIntentMessage ? (
+          <PageAutomationState
+            detail={cancelIntentMessage}
+            tone={cancelIntentState === 'error' ? 'critical' : 'good'}
+            title={cancelIntentState === 'error' ? 'ยกเลิกเวลาไม่สำเร็จ' : 'ยกเลิกเวลาแล้ว'}
           />
         ) : null}
       </PageAutomationPanel>

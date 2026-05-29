@@ -84,3 +84,9 @@ export function schedulePostDraft(draftId: string, scheduledAt: string) {
     body: JSON.stringify({ scheduledAt }),
   })
 }
+
+export function cancelScheduledPostDraft(draftId: string) {
+  return pageAutomationApiJson<{ ok: true; draft: PostDraft }>(`/api/page-automation/post-drafts/${encodeURIComponent(draftId)}/cancel-schedule`, {
+    method: 'POST',
+  })
+}

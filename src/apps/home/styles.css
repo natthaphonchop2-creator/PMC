@@ -253,9 +253,9 @@ button.home-app-card {
 
 a.home-app-card:hover,
 button.home-app-card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   border-color: #d8c8b6;
-  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.065);
 }
 
 .home-app-card:focus-visible,
@@ -283,23 +283,23 @@ button.home-app-card:hover {
   margin-bottom: 22px;
   border-radius: 14px;
   color: #475467;
+  transition: transform 180ms ease, box-shadow 180ms ease;
 }
 
-.home-app-icon.sand { background: #f2eadf; color: #8a653a; }
-.home-app-icon.coral { background: #ffe7e3; color: #d65f4d; }
-.home-app-icon.neutral { background: #eceff3; color: #667085; }
-.home-app-icon.lavender { background: #e9e6ff; color: #7664d8; }
-.home-app-icon.blue { background: #e6f0fb; color: #2f86eb; }
-.home-app-icon.green { background: #e8f7ed; color: #167047; }
-.home-app-icon.gold { background: #fff0d2; color: #b7791f; }
-.home-app-icon.purple { background: #f3e6ff; color: #8f5ad8; }
-
-.home-product-logo {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  object-fit: contain;
+a.home-app-card:hover .home-app-icon,
+button.home-app-card:hover .home-app-icon {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(80, 62, 43, 0.075);
 }
+
+.home-app-icon.sand { background: #f3eadf; color: #8a653a; }
+.home-app-icon.coral { background: #f2e7df; color: #9b6b53; }
+.home-app-icon.neutral { background: #eef0f2; color: #5f6b7a; }
+.home-app-icon.lavender { background: #efedf7; color: #6f668f; }
+.home-app-icon.blue { background: #eaf0f2; color: #587484; }
+.home-app-icon.green { background: #eaf2ec; color: #51735d; }
+.home-app-icon.gold { background: #f5eddc; color: #9a713d; }
+.home-app-icon.purple { background: #f0edf3; color: #7b6986; }
 
 .home-app-copy {
   display: grid;
@@ -446,6 +446,13 @@ button.home-app-card:hover {
   cursor: pointer;
   font-size: 13px;
   font-weight: 950;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.home-connection-banner button:hover {
+  transform: translateY(-1px);
+  background: #997247;
+  box-shadow: 0 12px 24px rgba(170, 131, 88, 0.22);
 }
 
 .home-footer {
@@ -468,6 +475,7 @@ button.home-app-card:hover {
   padding: 24px;
   background: rgba(16, 24, 40, 0.36);
   backdrop-filter: blur(12px);
+  animation: home-backdrop-in 180ms ease both;
 }
 
 .home-settings-modal {
@@ -485,6 +493,7 @@ button.home-app-card:hover {
     radial-gradient(circle at 96% 12%, rgba(48, 213, 168, 0.12), transparent 30%),
     #ffffff;
   box-shadow: 0 30px 90px rgba(15, 23, 42, 0.24);
+  animation: home-modal-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .home-settings-close {
@@ -706,6 +715,39 @@ button.home-app-card:hover {
   font-size: 13px;
   font-weight: 760;
   line-height: 1.45;
+}
+
+@keyframes home-backdrop-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes home-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-shell *,
+  .home-shell *::before,
+  .home-shell *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
 }
 
 @media (max-width: 1400px) and (min-width: 1121px) {

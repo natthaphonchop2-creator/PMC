@@ -457,25 +457,23 @@ describe('Home app shell', () => {
     expect(text).not.toContain('ใช้เป็นต้นแบบ')
   })
 
-  it('uses generated product logos for Ads and Page Auto entries on Home', () => {
+  it('uses standard launcher icons for Ads and Page Auto entries on Home', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 
-    expect(html).toContain('src="/pmc-ads-logo.png?v=transparent"')
-    expect(html).toContain('src="/pmc-page-auto-logo.png?v=transparent"')
-    expect(html).toContain('alt="PMC Ads"')
-    expect(html).toContain('alt="PMC Page Auto"')
+    expect(html).toContain('class="lucide lucide-infinity')
+    expect(html).toContain('class="lucide lucide-message-circle')
+    expect(html).not.toContain('src="/pmc-ads-logo.png?v=transparent"')
+    expect(html).not.toContain('src="/pmc-page-auto-logo.png?v=transparent"')
+    expect(html).not.toContain('home-product-logo')
   })
 
-  it('uses transparent product logo assets without card-like image shadows', () => {
+  it('keeps standard Home icons free of product-logo styling', () => {
     const homeCss = readText('../src/apps/home/styles.css')
-    const productLogoRule = homeCss.match(/\.home-product-logo\s*\{[^}]+\}/)?.[0] ?? ''
 
-    expect(readPngColorType('../public/pmc-ads-logo.png')).toBe(6)
-    expect(readPngColorType('../public/pmc-page-auto-logo.png')).toBe(6)
-    expect(productLogoRule).not.toContain('box-shadow')
-    expect(productLogoRule).not.toContain('background')
+    expect(homeCss).not.toContain('.home-product-logo')
     expect(homeCss).not.toContain('.home-suggestion-icon')
-    expect(homeCss).toMatch(/\.home-app-icon\.blue\s*\{\s*background:\s*#e6f0fb;\s*color:\s*#2f86eb;\s*\}/)
+    expect(homeCss).toMatch(/\.home-app-icon\.blue\s*\{\s*background:\s*#eaf0f2;\s*color:\s*#587484;\s*\}/)
+    expect(homeCss).not.toContain('background: linear-gradient(90deg, var(--home-taupe), #2f86eb, #30a77c)')
   })
 
   it('marks future modules as setup launchers instead of pretending they are live routes', () => {
@@ -494,13 +492,13 @@ describe('Home app shell', () => {
     expect(html).not.toContain('<a class="home-app-card" href="#reports"')
   })
 
-  it('uses clinic media and product logos without repeated PMC brand decoration', () => {
+  it('uses clinic media without repeated PMC brand decoration', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 
     expect(countOccurrences(html, 'src="/pmc-clinic-reception.png"')).toBe(1)
     expect(html).toContain('alt="PMC Aesthetic Clinic reception"')
-    expect(countOccurrences(html, 'src="/pmc-ads-logo.png?v=transparent"')).toBe(1)
-    expect(countOccurrences(html, 'src="/pmc-page-auto-logo.png?v=transparent"')).toBe(1)
+    expect(html).not.toContain('src="/pmc-ads-logo.png?v=transparent"')
+    expect(html).not.toContain('src="/pmc-page-auto-logo.png?v=transparent"')
     expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
     expect(html).not.toContain('home-tool-watermark')
     expect(html).not.toContain('home-chip-mark')
@@ -512,8 +510,10 @@ describe('Home app shell', () => {
       withPathname(pathname, () => {
         const html = renderToStaticMarkup(<PageAutomationApp />)
 
-        expect(countOccurrences(html, 'src="/pmc-page-auto-logo.png?v=transparent"')).toBe(1)
+        expect(html).not.toContain('src="/pmc-page-auto-logo.png?v=transparent"')
+        expect(html).not.toContain('pa-brand-logo-wrap')
         expect(html).toContain('PMC Page Auto')
+        expect(html).toContain('class="pa-shell"')
         expect(html).toContain('ศูนย์จัดการเพจและข้อความ')
         expect(html).toContain('ข้อความ')
         expect(html).toContain('โพสต์')
@@ -532,25 +532,36 @@ describe('Home app shell', () => {
         expect(html).not.toContain('Meta API operations')
         expect(html).not.toContain('Unified inbox')
         expect(html).not.toContain('Dashboard')
+        expect(html).not.toContain('class="app-shell"')
+        expect(html).not.toContain('page-app-shell')
         expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
         expect(html).not.toContain('<a class="pa-back-link" href="/" title="กลับ PMC Ads Agent">PMC</a>')
       })
     }
   })
 
-  it('keeps Page Automation on the PMC Ads palette and Home on the soft launcher palette', () => {
+  it('keeps Page Automation aligned with the soft launcher palette', () => {
     const homeCss = readText('../src/apps/home/styles.css')
     const pageCss = readText('../src/apps/page-automation/styles.css')
+    const shellRule = pageCss.match(/\.pa-shell\s*\{[^}]+\}/)?.[0] ?? ''
 
     expect(homeCss).toContain('#fbfaf8')
     expect(homeCss).toContain('#aa8358')
     expect(homeCss).toContain('#167047')
-    expect(pageCss).toContain('#7567d8')
-    expect(pageCss).toContain('#2f86eb')
-    expect(pageCss).toContain('#30d5a8')
+    expect(shellRule).toContain('--pa-bg: #fbfaf8;')
+    expect(shellRule).toContain('--pa-taupe: #aa8358;')
+    expect(shellRule).toContain('--pa-blue: #587484;')
+    expect(shellRule).toContain('--pa-green: #167047;')
+    expect(shellRule).toContain('background-image: url("/pmc-page-auto-background.png");')
+    expect(pageCss).toContain('#fbfaf8')
+    expect(pageCss).toContain('#aa8358')
+    expect(pageCss).toContain('#587484')
     expect(pageCss).toContain('.pa-inbox-workspace')
     expect(pageCss).toContain('grid-template-columns: minmax(260px, 0.78fr) minmax(0, 1.42fr) minmax(250px, 0.8fr)')
     expect(pageCss).toContain('@media (max-width: 760px)')
+    expect(pageCss).not.toContain('#2f86eb')
+    expect(pageCss).not.toContain('#30d5a8')
+    expect(pageCss).not.toMatch(/linear-gradient\([^)]*(#2f86eb|#30d5a8|#30a77c|#e16447)[^)]*\)/i)
     expect(pageCss).not.toContain('#242424')
     expect(pageCss).not.toContain('#e16447')
   })
@@ -599,6 +610,17 @@ describe('Home app shell', () => {
     expect(homeCss).toContain('.home-clinic-copy p')
     expect(roundButtonRule).not.toContain('cursor: pointer')
   })
+
+  it('keeps Home motion minimal with a reduced-motion escape hatch', () => {
+    const homeCss = readText('../src/apps/home/styles.css')
+
+    expect(homeCss).toContain('@keyframes home-modal-in')
+    expect(homeCss).toContain('@media (prefers-reduced-motion: reduce)')
+    expect(homeCss).toContain('animation-iteration-count: 1 !important')
+    expect(homeCss).not.toContain('@keyframes home-panel-sweep')
+    expect(homeCss).not.toContain('@keyframes home-status-breathe')
+    expect(homeCss).not.toContain('@keyframes home-image-drift')
+  })
 })
 
 function countOccurrences(value: string, needle: string) {
@@ -613,12 +635,6 @@ function visibleText(html: string) {
   return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
-function readPngColorType(relativePath: string) {
-  const bytes = readFileSync(new URL(relativePath, import.meta.url))
-  const signature = '89504e470d0a1a0a'
-  expect(bytes.subarray(0, 8).toString('hex')).toBe(signature)
-  return bytes[25]
-}
 
 function withPathname(pathname: string, callback: () => void) {
   const previousWindow = globalThis.window

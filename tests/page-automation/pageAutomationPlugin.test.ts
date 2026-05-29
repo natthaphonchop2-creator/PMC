@@ -467,6 +467,82 @@ describe('pageAutomationPlugin middleware', () => {
     })
   })
 
+  it('cancels a scheduled post draft as an operator intent and returns it to ready', async () => {
+    const draft = postDraft({ id: 'draft ready', status: 'ready' })
+    const deps = baseDeps({
+      readJsonlRecords: vi.fn(async (filePath: string, fallback: unknown) => {
+        if (filePath.endsWith('/post-drafts.jsonl')) return [draft]
+        if (filePath.endsWith('/schedules.jsonl')) {
+          return [
+            {
+              id: 'schedule-existing',
+              draftId: 'draft ready',
+              pageId: 'page-1',
+              scheduledAt: '2026-05-21T09:00:00.000Z',
+              status: 'scheduled',
+              mode: 'operator',
+              createdAt: '2026-05-21T03:00:00.000Z',
+            },
+          ]
+        }
+        if (filePath.endsWith('/publish-events.jsonl')) return []
+        return fallback
+      }),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('POST', '/api/page-automation/post-drafts/draft%20ready/cancel-schedule'), res)
+
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith(
+      '/tmp/page-automation/audit-log.jsonl',
+      expect.objectContaining({
+        actor: 'user',
+        action: 'intent_cancel_scheduled_post_draft',
+        target: 'draft ready',
+      }),
+    )
+    expect(deps.appendJsonlRecord).toHaveBeenCalledWith(
+      '/tmp/page-automation/schedules.jsonl',
+      expect.objectContaining({
+        draftId: 'draft ready',
+        pageId: 'page-1',
+        scheduledAt: '2026-05-21T09:00:00.000Z',
+        status: 'cancelled',
+      }),
+    )
+    const payload = JSON.parse(res.body)
+    expect(payload).toEqual({
+      ok: true,
+      draft: expect.objectContaining({
+        id: 'draft ready',
+        status: 'ready',
+        updatedAt: FIXED_NOW,
+      }),
+    })
+    expect(payload.draft).not.toHaveProperty('scheduledAt')
+  })
+
+  it('rejects cancelling a non-scheduled post draft without appending records', async () => {
+    const draft = postDraft({ id: 'draft-ready', status: 'ready' })
+    const deps = baseDeps({
+      readJsonlRecords: vi.fn(async (filePath: string, fallback: unknown) => {
+        if (filePath.endsWith('/post-drafts.jsonl')) return [draft]
+        if (filePath.endsWith('/schedules.jsonl')) return []
+        if (filePath.endsWith('/publish-events.jsonl')) return []
+        return fallback
+      }),
+    })
+    const res = mockResponse()
+    const middleware = createPageAutomationMiddleware({}, deps)
+
+    await middleware(mockRequest('POST', '/api/page-automation/post-drafts/draft-ready/cancel-schedule'), res)
+
+    expect(res.statusCode).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({ error: 'Only scheduled post drafts can be cancelled' })
+    expect(deps.appendJsonlRecord).not.toHaveBeenCalled()
+  })
+
   it('does not append a post draft when audit intent append fails', async () => {
     const deps = baseDeps({
       appendJsonlRecord: vi.fn(async (filePath: string) => {

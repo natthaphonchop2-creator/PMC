@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>คู่มือ Toolbar PMC Ads Agent</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 13mm;
+      }
+
+      :root {
+        --ink: #142033;
+        --muted: #5f6f86;
+        --line: #dbe5f2;
+        --panel: #ffffff;
+        --soft: #f5f8fc;
+        --blue: #2563eb;
+        --violet: #6d5bd0;
+        --green: #16a34a;
+        --amber: #d97706;
+        --red: #dc2626;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: #eef3f9;
+        font-family: "IBM Plex Sans Thai", "Noto Sans Thai", Tahoma, system-ui, sans-serif;
+        font-size: 11.2pt;
+        line-height: 1.62;
+      }
+
+      .page {
+        min-height: 270mm;
+        break-after: page;
+        background: var(--panel);
+      }
+
+      .page:last-child {
+        break-after: auto;
+      }
+
+      .cover {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 20px;
+        padding: 18mm 16mm;
+        background:
+          linear-gradient(135deg, rgba(109, 91, 208, 0.12), transparent 44%),
+          linear-gradient(225deg, rgba(37, 99, 235, 0.11), transparent 42%),
+          #ffffff;
+      }
+
+      .content {
+        padding: 16mm;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 10px;
+        font-size: 30pt;
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin-bottom: 10px;
+        font-size: 19pt;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        margin: 14px 0 8px;
+        font-size: 14pt;
+        line-height: 1.35;
+      }
+
+      h4 {
+        margin: 0 0 5px;
+        font-size: 11.7pt;
+      }
+
+      p {
+        margin-bottom: 8px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand img {
+        width: 52px;
+        height: 52px;
+        border-radius: 14px;
+        background: #fff;
+        object-fit: contain;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.14);
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 14pt;
+      }
+
+      .brand span {
+        display: block;
+        color: var(--muted);
+      }
+
+      .lead {
+        max-width: 170mm;
+        color: var(--muted);
+        font-size: 13pt;
+      }
+
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #4f46e5;
+        font-weight: 800;
+      }
+
+      .badge.green {
+        background: #dcfce7;
+        color: #15803d;
+      }
+
+      .badge.amber {
+        background: #fef3c7;
+        color: #a16207;
+      }
+
+      .hero-shot {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #f8fbff;
+        box-shadow: 0 18px 44px rgba(15, 23, 42, 0.12);
+      }
+
+      .hero-shot img {
+        display: block;
+        width: 100%;
+      }
+
+      .hint {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 10pt;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .toolbar-layout {
+        display: grid;
+        grid-template-columns: 44mm 1fr;
+        gap: 14px;
+        align-items: start;
+      }
+
+      .image-card {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #f8fbff;
+      }
+
+      .image-card img {
+        display: block;
+        width: 100%;
+      }
+
+      .topbar-shot {
+        margin-bottom: 14px;
+      }
+
+      .topbar-shot img {
+        width: 100%;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .callout {
+        margin: 12px 0;
+        border: 1px solid #bfdbfe;
+        border-left: 5px solid var(--blue);
+        border-radius: 12px;
+        padding: 11px 13px;
+        background: #eff6ff;
+      }
+
+      .warning {
+        margin: 12px 0;
+        border: 1px solid #fde68a;
+        border-left: 5px solid var(--amber);
+        border-radius: 12px;
+        padding: 11px 13px;
+        background: #fffbeb;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 8px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 8px 9px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #f1f5f9;
+        color: #334155;
+        font-size: 10.4pt;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        margin-right: 7px;
+        border-radius: 999px;
+        background: var(--blue);
+        color: #fff;
+        font-weight: 900;
+        font-size: 9.3pt;
+      }
+
+      .icon-label {
+        font-weight: 900;
+        color: #111827;
+      }
+
+      .small {
+        color: var(--muted);
+        font-size: 10pt;
+      }
+
+      .safe {
+        color: var(--green);
+        font-weight: 900;
+      }
+
+      .danger {
+        color: var(--red);
+        font-weight: 900;
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 10pt;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="page cover">
+      <div class="brand">
+        <img src="../public/promedclinicpmc-logo.png" alt="" />
+        <div>
+          <strong>PMC Ads Agent</strong>
+          <span>คู่มือฉบับสั้นสำหรับ Toolbar</span>
+        </div>
+      </div>
+
+      <div>
+        <h1>คู่มือ Toolbar<br />PMC Ads Agent</h1>
+        <p class="lead">
+          เอกสารนี้อธิบายเฉพาะปุ่มและแถบเครื่องมือที่เห็นบนหน้าจอ:
+          เมนูด้านซ้าย, แถบบน, ปุ่มซิงก์ Meta API, ตัวกรองวันที่,
+          โหมด Automation และปุ่มรายงาน พร้อมภาพประกอบจากระบบจริง
+        </p>
+        <div class="badge-row">
+          <span class="badge">Sidebar ด้านซ้าย</span>
+          <span class="badge green">Topbar ด้านบน</span>
+          <span class="badge amber">ปุ่มที่ควรระวัง</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="hero-shot">
+          <img src="assets/pmc-toolbar-full.png" alt="ภาพรวม Toolbar ของ PMC Ads Agent" />
+        </div>
+        <p class="hint">ภาพรวมจากหน้าเว็บจริง: ด้านซ้ายคือเมนูหลัก ด้านบนคือแถบควบคุมข้อมูลและการทำงาน</p>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="content">
+        <h2>1. ภาพรวม Toolbar ที่มีในระบบ</h2>
+        <p class="lead">
+          Toolbar ของระบบแบ่งเป็น 2 ส่วนหลัก อ่านแบบง่ายคือ
+          “ซ้ายไว้เปลี่ยนหน้า” และ “ด้านบนไว้ควบคุมข้อมูลปัจจุบัน”
+        </p>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>Sidebar ด้านซ้าย</h3>
+            <p>
+              ใช้ย้ายไปหน้าต่าง ๆ ของระบบ เช่น วิเคราะห์, ตัวจัดการโฆษณา,
+              นักการตลาด AI, รายงาน และตั้งค่า
+            </p>
+            <p class="small">ปุ่มที่มีพื้นหลังสีม่วงคือหน้าที่กำลังเปิดอยู่ตอนนี้</p>
+          </div>
+
+          <div class="card">
+            <h3>Topbar ด้านบน</h3>
+            <p>
+              ใช้ดูชื่อหน้าปัจจุบัน เลือกบัญชี/ช่วงวันที่ ซิงก์ข้อมูล Meta API
+              เลือกโหมด Automation และเตรียมรายงาน
+            </p>
+            <p class="small">ถ้าข้อมูลไม่อัปเดต ให้เริ่มจากปุ่ม “เชื่อมต่อ Meta API”</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>จำให้สั้นที่สุด:</strong>
+          เมนูซ้าย = เลือกงานที่จะทำ, แถบบน = เลือกข้อมูลและสั่งให้ระบบอัปเดต
+        </div>
+
+        <div class="warning">
+          <strong>ข้อควรระวัง:</strong>
+          Toolbar ส่วนใหญ่เป็นปุ่มดูข้อมูลและเปลี่ยนหน้า แต่ถ้าเข้าไปกดคำสั่งในหน้าต่างยืนยัน เช่น
+          เปิด/ปิด/ลบใน Meta ให้ตรวจชื่อแคมเปญและคำสั่งก่อนเสมอ
+        </div>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="content">
+        <h2>2. Sidebar ด้านซ้าย</h2>
+        <p class="lead">แถบนี้ใช้เปลี่ยนหน้าในระบบ เป็นทางลัดหลักของผู้ใช้งาน</p>
+
+        <div class="toolbar-layout">
+          <div class="image-card">
+            <img src="assets/pmc-toolbar-sidebar.png" alt="Sidebar ด้านซ้ายของ PMC Ads Agent" />
+          </div>
+
+          <div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 34%">ปุ่ม</th>
+                  <th>ใช้ทำอะไร</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="num">1</span><span class="icon-label">โลโก้ PMC</span></td>
+                  <td>บอกว่าคุณอยู่ในระบบ PMC Ads Agent</td>
+                </tr>
+                <tr>
+                  <td><span class="num">2</span><span class="icon-label">วิเคราะห์</span></td>
+                  <td>เปิด Dashboard เพื่อดูภาพรวมตัวเลขหลัก เช่น spend, revenue, ROAS, CPA และ funnel</td>
+                </tr>
+                <tr>
+                  <td><span class="num">3</span><span class="icon-label">ตัวจัดการโฆษณา</span></td>
+                  <td>ดูและจัดการ Campaign, Ad set และ Ad จากข้อมูล Meta จริง</td>
+                </tr>
+                <tr>
+                  <td><span class="num">4</span><span class="icon-label">นักการตลาด AI</span></td>
+                  <td>เรียก Master Agent ให้สรุปข้อมูลและเสนอแผนที่ควรทำต่อ</td>
+                </tr>
+                <tr>
+                  <td><span class="num">5</span><span class="icon-label">Optimizer & Automation</span></td>
+                  <td>ดูแผนเพิ่มประสิทธิภาพ เช่น แนะนำเปิดกลับ, หยุดรั่ว, คุมงบ หรือ batch action</td>
+                </tr>
+                <tr>
+                  <td><span class="num">6</span><span class="icon-label">สตูดิโอครีเอทีฟ</span></td>
+                  <td>ดู creative และ insight ที่เกี่ยวกับงานโฆษณา เพื่อช่วยตัดสินใจรีเฟรชครีเอทีฟ</td>
+                </tr>
+                <tr>
+                  <td><span class="num">7</span><span class="icon-label">กลุ่มเป้าหมาย</span></td>
+                  <td>ดู segment, audience, placement และสัญญาณจาก ad set</td>
+                </tr>
+                <tr>
+                  <td><span class="num">8</span><span class="icon-label">คลังโฆษณา</span></td>
+                  <td>ดู asset และความพร้อมด้าน compliance ก่อนใช้งานจริง</td>
+                </tr>
+                <tr>
+                  <td><span class="num">9</span><span class="icon-label">รายงาน</span></td>
+                  <td>เตรียมรายงาน สรุป outcome และดู learning/monitoring ของระบบ</td>
+                </tr>
+                <tr>
+                  <td><span class="num">10</span><span class="icon-label">ตั้งค่า</span></td>
+                  <td>ตั้งค่า Meta API, token, ad account และตรวจสถานะการเชื่อมต่อ</td>
+                </tr>
+                <tr>
+                  <td><span class="num">11</span><span class="icon-label">ช่วยเหลือ</span></td>
+                  <td>เปิดคู่มือหรือ playbook สั้น ๆ เมื่อไม่แน่ใจว่าควรเริ่มจากตรงไหน</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="callout">
+              <strong>วิธีดูหน้าปัจจุบัน:</strong>
+              ไอคอนที่มีพื้นหลังสีม่วงคือหน้าที่คุณกำลังใช้งานอยู่
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="content">
+        <h2>3. Topbar ด้านบน</h2>
+        <p class="lead">แถบบนคือจุดควบคุมข้อมูลที่กำลังดูอยู่ในหน้านั้น</p>
+
+        <div class="image-card topbar-shot">
+          <img src="assets/pmc-toolbar-topbar.png" alt="Topbar ด้านบนของ PMC Ads Agent" />
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 28%">ส่วนบนหน้าจอ</th>
+              <th>คำอธิบายแบบง่าย</th>
+              <th style="width: 23%">ควรกดเมื่อไร</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="num">1</span><span class="icon-label">ชื่อหน้า</span></td>
+              <td>บอกว่าตอนนี้อยู่หน้าอะไร เช่น ตัวจัดการโฆษณา, นักการตลาด AI หรือรายงาน</td>
+              <td>ใช้เช็กว่าคุณอยู่ถูกหน้าก่อนทำงาน</td>
+            </tr>
+            <tr>
+              <td><span class="num">2</span><span class="icon-label">บัญชี Workspace</span></td>
+              <td>แสดงบัญชีหรือ workspace ที่กำลังใช้ เช่น Promed Clinic PMC</td>
+              <td>ดูให้แน่ใจก่อนอ่านตัวเลขหรือส่งคำสั่ง</td>
+            </tr>
+            <tr>
+              <td><span class="num">3</span><span class="icon-label">ช่วงวันที่</span></td>
+              <td>เลือกข้อมูลที่ต้องการดู เช่น ข้อมูลทั้งหมด, 7 วันล่าสุด, 30 วันล่าสุด, เดือนนี้</td>
+              <td>เมื่ออยากดูตัวเลขในช่วงเวลาอื่น</td>
+            </tr>
+            <tr>
+              <td><span class="num">4</span><span class="icon-label safe">เชื่อมต่อ Meta API</span></td>
+              <td>ดึงข้อมูลล่าสุดจาก Meta เข้ามาในระบบ ถ้าสีเขียวคือเชื่อมต่อได้</td>
+              <td>กดก่อนเริ่มงาน หรือเมื่อข้อมูลดูไม่อัปเดต</td>
+            </tr>
+            <tr>
+              <td><span class="num">5</span><span class="icon-label">โหมด Automation</span></td>
+              <td>กำหนดระดับการทำงาน เช่น แนะนำเท่านั้น หรือ ต้องอนุมัติก่อน</td>
+              <td>ตั้งก่อนใช้ AI/Optimizer ที่เกี่ยวกับ action จริง</td>
+            </tr>
+            <tr>
+              <td><span class="num">6</span><span class="icon-label">เตรียมรายงาน</span></td>
+              <td>สร้างสรุปสำหรับส่งต่อหรือรีวิวกับทีมจากข้อมูลล่าสุด</td>
+              <td>ใช้ท้ายวันหรือก่อนประชุม</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="warning">
+          <strong>ถ้าข้อมูลดูผิด:</strong>
+          ให้เช็ก 3 อย่างตามลำดับ: ช่วงวันที่ถูกไหม, กดเชื่อมต่อ Meta API แล้วหรือยัง,
+          และบัญชี Workspace ถูกต้องไหม
+        </div>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="content">
+        <h2>4. ใช้ Toolbar บนมือถือ</h2>
+        <p class="lead">
+          บนมือถือ ระบบจะจัดปุ่มให้แคบลงเพื่อไม่ให้ล้นจอ หลักการใช้งานยังเหมือนเดิม
+        </p>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>เมนูด้านซ้าย</h3>
+            <p>ถ้าหน้าจอเล็ก ให้กดปุ่มเมนูเพื่อเปิดรายการหน้า แล้วเลือกหน้าที่ต้องการใช้งาน</p>
+          </div>
+          <div class="card">
+            <h3>แถบบน</h3>
+            <p>ปุ่มอาจเรียงลงหลายบรรทัด ให้ดูจากชื่อปุ่มเป็นหลัก เช่น ช่วงวันที่, เชื่อมต่อ Meta API, เตรียมรายงาน</p>
+          </div>
+          <div class="card">
+            <h3>ก่อนกดคำสั่งสำคัญ</h3>
+            <p>บนมือถืออ่านข้อความยืนยันให้ครบ เพราะพื้นที่แคบและมีโอกาสกดผิดง่ายกว่าจอคอมพิวเตอร์</p>
+          </div>
+          <div class="card">
+            <h3>งานที่ควรทำบนจอใหญ่</h3>
+            <p>งานลบ, batch action, หรือดำเนินการใน Meta จริง ควรทำบนคอมพิวเตอร์เพื่อเห็นรายละเอียดครบ</p>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>สูตรใช้งานเร็ว:</strong>
+          1) เปิดหน้าจาก Sidebar 2) เลือกช่วงวันที่จาก Topbar 3) กดเชื่อมต่อ Meta API 4) เริ่มอ่านข้อมูลหรือให้ AI วิเคราะห์
+        </div>
+
+        <div class="footer">
+          <span>PMC Ads Agent Toolbar Guide</span>
+          <span>อัปเดตล่าสุด: 20 พฤษภาคม 2569</span>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

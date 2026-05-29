@@ -1,0 +1,25 @@
+# PMC Ads Agent Project Updates
+
+This is the canonical update log for PMC Ads Agent development.
+
+## Standing Rule
+
+Every development change must update this file before staging or committing. This includes UI work, API changes, tests, assets, documentation, release preparation, and bug fixes.
+
+Release-specific documents, previews, PDFs, screenshots, and visual QA assets must be grouped under `docs/releases/<date>-v<version>/` with a short README index.
+
+## Current Version
+
+- Version: `0.1.0`
+- Date: 2026-05-29
+- Branch: `codex/PMC`
+- Release folder: `docs/releases/2026-05-29-v0.1.0/`
+
+## 2026-05-29 - v0.1.0
+
+- Added a Page Automation cancel-schedule API flow that records an operator audit intent and appends a cancelled schedule record.
+- Added the Auto Post cancel-schedule button and UI feedback for scheduled drafts.
+- Refined Home launcher and Page Automation visuals around the softer PMC palette, removed product-logo dependency from the launcher/header, and added the Page Automation background asset.
+- Updated regression tests for Home visual rules, Page Automation cancel-schedule UI behavior, and backend cancel-schedule handling.
+- Organized user manuals, visual previews, PDFs, and QA screenshots into `docs/releases/2026-05-29-v0.1.0/`.
+- Added this project update log and made update-log maintenance a mandatory development rule in `Agent.md`.

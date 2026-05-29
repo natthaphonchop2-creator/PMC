@@ -1,0 +1,1059 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <title>คู่มือการใช้งาน PMC Ads Agent</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 14mm 13mm 16mm;
+      }
+
+      :root {
+        --ink: #162033;
+        --soft-ink: #475569;
+        --muted: #64748b;
+        --line: #dbe4f0;
+        --light: #f5f8fc;
+        --panel: #ffffff;
+        --blue: #2563eb;
+        --violet: #6d5bd0;
+        --green: #16a34a;
+        --amber: #d97706;
+        --red: #dc2626;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        color: var(--ink);
+        font-family: "IBM Plex Sans Thai", "Noto Sans Thai", "Tahoma", system-ui, sans-serif;
+        font-size: 11.2pt;
+        line-height: 1.62;
+        background: #eef3f9;
+      }
+
+      body {
+        padding: 0;
+      }
+
+      .page {
+        min-height: 270mm;
+        padding: 0;
+        break-after: page;
+        background: var(--panel);
+      }
+
+      .page:last-child {
+        break-after: auto;
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 10px;
+        font-size: 30pt;
+        line-height: 1.12;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 18pt;
+        line-height: 1.25;
+        break-after: avoid;
+      }
+
+      h3 {
+        margin: 16px 0 7px;
+        font-size: 13.4pt;
+        line-height: 1.35;
+        break-after: avoid;
+      }
+
+      h4 {
+        margin: 12px 0 5px;
+        font-size: 11.6pt;
+        line-height: 1.35;
+      }
+
+      p {
+        margin-bottom: 8px;
+      }
+
+      ul,
+      ol {
+        margin: 6px 0 10px 22px;
+        padding: 0;
+      }
+
+      li {
+        margin: 3px 0;
+      }
+
+      strong {
+        color: #111827;
+      }
+
+      code {
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #f8fafc;
+        color: #1e3a8a;
+        padding: 0 4px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 9.5pt;
+      }
+
+      .cover {
+        min-height: 270mm;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        gap: 16px;
+        padding: 18mm 16mm;
+        color: #0f172a;
+        background:
+          linear-gradient(135deg, rgba(109, 91, 208, 0.12), transparent 42%),
+          linear-gradient(225deg, rgba(37, 99, 235, 0.12), transparent 44%),
+          linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%);
+      }
+
+      .cover-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand img {
+        width: 50px;
+        height: 50px;
+        object-fit: contain;
+        border-radius: 14px;
+        background: #fff;
+        box-shadow: 0 10px 24px rgba(37, 99, 235, 0.14);
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 14pt;
+      }
+
+      .brand span {
+        display: block;
+        color: var(--muted);
+        font-size: 9.5pt;
+        font-weight: 700;
+      }
+
+      .cover-main {
+        align-self: center;
+        max-width: 600px;
+      }
+
+      .cover-main p {
+        max-width: 560px;
+        color: var(--soft-ink);
+        font-size: 13pt;
+      }
+
+      .cover-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .badge,
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #3730a3;
+        padding: 4px 10px;
+        font-size: 9.4pt;
+        font-weight: 800;
+      }
+
+      .badge.green {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .badge.blue {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+
+      .badge.amber {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .cover-footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 9.8pt;
+      }
+
+      .toc {
+        display: grid;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .toc-row {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfdff;
+        padding: 10px 12px;
+      }
+
+      .toc-num,
+      .step-num {
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        background: var(--blue);
+        color: #fff;
+        font-size: 9pt;
+        font-weight: 900;
+      }
+
+      .section {
+        padding: 0 0 4px;
+      }
+
+      .section + .section {
+        margin-top: 18px;
+      }
+
+      .lead {
+        color: var(--soft-ink);
+        font-size: 12pt;
+      }
+
+      .note,
+      .warning,
+      .success,
+      .simple-box {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--light);
+        padding: 10px 12px;
+        margin: 10px 0;
+        break-inside: avoid;
+      }
+
+      .warning {
+        border-color: rgba(220, 38, 38, 0.25);
+        background: #fff1f2;
+      }
+
+      .success {
+        border-color: rgba(22, 163, 74, 0.24);
+        background: #f0fdf4;
+      }
+
+      .note strong,
+      .warning strong,
+      .success strong,
+      .simple-box strong {
+        display: block;
+        margin-bottom: 2px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 9px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 10px 11px;
+        break-inside: avoid;
+      }
+
+      .card h4 {
+        margin-top: 0;
+        color: #0f172a;
+      }
+
+      .card p,
+      .card li {
+        color: var(--soft-ink);
+        font-size: 10.4pt;
+      }
+
+      .screen-card {
+        border-left: 4px solid var(--violet);
+      }
+
+      .screen-card.blue {
+        border-left-color: var(--blue);
+      }
+
+      .screen-card.green {
+        border-left-color: var(--green);
+      }
+
+      .screen-card.amber {
+        border-left-color: var(--amber);
+      }
+
+      .screen-card.red {
+        border-left-color: var(--red);
+      }
+
+      .flow {
+        display: grid;
+        gap: 8px;
+        margin: 10px 0 14px;
+      }
+
+      .flow-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        align-items: stretch;
+      }
+
+      .flow-row.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .flow-box {
+        position: relative;
+        min-height: 70px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 10px 10px 10px 12px;
+        break-inside: avoid;
+      }
+
+      .flow-box::after {
+        content: "→";
+        position: absolute;
+        top: 50%;
+        right: -12px;
+        transform: translateY(-50%);
+        color: var(--blue);
+        font-weight: 900;
+      }
+
+      .flow-box:last-child::after {
+        content: "";
+      }
+
+      .flow-box strong {
+        display: block;
+        margin-bottom: 3px;
+      }
+
+      .flow-box span {
+        display: block;
+        color: var(--soft-ink);
+        font-size: 9.8pt;
+      }
+
+      .steps {
+        display: grid;
+        gap: 8px;
+        margin: 10px 0;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 9px;
+        align-items: start;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 9px 11px;
+        break-inside: avoid;
+      }
+
+      .step p {
+        margin: 0;
+        color: var(--soft-ink);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 10px 0 12px;
+        break-inside: avoid;
+      }
+
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 7px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #f1f5f9;
+        color: #0f172a;
+        font-weight: 900;
+      }
+
+      td {
+        color: var(--soft-ink);
+      }
+
+      .small {
+        color: var(--muted);
+        font-size: 9.5pt;
+      }
+
+      .danger-text {
+        color: var(--red);
+        font-weight: 900;
+      }
+
+      .ok-text {
+        color: var(--green);
+        font-weight: 900;
+      }
+
+      .page-content {
+        padding: 0;
+      }
+
+      .chapter-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+      }
+
+      .chapter-kicker {
+        display: inline-flex;
+        min-width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        align-items: center;
+        justify-content: center;
+        background: #eef2ff;
+        color: var(--violet);
+        font-weight: 950;
+      }
+
+      .footer-note {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 9.3pt;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="page cover">
+      <div class="cover-top">
+        <div class="brand">
+          <img src="../public/promedclinicpmc-logo.png" alt="" />
+          <div>
+            <strong>PMC Ads Agent</strong>
+            <span>คู่มือสำหรับทีมคลินิกและการตลาด</span>
+          </div>
+        </div>
+        <span class="badge blue">ฉบับใช้งานจริง</span>
+      </div>
+
+      <div class="cover-main">
+        <h1>คู่มือการใช้งาน PMC Ads Agent</h1>
+        <p>
+          คู่มือฉบับนี้อธิบายทุกหน้าจอ ทุกระบบ และ Flow สำคัญของ PMC Ads Agent
+          แบบภาษาคนใช้งาน เพื่อให้คนที่ไม่เก่งคอมพิวเตอร์ก็สามารถเปิดดูข้อมูล,
+          ขอคำแนะนำจาก AI, อนุมัติแผน, และควบคุมโฆษณา Meta ได้อย่างปลอดภัย
+        </p>
+        <div class="cover-badges">
+          <span class="badge green">Meta API จริง</span>
+          <span class="badge">AI Master Agent</span>
+          <span class="badge amber">ต้องอนุมัติก่อนเขียน Meta</span>
+          <span class="badge blue">Knowledgebase & Learning</span>
+        </div>
+      </div>
+
+      <div class="cover-footer">
+        <span>อัปเดตล่าสุด: 20 พฤษภาคม 2569</span>
+        <span>ใช้กับระบบ PMC Ads Agent เวอร์ชัน Phase 4</span>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">0</span>
+        <div>
+          <h2>สารบัญและภาพรวมเร็ว</h2>
+          <p class="lead">เริ่มจากหน้านี้ก่อน ถ้าคุณยังไม่เคยใช้ระบบ</p>
+        </div>
+      </div>
+
+      <div class="toc">
+        <div class="toc-row"><span class="toc-num">1</span><div><strong>ระบบนี้ใช้ทำอะไร</strong><br />ภาพรวม PMC Ads Agent, Meta API, AI Brain และ Knowledgebase</div></div>
+        <div class="toc-row"><span class="toc-num">2</span><div><strong>Flow การใช้งานรายวัน</strong><br />เปิดระบบ → ซิงก์ข้อมูล → ให้ AI วิเคราะห์ → อนุมัติ → ติดตามผล</div></div>
+        <div class="toc-row"><span class="toc-num">3</span><div><strong>เมนูและหน้าจอทั้งหมด</strong><br />Dashboard, Ads Manager, นักการตลาด AI, Optimizer, Creative, Audience, Library, Reports, Settings, Help</div></div>
+        <div class="toc-row"><span class="toc-num">4</span><div><strong>การอนุมัติและการเขียนข้อมูลจริงไป Meta</strong><br />อะไรคือ action จริง, checklist, แผน, rollback และข้อควรระวัง</div></div>
+        <div class="toc-row"><span class="toc-num">5</span><div><strong>AI Brain และ Knowledgebase</strong><br />ระบบอ่านข้อมูล คิด วิเคราะห์ บันทึกความจำ และเรียนรู้ย้อนหลังอย่างไร</div></div>
+        <div class="toc-row"><span class="toc-num">6</span><div><strong>ปัญหาที่พบบ่อย</strong><br />เชื่อมต่อไม่ได้, ข้อมูลไม่มา, AI ไม่ตอบ, กดปุ่มแล้วไม่แน่ใจว่าทำอะไร</div></div>
+      </div>
+
+      <div class="warning">
+        <strong>กฎความปลอดภัยข้อแรก</strong>
+        ถ้าปุ่มหรือหน้าต่างบอกว่า “เขียนข้อมูลจริงใน Meta”, “ดำเนินการใน Meta”, “ลบใน Meta”
+        ให้หยุดอ่านรายละเอียดก่อนกดเสมอ เพราะคำสั่งนั้นอาจเปลี่ยนสถานะโฆษณาจริง
+      </div>
+
+      <div class="success">
+        <strong>จำง่าย ๆ</strong>
+        เปิดดูข้อมูลและถาม AI ทำได้ปกติ แต่การเปิด/ปิด/ลบ/แก้ไขข้อมูล Meta ต้องผ่านหน้าต่างยืนยันก่อนเสมอ
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">1</span>
+        <div>
+          <h2>PMC Ads Agent คืออะไร</h2>
+          <p class="lead">ระบบหลังบ้านสำหรับดูแลโฆษณา Meta ของคลินิก โดยมี AI เป็นสมองช่วยวิเคราะห์</p>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>หน้าที่หลักของระบบ</h3>
+        <div class="grid-2">
+          <div class="card">
+            <h4>1. ดึงข้อมูลจริงจาก Meta</h4>
+            <p>ระบบอ่านข้อมูลแคมเปญ ชุดโฆษณา โฆษณา ยอดใช้จ่าย ROAS CTR booking และ metric อื่น ๆ จาก Meta API</p>
+          </div>
+          <div class="card">
+            <h4>2. ให้ AI วิเคราะห์แทนการอ่านตัวเลขเอง</h4>
+            <p>AI จะช่วยสรุปว่าอะไรควรดู อะไรควรทำก่อน และแผนไหนต้องขออนุมัติ</p>
+          </div>
+          <div class="card">
+            <h4>3. คุมการเขียนข้อมูลจริง</h4>
+            <p>ถ้าต้องเปิด/ปิด/แก้ไข/ลบ object ใน Meta ระบบจะแสดงหน้าต่างยืนยันก่อนเสมอ</p>
+          </div>
+          <div class="card">
+            <h4>4. บันทึกความรู้และผลย้อนหลัง</h4>
+            <p>Knowledgebase เก็บ insight, decision, outcome และ learning เพื่อใช้วิเคราะห์รอบต่อไป</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>ภาพรวมระบบแบบง่าย</h3>
+        <div class="flow">
+          <div class="flow-row">
+            <div class="flow-box"><strong>Meta API</strong><span>ส่งข้อมูลโฆษณาจริงเข้าระบบ</span></div>
+            <div class="flow-box"><strong>WorkspaceData</strong><span>จัดข้อมูลให้เป็นชุดเดียวกัน</span></div>
+            <div class="flow-box"><strong>PMC Master Agent</strong><span>AI อ่านข้อมูลและสรุปแผน</span></div>
+            <div class="flow-box"><strong>ผู้ใช้งานอนุมัติ</strong><span>เลือกทำหรือไม่ทำ ก่อนเขียน Meta</span></div>
+          </div>
+          <div class="flow-row three">
+            <div class="flow-box"><strong>Meta Write</strong><span>เปิด/ปิด/แก้ไข Meta เมื่อยืนยันแล้ว</span></div>
+            <div class="flow-box"><strong>Audit Trail</strong><span>บันทึกเหตุการณ์สำคัญ</span></div>
+            <div class="flow-box"><strong>Knowledgebase</strong><span>เก็บผลไว้เรียนรู้ย้อนหลัง</span></div>
+          </div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>คำที่เห็นในระบบ</th><th>แปลว่าอะไร</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Campaign / แคมเปญ</td><td>โครงใหญ่ของโฆษณา เช่น แคมเปญเติมไขมัน 9,900</td></tr>
+          <tr><td>Ad set / ชุดโฆษณา</td><td>กลุ่มเป้าหมาย งบ และ placement ภายใต้แคมเปญ</td></tr>
+          <tr><td>Ad / โฆษณา</td><td>ตัวโฆษณาจริง เช่น รูป วิดีโอ ข้อความ และ CTA</td></tr>
+          <tr><td>ROAS</td><td>รายได้เทียบค่าโฆษณา ยิ่งสูงยิ่งดี</td></tr>
+          <tr><td>CPA</td><td>ต้นทุนต่อ booking หรือ conversion ยิ่งต่ำยิ่งดี</td></tr>
+          <tr><td>CTR</td><td>อัตราคลิก ถ้าต่ำมากอาจบอกว่าครีเอทีฟหรือกลุ่มเป้าหมายไม่ดึงดูด</td></tr>
+          <tr><td>Approval / อนุมัติ</td><td>การให้ระบบบันทึกแผน หรือส่งคำสั่งจริงหลังตรวจรายละเอียด</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">2</span>
+        <div>
+          <h2>Flow การใช้งานรายวัน</h2>
+          <p class="lead">ใช้ลำดับนี้ถ้าคุณต้องดูแลโฆษณาทุกวัน</p>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step"><span class="step-num">1</span><p><strong>เปิดระบบ</strong><br />เข้า URL ของ PMC Ads Agent และล็อกอินด้วย Basic Auth ที่ทีมกำหนดให้</p></div>
+        <div class="step"><span class="step-num">2</span><p><strong>เช็กสถานะ Meta API</strong><br />ดูปุ่มสีเขียว “เชื่อมต่อ Meta API” หรือแถบแจ้งเตือน ถ้าไม่เขียวให้ไปที่ Settings</p></div>
+        <div class="step"><span class="step-num">3</span><p><strong>เลือกช่วงวันที่</strong><br />เช่น ข้อมูลทั้งหมด, 7 วันล่าสุด, 30 วันล่าสุด, เดือนนี้ หรือไตรมาสนี้</p></div>
+        <div class="step"><span class="step-num">4</span><p><strong>ดู Dashboard</strong><br />อ่านค่าโฆษณา รายได้ ROAS CPA funnel และคำแนะนำภาพรวม</p></div>
+        <div class="step"><span class="step-num">5</span><p><strong>เรียก Master Agent</strong><br />ไปที่ “นักการตลาด AI” แล้วกด “เรียก Master Agent” เพื่อให้ AI วิเคราะห์ข้อมูลล่าสุด</p></div>
+        <div class="step"><span class="step-num">6</span><p><strong>อ่านแผนที่ AI เสนอ</strong><br />ดูเหตุผล หลักฐาน ความเสี่ยง confidence และสิ่งที่ควรทำก่อน</p></div>
+        <div class="step"><span class="step-num">7</span><p><strong>อนุมัติหรือถามเจาะลึก</strong><br />ถ้ายังไม่แน่ใจให้กด “ถามเจาะลึก” ก่อน ถ้าพร้อมให้กด “สร้างแผนอนุมัติ”</p></div>
+        <div class="step"><span class="step-num">8</span><p><strong>ดำเนินการตามแผน</strong><br />ถ้ามีคำสั่ง Meta ชัดเจน ระบบจะแสดงปุ่ม “ดำเนินการใน Meta” ถ้าไม่ชัดจะเป็น checklist เท่านั้น</p></div>
+        <div class="step"><span class="step-num">9</span><p><strong>ซิงก์และติดตามผล</strong><br />หลังดำเนินการ ให้ซิงก์ข้อมูลอีกครั้ง และดู Reports หรือ Phase 4 Learning เพื่อติดตาม outcome</p></div>
+      </div>
+
+      <div class="warning">
+        <strong>ก่อนกดคำสั่งจริงใน Meta ให้เช็ก 4 อย่าง</strong>
+        ชื่อแคมเปญถูกไหม, object type ถูกไหม, สถานะที่จะส่งถูกไหม, และมีแผน rollback หรือหยุดกลับไหม
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">3</span>
+        <div>
+          <h2>ส่วนประกอบบนหน้าจอ</h2>
+          <p class="lead">รู้จักเมนู แถบบน และปุ่มสำคัญก่อนเริ่มใช้งาน</p>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h4>Sidebar / เมนูด้านซ้าย</h4>
+          <ul>
+            <li>ใช้เปลี่ยนหน้า เช่น วิเคราะห์, ตัวจัดการโฆษณา, นักการตลาด AI</li>
+            <li>บนมือถือให้กดปุ่ม “เมนู” เพื่อเปิดรายการหน้า</li>
+            <li>การ์ดด้านล่างบอกบัญชีโฆษณาและสถานะซิงก์</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>Topbar / แถบบน</h4>
+          <ul>
+            <li>แสดงชื่อหน้าปัจจุบัน</li>
+            <li>เลือกช่วงวันที่</li>
+            <li>กดซิงก์ Meta API</li>
+            <li>เลือกโหมด automation</li>
+            <li>กดเตรียมรายงาน</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>ปุ่ม “เชื่อมต่อ Meta API”</h4>
+          <p>ใช้ดึงข้อมูลล่าสุดจาก Meta ถ้าขึ้นสีเขียวแปลว่าเชื่อมต่อได้ ถ้าขึ้น error ให้ไปหน้า Settings</p>
+        </div>
+        <div class="card">
+          <h4>โหมด Automation</h4>
+          <ul>
+            <li><strong>แนะนำเท่านั้น:</strong> ระบบเสนอแผน แต่ไม่เขียน Meta เอง</li>
+            <li><strong>ต้องอนุมัติก่อน:</strong> ใช้กับ flow ที่จะเขียน Meta หลังยืนยัน</li>
+            <li><strong>พัก automation:</strong> หยุดการทำงานอัตโนมัติไว้ก่อน</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="simple-box">
+        <strong>สีของปุ่มและสถานะ</strong>
+        เขียว = สถานะดีหรือเปิดใช้งาน, น้ำเงิน = คำสั่งทั่วไปหรือบันทึก, เหลือง = ต้องตรวจ/ต้องอนุมัติ, แดง = เสี่ยงหรือเขียนข้อมูลจริง/ลบจริง
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">4</span>
+        <div>
+          <h2>คู่มือแต่ละหน้า</h2>
+          <p class="lead">ทุกเมนูหลักในระบบ และควรใช้เมื่อไร</p>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card screen-card">
+          <h4>1. วิเคราะห์ / Dashboard</h4>
+          <p>ใช้ดูภาพรวมเร็วที่สุดของบัญชีโฆษณา</p>
+          <ul>
+            <li>KPI: ค่าโฆษณา รายได้ ROAS CPA Lead Booking</li>
+            <li>Funnel คลินิก: จุดที่ลูกค้าหลุดจาก impression ถึง treatment</li>
+            <li>Campaign table: แคมเปญที่ดี เสี่ยง หรือควรหยุดดู</li>
+            <li>คำแนะนำจากระบบและ audit ล่าสุด</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card blue">
+          <h4>2. ตัวจัดการโฆษณา</h4>
+          <p>ใช้จัดการโครงสร้างจริงจาก Meta: แคมเปญ ชุดโฆษณา และโฆษณา</p>
+          <ul>
+            <li>ค้นหา campaign, ad set หรือ ad</li>
+            <li>กดเปิด/ปิดสถานะ object</li>
+            <li>แก้ชื่อหรืองบรายวัน</li>
+            <li>ลบ object ใน Meta เฉพาะกรณีจำเป็นมาก</li>
+            <li>เปิดรีวิวซิงก์เพื่อตรวจข้อมูลว่าพร้อมหรือไม่</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card green">
+          <h4>3. นักการตลาด AI</h4>
+          <p>หน้าหลักของ PMC Master Agent ใช้ให้ AI อ่านข้อมูลและสรุปแผน</p>
+          <ul>
+            <li>กด “เรียก Master Agent”</li>
+            <li>ดูสรุปจาก AI เป็นภาษาคน</li>
+            <li>ดูสิ่งที่ควรดูตอนนี้และสิ่งที่ควรทำก่อน</li>
+            <li>กด “ถามเจาะลึก” เพื่อถามแผนนั้นละเอียดขึ้น</li>
+            <li>กด “สร้างแผนอนุมัติ” เพื่อเริ่ม flow อนุมัติ</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card amber">
+          <h4>4. Optimizer & Automation</h4>
+          <p>ใช้กรองรายการที่ควรเปิด/ปิด/คุมงบตาม metric จริง</p>
+          <ul>
+            <li>เลือกกลยุทธ์ เช่น เปิดกลับ, ปิดลดรั่ว, ดูทั้งหมด</li>
+            <li>ดู Decision Board และรายการเข้าเกณฑ์</li>
+            <li>รัน batch ได้เมื่ออยู่ในโหมดที่ต้องอนุมัติก่อน</li>
+            <li>สร้างกฎ custom เช่น Budget, Pause, Schedule, Creative</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card">
+          <h4>5. สตูดิโอครีเอทีฟ</h4>
+          <p>ใช้ดูผลงานครีเอทีฟจาก ads และ insight ที่ซิงก์มา</p>
+          <ul>
+            <li>ดู creative ที่ชนะหรือควรรีเฟรช</li>
+            <li>ดู spend, CTR, results, ROAS ตาม creative</li>
+            <li>ใช้เป็นข้อมูลให้ทีมครีเอทีฟผลิตงานใหม่</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card blue">
+          <h4>6. กลุ่มเป้าหมาย</h4>
+          <p>ใช้ดู segment และ audience จาก ad set จริง</p>
+          <ul>
+            <li>ดู audience ที่ใช้เงินเยอะหรือได้ booking ดี</li>
+            <li>ดู placement และ targeting โดยรวม</li>
+            <li>ช่วยตัดสินใจว่าจะ scale หรือเปลี่ยนกลุ่มเป้าหมาย</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card green">
+          <h4>7. คลังโฆษณา</h4>
+          <p>ใช้ดู asset และความเสี่ยง compliance ก่อน launch</p>
+          <ul>
+            <li>ดูรายการที่ approved, needs review หรือ blocked</li>
+            <li>ตรวจ claim ทางการแพทย์</li>
+            <li>ใช้เป็นด่านก่อนเปิดโฆษณาใหม่</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card amber">
+          <h4>8. รายงาน</h4>
+          <p>ใช้เตรียมรายงานและรัน Phase 4 Learning & Monitoring</p>
+          <ul>
+            <li>สร้างรายงานจากข้อมูลล่าสุด</li>
+            <li>ดู outcome observations</li>
+            <li>ดู learning records และ monitoring alerts</li>
+            <li>ใช้สรุปงานให้ทีมทุกวันหรือทุกสัปดาห์</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card red">
+          <h4>9. ตั้งค่า</h4>
+          <p>ใช้ตั้งค่า Meta API และตรวจสถานะเชื่อมต่อ</p>
+          <ul>
+            <li>ใส่ Access Token และ Ad Account ID</li>
+            <li>เลือก Graph Version, Date Preset, Max Pages</li>
+            <li>กด Save & Test เพื่อบันทึกและตรวจเชื่อมต่อ</li>
+          </ul>
+        </div>
+
+        <div class="card screen-card">
+          <h4>10. ศูนย์ช่วยเหลือ</h4>
+          <p>ใช้ดู playbook การรีวิวโฆษณารายวัน</p>
+          <ul>
+            <li>แนวทางเช็กข้อมูลก่อนตัดสินใจ</li>
+            <li>ปุ่มไป Settings หรือ Sync ใหม่</li>
+            <li>เหมาะสำหรับผู้ใช้งานใหม่</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">5</span>
+        <div>
+          <h2>Flow การใช้ AI Master Agent</h2>
+          <p class="lead">ใช้เมื่อต้องการให้ AI เป็นสมองช่วยอ่านข้อมูลและเสนอแผน</p>
+        </div>
+      </div>
+
+      <div class="flow">
+        <div class="flow-row">
+          <div class="flow-box"><strong>กดเรียก Master Agent</strong><span>AI อ่าน WorkspaceData, Website Context, Memory</span></div>
+          <div class="flow-box"><strong>AI แบ่งงานให้ Agent</strong><span>Campaign, Budget, Funnel, Creative, Audience, Compliance</span></div>
+          <div class="flow-box"><strong>สรุปคำแนะนำ</strong><span>แสดงสิ่งที่ควรดูและสิ่งที่ควรทำก่อน</span></div>
+          <div class="flow-box"><strong>ถามเจาะลึกหรือสร้างแผน</strong><span>ผู้ใช้เลือกทางที่ต้องการ</span></div>
+        </div>
+      </div>
+
+      <h3>อ่านผล AI อย่างไร</h3>
+      <table>
+        <thead>
+          <tr><th>ช่องข้อมูล</th><th>วิธีอ่าน</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>สรุปจาก Master Agent</td><td>อ่านเหมือนผู้จัดการสรุปให้ฟังว่าภาพรวมควรสนใจอะไร</td></tr>
+          <tr><td>สิ่งที่ควรดูตอนนี้</td><td>ปัญหา สัญญาณผิดปกติ หรือโอกาสที่ควรตรวจ</td></tr>
+          <tr><td>สิ่งที่ควรทำก่อน</td><td>แผนที่ AI เสนอให้ขออนุมัติหรือทำต่อ</td></tr>
+          <tr><td>ความเสี่ยง</td><td>ต่ำ/กลาง/สูง ยิ่งสูงยิ่งต้องอ่านละเอียดก่อนกด</td></tr>
+          <tr><td>Confidence</td><td>AI มั่นใจแค่ไหนจากข้อมูลที่มี ไม่ใช่การรับประกันผลลัพธ์</td></tr>
+          <tr><td>หลักฐาน</td><td>ตัวเลขหรือข้อมูลจริงที่ AI ใช้คิด เช่น spend, ROAS, CPA</td></tr>
+        </tbody>
+      </table>
+
+      <div class="note">
+        <strong>ถ้าผล AI ดูแปลก</strong>
+        ให้กดซิงก์ Meta อีกครั้ง แล้วเรียก Master Agent ใหม่ ถ้ายังแปลกให้ตรวจช่วงวันที่และข้อมูลใน Settings
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">6</span>
+        <div>
+          <h2>การอนุมัติแผนและการเขียน Meta จริง</h2>
+          <p class="lead">ส่วนนี้สำคัญที่สุด เพราะเกี่ยวข้องกับการเปลี่ยนโฆษณาจริง</p>
+        </div>
+      </div>
+
+      <div class="flow">
+        <div class="flow-row">
+          <div class="flow-box"><strong>AI เสนอ Action</strong><span>เช่น เปิดกลับแบบค่อยเป็นค่อยไป หรือคงพักไว้</span></div>
+          <div class="flow-box"><strong>ผู้ใช้กดสร้างแผน</strong><span>ระบบเปิดหน้าต่างอนุมัติ</span></div>
+          <div class="flow-box"><strong>ระบบแยกประเภท</strong><span>Meta action หรือ checklist</span></div>
+          <div class="flow-box"><strong>ผู้ใช้ยืนยัน</strong><span>จึงเริ่มทำตามแผน</span></div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h4>แบบที่ 1: Checklist เท่านั้น</h4>
+          <p>ใช้กับงานตรวจสอบ วิเคราะห์ tracking compliance creative หรือ diagnosis ที่ยังไม่มีคำสั่งเปิด/ปิดชัดเจน</p>
+          <ul>
+            <li>ระบบจะไม่เดาเอง</li>
+            <li>ไม่เขียนข้อมูลไป Meta</li>
+            <li>ผู้ใช้ทำตามรายการ แล้วกดบันทึกว่าเสร็จ</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>แบบที่ 2: ดำเนินการใน Meta</h4>
+          <p>ใช้เมื่อระบบรู้ชัดว่า object ไหนและต้องส่งสถานะอะไร เช่น เปิดใช้งานหรือหยุดใช้งาน</p>
+          <ul>
+            <li>แสดง Action ใน Meta</li>
+            <li>แสดง Meta object และ ID</li>
+            <li>แสดงคำสั่งที่จะส่ง</li>
+            <li>ผู้ใช้ต้องกด “ดำเนินการใน Meta” อีกครั้ง</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="warning">
+        <strong>ปุ่มที่ต้องระวัง</strong>
+        <span class="danger-text">ดำเนินการใน Meta, ยืนยันใน Meta, ลบใน Meta</span>
+        คือปุ่มที่อาจเปลี่ยนข้อมูลจริง อย่ากดถ้ายังไม่มั่นใจชื่อแคมเปญและคำสั่งที่จะส่ง
+      </div>
+
+      <h3>ตัวอย่างการอ่านหน้าต่างดำเนินการแผน</h3>
+      <table>
+        <thead>
+          <tr><th>ช่อง</th><th>ต้องเช็กอะไร</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>แผน</td><td>อ่านว่า AI ต้องการให้ทำอะไร เช่น เปิดกลับแบบจำกัดงบ หรือพักไว้ก่อน</td></tr>
+          <tr><td>Action ใน Meta</td><td>ดูว่าระบบจะเปิด/พัก object อะไร</td></tr>
+          <tr><td>Meta object</td><td>ดูว่าเป็นแคมเปญ ชุดโฆษณา หรือโฆษณา และ ID ถูกต้องไหม</td></tr>
+          <tr><td>คำสั่งที่จะส่ง</td><td>ต้องตรงกับที่ต้องการ เช่น “เปิดใช้งาน” หรือ “หยุดใช้งาน”</td></tr>
+          <tr><td>เกณฑ์ควบคุม</td><td>อ่านว่าถ้าผลแย่ลงต้องหยุดหรือ rollback อย่างไร</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">7</span>
+        <div>
+          <h2>Knowledgebase และระบบเรียนรู้ย้อนหลัง</h2>
+          <p class="lead">ระบบไม่ได้แค่วิเคราะห์รอบเดียว แต่เก็บข้อมูลไว้ใช้คิดในอนาคต</p>
+        </div>
+      </div>
+
+      <div class="flow">
+        <div class="flow-row">
+          <div class="flow-box"><strong>AI วิเคราะห์</strong><span>สร้าง finding, recommendation, decision</span></div>
+          <div class="flow-box"><strong>บันทึก Memory</strong><span>เก็บสิ่งที่พบและหลักฐาน</span></div>
+          <div class="flow-box"><strong>ดำเนินการ/ไม่ดำเนินการ</strong><span>ระบบจดว่าเกิดอะไรขึ้น</span></div>
+          <div class="flow-box"><strong>Phase 4 Learning</strong><span>เทียบผลลัพธ์และสร้าง learning</span></div>
+        </div>
+      </div>
+
+      <h3>ข้อมูลที่ Knowledgebase เก็บ</h3>
+      <div class="grid-2">
+        <div class="card"><h4>Memory</h4><p>ข้อสังเกตจาก AI เช่น แคมเปญที่ ROAS ดี หรือ creative ที่ควร refresh</p></div>
+        <div class="card"><h4>Decision Record</h4><p>แผนที่ AI เสนอ เป้าหมาย หลักฐาน ความเสี่ยง และสถานะอนุมัติ</p></div>
+        <div class="card"><h4>Outcome Observation</h4><p>ผลหลังจากดำเนินการ เช่น ดีขึ้น แย่ลง หรือยังรอดูข้อมูล</p></div>
+        <div class="card"><h4>Monitoring Alert</h4><p>สัญญาณเตือน เช่น ไม่มี active campaign, ข้อมูล stale, หรือแผนเสี่ยงสูงค้างอนุมัติ</p></div>
+      </div>
+
+      <div class="note">
+        <strong>สำคัญ</strong>
+        Learning เป็นการอ่านความสัมพันธ์จากข้อมูล ไม่ใช่การยืนยันสาเหตุ 100% ผู้ใช้ยังต้องตรวจบริบทจริงของแคมเปญเสมอ
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">8</span>
+        <div>
+          <h2>การตั้งค่าและการเชื่อมต่อ Meta</h2>
+          <p class="lead">ใช้เมื่อระบบยังไม่เห็นข้อมูล หรือ Meta API ต่อไม่ติด</p>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step"><span class="step-num">1</span><p><strong>ไปที่หน้า “ตั้งค่า”</strong><br />อยู่ในกลุ่มเมนูระบบด้านซ้าย หรือกดจากศูนย์ช่วยเหลือ</p></div>
+        <div class="step"><span class="step-num">2</span><p><strong>ใส่ Access Token</strong><br />ใช้ token ที่มีสิทธิ์อ่านโฆษณา เช่น <code>ads_read</code> และถ้าต้องเขียนข้อมูลต้องมีสิทธิ์ที่เหมาะสม</p></div>
+        <div class="step"><span class="step-num">3</span><p><strong>ใส่ Ad Account ID</strong><br />ควรอยู่ในรูปแบบของบัญชีโฆษณา เช่น <code>act_...</code> หรือเลขบัญชีตามที่ระบบรองรับ</p></div>
+        <div class="step"><span class="step-num">4</span><p><strong>เลือกค่าอื่น</strong><br />Graph Version, Date Preset, Max Pages</p></div>
+        <div class="step"><span class="step-num">5</span><p><strong>กด Save & Test</strong><br />ระบบจะบันทึกและตรวจเชื่อมต่อ ถ้าผ่านให้กลับไปกดซิงก์ Meta API</p></div>
+      </div>
+
+      <div class="warning">
+        <strong>ห้ามแชร์ Token ในแชตหรือเอกสารทั่วไป</strong>
+        Token คือกุญแจเข้าบัญชีโฆษณา ควรส่งผ่านช่องทางปลอดภัยและให้เฉพาะคนที่รับผิดชอบ
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>อาการ</th><th>สิ่งที่ควรทำ</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>ขึ้น “ต้องตั้งค่าก่อน”</td><td>ไปหน้า Settings แล้วใส่ Token และ Ad Account ID</td></tr>
+          <tr><td>ขึ้น “ซิงก์ผิดพลาด”</td><td>Token อาจหมดอายุ, ไม่มี permission, หรือ account ไม่ถูกต้อง</td></tr>
+          <tr><td>เชื่อมต่อได้แต่ไม่มีข้อมูล</td><td>ลองเปลี่ยนช่วงวันที่เป็น “ข้อมูลทั้งหมด” หรือ “30 วันล่าสุด”</td></tr>
+          <tr><td>AI ตอบช้า</td><td>รอสักครู่ หรือซิงก์ใหม่แล้วเรียก Master Agent อีกครั้ง</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">9</span>
+        <div>
+          <h2>คู่มือสำหรับมือถือ</h2>
+          <p class="lead">ระบบรองรับมือถือ แต่บางงานที่เสี่ยงควรทำบนจอใหญ่เพื่ออ่านรายละเอียดครบ</p>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h4>เปิดเมนู</h4>
+          <p>บนมือถือ ให้กดปุ่ม “เมนู” ที่มุมบนขวาของแถบโลโก้ เพื่อเลือกหน้าอื่น</p>
+        </div>
+        <div class="card">
+          <h4>อ่านการ์ดโฆษณา</h4>
+          <p>การ์ดจะแสดงชื่อ object, สถานะ, spend, ROAS และปุ่มคำสั่งในแนวตั้งเพื่อไม่ให้ล้นจอ</p>
+        </div>
+        <div class="card">
+          <h4>หน้าต่างยืนยัน</h4>
+          <p>Modal จะแสดงเป็นแผ่นด้านล่าง อ่านให้ครบก่อนกดปุ่มสีน้ำเงินหรือแดง</p>
+        </div>
+        <div class="card">
+          <h4>งานที่ควรทำบนคอมพิวเตอร์</h4>
+          <p>การลบ object, batch optimizer, หรือการตรวจรายละเอียดหลายแคมเปญ ควรทำบนจอใหญ่</p>
+        </div>
+      </div>
+
+      <div class="success">
+        <strong>ตรวจแล้ว</strong>
+        Layout หลักรองรับมือถือขนาดประมาณ 360-390px โดยไม่มีการล้นแนวนอนในเมนูหลัก
+      </div>
+    </section>
+
+    <section class="page">
+      <div class="chapter-title">
+        <span class="chapter-kicker">10</span>
+        <div>
+          <h2>คำถามที่พบบ่อย</h2>
+          <p class="lead">คำตอบสั้น ๆ สำหรับปัญหาที่เจอบ่อย</p>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h4>1. กดซิงก์แล้วข้อมูลไม่มา</h4>
+          <p>ตรวจ Settings, Token, Ad Account ID และลองเปลี่ยนช่วงวันที่เป็น “ข้อมูลทั้งหมด”</p>
+        </div>
+        <div class="card">
+          <h4>2. AI บอกให้เปิดแคมเปญ ต้องกดเลยไหม</h4>
+          <p>ไม่ต้องรีบ กด “ถามเจาะลึก” ก่อน แล้วอ่านหลักฐานและเกณฑ์ควบคุมให้ครบ</p>
+        </div>
+        <div class="card">
+          <h4>3. อนุมัติเป็นแผนแล้วเกิดอะไรต่อ</h4>
+          <p>ระบบจะเปิด flow ดำเนินการต่อ ถ้าแผนส่ง Meta ได้จะมีปุ่ม “ดำเนินการใน Meta” ถ้าไม่ชัดจะเป็น checklist</p>
+        </div>
+        <div class="card">
+          <h4>4. กดผิดแล้วทำอย่างไร</h4>
+          <p>รีบซิงก์ข้อมูลใหม่ ตรวจสถานะใน Ads Manager และใช้ rollback ตาม guardrail หรือเปิด Meta Ads Manager ตรวจซ้ำ</p>
+        </div>
+        <div class="card">
+          <h4>5. ทำไมบางแผนไม่มีปุ่มส่ง Meta</h4>
+          <p>เพราะแผนนั้นเป็นงานตรวจสอบ เช่น tracking, creative, compliance หรือ diagnosis ระบบจึงไม่เดาคำสั่งเอง</p>
+        </div>
+        <div class="card">
+          <h4>6. รายงานใช้ทำอะไร</h4>
+          <p>ใช้สรุป performance, outcome, learning, alert และ next actions สำหรับทีม</p>
+        </div>
+      </div>
+
+      <div class="warning">
+        <strong>เช็กลิสต์ก่อนจบงานประจำวัน</strong>
+        ซิงก์ข้อมูลล่าสุดแล้ว, อ่าน Dashboard แล้ว, เรียก Master Agent แล้ว, ตรวจแผนที่ค้างอนุมัติแล้ว, บันทึกผลหรือรายงานแล้ว
+      </div>
+
+      <p class="footer-note">
+        เอกสารนี้สร้างจากโครงระบบ PMC Ads Agent ในโปรเจกต์ปัจจุบัน และไม่รวมรหัสผ่าน, token หรือข้อมูลลับของบัญชีโฆษณา
+      </p>
+    </section>
+  </body>
+</html>

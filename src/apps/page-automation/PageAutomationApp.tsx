@@ -169,9 +169,6 @@ export function PageAutomationApp() {
     <main className="pa-shell">
       <header className="pa-app-topbar">
         <a className="pa-brand-link" href="/" title="กลับ Home">
-          <span className="pa-brand-logo-wrap">
-            <img src="/pmc-page-auto-logo.png?v=transparent" alt="PMC Page Auto" />
-          </span>
           <span>
             <strong>PMC Page Auto</strong>
             <small>ศูนย์จัดการเพจและข้อความ</small>

@@ -164,6 +164,14 @@ Master Agent คือ controller หลักของระบบ และเ
 - Master ต้องบันทึกเหตุผลว่าทำไมเลือก action นั้น
 - Master ต้อง reject output ที่ไม่มี evidence หรือมี metric ที่ไม่มี source
 - Master ต้องบังคับให้ทุก write action มี before, after, guardrail, rollback และ audit event
+- ก่อนสร้างคำสั่งเปลี่ยนสถานะใน Meta ต้องเทียบสถานะปัจจุบันก่อนเสมอ ถ้า campaign, ad set หรือ ad อยู่สถานะเดียวกับคำสั่งแล้ว ให้เปลี่ยนเป็น checklist/review item และห้ามส่งคำสั่งซ้ำ
+
+กฎของข้อความบน UI:
+
+- ข้อความที่แสดงในหน้าจอต้องพูดกับผู้ใช้งานโดยตรง ไม่ใช่อธิบาย implementation ให้ developer อ่าน
+- หลีกเลี่ยงคำเชิงระบบ เช่น `source`, `AI Brain`, `PMC Master Agent`, `หลังผู้ใช้กด`, `เฉพาะรายการที่มาจาก...` เว้นแต่เป็นชื่อเมนูหรือ action ที่ผู้ใช้ต้องกดจริง
+- Empty state ต้องบอกสถานะปัจจุบันและขั้นตอนถัดไปของผู้ใช้ เช่น "ยังไม่มีรายการที่ต้องอนุมัติ" และ "เมื่อคุณให้ AI วิเคราะห์ข้อมูลล่าสุด รายการที่ต้องตัดสินใจจะมาแสดงที่นี่"
+- ถ้าข้อมูลมาจากสูตรหรือ metric guardrail ไม่ใช่ AI ที่ผู้ใช้สั่งวิเคราะห์ ห้ามเขียนให้ดูเหมือนเป็นคำแนะนำ AI
 
 Workflow การพัฒนาใต้ Master:
 
@@ -176,6 +184,14 @@ Workflow การพัฒนาใต้ Master:
 7. Security Agent ตรวจ secrets, permissions, unsafe writes
 8. Documentation Agent อัปเดตเอกสาร
 9. Master review และสรุปผล
+
+กฎการอัปเดตเอกสารระหว่างพัฒนา:
+
+- เวอร์ชันล่าสุดของโปรเจกต์คือ `0.1.0`
+- `docs/PROJECT_UPDATES.md` คือ update log กลางของโปรเจกต์
+- ทุกครั้งที่มีการพัฒนา แก้บั๊ก ปรับ UI เปลี่ยน API เพิ่ม asset หรือเตรียม release ต้องเพิ่ม entry ใน `docs/PROJECT_UPDATES.md` ก่อน stage หรือ commit
+- ถ้ามีไฟล์ preview, manual, PDF, screenshot หรือ asset สำหรับ release ให้จัดเก็บใน `docs/releases/<date>-v<version>/` และเพิ่ม index สั้นๆ ใน README ของโฟลเดอร์ release นั้น
+- ห้ามถือว่างานเสร็จถ้า code/test เปลี่ยนแล้วแต่ยังไม่ได้อัปเดต update log และ release notes ที่เกี่ยวข้อง
 
 ### Agent Control Hierarchy
 

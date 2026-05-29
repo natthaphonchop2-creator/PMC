@@ -1,0 +1,997 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PMC Chart System Options</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f8fc;
+        --surface: #ffffff;
+        --surface-2: #f8fbff;
+        --ink: #0f233a;
+        --muted: #667792;
+        --line: #dce6f2;
+        --teal: #24b6a2;
+        --teal-dark: #118d82;
+        --blue: #2684ff;
+        --purple: #7a5bf5;
+        --orange: #f7a928;
+        --green: #15b981;
+        --red: #e55353;
+        --shadow: 0 20px 60px rgba(40, 70, 110, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at top left, rgba(36, 182, 162, 0.14), transparent 28rem),
+          linear-gradient(180deg, #ffffff 0%, var(--bg) 44%, #eef6f6 100%);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .page {
+        width: min(1440px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 28px 0 56px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: start;
+        padding: 24px 0 22px;
+      }
+
+      .brand {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        min-width: 0;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 58px;
+        height: 58px;
+        place-items: center;
+        border: 1px solid rgba(36, 182, 162, 0.28);
+        border-radius: 18px;
+        background:
+          linear-gradient(135deg, rgba(36, 182, 162, 0.14), rgba(38, 132, 255, 0.1)),
+          #ffffff;
+        box-shadow: 0 14px 34px rgba(35, 143, 129, 0.12);
+      }
+
+      .brand-mark svg {
+        width: 34px;
+        height: 34px;
+      }
+
+      .eyebrow {
+        margin: 0 0 6px;
+        color: var(--teal-dark);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 8px;
+        font-size: clamp(32px, 4vw, 56px);
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      .lead {
+        max-width: 820px;
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.7;
+      }
+
+      .status-stack {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        width: min(480px, 100%);
+      }
+
+      .status {
+        min-height: 76px;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: 0 14px 34px rgba(31, 55, 88, 0.08);
+      }
+
+      .status b {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+
+      .status span {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 99px;
+        background: var(--green);
+        box-shadow: 0 0 0 4px rgba(21, 185, 129, 0.12);
+      }
+
+      .rule-card {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+        margin: 8px 0 22px;
+        padding: 18px 20px;
+        border: 1px solid rgba(36, 182, 162, 0.28);
+        border-radius: 22px;
+        background: rgba(232, 249, 246, 0.78);
+      }
+
+      .rule-icon {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border-radius: 12px;
+        background: #ffffff;
+        color: var(--teal-dark);
+        font-weight: 900;
+      }
+
+      .rule-card h2 {
+        margin-bottom: 6px;
+        font-size: 18px;
+      }
+
+      .rule-card p {
+        margin: 0;
+        color: #435672;
+        line-height: 1.65;
+      }
+
+      .compare {
+        overflow: hidden;
+        margin: 0 0 22px;
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: var(--shadow);
+      }
+
+      .compare-header,
+      .compare-row {
+        display: grid;
+        grid-template-columns: 0.6fr 1fr 1.1fr 1fr;
+        gap: 0;
+      }
+
+      .compare-header {
+        background: #f2f7fb;
+        color: #53667f;
+        font-size: 13px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+
+      .compare-header div,
+      .compare-row div {
+        padding: 16px 18px;
+        border-right: 1px solid var(--line);
+      }
+
+      .compare-header div:last-child,
+      .compare-row div:last-child {
+        border-right: 0;
+      }
+
+      .compare-row {
+        border-top: 1px solid var(--line);
+      }
+
+      .compare-row strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .compare-row span {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+      }
+
+      .option {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: var(--shadow);
+      }
+
+      .option-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 22px 22px 14px;
+      }
+
+      .option h2 {
+        margin-bottom: 6px;
+        font-size: 24px;
+      }
+
+      .option p {
+        margin-bottom: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }
+
+      .badge {
+        display: inline-flex;
+        height: 34px;
+        align-items: center;
+        justify-content: center;
+        white-space: nowrap;
+        border-radius: 999px;
+        padding: 0 13px;
+        background: #eaf7f5;
+        color: var(--teal-dark);
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .preview {
+        margin: 0 22px 18px;
+        padding: 18px;
+        border: 1px solid #e2ebf5;
+        border-radius: 22px;
+        background: linear-gradient(180deg, #ffffff, #f7fbff);
+      }
+
+      .preview.dark {
+        border-color: rgba(255, 255, 255, 0.08);
+        background:
+          linear-gradient(135deg, rgba(36, 182, 162, 0.14), rgba(38, 132, 255, 0.08)),
+          #0c1829;
+        color: #ecf7ff;
+      }
+
+      .chart-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(180px, 0.8fr);
+        gap: 16px;
+        min-height: 300px;
+      }
+
+      .chart-main,
+      .chart-side,
+      .mini-block {
+        border: 1px solid rgba(129, 151, 178, 0.22);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.74);
+      }
+
+      .dark .chart-main,
+      .dark .chart-side,
+      .dark .mini-block {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .chart-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px 0;
+      }
+
+      .chart-head strong {
+        font-size: 15px;
+      }
+
+      .chart-head span {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .dark .chart-head span,
+      .dark .chart-note {
+        color: #9fb5d3;
+      }
+
+      .chart-svg {
+        display: block;
+        width: 100%;
+        height: 210px;
+      }
+
+      .side-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .metric-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(129, 151, 178, 0.18);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .metric-line:last-child {
+        border-bottom: 0;
+      }
+
+      .metric-line span {
+        color: var(--muted);
+      }
+
+      .dark .metric-line span {
+        color: #a8bad2;
+      }
+
+      .chart-note {
+        padding: 0 16px 14px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .matrix {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 7px;
+        padding: 16px;
+      }
+
+      .matrix span {
+        min-height: 30px;
+        border-radius: 9px;
+        background: rgba(38, 132, 255, 0.18);
+      }
+
+      .matrix span:nth-child(3n) {
+        background: rgba(36, 182, 162, 0.32);
+      }
+
+      .matrix span:nth-child(4n) {
+        background: rgba(122, 91, 245, 0.26);
+      }
+
+      .bars {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .bar {
+        display: grid;
+        grid-template-columns: 70px 1fr;
+        gap: 10px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .bar i {
+        display: block;
+        height: 10px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--blue), var(--teal));
+      }
+
+      .implementation {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        padding: 0 22px 22px;
+      }
+
+      .implementation div {
+        min-height: 112px;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--surface-2);
+      }
+
+      .implementation h3 {
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      .implementation ul {
+        margin: 0;
+        padding-left: 19px;
+        color: var(--muted);
+        line-height: 1.65;
+        font-size: 14px;
+      }
+
+      .source-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 22px;
+        padding: 0;
+        list-style: none;
+      }
+
+      .source-list a {
+        display: inline-flex;
+        min-height: 38px;
+        align-items: center;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #ffffff;
+        padding: 0 14px;
+        color: #31506f;
+        font-size: 13px;
+        font-weight: 800;
+        text-decoration: none;
+      }
+
+      @media (max-width: 1100px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .status-stack {
+          width: 100%;
+        }
+
+        .options {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .page {
+          width: min(100% - 28px, 1440px);
+          padding-top: 16px;
+        }
+
+        .brand {
+          align-items: flex-start;
+        }
+
+        .brand-mark {
+          width: 48px;
+          height: 48px;
+          border-radius: 15px;
+        }
+
+        .status-stack,
+        .chart-shell,
+        .implementation {
+          grid-template-columns: 1fr;
+        }
+
+        .compare {
+          display: block;
+        }
+
+        .compare-header {
+          display: none;
+        }
+
+        .compare-row {
+          display: grid;
+          grid-template-columns: 1fr;
+          padding: 12px 0;
+        }
+
+        .compare-row div {
+          padding: 8px 16px;
+          border-right: 0;
+        }
+
+        .compare-row div::before {
+          display: block;
+          margin-bottom: 4px;
+          color: #71839a;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          content: attr(data-label);
+        }
+
+        .option-top {
+          display: grid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48" fill="none">
+              <path
+                d="M9 30.5C9 18 17 9 29 9h10v10c0 11.5-8.8 20-20.2 20H9v-8.5Z"
+                fill="url(#markGradient)"
+              />
+              <path
+                d="M14 34c6-1 10.7-3.8 14.2-8.4 2-2.7 3.7-4 5.8-4h5"
+                stroke="white"
+                stroke-width="5"
+                stroke-linecap="round"
+              />
+              <defs>
+                <linearGradient id="markGradient" x1="9" y1="9" x2="41" y2="39">
+                  <stop stop-color="#24B6A2" />
+                  <stop offset="0.55" stop-color="#2684FF" />
+                  <stop offset="1" stop-color="#7A5BF5" />
+                </linearGradient>
+              </defs>
+            </svg>
+          </div>
+          <div>
+            <p class="eyebrow">PMC Ads Agent</p>
+            <h1>Chart System Options</h1>
+            <p class="lead">
+              หน้าเลือกแนวกราฟสำหรับปรับ Ads Agent ให้ดูเป็นระบบวิเคราะห์จริงจังขึ้น
+              โดยยังไม่แตะหน้า production จนกว่าจะเลือกแนวที่ต้องการ
+            </p>
+          </div>
+        </div>
+        <div class="status-stack" aria-label="implementation rules">
+          <div class="status">
+            <b>ข้อมูลจริงเท่านั้น</b>
+            <span><i class="dot"></i> ห้ามแต่งตัวเลขในแอปจริง</span>
+          </div>
+          <div class="status">
+            <b>Chart API จริง</b>
+            <span><i class="dot"></i> ใช้ library ที่ maintain ได้</span>
+          </div>
+          <div class="status">
+            <b>เลือกก่อนลงมือ</b>
+            <span><i class="dot"></i> หน้า preview นี้เพื่อเลือกทิศทาง</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="rule-card">
+        <div class="rule-icon">!</div>
+        <div>
+          <h2>กฎสำหรับตอน implement</h2>
+          <p>
+            กราฟในแอปจริงต้องอ่านจากข้อมูลที่มีอยู่ เช่น summary, trendData, campaigns,
+            funnel metrics และผลวิเคราะห์ที่ได้จาก API จริงเท่านั้น ถ้าข้อมูลไม่พอ
+            ให้แสดงสถานะว่ายังไม่มีข้อมูลแทนการสร้างค่าจำลอง
+          </p>
+        </div>
+      </section>
+
+      <section class="compare" aria-label="chart option comparison">
+        <div class="compare-header">
+          <div>ตัวเลือก</div>
+          <div>Chart API</div>
+          <div>เหมาะกับ</div>
+          <div>ผลกระทบตอนทำ</div>
+        </div>
+        <div class="compare-row">
+          <div data-label="ตัวเลือก"><strong>A</strong><span>Executive Analytics</span></div>
+          <div data-label="Chart API"><strong>Apache ECharts</strong><span>ระบบ chart engine ครบ เหมาะกับ dashboard จริง</span></div>
+          <div data-label="เหมาะกับ"><strong>Ads performance, funnel, mix, drilldown</strong><span>ดูจริงจังที่สุดและขยายต่อได้ไกล</span></div>
+          <div data-label="ผลกระทบตอนทำ"><strong>กลาง</strong><span>ต้องเพิ่ม dependency และทำ adapter ข้อมูล</span></div>
+        </div>
+        <div class="compare-row">
+          <div data-label="ตัวเลือก"><strong>B</strong><span>Data Studio</span></div>
+          <div data-label="Chart API"><strong>Nivo</strong><span>React chart components ดีไซน์ดีและ theme ได้ละเอียด</span></div>
+          <div data-label="เหมาะกับ"><strong>หน้าสวย อ่านง่าย</strong><span>เหมาะกับทีมที่ต้องดูรายงานและ presentation</span></div>
+          <div data-label="ผลกระทบตอนทำ"><strong>กลางถึงสูง</strong><span>ต้องจัด theme และ responsive ใหม่</span></div>
+        </div>
+        <div class="compare-row">
+          <div data-label="ตัวเลือก"><strong>C</strong><span>Operations Console</span></div>
+          <div data-label="Chart API"><strong>ApexCharts</strong><span>สวยเร็ว มี line, area, donut, annotation</span></div>
+          <div data-label="เหมาะกับ"><strong>ทำให้ดู premium เร็ว</strong><span>เหมาะกับ dashboard ที่ต้อง ship ไว</span></div>
+          <div data-label="ผลกระทบตอนทำ"><strong>กลาง</strong><span>ต้องเช็ก bundle และ SSR/client behavior</span></div>
+        </div>
+        <div class="compare-row">
+          <div data-label="ตัวเลือก"><strong>D</strong><span>Low-risk Upgrade</span></div>
+          <div data-label="Chart API"><strong>Recharts เดิม</strong><span>ปรับ design system และ composition</span></div>
+          <div data-label="เหมาะกับ"><strong>เปลี่ยนน้อยที่สุด</strong><span>เสี่ยงต่ำ แต่ความรู้สึก premium อาจน้อยกว่า A/B/C</span></div>
+          <div data-label="ผลกระทบตอนทำ"><strong>ต่ำ</strong><span>ไม่ต้องเปลี่ยน library หลัก</span></div>
+        </div>
+      </section>
+
+      <section class="options">
+        <article class="option">
+          <div class="option-top">
+            <div>
+              <h2>Option A: Executive Analytics</h2>
+              <p>
+                เหมาะสุดถ้าต้องการให้หน้า Ads Agent เป็นระบบวิเคราะห์จริง
+                มี tooltip, zoom, dataset, funnel, donut และกราฟผสมในชุดเดียว
+              </p>
+            </div>
+            <span class="badge">Recommended</span>
+          </div>
+          <div class="preview dark">
+            <div class="chart-shell">
+              <div class="chart-main">
+                <div class="chart-head">
+                  <strong>Revenue, Spend และ ROAS Trend</strong>
+                  <span>Apache ECharts</span>
+                </div>
+                <svg class="chart-svg" viewBox="0 0 620 230" role="img" aria-label="ECharts style preview">
+                  <defs>
+                    <linearGradient id="areaA" x1="0" y1="0" x2="0" y2="1">
+                      <stop stop-color="#24B6A2" stop-opacity="0.42" />
+                      <stop offset="1" stop-color="#24B6A2" stop-opacity="0" />
+                    </linearGradient>
+                  </defs>
+                  <g stroke="rgba(255,255,255,.12)" stroke-width="1">
+                    <path d="M48 40H590" />
+                    <path d="M48 90H590" />
+                    <path d="M48 140H590" />
+                    <path d="M48 190H590" />
+                  </g>
+                  <path
+                    d="M48 176 C105 126 128 111 177 122 C226 133 238 70 291 76 C342 82 351 154 409 129 C459 107 489 70 540 87 C568 97 579 78 590 66 L590 205 L48 205Z"
+                    fill="url(#areaA)"
+                  />
+                  <path
+                    d="M48 176 C105 126 128 111 177 122 C226 133 238 70 291 76 C342 82 351 154 409 129 C459 107 489 70 540 87 C568 97 579 78 590 66"
+                    fill="none"
+                    stroke="#24D6BD"
+                    stroke-width="4"
+                    stroke-linecap="round"
+                  />
+                  <path
+                    d="M48 190 C113 164 153 176 194 154 C236 132 274 136 318 122 C368 106 405 117 444 95 C491 69 536 77 590 54"
+                    fill="none"
+                    stroke="#7AA7FF"
+                    stroke-width="3"
+                    stroke-dasharray="7 8"
+                    stroke-linecap="round"
+                  />
+                  <circle cx="540" cy="87" r="7" fill="#0C1829" stroke="#24D6BD" stroke-width="4" />
+                  <g fill="#9FB5D3" font-size="12" font-weight="700">
+                    <text x="48" y="222">Mon</text>
+                    <text x="180" y="222">Wed</text>
+                    <text x="319" y="222">Fri</text>
+                    <text x="455" y="222">Sun</text>
+                  </g>
+                </svg>
+                <p class="chart-note">Preview นี้เป็นภาพทิศทาง UI เท่านั้น ตอนทำจริงจะ bind จาก trendData และ campaigns</p>
+              </div>
+              <div class="side-grid">
+                <div class="chart-side">
+                  <div class="chart-head">
+                    <strong>Campaign Mix</strong>
+                    <span>Donut</span>
+                  </div>
+                  <svg class="chart-svg" viewBox="0 0 220 210" role="img" aria-label="Donut chart preview">
+                    <circle cx="108" cy="102" r="62" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="30" />
+                    <circle cx="108" cy="102" r="62" fill="none" stroke="#24D6BD" stroke-width="30" stroke-dasharray="138 250" transform="rotate(-90 108 102)" />
+                    <circle cx="108" cy="102" r="62" fill="none" stroke="#7AA7FF" stroke-width="30" stroke-dasharray="72 250" stroke-dashoffset="-138" transform="rotate(-90 108 102)" />
+                    <circle cx="108" cy="102" r="62" fill="none" stroke="#F7A928" stroke-width="30" stroke-dasharray="44 250" stroke-dashoffset="-210" transform="rotate(-90 108 102)" />
+                    <text x="108" y="98" text-anchor="middle" fill="#ECF7FF" font-size="13" font-weight="800">Share</text>
+                    <text x="108" y="119" text-anchor="middle" fill="#9FB5D3" font-size="12">real data</text>
+                  </svg>
+                </div>
+                <div class="mini-block">
+                  <div class="metric-line"><span>Risk view</span><b>Rule + AI</b></div>
+                  <div class="metric-line"><span>Interaction</span><b>Tooltip + Zoom</b></div>
+                  <div class="metric-line"><span>Best fit</span><b>Dashboard</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="implementation">
+            <div>
+              <h3>ข้อมูลที่จะใช้</h3>
+              <ul>
+                <li>Revenue trend จาก trendData</li>
+                <li>Spend, CPA, ROAS จาก campaigns</li>
+                <li>Campaign mix จาก revenue หรือ conversions จริง</li>
+              </ul>
+            </div>
+            <div>
+              <h3>เหตุผลที่เลือก</h3>
+              <ul>
+                <li>ขยายเป็น funnel, heatmap, drilldown ได้</li>
+                <li>เหมาะกับหน้าองค์กรและข้อมูล Meta API</li>
+                <li>เหมาะเป็น chart system ระยะยาว</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="option">
+          <div class="option-top">
+            <div>
+              <h2>Option B: Data Studio</h2>
+              <p>
+                เน้นความสวยแบบ product analytics อ่านง่าย ใช้สีสะอาด
+                เหมาะกับหน้าที่ทีมใช้ดูรายงานและสรุปผลให้ผู้บริหาร
+              </p>
+            </div>
+            <span class="badge">Clean UI</span>
+          </div>
+          <div class="preview">
+            <div class="chart-shell">
+              <div class="chart-main">
+                <div class="chart-head">
+                  <strong>Performance Overview</strong>
+                  <span>Nivo</span>
+                </div>
+                <svg class="chart-svg" viewBox="0 0 620 230" role="img" aria-label="Nivo style preview">
+                  <defs>
+                    <linearGradient id="areaB1" x1="0" y1="0" x2="0" y2="1">
+                      <stop stop-color="#2684FF" stop-opacity="0.25" />
+                      <stop offset="1" stop-color="#2684FF" stop-opacity="0" />
+                    </linearGradient>
+                    <linearGradient id="areaB2" x1="0" y1="0" x2="0" y2="1">
+                      <stop stop-color="#24B6A2" stop-opacity="0.22" />
+                      <stop offset="1" stop-color="#24B6A2" stop-opacity="0" />
+                    </linearGradient>
+                  </defs>
+                  <g stroke="#DFE8F4" stroke-width="1">
+                    <path d="M48 40H590" />
+                    <path d="M48 90H590" />
+                    <path d="M48 140H590" />
+                    <path d="M48 190H590" />
+                  </g>
+                  <path d="M48 172 C121 96 167 94 226 126 C290 160 319 72 383 88 C454 106 508 60 590 82 L590 205 L48 205Z" fill="url(#areaB1)" />
+                  <path d="M48 172 C121 96 167 94 226 126 C290 160 319 72 383 88 C454 106 508 60 590 82" fill="none" stroke="#2684FF" stroke-width="4" stroke-linecap="round" />
+                  <path d="M48 191 C116 160 166 156 226 143 C306 126 338 166 398 139 C466 108 511 128 590 96 L590 205 L48 205Z" fill="url(#areaB2)" />
+                  <path d="M48 191 C116 160 166 156 226 143 C306 126 338 166 398 139 C466 108 511 128 590 96" fill="none" stroke="#24B6A2" stroke-width="4" stroke-linecap="round" />
+                </svg>
+                <p class="chart-note">เหมาะกับกราฟที่ต้องการ animation และ theme ที่ดูสะอาดกว่า chart พื้นฐาน</p>
+              </div>
+              <div class="chart-side">
+                <div class="chart-head">
+                  <strong>Signal Matrix</strong>
+                  <span>Heat layer</span>
+                </div>
+                <div class="matrix" aria-hidden="true">
+                  <span></span><span></span><span></span><span></span>
+                  <span></span><span></span><span></span><span></span>
+                  <span></span><span></span><span></span><span></span>
+                  <span></span><span></span><span></span><span></span>
+                </div>
+                <div class="metric-line"><span>Best fit</span><b>Report</b></div>
+                <div class="metric-line"><span>Theme</span><b>Very flexible</b></div>
+              </div>
+            </div>
+          </div>
+          <div class="implementation">
+            <div>
+              <h3>ข้อมูลที่จะใช้</h3>
+              <ul>
+                <li>Trend หลายเส้นจากข้อมูลรายวันจริง</li>
+                <li>Campaign comparison จาก campaigns</li>
+                <li>Signal matrix จาก risk, status, objective</li>
+              </ul>
+            </div>
+            <div>
+              <h3>เหตุผลที่เลือก</h3>
+              <ul>
+                <li>ภาพรวมสวยและไม่แข็งเกินไป</li>
+                <li>เหมาะกับรายงานที่ต้องอ่านง่าย</li>
+                <li>theme ต่อกับสี PMC ได้ดี</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="option">
+          <div class="option-top">
+            <div>
+              <h2>Option C: Operations Console</h2>
+              <p>
+                เน้น dashboard ที่ดูสำเร็จรูปและ premium เร็ว เหมาะกับกราฟ
+                area, donut, radial, annotation และข้อมูล operational ที่ต้อง scan ไว
+              </p>
+            </div>
+            <span class="badge">Fast Polish</span>
+          </div>
+          <div class="preview">
+            <div class="chart-shell">
+              <div class="chart-main">
+                <div class="chart-head">
+                  <strong>Ads Operations Trend</strong>
+                  <span>ApexCharts</span>
+                </div>
+                <svg class="chart-svg" viewBox="0 0 620 230" role="img" aria-label="ApexCharts style preview">
+                  <defs>
+                    <linearGradient id="areaC" x1="0" y1="0" x2="0" y2="1">
+                      <stop stop-color="#7A5BF5" stop-opacity="0.32" />
+                      <stop offset="1" stop-color="#7A5BF5" stop-opacity="0" />
+                    </linearGradient>
+                  </defs>
+                  <g stroke="#E5EDF6" stroke-width="1">
+                    <path d="M48 42H590" />
+                    <path d="M48 92H590" />
+                    <path d="M48 142H590" />
+                    <path d="M48 192H590" />
+                  </g>
+                  <path
+                    d="M48 180 C102 166 139 82 195 104 C250 126 252 158 308 130 C367 101 392 64 454 77 C513 89 536 153 590 101 L590 205 L48 205Z"
+                    fill="url(#areaC)"
+                  />
+                  <path
+                    d="M48 180 C102 166 139 82 195 104 C250 126 252 158 308 130 C367 101 392 64 454 77 C513 89 536 153 590 101"
+                    fill="none"
+                    stroke="#7A5BF5"
+                    stroke-width="4"
+                    stroke-linecap="round"
+                  />
+                  <circle cx="195" cy="104" r="6" fill="#fff" stroke="#7A5BF5" stroke-width="4" />
+                  <circle cx="454" cy="77" r="6" fill="#fff" stroke="#7A5BF5" stroke-width="4" />
+                  <rect x="375" y="33" width="116" height="45" rx="13" fill="#fff" stroke="#DCE6F2" />
+                  <text x="391" y="55" fill="#53667F" font-size="12" font-weight="800">annotation</text>
+                  <text x="391" y="70" fill="#7A5BF5" font-size="11" font-weight="800">decision point</text>
+                </svg>
+                <p class="chart-note">เหมาะถ้าต้องการกราฟที่ดูพร้อมใช้เร็วและมี interaction พื้นฐานครบ</p>
+              </div>
+              <div class="side-grid">
+                <div class="chart-side">
+                  <div class="chart-head">
+                    <strong>Health Gauge</strong>
+                    <span>Radial</span>
+                  </div>
+                  <svg class="chart-svg" viewBox="0 0 220 150" role="img" aria-label="Radial gauge preview">
+                    <path d="M50 106a58 58 0 1 1 116 0" fill="none" stroke="#E6EEF7" stroke-width="20" stroke-linecap="round" />
+                    <path d="M50 106a58 58 0 0 1 88-50" fill="none" stroke="#24B6A2" stroke-width="20" stroke-linecap="round" />
+                    <text x="108" y="104" text-anchor="middle" fill="#0F233A" font-size="22" font-weight="900">API</text>
+                    <text x="108" y="123" text-anchor="middle" fill="#667792" font-size="12" font-weight="800">real status</text>
+                  </svg>
+                </div>
+                <div class="mini-block">
+                  <div class="metric-line"><span>Speed</span><b>High</b></div>
+                  <div class="metric-line"><span>Look</span><b>Premium</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="implementation">
+            <div>
+              <h3>ข้อมูลที่จะใช้</h3>
+              <ul>
+                <li>Revenue/spend trend จาก trendData</li>
+                <li>Status gauge จาก Meta/AI API status จริง</li>
+                <li>Annotation จากเหตุการณ์จริงใน log</li>
+              </ul>
+            </div>
+            <div>
+              <h3>เหตุผลที่เลือก</h3>
+              <ul>
+                <li>ทำให้ดูเป็น SaaS dashboard เร็ว</li>
+                <li>รองรับ chart type หลักครบ</li>
+                <li>ลดเวลาปั้น chart visual เอง</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+
+        <article class="option">
+          <div class="option-top">
+            <div>
+              <h2>Option D: Low-risk Upgrade</h2>
+              <p>
+                ใช้ Recharts เดิมต่อ แต่ปรับ CSS, spacing, tooltip, legend,
+                empty state และ composition ให้ดูเป็น dashboard มืออาชีพขึ้น
+              </p>
+            </div>
+            <span class="badge">Lowest Risk</span>
+          </div>
+          <div class="preview">
+            <div class="chart-shell">
+              <div class="chart-main">
+                <div class="chart-head">
+                  <strong>Campaign Comparison</strong>
+                  <span>Recharts</span>
+                </div>
+                <div class="bars" aria-label="bar chart preview">
+                  <div class="bar"><span>Campaign A</span><i style="width: 94%"></i></div>
+                  <div class="bar"><span>Campaign B</span><i style="width: 78%"></i></div>
+                  <div class="bar"><span>Campaign C</span><i style="width: 68%"></i></div>
+                  <div class="bar"><span>Campaign D</span><i style="width: 56%"></i></div>
+                  <div class="bar"><span>Campaign E</span><i style="width: 34%"></i></div>
+                </div>
+                <svg class="chart-svg" viewBox="0 0 620 120" role="img" aria-label="line preview">
+                  <g stroke="#E5EDF6" stroke-width="1">
+                    <path d="M48 22H590" />
+                    <path d="M48 62H590" />
+                    <path d="M48 102H590" />
+                  </g>
+                  <path d="M48 92 C109 77 149 83 203 63 C253 44 299 47 356 38 C410 30 457 49 503 35 C545 23 570 24 590 18" fill="none" stroke="#2684FF" stroke-width="4" stroke-linecap="round" />
+                </svg>
+                <p class="chart-note">เหมาะถ้าต้องการแก้หน้าปัจจุบันให้ดีขึ้นโดยไม่เปลี่ยน stack หลัก</p>
+              </div>
+              <div class="chart-side">
+                <div class="chart-head">
+                  <strong>Readability</strong>
+                  <span>Design tokens</span>
+                </div>
+                <div class="metric-line"><span>Dependency change</span><b>None</b></div>
+                <div class="metric-line"><span>Implementation</span><b>Fast</b></div>
+                <div class="metric-line"><span>Best fit</span><b>Current app</b></div>
+                <div class="metric-line"><span>Future depth</span><b>Medium</b></div>
+              </div>
+            </div>
+          </div>
+          <div class="implementation">
+            <div>
+              <h3>ข้อมูลที่จะใช้</h3>
+              <ul>
+                <li>ใช้ data contract เดิมทั้งหมด</li>
+                <li>เพิ่ม guard สำหรับ null/empty data</li>
+                <li>แยก chart adapter เพื่อกันข้อมูลปลอม</li>
+              </ul>
+            </div>
+            <div>
+              <h3>เหตุผลที่เลือก</h3>
+              <ul>
+                <li>เสี่ยงต่ำและ deploy ได้เร็ว</li>
+                <li>ไม่ต้องเพิ่ม library ใหม่</li>
+                <li>เหมาะกับการ polish รอบแรก</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <ul class="source-list" aria-label="official chart sources">
+        <li><a href="https://echarts.apache.org/handbook/en/get-started/">Apache ECharts Get Started</a></li>
+        <li><a href="https://echarts.apache.org/examples/en/index.html">Apache ECharts Examples</a></li>
+        <li><a href="https://nivo.rocks/line/">Nivo Line Docs</a></li>
+        <li><a href="https://apexcharts.com/docs/react-charts/">ApexCharts React Docs</a></li>
+        <li><a href="https://recharts.github.io/en-US/api/LineChart/">Recharts LineChart API</a></li>
+      </ul>
+    </main>
+  </body>
+</html>
