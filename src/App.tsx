@@ -3108,6 +3108,13 @@ function AdGroupsInspector({
   onEdit: (row: AdGroupRow) => void
   onStatusChange: (row: AdGroupRow) => void
 }) {
+  const [showAdsDetail, setShowAdsDetail] = useState(false)
+  const selectedRowId = row?.id
+
+  useEffect(() => {
+    setShowAdsDetail(false)
+  }, [selectedRowId])
+
   if (!row) {
     return (
       <aside className="ad-groups-inspector" aria-label="รายละเอียด Ad Set ที่เลือก">
@@ -3139,9 +3146,15 @@ function AdGroupsInspector({
           <Pencil size={15} />
           แก้งบ / แก้ชื่อ
         </button>
-        <button className="outline-button" type="button" onClick={() => undefined}>
+        <button
+          aria-controls="ad-groups-ads-detail"
+          aria-expanded={showAdsDetail}
+          className="outline-button"
+          type="button"
+          onClick={() => setShowAdsDetail((current) => !current)}
+        >
           <Eye size={15} />
-          ดู Ads
+          {showAdsDetail ? 'ซ่อน Ads' : 'ดู Ads'}
         </button>
       </div>
       <div className="ad-groups-detail-lines">
@@ -3168,6 +3181,28 @@ function AdGroupsInspector({
         ) : (
           <EmptyState title="ยังไม่มี Ads" detail="Ad Set นี้ยังไม่มีโฆษณาใน workspace ล่าสุด" />
         )}
+        {showAdsDetail ? (
+          <div className="ad-groups-ads-detail" id="ad-groups-ads-detail">
+            {selectedAds.length > 0 ? (
+              selectedAds.map((ad) => (
+                <article className="ad-groups-ad-detail-row" key={ad.id}>
+                  <div>
+                    <strong>{ad.name}</strong>
+                    <span>{ad.creative} · {ad.status}</span>
+                  </div>
+                  <div className="ad-groups-ad-detail-metrics">
+                    <MetricLine label="Spend" value={fmtMoney(ad.spend)} />
+                    <MetricLine label="CTR" value={`${ad.ctr.toFixed(1)}%`} />
+                    <MetricLine label="Leads" value={fmtNum(ad.leads)} />
+                    <MetricLine label="Score" value={fmtNum(ad.score)} />
+                  </div>
+                </article>
+              ))
+            ) : (
+              <EmptyState title="ไม่มีรายละเอียด Ads" detail="ยังไม่พบ Ads ที่ผูกกับ Ad Set นี้" />
+            )}
+          </div>
+        ) : null}
       </section>
     </aside>
   )

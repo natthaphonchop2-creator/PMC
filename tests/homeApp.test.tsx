@@ -254,12 +254,35 @@ describe('Home app shell', () => {
   it('wires Ad Groups actions through approval-safe helpers only', () => {
     const source = readText('../src/App.tsx')
     const adGroupsSource = source.slice(source.indexOf('export function AdGroupsPage'), source.indexOf('function AdsManagerPage'))
+    const approveCommandSource = extractFunctionBody(adGroupsSource, 'const approveCommand')
+    const queueStatusCommandSource = extractFunctionBody(adGroupsSource, 'const queueStatusCommand')
+    const queueEditCommandSource = extractFunctionBody(adGroupsSource, 'const queueEditCommand')
+    const openEditRowSource = extractFunctionBody(adGroupsSource, 'const openEditRow')
+    const inspectorSource = source.slice(source.indexOf('function AdGroupsInspector'), source.indexOf('function AdGroupEditModal'))
 
     expect(adGroupsSource).toContain('pendingApprovalCommand')
     expect(adGroupsSource).toContain('createAdGroupApprovalCommand')
     expect(adGroupsSource).toContain('AdGroupApprovalModal')
     expect(adGroupsSource).toContain('adGroupApprovalCommandToMetaRequest')
     expect(adGroupsSource).not.toContain('requestDelete')
+    expect(approveCommandSource).toContain('apiJson(')
+    expect(queueStatusCommandSource).not.toContain('apiJson(')
+    expect(queueEditCommandSource).not.toContain('apiJson(')
+    expect(openEditRowSource).not.toContain('apiJson(')
+    expect(inspectorSource).not.toContain('apiJson(')
+    expect(countOccurrences(adGroupsSource, 'apiJson(')).toBe(countOccurrences(approveCommandSource, 'apiJson('))
+  })
+
+  it('wires the Ad Groups Ads action to an expandable inspector detail', () => {
+    const source = readText('../src/App.tsx')
+    const inspectorSource = source.slice(source.indexOf('function AdGroupsInspector'), source.indexOf('function AdGroupEditModal'))
+
+    expect(inspectorSource).not.toContain('onClick={() => undefined}')
+    expect(inspectorSource).toContain('showAdsDetail')
+    expect(inspectorSource).toContain('setShowAdsDetail')
+    expect(inspectorSource).toContain('aria-expanded={showAdsDetail}')
+    expect(inspectorSource).toContain('aria-controls="ad-groups-ads-detail"')
+    expect(inspectorSource).toContain('id="ad-groups-ads-detail"')
   })
 
   it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
@@ -1817,6 +1840,24 @@ function dashboardMetricCardHtml(html: string, label: string) {
   const match = html.match(new RegExp(`<article class="ads-dashboard-metric-card">(?:(?!</article>)[\\s\\S])*<span>${label}</span>(?:(?!</article>)[\\s\\S])*</article>`))
   expect(match?.[0]).toBeTruthy()
   return match?.[0] ?? ''
+}
+
+function extractFunctionBody(source: string, marker: string) {
+  const start = source.indexOf(marker)
+  expect(start).toBeGreaterThanOrEqual(0)
+
+  const arrowStart = source.indexOf('=> {', start)
+  expect(arrowStart).toBeGreaterThanOrEqual(0)
+
+  let depth = 0
+  for (let index = source.indexOf('{', arrowStart); index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '{') depth += 1
+    if (char === '}') depth -= 1
+    if (depth === 0) return source.slice(start, index + 1)
+  }
+
+  throw new Error(`Could not extract function body for ${marker}`)
 }
 
 function withPathname(pathname: string, callback: () => void) {

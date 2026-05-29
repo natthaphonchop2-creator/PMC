@@ -2393,6 +2393,44 @@ input:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.ad-groups-ads-detail {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ad-groups-ad-detail-row {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.ad-groups-ad-detail-row strong,
+.ad-groups-ad-detail-row span {
+  display: block;
+}
+
+.ad-groups-ad-detail-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ad-groups-ad-detail-row span {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ad-groups-ad-detail-metrics {
+  display: grid;
+  gap: 0;
+}
+
 .ad-group-edit-modal {
   width: min(620px, 100%);
 }
