@@ -24,3 +24,4 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Organized user manuals, visual previews, PDFs, and QA screenshots into `docs/releases/2026-05-29-v0.1.0/`.
 - Added this project update log and made update-log maintenance a mandatory development rule in `Agent.md`.
 - Added the Ad Groups workspace design spec with the approved Split Inspector layout, approval-gated Meta write flow, and phase-1 testing scope.
+- Added the Insights AI Analysis workspace design spec with the approved AI Brief First layout, researched measurement formulas, confidence scoring, cached AI refresh flow, and approval-gated recommendation rules.
