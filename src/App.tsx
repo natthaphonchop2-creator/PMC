@@ -1633,8 +1633,10 @@ function PmcAdsAgentApp() {
   }, [])
 
   const handleTabSelect = useCallback((tab: TabId, toolbarKey?: string) => {
+    const nextToolbarKey = toolbarKey ?? navItems.find((item) => item.id === tab)?.toolbarKey ?? 'dashboard'
+
     setActiveTab(tab)
-    setActiveToolbarKey(toolbarKey ?? navItems.find((item) => item.id === tab)?.toolbarKey ?? 'dashboard')
+    setActiveToolbarKey(nextToolbarKey)
     const tabNotices: Record<TabId, { message: string; tone: Tone }> = {
       ads: { message: 'เปิด Campaigns แล้ว ตรวจชื่อและสถานะให้ชัดก่อนปรับแคมเปญนะครับ', tone: 'watch' },
       analytics: { message: 'กลับมาดู Ads Dashboard ล่าสุดแล้วครับ', tone: 'info' },
@@ -1647,7 +1649,10 @@ function PmcAdsAgentApp() {
       reports: { message: 'เปิด Reports แล้ว ใช้สรุปงานให้ทีมรีวิวได้', tone: 'good' },
       settings: { message: 'เปิด Settings แล้ว ตั้งค่าบัญชีโฆษณาและระบบวิเคราะห์ได้ตรงนี้', tone: 'watch' },
     }
-    const notice = tabNotices[tab]
+    const notice =
+      tab === 'ads' && nextToolbarKey === 'ad-groups'
+        ? { message: 'เปิด Ad Groups แล้ว ตรวจชุดโฆษณา กลุ่มเป้าหมาย และโฆษณาที่เกี่ยวข้องก่อนปรับงาน', tone: 'info' as const }
+        : tabNotices[tab]
     showMascotNotice(notice.message, notice.tone)
   }, [showMascotNotice])
 

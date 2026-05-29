@@ -107,12 +107,20 @@ describe('Home app shell', () => {
 
   it('routes the Ad Groups toolbar item to a dedicated AdGroupsPage', () => {
     const source = readText('../src/App.tsx')
+    const navSource = source.slice(source.indexOf('const navItems'), source.indexOf('const datePresetOptions'))
     const routeSource = source.slice(source.indexOf("{activeTab === 'ads'"), source.indexOf("{activeTab === 'marketer'"))
+    const toolbarSource = source.slice(source.indexOf('function AdsOuterToolbar'), source.indexOf('function MasterAgentSkeleton'))
+    const tabSelectSource = source.slice(source.indexOf('const handleTabSelect'), source.indexOf('const handlePageScopeSelect'))
 
+    expect(navSource).toContain("{ id: 'ads', toolbarKey: 'ad-groups', label: 'Ad Groups'")
+    expect(toolbarSource).toContain('onSelect(tab, toolbarKey)')
+    expect(toolbarSource).toContain('onClick={() => selectTab(item.id, item.toolbarKey)}')
     expect(routeSource).toContain("activeToolbarKey === 'ad-groups'")
     expect(routeSource).toContain('<AdGroupsPage')
     expect(routeSource).toContain('<AdsManagerPage')
     expect(routeSource.indexOf('<AdGroupsPage')).toBeLessThan(routeSource.indexOf('<AdsManagerPage'))
+    expect(tabSelectSource).toContain("nextToolbarKey === 'ad-groups'")
+    expect(tabSelectSource).toContain('เปิด Ad Groups')
   })
 
   it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
