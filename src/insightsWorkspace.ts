@@ -986,7 +986,7 @@ function cleanText(value: unknown, fallback: string): string {
 
 function cleanStringList(value: unknown, fallback: string[]): string[] {
   if (!Array.isArray(value)) return fallback
-  const list = value.filter((item): item is string => typeof item === 'string' && item.trim()).map((item) => item.trim())
+  const list = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
   return list.length ? list : fallback
 }
 

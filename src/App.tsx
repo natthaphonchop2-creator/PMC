@@ -65,6 +65,23 @@ import {
   type AdGroupStatusFilter,
   type AdGroupViewMode,
 } from './adGroupsWorkspace'
+import {
+  buildFallbackInsightsCache,
+  buildInsightsAnalysisPayload,
+  canOpenInsightsApprovalCommand,
+  deriveInsightsMetrics,
+  formatInsightMetricValue,
+  normalizeInsightsAiResponse,
+  readInsightsCache,
+  writeInsightsCache,
+  type InsightsCachedInsight,
+  type InsightsConfidence,
+  type InsightsDerivedMetric,
+  type InsightsEvidenceCard,
+  type InsightsFormulaDiagnostic,
+  type InsightsMetrics,
+  type InsightsRecommendation,
+} from './insightsWorkspace'
 import { HomeApp } from './apps/home/HomeApp'
 import { PageAutomationApp } from './apps/page-automation/PageAutomationApp'
 import type { ManagedPage, SharedAdsInsightForPage } from './apps/page-automation/types'
@@ -352,15 +369,6 @@ type AiBrainApiResponse = AiBrainResponse & {
   }
 }
 
-type AiBrainSpecialistReport = NonNullable<AiBrainResponse['specialistOutputs']['campaignAnalyst']>
-
-type BrainDeepDiveState = {
-  actionId: string
-  target: string
-  result?: AiBrainApiResponse
-  error?: string
-}
-
 type MetaInfo = {
   accountName: string
   adAccountId?: string | null
@@ -431,7 +439,7 @@ const sectionTooltips: Record<string, string> = {
   'PMC Insights': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
   'ตัวจัดการโฆษณา': 'จัดการแคมเปญ ชุดโฆษณา และโฆษณา รวมเปิด ปิด แก้ไข หรือลบ',
   'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
-  'ผู้ช่วย Insights': 'อ่านข้อมูลโฆษณาล่าสุดแล้วสรุปเรื่องที่ควรตัดสินใจ',
+  Insights: 'สรุป AI brief ตัวเลข สูตรวิเคราะห์ และหลักฐานจากข้อมูลโฆษณาล่าสุด',
   'ตัวสร้างรายงาน': 'เตรียมรายงานสรุปงานโฆษณาจากข้อมูลล่าสุด',
   'ตั้งค่าบัญชีโฆษณา': 'เชื่อมต่อบัญชีโฆษณาและระบบวิเคราะห์ให้พร้อมใช้งาน',
   'ศูนย์ช่วยเหลือ': 'คู่มือสั้นสำหรับเริ่มใช้งานและแก้ปัญหาเบื้องต้น',
@@ -596,12 +604,6 @@ function actionStateLabel(state: ActionState | string) {
   return labels[state] ?? state
 }
 
-function actionStateLabelForPlan(state: ActionState | string, execution?: Recommendation['execution']) {
-  if (!execution && state === 'Executing') return 'กำลังทำแผน'
-  if (!execution && state === 'Executed') return 'ทำแผนเสร็จแล้ว'
-  return actionStateLabel(state)
-}
-
 function riskLabel(risk: Recommendation['risk']) {
   if (risk === 'High') return 'ความเสี่ยงสูง'
   if (risk === 'Medium') return 'ความเสี่ยงกลาง'
@@ -647,105 +649,6 @@ function cleanRecommendationCopy(text: string) {
     .replaceAll('monitor', 'ติดตามผล')
     .replaceAll('action', 'รายการ')
     .replaceAll('Action', 'รายการ')
-}
-
-function humanizeAiEvidence(text: string) {
-  const normalized = text.trim()
-  if (!normalized) return ''
-  if (/fallbackReason:/i.test(normalized)) return ''
-  if (/OpenAI response/i.test(normalized) || /structured output failed/i.test(normalized)) {
-    return 'AI หลักตอบกลับไม่สมบูรณ์ ระบบจึงใช้ข้อมูลโฆษณาล่าสุดมาวิเคราะห์แทน'
-  }
-  if (/deterministic fallback/i.test(normalized) || /fallback mode/i.test(normalized)) {
-    return 'ระบบใช้โหมดวิเคราะห์สำรองจากข้อมูลโฆษณาล่าสุด'
-  }
-  if (normalized.includes('โมเดลตอบไม่ผ่าน schema')) {
-    return 'AI หลักตอบกลับไม่สมบูรณ์ ระบบจึงใช้โหมดวิเคราะห์สำรอง'
-  }
-  if (normalized.includes('Master Agent ยังคืนผลจาก WorkspaceData') || normalized.includes('แทนการหยุดด้วย 502')) {
-    return 'AI หลักตอบกลับไม่สมบูรณ์ ระบบจึงสรุปจากข้อมูลโฆษณาล่าสุดและกฎวิเคราะห์ในระบบแทน'
-  }
-  if (normalized.includes('ไม่มี campaign ที่ active')) {
-    return 'ยังไม่มีแคมเปญที่เปิดใช้งานในข้อมูลรอบนี้'
-  }
-
-  return cleanRecommendationCopy(normalized)
-    .replace(/activeCampaigns=(\d+)/gi, 'แคมเปญที่กำลังรัน $1')
-    .replace(/campaigns=(\d+)/gi, 'แคมเปญทั้งหมด $1')
-    .replace(/ads=(\d+)/gi, 'โฆษณาทั้งหมด $1')
-    .replace(/account spend/gi, 'ภาพรวมบัญชีใช้จ่าย')
-    .replaceAll('metricPack.account', 'ภาพรวมบัญชี')
-    .replaceAll('workspace.channelPerformance', 'ภาพรวมช่องทาง')
-    .replaceAll('activeCampaigns', 'แคมเปญที่กำลังรัน')
-    .replaceAll('campaign ', 'แคมเปญ ')
-    .replaceAll('ad ', 'โฆษณา ')
-    .replaceAll('adset ', 'ชุดโฆษณา ')
-    .replaceAll('status paused', 'สถานะพักอยู่')
-    .replaceAll('status active', 'สถานะกำลังรัน')
-    .replaceAll('spend', 'ค่าใช้จ่าย')
-    .replaceAll('revenue', 'รายได้')
-    .replaceAll('conversions', 'ผลลัพธ์')
-    .replaceAll('bookings', 'ยอดนัดหมาย')
-    .replaceAll('booking', 'ยอดนัดหมาย')
-    .replaceAll('guardrail', 'เกณฑ์')
-}
-
-function humanEvidencePreview(items: string[], limit = 2) {
-  const lines = items.map(humanizeAiEvidence).filter(Boolean).slice(0, limit)
-  return lines.length ? lines.join(' · ') : 'ยังไม่มีหลักฐานเพิ่ม'
-}
-
-function isOperatorFacingFinding(finding: AiBrainResponse['findings'][number]) {
-  const text = [finding.title, finding.explanation, ...finding.evidence].join(' ').toLowerCase()
-  return !['deterministic fallback', 'fallbackreason', 'fallback mode', 'schema', '502', 'openai response', 'โหมดวิเคราะห์สำรอง'].some((term) => text.includes(term))
-}
-
-function buildMasterSummaryView(result: AiBrainApiResponse) {
-  const firstFinding = result.findings.find(isOperatorFacingFinding)
-  const firstRecommendation = result.recommendations[0]
-  const policyText = result.policy.approvedForDirectExecution ? 'มี action บางส่วนที่พร้อมดำเนินการหลังอนุมัติ' : 'ทุก action ยังต้องให้ผู้ใช้อนุมัติก่อน'
-  const decision = firstRecommendation
-    ? `เริ่มจาก ${firstRecommendation.targetName}: ${cleanRecommendationCopy(firstRecommendation.action)}`
-    : humanizeAiEvidence(result.masterDecision)
-  const focus = firstFinding
-    ? `${humanizeAiEvidence(firstFinding.title)}: ${humanizeAiEvidence(firstFinding.explanation)}`
-    : 'ยังไม่มีสัญญาณผิดปกติชัดเจนจากข้อมูลรอบนี้'
-
-  return {
-    title: 'สรุปจากผู้ช่วย Insights',
-    items: [
-      focus,
-      decision,
-      `${result.approvalActions.length} แผนพร้อมให้รีวิว`,
-      policyText,
-    ].filter(Boolean).slice(0, 4),
-  }
-}
-
-function buildFocusedWorkspaceForBrain(workspace: WorkspaceData, action: MetaRecommendedAction): WorkspaceData {
-  const target = action.target.toLowerCase()
-  const campaigns = workspace.campaigns.filter((campaign) => campaign.id === action.campaignId || campaign.name.toLowerCase().includes(target))
-  const fallbackCampaigns = workspace.campaigns.filter((campaign) => campaign.id === action.campaignId)
-  const selectedCampaigns = (campaigns.length ? campaigns : fallbackCampaigns).slice(0, 6)
-  const campaignIds = new Set(selectedCampaigns.map((campaign) => campaign.id))
-  const adSetsByName = workspace.adSets.filter((adSet) => adSet.name.toLowerCase().includes(target))
-  const adSets = [...adSetsByName, ...workspace.adSets.filter((adSet) => campaignIds.has(adSet.campaignId))]
-    .filter((adSet, index, list) => list.findIndex((item) => item.id === adSet.id) === index)
-    .slice(0, 8)
-  const adSetIds = new Set(adSets.map((adSet) => adSet.id))
-  const adsByName = workspace.adInsights.filter((ad) => `${ad.name} ${ad.creative}`.toLowerCase().includes(target))
-  const adInsights = [...adsByName, ...workspace.adInsights.filter((ad) => campaignIds.has(ad.campaignId) || adSetIds.has(ad.adSetId))]
-    .filter((ad, index, list) => list.findIndex((item) => item.id === ad.id) === index)
-    .sort((a, b) => b.spend - a.spend || b.score - a.score)
-    .slice(0, 12)
-
-  return {
-    ...workspace,
-    campaigns: selectedCampaigns,
-    adSets,
-    adInsights,
-    trendData: workspace.trendData.slice(-30),
-  }
 }
 
 function campaignStatusLabel(status: Campaign['status']) {
@@ -1262,7 +1165,7 @@ function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
     creative: ['Automation Ads', 'workflow โฆษณาอัตโนมัติ'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
     library: ['คลังโฆษณา', 'ความเสี่ยงของข้อความ'],
-    marketer: ['Insights', 'ผู้ช่วย Insights', 'สิ่งที่ควรดูตอนนี้', 'แผนที่เลือกทำต่อ'],
+    marketer: ['Insights', 'สรุปล่าสุดจาก AI', 'ตัวเลขสำคัญ', 'คำแนะนำที่ควรตรวจ'],
     optimization: ['Optimizer & Automation', 'บอร์ดตัดสินใจ', 'คิวคำสั่ง Auto Ads'],
     reports: ['ตัวสร้างรายงาน', 'รายงานฉบับร่าง'],
     settings: ['ตั้งค่าบัญชีโฆษณา', 'สถานะการเชื่อมต่อ'],
@@ -1391,9 +1294,9 @@ function PmcAdsAgentApp() {
     setBrainApprovalActions((current) => [action, ...current.filter((item) => item.id !== action.id)])
     setRecommendationStates((current) => ({ ...current, [action.id]: current[action.id] ?? 'Suggested' }))
     setConfirmingId(action.id)
-    showMascotNotice('ผู้ช่วย Insights ส่งแผนให้ตรวจแล้วครับ', toneForRisk(action.risk))
+    showMascotNotice('Insights ส่งแผนให้ตรวจแล้วครับ', toneForRisk(action.risk))
     appendAudit({
-      action: 'เปิดแผนจากผู้ช่วย Insights',
+      action: 'เปิดแผนจาก Insights',
       detail: `${action.target} · ${action.summary}`,
       actor: 'ผู้ใช้งาน',
       tone: 'info',
@@ -1890,10 +1793,11 @@ function PmcAdsAgentApp() {
             />
           )}
           {activeTab === 'marketer' && (
-	            <AiMarketerPage
-		              onBrainApprovalActions={setBrainApprovalActions}
+            <InsightsPage
+              datePreset={datePreset}
+              onBrainApprovalActions={setBrainApprovalActions}
               onOpenPlanExecution={openBrainPlanExecution}
-	              onQueueBrainAction={queueBrainAction}
+              onQueueBrainAction={queueBrainAction}
               recommendationStates={recommendationStates}
               websiteContext={websiteContext}
               workspace={visibleWorkspace}
@@ -4082,7 +3986,8 @@ function EditMetaObjectModal({
   )
 }
 
-function AiMarketerPage({
+export function InsightsPage({
+  datePreset,
   onBrainApprovalActions,
   onOpenPlanExecution,
   onQueueBrainAction,
@@ -4090,6 +3995,7 @@ function AiMarketerPage({
   websiteContext,
   workspace,
 }: {
+  datePreset: string
   onBrainApprovalActions: (actions: MetaRecommendedAction[]) => void
   onOpenPlanExecution: (action: MetaRecommendedAction) => void
   onQueueBrainAction: (action: MetaRecommendedAction) => void
@@ -4097,243 +4003,395 @@ function AiMarketerPage({
   websiteContext: WebsiteContext
   workspace: WorkspaceData | null
 }) {
-  const [brainResult, setBrainResult] = useState<AiBrainApiResponse | null>(null)
-  const [brainError, setBrainError] = useState('')
-  const [brainActionMessage, setBrainActionMessage] = useState('')
-  const [brainDeepDive, setBrainDeepDive] = useState<BrainDeepDiveState | null>(null)
-  const [deepDiveRunningTargetId, setDeepDiveRunningTargetId] = useState('')
-  const [isBrainRunning, setIsBrainRunning] = useState(false)
-  const specialistReports = useMemo<AiBrainSpecialistReport[]>(
-    () => Object.values(brainResult?.specialistOutputs ?? {}).filter((report): report is AiBrainSpecialistReport => Boolean(report)),
-    [brainResult],
+  const metrics = useMemo<InsightsMetrics | null>(() => (workspace ? deriveInsightsMetrics(workspace) : null), [workspace])
+  const analysisPayload = useMemo(
+    () => (workspace ? buildInsightsAnalysisPayload({ accountName: websiteContext.route || 'PMC Ads Agent', datePreset, workspace }) : null),
+    [datePreset, websiteContext.route, workspace],
   )
-  const visibleBrainFindings = useMemo(() => (brainResult?.findings ?? []).filter(isOperatorFacingFinding), [brainResult])
-  const masterSummaryView = useMemo(() => (brainResult ? buildMasterSummaryView(brainResult) : null), [brainResult])
-  const runMasterAgent = useCallback(async () => {
-    if (!workspace || isBrainRunning) return
-    setIsBrainRunning(true)
-    setBrainError('')
+  const [cachedInsight, setCachedInsight] = useState<InsightsCachedInsight | null>(() => readInsightsCache())
+  const [aiError, setAiError] = useState('')
+  const [actionMessage, setActionMessage] = useState('')
+  const [isAiRunning, setIsAiRunning] = useState(false)
+
+  const fallbackInsight = useMemo(() => (analysisPayload ? buildFallbackInsightsCache(analysisPayload) : null), [analysisPayload])
+  const visibleInsight = cachedInsight ?? fallbackInsight
+
+  const runInsightsAiAnalysis = useCallback(async () => {
+    if (!workspace || !analysisPayload || isAiRunning) return
+    setIsAiRunning(true)
+    setAiError('')
+    setActionMessage('')
 
     try {
+      const insightsPayload = {
+        ...analysisPayload,
+        attribution: analysisPayload.attribution,
+        derivedMetrics: analysisPayload.derivedMetrics,
+        freshness: analysisPayload.freshness,
+        rawMetrics: analysisPayload.rawMetrics,
+      }
       const result = await apiJson<AiBrainApiResponse>('/api/ai/brain', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          intent: 'Analyze the current Insights page with live website context, runtime memory, and approval-only recommendations.',
+          intent: 'Build the Insights AI Brief First analysis from structured Meta metrics, formulas, freshness, attribution, evidence, and approval-gated recommendations.',
+          insightsPayload,
           websiteContext,
           workspace,
         }),
       })
-      setBrainResult(result)
+      const normalized = normalizeInsightsAiResponse(result, analysisPayload)
+      setCachedInsight(normalized)
+      writeInsightsCache(normalized)
       onBrainApprovalActions(result.approvalActions ?? [])
-      setBrainActionMessage(`สร้างแผนให้รีวิว ${result.approvalActions?.length ?? 0} รายการ และบันทึกข้อมูลอ้างอิง ${result.knowledge?.memoriesWritten ?? 0} รายการ`)
+      setActionMessage(`วิเคราะห์ล่าสุดแล้ว: ${normalized.recommendations.length} คำแนะนำ และ ${normalized.evidenceCards.length} หลักฐาน`)
     } catch (error) {
-      setBrainError(error instanceof Error ? formatApiMessage(error.message) : 'ผู้ช่วย Insights วิเคราะห์ไม่สำเร็จ')
+      setAiError(error instanceof Error ? formatApiMessage(error.message) : 'AI วิเคราะห์ Insights ไม่สำเร็จ')
     } finally {
-      setIsBrainRunning(false)
+      setIsAiRunning(false)
     }
-  }, [isBrainRunning, onBrainApprovalActions, websiteContext, workspace])
+  }, [analysisPayload, isAiRunning, onBrainApprovalActions, websiteContext, workspace])
 
-  const openPlanApproval = useCallback((action: MetaRecommendedAction) => {
-      setBrainActionMessage('เปิดหน้าต่างยืนยันแล้ว: ถ้าอนุมัติ ระบบจะเก็บเป็นแผนก่อน และยังไม่เปลี่ยนข้อมูลจริง')
+  const openInsightsApproval = useCallback((recommendation: InsightsRecommendation) => {
+    const approval = canOpenInsightsApprovalCommand(recommendation)
+    const action = insightsRecommendationToMetaAction(recommendation)
+    const state = recommendationStates[action.id] ?? 'Suggested'
+
+    if (state === 'Approved' || state === 'Executing') {
+      onOpenPlanExecution(action)
+      return
+    }
+
+    if (!approval.allowed) {
+      setActionMessage(approval.reason)
+      return
+    }
+
+    setActionMessage('เปิดหน้าต่างอนุมัติแล้ว: ถ้าอนุมัติ ระบบจะเก็บเป็นแผนก่อน และยังไม่เปลี่ยนข้อมูลจริง')
     onQueueBrainAction(action)
-  }, [onQueueBrainAction])
+  }, [onOpenPlanExecution, onQueueBrainAction, recommendationStates])
 
-  const runBrainDeepDive = useCallback(async (action: MetaRecommendedAction) => {
-    if (!workspace || deepDiveRunningTargetId) return
-    setDeepDiveRunningTargetId(action.id)
-    setBrainDeepDive({ actionId: action.id, target: action.target })
-    setBrainActionMessage(`กำลังเจาะลึก ${action.target}`)
-    try {
-      const focusedWorkspace = buildFocusedWorkspaceForBrain(workspace, action)
-      const result = await apiJson<AiBrainApiResponse>('/api/ai/brain', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          intent: `Deep dive target "${action.target}" in plain Thai. Explain what happened, why it matters, what to check next, and save useful findings to knowledgebase.`,
-          websiteContext: {
-            ...websiteContext,
-            selectedCampaignId: action.campaignId,
-            visibleCards: [...websiteContext.visibleCards, `Deep dive: ${action.target}`],
-          },
-          workspace: focusedWorkspace,
-        }),
-      })
-      setBrainDeepDive({ actionId: action.id, target: action.target, result })
-      setBrainActionMessage(`เจาะลึกแล้ว: บันทึกข้อมูลอ้างอิง ${result.knowledge?.memoriesWritten ?? 0} รายการ`)
-    } catch (error) {
-      const message = error instanceof Error ? formatApiMessage(error.message) : 'ถามเจาะลึกไม่สำเร็จ'
-      setBrainDeepDive({ actionId: action.id, target: action.target, error: message })
-      setBrainActionMessage(message)
-    } finally {
-      setDeepDiveRunningTargetId('')
-    }
-  }, [deepDiveRunningTargetId, websiteContext, workspace])
+  if (!workspace || !metrics || !visibleInsight) {
+    return (
+      <TwoColumnPage>
+        <section className="insights-workspace">
+          <div className="insights-brief-panel">
+            <StatusBadge label="ข้อมูลยังไม่พอ" tone="watch" />
+            <EmptyState title="ต้อง Sync Meta ก่อนใช้ Insights" detail="เมื่อมีข้อมูล Campaign, Ad Set, Ads และ trend แล้ว ระบบจะสร้าง AI brief และสูตรวิเคราะห์ให้ทันที" />
+          </div>
+        </section>
+      </TwoColumnPage>
+    )
+  }
 
   return (
     <TwoColumnPage>
-      <SectionCard
-        className="ai-brain-panel"
-        collapsible
-        title="ผู้ช่วย Insights"
-        subtitle="อ่านข้อมูลโฆษณาล่าสุดแล้วสรุปคำแนะนำที่ควรตรวจ"
-      >
-        <div className="master-agent-launch">
-          <button className={`primary-button master-agent-cta ${isBrainRunning ? 'is-running' : ''}`} type="button" onClick={() => void runMasterAgent()} disabled={!workspace || isBrainRunning}>
-            <BrainCircuit size={18} />
-            <span className="master-agent-cta-copy">
-              <strong>{isBrainRunning ? 'กำลังวิเคราะห์' : 'วิเคราะห์ด้วยผู้ช่วย Insights'}</strong>
-              <small>{isBrainRunning ? 'กำลังอ่านข้อมูลจริงและข้อมูลที่บันทึกไว้' : 'ให้ระบบสรุปสิ่งที่ควรตรวจตอนนี้'}</small>
-            </span>
-          </button>
-        </div>
-        {isBrainRunning ? (
-          <MasterAgentSkeleton />
-        ) : brainResult ? (
-          <div className="ai-brain-result">
-            <div className="ai-brain-summary">
-              <BrainCircuit size={22} />
-              <div>
-                <strong>{masterSummaryView?.title ?? 'สรุปจากผู้ช่วย Insights'}</strong>
-                <ul>
-                  {(masterSummaryView?.items ?? []).map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            <div className="ai-brain-metrics">
-              <MetricLine label="ข้อมูลอ้างอิง" value={`${brainResult.knowledge?.memoriesRead ?? 0} อ่าน / ${brainResult.knowledge?.memoriesWritten ?? 0} บันทึก`} />
-              <MetricLine label="แผนที่ต้องตรวจ" value={`${brainResult.approvalActions.length} แผน`} />
-              <MetricLine label="มุมวิเคราะห์" value={`${specialistReports.length} ด้าน`} />
-            </div>
-            <div className="ai-brain-list-grid">
-              <div>
-                <h3>สิ่งที่ควรดูตอนนี้</h3>
-                {visibleBrainFindings.slice(0, 4).map((finding) => (
-                  <article className="ai-brain-note" key={finding.title}>
-	                    <StatusBadge label={riskLabel(finding.risk)} tone={toneForRisk(finding.risk)} />
-	                    <strong>{humanizeAiEvidence(finding.title)}</strong>
-	                    <p>{humanizeAiEvidence(finding.explanation)}</p>
-	                    <small>หลักฐาน: {humanEvidencePreview(finding.evidence)}</small>
-	                  </article>
-	                ))}
-                {!visibleBrainFindings.length ? <EmptyState title="ยังไม่มีสัญญาณผิดปกติชัดเจน" detail="จะแสดงเฉพาะข้อมูลที่ใช้ตัดสินใจเรื่องโฆษณาได้" /> : null}
-              </div>
-              <div>
-                <h3>สิ่งที่ควรทำก่อน</h3>
-                {brainResult.recommendations.slice(0, 3).map((recommendation) => (
-                  <article className="ai-brain-note" key={`${recommendation.targetId}-${recommendation.type}`}>
-	                    <StatusBadge label={recommendation.requiresApproval ? 'ต้องอนุมัติ' : 'รีวิว'} tone="watch" />
-	                    <strong>{recommendation.targetName}</strong>
-	                    <p>ควรทำ: {recommendation.action}</p>
-	                    <small>เกณฑ์ก่อนทำ: {cleanRecommendationCopy(recommendation.guardrail)}</small>
-	                  </article>
-	                ))}
-	              </div>
-	            </div>
-	            {brainActionMessage ? <p className="ai-brain-action-message">{brainActionMessage}</p> : null}
-	            {brainResult.approvalActions.length ? (
-	              <div className="ai-brain-approval-list">
-	                <h3>แผนที่เลือกทำต่อ</h3>
-	                {brainResult.approvalActions.slice(0, 4).map((action) => {
-                    const state = recommendationStates[action.id] ?? 'Suggested'
-                    const deepDive = brainDeepDive?.actionId === action.id ? brainDeepDive : null
-                    const stateTone = state === 'Rejected' || state === 'Failed' ? 'critical' : state === 'Approved' || state === 'Executed' ? 'good' : 'watch'
-                    const deepDiveFindings = deepDive?.result?.findings.filter(isOperatorFacingFinding) ?? []
-                    const deepDiveRecommendations = deepDive?.result?.recommendations ?? []
-                    const deepDiveSummary = deepDive?.result ? humanizeAiEvidence(deepDive.result.summary) || humanizeAiEvidence(deepDive.result.masterDecision) : ''
-
-                    return (
-                      <article className="ai-brain-approval-card" key={action.id}>
-                        <div>
-                          <div className="recommendation-badges">
-                            <StatusBadge label={actionStateLabelForPlan(state, action.execution)} tone={stateTone} />
-                            <StatusBadge label={riskLabel(action.risk)} tone={toneForRisk(action.risk)} />
-                          </div>
-                          <strong>{action.target}</strong>
-                          <p>ทำอะไรต่อ: {cleanRecommendationCopy(action.summary)}</p>
-                          <small>ข้อมูลก่อนทำ: {humanizeAiEvidence(action.before)}</small>
-                          {state === 'Approved' ? <p className="ai-brain-next-step">อนุมัติแล้วเป็นแผน: เก็บไว้ในคิวและยังไม่เปลี่ยนข้อมูลจริง</p> : null}
-                          {state === 'Executing' ? <p className="ai-brain-next-step">กำลังดำเนินการตามแผน: เปิดขั้นตอนต่อเพื่อบันทึกผลเมื่อเสร็จ</p> : null}
-                          {state === 'Executed' ? <p className="ai-brain-next-step">ดำเนินการแผนเสร็จแล้ว: บันทึกผลไว้แล้ว</p> : null}
-                          {state === 'Rejected' ? <p className="ai-brain-next-step">ปฏิเสธแล้ว: แผนนี้จะไม่ถูกนำไปทำต่อ</p> : null}
-                        </div>
-                        <div>
-                          <span>{action.confidence}% ความมั่นใจ</span>
-                          <small>เกณฑ์: {cleanRecommendationCopy(action.guardrail)}</small>
-                          <div className="ai-brain-card-actions">
-                            <button className="outline-button" type="button" onClick={() => void runBrainDeepDive(action)} disabled={Boolean(deepDiveRunningTargetId)}>
-                              <BrainCircuit size={14} />
-                              {deepDiveRunningTargetId === action.id ? 'กำลังเจาะลึก' : 'ถามเจาะลึก'}
-                            </button>
-                            <button
-                              className="primary-button"
-                              type="button"
-                              onClick={() => {
-                                if (state === 'Approved' || state === 'Executing') {
-                                  onOpenPlanExecution(action)
-                                  return
-                                }
-                                openPlanApproval(action)
-                              }}
-                              disabled={state === 'Executed' || state === 'Rejected' || state === 'Failed'}
-                            >
-                              <BookOpenCheck size={14} />
-                              {state === 'Executing' ? 'ดำเนินการต่อ' : state === 'Approved' ? 'ดำเนินการแผน' : state === 'Executed' ? 'เสร็จแล้ว' : 'สร้างแผนอนุมัติ'}
-                            </button>
-                          </div>
-                        </div>
-                        {deepDive ? (
-                          <div className="ai-brain-deep-dive">
-                            <div className="recommendation-badges">
-                              <StatusBadge label={deepDive.error ? 'เจาะลึกไม่สำเร็จ' : deepDive.result ? 'ผลเจาะลึก' : 'กำลังเจาะลึก'} tone={deepDive.error ? 'critical' : 'violet'} />
-                              {deepDive.result ? <StatusBadge label={`${deepDive.result.knowledge?.memoriesWritten ?? 0} บันทึกใหม่`} tone="info" /> : null}
-                            </div>
-                            <strong>{deepDive.target}</strong>
-                            {!deepDive.result && !deepDive.error ? <DeepDiveSkeleton /> : null}
-                            {deepDive.error ? <p>{deepDive.error}</p> : null}
-                            {deepDive.result ? (
-                              <>
-                                <p>{deepDiveSummary}</p>
-                                {deepDiveFindings.length ? (
-                                  <div className="ai-brain-deep-dive-grid">
-                                    {deepDiveFindings.slice(0, 3).map((finding) => (
-                                      <article className="ai-brain-note" key={`deep-${action.id}-${finding.title}`}>
-                                        <StatusBadge label={riskLabel(finding.risk)} tone={toneForRisk(finding.risk)} />
-                                        <strong>{humanizeAiEvidence(finding.title)}</strong>
-                                        <small>{humanEvidencePreview(finding.evidence)}</small>
-                                      </article>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <div className="ai-brain-deep-dive-fallback">
-                                    <strong>สรุปที่ใช้ตัดสินใจ</strong>
-                                    {deepDiveRecommendations.slice(0, 2).map((recommendation) => (
-                                      <p key={`${action.id}-${recommendation.targetId}-${recommendation.type}`}>{cleanRecommendationCopy(recommendation.action)}</p>
-                                    ))}
-                                    {!deepDiveRecommendations.length ? <p>{humanizeAiEvidence(deepDive.result.masterDecision)}</p> : null}
-                                  </div>
-                                )}
-                              </>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </article>
-                    )
-                  })}
-	              </div>
-	            ) : null}
-	          </div>
-	        ) : (
-          <EmptyState
-            title={brainError || 'ยังไม่ได้วิเคราะห์ Insights'}
-            detail={workspace ? 'กดวิเคราะห์เพื่อให้ระบบอ่านข้อมูลล่าสุดแล้วสรุปสิ่งที่ควรทำต่อ' : 'ต้องเชื่อมต่อบัญชีโฆษณาก่อนใช้ผู้ช่วย Insights'}
-          />
-        )}
-      </SectionCard>
+      <section className="insights-workspace">
+        <InsightsBriefPanel
+          aiError={aiError}
+          insight={visibleInsight}
+          isAiRunning={isAiRunning}
+          onRefresh={() => void runInsightsAiAnalysis()}
+          workspace={workspace}
+        />
+        {actionMessage ? <p className="insights-action-message">{actionMessage}</p> : null}
+        <InsightsMetricScoreboard metrics={metrics.scoreboard} />
+        <InsightsTrendCharts trends={metrics.trends} />
+        <InsightsFormulaDiagnostics diagnostics={visibleInsight.metricDiagnostics} />
+        <InsightsEvidenceCards evidenceCards={visibleInsight.evidenceCards.length ? visibleInsight.evidenceCards : metrics.evidenceCards} />
+        <InsightsRecommendationList
+          onOpenApproval={openInsightsApproval}
+          recommendationStates={recommendationStates}
+          recommendations={visibleInsight.recommendations.length ? visibleInsight.recommendations : metrics.recommendations}
+        />
+      </section>
     </TwoColumnPage>
   )
+}
+
+function InsightsBriefPanel({
+  aiError,
+  insight,
+  isAiRunning,
+  onRefresh,
+  workspace,
+}: {
+  aiError: string
+  insight: InsightsCachedInsight
+  isAiRunning: boolean
+  onRefresh: () => void
+  workspace: WorkspaceData
+}) {
+  const analyzedAt = formatShortDateTime(insight.analyzedAt)
+  const metaSyncedAt = workspace.updatedAt ? formatShortDateTime(workspace.updatedAt) : 'รอข้อมูล'
+  const cacheLabel = insight.source === 'ai' ? 'ข้อมูล AI ล่าสุด' : insight.source === 'cached' ? 'แคชล่าสุด' : 'สรุปจากสูตรล่าสุด'
+
+  return (
+    <section className="insights-brief-panel">
+      <div className="insights-brief-head">
+        <div>
+          <div className="recommendation-badges">
+            <StatusBadge label="สรุปล่าสุดจาก AI" tone="violet" />
+            <StatusBadge label={cacheLabel} tone={insight.source === 'ai' ? 'good' : 'watch'} />
+          </div>
+          <h2>{insight.brief.title}</h2>
+          <p>{insight.brief.summary}</p>
+        </div>
+        <button className="primary-button insights-refresh-button" type="button" onClick={onRefresh} disabled={isAiRunning}>
+          <BrainCircuit size={16} />
+          {isAiRunning ? 'กำลังวิเคราะห์' : 'วิเคราะห์ใหม่ด้วย AI'}
+        </button>
+      </div>
+      <div className="insights-brief-meta">
+        <InsightsConfidenceBadge confidence={insight.confidence} />
+        <MetricLine label="ช่วงข้อมูล" value={insight.payload.dateWindow.preset} />
+        <MetricLine label="ซิงก์ Meta ล่าสุด" value={metaSyncedAt} />
+        <MetricLine label="วิเคราะห์ล่าสุด" value={analyzedAt} />
+      </div>
+      <div className="insights-brief-grid">
+        <InsightsBriefBlock title="วันนี้ควรรู้อะไร" items={insight.brief.whatChanged} />
+        <InsightsBriefBlock title="สิ่งที่ควรทำต่อ" items={insight.brief.whatToDoNext} />
+        <InsightsBriefBlock title="ความเสี่ยงที่ต้องจับตา" items={insight.brief.risks.length ? insight.brief.risks : insight.dataWarnings} tone="watch" />
+      </div>
+      {aiError ? <InsightsDataWarning message={aiError} tone="critical" /> : null}
+      {insight.dataWarnings.map((warning) => (
+        <InsightsDataWarning key={warning} message={warning} tone="watch" />
+      ))}
+    </section>
+  )
+}
+
+function InsightsBriefBlock({ items, title, tone = 'neutral' }: { items: string[]; title: string; tone?: Tone }) {
+  return (
+    <article className={`insights-brief-block ${tone}`}>
+      <h3>{title}</h3>
+      <ul>
+        {items.slice(0, 4).map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </article>
+  )
+}
+
+function InsightsConfidenceBadge({ confidence }: { confidence: InsightsConfidence }) {
+  const tone: Tone = confidence.level === 'สูง' ? 'good' : confidence.level === 'กลาง' ? 'watch' : 'critical'
+  return (
+    <div className="insights-confidence">
+      <StatusBadge label={`ความมั่นใจ ${confidence.level}`} tone={tone} />
+      <strong>{confidence.overall}%</strong>
+      <small>{confidence.reasons.slice(0, 2).join(' · ')}</small>
+    </div>
+  )
+}
+
+function InsightsMetricScoreboard({ metrics }: { metrics: InsightsDerivedMetric[] }) {
+  return (
+    <section className="insights-section">
+      <div className="insights-section-head">
+        <div>
+          <h2>ตัวเลขสำคัญ</h2>
+          <p>Scoreboard และกราฟใช้ metric source ชุดเดียวกัน</p>
+        </div>
+        <StatusBadge label={`${metrics.length} metrics`} tone="info" />
+      </div>
+      <div className="insights-scoreboard">
+        {metrics.map((metric) => (
+          <article className={`insights-metric-card ${metric.availability}`} key={metric.key}>
+            <span>{metric.label}</span>
+            <strong>{formatInsightMetricValue(metric)}</strong>
+            <small>{metric.formula}</small>
+            {metric.changeRate !== null ? <em>{metric.changeRate >= 0 ? '+' : ''}{(metric.changeRate * 100).toFixed(1)}%</em> : <em>รอข้อมูลเทียบช่วงก่อน</em>}
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function InsightsTrendCharts({ trends }: { trends: InsightsMetrics['trends'] }) {
+  return (
+    <section className="insights-section">
+      <div className="insights-section-head">
+        <div>
+          <h2>กราฟแนวโน้ม</h2>
+          <p>ใช้ข้อมูลรายวันจาก Meta workspace และสูตร derived metrics</p>
+        </div>
+        <StatusBadge label={`${trends.length} วัน`} tone="neutral" />
+      </div>
+      <div className="insights-chart-grid">
+        <article className="insights-chart-card">
+          <h3>Spend vs Results</h3>
+          <ResponsiveContainer height={220} width="100%">
+            <BarChart data={trends} margin={{ bottom: 0, left: -18, right: 8, top: 12 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tickLine={false} />
+              <YAxis tickLine={false} />
+              <Tooltip />
+              <Bar dataKey="spend" fill="#B98247" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="results" fill="#315C6B" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </article>
+        <article className="insights-chart-card">
+          <h3>CPA / ROAS / CTR</h3>
+          <ResponsiveContainer height={220} width="100%">
+            <BarChart data={trends} margin={{ bottom: 0, left: -18, right: 8, top: 12 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tickLine={false} />
+              <YAxis tickLine={false} />
+              <Tooltip />
+              <Bar dataKey="cpa" fill="#9E6042" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="roas" fill="#537A5A" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="ctr" fill="#7E6AA8" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </article>
+      </div>
+    </section>
+  )
+}
+
+function InsightsFormulaDiagnostics({ diagnostics }: { diagnostics: InsightsFormulaDiagnostic[] }) {
+  return (
+    <section className="insights-section">
+      <div className="insights-section-head">
+        <div>
+          <h2>วิเคราะห์สาเหตุ</h2>
+          <p>สูตร diagnostic แยกปัญหา CPA, ROAS, fatigue, waste, momentum และคุณภาพข้อมูล</p>
+        </div>
+      </div>
+      <div className="insights-formula-grid">
+        {diagnostics.map((diagnostic) => (
+          <article className={`insights-diagnostic-card ${diagnostic.tone}`} key={diagnostic.id}>
+            <div className="recommendation-badges">
+              <StatusBadge label={diagnostic.availability === 'ready' ? 'คำนวณได้' : 'รอข้อมูล'} tone={diagnostic.availability === 'ready' ? diagnostic.tone : 'neutral'} />
+              <StatusBadge label={`มั่นใจ ${diagnostic.confidence.overall}%`} tone={diagnostic.confidence.level === 'สูง' ? 'good' : diagnostic.confidence.level === 'กลาง' ? 'watch' : 'critical'} />
+            </div>
+            <h3>{diagnostic.title}</h3>
+            <p>{diagnostic.summary}</p>
+            <small>{diagnostic.formula}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function InsightsEvidenceCards({ evidenceCards }: { evidenceCards: InsightsEvidenceCard[] }) {
+  return (
+    <section className="insights-section">
+      <div className="insights-section-head">
+        <div>
+          <h2>หลักฐานที่ใช้</h2>
+          <p>ผูกข้อสรุปกลับไปที่ Campaign, Ad Set, Ad หรือภาพรวมบัญชี</p>
+        </div>
+      </div>
+      <div className="insights-evidence-grid">
+        {evidenceCards.map((card) => (
+          <article className="insights-evidence-card" key={card.id}>
+            <div className="recommendation-badges">
+              <StatusBadge label={objectTypeLabelForInsight(card.objectType)} tone="neutral" />
+              <StatusBadge label={`มั่นใจ ${card.confidence.overall}%`} tone={card.confidence.level === 'สูง' ? 'good' : card.confidence.level === 'กลาง' ? 'watch' : 'critical'} />
+            </div>
+            <h3>{card.title}</h3>
+            <strong>{card.objectName}</strong>
+            <p>{card.formulaResult}</p>
+            <div className="insights-evidence-metrics">
+              {card.metricValues.map((metric) => (
+                <MetricLine key={`${card.id}-${metric.label}`} label={metric.label} value={metric.value} />
+              ))}
+            </div>
+            <small>{card.dateWindow} · {shortMetaId(card.objectId)}</small>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function InsightsRecommendationList({
+  onOpenApproval,
+  recommendationStates,
+  recommendations,
+}: {
+  onOpenApproval: (recommendation: InsightsRecommendation) => void
+  recommendationStates: Record<string, ActionState>
+  recommendations: InsightsRecommendation[]
+}) {
+  return (
+    <section className="insights-section">
+      <div className="insights-section-head">
+        <div>
+          <h2>คำแนะนำที่ควรตรวจ</h2>
+          <p>อ่านหลักฐานก่อนตัดสินใจ และต้องอนุมัติก่อนส่ง Meta ทุกครั้ง</p>
+        </div>
+      </div>
+      <div className="insights-recommendation-list">
+        {recommendations.map((recommendation) => {
+          const approval = canOpenInsightsApprovalCommand(recommendation)
+          const action = insightsRecommendationToMetaAction(recommendation)
+          const state = recommendationStates[action.id] ?? 'Suggested'
+          const isApprovedPlan = state === 'Approved' || state === 'Executing'
+          return (
+            <article className="insights-recommendation-card" key={recommendation.id}>
+              <div>
+                <div className="recommendation-badges">
+                  <StatusBadge label={recommendation.requiresApproval ? 'ต้องอนุมัติก่อนส่ง Meta' : 'รีวิวเท่านั้น'} tone={recommendation.requiresApproval ? 'watch' : 'neutral'} />
+                  <StatusBadge label={`มั่นใจ ${recommendation.confidence.overall}%`} tone={recommendation.confidence.level === 'สูง' ? 'good' : recommendation.confidence.level === 'กลาง' ? 'watch' : 'critical'} />
+                  <StatusBadge label={actionStateLabel(state)} tone={state === 'Rejected' || state === 'Failed' ? 'critical' : isApprovedPlan ? 'good' : 'info'} />
+                </div>
+                <h3>{recommendation.title}</h3>
+                <p>{recommendation.targetName}</p>
+                <small>{recommendation.riskNote}</small>
+              </div>
+              <button className={approval.allowed || isApprovedPlan ? 'primary-button' : 'outline-button'} type="button" onClick={() => onOpenApproval(recommendation)}>
+                <BookOpenCheck size={14} />
+                {isApprovedPlan ? 'ดำเนินการแผน' : approval.allowed ? 'เปิดอนุมัติ' : 'ดูเหตุผล'}
+              </button>
+            </article>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function InsightsDataWarning({ message, tone }: { message: string; tone: Tone }) {
+  return (
+    <div className={`insights-data-warning ${tone}`}>
+      <Info size={14} />
+      <span>{message}</span>
+    </div>
+  )
+}
+
+function insightsRecommendationToMetaAction(recommendation: InsightsRecommendation): MetaRecommendedAction {
+  const risk: MetaRecommendedAction['risk'] = recommendation.confidence.level === 'ต่ำ' ? 'High' : recommendation.confidence.level === 'กลาง' ? 'Medium' : 'Low'
+  return {
+    after: recommendation.action === 'pause' ? 'พักไว้เป็นแผนหลังตรวจหลักฐาน' : 'เปิดเป็นแผนรีวิวก่อนดำเนินการ',
+    before: `เป้าหมายปัจจุบัน: ${recommendation.targetName}`,
+    campaignId: recommendation.targetType === 'campaign' ? recommendation.targetId : '',
+    confidence: recommendation.confidence.overall,
+    expectedImpact: recommendation.title,
+    guardrail: recommendation.riskNote,
+    id: `insights-${recommendation.id}`,
+    requiresApproval: recommendation.requiresApproval,
+    risk,
+    rollbackNote: 'ยังไม่เปลี่ยนข้อมูลจริงจากหน้า Insights ถ้าต้องย้อนกลับให้กลับไปตรวจใน workspace ที่เกี่ยวข้อง',
+    source: 'ai_brain',
+    status: 'pending',
+    summary: recommendation.title,
+    target: recommendation.targetName,
+    type: 'insights_review',
+  }
+}
+
+function objectTypeLabelForInsight(type: InsightsEvidenceCard['objectType']) {
+  if (type === 'campaign') return 'Campaign'
+  if (type === 'adset') return 'Ad Set'
+  if (type === 'ad') return 'Ad'
+  return 'Account'
 }
 
 function MasterAgentSkeleton() {
@@ -4359,24 +4417,6 @@ function MasterAgentSkeleton() {
         <span className="skeleton-line wide" />
         <span className="skeleton-line" />
         <span className="skeleton-button" />
-      </div>
-    </div>
-  )
-}
-
-function DeepDiveSkeleton() {
-  return (
-    <div className="ai-brain-deep-dive-skeleton" aria-live="polite" aria-busy="true">
-      <span className="skeleton-line wide" />
-      <span className="skeleton-line" />
-      <div className="ai-brain-deep-dive-grid">
-        {[0, 1, 2].map((item) => (
-          <div className="ai-brain-skeleton-card" key={item}>
-            <span className="skeleton-pill" />
-            <span className="skeleton-line wide" />
-            <span className="skeleton-line short" />
-          </div>
-        ))}
       </div>
     </div>
   )

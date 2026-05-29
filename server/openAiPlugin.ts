@@ -379,6 +379,7 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
         const startedAt = Date.now()
         const intent = cleanText(body.intent, 'Analyze the current PMC Ads workspace as the master controller.')
         const websiteContext = normalizeWebsiteContext(body.websiteContext)
+        const structuredInsightsPayload = sanitizeUnknownRecord(body.insightsPayload)
         const suppliedMemories = normalizeKnowledgeMemories(body.memories)
         const suppliedDecisions = normalizeDecisionRecords(body.decisions)
         const targetIds = collectAiBrainTargetIds(workspace, websiteContext)
@@ -417,6 +418,7 @@ export function createOpenAiMiddleware(env: OpenAiPluginEnv) {
             systemPrompt: aiBrainSystemPrompt,
             payload: {
               instruction: 'Act as PMC Master Agent. Route specialist thinking, enforce policy, and return Thai executive-ready analysis.',
+              insightsPayload: structuredInsightsPayload,
               masterTask,
               routing,
               contextBundle,

@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App, { AdGroupsPage, AnalyticsPage, AutomationAdsPage, ReportsPage } from '../src/App'
+import App, { AdGroupsPage, AnalyticsPage, AutomationAdsPage, InsightsPage, ReportsPage } from '../src/App'
 import { scopeWorkspaceByDatePreset } from '../src/adsDashboardDateScope'
 import { buildRevenueTrendOption } from '../src/adsDashboardChart'
 import { HomeApp } from '../src/apps/home/HomeApp'
 import { PageAutomationApp } from '../src/apps/page-automation/PageAutomationApp'
-import type { WorkspaceData } from '../src/types'
+import type { WebsiteContext, WorkspaceData } from '../src/types'
 
 describe('Home app shell', () => {
   it('renders Home as a soft clinic app launcher with honest readiness states', () => {
@@ -121,6 +121,80 @@ describe('Home app shell', () => {
     expect(routeSource.indexOf('<AdGroupsPage')).toBeLessThan(routeSource.indexOf('<AdsManagerPage'))
     expect(tabSelectSource).toContain("nextToolbarKey === 'ad-groups'")
     expect(tabSelectSource).toContain('เปิด Ad Groups')
+  })
+
+  it('routes the Insights toolbar item to the rebuilt InsightsPage', () => {
+    const source = readText('../src/App.tsx')
+    const routeSource = source.slice(source.indexOf("{activeTab === 'marketer'"), source.indexOf("{activeTab === 'optimization'"))
+
+    expect(routeSource).toContain('<InsightsPage')
+    expect(routeSource).not.toContain('<AiMarketerPage')
+  })
+
+  it('renders the rebuilt Insights page without old assistant-first UI', () => {
+    const html = renderToStaticMarkup(
+      <InsightsPage
+        datePreset="เดือนนี้"
+        onBrainApprovalActions={() => undefined}
+        onOpenPlanExecution={() => undefined}
+        onQueueBrainAction={() => undefined}
+        recommendationStates={{}}
+        websiteContext={websiteContextForInsights()}
+        workspace={workspaceForDateScoping()}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('สรุปล่าสุดจาก AI')
+    expect(text).toContain('วิเคราะห์ใหม่ด้วย AI')
+    expect(text).toContain('ความมั่นใจ')
+    expect(text).toContain('วันนี้ควรรู้อะไร')
+    expect(text).toContain('ตัวเลขสำคัญ')
+    expect(text).toContain('กราฟแนวโน้ม')
+    expect(text).toContain('วิเคราะห์สาเหตุ')
+    expect(text).toContain('หลักฐานที่ใช้')
+    expect(text).toContain('คำแนะนำที่ควรตรวจ')
+    expect(html).toContain('class="insights-scoreboard"')
+    expect(html).toContain('class="insights-chart-grid"')
+    expect(html).toContain('class="insights-formula-grid"')
+    expect(html).toContain('class="insights-evidence-grid"')
+    expect(html).toContain('class="insights-recommendation-list"')
+    expect(text).toContain('ต้องอนุมัติก่อนส่ง Meta')
+    expect(text).not.toContain('ผู้ช่วย Insights')
+    expect(text).not.toContain('แผนที่เลือกทำต่อ')
+    expect(html).not.toContain('ai-brain-panel')
+    expect(html).not.toContain('master-agent-launch')
+  })
+
+  it('sends structured Insights payload to the real AI brain endpoint', () => {
+    const source = readText('../src/App.tsx')
+    const pageSource = source.slice(source.indexOf('export function InsightsPage'), source.indexOf('function InsightsBriefPanel'))
+    const endpointSource = readText('../server/openAiPlugin.ts').slice(
+      readText('../server/openAiPlugin.ts').indexOf("requestUrl.pathname === '/api/ai/brain'"),
+      readText('../server/openAiPlugin.ts').indexOf("requestUrl.pathname === '/api/ai/outcomes'"),
+    )
+
+    expect(pageSource).toContain("apiJson<AiBrainApiResponse>('/api/ai/brain'")
+    expect(pageSource).toContain('insightsPayload')
+    expect(pageSource).toContain('buildInsightsAnalysisPayload')
+    expect(pageSource).toContain('rawMetrics')
+    expect(pageSource).toContain('derivedMetrics')
+    expect(pageSource).toContain('freshness')
+    expect(pageSource).toContain('attribution')
+    expect(endpointSource).toContain('structuredInsightsPayload')
+    expect(endpointSource).toContain('sanitizeUnknownRecord(body.insightsPayload)')
+    expect(endpointSource).toContain('insightsPayload: structuredInsightsPayload')
+  })
+
+  it('keeps Insights recommendations approval-gated and avoids direct Meta writes', () => {
+    const source = readText('../src/App.tsx')
+    const pageSource = source.slice(source.indexOf('export function InsightsPage'), source.indexOf('function InsightsBriefPanel'))
+
+    expect(pageSource).toContain('canOpenInsightsApprovalCommand')
+    expect(pageSource).toContain('onQueueBrainAction')
+    expect(pageSource).toContain('onOpenPlanExecution')
+    expect(pageSource).not.toContain("'/api/meta/")
+    expect(pageSource).not.toContain('apiJson<MetaStatusResponse>')
   })
 
   it('renders the static Ad Groups split inspector workspace', () => {
@@ -1637,7 +1711,9 @@ describe('Home app shell', () => {
   it('keeps Insights copy user-facing instead of internal agent labels', () => {
     const appSource = readText('../src/App.tsx')
 
-    expect(appSource).toContain('ผู้ช่วย Insights')
+    expect(appSource).toContain('สรุปล่าสุดจาก AI')
+    expect(appSource).toContain('คำแนะนำที่ควรตรวจ')
+    expect(appSource).not.toContain('ผู้ช่วย Insights')
     expect(appSource).not.toContain('PMC Master Agent')
     expect(appSource).not.toContain('เรียก Master Agent')
     expect(appSource).not.toContain('AI Brain')
@@ -1831,6 +1907,18 @@ function workspaceForDateScoping(): WorkspaceData {
     tasks: [],
     trendData,
     updatedAt: 'Meta sync',
+  }
+}
+
+function websiteContextForInsights(): WebsiteContext {
+  return {
+    activeTab: 'marketer',
+    capturedAt: '2026-05-29T08:00:00.000Z',
+    dataState: 'live',
+    datePreset: 'เดือนนี้',
+    route: '/ads-agent',
+    visibleCards: ['Insights', 'สรุปล่าสุดจาก AI', 'ตัวเลขสำคัญ'],
+    visibleTableRows: [],
   }
 }
 
