@@ -173,13 +173,19 @@ describe('adGroupsWorkspace helpers', () => {
 })
 
 type PauseCommand = Extract<AdGroupApprovalCommand, { operation: 'pause_adset' }>
+type ResumeCommand = Extract<AdGroupApprovalCommand, { operation: 'resume_adset' }>
 type RenameCommand = Extract<AdGroupApprovalCommand, { operation: 'rename_adset' }>
 type UpdateBudgetCommand = Extract<AdGroupApprovalCommand, { operation: 'update_budget' }>
 
 const statusProposedValue: PauseCommand['proposedValue'] = 'PAUSED'
+const resumeStatusProposedValue: ResumeCommand['proposedValue'] = 'ACTIVE'
 const renameProposedValue: RenameCommand['proposedValue'] = { name: 'Bangkok New' }
 const updateBudgetProposedValue: UpdateBudgetCommand['proposedValue'] = { daily_budget: 90000, name: 'Bangkok New' }
 
+// @ts-expect-error pause commands must only propose PAUSED
+const invalidPauseStatusProposedValue: PauseCommand['proposedValue'] = 'ACTIVE'
+// @ts-expect-error resume commands must only propose ACTIVE
+const invalidResumeStatusProposedValue: ResumeCommand['proposedValue'] = 'PAUSED'
 // @ts-expect-error status commands must not accept params objects
 const invalidStatusProposedValue: PauseCommand['proposedValue'] = { status: 'PAUSED' }
 // @ts-expect-error rename commands must not accept a raw string
@@ -188,5 +194,8 @@ const invalidRenameProposedValue: RenameCommand['proposedValue'] = 'Bangkok New'
 const invalidUpdateBudgetProposedValue: UpdateBudgetCommand['proposedValue'] = 90000
 
 void invalidStatusProposedValue
+void resumeStatusProposedValue
+void invalidPauseStatusProposedValue
+void invalidResumeStatusProposedValue
 void invalidRenameProposedValue
 void invalidUpdateBudgetProposedValue
