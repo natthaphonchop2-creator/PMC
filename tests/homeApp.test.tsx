@@ -156,6 +156,19 @@ describe('Home app shell', () => {
         spend: 350,
         status: 'healthy',
       },
+      {
+        audience: 'Chiang Mai',
+        bookings: 3,
+        budget: 500,
+        campaignId: 'cmp-1',
+        cpa: 50,
+        deliveryStatus: 'paused',
+        id: 'set-2',
+        name: 'Chiang Mai Retarget',
+        roas: 1.8,
+        spend: 150,
+        status: 'watch',
+      },
     ]
     const ads: WorkspaceData['adInsights'] = [
       {
@@ -209,8 +222,23 @@ describe('Home app shell', () => {
     expect(text).toContain('Lead Botox')
     expect(text).toContain('2 Ads')
     expect(text).toContain('ตรวจคำสั่งก่อนส่ง Meta')
+    expect(text).toContain('ปิด Ad Set')
+    expect(text).toContain('แก้งบ')
+    expect(text).toContain('แก้ชื่อ')
+    expect(text).toContain('ดู Ads')
     expect(text).not.toContain('ตัวจัดการโฆษณา')
     expect(text).not.toContain('แคมเปญที่เลือก')
+
+    const pausedFirstHtml = renderToStaticMarkup(
+      <AdGroupsPage
+        adSets={[adSets[1], adSets[0]]}
+        ads={ads}
+        campaigns={campaigns}
+        onMutationComplete={async () => undefined}
+      />,
+    )
+
+    expect(visibleText(pausedFirstHtml)).toContain('เปิด Ad Set')
   })
 
   it('derives the Ad Groups inspector selection from filtered rows only', () => {
@@ -221,6 +249,17 @@ describe('Home app shell', () => {
     expect(selectionSource).toContain('const selectedRow = selectedFilteredRow ?? filteredRows[0]')
     expect(selectionSource).not.toContain('rows.find((row) => row.id === selectedAdSetId)')
     expect(selectionSource).not.toContain('?? rows[0]')
+  })
+
+  it('wires Ad Groups actions through approval-safe helpers only', () => {
+    const source = readText('../src/App.tsx')
+    const adGroupsSource = source.slice(source.indexOf('export function AdGroupsPage'), source.indexOf('function AdsManagerPage'))
+
+    expect(adGroupsSource).toContain('pendingApprovalCommand')
+    expect(adGroupsSource).toContain('createAdGroupApprovalCommand')
+    expect(adGroupsSource).toContain('AdGroupApprovalModal')
+    expect(adGroupsSource).toContain('adGroupApprovalCommandToMetaRequest')
+    expect(adGroupsSource).not.toContain('requestDelete')
   })
 
   it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {

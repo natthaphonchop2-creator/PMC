@@ -2339,6 +2339,36 @@ input:focus-visible {
   font-size: 13px;
 }
 
+.ad-groups-action-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ad-groups-action-grid .outline-button {
+  min-width: 0;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: normal;
+}
+
+.ad-groups-action-grid .outline-button.danger {
+  border-color: rgba(220, 38, 38, 0.24);
+  color: #b91c1c;
+}
+
+.ad-groups-action-grid .outline-button.good {
+  border-color: rgba(22, 163, 74, 0.24);
+  color: #15803d;
+}
+
 .ad-groups-detail-lines {
   display: grid;
   gap: 0;
@@ -2361,6 +2391,45 @@ input:focus-visible {
   font-size: 12px;
   font-weight: 800;
   overflow-wrap: anywhere;
+}
+
+.ad-group-edit-modal {
+  width: min(620px, 100%);
+}
+
+.ad-group-edit-form {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.ad-group-edit-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ad-group-edit-form input {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.form-error {
+  border: 1px solid rgba(220, 38, 38, 0.18);
+  border-radius: 8px;
+  background: rgba(254, 242, 242, 0.86);
+  color: #b91c1c;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .ads-manager-toolbar {

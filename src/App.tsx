@@ -54,9 +54,13 @@ import type {
 } from './types'
 import { buildRevenueTrendOption } from './adsDashboardChart'
 import {
+  adGroupApprovalCommandToMetaRequest,
   buildAdGroupRows,
+  createAdGroupApprovalCommand,
   filterAdGroupRows,
   groupAdGroupRowsByCampaign,
+  validateAdGroupEditDraft,
+  type AdGroupApprovalCommand,
   type AdGroupRow,
   type AdGroupStatusFilter,
   type AdGroupViewMode,
@@ -2840,12 +2844,17 @@ export function AdGroupsPage({
   campaigns: Campaign[]
   onMutationComplete: () => Promise<void>
 }) {
-  void onMutationComplete
   const [searchQuery, setSearchQuery] = useState('')
   const [campaignId, setCampaignId] = useState('')
   const [statusFilter, setStatusFilter] = useState<AdGroupStatusFilter>('all')
   const [viewMode, setViewMode] = useState<AdGroupViewMode>('groupedByCampaign')
   const [selectedAdSetId, setSelectedAdSetId] = useState('')
+  const [pendingApprovalCommand, setPendingApprovalCommand] = useState<AdGroupApprovalCommand | null>(null)
+  const [editRow, setEditRow] = useState<AdGroupRow | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editBudget, setEditBudget] = useState('')
+  const [approvalError, setApprovalError] = useState('')
+  const [isSendingApproval, setIsSendingApproval] = useState(false)
 
   const rows = useMemo(
     () => buildAdGroupRows({ adSets, ads, campaigns, lastSyncedAt: '' }),
@@ -2865,6 +2874,79 @@ export function AdGroupsPage({
 
   const selectRow = (row: AdGroupRow) => {
     setSelectedAdSetId(row.id)
+  }
+
+  const openEditRow = (row: AdGroupRow) => {
+    setApprovalError('')
+    setEditRow(row)
+    setEditName(row.name)
+    setEditBudget(String(row.budget))
+  }
+
+  const queueStatusCommand = (row: AdGroupRow) => {
+    setApprovalError('')
+    if (row.deliveryStatus === 'paused') {
+      setPendingApprovalCommand(createAdGroupApprovalCommand({ operation: 'resume_adset', proposedValue: 'ACTIVE', row }))
+      return
+    }
+
+    setPendingApprovalCommand(createAdGroupApprovalCommand({ operation: 'pause_adset', proposedValue: 'PAUSED', row }))
+  }
+
+  const queueEditCommand = () => {
+    if (!editRow) return
+    const validation = validateAdGroupEditDraft({
+      budgetText: editBudget,
+      currentBudget: editRow.budget,
+      currentName: editRow.name,
+      nameText: editName,
+    })
+
+    if (validation.error) {
+      setApprovalError(validation.error)
+      return
+    }
+
+    setApprovalError('')
+    if (validation.params.name !== undefined && validation.params.daily_budget === undefined) {
+      setPendingApprovalCommand(
+        createAdGroupApprovalCommand({
+          operation: 'rename_adset',
+          proposedValue: { name: validation.params.name },
+          row: editRow,
+        }),
+      )
+    } else {
+      setPendingApprovalCommand(
+        createAdGroupApprovalCommand({
+          operation: 'update_budget',
+          proposedValue: validation.params,
+          row: editRow,
+        }),
+      )
+    }
+    setEditRow(null)
+  }
+
+  const approveCommand = async () => {
+    if (!pendingApprovalCommand || isSendingApproval) return
+    const request = adGroupApprovalCommandToMetaRequest(pendingApprovalCommand)
+    setIsSendingApproval(true)
+    setApprovalError('')
+
+    try {
+      await apiJson(request.endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request.body),
+      })
+      await onMutationComplete()
+      setPendingApprovalCommand(null)
+    } catch (error) {
+      setApprovalError(error instanceof Error ? formatApiMessage(error.message) : 'ส่งคำสั่งไป Meta ไม่สำเร็จ')
+    } finally {
+      setIsSendingApproval(false)
+    }
   }
 
   const rowList = (listRows: AdGroupRow[]) => (
@@ -2978,50 +3060,243 @@ export function AdGroupsPage({
         </div>
       </section>
 
-      <aside className="ad-groups-inspector" aria-label="รายละเอียด Ad Set ที่เลือก">
-        {selectedRow ? (
-          <>
-            <div className="ad-groups-inspector-head">
-              <StatusBadge label={deliveryLabel(selectedRow.deliveryStatus)} tone={deliveryTone(selectedRow.deliveryStatus)} />
-              <h3>{selectedRow.name}</h3>
-              <p>{selectedRow.audience}</p>
-            </div>
-            <div className="ad-groups-review-state">
-              <strong>ตรวจคำสั่งก่อนส่ง Meta</strong>
-              <p>พื้นที่นี้ยังเป็น static review สำหรับ Task 4 และยังไม่ส่งคำสั่งไป Meta</p>
-            </div>
-            <div className="ad-groups-detail-lines">
-              <MetricLine label="Campaign" value={selectedRow.campaignName} />
-              <MetricLine label="Status" value={deliveryLabel(selectedRow.deliveryStatus)} />
-              <MetricLine label="Budget" value={selectedRow.budgetDisplay} />
-              <MetricLine label="Spend" value={fmtMoney(selectedRow.spend)} />
-              <MetricLine label="Bookings" value={fmtNum(selectedRow.bookings)} />
-              <MetricLine label="ROAS" value={`${selectedRow.roas.toFixed(2)}x`} />
-            </div>
-            <section className="ad-groups-ads-summary">
-              <div className="ad-groups-group-head">
-                <strong>Ads summary</strong>
-                <span>{selectedRow.adsCount} Ads</span>
-              </div>
-              <MetricLine label="Active Ads" value={fmtNum(selectedRow.activeAdsCount)} />
-              <MetricLine label="Paused Ads" value={fmtNum(selectedRow.pausedAdsCount)} />
-              {selectedAds.length > 0 ? (
-                <div className="ad-groups-ad-chips">
-                  {selectedAds.map((ad) => (
-                    <span key={ad.id}>{ad.name}</span>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState title="ยังไม่มี Ads" detail="Ad Set นี้ยังไม่มีโฆษณาใน workspace ล่าสุด" />
-              )}
-            </section>
-          </>
-        ) : (
-          <EmptyState title="ยังไม่มี Ad Set" detail="เชื่อมข้อมูลจาก Meta เพื่อเริ่มตรวจ Ad Groups" />
-        )}
-      </aside>
+      <AdGroupsInspector
+        row={selectedRow}
+        selectedAds={selectedAds}
+        onEdit={openEditRow}
+        onStatusChange={queueStatusCommand}
+      />
+      {editRow ? (
+        <AdGroupEditModal
+          editBudget={editBudget}
+          editName={editName}
+          error={approvalError}
+          row={editRow}
+          setEditBudget={setEditBudget}
+          setEditName={setEditName}
+          onCancel={() => {
+            setApprovalError('')
+            setEditRow(null)
+          }}
+          onQueue={queueEditCommand}
+        />
+      ) : null}
+      {pendingApprovalCommand ? (
+        <AdGroupApprovalModal
+          command={pendingApprovalCommand}
+          error={approvalError}
+          isSending={isSendingApproval}
+          onCancel={() => {
+            setApprovalError('')
+            setPendingApprovalCommand(null)
+          }}
+          onApprove={() => void approveCommand()}
+        />
+      ) : null}
     </div>
   )
+}
+
+function AdGroupsInspector({
+  row,
+  selectedAds,
+  onEdit,
+  onStatusChange,
+}: {
+  row?: AdGroupRow
+  selectedAds: WorkspaceData['adInsights']
+  onEdit: (row: AdGroupRow) => void
+  onStatusChange: (row: AdGroupRow) => void
+}) {
+  if (!row) {
+    return (
+      <aside className="ad-groups-inspector" aria-label="รายละเอียด Ad Set ที่เลือก">
+        <EmptyState title="ยังไม่มี Ad Set" detail="เชื่อมข้อมูลจาก Meta เพื่อเริ่มตรวจ Ad Groups" />
+      </aside>
+    )
+  }
+
+  const statusLabel = row.deliveryStatus === 'paused' ? 'เปิด Ad Set' : 'ปิด Ad Set'
+  const statusTone = row.deliveryStatus === 'paused' ? 'good' : 'danger'
+
+  return (
+    <aside className="ad-groups-inspector" aria-label="รายละเอียด Ad Set ที่เลือก">
+      <div className="ad-groups-inspector-head">
+        <StatusBadge label={deliveryLabel(row.deliveryStatus)} tone={deliveryTone(row.deliveryStatus)} />
+        <h3>{row.name}</h3>
+        <p>{row.audience}</p>
+      </div>
+      <div className="ad-groups-review-state">
+        <strong>ตรวจคำสั่งก่อนส่ง Meta</strong>
+        <p>ทุกคำสั่งเปลี่ยน Ad Set จะเข้าหน้ายืนยันก่อนส่งไป Meta</p>
+      </div>
+      <div className="ad-groups-action-grid" aria-label="Ad Set actions">
+        <button className={`outline-button ${statusTone}`} type="button" onClick={() => onStatusChange(row)}>
+          <Power size={15} />
+          {statusLabel}
+        </button>
+        <button className="outline-button" type="button" onClick={() => onEdit(row)}>
+          <Pencil size={15} />
+          แก้งบ / แก้ชื่อ
+        </button>
+        <button className="outline-button" type="button" onClick={() => undefined}>
+          <Eye size={15} />
+          ดู Ads
+        </button>
+      </div>
+      <div className="ad-groups-detail-lines">
+        <MetricLine label="Campaign" value={row.campaignName} />
+        <MetricLine label="Status" value={deliveryLabel(row.deliveryStatus)} />
+        <MetricLine label="Budget" value={row.budgetDisplay} />
+        <MetricLine label="Spend" value={fmtMoney(row.spend)} />
+        <MetricLine label="Bookings" value={fmtNum(row.bookings)} />
+        <MetricLine label="ROAS" value={`${row.roas.toFixed(2)}x`} />
+      </div>
+      <section className="ad-groups-ads-summary">
+        <div className="ad-groups-group-head">
+          <strong>Ads summary</strong>
+          <span>{row.adsCount} Ads</span>
+        </div>
+        <MetricLine label="Active Ads" value={fmtNum(row.activeAdsCount)} />
+        <MetricLine label="Paused Ads" value={fmtNum(row.pausedAdsCount)} />
+        {selectedAds.length > 0 ? (
+          <div className="ad-groups-ad-chips">
+            {selectedAds.map((ad) => (
+              <span key={ad.id}>{ad.name}</span>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="ยังไม่มี Ads" detail="Ad Set นี้ยังไม่มีโฆษณาใน workspace ล่าสุด" />
+        )}
+      </section>
+    </aside>
+  )
+}
+
+function AdGroupEditModal({
+  editBudget,
+  editName,
+  error,
+  row,
+  setEditBudget,
+  setEditName,
+  onCancel,
+  onQueue,
+}: {
+  editBudget: string
+  editName: string
+  error: string
+  row: AdGroupRow
+  setEditBudget: (value: string) => void
+  setEditName: (value: string) => void
+  onCancel: () => void
+  onQueue: () => void
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-modal ad-group-edit-modal" role="dialog" aria-modal="true" aria-labelledby="ad-group-edit-title">
+        <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดหน้าแก้ไข Ad Set">
+          <X size={18} />
+        </button>
+        <StatusBadge label="เตรียมคำสั่งแก้ไข" tone="watch" />
+        <h2 id="ad-group-edit-title">แก้งบ / แก้ชื่อ</h2>
+        <p>ตั้งค่าที่ต้องการเปลี่ยนก่อนส่งเข้าหน้ายืนยัน งบรายวันเป็นหน่วยบาท</p>
+        <div className="ad-group-edit-form">
+          <label>
+            <span>ชื่อ Ad Set</span>
+            <input value={editName} onChange={(event) => setEditName(event.target.value)} />
+          </label>
+          <label>
+            <span>งบรายวัน (THB)</span>
+            <input inputMode="decimal" value={editBudget} onChange={(event) => setEditBudget(event.target.value)} />
+          </label>
+        </div>
+        <div className="confirm-grid">
+          <MetricLine label="Ad Set" value={row.name} />
+          <MetricLine label="รหัสใน Meta" value={shortMetaId(row.id)} />
+          <MetricLine label="Campaign" value={row.campaignName} />
+        </div>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="modal-actions">
+          <button className="outline-button" type="button" onClick={onCancel}>
+            ยกเลิก
+          </button>
+          <button className="primary-button" type="button" onClick={onQueue}>
+            <Pencil size={14} />
+            ตรวจคำสั่ง
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function AdGroupApprovalModal({
+  command,
+  error,
+  isSending,
+  onApprove,
+  onCancel,
+}: {
+  command: AdGroupApprovalCommand
+  error: string
+  isSending: boolean
+  onApprove: () => void
+  onCancel: () => void
+}) {
+  const actionLabel = adGroupApprovalActionLabel(command)
+  const proposedValue = adGroupApprovalProposedValue(command)
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="ad-group-approval-title">
+        <button className="modal-close" type="button" onClick={onCancel} aria-label="ปิดการยืนยัน Ad Set" disabled={isSending}>
+          <X size={18} />
+        </button>
+        <StatusBadge label="ส่งคำสั่งจริง" tone={command.operation === 'pause_adset' ? 'critical' : 'watch'} />
+        <h2 id="ad-group-approval-title">{actionLabel}</h2>
+        <p>คำสั่งนี้จะเปลี่ยนข้อมูลจริงในบัญชีโฆษณาหลังคุณยืนยันเท่านั้น</p>
+        <div className="confirm-grid">
+          <MetricLine label="Ad Set" value={command.targetName} />
+          <MetricLine label="รหัสใน Meta" value={shortMetaId(command.targetId)} />
+          <MetricLine label="Campaign" value={command.parentCampaignName} />
+          <MetricLine label="ค่าเดิม" value={String(command.currentValue)} />
+          <MetricLine label="ค่าที่จะส่ง" value={proposedValue} />
+        </div>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="modal-actions">
+          <button className="outline-button" type="button" onClick={onCancel} disabled={isSending}>
+            ยกเลิก
+          </button>
+          <button className="danger-button" type="button" onClick={onApprove} disabled={isSending}>
+            {isSending ? 'กำลังส่ง...' : 'อนุมัติและส่ง Meta'}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function adGroupApprovalActionLabel(command: AdGroupApprovalCommand) {
+  if (command.operation === 'pause_adset') return 'ปิด Ad Set'
+  if (command.operation === 'resume_adset') return 'เปิด Ad Set'
+  if (command.operation === 'rename_adset') return 'แก้ชื่อ Ad Set'
+  return 'แก้งบ Ad Set'
+}
+
+function adGroupApprovalProposedValue(command: AdGroupApprovalCommand) {
+  if (command.operation === 'pause_adset' || command.operation === 'resume_adset') {
+    return mutationStatusLabel(command.proposedValue)
+  }
+
+  if (command.operation === 'rename_adset') {
+    return command.proposedValue.name
+  }
+
+  const parts = []
+  if (command.proposedValue.name) parts.push(`ชื่อ: ${command.proposedValue.name}`)
+  if (command.proposedValue.daily_budget) parts.push(`งบ: ${fmtMoney(command.proposedValue.daily_budget / 100)}`)
+  return parts.join(' · ')
 }
 
 function AdsManagerPage({
