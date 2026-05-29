@@ -6,6 +6,7 @@ import {
   filterAdGroupRows,
   groupAdGroupRowsByCampaign,
   validateAdGroupEditDraft,
+  type AdGroupApprovalCommand,
   type AdGroupStatusFilter,
 } from '../src/adGroupsWorkspace'
 import type { WorkspaceData } from '../src/types'
@@ -94,6 +95,13 @@ describe('adGroupsWorkspace helpers', () => {
       currentName: 'Bangkok Core',
       nameText: 'Bangkok New',
     })).toEqual({ error: '', params: { daily_budget: 90000, name: 'Bangkok New' } })
+
+    expect(validateAdGroupEditDraft({
+      budgetText: '0.004',
+      currentBudget: 700,
+      currentName: 'Bangkok Core',
+      nameText: 'Bangkok Core',
+    })).toEqual({ error: 'งบประมาณต้องมากกว่า 0 บาท', params: {} })
   })
 
   it('validates Ad Set edit draft edge cases', () => {
@@ -156,4 +164,29 @@ describe('adGroupsWorkspace helpers', () => {
       },
     })
   })
+
+  it('keeps approval command proposed values operation-safe', () => {
+    expect(statusProposedValue).toBe('PAUSED')
+    expect(renameProposedValue).toEqual({ name: 'Bangkok New' })
+    expect(updateBudgetProposedValue).toEqual({ daily_budget: 90000, name: 'Bangkok New' })
+  })
 })
+
+type PauseCommand = Extract<AdGroupApprovalCommand, { operation: 'pause_adset' }>
+type RenameCommand = Extract<AdGroupApprovalCommand, { operation: 'rename_adset' }>
+type UpdateBudgetCommand = Extract<AdGroupApprovalCommand, { operation: 'update_budget' }>
+
+const statusProposedValue: PauseCommand['proposedValue'] = 'PAUSED'
+const renameProposedValue: RenameCommand['proposedValue'] = { name: 'Bangkok New' }
+const updateBudgetProposedValue: UpdateBudgetCommand['proposedValue'] = { daily_budget: 90000, name: 'Bangkok New' }
+
+// @ts-expect-error status commands must not accept params objects
+const invalidStatusProposedValue: PauseCommand['proposedValue'] = { status: 'PAUSED' }
+// @ts-expect-error rename commands must not accept a raw string
+const invalidRenameProposedValue: RenameCommand['proposedValue'] = 'Bangkok New'
+// @ts-expect-error update-budget commands must not accept a raw number
+const invalidUpdateBudgetProposedValue: UpdateBudgetCommand['proposedValue'] = 90000
+
+void invalidStatusProposedValue
+void invalidRenameProposedValue
+void invalidUpdateBudgetProposedValue

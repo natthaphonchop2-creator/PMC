@@ -4,6 +4,11 @@ export type AdGroupStatusFilter = 'all' | 'active' | 'paused' | 'pending'
 export type AdGroupViewMode = 'flat' | 'groupedByCampaign'
 export type AdGroupApprovalOperation = 'pause_adset' | 'resume_adset' | 'rename_adset' | 'update_budget'
 export type AdGroupApprovalStatus = 'pending_approval' | 'sending' | 'synced' | 'failed' | 'cancelled'
+export type AdGroupStatusProposedValue = 'PAUSED' | 'ACTIVE'
+export type AdGroupUpdateParams = {
+  daily_budget?: number
+  name?: string
+}
 
 export type AdGroupRow = {
   id: string
@@ -25,9 +30,8 @@ export type AdGroupRow = {
   hasPendingCommand: boolean
 }
 
-export type AdGroupApprovalCommand = {
+type AdGroupApprovalCommandBase = {
   id: string
-  operation: AdGroupApprovalOperation
   status: AdGroupApprovalStatus
   targetId: string
   targetType: 'adset'
@@ -35,10 +39,21 @@ export type AdGroupApprovalCommand = {
   parentCampaignId: string
   parentCampaignName: string
   currentValue: string | number
-  proposedValue: string | number | Record<string, string | number>
   errorMessage: string
   createdAt: string
 }
+
+export type AdGroupApprovalCommand =
+  | (AdGroupApprovalCommandBase & { operation: 'pause_adset'; proposedValue: AdGroupStatusProposedValue })
+  | (AdGroupApprovalCommandBase & { operation: 'resume_adset'; proposedValue: AdGroupStatusProposedValue })
+  | (AdGroupApprovalCommandBase & { operation: 'rename_adset'; proposedValue: { name: string } })
+  | (AdGroupApprovalCommandBase & { operation: 'update_budget'; proposedValue: AdGroupUpdateParams })
+
+export type CreateAdGroupApprovalCommandInput =
+  | { operation: 'pause_adset'; proposedValue: AdGroupStatusProposedValue; row: AdGroupRow }
+  | { operation: 'resume_adset'; proposedValue: AdGroupStatusProposedValue; row: AdGroupRow }
+  | { operation: 'rename_adset'; proposedValue: { name: string }; row: AdGroupRow }
+  | { operation: 'update_budget'; proposedValue: AdGroupUpdateParams; row: AdGroupRow }
 
 export type AdGroupRowGroup = {
   campaignId: string
@@ -123,25 +138,28 @@ export function createAdGroupApprovalCommand({
   operation,
   proposedValue,
   row,
-}: {
-  operation: AdGroupApprovalOperation
-  proposedValue: AdGroupApprovalCommand['proposedValue']
-  row: AdGroupRow
-}): AdGroupApprovalCommand {
-  return {
+}: CreateAdGroupApprovalCommandInput): AdGroupApprovalCommand {
+  const base: Omit<AdGroupApprovalCommandBase, 'currentValue'> = {
     id: createApprovalCommandId(),
-    operation,
     status: 'pending_approval',
     targetId: row.id,
     targetType: 'adset',
     targetName: row.name,
     parentCampaignId: row.campaignId,
     parentCampaignName: row.campaignName,
-    currentValue: getCurrentAdGroupValue(operation, row),
-    proposedValue,
     errorMessage: '',
     createdAt: new Date().toISOString(),
   }
+
+  if (operation === 'rename_adset') {
+    return { ...base, operation, currentValue: row.name, proposedValue }
+  }
+
+  if (operation === 'update_budget') {
+    return { ...base, operation, currentValue: row.budget, proposedValue }
+  }
+
+  return { ...base, operation, currentValue: row.deliveryStatus, proposedValue }
 }
 
 export function validateAdGroupEditDraft({
@@ -171,7 +189,12 @@ export function validateAdGroupEditDraft({
     }
 
     if (budget !== currentBudget) {
-      params.daily_budget = Math.round(budget * 100)
+      const dailyBudget = Math.round(budget * 100)
+      if (dailyBudget < 100) {
+        return { error: 'งบประมาณต้องมากกว่า 0 บาท', params: {} }
+      }
+
+      params.daily_budget = dailyBudget
     }
   }
 
@@ -189,8 +212,8 @@ export function validateAdGroupEditDraft({
 export function adGroupApprovalCommandToMetaRequest(command: AdGroupApprovalCommand): {
   endpoint: '/api/meta/object' | '/api/meta/object-status'
   body:
-    | { objectId: string; objectType: 'adset'; operation: 'update'; params: Record<string, string | number> }
-    | { objectId: string; objectType: 'adset'; status: string | number | Record<string, string | number> }
+    | { objectId: string; objectType: 'adset'; operation: 'update'; params: AdGroupUpdateParams }
+    | { objectId: string; objectType: 'adset'; status: AdGroupStatusProposedValue }
 } {
   if (command.operation === 'pause_adset' || command.operation === 'resume_adset') {
     return {
@@ -226,30 +249,8 @@ function createApprovalCommandId() {
   return `adgroup-command-${Date.now()}`
 }
 
-function getCurrentAdGroupValue(operation: AdGroupApprovalOperation, row: AdGroupRow) {
-  if (operation === 'rename_adset') {
-    return row.name
-  }
-
-  if (operation === 'update_budget') {
-    return row.budget
-  }
-
-  return row.deliveryStatus
-}
-
-function adGroupApprovalCommandToMetaParams(command: AdGroupApprovalCommand): Record<string, string | number> {
-  if (command.operation === 'pause_adset') {
-    return { status: 'PAUSED' }
-  }
-
-  if (command.operation === 'resume_adset') {
-    return { status: 'ACTIVE' }
-  }
-
-  if (command.operation === 'rename_adset') {
-    return { name: String(command.proposedValue) }
-  }
-
-  return command.proposedValue && typeof command.proposedValue === 'object' ? command.proposedValue : {}
+function adGroupApprovalCommandToMetaParams(
+  command: Extract<AdGroupApprovalCommand, { operation: 'rename_adset' | 'update_budget' }>,
+): AdGroupUpdateParams {
+  return command.proposedValue
 }
