@@ -1852,7 +1852,15 @@ function PmcAdsAgentApp() {
               trendData={trendPoints}
             />
           )}
-          {activeTab === 'ads' && (
+          {activeTab === 'ads' && activeToolbarKey === 'ad-groups' && (
+            <AdGroupsPage
+              adSets={visibleWorkspace?.adSets ?? []}
+              ads={visibleWorkspace?.adInsights ?? []}
+              campaigns={displayCampaigns}
+              onMutationComplete={() => refreshWorkspace('execution')}
+            />
+          )}
+          {activeTab === 'ads' && activeToolbarKey !== 'ad-groups' && (
             <AdsManagerPage
               adSets={visibleWorkspace?.adSets ?? []}
               ads={visibleWorkspace?.adInsights ?? []}
@@ -2805,6 +2813,28 @@ function RevenueOverviewChart({ embedded = false, trendData }: { embedded?: bool
     >
       {content}
     </SectionCard>
+  )
+}
+
+export function AdGroupsPage({
+  adSets,
+  ads,
+  campaigns,
+  onMutationComplete,
+}: {
+  adSets: WorkspaceData['adSets']
+  ads: WorkspaceData['adInsights']
+  campaigns: Campaign[]
+  onMutationComplete: () => Promise<void>
+}) {
+  void onMutationComplete
+
+  return (
+    <TwoColumnPage aside={<StatePanel state="Ad Groups" detail={`${adSets.length} ชุดโฆษณา · ${ads.length} โฆษณา`} tone="info" />}>
+      <SectionCard title="Ad Groups" subtitle={`${campaigns.length} แคมเปญที่เกี่ยวข้อง`}>
+        <p>กำลังเตรียม workspace สำหรับจัดการ Ad Set</p>
+      </SectionCard>
+    </TwoColumnPage>
   )
 }
 

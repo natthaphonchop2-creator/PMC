@@ -105,6 +105,16 @@ describe('Home app shell', () => {
     })
   })
 
+  it('routes the Ad Groups toolbar item to a dedicated AdGroupsPage', () => {
+    const source = readText('../src/App.tsx')
+    const routeSource = source.slice(source.indexOf("{activeTab === 'ads'"), source.indexOf("{activeTab === 'marketer'"))
+
+    expect(routeSource).toContain("activeToolbarKey === 'ad-groups'")
+    expect(routeSource).toContain('<AdGroupsPage')
+    expect(routeSource).toContain('<AdsManagerPage')
+    expect(routeSource.indexOf('<AdGroupsPage')).toBeLessThan(routeSource.indexOf('<AdsManagerPage'))
+  })
+
   it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
     withPathname('/ads-agent', () => {
       const html = renderToStaticMarkup(<App />)
