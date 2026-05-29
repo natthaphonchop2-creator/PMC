@@ -96,6 +96,29 @@ describe('adGroupsWorkspace helpers', () => {
     })).toEqual({ error: '', params: { daily_budget: 90000, name: 'Bangkok New' } })
   })
 
+  it('validates Ad Set edit draft edge cases', () => {
+    expect(validateAdGroupEditDraft({
+      budgetText: '900',
+      currentBudget: 700,
+      currentName: 'Bangkok Core',
+      nameText: '   ',
+    })).toEqual({ error: 'ชื่อต้องไม่ว่าง', params: {} })
+
+    expect(validateAdGroupEditDraft({
+      budgetText: '',
+      currentBudget: 700,
+      currentName: 'Bangkok Core',
+      nameText: 'Bangkok Core',
+    })).toEqual({ error: 'ยังไม่มีรายการเปลี่ยนแปลงให้บันทึก', params: {} })
+
+    expect(validateAdGroupEditDraft({
+      budgetText: '   ',
+      currentBudget: 700,
+      currentName: 'Bangkok Core',
+      nameText: 'Bangkok New',
+    })).toEqual({ error: '', params: { name: 'Bangkok New' } })
+  })
+
   it('converts approval commands to Meta object requests', () => {
     const [row] = buildAdGroupRows({ adSets, ads, campaigns })
     const command = createAdGroupApprovalCommand({ operation: 'update_budget', proposedValue: { daily_budget: 90000 }, row })

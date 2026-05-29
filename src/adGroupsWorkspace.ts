@@ -155,21 +155,32 @@ export function validateAdGroupEditDraft({
   currentName: string
   nameText: string
 }): { error: string; params: { daily_budget?: number; name?: string } } {
-  const budget = Number(budgetText.trim())
-
-  if (!Number.isFinite(budget) || budget <= 0) {
-    return { error: 'งบประมาณต้องมากกว่า 0 บาท', params: {} }
-  }
-
   const params: { daily_budget?: number; name?: string } = {}
-  const dailyBudget = Math.round(budget * 100)
-  if (budget !== currentBudget) {
-    params.daily_budget = dailyBudget
+  const name = nameText.trim()
+
+  if (!name) {
+    return { error: 'ชื่อต้องไม่ว่าง', params: {} }
   }
 
-  const name = nameText.trim()
-  if (name && name !== currentName) {
+  const trimmedBudgetText = budgetText.trim()
+  if (trimmedBudgetText) {
+    const budget = Number(trimmedBudgetText)
+
+    if (!Number.isFinite(budget) || budget <= 0) {
+      return { error: 'งบประมาณต้องมากกว่า 0 บาท', params: {} }
+    }
+
+    if (budget !== currentBudget) {
+      params.daily_budget = Math.round(budget * 100)
+    }
+  }
+
+  if (name !== currentName) {
     params.name = name
+  }
+
+  if (Object.keys(params).length === 0) {
+    return { error: 'ยังไม่มีรายการเปลี่ยนแปลงให้บันทึก', params: {} }
   }
 
   return { error: '', params }
