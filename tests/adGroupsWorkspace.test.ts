@@ -107,4 +107,27 @@ describe('adGroupsWorkspace helpers', () => {
       },
     })
   })
+
+  it('converts pause and resume commands to Meta status requests', () => {
+    const rows = buildAdGroupRows({ adSets, ads, campaigns })
+    const pauseCommand = createAdGroupApprovalCommand({ operation: 'pause_adset', proposedValue: 'PAUSED', row: rows[0] })
+    const resumeCommand = createAdGroupApprovalCommand({ operation: 'resume_adset', proposedValue: 'ACTIVE', row: rows[1] })
+
+    expect(adGroupApprovalCommandToMetaRequest(pauseCommand)).toEqual({
+      endpoint: '/api/meta/object-status',
+      body: {
+        objectId: 'set-1',
+        objectType: 'adset',
+        status: 'PAUSED',
+      },
+    })
+    expect(adGroupApprovalCommandToMetaRequest(resumeCommand)).toEqual({
+      endpoint: '/api/meta/object-status',
+      body: {
+        objectId: 'set-2',
+        objectType: 'adset',
+        status: 'ACTIVE',
+      },
+    })
+  })
 })

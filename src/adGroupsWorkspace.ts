@@ -170,9 +170,22 @@ export function validateAdGroupEditDraft({
 }
 
 export function adGroupApprovalCommandToMetaRequest(command: AdGroupApprovalCommand): {
-  endpoint: '/api/meta/object'
-  body: { objectId: string; objectType: 'adset'; operation: 'update'; params: Record<string, string | number> }
+  endpoint: '/api/meta/object' | '/api/meta/object-status'
+  body:
+    | { objectId: string; objectType: 'adset'; operation: 'update'; params: Record<string, string | number> }
+    | { objectId: string; objectType: 'adset'; status: string | number | Record<string, string | number> }
 } {
+  if (command.operation === 'pause_adset' || command.operation === 'resume_adset') {
+    return {
+      endpoint: '/api/meta/object-status',
+      body: {
+        objectId: command.targetId,
+        objectType: 'adset',
+        status: command.proposedValue,
+      },
+    }
+  }
+
   return {
     endpoint: '/api/meta/object',
     body: {
