@@ -26,3 +26,4 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added the Ad Groups workspace design spec with the approved Split Inspector layout, approval-gated Meta write flow, and phase-1 testing scope.
 - Added the Insights AI Analysis workspace design spec with the approved AI Brief First layout, researched measurement formulas, confidence scoring, cached AI refresh flow, and approval-gated recommendation rules.
 - Clarified the Insights design scope: the implementation must rebuild and replace the old Insights page rather than patching or preserving the previous UI as a parallel mode.
+- Added the Automation Ads workspace design spec with the approved Run Monitor + Tabs layout, configurable safe rule builder, scheduled approval queue, hybrid rule/AI decision engine, and approval-gated Meta writes.
