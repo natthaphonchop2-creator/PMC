@@ -23,3 +23,4 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Updated regression tests for Home visual rules, Page Automation cancel-schedule UI behavior, and backend cancel-schedule handling.
 - Organized user manuals, visual previews, PDFs, and QA screenshots into `docs/releases/2026-05-29-v0.1.0/`.
 - Added this project update log and made update-log maintenance a mandatory development rule in `Agent.md`.
+- Added the Ad Groups workspace design spec with the approved Split Inspector layout, approval-gated Meta write flow, and phase-1 testing scope.
