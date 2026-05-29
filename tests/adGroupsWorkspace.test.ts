@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildAdGroupRows,
+  adGroupApprovalCommandToMetaRequest,
+  createAdGroupApprovalCommand,
   filterAdGroupRows,
   groupAdGroupRowsByCampaign,
+  validateAdGroupEditDraft,
   type AdGroupStatusFilter,
 } from '../src/adGroupsWorkspace'
 import type { WorkspaceData } from '../src/types'
@@ -58,5 +61,50 @@ describe('adGroupsWorkspace helpers', () => {
       expect.objectContaining({ campaignId: 'cmp-1', campaignName: 'Lead Botox', rows: expect.arrayContaining([expect.objectContaining({ id: 'set-1' })]) }),
       expect.objectContaining({ campaignId: 'cmp-2', campaignName: 'Filler Review', rows: [expect.objectContaining({ id: 'set-3' })] }),
     ])
+  })
+
+  it('creates pending approval commands for Ad Set operations', () => {
+    const [row] = buildAdGroupRows({ adSets, ads, campaigns })
+
+    expect(createAdGroupApprovalCommand({ operation: 'pause_adset', proposedValue: 'PAUSED', row })).toEqual(expect.objectContaining({
+      operation: 'pause_adset',
+      status: 'pending_approval',
+      targetId: 'set-1',
+      targetName: 'Bangkok Core',
+      parentCampaignName: 'Lead Botox',
+      currentValue: 'active',
+      proposedValue: 'PAUSED',
+    }))
+  })
+
+  it('validates Ad Set edit drafts into Meta params', () => {
+    expect(validateAdGroupEditDraft({
+      budgetText: '0',
+      currentBudget: 700,
+      currentName: 'Bangkok Core',
+      nameText: 'Bangkok Core',
+    })).toEqual({ error: 'งบประมาณต้องมากกว่า 0 บาท', params: {} })
+
+    expect(validateAdGroupEditDraft({
+      budgetText: '900',
+      currentBudget: 700,
+      currentName: 'Bangkok Core',
+      nameText: 'Bangkok New',
+    })).toEqual({ error: '', params: { daily_budget: 90000, name: 'Bangkok New' } })
+  })
+
+  it('converts approval commands to Meta object requests', () => {
+    const [row] = buildAdGroupRows({ adSets, ads, campaigns })
+    const command = createAdGroupApprovalCommand({ operation: 'update_budget', proposedValue: { daily_budget: 90000 }, row })
+
+    expect(adGroupApprovalCommandToMetaRequest(command)).toEqual({
+      endpoint: '/api/meta/object',
+      body: {
+        objectId: 'set-1',
+        objectType: 'adset',
+        operation: 'update',
+        params: { daily_budget: 90000 },
+      },
+    })
   })
 })

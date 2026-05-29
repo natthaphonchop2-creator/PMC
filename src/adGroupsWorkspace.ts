@@ -2,6 +2,8 @@ import type { WorkspaceData } from './types'
 
 export type AdGroupStatusFilter = 'all' | 'active' | 'paused' | 'pending'
 export type AdGroupViewMode = 'flat' | 'groupedByCampaign'
+export type AdGroupApprovalOperation = 'pause_adset' | 'resume_adset' | 'rename_adset' | 'update_budget'
+export type AdGroupApprovalStatus = 'pending_approval' | 'sending' | 'synced' | 'failed' | 'cancelled'
 
 export type AdGroupRow = {
   id: string
@@ -21,6 +23,18 @@ export type AdGroupRow = {
   audience: string
   lastSyncedAt: string
   hasPendingCommand: boolean
+}
+
+export type AdGroupApprovalCommand = {
+  id: string
+  operation: AdGroupApprovalOperation
+  status: AdGroupApprovalStatus
+  targetId: string
+  targetName: string
+  parentCampaignName: string
+  currentValue: string | number
+  proposedValue: string | number | Record<string, string | number>
+  createdAt: string
 }
 
 export type AdGroupRowGroup = {
@@ -102,6 +116,110 @@ export function groupAdGroupRowsByCampaign(rows: AdGroupRow[]): AdGroupRowGroup[
   return Array.from(groups.values())
 }
 
+export function createAdGroupApprovalCommand({
+  operation,
+  proposedValue,
+  row,
+}: {
+  operation: AdGroupApprovalOperation
+  proposedValue: AdGroupApprovalCommand['proposedValue']
+  row: AdGroupRow
+}): AdGroupApprovalCommand {
+  return {
+    id: createApprovalCommandId(),
+    operation,
+    status: 'pending_approval',
+    targetId: row.id,
+    targetName: row.name,
+    parentCampaignName: row.campaignName,
+    currentValue: getCurrentAdGroupValue(operation, row),
+    proposedValue,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+export function validateAdGroupEditDraft({
+  budgetText,
+  currentBudget,
+  currentName,
+  nameText,
+}: {
+  budgetText: string
+  currentBudget: number
+  currentName: string
+  nameText: string
+}): { error: string; params: { daily_budget?: number; name?: string } } {
+  const budget = Number(budgetText.trim())
+
+  if (!Number.isFinite(budget) || budget <= 0) {
+    return { error: 'งบประมาณต้องมากกว่า 0 บาท', params: {} }
+  }
+
+  const params: { daily_budget?: number; name?: string } = {}
+  const dailyBudget = Math.round(budget * 100)
+  if (budget !== currentBudget) {
+    params.daily_budget = dailyBudget
+  }
+
+  const name = nameText.trim()
+  if (name && name !== currentName) {
+    params.name = name
+  }
+
+  return { error: '', params }
+}
+
+export function adGroupApprovalCommandToMetaRequest(command: AdGroupApprovalCommand): {
+  endpoint: '/api/meta/object'
+  body: { objectId: string; objectType: 'adset'; operation: 'update'; params: Record<string, string | number> }
+} {
+  return {
+    endpoint: '/api/meta/object',
+    body: {
+      objectId: command.targetId,
+      objectType: 'adset',
+      operation: 'update',
+      params: adGroupApprovalCommandToMetaParams(command),
+    },
+  }
+}
+
 function formatAdGroupMoney(value: number) {
   return new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0, style: 'currency', currency: 'THB' }).format(value)
+}
+
+function createApprovalCommandId() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+
+  return `adgroup-command-${Date.now()}`
+}
+
+function getCurrentAdGroupValue(operation: AdGroupApprovalOperation, row: AdGroupRow) {
+  if (operation === 'rename_adset') {
+    return row.name
+  }
+
+  if (operation === 'update_budget') {
+    return row.budget
+  }
+
+  return row.deliveryStatus
+}
+
+function adGroupApprovalCommandToMetaParams(command: AdGroupApprovalCommand): Record<string, string | number> {
+  if (command.operation === 'pause_adset') {
+    return { status: 'PAUSED' }
+  }
+
+  if (command.operation === 'resume_adset') {
+    return { status: 'ACTIVE' }
+  }
+
+  if (command.operation === 'rename_adset') {
+    return { name: String(command.proposedValue) }
+  }
+
+  return command.proposedValue && typeof command.proposedValue === 'object' ? command.proposedValue : {}
 }
