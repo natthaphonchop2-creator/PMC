@@ -30,10 +30,13 @@ export type AdGroupApprovalCommand = {
   operation: AdGroupApprovalOperation
   status: AdGroupApprovalStatus
   targetId: string
+  targetType: 'adset'
   targetName: string
+  parentCampaignId: string
   parentCampaignName: string
   currentValue: string | number
   proposedValue: string | number | Record<string, string | number>
+  errorMessage: string
   createdAt: string
 }
 
@@ -130,10 +133,13 @@ export function createAdGroupApprovalCommand({
     operation,
     status: 'pending_approval',
     targetId: row.id,
+    targetType: 'adset',
     targetName: row.name,
+    parentCampaignId: row.campaignId,
     parentCampaignName: row.campaignName,
     currentValue: getCurrentAdGroupValue(operation, row),
     proposedValue,
+    errorMessage: '',
     createdAt: new Date().toISOString(),
   }
 }

@@ -70,10 +70,13 @@ describe('adGroupsWorkspace helpers', () => {
       operation: 'pause_adset',
       status: 'pending_approval',
       targetId: 'set-1',
+      targetType: 'adset',
       targetName: 'Bangkok Core',
+      parentCampaignId: 'cmp-1',
       parentCampaignName: 'Lead Botox',
       currentValue: 'active',
       proposedValue: 'PAUSED',
+      errorMessage: '',
     }))
   })
 
