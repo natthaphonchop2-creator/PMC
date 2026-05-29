@@ -28,3 +28,4 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Clarified the Insights design scope: the implementation must rebuild and replace the old Insights page rather than patching or preserving the previous UI as a parallel mode.
 - Added the Automation Ads workspace design spec with the approved Run Monitor + Tabs layout, configurable safe rule builder, scheduled approval queue, hybrid rule/AI decision engine, and approval-gated Meta writes.
 - Added the Ad Groups workspace implementation plan with TDD tasks for routing, data helpers, Split Inspector UI, approval-gated actions, and local QA.
+- Implemented the Ad Groups workspace as a dedicated Split Inspector page with Ad Set filters, read-only Ads details, and approval-gated Meta actions.

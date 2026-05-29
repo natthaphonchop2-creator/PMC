@@ -278,6 +278,8 @@ describe('Home app shell', () => {
     const inspectorSource = source.slice(source.indexOf('function AdGroupsInspector'), source.indexOf('function AdGroupEditModal'))
 
     expect(inspectorSource).not.toContain('onClick={() => undefined}')
+    expect(inspectorSource).not.toContain('setShowAdsDetail(false)')
+    expect(inspectorSource).toContain('showAdsDetailRowId')
     expect(inspectorSource).toContain('showAdsDetail')
     expect(inspectorSource).toContain('setShowAdsDetail')
     expect(inspectorSource).toContain('aria-expanded={showAdsDetail}')

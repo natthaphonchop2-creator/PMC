@@ -3108,12 +3108,8 @@ function AdGroupsInspector({
   onEdit: (row: AdGroupRow) => void
   onStatusChange: (row: AdGroupRow) => void
 }) {
-  const [showAdsDetail, setShowAdsDetail] = useState(false)
-  const selectedRowId = row?.id
-
-  useEffect(() => {
-    setShowAdsDetail(false)
-  }, [selectedRowId])
+  const [showAdsDetailRowId, setShowAdsDetail] = useState<string | null>(null)
+  const showAdsDetail = Boolean(row && showAdsDetailRowId === row.id)
 
   if (!row) {
     return (
@@ -3151,7 +3147,7 @@ function AdGroupsInspector({
           aria-expanded={showAdsDetail}
           className="outline-button"
           type="button"
-          onClick={() => setShowAdsDetail((current) => !current)}
+          onClick={() => setShowAdsDetail((current) => (current === row.id ? null : row.id))}
         >
           <Eye size={15} />
           {showAdsDetail ? 'ซ่อน Ads' : 'ดู Ads'}
