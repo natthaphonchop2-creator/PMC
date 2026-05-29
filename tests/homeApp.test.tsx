@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import App, { AnalyticsPage, CreativeStudioPage, ReportsPage } from '../src/App'
+import App, { AnalyticsPage, AutomationAdsPage, ReportsPage } from '../src/App'
+import { buildRevenueTrendOption } from '../src/adsDashboardChart'
 import { HomeApp } from '../src/apps/home/HomeApp'
 import { PageAutomationApp } from '../src/apps/page-automation/PageAutomationApp'
 
@@ -52,42 +53,295 @@ describe('Home app shell', () => {
 
     withPathname('/ads-agent', () => {
       const html = renderToStaticMarkup(<App />)
-      expect(html).toContain('PMC Ads Agent')
+      const text = visibleText(html)
+
+      expect(html).toMatch(/class="[^"]*\bads-workspace-shell\b[^"]*"/)
+      expect(html).toContain('class="ads-outer-toolbar')
+      expect(html).toContain('aria-label="Ads Agent navigation"')
       expect(html).toContain('href="/"')
-      expect(html).toContain('กลับ Home')
-      expect(html).toContain('aria-label="กลับหน้า Home"')
-      expect(countOccurrences(html, 'src="/pmc-ads-logo.png?v=transparent"')).toBe(1)
-      expect(html).not.toContain('src="/promedclinicpmc-logo.png"')
-      expect(html).not.toContain('ศูนย์รวม App')
+      expect(text).toContain('PMC')
+      expect(text).toContain('Aesthetic Clinic')
+      expect(text).toContain('Ads Dashboard')
+      expect(text).toContain('Campaigns')
+      expect(text).toContain('Ad Groups')
+      expect(text).toContain('Automation Ads')
+      expect(text).toContain('Audience')
+      expect(text).toContain('Reports')
+      expect(text).toContain('Insights')
+      expect(text).toContain('Settings')
+      expect(countOccurrences(html, 'class="ads-toolbar-item')).toBe(8)
+      expect(text.indexOf('Ad Groups')).toBeLessThan(text.indexOf('Insights'))
+      expect(text.indexOf('Insights')).toBeLessThan(text.indexOf('Automation Ads'))
+      expect(html).toContain('class="ads-toolbar-user-card"')
+      expect(html).toContain('class="ads-toolbar-avatar"')
+      expect(html).toContain('class="ads-toolbar-user-copy"')
+      expect(html).toContain('class="ads-toolbar-user-role"')
+      expect(text).toContain('ข้อมูลทั้งหมด')
+      expect(text).toContain('เลือก Page')
+      expect(html).toMatch(/<button(?=[^>]*class="ads-toolbar-user-card")(?=[^>]*aria-label="เลือก Page สำหรับดูข้อมูล")[^>]*>/)
+      expect(html).toContain('class="ads-toolbar-user-menu"')
+      expect(html).toContain('class="ads-page-selector-menu"')
+      expect(html).toContain('class="ads-page-selector-option active"')
+      expect(html).not.toContain('ads-toolbar-status-card')
+      expect(html).not.toContain('data-source-bar')
+      expect(html).toMatch(
+        /<button(?=[^>]*class="ads-toolbar-item active")(?=[^>]*aria-current="page")(?=[^>]*aria-label="Ads Dashboard")[^>]*>/,
+      )
+      expect(html).toMatch(/<div class="topbar-actions"><button[^>]*aria-label="เช็ค API"[^>]*>[\s\S]*เช็ค API[\s\S]*<\/button><\/div>/)
+      expect(html).not.toContain('aria-label="ช่วงวันที่"')
+      expect(html).not.toContain('aria-label="เปิดหรือปิด Auto"')
+      expect(html).not.toContain('เตรียมรายงาน</button>')
+      expect(html).not.toContain('class="nav-groups"')
+      expect(html).not.toContain('Optimizer &amp; Automation')
+      expect(text).not.toContain('Optimizer & Automation')
+      expect(text).not.toContain('ศูนย์ช่วยเหลือ')
+      expect(text).not.toContain('AI Brain')
+      expect(text).not.toContain('PMC Master Agent')
     })
   })
 
-  it('shows campaign data as a chart on Ads analytics instead of the campaign performance list', () => {
+  it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
+    withPathname('/ads-agent', () => {
+      const html = renderToStaticMarkup(<App />)
+      const text = visibleText(html)
+
+      expect(text).toContain('Ads Dashboard')
+      expect(text).toContain('Customize Dashboard')
+      expect(html).toMatch(
+        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน")[^>]*>[\s\S]*Customize Dashboard[\s\S]*<\/button>/,
+      )
+      expect(text).toContain('New Campaign')
+      expect(text).toContain('Impressions')
+      expect(text).toContain('Clicks')
+      expect(text).toContain('Conversions')
+      expect(html).toMatch(
+        /<article[^>]*class="[^"]*ads-dashboard-metric-card[^"]*"[^>]*>(?:(?!<\/article>)[\s\S])*<span>Cost<\/span>(?:(?!<\/article>)[\s\S])*<\/article>/,
+      )
+      expect(countOccurrences(html, '<h2>Performance Overview</h2>')).toBe(1)
+      expect(html).not.toContain('class="panel revenue-chart-panel"')
+      expect(text).toContain('Top Campaigns')
+      expect(text).not.toContain('Conversions by Region')
+      expect(text).toContain('Cost per Result')
+      expect(text).toContain('CTR')
+      expect(text).toContain('ROAS')
+      expect(text).toContain('PMC Insights')
+      expect(html).not.toContain('ads-region-panel')
+      expect(html).not.toContain('ads-region-map')
+      expect(countOccurrences(html, 'class="ads-dashboard-metric-card"')).toBe(7)
+      expect(text).not.toContain('Revenue Overview')
+      expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
+    })
+  })
+
+  it('enables New Campaign and wires it to an in-page campaign composer', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        recommendations={[]}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const source = readText('../src/App.tsx')
+    const buttonMatch = html.match(/<button(?=[^>]*aria-label="สร้างแคมเปญใหม่")(?=[^>]*aria-haspopup="dialog")[^>]*>[\s\S]*New Campaign[\s\S]*?<\/button>/)
+
+    expect(buttonMatch?.[0]).toBeTruthy()
+    expect(buttonMatch?.[0]).not.toContain('disabled')
+    expect(source).toContain('setCampaignComposerOpen(true)')
+    expect(source).toContain('NewCampaignComposer')
+  })
+
+  it('renders the Ads Dashboard date range as a working select control', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        dateLabel="30 วันล่าสุด"
+        funnelMetrics={[]}
+        onDatePresetChange={() => undefined}
+        recommendations={[]}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const source = readText('../src/App.tsx')
+
+    expect(html).toContain('class="ads-dashboard-date-pill"')
+    expect(html).toContain('aria-label="ช่วงข้อมูล Ads Dashboard"')
+    expect(html).toContain('<option value="ข้อมูลทั้งหมด">ข้อมูลทั้งหมด</option>')
+    expect(html).toContain('<option value="7 วันล่าสุด">7 วันล่าสุด</option>')
+    expect(html).toMatch(/<option(?=[^>]*value="30 วันล่าสุด")(?=[^>]*selected="")[^>]*>30 วันล่าสุด<\/option>/)
+    expect(html).toContain('<option value="เดือนนี้">เดือนนี้</option>')
+    expect(html).toContain('<option value="ไตรมาสนี้">ไตรมาสนี้</option>')
+    expect(html).not.toContain('<span class="ads-dashboard-date-pill"')
+    expect(source).toContain('onDatePresetChange={setDatePreset}')
+    expect(source).toContain('handleDatePresetChange(event.currentTarget.value)')
+  })
+
+  it('wires the Ads Insights banner button to open the Insights workspace', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        onOpenInsights={() => undefined}
+        recommendations={[]}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const source = readText('../src/App.tsx')
+    const buttonMatch = html.match(/<button(?=[^>]*aria-label="เปิดเมนู Insights จากแถบด้านซ้าย")(?=[^>]*class="clinic-secondary-button ads-insight-open-button")[^>]*>เปิด Insights<\/button>/)
+
+    expect(buttonMatch?.[0]).toBeTruthy()
+    expect(buttonMatch?.[0]).not.toContain('disabled')
+    expect(source).toContain("onOpenInsights={() => handleTabSelect('marketer')}")
+    expect(source).toContain('onOpenInsights?.()')
+  })
+
+  it('wires the Top Campaigns view-all button to open the Campaigns workspace', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[
+          {
+            aiTag: 'แข็งแรง',
+            budget: 99000,
+            conversions: 140,
+            cpa: 520,
+            ctr: 6.1,
+            deliveryStatus: 'active',
+            frequency: 3.2,
+            id: 'campaign-1',
+            name: 'ตัวรี MSG เติมไขมัน 9900',
+            revenue: 208000,
+            roas: 1.92,
+            spend: 108000,
+            status: 'Active',
+            tone: 'good',
+          },
+        ]}
+        funnelMetrics={[]}
+        onOpenCampaigns={() => undefined}
+        recommendations={[]}
+        summary={{
+          bookings: 140,
+          cac: 0,
+          cpa: 520,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 208000,
+          roas: 1.92,
+          spend: 108000,
+        }}
+        trendData={[]}
+      />,
+    )
+    const source = readText('../src/App.tsx')
+    const buttonMatch = html.match(/<button(?=[^>]*class="ads-view-all-button")(?=[^>]*aria-label="เปิดหน้า Campaigns เพื่อดูแคมเปญทั้งหมด")[^>]*>ดูแคมเปญทั้งหมด<\/button>/)
+
+    expect(buttonMatch?.[0]).toBeTruthy()
+    expect(buttonMatch?.[0]).not.toContain('disabled')
+    expect(source).toContain("onOpenCampaigns={() => handleTabSelect('ads', 'campaigns')}")
+    expect(source).toContain('onOpenCampaigns?.()')
+  })
+
+  it('shows only the top 3 campaign rankings on Ads Dashboard', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[
           {
             aiTag: 'จับตา',
             budget: 99000,
-            conversions: 96,
-            cpa: 758,
-            ctr: 5.9,
+            conversions: 140,
+            cpa: 520,
+            ctr: 6.1,
             deliveryStatus: 'active',
-            frequency: 4.1,
+            frequency: 3.2,
             id: 'campaign-1',
-            name: 'ตัวรี MSG เติมไขมัน 9900',
-            revenue: 138324,
+            name: 'ตัวรี MSG เติมไขมัน 9900 24.7.67',
+            revenue: 208000,
+            roas: 1.92,
+            spend: 108000,
+            status: 'Watch',
+            tone: 'watch',
+          },
+          {
+            aiTag: 'แข็งแรง',
+            budget: 90000,
+            conversions: 100,
+            cpa: 480,
+            ctr: 5.4,
+            deliveryStatus: 'active',
+            frequency: 3.7,
+            id: 'campaign-2',
+            name: 'ตัวรี MSG เติมไขมัน 9900 CA เพจTab',
+            revenue: 160000,
+            roas: 1.6,
+            spend: 96000,
+            status: 'Healthy',
+            tone: 'healthy',
+          },
+          {
+            aiTag: 'แข็งแรง',
+            budget: 78000,
+            conversions: 96,
+            cpa: 510,
+            ctr: 4.9,
+            deliveryStatus: 'active',
+            frequency: 3.1,
+            id: 'campaign-3',
+            name: 'ตัวรี MSG เติมไขมัน 9900 CA เพจFifth',
+            revenue: 146000,
             roas: 1.9,
-            spend: 72807,
+            spend: 76800,
+            status: 'Healthy',
+            tone: 'healthy',
+          },
+          {
+            aiTag: 'พักก่อน',
+            budget: 70000,
+            conversions: 27,
+            cpa: 1800,
+            ctr: 2.1,
+            deliveryStatus: 'limited',
+            frequency: 5.2,
+            id: 'campaign-4',
+            name: 'ตัวเปิด2 MSG เติมไขมัน 9900 24.7.67',
+            revenue: 42000,
+            roas: 0.74,
+            spend: 56800,
             status: 'Watch',
             tone: 'watch',
           },
         ]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 96,
           cac: 0,
@@ -103,14 +357,68 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('กราฟข้อมูลแคมเปญ')
-    expect(text).toContain('ค่าใช้จ่าย รายได้ CPA ROAS และความถี่ของแคมเปญ')
-    expect(html).toContain('aria-label="กราฟข้อมูลแคมเปญ"')
+    expect(text).toContain('Ads Dashboard')
+    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900 24.7.67')
+    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900 CA เพจTab')
+    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900 CA เพจFifth')
+    expect(text).toContain('140 ผลลัพธ์ · ROAS 1.92x')
+    expect(html).toContain('ads-top-campaign-list')
+    expect(countOccurrences(html, 'class="ads-top-campaign-row"')).toBe(3)
+    expect(text).not.toContain('ตัวเปิด2 MSG เติมไขมัน 9900 24.7.67')
+    expect(text).not.toContain('กราฟข้อมูลแคมเปญ')
     expect(text).not.toContain('ผลงานแคมเปญ')
     expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
   })
 
-  it('shows a Revenue Overview from real analytics data instead of reference placeholders', () => {
+  it('shows a compact Ads Insights performance status with a decorative visual asset', () => {
+    const renderDashboard = (summaryOverrides = {}, recommendations = []) =>
+      renderToStaticMarkup(
+        <AnalyticsPage
+          campaigns={[]}
+          funnelMetrics={[]}
+          recommendations={recommendations}
+          summary={{
+            bookings: 0,
+            cac: 0,
+            cpa: 0,
+            leads: 0,
+            paidTreatments: 0,
+            revenue: 0,
+            roas: 0,
+            spend: 0,
+            ...summaryOverrides,
+          }}
+          trendData={[]}
+        />,
+      )
+
+    const goodText = visibleText(renderDashboard({ bookings: 18, revenue: 180000, roas: 2.4, spend: 75000 }))
+    const mediumText = visibleText(renderDashboard({ bookings: 8, revenue: 72000, roas: 0.93, spend: 708000 }))
+    const badText = visibleText(renderDashboard({ bookings: 0, revenue: 0, roas: 0, spend: 20000 }))
+    const html = renderDashboard({ bookings: 8, revenue: 72000, roas: 0.93, spend: 708000 })
+
+    expect(goodText).toContain('Your ads are performing Good')
+    expect(mediumText).toContain('Your ads are performing Average')
+    expect(badText).toContain('Your ads are performing Poor')
+    expect(html).toContain('src="/pmc-insights-performance.svg"')
+    expect(html).not.toContain('ads-insight-label')
+    expect(html).not.toContain('รอคำแนะนำใหม่จากข้อมูลจริง')
+    expect(html).not.toContain('รอคำแนะนำใหม่จากข้อมูลจริง')
+    expect(html).not.toContain('เมื่อมีสัญญาณสำคัญจากข้อมูลโฆษณา')
+    expect(html).not.toContain('insight-bar')
+  })
+
+  it('keeps the Ads Insights decorative image as a branded local SVG asset', () => {
+    const asset = readText('../public/pmc-insights-performance.svg')
+
+    expect(asset).toContain('<svg')
+    expect(asset).toContain('linearGradient')
+    expect(asset).toContain('chart-bars')
+    expect(asset).toContain('growth-line')
+  })
+
+  it('shows Ads Dashboard sections from real analytics data instead of reference placeholders', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[
@@ -148,10 +456,175 @@ describe('Home app shell', () => {
           },
         ]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[
+          { bookings: 18, date: '2026-05-16', day: 'May 16', revenue: 38000, spend: 22000 },
+          { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
+          { bookings: 52, date: '2026-05-18', day: 'May 18', revenue: 80324, spend: 54807 },
+        ]}
+        adSets={[
+          adSetForDashboard({
+            audienceTargeting: {
+              devicePlatforms: [],
+              exclusions: [],
+              genders: [],
+              geoLocations: [{ country: 'TH', name: 'Bangkok', type: 'city' }],
+              interests: [],
+              locales: [],
+              placements: [],
+              publisherPlatforms: [],
+              rawSummary: 'Bangkok',
+            },
+            bookings: 96,
+            spend: 72807,
+          }),
+          adSetForDashboard({
+            audienceTargeting: {
+              devicePlatforms: [],
+              exclusions: [],
+              genders: [],
+              geoLocations: [{ country: 'TH', name: 'Chiang Mai', type: 'city' }],
+              interests: [],
+              locales: [],
+              placements: [],
+              publisherPlatforms: [],
+              rawSummary: 'Chiang Mai',
+            },
+            bookings: 30,
+            id: 'set-2',
+            name: 'Chiang Mai Lookalike',
+            spend: 35000,
+          }),
+        ]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('Ads Dashboard')
+    expect(text).toContain('Customize Dashboard')
+    expect(text).toContain('New Campaign')
+    expect(text).toContain('Impressions')
+    expect(text).toContain('Clicks')
+    expect(text).toContain('Conversions')
+    expect(text).toContain('Cost')
+    expect(text).toContain('Performance Overview')
+    expect(text).toContain('Top Campaigns')
+    expect(text).not.toContain('Conversions by Region')
+    expect(text).not.toContain('Bangkok')
+    expect(text).not.toContain('Chiang Mai')
+    expect(text).toContain('PMC Insights')
+    expect(text).toContain('Cost per Result')
+    expect(text).toContain('CTR')
+    expect(text).toContain('ROAS')
+    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900')
+    expect(text).toContain('฿108k')
+    expect(html).toContain('ads-dashboard-layout')
+    expect(countOccurrences(html, 'class="ads-dashboard-metric-card"')).toBe(7)
+    expect(html).toContain('class="ads-dashboard-main-grid"')
+    expect(html).not.toContain('class="ads-region-map"')
+    expect(html).not.toContain('revenue-sparkline')
+    expect(html).not.toContain('แนวโน้มย่อ')
+    expect(text).not.toContain('Welcome back, James')
+    expect(text).not.toContain('AeuxGlobal')
+    expect(text).not.toContain('2.45M')
+    expect(text).not.toContain('$24,680')
+    expect(text).not.toContain('$24,560')
+    expect(text).not.toContain('Website')
+    expect(text).not.toContain('Mobile App')
+  })
+
+  it('removes regional reporting from the Ads Dashboard shell', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        adSets={[]}
+        campaigns={[]}
+        funnelMetrics={[]}
+        recommendations={[]}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(html).toContain('ads-dashboard-layout')
+    expect(html).toContain('ads-dashboard-metric-grid')
+    expect(html).toContain('ads-dashboard-main-grid')
+    expect(html).toContain('ads-dashboard-lower-grid')
+    expect(text).toContain('Performance Overview')
+    expect(text).toContain('Top Campaigns')
+    expect(text).not.toContain('Conversions by Region')
+    expect(text).toContain('PMC Insights')
+    expect(text).toContain('Cost per Result')
+    expect(text).toContain('CTR')
+    expect(text).toContain('ROAS')
+    expect(html).not.toContain('ads-region-panel')
+    expect(html).not.toContain('ads-region-map')
+    expect(text).not.toContain('ยังไม่มีข้อมูลพื้นที่จากบัญชีโฆษณา')
+    expect(text).not.toContain('เชื่อมต่อข้อมูลพื้นที่จากชุดโฆษณาเพื่อดูสัดส่วนผลลัพธ์ตามจังหวัดหรือเมือง')
+    expect(text).not.toContain('AeuxGlobal')
+    expect(text).not.toContain('North America')
+    expect(text).not.toContain('$24,680')
+    expect(text).not.toContain('2.45M')
+  })
+
+  it('keeps unavailable Impressions and Clicks honest instead of showing lead, campaign, or booking proxies', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[
+          {
+            aiTag: 'แข็งแรง',
+            budget: 120000,
+            conversions: 140,
+            cpa: 520,
+            ctr: 6.1,
+            deliveryStatus: 'active',
+            frequency: 3.8,
+            id: 'campaign-1',
+            name: 'ตัวรี MSG เติมไขมัน 9900',
+            revenue: 138324,
+            roas: 1.9,
+            spend: 72807,
+            status: 'Active',
+            tone: 'good',
+          },
+          {
+            aiTag: 'เฝ้าดู',
+            budget: 60000,
+            conversions: 30,
+            cpa: 780,
+            ctr: 4.2,
+            deliveryStatus: 'active',
+            frequency: 5.1,
+            id: 'campaign-2',
+            name: 'Review Botox Lead',
+            revenue: 42000,
+            roas: 1.2,
+            spend: 35000,
+            status: 'Watch',
+            tone: 'watch',
+          },
+        ]}
+        funnelMetrics={[]}
+        recommendations={[]}
         summary={{
           bookings: 170,
           cac: 640,
@@ -169,25 +642,142 @@ describe('Home app shell', () => {
         ]}
       />,
     )
-    const text = visibleText(html)
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
 
-    expect(text).toContain('Revenue Overview')
-    expect(text).toContain('Total Revenue')
-    expect(text).toContain('Bookings')
-    expect(text).toContain('Paid Cases')
-    expect(text).toContain('Conversion Rate')
-    expect(text).toContain('Revenue by Campaign')
-    expect(text).toContain('ตัวรี MSG เติมไขมัน 9900')
-    expect(text).toContain('฿180k')
-    expect(html).not.toContain('revenue-sparkline')
-    expect(html).not.toContain('แนวโน้มย่อ')
-    expect(text).not.toContain('Welcome back, James')
-    expect(text).not.toContain('$24,560')
-    expect(text).not.toContain('Website')
-    expect(text).not.toContain('Mobile App')
+    expect(visibleText(impressionsCard)).toContain('รอข้อมูล')
+    expect(visibleText(impressionsCard)).toContain('รอข้อมูลการแสดงผลสำหรับช่วงนี้')
+    expect(visibleText(impressionsCard)).not.toContain('220')
+    expect(visibleText(impressionsCard)).not.toContain('2 แคมเปญ')
+
+    expect(visibleText(clicksCard)).toContain('รอข้อมูล')
+    expect(visibleText(clicksCard)).toContain('รอข้อมูลการกดสำหรับช่วงนี้')
+    expect(visibleText(clicksCard)).not.toContain('170')
   })
 
-  it('uses the selected ECharts engine for Ads analytics charts without placeholder data', () => {
+  it('uses real funnel metric counts for Impressions and Clicks dashboard cards when available', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[
+          { count: 20000, conversionRate: 100, dropOffRate: 0, stage: 'Impressions' },
+          { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
+        ]}
+        recommendations={[]}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[]}
+      />,
+    )
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+
+    expect(visibleText(impressionsCard)).toContain('20,000')
+    expect(visibleText(impressionsCard)).toContain('จำนวนครั้งที่โฆษณาถูกเห็น')
+    expect(visibleText(impressionsCard)).not.toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
+    expect(visibleText(impressionsCard)).not.toContain('220')
+
+    expect(visibleText(clicksCard)).toContain('1,220')
+    expect(visibleText(clicksCard)).toContain('จำนวนครั้งที่คนกดจากโฆษณา')
+    expect(visibleText(clicksCard)).not.toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
+    expect(visibleText(clicksCard)).not.toContain('170')
+  })
+
+  it('renders KPI sparklines from real dashboard series instead of decorative CSS lines', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[
+          { count: 20000, conversionRate: 100, dropOffRate: 0, stage: 'Impressions' },
+          { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
+          { count: 220, conversionRate: 18, dropOffRate: 82, stage: 'Leads' },
+          { count: 170, conversionRate: 77.3, dropOffRate: 22.7, stage: 'Bookings' },
+          { count: 128, conversionRate: 75.3, dropOffRate: 24.7, stage: 'Paid' },
+        ]}
+        recommendations={[]}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[
+          { bookings: 18, clicks: 400, date: '2026-05-16', day: 'May 16', leads: 58, revenue: 38000, spend: 22000, treatments: 10 },
+          { bookings: 35, clicks: 520, date: '2026-05-17', day: 'May 17', leads: 72, revenue: 62000, spend: 31000, treatments: 24 },
+          { bookings: 52, clicks: 610, date: '2026-05-18', day: 'May 18', leads: 90, revenue: 80324, spend: 54807, treatments: 38 },
+        ]}
+      />,
+    )
+
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+    const conversionsCard = dashboardMetricCardHtml(html, 'Conversions')
+    const costCard = dashboardMetricCardHtml(html, 'Cost')
+
+    expect(countOccurrences(html, 'data-sparkline="metric-summary"')).toBe(7)
+    expect(countOccurrences(html, 'class="ads-dashboard-metric-footer"')).toBe(7)
+    expect(impressionsCard).toMatch(/ads-dashboard-metric-footer[\s\S]*ads-dashboard-metric-change[\s\S]*data-sparkline="metric-summary"/)
+    expect(impressionsCard).toContain('data-sparkline-source="funnel"')
+    expect(impressionsCard).toContain('data-values="20000,1220,220,170,128"')
+    expect(clicksCard).toContain('data-sparkline-source="daily-trend"')
+    expect(clicksCard).toContain('data-values="400,520,610"')
+    expect(conversionsCard).toContain('data-values="18,35,52"')
+    expect(costCard).toContain('data-values="22000,31000,54807"')
+    expect(impressionsCard).toContain('data-tooltip="Impressions: สรุปเส้นทางลูกค้า · ล่าสุด 128 · สูงสุด 20,000 · ต่ำสุด 128"')
+    expect(impressionsCard).toContain('title="Impressions: สรุปเส้นทางลูกค้า · ล่าสุด 128 · สูงสุด 20,000 · ต่ำสุด 128"')
+    expect(impressionsCard).toContain('tabindex="0"')
+    expect(impressionsCard).toContain('<svg')
+    expect(clicksCard).toContain('<path')
+    expect(html).not.toContain('ads-mini-sparkline" aria-hidden="true"')
+  })
+
+  it('preserves zero funnel metric counts as real Impressions and Clicks data', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[
+          { count: 0, conversionRate: 0, dropOffRate: 0, stage: 'Impressions' },
+          { count: 0, conversionRate: 0, dropOffRate: 0, stage: 'Clicks' },
+        ]}
+        recommendations={[]}
+        summary={{
+          bookings: 170,
+          cac: 640,
+          cpa: 635,
+          leads: 220,
+          paidTreatments: 128,
+          revenue: 180324,
+          roas: 1.67,
+          spend: 107807,
+        }}
+        trendData={[]}
+      />,
+    )
+    const impressionsCard = dashboardMetricCardHtml(html, 'Impressions')
+    const clicksCard = dashboardMetricCardHtml(html, 'Clicks')
+
+    expect(visibleText(impressionsCard)).toContain('Impressions 0')
+    expect(visibleText(impressionsCard)).toContain('จำนวนครั้งที่โฆษณาถูกเห็น')
+    expect(visibleText(impressionsCard)).not.toContain('รอ Meta ส่ง impressions สำหรับช่วงนี้')
+
+    expect(visibleText(clicksCard)).toContain('Clicks 0')
+    expect(visibleText(clicksCard)).toContain('จำนวนครั้งที่คนกดจากโฆษณา')
+    expect(visibleText(clicksCard)).not.toContain('รอ Meta ส่ง clicks สำหรับช่วงนี้')
+  })
+
+  it('uses the selected ECharts engine for Ads Dashboard performance chart without placeholder data', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[
@@ -229,10 +819,7 @@ describe('Home app shell', () => {
           { count: 1220, conversionRate: 6.1, dropOffRate: 93.9, stage: 'Clicks' },
           { count: 170, conversionRate: 13.9, dropOffRate: 86.1, stage: 'Bookings' },
         ]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 170,
           cac: 640,
@@ -251,27 +838,72 @@ describe('Home app shell', () => {
       />,
     )
 
-    expect(countOccurrences(html, 'data-chart-engine="echarts"')).toBe(4)
-    expect(countOccurrences(html, 'data-chart-source="real"')).toBe(4)
-    expect(html).toContain('data-chart-style="sharp-lines"')
-    expect(html).toContain('aria-label="Revenue Overview chart"')
-    expect(html).toContain('aria-label="Revenue by Campaign chart"')
-    expect(html).toContain('aria-label="Funnel คลินิก chart"')
-    expect(html).toContain('aria-label="กราฟข้อมูลแคมเปญ"')
+    expect(countOccurrences(html, 'data-chart-engine="echarts"')).toBe(1)
+    expect(countOccurrences(html, 'data-chart-source="real"')).toBe(1)
+    expect(html).toContain('data-chart-style="separated-lines"')
+    expect(html).toContain('data-chart-layout="separated-lanes"')
+    expect(html).toContain('Performance Overview')
+    expect(html).toContain('aria-label="กราฟรายวันแบบแยกเส้นรายได้ ค่าโฆษณา และยอดนัดหมาย"')
+    expect(html).not.toContain('Revenue Overview')
+    expect(html).not.toContain('aria-label="Revenue by Campaign chart"')
+    expect(html).not.toContain('aria-label="Funnel คลินิก chart"')
+    expect(html).not.toContain('aria-label="กราฟข้อมูลแคมเปญ"')
     expect(html).not.toContain('$24,560')
     expect(html).not.toContain('Website')
     expect(html).not.toContain('Mobile App')
   })
 
-  it('shows period changes from each metric own real trend instead of reusing booking trend', () => {
+  it('uses one visible X and Y numeric axis label set for Performance Overview lanes', () => {
+    const option = buildRevenueTrendOption([
+      { bookings: 18, date: '2026-05-16', day: 'May 16', revenue: 38000, spend: 22000 },
+      { bookings: 35, date: '2026-05-17', day: 'May 17', revenue: 62000, spend: 31000 },
+      { bookings: 52, date: '2026-05-18', day: 'May 18', revenue: 80324, spend: 54807 },
+    ])
+    const xAxes = (Array.isArray(option.xAxis) ? option.xAxis : [option.xAxis]) as Array<{
+      axisLabel?: { show?: boolean }
+    }>
+    const yAxes = (Array.isArray(option.yAxis) ? option.yAxis : [option.yAxis]) as Array<{
+      axisLabel?: { align?: string; formatter?: unknown; margin?: number; show?: boolean }
+      axisLine?: { show?: boolean }
+      interval?: number
+      max?: number
+      min?: number
+      splitNumber?: number
+    }>
+    const grids = (Array.isArray(option.grid) ? option.grid : [option.grid]) as Array<{
+      left?: number
+    }>
+
+    expect(grids.map((grid) => grid.left)).toEqual([58, 58, 58])
+    expect(xAxes).toHaveLength(3)
+    expect(xAxes.map((axis) => axis.axisLabel?.show ?? true)).toEqual([false, false, true])
+    expect(yAxes).toHaveLength(3)
+    expect(yAxes.map((axis) => ({ interval: axis.interval, max: axis.max, min: axis.min, splitNumber: axis.splitNumber }))).toEqual([
+      { interval: 25_000, max: 100_000, min: 0, splitNumber: 4 },
+      { interval: 25_000, max: 100_000, min: 0, splitNumber: 4 },
+      { interval: 25, max: 100, min: 0, splitNumber: 4 },
+    ])
+    expect(yAxes.map((axis) => axis.axisLabel?.show ?? true)).toEqual([true, false, false])
+    expect(yAxes[0]?.axisLabel?.align).toBe('right')
+    expect(yAxes[0]?.axisLabel?.margin).toBe(10)
+    expect(yAxes[0]?.axisLine?.show).toBe(true)
+    expect(yAxes.slice(1).map((axis) => axis.axisLine?.show ?? true)).toEqual([false, false])
+    expect(yAxes[0]?.axisLabel?.formatter).toBe(yAxes[1]?.axisLabel?.formatter)
+    expect(yAxes[1]?.axisLabel?.formatter).toBe(yAxes[2]?.axisLabel?.formatter)
+    if (typeof yAxes[0]?.axisLabel?.formatter === 'function') {
+      const tickLabel = String(yAxes[0].axisLabel.formatter(25_000))
+
+      expect(tickLabel).toBe('25k')
+      expect(tickLabel).not.toContain('฿')
+    }
+  })
+
+  it('shows dashboard period changes from real trend data without fake metric values', () => {
     const html = renderToStaticMarkup(
       <AnalyticsPage
         campaigns={[]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 600,
           cac: 0,
@@ -280,27 +912,55 @@ describe('Home app shell', () => {
           paidTreatments: 200,
           revenue: 600,
           roas: 0,
-          spend: 0,
+          spend: 600,
         }}
         trendData={[
-          { bookings: 100, date: '2026-05-16', day: 'May 16', revenue: 100, spend: 0, treatments: 20 },
-          { bookings: 100, date: '2026-05-17', day: 'May 17', revenue: 100, spend: 0, treatments: 20 },
-          { bookings: 200, date: '2026-05-18', day: 'May 18', revenue: 200, spend: 0, treatments: 80 },
-          { bookings: 200, date: '2026-05-19', day: 'May 19', revenue: 200, spend: 0, treatments: 80 },
+          { bookings: 100, date: '2026-05-16', day: 'May 16', revenue: 100, spend: 100, treatments: 20 },
+          { bookings: 100, date: '2026-05-17', day: 'May 17', revenue: 100, spend: 100, treatments: 20 },
+          { bookings: 200, date: '2026-05-18', day: 'May 18', revenue: 200, spend: 200, treatments: 80 },
+          { bookings: 200, date: '2026-05-19', day: 'May 19', revenue: 200, spend: 200, treatments: 80 },
         ]}
       />,
     )
     const text = visibleText(html)
 
-    expect(text).toContain('Paid Cases')
-    expect(text).toContain('↑ 300.0%')
-    expect(text).toContain('จาก paid cases รายวัน')
-    expect(text).toContain('Conversion Rate')
-    expect(text).toContain('33.3%')
+    expect(text).toContain('Conversions')
     expect(text).toContain('↑ 100.0%')
-    expect(text).toContain('จาก paid / booking รายวัน')
-    expect(countOccurrences(text, '↑ 100.0%')).toBe(3)
-    expect(text).not.toContain('จริง')
+    expect(text).toContain('เทียบยอดนัดรายวัน')
+    expect(text).not.toContain('จากลูกค้าชำระเงินเทียบยอดนัดรายวัน')
+    expect(text).toContain('Cost')
+    expect(text).toContain('จากค่าโฆษณารายวัน')
+    expect(text).toContain('รอข้อมูล')
+    expect(text).not.toContain('AI จริง')
+    expect(text).not.toContain('$24,680')
+  })
+
+  it('keeps Conversions period-change helper copy compact while waiting for paid-customer data', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsPage
+        campaigns={[]}
+        funnelMetrics={[]}
+        recommendations={[]}
+        summary={{
+          bookings: 0,
+          cac: 0,
+          cpa: 0,
+          leads: 0,
+          paidTreatments: 0,
+          revenue: 0,
+          roas: 0,
+          spend: 0,
+        }}
+        trendData={[
+          { bookings: 100, date: '2026-05-16', day: 'May 16', revenue: 0, spend: 0 },
+          { bookings: 120, date: '2026-05-17', day: 'May 17', revenue: 0, spend: 0 },
+        ]}
+      />,
+    )
+    const text = visibleText(html)
+
+    expect(text).toContain('รอข้อมูลชำระเงิน')
+    expect(text).not.toContain('ต้องมีข้อมูลลูกค้าชำระเงินรายวัน')
   })
 
   it('does not show the audit trail panel on Ads analytics', () => {
@@ -308,10 +968,7 @@ describe('Home app shell', () => {
       <AnalyticsPage
         campaigns={[]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[]}
-        recommendationStates={{}}
         summary={{
           bookings: 0,
           cac: 0,
@@ -379,8 +1036,6 @@ describe('Home app shell', () => {
       <AnalyticsPage
         campaigns={[]}
         funnelMetrics={[]}
-        onApprove={() => undefined}
-        onReject={() => undefined}
         recommendations={[
           {
             action: 'ลดงบ 10-15%',
@@ -394,7 +1049,6 @@ describe('Home app shell', () => {
             title: 'ป้องกันงบและตรวจ Tracking',
           },
         ]}
-        recommendationStates={{}}
         summary={{
           bookings: 0,
           cac: 0,
@@ -410,10 +1064,8 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('คำแนะนำที่รออนุมัติ')
-    expect(text).toContain('รายการที่ AI คัดมาให้คุณตรวจ')
-    expect(text).toContain('ยังไม่มีรายการที่ต้องอนุมัติ')
-    expect(text).toContain('เมื่อคุณให้ AI วิเคราะห์ข้อมูลล่าสุด')
+    expect(text).toContain('PMC Insights')
+    expect(text).toContain('Your ads are performing Poor')
     expect(text).not.toContain('ป้องกันงบและตรวจ Tracking')
     expect(text).not.toContain('Meta metrics')
     expect(text).not.toContain('PMC Master Agent')
@@ -422,9 +1074,9 @@ describe('Home app shell', () => {
     expect(text).not.toContain('AI จริง')
   })
 
-  it('shows Creative Studio as updating while the full workspace is paused', () => {
+  it('shows Automation Ads as updating while the full workspace is paused', () => {
     const html = renderToStaticMarkup(
-      <CreativeStudioPage
+      <AutomationAdsPage
         components={[
           {
             ads: 1,
@@ -448,12 +1100,14 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('สตูดิโอครีเอทีฟกำลังอัพเดท')
-    expect(text).toContain('ทีมกำลังปรับหน้า Creative Studio')
-    expect(text).toContain('ข้อมูลครีเอทีฟที่ซิงก์ไว้')
+    expect(text).toContain('Automation Ads กำลังอัพเดท')
+    expect(text).toContain('ทีมกำลังจัดระบบ workflow โฆษณาอัตโนมัติ')
+    expect(text).toContain('ข้อมูล Automation Ads ที่บันทึกไว้')
     expect(text).toContain('กลับมาทำต่อเร็ว ๆ นี้')
     expect(html).not.toContain('placeholder="ค้นหาครีเอทีฟ"')
     expect(text).not.toContain('บรีฟครีเอทีฟ')
+    expect(text).not.toContain('Creative Studio')
+    expect(text).not.toContain('สตูดิโอครีเอทีฟ')
     expect(text).not.toContain('ใช้เป็นต้นแบบ')
   })
 
@@ -566,6 +1220,152 @@ describe('Home app shell', () => {
     expect(pageCss).not.toContain('#e16447')
   })
 
+  it('has Ads Agent outer-toolbar shell styles isolated from Home and Page Automation', () => {
+    const appCss = readText('../src/App.css')
+    const homeCss = readText('../src/apps/home/styles.css')
+    const pageCss = readText('../src/apps/page-automation/styles.css')
+
+    expect(appCss).toContain('.ads-workspace-shell')
+    expect(appCss).toMatch(/\.ads-workspace-shell\s*\{[^}]*grid-template-columns:\s*[^;}]+/s)
+    expect(appCss).toContain('.ads-outer-toolbar')
+    expect(appCss).toContain('.ads-main-panel')
+    expect(appCss).toContain('.ads-toolbar-item.active')
+    expect(appCss).toContain('.ads-dashboard-metric-grid')
+    expect(appCss).toContain('@media (max-width: 760px)')
+    expect(appCss).toContain('@media (max-width: 640px)')
+    expect(homeCss).not.toContain('ads-workspace-shell')
+    expect(pageCss).not.toContain('ads-workspace-shell')
+  })
+
+  it('uses the supplied clinic shell image as the Ads Agent toolbar and panel background', () => {
+    const appCss = readText('../src/App.css')
+    const backgroundBytes = readFileSync(new URL('../public/pmc-dashboard-shell-bg.png', import.meta.url))
+    const workspaceShellBlock = appCss.match(/\.ads-workspace-shell\s*\{[^}]*\}/s)?.[0] ?? ''
+    const outerToolbarBlock = appCss.match(/\.ads-outer-toolbar\s*\{[^}]*\}/s)?.[0] ?? ''
+    const mainPanelBlock = appCss.match(/\.ads-main-panel\s*\{[^}]*\}/s)?.[0] ?? ''
+
+    expect(backgroundBytes.byteLength).toBeGreaterThan(900_000)
+    expect(backgroundBytes.byteLength).toBeLessThan(1_000_000)
+    expect(appCss).toContain("url('/pmc-dashboard-shell-bg.png')")
+    expect(workspaceShellBlock).toContain('background: #fbf7ef;')
+    expect(workspaceShellBlock).not.toContain('pmc-dashboard-shell-bg.png')
+    expect(outerToolbarBlock).toContain("url('/pmc-dashboard-shell-bg.png')")
+    expect(outerToolbarBlock).not.toContain('linear-gradient')
+    expect(mainPanelBlock).toContain("url('/pmc-dashboard-shell-bg.png')")
+    expect(mainPanelBlock).not.toContain('linear-gradient')
+    expect(appCss).not.toMatch(/\.ads-toolbar-brand > \*\s*\{[^}]*opacity:\s*0/s)
+    expect(appCss).not.toContain("url('/pmc-soft-dashboard-bg.png')")
+    expect(appCss).not.toContain('rgba(255, 253, 249, 0.9), rgba(255, 253, 249, 0.86)')
+  })
+
+  it('does not animate removed sidebar mascot targets in the Ads Agent shell', () => {
+    const appSource = readText('../src/App.tsx')
+
+    expect(appSource).not.toContain("'.sidebar-mascot'")
+    expect(appSource).toContain("'.ads-toolbar-brand-mark'")
+  })
+
+  it('keeps the Ads Agent toolbar wordmark single-column when the logo mark is hidden', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toMatch(/@media \(max-width: 1180px\)[\s\S]*?\.ads-toolbar-brand\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);[^}]*gap:\s*0;/)
+    expect(appCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.ads-toolbar-brand\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);[^}]*gap:\s*0;/)
+  })
+
+  it('uses the compact Thai-friendly Ads Agent typography scale', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toMatch(/\.ads-workspace-shell\s*\{[^}]*font-family:\s*'Noto Sans Thai', 'IBM Plex Sans Thai', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;[^}]*font-size:\s*13px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-brand strong\s*\{[^}]*font-family:\s*inherit;[^}]*font-size:\s*26px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-item\s*\{[^}]*font-size:\s*12\.5px;/)
+    expect(appCss).toMatch(/\.ads-dashboard-head h2\s*\{[^}]*font-size:\s*30px;/)
+    expect(appCss).toMatch(/\.ads-dashboard-metric-card strong\s*\{[^}]*font-size:\s*24px;/)
+    expect(appCss).toMatch(/\.ads-dashboard-panel-head h2\s*\{[^}]*font-size:\s*14\.5px;/)
+  })
+
+  it('shows KPI sparkline data on hover and keyboard focus', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toMatch(/\.ads-mini-sparkline::after\s*\{[^}]*content:\s*attr\(data-tooltip\);/)
+    expect(appCss).toMatch(/\.ads-mini-sparkline:hover::after,\s*\.ads-mini-sparkline:focus-visible::after\s*\{[^}]*opacity:\s*1;/)
+    expect(appCss).toMatch(/\.ads-mini-sparkline:focus-visible\s*\{[^}]*box-shadow:/)
+  })
+
+  it('centers lower metric card sparklines inside their cards', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toMatch(/\.ads-dashboard-lower-grid \.ads-dashboard-metric-card \.ads-dashboard-metric-footer\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/)
+    expect(appCss).toMatch(/\.ads-dashboard-lower-grid \.ads-mini-sparkline\s*\{[^}]*justify-self:\s*center;[^}]*width:\s*min\(150px,\s*100%\);/)
+  })
+
+  it('tightens the Ads Dashboard header spacing and keeps action buttons aligned', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toMatch(/\.ads-main-panel \.topbar\s*\{[^}]*min-height:\s*46px;[^}]*padding:\s*16px 32px 0;/)
+    expect(appCss).toMatch(/\.ads-main-panel \.page-body\s*\{[^}]*padding:\s*4px 32px 30px;/)
+    expect(appCss).toMatch(/\.ads-dashboard-head\s*\{[^}]*align-items:\s*flex-start;/)
+    expect(appCss).toMatch(/\.ads-dashboard-date-pill\s*\{[^}]*margin-top:\s*10px;/)
+    expect(appCss).toMatch(/\.ads-dashboard-actions\s*\{[^}]*align-self:\s*flex-start;[^}]*flex-wrap:\s*nowrap;[^}]*padding-top:\s*15px;/)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.clinic-primary-button,\s*\.ads-workspace-shell \.clinic-secondary-button\s*\{[^}]*white-space:\s*nowrap;/)
+  })
+
+  it('lays out the Ads Agent user card as a compact profile control', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toMatch(/\.ads-toolbar-user-card\s*\{[^}]*grid-template-columns:\s*42px minmax\(0,\s*1fr\) 30px;[^}]*padding:\s*10px 12px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-avatar\s*\{[^}]*display:\s*grid;[^}]*place-items:\s*center;[^}]*width:\s*42px;[^}]*height:\s*42px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-user-copy\s*\{[^}]*display:\s*grid;[^}]*gap:\s*4px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-user-role\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*gap:\s*5px;/)
+    expect(appCss).toMatch(/\.ads-toolbar-user-menu\s*\{[^}]*width:\s*30px;[^}]*height:\s*30px;[^}]*border-radius:\s*999px;/)
+    expect(appCss).toMatch(/\.ads-page-selector-popover\s*\{[^}]*position:\s*absolute;[^}]*bottom:\s*calc\(100% \+ 10px\);/)
+    expect(appCss).toMatch(/\.ads-page-selector-option\s*\{[^}]*grid-template-columns:\s*34px minmax\(0,\s*1fr\);/)
+  })
+
+  it('adds subtle decorative effects to the Ads Agent shell without adding visible helper text', () => {
+    const appCss = readText('../src/App.css')
+
+    expect(appCss).toContain('@keyframes clinicShellDrift')
+    expect(appCss).toContain('@keyframes clinicSheenSweep')
+    expect(appCss).toContain('@keyframes clinicLinePulse')
+    expect(appCss).toMatch(/\.ads-workspace-shell::before\s*\{[\s\S]*?animation:\s*clinicShellDrift 18s linear infinite;/)
+    expect(appCss).toMatch(/\.ads-main-panel::before\s*\{[\s\S]*?repeating-linear-gradient[\s\S]*?animation:\s*clinicShellDrift 24s linear infinite;/)
+    expect(appCss).toMatch(/\.ads-toolbar-item::after\s*\{[\s\S]*?linear-gradient\(90deg,\s*transparent,\s*rgba\(255,\s*255,\s*255,\s*0\.62\),\s*transparent\)/)
+    expect(appCss).toMatch(/\.ads-toolbar-item:hover::after,\s*\.ads-toolbar-item:focus-visible::after,\s*\.ads-toolbar-item\.active::after\s*\{[\s\S]*?animation:\s*clinicSheenSweep 1\.8s ease-out;/)
+    expect(appCss).toMatch(/\.ads-dashboard-metric-card::after,\s*\.ads-dashboard-panel::after,\s*\.ads-workspace-shell \.panel::after\s*\{[\s\S]*?pointer-events:\s*none;/)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.automation-ads-updating-panel::before\s*\{[\s\S]*?animation:\s*clinicLinePulse 3\.8s ease-in-out infinite;/)
+    expect(appCss).toMatch(/@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?animation-duration:\s*0\.01ms !important;/)
+  })
+
+  it('applies the approved clinic shell styling to every Ads Agent toolbar workspace', () => {
+    const appSource = readText('../src/App.tsx')
+    const appCss = readText('../src/App.css')
+
+    expect(appSource).toContain('className="two-column-page ads-tool-window"')
+    expect(appCss).toMatch(/\.ads-workspace-shell \.ads-tool-window\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) minmax\(260px,\s*300px\);[^}]*gap:\s*12px;/s)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.panel\s*\{[^}]*background:\s*rgba\(255,\s*253,\s*249,\s*0\.86\);[^}]*box-shadow:\s*0 12px 28px rgba\(77,\s*57,\s*32,\s*0\.065\);/s)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.panel-head h2\s*\{[^}]*font-size:\s*14\.5px;[^}]*font-weight:\s*900;/s)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.primary-button\s*\{[^}]*background:\s*linear-gradient\(135deg,\s*#c18a55,\s*#9c6433\);/s)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.automation-ads-updating-panel h2\s*\{[^}]*font-size:\s*24px;/s)
+    expect(appCss).toMatch(/\.ads-workspace-shell \.ads-entity-row\.campaign\s*\{[^}]*rgba\(157,\s*110,\s*62,\s*0\.12\)/s)
+    expect(appCss).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.ads-workspace-shell \.ads-tool-window\s*\{[^}]*grid-template-columns:\s*1fr;/)
+  })
+
+  it('does not run dashboard card animations when the active tool has no dashboard cards', () => {
+    const appSource = readText('../src/App.tsx')
+
+    expect(appSource).toContain("root.querySelectorAll('.ads-dashboard-metric-card, .ads-dashboard-panel')")
+    expect(appSource).toMatch(/if \(dashboardAnimationTargets\.length > 0\) \{[\s\S]*?timeline\.from\(dashboardAnimationTargets,/)
+  })
+
+  it('keeps Insights copy user-facing instead of internal agent labels', () => {
+    const appSource = readText('../src/App.tsx')
+
+    expect(appSource).toContain('ผู้ช่วย Insights')
+    expect(appSource).not.toContain('PMC Master Agent')
+    expect(appSource).not.toContain('เรียก Master Agent')
+    expect(appSource).not.toContain('AI Brain')
+  })
+
   it('does not show hardcoded sidebar alert or task counts as if they were live data', () => {
     const html = renderToStaticMarkup(<HomeApp />)
 
@@ -631,10 +1431,39 @@ function readText(relativePath: string) {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
 }
 
+function adSetForDashboard(overrides = {}) {
+  return {
+    audience: 'Bangkok skincare buyers',
+    budget: 50000,
+    bookings: 10,
+    campaignId: 'campaign-1',
+    cpa: 500,
+    deliveryStatus: 'active',
+    id: 'set-1',
+    name: 'Bangkok Core Audience',
+    roas: 1.5,
+    spend: 5000,
+    status: 'healthy',
+    ...overrides,
+  }
+}
+
 function visibleText(html: string) {
   return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+function dashboardMetricCardHtml(html: string, label: string) {
+  const match = html.match(new RegExp(`<article class="ads-dashboard-metric-card">(?:(?!</article>)[\\s\\S])*<span>${label}</span>(?:(?!</article>)[\\s\\S])*</article>`))
+  expect(match?.[0]).toBeTruthy()
+  return match?.[0] ?? ''
+}
+
+function readPngColorType(relativePath: string) {
+  const bytes = readFileSync(new URL(relativePath, import.meta.url))
+  const signature = '89504e470d0a1a0a'
+  expect(bytes.subarray(0, 8).toString('hex')).toBe(signature)
+  return bytes[25]
+}
 
 function withPathname(pathname: string, callback: () => void) {
   const previousWindow = globalThis.window

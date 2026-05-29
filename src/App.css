@@ -511,6 +511,11 @@ input:focus-visible {
   gap: 10px;
 }
 
+.topbar-actions .api-check-button {
+  justify-content: center;
+  min-width: 118px;
+}
+
 .topbar-actions .toolbar-tooltip > select,
 .topbar-actions .toolbar-tooltip > .pill-button,
 .topbar-actions .toolbar-tooltip > .auto-toggle-control {
@@ -946,7 +951,7 @@ input:focus-visible {
 }
 
 .revenue-chart-wrap {
-  min-height: 338px;
+  min-height: 372px;
 }
 
 .echart-canvas {
@@ -955,7 +960,7 @@ input:focus-visible {
 }
 
 .revenue-echart {
-  height: 326px;
+  height: 360px;
 }
 
 .revenue-mix-echart {
@@ -1857,6 +1862,37 @@ input:focus-visible {
 
   100% {
     background-position: -60% 0;
+  }
+}
+
+@keyframes clinicShellDrift {
+  from {
+    background-position: 0 0, 0 0;
+  }
+
+  to {
+    background-position: 180px 0, -160px 0;
+  }
+}
+
+@keyframes clinicSheenSweep {
+  from {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+
+  to {
+    transform: translateX(180%) skewX(-18deg);
+  }
+}
+
+@keyframes clinicLinePulse {
+  0%,
+  100% {
+    opacity: 0.42;
+  }
+
+  50% {
+    opacity: 0.9;
   }
 }
 
@@ -4101,7 +4137,7 @@ input:focus-visible {
   object-fit: cover;
 }
 
-.creative-updating-panel {
+.automation-ads-updating-panel {
   min-height: 360px;
   display: grid;
   align-content: center;
@@ -4109,14 +4145,14 @@ input:focus-visible {
   gap: 16px;
 }
 
-.creative-updating-panel h2 {
+.automation-ads-updating-panel h2 {
   margin: 0;
   color: var(--ink);
   font-size: clamp(28px, 4vw, 44px);
   line-height: 1.08;
 }
 
-.creative-updating-panel p {
+.automation-ads-updating-panel p {
   max-width: 680px;
   margin: 0;
   color: var(--muted);
@@ -4125,7 +4161,7 @@ input:focus-visible {
   line-height: 1.65;
 }
 
-.creative-updating-meta {
+.automation-ads-updating-meta {
   width: min(100%, 560px);
   display: grid;
   gap: 10px;
@@ -4335,6 +4371,40 @@ input:focus-visible {
 
 .plan-execution-modal {
   width: min(680px, 100%);
+}
+
+.campaign-composer-modal {
+  width: min(680px, 100%);
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  background:
+    linear-gradient(140deg, rgba(255, 249, 240, 0.96), rgba(255, 255, 255, 0.98)),
+    #fff;
+}
+
+.campaign-composer-modal h2 {
+  color: var(--clinic-ink);
+}
+
+.campaign-composer-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.campaign-composer-summary {
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.78);
+  color: var(--clinic-muted);
+  padding: 11px 12px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.campaign-composer-modal .modal-actions {
+  justify-content: flex-end;
+  margin-top: 2px;
 }
 
 .plan-execution-target {
@@ -4892,9 +4962,8 @@ input:focus-visible {
   }
 
   .topbar-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: auto;
+    display: flex;
     justify-content: flex-start;
     gap: 8px;
   }
@@ -5185,11 +5254,11 @@ input:focus-visible {
     grid-template-columns: 10px minmax(0, 1fr) 38px 76px;
   }
 
-  .creative-updating-panel {
+  .automation-ads-updating-panel {
     min-height: 300px;
   }
 
-  .creative-updating-panel h2 {
+  .automation-ads-updating-panel h2 {
     font-size: 30px;
   }
 
@@ -5229,7 +5298,6 @@ input:focus-visible {
 
 @media (max-width: 520px) {
   .topbar-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
@@ -5829,6 +5897,2104 @@ input:focus-visible {
 
   .nav-item {
     font-size: 11px;
+  }
+}
+
+/* Ads Agent clinic workspace shell */
+.ads-workspace-shell {
+  --clinic-bg: #f7f1e8;
+  --clinic-surface: #fffdf9;
+  --clinic-surface-soft: #fbf7ef;
+  --clinic-ink: #241f18;
+  --clinic-muted: #776b5d;
+  --clinic-border: rgba(120, 92, 58, 0.16);
+  --clinic-bronze: #9d6e3e;
+  --clinic-bronze-dark: #6c4724;
+  --surface: #fffdf9;
+  --surface-soft: rgba(255, 250, 242, 0.84);
+  --ink: #241f18;
+  --ink-soft: #4f4133;
+  --muted: #776b5d;
+  --border: rgba(130, 104, 73, 0.16);
+  --border-strong: rgba(130, 104, 73, 0.24);
+  --blue: #2684ff;
+  --violet: #8b5cf6;
+  --green: #15803d;
+  --amber: #a16207;
+  --red: #b91c1c;
+  --shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  --gradient-accent: linear-gradient(90deg, #c18a55 0%, #9c6433 100%);
+  --gradient-surface: rgba(255, 253, 249, 0.86);
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 286px minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  background: #fbf7ef;
+  color: var(--clinic-ink);
+  font-family: 'Noto Sans Thai', 'IBM Plex Sans Thai', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+}
+
+.ads-workspace-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(116deg, transparent 0 36%, rgba(255, 255, 255, 0.38) 44%, transparent 53%),
+    repeating-linear-gradient(104deg, rgba(154, 106, 56, 0.08) 0 1px, transparent 1px 18px);
+  background-size: 520px 100%, 220px 100%;
+  opacity: 0.22;
+  animation: clinicShellDrift 18s linear infinite;
+}
+
+.ads-outer-toolbar,
+.ads-main-panel,
+.ads-dashboard-metric-card,
+.ads-dashboard-panel {
+  min-width: 0;
+}
+
+.ads-outer-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 130;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: url('/pmc-dashboard-shell-bg.png') left top / auto 100vh no-repeat #f3e5d6;
+  box-shadow: inset -1px 0 0 rgba(120, 92, 58, 0.12), 12px 0 32px rgba(83, 61, 39, 0.04);
+  padding: 38px 26px 18px;
+}
+
+.ads-outer-toolbar::before {
+  content: "";
+  position: absolute;
+  display: none;
+  inset: auto -18px 120px auto;
+  width: 168px;
+  height: 198px;
+  background:
+    radial-gradient(ellipse at 50% 100%, rgba(188, 148, 105, 0.18), transparent 64%);
+  clip-path: polygon(50% 0, 65% 32%, 92% 18%, 76% 48%, 100% 62%, 67% 65%, 78% 100%, 50% 74%, 22% 100%, 33% 65%, 0 62%, 24% 48%, 8% 18%, 35% 32%);
+  opacity: 0.56;
+  pointer-events: none;
+}
+
+.ads-outer-toolbar::after {
+  content: "";
+  position: absolute;
+  inset: 24px 16px;
+  border-radius: 26px;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.34), transparent 28%),
+    repeating-linear-gradient(106deg, transparent 0 20px, rgba(255, 255, 255, 0.22) 21px 22px, transparent 23px 44px);
+  mask-image: linear-gradient(180deg, transparent 0, #000 14%, #000 82%, transparent 100%);
+  opacity: 0.44;
+}
+
+.ads-toolbar-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ads-toolbar-brand {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 0;
+  color: var(--clinic-ink);
+  text-decoration: none;
+}
+
+.ads-toolbar-brand strong,
+.ads-toolbar-user-card strong,
+.ads-toolbar-status-card strong,
+.ads-dashboard-panel-head h2,
+.ads-top-campaign-row strong,
+.ads-workspace-shell .approval-insight-card strong {
+  overflow-wrap: anywhere;
+}
+
+.ads-toolbar-brand strong {
+  display: block;
+  color: #1d1a16;
+  font-family: inherit;
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 0.96;
+}
+
+.ads-toolbar-brand small {
+  display: block;
+  margin-top: 8px;
+  color: #6e4925;
+  font-size: 8.5px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ads-toolbar-brand-mark {
+  display: none;
+}
+
+.ads-mobile-menu-button {
+  display: none;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(154, 106, 56, 0.22);
+  border-radius: 8px;
+  background: #fffaf2;
+  color: var(--clinic-bronze-dark);
+  place-items: center;
+}
+
+.ads-toolbar-nav {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ads-toolbar-item {
+  position: relative;
+  min-width: 0;
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 13px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 253, 249, 0.3);
+  color: #2c241b;
+  padding: 6px 11px;
+  text-align: left;
+  font-size: 12.5px;
+  font-weight: 850;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  overflow: hidden;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.ads-toolbar-item::after {
+  content: "";
+  position: absolute;
+  inset: 1px auto 1px -38%;
+  width: 38%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.62), transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ads-toolbar-item span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-toolbar-item:hover,
+.ads-toolbar-item:focus-visible {
+  border-color: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 253, 249, 0.64);
+  box-shadow: 0 10px 24px rgba(91, 66, 39, 0.08);
+  transform: translateX(2px);
+}
+
+.ads-toolbar-item:hover::after,
+.ads-toolbar-item:focus-visible::after,
+.ads-toolbar-item.active::after {
+  opacity: 1;
+  animation: clinicSheenSweep 1.8s ease-out;
+}
+
+.ads-toolbar-item.active {
+  border-color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 253, 249, 0.78);
+  color: var(--clinic-bronze-dark);
+  box-shadow: 0 14px 28px rgba(116, 83, 49, 0.14);
+}
+
+.ads-toolbar-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 253, 249, 0.88);
+  color: #80664d;
+  box-shadow: 0 8px 18px rgba(77, 57, 32, 0.07);
+}
+
+.ads-toolbar-item.active .ads-toolbar-icon {
+  background: linear-gradient(135deg, #c99863, #9b6734);
+  color: #ffffff;
+}
+
+.ads-toolbar-user-card {
+  margin-top: auto;
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.74);
+  box-shadow: 0 14px 28px rgba(77, 57, 32, 0.1);
+  padding: 10px 12px;
+  backdrop-filter: blur(8px);
+  color: var(--clinic-ink);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.ads-page-selector-shell {
+  position: relative;
+  margin-top: auto;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.ads-toolbar-user-card:hover,
+.ads-toolbar-user-card:focus-visible,
+.ads-toolbar-user-card.open {
+  border-color: rgba(154, 106, 56, 0.28);
+  box-shadow: 0 18px 34px rgba(77, 57, 32, 0.14);
+  transform: translateY(-1px);
+}
+
+.ads-toolbar-user-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ads-toolbar-user-copy strong,
+.ads-toolbar-user-role {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-toolbar-user-copy strong {
+  font-size: 13px;
+  line-height: 1.18;
+}
+
+.ads-toolbar-user-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.ads-toolbar-avatar {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid rgba(154, 106, 56, 0.18);
+  background:
+    radial-gradient(circle at 30% 18%, rgba(255, 255, 255, 0.88), transparent 36%),
+    linear-gradient(135deg, rgba(201, 152, 99, 0.3), rgba(142, 96, 51, 0.18)),
+    #efe2d2;
+  color: var(--clinic-bronze-dark);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.74), 0 8px 18px rgba(77, 57, 32, 0.09);
+}
+
+.ads-toolbar-user-role svg {
+  flex: 0 0 auto;
+  color: rgba(110, 73, 37, 0.76);
+}
+
+.ads-toolbar-user-menu {
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  justify-self: end;
+  padding: 0;
+  background: rgba(255, 253, 249, 0.72);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-toolbar-user-card.open .ads-toolbar-user-menu svg {
+  transform: rotate(180deg);
+}
+
+.ads-toolbar-user-menu svg {
+  transition: transform 180ms ease;
+}
+
+.ads-page-selector-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 80;
+}
+
+.ads-page-selector-popover[hidden] {
+  display: none;
+}
+
+.ads-page-selector-menu {
+  display: grid;
+  gap: 6px;
+  max-height: min(430px, calc(100vh - 140px));
+  overflow-y: auto;
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 253, 249, 0.96);
+  box-shadow: 0 20px 44px rgba(77, 57, 32, 0.18);
+  padding: 8px;
+  backdrop-filter: blur(12px);
+}
+
+.ads-page-selector-option {
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  background: transparent;
+  color: var(--clinic-ink);
+  padding: 8px;
+  text-align: left;
+}
+
+.ads-page-selector-option:hover,
+.ads-page-selector-option:focus-visible,
+.ads-page-selector-option.active {
+  border-color: rgba(154, 106, 56, 0.18);
+  background: rgba(255, 255, 255, 0.74);
+  outline: none;
+}
+
+.ads-page-selector-option-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(245, 236, 224, 0.86);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-page-selector-option-icon.page {
+  background: rgba(232, 244, 235, 0.86);
+  color: #1f8a5b;
+}
+
+.ads-page-selector-option > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.ads-page-selector-option strong,
+.ads-page-selector-option small,
+.ads-page-selector-option em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-page-selector-option strong {
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.ads-page-selector-option small,
+.ads-page-selector-option em {
+  color: var(--clinic-muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.ads-toolbar-status-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: #fffdf9;
+  padding: 12px;
+}
+
+.ads-toolbar-status-card strong {
+  color: var(--clinic-ink);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ads-toolbar-status-card span,
+.ads-toolbar-status-card small {
+  color: var(--clinic-muted);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ads-main-panel {
+  position: relative;
+  z-index: 1;
+  min-height: calc(100vh - 20px);
+  margin: 10px 10px 10px 0;
+  border: 1px solid rgba(130, 104, 73, 0.14);
+  border-radius: 30px;
+  background: url('/pmc-dashboard-shell-bg.png') center top / cover no-repeat rgba(255, 253, 249, 0.9);
+  box-shadow: 0 24px 64px rgba(77, 57, 32, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  overflow: clip;
+}
+
+.ads-main-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(128deg, transparent 0 56%, rgba(255, 255, 255, 0.52) 62%, transparent 70%),
+    repeating-linear-gradient(172deg, transparent 0 18px, rgba(193, 138, 85, 0.08) 19px 20px, transparent 21px 38px);
+  background-size: 680px 100%, 260px 100%;
+  opacity: 0.34;
+  animation: clinicShellDrift 24s linear infinite;
+}
+
+.ads-main-panel .topbar {
+  position: relative;
+  z-index: 1;
+  min-height: 46px;
+  justify-content: flex-end;
+  padding: 16px 32px 0;
+  border-bottom: 0;
+  background: transparent;
+  backdrop-filter: blur(6px);
+}
+
+.ads-main-panel .page-body {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 1580px);
+  padding: 4px 32px 30px;
+}
+
+.ads-dashboard-layout {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  isolation: isolate;
+}
+
+.ads-dashboard-layout::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -20px -12px auto auto;
+  width: min(58vw, 760px);
+  height: 190px;
+  opacity: 0.24;
+  background:
+    repeating-radial-gradient(ellipse at top right, rgba(154, 106, 56, 0.2) 0 1px, transparent 1px 10px);
+  pointer-events: none;
+}
+
+.ads-dashboard-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 2px;
+}
+
+.ads-dashboard-head h2 {
+  margin: 0;
+  color: var(--clinic-ink);
+  font-size: 30px;
+  line-height: 1.04;
+  font-weight: 850;
+}
+
+.ads-dashboard-date-pill {
+  width: fit-content;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 10px;
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.82);
+  color: #4f4133;
+  padding: 0 13px;
+  font-size: 11px;
+  font-weight: 850;
+  box-shadow: 0 8px 20px rgba(77, 57, 32, 0.05);
+}
+
+.ads-dashboard-date-pill select {
+  min-height: 34px;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 850;
+  line-height: 1.2;
+  outline: none;
+  padding: 0 18px 0 0;
+}
+
+.ads-dashboard-date-pill select:focus-visible {
+  outline: 2px solid rgba(30, 136, 229, 0.78);
+  outline-offset: 3px;
+}
+
+.ads-dashboard-date-pill svg:last-child {
+  margin-left: -18px;
+  pointer-events: none;
+}
+
+.ads-dashboard-actions,
+.ads-workspace-shell .approval-insight-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.ads-dashboard-actions {
+  align-self: flex-start;
+  flex-wrap: nowrap;
+  padding-top: 15px;
+}
+
+.ads-workspace-shell .clinic-primary-button,
+.ads-workspace-shell .clinic-secondary-button {
+  min-height: 38px;
+  min-width: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  font-size: 11.5px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.ads-workspace-shell .clinic-primary-button {
+  position: relative;
+  border: 1px solid rgba(110, 73, 37, 0.18);
+  background: linear-gradient(135deg, #c18a55, #9c6433);
+  color: #fffdf9;
+  box-shadow: 0 10px 22px rgba(110, 73, 37, 0.18);
+  overflow: hidden;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.ads-workspace-shell .clinic-primary-button::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 -46%;
+  width: 42%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.38), transparent);
+  pointer-events: none;
+}
+
+.ads-workspace-shell .clinic-primary-button:hover:not(:disabled),
+.ads-workspace-shell .clinic-primary-button:focus-visible:not(:disabled) {
+  box-shadow: 0 14px 30px rgba(110, 73, 37, 0.22);
+  transform: translateY(-1px);
+}
+
+.ads-workspace-shell .clinic-primary-button:hover:not(:disabled)::after,
+.ads-workspace-shell .clinic-primary-button:focus-visible:not(:disabled)::after {
+  animation: clinicSheenSweep 1.6s ease-out;
+}
+
+.ads-workspace-shell .clinic-primary-button:disabled,
+.ads-workspace-shell .clinic-secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.ads-workspace-shell .clinic-secondary-button {
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  background: rgba(255, 253, 249, 0.82);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-dashboard-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ads-dashboard-metric-card {
+  position: relative;
+  z-index: 0;
+  min-height: 134px;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  grid-template-rows: auto minmax(36px, 1fr);
+  gap: 9px 12px;
+  align-items: start;
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.84);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.07);
+  padding: 14px;
+  backdrop-filter: blur(3px);
+  overflow: visible;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ads-dashboard-metric-card::after,
+.ads-dashboard-panel::after,
+.ads-workspace-shell .panel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.72), transparent 32%),
+    linear-gradient(180deg, rgba(193, 138, 85, 0.1), transparent 44%);
+  opacity: 0.28;
+  transition: opacity 180ms ease;
+}
+
+.ads-dashboard-metric-card > *,
+.ads-dashboard-panel > *,
+.ads-workspace-shell .panel > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ads-dashboard-metric-card:hover,
+.ads-dashboard-metric-card:focus-within {
+  z-index: 5;
+  border-color: rgba(130, 104, 73, 0.22);
+  box-shadow: 0 16px 34px rgba(77, 57, 32, 0.09);
+  transform: translateY(-1px);
+}
+
+.ads-dashboard-metric-card:hover::after,
+.ads-dashboard-metric-card:focus-within::after,
+.ads-dashboard-panel:hover::after,
+.ads-dashboard-panel:focus-within::after,
+.ads-workspace-shell .panel:hover::after,
+.ads-workspace-shell .panel:focus-within::after {
+  opacity: 0.5;
+}
+
+.ads-dashboard-metric-main,
+.ads-dashboard-metric-footer {
+  min-width: 0;
+}
+
+.ads-dashboard-metric-card span,
+.ads-dashboard-metric-card small {
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 850;
+  line-height: 1.42;
+}
+
+.ads-dashboard-metric-card strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--clinic-ink);
+  font-size: 24px;
+  line-height: 1;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.ads-dashboard-metric-card small {
+  display: block;
+  margin-top: 6px;
+}
+
+.ads-dashboard-metric-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+
+.ads-dashboard-metric-icon.green {
+  background: #f5ead8;
+  color: #80532a;
+}
+
+.ads-dashboard-metric-icon.sand {
+  background: #f5ead8;
+  color: #80532a;
+}
+
+.ads-dashboard-metric-icon.blue {
+  background: #e9f3ff;
+  color: #1f6fbd;
+}
+
+.ads-dashboard-metric-icon.purple {
+  background: #f0edff;
+  color: #6757c8;
+}
+
+.ads-dashboard-metric-icon.gold {
+  background: #fff3c8;
+  color: #9a6500;
+}
+
+.ads-dashboard-metric-change {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ads-dashboard-metric-footer {
+  grid-column: 1 / -1;
+  align-self: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 43%);
+  align-items: end;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.ads-dashboard-metric-change em {
+  flex: 0 0 auto;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.ads-dashboard-metric-change em.good {
+  color: #15803d;
+}
+
+.ads-dashboard-metric-change em.critical {
+  color: #b91c1c;
+}
+
+.ads-dashboard-metric-change em.watch {
+  color: #9a6500;
+}
+
+.ads-dashboard-metric-change em.info {
+  color: #1f6fbd;
+}
+
+.ads-dashboard-metric-change em.neutral {
+  color: #766b5c;
+}
+
+.ads-dashboard-metric-change small {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ads-mini-sparkline {
+  position: relative;
+  align-self: end;
+  justify-self: end;
+  width: min(118px, 100%);
+  height: 40px;
+  color: #aa7a3f;
+  cursor: help;
+  font-size: 0;
+  line-height: 0;
+  outline: none;
+  opacity: 0.9;
+}
+
+.ads-mini-sparkline::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 9px);
+  z-index: 40;
+  width: max-content;
+  max-width: min(260px, 70vw);
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  border-radius: 8px;
+  background: rgba(37, 31, 23, 0.94);
+  color: #fffdf9;
+  box-shadow: 0 14px 30px rgba(37, 31, 23, 0.18);
+  font-size: 10.5px;
+  font-weight: 850;
+  line-height: 1.45;
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+  white-space: normal;
+}
+
+.ads-mini-sparkline:hover::after,
+.ads-mini-sparkline:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.ads-mini-sparkline:focus-visible {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(170, 122, 63, 0.18);
+}
+
+.ads-mini-sparkline svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ads-sparkline-area {
+  fill: currentColor;
+  opacity: 0.12;
+}
+
+.ads-sparkline-baseline {
+  fill: none;
+  opacity: 0.2;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.ads-sparkline-line {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.7;
+}
+
+.ads-sparkline-dot {
+  fill: currentColor;
+  stroke: #fffdf9;
+  stroke-width: 2;
+}
+
+.ads-mini-sparkline.is-empty {
+  opacity: 0.45;
+}
+
+.ads-mini-sparkline.is-empty .ads-sparkline-area {
+  opacity: 0;
+}
+
+.ads-mini-sparkline.is-empty .ads-sparkline-line {
+  stroke-dasharray: 5 6;
+}
+
+.ads-mini-sparkline.blue {
+  color: #2684ff;
+}
+
+.ads-mini-sparkline.purple {
+  color: #b84cff;
+}
+
+.ads-mini-sparkline.gold {
+  color: #f4a416;
+}
+
+.ads-mini-sparkline.sand {
+  color: #aa7a3f;
+}
+
+.ads-dashboard-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.ads-dashboard-lower-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(286px, 0.92fr);
+  gap: 12px;
+}
+
+.ads-dashboard-lower-grid .ads-dashboard-metric-card .ads-dashboard-metric-footer {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+
+.ads-dashboard-lower-grid .ads-mini-sparkline {
+  justify-self: center;
+  width: min(150px, 100%);
+}
+
+.ads-dashboard-panel {
+  position: relative;
+  z-index: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.86);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  padding: 15px;
+  backdrop-filter: blur(3px);
+  overflow: visible;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ads-dashboard-panel-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ads-dashboard-panel-head h2 {
+  margin: 0;
+  color: var(--clinic-ink);
+  font-size: 14.5px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.ads-dashboard-panel-head p,
+.ads-insight-panel > p {
+  margin: 5px 0 0;
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.ads-workspace-shell .revenue-chart-panel.is-embedded {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+}
+
+.ads-workspace-shell .revenue-chart-inline-head {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ads-workspace-shell .performance-panel .revenue-chart-wrap {
+  min-height: 236px;
+}
+
+.ads-workspace-shell .performance-panel .revenue-echart {
+  height: 236px;
+}
+
+.performance-empty-chart {
+  position: relative;
+  min-height: 252px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(130, 104, 73, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(rgba(231, 237, 245, 0.72) 1px, transparent 1px) 0 34px / 100% 54px,
+    linear-gradient(180deg, rgba(251, 253, 252, 0.86), rgba(255, 255, 255, 0.92));
+  overflow: hidden;
+}
+
+.performance-empty-lines {
+  position: absolute;
+  inset: 42px 18px 42px;
+}
+
+.performance-empty-lines .line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 72px;
+  border-radius: 8px;
+  border-top: 3px solid currentColor;
+  opacity: 0.28;
+  clip-path: polygon(0 64%, 12% 42%, 24% 55%, 36% 22%, 49% 48%, 62% 35%, 75% 14%, 88% 32%, 100% 24%, 100% 100%, 0 100%);
+}
+
+.performance-empty-lines .line.green {
+  top: 18px;
+  color: #aa7a3f;
+}
+
+.performance-empty-lines .line.blue {
+  top: 76px;
+  color: #2684ff;
+}
+
+.performance-empty-lines .line.purple {
+  top: 132px;
+  color: #b84cff;
+}
+
+.performance-empty-chart .empty-state {
+  position: relative;
+  z-index: 1;
+  max-width: 340px;
+  background: rgba(255, 255, 255, 0.82);
+  border-radius: 8px;
+  padding: 16px;
+  backdrop-filter: blur(6px);
+}
+
+.ads-top-campaign-list,
+.ads-workspace-shell .approval-insight-list {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.ads-top-campaign-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(130, 104, 73, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 250, 242, 0.84);
+  padding: 9px 10px;
+}
+
+.ads-top-campaign-row > div {
+  min-width: 0;
+}
+
+.ads-top-campaign-row strong,
+.ads-top-campaign-row small {
+  display: block;
+  min-width: 0;
+}
+
+.ads-top-campaign-row small {
+  margin-top: 4px;
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ads-campaign-rank-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: #f2eee8;
+  color: #80664d;
+  font-size: 10.5px;
+  font-weight: 950;
+}
+
+.ads-campaign-rank-icon.good {
+  background: #f5ead8;
+  color: #80532a;
+}
+
+.ads-campaign-rank-icon.info {
+  background: #e9f3ff;
+  color: #1f6fbd;
+}
+
+.ads-campaign-rank-icon.watch {
+  background: #fff3d3;
+  color: #a16207;
+}
+
+.ads-campaign-rank-icon.critical {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.ads-campaign-rank-change {
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.ads-campaign-rank-change.good,
+.ads-campaign-rank-change.info {
+  color: #8f5f31;
+}
+
+.ads-campaign-rank-change.watch {
+  color: #a16207;
+}
+
+.ads-campaign-rank-change.critical {
+  color: #b91c1c;
+}
+
+.ads-dashboard-select-pill,
+.ads-view-all-button {
+  min-height: 32px;
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 250, 242, 0.84);
+  color: var(--clinic-bronze-dark);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.ads-dashboard-select-pill {
+  padding: 0 10px;
+}
+
+.ads-view-all-button {
+  width: 100%;
+  margin-top: 2px;
+}
+
+.ads-dashboard-select-pill:disabled,
+.ads-view-all-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+}
+
+.ads-workspace-shell .approval-insight-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(130, 104, 73, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 250, 242, 0.84);
+  padding: 12px;
+}
+
+.ads-workspace-shell .approval-insight-card > div {
+  min-width: 0;
+}
+
+.ads-workspace-shell .approval-insight-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--clinic-ink);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ads-workspace-shell .approval-insight-card p {
+  margin: 5px 0 0;
+  color: var(--clinic-muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ads-insight-panel {
+  padding: 0;
+  overflow: hidden;
+  background: #8f6034;
+  color: #ffffff;
+}
+
+.ads-insight-panel .ads-dashboard-panel-head {
+  display: none;
+}
+
+.ads-insight-banner {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 118px);
+  gap: 14px;
+  align-items: center;
+  padding: 18px 16px;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 84% 20%, rgba(255, 241, 212, 0.2), transparent 34%),
+    linear-gradient(135deg, #9a6a3a 0%, #8c582b 54%, #704019 100%);
+}
+
+.ads-insight-banner::before {
+  content: "";
+  position: absolute;
+  inset: auto -38px -68px auto;
+  width: 210px;
+  height: 210px;
+  border-radius: 999px;
+  background: rgba(255, 248, 236, 0.16);
+}
+
+.ads-insight-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(120deg, transparent 0 56%, rgba(255, 246, 232, 0.12) 56% 57%, transparent 57%),
+    radial-gradient(circle at 12% 18%, rgba(255, 255, 255, 0.12), transparent 22%);
+  pointer-events: none;
+}
+
+.ads-insight-banner > div {
+  position: relative;
+  min-width: 0;
+  z-index: 1;
+}
+
+.ads-insight-copy {
+  align-self: center;
+  display: grid;
+  gap: 12px;
+}
+
+.ads-insight-banner strong {
+  display: block;
+  color: #ffffff;
+  font-size: 21px;
+  font-weight: 950;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.ads-insight-status {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 25px;
+  line-height: 1;
+}
+
+.ads-insight-status.good {
+  color: #d9ffda;
+}
+
+.ads-insight-status.medium {
+  color: #ffe1b4;
+}
+
+.ads-insight-status.bad {
+  color: #ffd1c4;
+}
+
+.ads-workspace-shell .ads-insight-open-button,
+.ads-insight-open-button {
+  justify-self: start;
+  min-height: 30px;
+  width: auto;
+  border-color: rgba(255, 236, 208, 0.5);
+  background: rgba(255, 248, 236, 0.92);
+  color: #7a4d22;
+  padding: 0 13px;
+  font-size: 11px;
+  box-shadow: 0 10px 18px rgba(57, 32, 13, 0.16);
+}
+
+.ads-workspace-shell .ads-insight-open-button:hover,
+.ads-insight-open-button:hover {
+  background: #ffffff;
+}
+
+.ads-insight-visual {
+  height: 126px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+}
+
+.ads-insight-visual img {
+  display: block;
+  width: min(130px, 100%);
+  max-height: 130px;
+  object-fit: contain;
+  filter: drop-shadow(0 18px 18px rgba(48, 29, 12, 0.28));
+}
+
+.ads-workspace-shell .ads-insight-panel .clinic-primary-button {
+  justify-self: start;
+}
+
+.ads-workspace-shell .ads-tool-window {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
+  gap: 12px;
+  align-items: start;
+}
+
+.ads-workspace-shell .ads-tool-window .main-stack,
+.ads-workspace-shell .ads-tool-window .right-rail {
+  gap: 12px;
+}
+
+.ads-workspace-shell .panel,
+.ads-workspace-shell .mini-card,
+.ads-workspace-shell .asset-card,
+.ads-workspace-shell .report-preview,
+.ads-workspace-shell .audience-row,
+.ads-workspace-shell .help-item,
+.ads-workspace-shell .automation-ads-updating-meta,
+.ads-workspace-shell .ads-entity-group,
+.ads-workspace-shell .ads-entity-branch {
+  border: 1px solid rgba(130, 104, 73, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.86);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  backdrop-filter: blur(3px);
+}
+
+.ads-workspace-shell .panel {
+  position: relative;
+  z-index: 0;
+  background: rgba(255, 253, 249, 0.86);
+  box-shadow: 0 12px 28px rgba(77, 57, 32, 0.065);
+  padding: 15px;
+  overflow: visible;
+  transform: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ads-workspace-shell .panel::before {
+  display: none;
+}
+
+.ads-workspace-shell .panel:hover,
+.ads-workspace-shell .panel:focus-within {
+  border-color: rgba(130, 104, 73, 0.22);
+  box-shadow: 0 14px 30px rgba(77, 57, 32, 0.08);
+  transform: translateY(-1px);
+}
+
+.ads-workspace-shell .panel-head {
+  margin-bottom: 12px;
+  gap: 12px;
+}
+
+.ads-workspace-shell .panel-title-row {
+  gap: 7px;
+}
+
+.ads-workspace-shell .panel-title-row h2,
+.ads-workspace-shell .panel-head h2 {
+  margin: 0;
+  color: var(--clinic-ink);
+  font-size: 14.5px;
+  line-height: 1.2;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .panel-head h2 {
+  font-size: 14.5px;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .panel-head p {
+  margin: 5px 0 0;
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.ads-workspace-shell .panel-actions {
+  gap: 8px;
+}
+
+.ads-workspace-shell .collapse-button,
+.ads-workspace-shell .primary-button,
+.ads-workspace-shell .outline-button,
+.ads-workspace-shell .danger-button {
+  min-height: 34px;
+  border-radius: 999px;
+  padding: 0 13px;
+  font-size: 10.8px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.ads-workspace-shell .collapse-button,
+.ads-workspace-shell .outline-button {
+  border: 1px solid rgba(130, 104, 73, 0.2);
+  background: rgba(255, 253, 249, 0.82);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .collapse-button:hover,
+.ads-workspace-shell .outline-button:hover {
+  border-color: rgba(130, 104, 73, 0.32);
+  box-shadow: 0 10px 22px rgba(110, 73, 37, 0.08);
+  transform: none;
+}
+
+.ads-workspace-shell .primary-button {
+  border: 1px solid rgba(110, 73, 37, 0.18);
+  background: linear-gradient(135deg, #c18a55, #9c6433);
+  color: #fffdf9;
+  box-shadow: 0 10px 22px rgba(110, 73, 37, 0.18);
+}
+
+.ads-workspace-shell .danger-button {
+  border: 1px solid rgba(185, 28, 28, 0.18);
+  background: #b91c1c;
+  color: #fffdf9;
+  box-shadow: 0 10px 22px rgba(185, 28, 28, 0.14);
+}
+
+.ads-workspace-shell .status-badge {
+  min-height: 23px;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .collapsed-placeholder {
+  min-height: 62px;
+  border-color: rgba(130, 104, 73, 0.24);
+  background: rgba(255, 250, 242, 0.76);
+  color: var(--clinic-muted);
+}
+
+.ads-workspace-shell .collapsed-placeholder strong {
+  color: var(--clinic-ink);
+  font-size: 12px;
+}
+
+.ads-workspace-shell .collapsed-placeholder span {
+  font-size: 10.5px;
+  font-weight: 750;
+}
+
+.ads-workspace-shell .state-panel,
+.ads-workspace-shell .state-panel-content {
+  gap: 9px;
+}
+
+.ads-workspace-shell .state-panel p,
+.ads-workspace-shell .mini-card p,
+.ads-workspace-shell .asset-card p,
+.ads-workspace-shell .report-preview p {
+  color: var(--clinic-muted);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.ads-workspace-shell .metric-line {
+  border-color: rgba(130, 104, 73, 0.14);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ads-workspace-shell .metric-line strong {
+  color: var(--clinic-ink);
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.ads-workspace-shell .split-grid {
+  gap: 12px;
+}
+
+.ads-workspace-shell .ads-manager-toolbar {
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ads-workspace-shell .ads-summary-grid {
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.ads-workspace-shell .ads-summary-grid .metric-line,
+.ads-workspace-shell .ads-type-legend,
+.ads-workspace-shell .ads-operation-message,
+.ads-workspace-shell .workspace-switcher,
+.ads-workspace-shell .settings-credential-state {
+  border: 1px solid rgba(130, 104, 73, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 250, 242, 0.82);
+}
+
+.ads-workspace-shell .ads-summary-grid .metric-line {
+  min-height: 52px;
+  padding: 9px 11px;
+}
+
+.ads-workspace-shell .ads-type-legend {
+  margin-bottom: 12px;
+}
+
+.ads-workspace-shell .ads-hierarchy {
+  gap: 9px;
+}
+
+.ads-workspace-shell .ads-entity-group,
+.ads-workspace-shell .ads-entity-branch {
+  overflow: hidden;
+}
+
+.ads-workspace-shell .ads-entity-row {
+  grid-template-columns: 32px minmax(190px, 1.45fr) auto minmax(188px, 0.85fr) auto;
+  gap: 9px;
+  border-bottom: 1px solid rgba(130, 104, 73, 0.12);
+  padding: 11px;
+}
+
+.ads-workspace-shell .ads-entity-row.campaign {
+  box-shadow: inset 4px 0 0 var(--clinic-bronze);
+  background:
+    linear-gradient(90deg, rgba(157, 110, 62, 0.12), transparent 58%),
+    rgba(255, 253, 249, 0.96);
+}
+
+.ads-workspace-shell .ads-entity-row.adset {
+  box-shadow: inset 4px 0 0 #2684ff;
+  background:
+    linear-gradient(90deg, rgba(38, 132, 255, 0.09), transparent 58%),
+    rgba(253, 251, 247, 0.96);
+}
+
+.ads-workspace-shell .ads-entity-row.ad {
+  box-shadow: inset 4px 0 0 #15803d;
+  background:
+    linear-gradient(90deg, rgba(21, 128, 61, 0.07), transparent 48%),
+    rgba(255, 253, 249, 0.95);
+}
+
+.ads-workspace-shell .ads-entity-main strong {
+  color: var(--clinic-ink);
+  font-size: 12.5px;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .ads-entity-main span,
+.ads-workspace-shell .ads-entity-metrics span,
+.ads-workspace-shell .ads-type-legend span {
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+.ads-workspace-shell .ads-entity-toggle,
+.ads-workspace-shell .icon-action {
+  border-color: rgba(130, 104, 73, 0.16);
+  background: rgba(255, 253, 249, 0.84);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .ads-entity-metrics span,
+.ads-workspace-shell .ads-object-id {
+  background: rgba(255, 250, 242, 0.9);
+  color: var(--clinic-muted);
+}
+
+.ads-workspace-shell .ads-entity-children {
+  background: rgba(255, 250, 242, 0.58);
+}
+
+.ads-workspace-shell .card-grid {
+  gap: 12px;
+}
+
+.ads-workspace-shell .mini-card,
+.ads-workspace-shell .asset-card,
+.ads-workspace-shell .report-preview {
+  padding: 13px;
+}
+
+.ads-workspace-shell .mini-card h3,
+.ads-workspace-shell .asset-card h3,
+.ads-workspace-shell .report-preview h3,
+.ads-workspace-shell .detail-stack h3 {
+  margin: 10px 0 6px;
+  color: var(--clinic-ink);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.ads-workspace-shell .asset-thumb {
+  height: 96px;
+  background:
+    linear-gradient(135deg, rgba(201, 152, 99, 0.16), rgba(38, 132, 255, 0.08)),
+    rgba(255, 253, 249, 0.9);
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .automation-ads-updating-panel {
+  position: relative;
+  overflow: hidden;
+  min-height: 260px;
+  gap: 12px;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel::before {
+  content: "";
+  position: absolute;
+  inset: 18px 18px auto auto;
+  width: min(38%, 280px);
+  height: 132px;
+  border-radius: 8px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(38, 132, 255, 0.2) 0 2px, transparent 2px 100%),
+    linear-gradient(90deg, rgba(21, 128, 61, 0.18) 0 2px, transparent 2px 100%),
+    linear-gradient(90deg, rgba(157, 110, 62, 0.2) 0 2px, transparent 2px 100%);
+  background-size: 100% 24px, 82% 24px, 62% 24px;
+  background-position: 0 18px, 24px 56px, 58px 94px;
+  background-repeat: no-repeat;
+  opacity: 0.72;
+  animation: clinicLinePulse 3.8s ease-in-out infinite;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel h2 {
+  position: relative;
+  font-size: 24px;
+  line-height: 1.12;
+  font-weight: 900;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel h2::after {
+  content: "";
+  display: block;
+  width: 96px;
+  height: 3px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #c18a55, #2684ff, #15803d);
+  animation: clinicLinePulse 3.2s ease-in-out infinite;
+}
+
+.ads-workspace-shell .automation-ads-updating-panel p {
+  max-width: 620px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.55;
+}
+
+.ads-workspace-shell .audience-table {
+  gap: 9px;
+}
+
+.ads-workspace-shell .audience-row {
+  grid-template-columns: minmax(0, 1.45fr) minmax(96px, 0.72fr) minmax(96px, 0.72fr) auto minmax(88px, 0.66fr);
+  gap: 10px;
+  padding: 11px;
+}
+
+.ads-workspace-shell .audience-row strong,
+.ads-workspace-shell .help-item strong {
+  color: var(--clinic-ink);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.32;
+}
+
+.ads-workspace-shell .audience-segment-meta,
+.ads-workspace-shell .asset-source-note,
+.ads-workspace-shell .help-item p {
+  color: var(--clinic-muted);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.ads-workspace-shell .help-item {
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px;
+}
+
+.ads-workspace-shell .help-item svg {
+  color: var(--clinic-bronze-dark);
+}
+
+.ads-workspace-shell .report-actions {
+  gap: 8px;
+}
+
+.ads-workspace-shell .report-text-preview {
+  border-color: rgba(130, 104, 73, 0.14);
+  background: rgba(255, 253, 249, 0.88);
+  color: #4f4133;
+  font-size: 11px;
+}
+
+.ads-workspace-shell .form-grid label,
+.ads-workspace-shell .ads-edit-form label {
+  color: var(--clinic-muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.ads-workspace-shell .form-grid input,
+.ads-workspace-shell .form-grid select,
+.ads-workspace-shell .form-grid textarea,
+.ads-workspace-shell .ads-edit-form input,
+.ads-workspace-shell .workspace-switcher select {
+  border: 1px solid rgba(130, 104, 73, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 253, 249, 0.88);
+  color: var(--clinic-ink);
+  font-size: 11.5px;
+  font-weight: 800;
+}
+
+.ads-workspace-shell .settings-message {
+  border-color: rgba(130, 104, 73, 0.16);
+  background: rgba(255, 250, 242, 0.82);
+  color: var(--clinic-bronze-dark);
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .ads-workspace-shell {
+    grid-template-columns: 232px minmax(0, 1fr);
+  }
+
+  .ads-outer-toolbar {
+    height: 100vh;
+    padding: 26px 16px 20px;
+  }
+
+  .ads-toolbar-brand {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .ads-toolbar-brand-mark {
+    display: none;
+    width: 40px;
+    height: 40px;
+    font-size: 23px;
+  }
+
+  .ads-toolbar-brand strong {
+    font-size: 23px;
+  }
+
+  .ads-toolbar-item {
+    grid-template-columns: 36px minmax(0, 1fr);
+    min-height: 48px;
+    gap: 10px;
+    font-size: 12px;
+  }
+
+  .ads-toolbar-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .ads-main-panel {
+    min-height: calc(100vh - 16px);
+    margin: 8px 8px 8px 0;
+    border-radius: 24px;
+  }
+
+  .ads-main-panel .page-body {
+    padding: 8px 20px 24px;
+  }
+
+  .ads-dashboard-head h2 {
+    font-size: 28px;
+  }
+
+  .ads-dashboard-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ads-dashboard-actions {
+    justify-content: flex-start;
+  }
+
+  .ads-dashboard-metric-grid,
+  .ads-dashboard-lower-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ads-dashboard-main-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 760px) {
+  .ads-workspace-shell {
+    display: block;
+    padding: 12px;
+  }
+
+  .ads-outer-toolbar {
+    position: relative;
+    top: auto;
+    height: auto;
+    margin-bottom: 12px;
+    gap: 12px;
+    padding: 12px;
+    overflow: visible;
+    border-radius: 24px;
+  }
+
+  .ads-mobile-menu-button {
+    display: grid;
+  }
+
+  .ads-toolbar-nav {
+    display: none;
+  }
+
+  .ads-outer-toolbar.menu-open .ads-toolbar-nav {
+    display: grid;
+  }
+
+  .ads-outer-toolbar.menu-open .ads-toolbar-nav {
+    max-height: min(62dvh, 520px);
+    overflow-y: auto;
+    border-top: 1px solid rgba(130, 104, 73, 0.14);
+    padding-top: 10px;
+  }
+
+  .ads-toolbar-user-card {
+    margin-top: 0;
+  }
+
+  .ads-page-selector-shell {
+    margin-top: 0;
+  }
+
+  .ads-main-panel {
+    min-height: auto;
+    margin: 0;
+    border-radius: 24px;
+  }
+
+  .ads-main-panel .topbar {
+    min-height: 52px;
+    padding: 14px 16px 0;
+  }
+
+  .ads-main-panel .page-body {
+    padding: 16px;
+  }
+
+  .ads-workspace-shell .ads-tool-window {
+    grid-template-columns: 1fr;
+  }
+
+  .ads-workspace-shell .ads-tool-window .main-stack,
+  .ads-workspace-shell .ads-tool-window .right-rail {
+    min-width: 0;
+  }
+
+  .ads-dashboard-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ads-dashboard-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .ads-workspace-shell {
+    padding: 8px;
+  }
+
+  .ads-toolbar-brand {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .ads-toolbar-brand-mark {
+    display: none;
+  }
+
+  .ads-toolbar-brand-mark,
+  .ads-mobile-menu-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .ads-toolbar-brand strong {
+    font-size: 14px;
+  }
+
+  .ads-toolbar-brand small {
+    font-size: 8.5px;
+  }
+
+  .ads-toolbar-user-card {
+    grid-template-columns: 34px minmax(0, 1fr) 28px;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .ads-toolbar-user-menu {
+    width: 28px;
+    height: 28px;
+  }
+
+  .ads-toolbar-avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .ads-main-panel .page-body {
+    padding: 12px;
+  }
+
+  .ads-workspace-shell .settings-credential-state {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 7px;
+  }
+
+  .ads-workspace-shell .settings-credential-state .status-badge {
+    justify-self: start;
+  }
+
+  .ads-dashboard-head h2 {
+    font-size: 21px;
+  }
+
+  .ads-dashboard-actions,
+  .ads-workspace-shell .approval-insight-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .ads-workspace-shell .clinic-primary-button,
+  .ads-workspace-shell .clinic-secondary-button {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  .ads-dashboard-metric-grid,
+  .ads-dashboard-main-grid,
+  .ads-dashboard-lower-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ads-dashboard-metric-card {
+    min-height: 0;
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .ads-dashboard-metric-card strong {
+    font-size: 23px;
+  }
+
+  .ads-dashboard-metric-footer {
+    grid-template-columns: minmax(0, 1fr) minmax(104px, 42%);
+    gap: 8px;
+  }
+
+  .ads-dashboard-metric-change small {
+    white-space: normal;
+  }
+
+  .ads-mini-sparkline {
+    justify-self: end;
+    width: 100%;
+    height: 38px;
+  }
+
+  .ads-insight-banner {
+    grid-template-columns: minmax(0, 1fr) 84px;
+    gap: 10px;
+  }
+
+  .ads-insight-visual {
+    display: grid;
+    height: 82px;
+  }
+
+  .ads-insight-visual img {
+    width: 84px;
+    max-height: 82px;
+  }
+
+  .ads-insight-banner strong {
+    font-size: 18px;
+  }
+
+  .ads-insight-status {
+    font-size: 21px;
+  }
+
+  .ads-top-campaign-row,
+  .ads-workspace-shell .approval-insight-card {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .ads-campaign-rank-icon {
+    display: none;
   }
 }
 

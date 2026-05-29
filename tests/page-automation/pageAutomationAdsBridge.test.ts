@@ -33,8 +33,6 @@ describe('normalizeAdsInsightForPage', () => {
   it('aggregates supplied workspace metrics without inventing values', () => {
     const insight = normalizeAdsInsightForPage({
       datePreset: 'last_7d',
-      pageId: 'page-1',
-      pageName: 'Fifth Clinic',
       workspace: workspaceData({
         campaigns: [
           campaign({ id: 'cmp-1', spend: 100, revenue: 300, conversions: 5, ctr: 2.5 }),
@@ -55,8 +53,8 @@ describe('normalizeAdsInsightForPage', () => {
       taskId: 'page-automation-1779336000000',
     })
     expect(insight.scope).toEqual({
-      pageId: 'page-1',
-      pageName: 'Fifth Clinic',
+      pageId: undefined,
+      pageName: undefined,
       campaignIds: ['cmp-1', 'cmp-2'],
       adSetIds: ['set-1', 'set-2'],
       adIds: ['ad-1', 'ad-2'],
@@ -70,6 +68,43 @@ describe('normalizeAdsInsightForPage', () => {
       leads: 10,
       bookings: 3,
     })
+  })
+
+  it('scopes Ads insight to campaigns, ad sets, and ads that match the selected page name', () => {
+    const insight = normalizeAdsInsightForPage({
+      datePreset: 'last_7d',
+      pageId: 'page-fifth',
+      pageName: 'Fifth Clinic',
+      workspace: workspaceData({
+        campaigns: [
+          campaign({ id: 'cmp-fifth', name: 'ตัวรี MSG เติมไขมัน 9900 CA เพจFifth 20.6.66 - สำเนา', spend: 100, revenue: 240, conversions: 4, ctr: 2 }),
+          campaign({ id: 'cmp-tab', name: 'ตัวรี MSG เติมไขมัน 9900 CA เพจTab 20.6.66 - สำเนา', spend: 900, revenue: 100, conversions: 10, ctr: 1 }),
+        ],
+        adSets: [
+          adSet({ id: 'set-fifth', campaignId: 'cmp-fifth', name: 'Fifth warm audience' }),
+          adSet({ id: 'set-tab', campaignId: 'cmp-tab', name: 'Tab warm audience' }),
+        ],
+        adInsights: [
+          ad({ id: 'ad-fifth', adSetId: 'set-fifth', campaignId: 'cmp-fifth', name: 'Fifth lead ad', spend: 100, clicks: 20, impressions: 1000, leads: 8, bookings: 4 }),
+          ad({ id: 'ad-tab', adSetId: 'set-tab', campaignId: 'cmp-tab', name: 'Tab lead ad', spend: 900, clicks: 90, impressions: 9000, leads: 30, bookings: 10 }),
+        ],
+      }),
+    })
+
+    expect(insight.scope.campaignIds).toEqual(['cmp-fifth'])
+    expect(insight.scope.adSetIds).toEqual(['set-fifth'])
+    expect(insight.scope.adIds).toEqual(['ad-fifth'])
+    expect(insight.metrics).toMatchObject({
+      spend: 100,
+      revenue: 240,
+      roas: 2.4,
+      cpa: 25,
+      ctr: 2,
+      leads: 8,
+      bookings: 4,
+    })
+    expect(insight.findings).toHaveLength(1)
+    expect(insight.creativeSignals.map((signal) => signal.adId)).toEqual(['ad-fifth'])
   })
 
   it('handles a null workspace with empty scope arrays and zero metrics', () => {
