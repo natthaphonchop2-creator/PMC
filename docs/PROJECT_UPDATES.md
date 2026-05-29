@@ -31,3 +31,4 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Implemented the Ad Groups workspace as a dedicated Split Inspector page with Ad Set filters, read-only Ads details, and approval-gated Meta actions.
 - Added the Insights AI Analysis workspace implementation plan for replacing the old Insights page with an AI Brief First workspace, structured AI refresh payloads, formula-backed metrics, charts, evidence, confidence, and approval-gated recommendations.
 - Implemented the rebuilt Insights AI Analysis workspace with cached AI brief, structured AI refresh payloads, formula metrics, charts, evidence, confidence, and approval-gated recommendations.
+- Added the Automation Ads workspace implementation plan for replacing the paused placeholder with a Run Monitor, scheduled approval queue, configurable safe rules, conflict handling, and run history.
