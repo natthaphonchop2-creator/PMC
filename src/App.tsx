@@ -2856,11 +2856,9 @@ export function AdGroupsPage({
     [campaignId, rows, searchQuery, statusFilter],
   )
   const groupedRows = useMemo(() => groupAdGroupRowsByCampaign(filteredRows), [filteredRows])
-  const selectedRow =
-    filteredRows.find((row) => row.id === selectedAdSetId) ??
-    rows.find((row) => row.id === selectedAdSetId) ??
-    filteredRows[0] ??
-    rows[0]
+  const selectedFilteredRow = filteredRows.find((row) => row.id === selectedAdSetId)
+  const selectedRow = selectedFilteredRow ?? filteredRows[0]
+  const selectedRowId = selectedRow?.id ?? ''
   const activeCount = rows.filter((row) => row.deliveryStatus === 'active').length
   const adsCount = rows.reduce((sum, row) => sum + row.adsCount, 0)
   const selectedAds = selectedRow ? ads.filter((ad) => ad.adSetId === selectedRow.id) : []
@@ -2873,8 +2871,8 @@ export function AdGroupsPage({
     <div className="ad-groups-row-list">
       {listRows.map((row) => (
         <button
-          aria-pressed={selectedRow?.id === row.id}
-          className={`ad-groups-row ${selectedRow?.id === row.id ? 'selected' : ''}`}
+          aria-pressed={selectedRowId === row.id}
+          className={`ad-groups-row ${selectedRowId === row.id ? 'selected' : ''}`}
           key={row.id}
           type="button"
           onClick={() => selectRow(row)}

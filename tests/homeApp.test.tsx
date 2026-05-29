@@ -213,6 +213,16 @@ describe('Home app shell', () => {
     expect(text).not.toContain('แคมเปญที่เลือก')
   })
 
+  it('derives the Ad Groups inspector selection from filtered rows only', () => {
+    const source = readText('../src/App.tsx')
+    const selectionSource = source.slice(source.indexOf('const filteredRows'), source.indexOf('const activeCount'))
+
+    expect(selectionSource).toContain('const selectedFilteredRow = filteredRows.find((row) => row.id === selectedAdSetId)')
+    expect(selectionSource).toContain('const selectedRow = selectedFilteredRow ?? filteredRows[0]')
+    expect(selectionSource).not.toContain('rows.find((row) => row.id === selectedAdSetId)')
+    expect(selectionSource).not.toContain('?? rows[0]')
+  })
+
   it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
     withPathname('/ads-agent', () => {
       const html = renderToStaticMarkup(<App />)
