@@ -8,6 +8,17 @@ Design the next `/ads-agent` workspace for `Insights`. This page must use a real
 
 This spec covers the Insights workspace only. `Ad Groups` has its own approved design spec, and `Automation Ads` should remain a separate future workspace.
 
+## Replacement Decision
+
+The Insights implementation should rebuild the page, not patch the existing Insights UI.
+
+- Replace the current `marketer`/Insights page with a new page built from this spec.
+- Remove the old visible Insights structure, including the old assistant-first cards, old selected-plan layout, and old mixed recommendation panels.
+- Do not keep old Insights UI sections as hidden alternate views or fallback UI.
+- Reuse existing verified data contracts, helpers, API clients, formatting utilities, and approval utilities only where they still match this spec.
+- Keep the Ads Agent shell/navigation route, but replace the content rendered for the `Insights` toolbar item.
+- Existing copy such as `ผู้ช่วย Insights` can be rewritten or removed if it conflicts with the new AI Brief First product language.
+
 ## Approved Direction
 
 Use an `AI Brief First` layout.
@@ -107,7 +118,8 @@ Reference URLs are listed at the end of this spec.
 
 ### In Scope
 
-- Design a standalone `Insights` workspace inside `/ads-agent`.
+- Design a rebuilt standalone `Insights` workspace inside `/ads-agent`.
+- Replace the old Insights page content rather than extending it.
 - Use a real AI API workflow for analysis.
 - Show cached insight on load and allow manual AI refresh.
 - Include metric scoreboard and charts.
@@ -123,6 +135,8 @@ Reference URLs are listed at the end of this spec.
 
 - Building `Automation Ads`.
 - Building the Ad Groups implementation.
+- Preserving the old Insights UI as a parallel mode.
+- Keeping old Insights cards, old selected-plan layout, or old recommendation panels when they conflict with this spec.
 - Running true MMM, Conversion Lift, or holdout studies in phase 1 without proper input data.
 - Creating automated Meta writes directly from Insights.
 - Changing Meta tokens, environment variables, or account connection setup.
@@ -500,6 +514,8 @@ Implementation should aim for these boundaries:
 - `deriveInsightsMetrics`: deterministic formula engine.
 - `normalizeInsightsAiResponse`: schema validation and UI-safe normalization.
 
+The implementation can replace the current `AiMarketerPage` entrypoint or introduce a new `InsightsPage` and swap the `marketer` tab to render it. Old Insights-only components should be removed once the new page covers their responsibilities.
+
 ## Data Model
 
 ### `InsightsWorkspaceState`
@@ -554,6 +570,8 @@ Implementation should aim for these boundaries:
 
 Automated tests should cover:
 
+- The `Insights` toolbar item renders the new AI Brief First page.
+- Old Insights-only primary UI copy/sections are not rendered as the main page after replacement.
 - Cached insight renders before a new AI call.
 - `วิเคราะห์ใหม่ด้วย AI` sends raw metrics, derived formulas, freshness, and attribution metadata.
 - Formula engine does not divide by zero.
@@ -581,6 +599,8 @@ Manual browser QA:
 
 ## Acceptance Criteria
 
+- The old Insights page is replaced by the new AI Brief First workspace.
+- No old Insights UI appears as a parallel or fallback primary view.
 - Insights opens with the latest cached AI brief.
 - User can run a fresh AI API analysis manually.
 - The page shows exact metrics, charts, formula diagnostics, and evidence.
