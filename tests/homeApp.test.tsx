@@ -190,10 +190,13 @@ describe('Home app shell', () => {
     const mobileTabsRule = extractCssRule(css, '.insights-river-mobile-tabs')
     const mobileTabsButtonRule = extractCssRule(css, '.insights-river-mobile-tabs button')
     const tabletRiverMedia = extractCssBlocks(css, '@media (max-width: 1180px)').join('\n')
+    const narrowRiverContainer = extractCssBlocks(css, '@container insights-decision-river (max-width: 900px)').join('\n')
 
     expect(css).toContain('.insights-river-desktop')
     expect(css).toContain('.insights-river-mobile')
     expect(css).toContain('.insights-river-evidence-sheet')
+    expect(css).toContain('container-name: insights-decision-river')
+    expect(css).toContain('container-type: inline-size')
     expect(css).toContain('.insights-river-driver.critical')
     expect(css).toContain('.insights-river-driver.good')
     expect(css).toContain('.insights-river-outcome.critical')
@@ -203,6 +206,8 @@ describe('Home app shell', () => {
     expect(mobileTabsButtonRule).toContain('min-height: 44px')
     expect(tabletRiverMedia).toMatch(/\.insights-river-desktop\s*\{[^}]*display:\s*none/)
     expect(tabletRiverMedia).toMatch(/\.insights-river-mobile\s*\{[^}]*display:\s*grid/)
+    expect(narrowRiverContainer).toMatch(/\.insights-river-desktop\s*\{[^}]*display:\s*none/)
+    expect(narrowRiverContainer).toMatch(/\.insights-river-mobile\s*\{[^}]*display:\s*grid/)
   })
 
   it('sends structured Insights payload to the real AI brain endpoint', () => {

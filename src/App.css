@@ -2320,6 +2320,8 @@ input:focus-visible {
 }
 
 .insights-decision-river {
+  container-name: insights-decision-river;
+  container-type: inline-size;
   display: grid;
   gap: 14px;
 }
@@ -2707,6 +2709,43 @@ input:focus-visible {
 }
 
 @media (max-width: 1180px) {
+  .insights-river-desktop {
+    display: none;
+  }
+
+  .insights-river-mobile {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .insights-river-driver {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 86px;
+  }
+
+  .insights-river-driver em {
+    justify-self: start;
+  }
+
+  .insights-river-mobile-outcomes {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-mobile-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-recommendation {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-recommendation em {
+    justify-self: start;
+  }
+}
+
+@container insights-decision-river (max-width: 900px) {
   .insights-river-desktop {
     display: none;
   }
