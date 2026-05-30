@@ -4262,7 +4262,11 @@ function InsightsMetricScoreboard({ metrics }: { metrics: InsightsDerivedMetric[
             <span>{metric.label}</span>
             <strong>{formatInsightMetricValue(metric)}</strong>
             <small>{metric.formula}</small>
-            {metric.changeRate !== null ? <em>{metric.changeRate >= 0 ? '+' : ''}{(metric.changeRate * 100).toFixed(1)}%</em> : <em>รอข้อมูลเทียบช่วงก่อน</em>}
+            {metric.changeRate !== null ? (
+              <em>{metric.changeRate >= 0 ? '+' : ''}{(metric.changeRate * 100).toFixed(1)}% · {metric.comparisonLabel}</em>
+            ) : (
+              <em>{metric.comparisonLabel}</em>
+            )}
           </article>
         ))}
       </div>
@@ -4384,9 +4388,9 @@ function InsightsDecisionRiver({
           <p>เห็นเส้นทางจาก driver metrics ไป CPA และ ROAS พร้อมหลักฐานก่อนตัดสินใจ</p>
         </div>
         <div className="insights-river-legend" aria-label="Decision River legend">
-          <span><i className="pressure" /> Pressure</span>
-          <span><i className="relief" /> Relief</span>
-          <span><i className="neutral" /> Neutral</span>
+          <span><i className="pressure" /> กดดัน KPI</span>
+          <span><i className="relief" /> ช่วยดีขึ้น</span>
+          <span><i className="neutral" /> ทรงตัว/รอข้อมูล</span>
         </div>
       </div>
 
@@ -4539,6 +4543,7 @@ function InsightsRiverDriverButton({
     >
       <span>
         <strong>{driver.label}</strong>
+        <b>{driver.formattedValue}</b>
         <small>{driver.description}</small>
       </span>
       <InsightsMiniSparkline values={driver.sparkline} tone={driver.tone} />
@@ -4553,7 +4558,7 @@ function InsightsRiverOutcomeCard({ outcome }: { outcome: InsightsRiverOutcome }
       <span>{outcome.label}</span>
       <strong>{outcome.formattedValue}</strong>
       <InsightsMiniSparkline values={outcome.sparkline} tone={outcome.tone} />
-      <small>{outcome.statusLabel}</small>
+      <small>{outcome.statusLabel} · {outcome.changeLabel}</small>
     </article>
   )
 }
@@ -4592,8 +4597,8 @@ function InsightsRiverEvidencePanel({
   return (
     <aside className="insights-river-evidence-panel" aria-label="Decision River evidence">
       <div className="insights-river-confidence-card">
-        <strong>{signalCounts.supporting} supporting</strong>
-        <span>{signalCounts.neutral} neutral · {signalCounts.contradicting} pressure</span>
+        <strong>{signalCounts.supporting} หลักฐานหนุน</strong>
+        <span>{signalCounts.neutral} กลาง · {signalCounts.contradicting} กดดัน</span>
       </div>
       <div className="insights-river-counts" aria-label="Evidence counts">
         <MetricLine label="Campaigns" value={String(evidenceCounts.campaign)} />
@@ -4602,7 +4607,7 @@ function InsightsRiverEvidencePanel({
       </div>
       <InsightsRiverEvidenceList evidenceCards={evidenceCards} />
       <div className="insights-river-caveats">
-        <strong>Source & caveats</strong>
+        <strong>แหล่งข้อมูลและข้อควรระวัง</strong>
         {caveats.map((caveat) => (
           <span key={caveat}>{caveat}</span>
         ))}
@@ -4646,8 +4651,9 @@ function InsightsRiverRecommendationStrip({ recommendation }: { recommendation?:
 
 function InsightsMiniSparkline({ tone, values }: { tone: Tone; values: number[] }) {
   const points = sparklinePoints(values)
+  const hasRealTrend = values.length > 1
   return (
-    <svg className={`insights-mini-sparkline ${tone}`} viewBox="0 0 80 26" aria-hidden="true">
+    <svg className={`insights-mini-sparkline ${tone}`} data-trend-state={hasRealTrend ? 'real' : 'waiting'} viewBox="0 0 80 26" aria-hidden="true">
       <polyline fill="none" points={points} strokeWidth="2" />
     </svg>
   )

@@ -37,11 +37,11 @@ describe('insightsDecisionRiver model', () => {
   })
 
   it('classifies pressure direction according to metric meaning', () => {
-    expect(pressureToneForDriver('cpm', 0.18)).toEqual({ label: 'Pressure', tone: 'watch', direction: 'up' })
-    expect(pressureToneForDriver('cpm', -0.18)).toEqual({ label: 'Relief', tone: 'good', direction: 'down' })
-    expect(pressureToneForDriver('ctr', 0.18)).toEqual({ label: 'Relief', tone: 'good', direction: 'up' })
-    expect(pressureToneForDriver('ctr', -0.18)).toEqual({ label: 'Pressure', tone: 'critical', direction: 'down' })
-    expect(pressureToneForDriver('spend', null)).toEqual({ label: 'Neutral', tone: 'neutral', direction: 'flat' })
+    expect(pressureToneForDriver('cpm', 0.18)).toEqual({ label: 'กดดัน', tone: 'watch', direction: 'up' })
+    expect(pressureToneForDriver('cpm', -0.18)).toEqual({ label: 'ช่วยดีขึ้น', tone: 'good', direction: 'down' })
+    expect(pressureToneForDriver('ctr', 0.18)).toEqual({ label: 'ช่วยดีขึ้น', tone: 'good', direction: 'up' })
+    expect(pressureToneForDriver('ctr', -0.18)).toEqual({ label: 'กดดัน', tone: 'critical', direction: 'down' })
+    expect(pressureToneForDriver('spend', null)).toEqual({ label: 'ทรงตัว', tone: 'neutral', direction: 'flat' })
   })
 
   it('marks lanes unavailable when the source metric is unavailable', () => {
@@ -79,7 +79,7 @@ describe('insightsDecisionRiver model', () => {
     const cpa = model.outcomes.find((outcome) => outcome.id === 'cpa')
 
     expect(cvr).toEqual(expect.objectContaining({ statusLabel: 'รอข้อมูล', tone: 'neutral' }))
-    expect(cpa).toEqual(expect.objectContaining({ formattedValue: '฿211', statusLabel: 'Neutral', tone: 'neutral' }))
+    expect(cpa).toEqual(expect.objectContaining({ formattedValue: '฿211', statusLabel: 'รอเทียบ', tone: 'neutral' }))
   })
 
   it('keeps caveats unique and capped', () => {

@@ -40,6 +40,17 @@ describe('insightsWorkspace helpers', () => {
     expect(metrics.trends[0]).toEqual(expect.objectContaining({ spend: 1000, results: 5, roas: 2 }))
   })
 
+  it('calculates percent change from real trend comparison windows', () => {
+    const workspace = workspaceFixture()
+    const metrics = deriveInsightsMetrics(workspace)
+    const spend = metrics.scoreboard.find((item) => item.key === 'spend')
+
+    expect(spend?.value).toBe(4000)
+    expect(spend?.previousValue).toBe(3000)
+    expect(spend?.changeRate).toBeCloseTo(0.8333, 4)
+    expect(spend?.comparisonLabel).toBe('เทียบ 2 จุดล่าสุดกับ 2 จุดก่อนหน้า')
+  })
+
   it('builds a structured AI payload with raw metrics, formulas, freshness, and attribution', () => {
     const workspace = workspaceFixture()
     const payload = buildInsightsAnalysisPayload({

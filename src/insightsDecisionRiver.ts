@@ -14,7 +14,7 @@ export type InsightsRiverDirection = 'up' | 'down' | 'flat'
 
 export type InsightsRiverPressure = {
   direction: InsightsRiverDirection
-  label: 'Pressure' | 'Relief' | 'Neutral'
+  label: 'กดดัน' | 'ช่วยดีขึ้น' | 'ทรงตัว'
   tone: InsightsRiverTone
 }
 
@@ -34,6 +34,7 @@ export type InsightsRiverLane = {
 }
 
 export type InsightsRiverOutcome = {
+  changeLabel: string
   formattedValue: string
   id: InsightsRiverOutcomeKey
   label: string
@@ -114,16 +115,16 @@ export function buildInsightsDecisionRiverModel({ insight, metrics }: BuildModel
 }
 
 export function pressureToneForDriver(metricKey: InsightsRiverDriverKey, changeRate: number | null): InsightsRiverPressure {
-  if (changeRate === null || Math.abs(changeRate) < 0.03) return { direction: 'flat', label: 'Neutral', tone: 'neutral' }
+  if (changeRate === null || Math.abs(changeRate) < 0.03) return { direction: 'flat', label: 'ทรงตัว', tone: 'neutral' }
 
   const direction: InsightsRiverDirection = changeRate > 0 ? 'up' : 'down'
   const reliefWhenUp = metricKey === 'ctr' || metricKey === 'conversion_rate'
   const isPressure = changeRate > 0 ? !reliefWhenUp : reliefWhenUp
-  if (!isPressure) return { direction, label: 'Relief', tone: 'good' }
+  if (!isPressure) return { direction, label: 'ช่วยดีขึ้น', tone: 'good' }
 
   return {
     direction,
-    label: 'Pressure',
+    label: 'กดดัน',
     tone: metricKey === 'ctr' || metricKey === 'conversion_rate' ? 'critical' : 'watch',
   }
 }
@@ -142,6 +143,23 @@ function buildDriverLane(driver: DriverMeta, metrics: InsightsMetrics, evidenceC
       metricKey: driver.metricKey,
       sparkline: sparklineForMetric(metrics, driver.metricKey),
       statusLabel: 'รอข้อมูล',
+      tone: 'neutral',
+      trendDirection: 'flat',
+      value: metric.value,
+    }
+  }
+
+  if (metric.changeRate === null) {
+    return {
+      changeLabel: 'รอข้อมูลเทียบ',
+      description: driver.description,
+      evidenceIds,
+      formattedValue: formatInsightMetricValue(metric),
+      id: driver.id,
+      label: driver.label,
+      metricKey: driver.metricKey,
+      sparkline: sparklineForMetric(metrics, driver.metricKey),
+      statusLabel: 'รอเทียบ',
       tone: 'neutral',
       trendDirection: 'flat',
       value: metric.value,
@@ -169,6 +187,7 @@ function buildOutcome(outcome: OutcomeMeta, metrics: InsightsMetrics): InsightsR
   const metric = findMetric(metrics.scoreboard, outcome.metricKey)
   if (metric.availability === 'unavailable') {
     return {
+      changeLabel: 'รอข้อมูลเทียบ',
       formattedValue: formatInsightMetricValue(metric),
       id: outcome.id,
       label: outcome.label,
@@ -181,17 +200,32 @@ function buildOutcome(outcome: OutcomeMeta, metrics: InsightsMetrics): InsightsR
   }
 
   const changeRate = metric.changeRate ?? 0
+  if (metric.changeRate === null) {
+    return {
+      changeLabel: 'รอข้อมูลเทียบ',
+      formattedValue: formatInsightMetricValue(metric),
+      id: outcome.id,
+      label: outcome.label,
+      metricKey: outcome.metricKey,
+      sparkline: sparklineForMetric(metrics, outcome.metricKey),
+      statusLabel: 'รอเทียบ',
+      tone: 'neutral',
+      value: metric.value,
+    }
+  }
+
   const isFlat = Math.abs(changeRate) < 0.03
   const improving = outcome.id === 'roas' ? changeRate > 0 : changeRate < 0
   const tone: InsightsRiverTone = isFlat ? 'neutral' : improving ? 'good' : 'critical'
 
   return {
+    changeLabel: formatChange(metric.changeRate),
     formattedValue: formatInsightMetricValue(metric),
     id: outcome.id,
     label: outcome.label,
     metricKey: outcome.metricKey,
     sparkline: sparklineForMetric(metrics, outcome.metricKey),
-    statusLabel: tone === 'good' ? 'Relief' : tone === 'critical' ? 'Pressure' : 'Neutral',
+    statusLabel: tone === 'good' ? 'ช่วยดีขึ้น' : tone === 'critical' ? 'กดดัน' : 'ทรงตัว',
     tone,
     value: metric.value,
   }
@@ -280,12 +314,9 @@ function sparklineForMetric(metrics: InsightsMetrics, key: InsightsMetricKey): n
         case 'frequency':
           return point[key]
         case 'cpm':
-          return point.cpc !== null && point.ctr !== null ? point.cpc * point.ctr * 10 : null
-        case 'conversion_rate': {
-          const clicks = point.cpc !== null ? safeRatio(point.spend, point.cpc) : null
-          const conversionRate = clicks !== null ? safeRatio(point.results, clicks) : null
-          return conversionRate !== null ? conversionRate * 100 : null
-        }
+          return point.cpm
+        case 'conversion_rate':
+          return point.conversionRate
       }
     })
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
@@ -304,11 +335,6 @@ function countEvidence(evidenceCards: InsightsEvidenceCard[]): InsightsRiverEvid
   return counts
 }
 
-function safeRatio(numerator: number, denominator: number): number | null {
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return null
-  return numerator / denominator
-}
-
 function countSignals(insight: InsightsCachedInsight, metrics: InsightsMetrics): InsightsRiverSignalCounts {
   const diagnostics = insight.metricDiagnostics.length ? insight.metricDiagnostics : metrics.formulaDiagnostics
   return diagnostics.reduce<InsightsRiverSignalCounts>(
@@ -324,9 +350,14 @@ function countSignals(insight: InsightsCachedInsight, metrics: InsightsMetrics):
 
 function buildCaveats(insight: InsightsCachedInsight, metrics: InsightsMetrics): string[] {
   return Array.from(new Set([
-    'Data from connected Meta workspace.',
-    insight.payload.attribution.setting,
+    'ดึงจาก Meta workspace ที่เชื่อมต่ออยู่',
+    localizeCaveat(insight.payload.attribution.setting),
     ...insight.dataWarnings,
     ...metrics.dataWarnings,
   ].filter(Boolean))).slice(0, 4)
+}
+
+function localizeCaveat(caveat: string): string {
+  if (caveat.toLowerCase().includes('meta reported attribution')) return 'ใช้ attribution ที่ Meta รายงานจาก workspace ที่ซิงก์'
+  return caveat
 }

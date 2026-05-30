@@ -12,26 +12,29 @@ export type InsightsConfidence = {
 }
 
 export type InsightsDerivedMetric = {
+  availability: InsightsAvailability
+  changeRate: number | null
+  comparisonLabel: string
+  formula: string
   key: InsightsMetricKey
   label: string
-  value: number | null
   previousValue: number | null
-  changeRate: number | null
-  formula: string
   sourceFields: string[]
-  availability: InsightsAvailability
+  value: number | null
 }
 
 export type InsightsTrendPoint = {
-  date: string
-  label: string
-  spend: number
-  results: number
+  conversionRate: number | null
   cpa: number | null
-  roas: number | null
-  ctr: number | null
   cpc: number | null
+  cpm: number | null
+  ctr: number | null
+  date: string
   frequency: number | null
+  label: string
+  roas: number | null
+  results: number
+  spend: number
 }
 
 export type InsightsFormulaDiagnostic = {
@@ -73,12 +76,18 @@ export type InsightsRecommendation = {
 }
 
 export type InsightsRawTotals = {
-  spend: number
-  revenue: number
-  results: number
+  clicks: number
   impressions: number
   reach: number
-  clicks: number
+  results: number
+  revenue: number
+  spend: number
+}
+
+type InsightsTrendComparison = {
+  current: InsightsRawTotals
+  label: string
+  previous: InsightsRawTotals
 }
 
 export type InsightsMetrics = {
@@ -202,9 +211,9 @@ export function safeRatio(numerator: number, denominator: number): number | null
 
 export function deriveInsightsMetrics(workspace: WorkspaceData): InsightsMetrics {
   const rawTotals = buildRawTotals(workspace)
-  const previousTotals = buildPreviousTotals(workspace.trendData)
+  const trendComparison = buildTrendComparison(workspace.trendData)
   const confidence = scoreInsightsConfidence(workspace, rawTotals)
-  const scoreboard = buildScoreboard(rawTotals, previousTotals)
+  const scoreboard = buildScoreboard(rawTotals, trendComparison)
   const trends = buildTrendPoints(workspace, rawTotals)
   const dataWarnings = buildDataWarnings(workspace, rawTotals)
   const wasteScores = buildWasteScores(workspace)
@@ -401,7 +410,8 @@ export function formatInsightMetricValue(metric: InsightsDerivedMetric): string 
   if (metric.availability === 'unavailable' || metric.value === null) return 'รอข้อมูล'
   if (metric.key === 'spend' || metric.key === 'cpa' || metric.key === 'cpc' || metric.key === 'cpm') return formatMoney(metric.value)
   if (metric.key === 'roas') return `${formatDecimal(metric.value)}x`
-  if (metric.key === 'ctr' || metric.key === 'conversion_rate' || metric.key === 'frequency') return `${formatDecimal(metric.value)}%`
+  if (metric.key === 'frequency') return `${formatDecimal(metric.value)}x`
+  if (metric.key === 'ctr' || metric.key === 'conversion_rate') return `${formatDecimal(metric.value)}%`
   return formatNumber(metric.value)
 }
 
@@ -441,64 +451,97 @@ function buildRawTotals(workspace: WorkspaceData): InsightsRawTotals {
   }
 }
 
-function buildPreviousTotals(trendData: WorkspaceData['trendData']): InsightsRawTotals {
-  if (trendData.length < 2) return { clicks: 0, impressions: 0, reach: 0, results: 0, revenue: 0, spend: 0 }
+function buildTrendComparison(trendData: WorkspaceData['trendData']): InsightsTrendComparison | null {
+  if (trendData.length < 2) return null
+  const orderedTrendData = trendData
+    .map((point, index) => ({ index, point, timestamp: Date.parse(point.date) }))
+    .sort((left, right) => {
+      const leftTime = Number.isFinite(left.timestamp) ? left.timestamp : left.index
+      const rightTime = Number.isFinite(right.timestamp) ? right.timestamp : right.index
+      return leftTime - rightTime
+    })
+    .map((item) => item.point)
   const midpoint = Math.max(1, Math.floor(trendData.length / 2))
-  const previousPoints = trendData.slice(0, midpoint)
+  const previousPoints = orderedTrendData.slice(0, midpoint)
+  const currentPoints = orderedTrendData.slice(midpoint)
+  if (!previousPoints.length || !currentPoints.length) return null
+
   return {
-    clicks: sum(previousPoints, (point) => point.clicks),
-    impressions: sum(previousPoints, (point) => point.impressions ?? 0),
-    reach: sum(previousPoints, (point) => point.reach ?? 0),
-    results: sum(previousPoints, (point) => point.bookings),
-    revenue: sum(previousPoints, (point) => point.revenue),
-    spend: sum(previousPoints, (point) => point.spend),
+    current: buildTrendTotals(currentPoints),
+    label: `เทียบ ${currentPoints.length} จุดล่าสุดกับ ${previousPoints.length} จุดก่อนหน้า`,
+    previous: buildTrendTotals(previousPoints),
   }
 }
 
-function buildScoreboard(current: InsightsRawTotals, previous: InsightsRawTotals): InsightsDerivedMetric[] {
+function buildTrendTotals(points: WorkspaceData['trendData']): InsightsRawTotals {
+  return {
+    clicks: sum(points, (point) => point.clicks),
+    impressions: sum(points, (point) => point.impressions ?? 0),
+    reach: sum(points, (point) => point.reach ?? 0),
+    results: sum(points, (point) => point.bookings),
+    revenue: sum(points, (point) => point.revenue),
+    spend: sum(points, (point) => point.spend),
+  }
+}
+
+function buildMetricValues(totals: InsightsRawTotals): Record<InsightsMetricKey, number | null> {
+  const cpa = safeRatio(totals.spend, totals.results)
+  const roas = safeRatio(totals.revenue, totals.spend)
+  const ctr = percentRatio(totals.clicks, totals.impressions)
+  const cpc = safeRatio(totals.spend, totals.clicks)
+  const cpm = totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : null
+  const frequency = safeRatio(totals.impressions, totals.reach)
+  const conversionRate = percentRatio(totals.results, totals.clicks)
+
+  return {
+    conversion_rate: conversionRate,
+    cpa,
+    cpc,
+    cpm,
+    ctr,
+    frequency,
+    results: totals.results,
+    roas,
+    spend: totals.spend,
+  }
+}
+
+function buildScoreboard(current: InsightsRawTotals, comparison: InsightsTrendComparison | null): InsightsDerivedMetric[] {
+  const currentValues = buildMetricValues(current)
+  const comparisonCurrentValues = comparison ? buildMetricValues(comparison.current) : null
+  const comparisonPreviousValues = comparison ? buildMetricValues(comparison.previous) : null
   const metric = (
     key: InsightsMetricKey,
     label: string,
-    value: number | null,
-    previousValue: number | null,
     formula: string,
     sourceFields: string[],
-  ): InsightsDerivedMetric => ({
-    availability: value === null ? 'unavailable' : 'ready',
-    changeRate: value !== null && previousValue !== null ? safeRatio(value - previousValue, Math.abs(previousValue)) : null,
-    formula,
-    key,
-    label,
-    previousValue,
-    sourceFields,
-    value,
-  })
-
-  const currentCpa = safeRatio(current.spend, current.results)
-  const previousCpa = safeRatio(previous.spend, previous.results)
-  const currentRoas = safeRatio(current.revenue, current.spend)
-  const previousRoas = safeRatio(previous.revenue, previous.spend)
-  const currentCtr = percentRatio(current.clicks, current.impressions)
-  const previousCtr = percentRatio(previous.clicks, previous.impressions)
-  const currentCpc = safeRatio(current.spend, current.clicks)
-  const previousCpc = safeRatio(previous.spend, previous.clicks)
-  const currentCpm = current.impressions > 0 ? (current.spend / current.impressions) * 1000 : null
-  const previousCpm = previous.impressions > 0 ? (previous.spend / previous.impressions) * 1000 : null
-  const currentFrequency = percentRatio(current.impressions, current.reach)
-  const previousFrequency = percentRatio(previous.impressions, previous.reach)
-  const currentCvr = percentRatio(current.results, current.clicks)
-  const previousCvr = percentRatio(previous.results, previous.clicks)
+  ): InsightsDerivedMetric => {
+    const value = currentValues[key]
+    const comparisonValue = comparisonCurrentValues?.[key] ?? null
+    const previousValue = comparisonPreviousValues?.[key] ?? null
+    return {
+      availability: value === null ? 'unavailable' : 'ready',
+      changeRate: comparisonValue !== null && previousValue !== null ? safeRatio(comparisonValue - previousValue, Math.abs(previousValue)) : null,
+      comparisonLabel: comparison ? comparison.label : 'รอ trend จริงสำหรับเทียบช่วงก่อน',
+      formula,
+      key,
+      label,
+      previousValue,
+      sourceFields,
+      value,
+    }
+  }
 
   return [
-    metric('spend', 'Spend', current.spend, previous.spend || null, 'spend', ['campaigns.spend', 'ads.spend']),
-    metric('results', 'Results', current.results, previous.results || null, 'conversions or bookings', ['campaigns.conversions', 'ads.bookings']),
-    metric('cpa', 'CPA/CPL', currentCpa, previousCpa, 'spend / conversions', ['spend', 'results']),
-    metric('roas', 'ROAS', currentRoas, previousRoas, 'conversion_value / spend', ['revenue', 'spend']),
-    metric('ctr', 'CTR', currentCtr, previousCtr, 'clicks / impressions', ['clicks', 'impressions']),
-    metric('cpc', 'CPC', currentCpc, previousCpc, 'spend / clicks', ['spend', 'clicks']),
-    metric('cpm', 'CPM', currentCpm, previousCpm, 'spend / impressions * 1000', ['spend', 'impressions']),
-    metric('frequency', 'Frequency', currentFrequency, previousFrequency, 'impressions / reach', ['impressions', 'reach']),
-    metric('conversion_rate', 'Conversion rate', currentCvr, previousCvr, 'conversions / clicks', ['results', 'clicks']),
+    metric('spend', 'Spend', 'spend', ['campaigns.spend', 'ads.spend', 'trendData.spend']),
+    metric('results', 'Results', 'conversions or bookings', ['campaigns.conversions', 'ads.bookings', 'trendData.bookings']),
+    metric('cpa', 'CPA/CPL', 'spend / conversions', ['spend', 'results', 'trendData.spend', 'trendData.bookings']),
+    metric('roas', 'ROAS', 'conversion_value / spend', ['revenue', 'spend', 'trendData.revenue', 'trendData.spend']),
+    metric('ctr', 'CTR', 'clicks / impressions', ['clicks', 'impressions', 'trendData.clicks', 'trendData.impressions']),
+    metric('cpc', 'CPC', 'spend / clicks', ['spend', 'clicks', 'trendData.spend', 'trendData.clicks']),
+    metric('cpm', 'CPM', 'spend / impressions * 1000', ['spend', 'impressions', 'trendData.spend', 'trendData.impressions']),
+    metric('frequency', 'Frequency', 'impressions / reach', ['impressions', 'reach', 'trendData.impressions', 'trendData.reach']),
+    metric('conversion_rate', 'Conversion rate', 'conversions / clicks', ['results', 'clicks', 'trendData.bookings', 'trendData.clicks']),
   ]
 }
 
@@ -513,11 +556,13 @@ function buildTrendPoints(workspace: WorkspaceData, rawTotals: InsightsRawTotals
     const reach = finiteOrZero(point.reach)
     const results = finiteOrZero(point.bookings)
     return {
+      conversionRate: percentRatio(results, clicks),
       cpa: safeRatio(point.spend, results),
       cpc: safeRatio(point.spend, clicks),
+      cpm: impressions > 0 ? (point.spend / impressions) * 1000 : null,
       ctr: percentRatio(clicks, impressions),
       date: point.date,
-      frequency: percentRatio(impressions, reach),
+      frequency: safeRatio(impressions, reach),
       label: formatTrendLabel(point.date),
       results,
       roas: safeRatio(point.revenue, point.spend),
@@ -529,6 +574,7 @@ function buildTrendPoints(workspace: WorkspaceData, rawTotals: InsightsRawTotals
 function buildDataWarnings(workspace: WorkspaceData, totals: InsightsRawTotals): string[] {
   const warnings: string[] = []
   if (!workspace.campaigns.length && !workspace.adInsights.length) warnings.push('ข้อมูลยังไม่พอ ต้อง Sync Meta ก่อนวิเคราะห์ด้วย AI')
+  if (workspace.trendData.length < 2) warnings.push('ยังไม่มี trend รายวันพอสำหรับคำนวณ % เทียบช่วงก่อน')
   if (totals.impressions < 1000 || totals.clicks < 20) warnings.push('ข้อมูลยังมีปริมาณต่ำ ความมั่นใจของข้อสรุปจะลดลง')
   if (!workspace.updatedAt) warnings.push('ยังไม่มีเวลาซิงก์ข้อมูลล่าสุด')
   return warnings
@@ -835,6 +881,7 @@ function findMetric(scoreboard: InsightsDerivedMetric[], key: InsightsMetricKey)
   return scoreboard.find((metric) => metric.key === key) ?? {
     availability: 'unavailable',
     changeRate: null,
+    comparisonLabel: 'รอ trend จริงสำหรับเทียบช่วงก่อน',
     formula: key,
     key,
     label: key,

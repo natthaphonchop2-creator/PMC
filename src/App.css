@@ -2330,20 +2330,34 @@ input:focus-visible {
   gap: 14px;
 }
 
+.insights-decision-river .insights-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
 .insights-river-legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 6px;
   color: #7b6a58;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  max-width: 320px;
 }
 
 .insights-river-legend span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 24px;
+  border: 1px solid rgba(121, 92, 57, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.64);
+  padding: 3px 8px;
+  white-space: nowrap;
 }
 
 .insights-river-legend i {
@@ -2428,6 +2442,13 @@ input:focus-visible {
   color: #2f271e;
   font-size: 14px;
   line-height: 1.25;
+}
+
+.insights-river-driver b {
+  color: #2f271e;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.1;
 }
 
 .insights-river-driver small {
@@ -2563,10 +2584,17 @@ input:focus-visible {
   align-self: start;
   position: sticky;
   top: 18px;
+  display: grid;
+  gap: 10px;
   border: 1px solid rgba(121, 92, 57, 0.14);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.64);
   padding: 12px;
+}
+
+.insights-river-confidence-card {
+  display: grid;
+  gap: 4px;
 }
 
 .insights-river-counts {
@@ -2635,6 +2663,11 @@ input:focus-visible {
 
 .insights-mini-sparkline polyline {
   stroke: #8a7a68;
+}
+
+.insights-mini-sparkline[data-trend-state="waiting"] polyline {
+  opacity: 0.42;
+  stroke-dasharray: 4 4;
 }
 
 .insights-mini-sparkline.pressure polyline,
@@ -2719,6 +2752,15 @@ input:focus-visible {
 }
 
 @media (max-width: 1180px) {
+  .insights-decision-river .insights-section-head {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-legend {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
   .insights-river-desktop {
     display: none;
   }
@@ -2756,6 +2798,15 @@ input:focus-visible {
 }
 
 @container insights-decision-river (max-width: 900px) {
+  .insights-decision-river .insights-section-head {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-legend {
+    justify-content: flex-start;
+    max-width: none;
+  }
+
   .insights-river-desktop {
     display: none;
   }
