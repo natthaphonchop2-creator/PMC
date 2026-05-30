@@ -14,9 +14,12 @@ describe('insightsDecisionRiver model', () => {
     expect(model.drivers.map((driver) => driver.id)).toEqual(['spend', 'cpm', 'ctr', 'conversion_rate', 'frequency'])
     expect(model.outcomes.map((outcome) => outcome.id)).toEqual(['cpa', 'roas'])
     expect(model.defaultDriverId).toBe('cpm')
-    expect(model.evidenceCounts.total).toBeGreaterThan(0)
+    expect(model.evidenceCounts).toEqual({ account: 0, ad: 0, adset: 0, campaign: 2, total: 2 })
     expect(model.caveats.some((caveat) => caveat.includes('Meta'))).toBe(true)
     expect(model.signalCounts.supporting + model.signalCounts.neutral + model.signalCounts.contradicting).toBeGreaterThan(0)
+
+    expect(model.drivers.find((driver) => driver.id === 'cpm')?.sparkline).toHaveLength(4)
+    expect(model.drivers.find((driver) => driver.id === 'conversion_rate')?.sparkline).toHaveLength(4)
   })
 
   it('classifies pressure direction according to metric meaning', () => {
@@ -29,6 +32,10 @@ describe('insightsDecisionRiver model', () => {
 
   it('marks lanes unavailable when the source metric is unavailable', () => {
     const workspace = workspaceFixture({
+      campaigns: [
+        { conversions: 0, cpa: 0, revenue: 0, roas: 0 },
+        { conversions: 0, cpa: 0, revenue: 0, roas: 0 },
+      ],
       trendData: [{ bookings: 0, clicks: 0, cpa: 0, date: '2026-05-01', impressions: 0, leads: 0, reach: 0, revenue: 0, showUps: 0, spend: 1000, treatments: 0 }],
     })
     workspace.adInsights = workspace.adInsights.map((ad) => ({ ...ad, bookings: 0, clicks: 0, impressions: 0, leads: 0 }))
@@ -43,9 +50,54 @@ describe('insightsDecisionRiver model', () => {
     expect(ctr).toEqual(expect.objectContaining({ statusLabel: 'รอข้อมูล', tone: 'neutral' }))
     expect(cpa).toEqual(expect.objectContaining({ statusLabel: 'รอข้อมูล', tone: 'neutral' }))
   })
+
+  it('keeps CPA ready when conversion rate is unavailable but CPA is available', () => {
+    const workspace = workspaceFixture({
+      trendData: [{ bookings: 0, clicks: 0, cpa: 0, date: '2026-05-01', impressions: 0, leads: 0, reach: 0, revenue: 4500, showUps: 0, spend: 4000, treatments: 0 }],
+    })
+    workspace.adInsights = workspace.adInsights.map((ad) => ({ ...ad, bookings: 0, clicks: 0, impressions: 0, leads: 0 }))
+
+    const metrics = deriveInsightsMetrics(workspace)
+    const insight = buildFallbackInsightsCache(buildInsightsAnalysisPayload({ accountName: 'PMC', datePreset: 'วันนี้', workspace }))
+    const model = buildInsightsDecisionRiverModel({ insight, metrics })
+
+    const cvr = model.drivers.find((driver) => driver.id === 'conversion_rate')
+    const cpa = model.outcomes.find((outcome) => outcome.id === 'cpa')
+
+    expect(cvr).toEqual(expect.objectContaining({ statusLabel: 'รอข้อมูล', tone: 'neutral' }))
+    expect(cpa).toEqual(expect.objectContaining({ formattedValue: '฿211', statusLabel: 'Neutral', tone: 'neutral' }))
+  })
+
+  it('keeps caveats unique and capped', () => {
+    const workspace = workspaceFixture()
+    const metrics = deriveInsightsMetrics(workspace)
+    const insight = buildFallbackInsightsCache(buildInsightsAnalysisPayload({ accountName: 'PMC', datePreset: 'เดือนนี้', workspace }))
+
+    const model = buildInsightsDecisionRiverModel({
+      insight: {
+        ...insight,
+        dataWarnings: ['duplicate warning', 'duplicate warning', 'extra warning one', 'extra warning two'],
+      },
+      metrics: {
+        ...metrics,
+        dataWarnings: ['duplicate warning', 'extra warning three'],
+      },
+    })
+
+    expect(model.caveats).toHaveLength(4)
+    expect(new Set(model.caveats).size).toBe(model.caveats.length)
+  })
 })
 
-function workspaceFixture(overrides: { trendData?: WorkspaceData['trendData'] } = {}): WorkspaceData {
+function workspaceFixture(overrides: {
+  campaigns?: Array<Partial<WorkspaceData['campaigns'][number]>>
+  trendData?: WorkspaceData['trendData']
+} = {}): WorkspaceData {
+  const campaigns: WorkspaceData['campaigns'] = [
+    { aiStatus: 'healthy', aiSummary: 'ROAS ดี', budget: 5000, conversions: 15, cpa: 333, ctr: 3.2, deliveryStatus: 'active', frequency: 2.2, id: 'cmp-1', name: 'Lead Botox', objective: 'Leads', revenue: 4000, roas: 2, spend: 2000 },
+    { aiStatus: 'watch', aiSummary: 'ต้องจับตา', budget: 3000, conversions: 4, cpa: 500, ctr: 1.2, deliveryStatus: 'active', frequency: 4.8, id: 'cmp-2', name: 'Filler Review', objective: 'Leads', revenue: 500, roas: 0.5, spend: 2000 },
+  ].map((campaign, index) => ({ ...campaign, ...(overrides.campaigns?.[index] ?? {}) }))
+
   return {
     actions: [],
     adInsights: [
@@ -60,10 +112,7 @@ function workspaceFixture(overrides: { trendData?: WorkspaceData['trendData'] } 
     auditTrail: [],
     autoAds: [],
     autoMode: 'suggest',
-    campaigns: [
-      { aiStatus: 'healthy', aiSummary: 'ROAS ดี', budget: 5000, conversions: 15, cpa: 333, ctr: 3.2, deliveryStatus: 'active', frequency: 2.2, id: 'cmp-1', name: 'Lead Botox', objective: 'Leads', revenue: 4000, roas: 2, spend: 2000 },
-      { aiStatus: 'watch', aiSummary: 'ต้องจับตา', budget: 3000, conversions: 4, cpa: 500, ctr: 1.2, deliveryStatus: 'active', frequency: 4.8, id: 'cmp-2', name: 'Filler Review', objective: 'Leads', revenue: 500, roas: 0.5, spend: 2000 },
-    ],
+    campaigns,
     channelPerformance: [],
     complianceReviews: [],
     funnelMetrics: [],

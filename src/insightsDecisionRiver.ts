@@ -167,11 +167,9 @@ function buildDriverLane(driver: DriverMeta, metrics: InsightsMetrics, evidenceC
 
 function buildOutcome(outcome: OutcomeMeta, metrics: InsightsMetrics): InsightsRiverOutcome {
   const metric = findMetric(metrics.scoreboard, outcome.metricKey)
-  const cvr = findMetric(metrics.scoreboard, 'conversion_rate')
-  const unavailable = metric.availability === 'unavailable' || (outcome.id === 'cpa' && cvr.availability === 'unavailable')
-  if (unavailable) {
+  if (metric.availability === 'unavailable') {
     return {
-      formattedValue: unavailableMetricValue(metric),
+      formattedValue: formatInsightMetricValue(metric),
       id: outcome.id,
       label: outcome.label,
       metricKey: outcome.metricKey,
@@ -227,8 +225,12 @@ function sparklineForMetric(metrics: InsightsMetrics, key: InsightsMetricKey): n
         case 'frequency':
           return point[key]
         case 'cpm':
-        case 'conversion_rate':
-          return null
+          return point.cpc !== null && point.ctr !== null ? point.cpc * point.ctr * 10 : null
+        case 'conversion_rate': {
+          const clicks = point.cpc !== null ? safeRatio(point.spend, point.cpc) : null
+          const conversionRate = clicks !== null ? safeRatio(point.results, clicks) : null
+          return conversionRate !== null ? conversionRate * 100 : null
+        }
       }
     })
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
@@ -241,14 +243,15 @@ function formatChange(changeRate: number | null): string {
   return `${changeRate >= 0 ? '+' : '-'}${percent}%`
 }
 
-function unavailableMetricValue(metric: InsightsDerivedMetric): string {
-  return metric.availability === 'unavailable' ? formatInsightMetricValue(metric) : 'รอข้อมูล'
-}
-
 function countEvidence(evidenceCards: InsightsEvidenceCard[]): InsightsRiverEvidenceCounts {
   const counts: InsightsRiverEvidenceCounts = { account: 0, ad: 0, adset: 0, campaign: 0, total: evidenceCards.length }
   for (const card of evidenceCards) counts[card.objectType] += 1
   return counts
+}
+
+function safeRatio(numerator: number, denominator: number): number | null {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return null
+  return numerator / denominator
 }
 
 function countSignals(insight: InsightsCachedInsight, metrics: InsightsMetrics): InsightsRiverSignalCounts {
