@@ -392,7 +392,13 @@ export function readInsightsCache(): InsightsCachedInsight | null {
     const raw = storage?.getItem(INSIGHTS_CACHE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as InsightsCachedInsight
-    return parsed && typeof parsed.id === 'string' ? { ...parsed, source: 'cached' } : null
+    if (!parsed || typeof parsed.id !== 'string') return null
+    const fallbackEvidenceCards = parsed.payload ? buildEvidenceCardsFromPayload(parsed.payload) : []
+    return {
+      ...parsed,
+      evidenceCards: mergeEvidenceMetricValues(parsed.evidenceCards, fallbackEvidenceCards),
+      source: 'cached',
+    }
   } catch {
     return null
   }
@@ -729,21 +735,20 @@ function buildEvidenceCards(workspace: WorkspaceData, scoreboard: InsightsDerive
     .slice()
     .sort((left, right) => right.spend - left.spend)
     .slice(0, 2)
-    .map((campaign) => ({
-      confidence,
-      dateWindow,
-      formulaResult: `ROAS ${formatDecimal(campaign.roas)}x · CPA ${formatMoney(campaign.cpa)}`,
-      id: `evidence-campaign-${campaign.id}`,
-      metricValues: [
-        { label: 'Spend', value: formatMoney(campaign.spend) },
-        { label: 'Results', value: formatNumber(campaign.conversions) },
-        { label: 'CTR', value: `${formatDecimal(campaign.ctr)}%` },
-      ],
-      objectId: campaign.id,
-      objectName: campaign.name,
-      objectType: 'campaign' as const,
-      title: campaign.roas < 1 ? 'Campaign ใช้งบแต่ ROAS ต่ำ' : 'Campaign ที่ควรรักษาจังหวะ',
-    }))
+    .map((campaign) => {
+      const campaignAds = workspace.adInsights.filter((ad) => ad.campaignId === campaign.id)
+      return {
+        confidence,
+        dateWindow,
+        formulaResult: `ROAS ${formatDecimal(campaign.roas)}x · CPA ${formatMoney(campaign.cpa)}`,
+        id: `evidence-campaign-${campaign.id}`,
+        metricValues: buildCampaignEvidenceMetricValues(campaign, campaignAds),
+        objectId: campaign.id,
+        objectName: campaign.name,
+        objectType: 'campaign' as const,
+        title: campaign.roas < 1 ? 'Campaign ใช้งบแต่ ROAS ต่ำ' : 'Campaign ที่ควรรักษาจังหวะ',
+      }
+    })
 
   const cpa = findMetric(scoreboard, 'cpa')
   const accountCard: InsightsEvidenceCard = {
@@ -751,7 +756,7 @@ function buildEvidenceCards(workspace: WorkspaceData, scoreboard: InsightsDerive
     dateWindow,
     formulaResult: `สูตรรวม CPA = ${formatInsightMetricValue(cpa)}`,
     id: 'evidence-account-scoreboard',
-    metricValues: scoreboard.slice(0, 4).map((metric) => ({ label: metric.label, value: formatInsightMetricValue(metric) })),
+    metricValues: scoreboard.map((metric) => ({ label: metric.label, value: formatInsightMetricValue(metric) })),
     objectId: 'account',
     objectName: 'บัญชีโฆษณา',
     objectType: 'account',
@@ -759,6 +764,50 @@ function buildEvidenceCards(workspace: WorkspaceData, scoreboard: InsightsDerive
   }
 
   return [accountCard, ...campaignCards]
+}
+
+type CampaignEvidenceMetricSource = {
+  conversions: number
+  cpa: number
+  ctr: number
+  frequency: number
+  id: string
+  roas: number
+  spend: number
+}
+
+type CampaignEvidenceActivitySource = {
+  bookings?: number
+  campaignId: string
+  clicks: number
+  impressions: number
+}
+
+function buildCampaignEvidenceMetricValues(
+  campaign: CampaignEvidenceMetricSource,
+  activityItems: CampaignEvidenceActivitySource[],
+): InsightsEvidenceCard['metricValues'] {
+  const hasActivity = activityItems.length > 0
+  const clicks = hasActivity ? sum(activityItems, (item) => item.clicks) : null
+  const impressions = hasActivity ? sum(activityItems, (item) => item.impressions) : null
+  const activityBookings = hasActivity ? sum(activityItems, (item) => item.bookings ?? 0) : 0
+  const results = finiteOrZero(campaign.conversions) || activityBookings
+  const ctr = finiteOrZero(campaign.ctr) || (clicks !== null && impressions !== null ? percentRatio(clicks, impressions) ?? 0 : 0)
+  const cvr = clicks !== null ? percentRatio(results, clicks) : null
+  const cpm = impressions !== null && impressions > 0 ? (finiteOrZero(campaign.spend) / impressions) * 1000 : null
+
+  return [
+    { label: 'Spend', value: formatMoney(finiteOrZero(campaign.spend)) },
+    { label: 'Results', value: formatNumber(results) },
+    { label: 'Clicks', value: formatOptionalNumber(clicks) },
+    { label: 'Impressions', value: formatOptionalNumber(impressions) },
+    { label: 'CTR', value: `${formatDecimal(ctr)}%` },
+    { label: 'CVR', value: formatOptionalPercent(cvr) },
+    { label: 'CPM', value: formatOptionalMoney(cpm) },
+    { label: 'Frequency', value: `${formatDecimal(finiteOrZero(campaign.frequency))}x` },
+    { label: 'ROAS', value: `${formatDecimal(finiteOrZero(campaign.roas))}x` },
+    { label: 'CPA', value: formatMoney(finiteOrZero(campaign.cpa)) },
+  ]
 }
 
 function buildRecommendations(
@@ -905,20 +954,41 @@ function inferDateWindow(datePreset: string, trendData: WorkspaceData['trendData
 }
 
 function buildEvidenceCardsFromPayload(payload: InsightsAnalysisPayload): InsightsEvidenceCard[] {
-  return payload.rawMetrics.campaigns.slice(0, 2).map((campaign) => ({
-    confidence: scorePayloadConfidence(payload),
-    dateWindow: payload.dateWindow.preset,
-    formulaResult: `ROAS ${formatDecimal(campaign.roas)}x · CPA ${formatMoney(campaign.cpa)}`,
-    id: `ai-evidence-${campaign.id}`,
-    metricValues: [
-      { label: 'Spend', value: formatMoney(campaign.spend) },
-      { label: 'Results', value: formatNumber(campaign.conversions) },
-    ],
-    objectId: campaign.id,
-    objectName: campaign.name,
-    objectType: 'campaign',
-    title: 'หลักฐานจาก Campaign',
-  }))
+  return payload.rawMetrics.campaigns.slice(0, 2).map((campaign) => {
+    const campaignAds = payload.rawMetrics.ads.filter((ad) => ad.campaignId === campaign.id)
+    return {
+      confidence: scorePayloadConfidence(payload),
+      dateWindow: payload.dateWindow.preset,
+      formulaResult: `ROAS ${formatDecimal(campaign.roas)}x · CPA ${formatMoney(campaign.cpa)}`,
+      id: `ai-evidence-${campaign.id}`,
+      metricValues: buildCampaignEvidenceMetricValues(campaign, campaignAds),
+      objectId: campaign.id,
+      objectName: campaign.name,
+      objectType: 'campaign',
+      title: 'หลักฐานจาก Campaign',
+    }
+  })
+}
+
+function mergeEvidenceMetricValues(cards: InsightsEvidenceCard[] | undefined, fallbackCards: InsightsEvidenceCard[]): InsightsEvidenceCard[] {
+  if (!Array.isArray(cards) || !cards.length) return fallbackCards
+  return cards.map((card, index) => {
+    const fallback = fallbackCards.find((item) => item.objectId === card.objectId && item.objectType === card.objectType) ?? fallbackCards[index]
+    if (!fallback) return card
+    const mergedMetrics = Array.isArray(card.metricValues) ? [...card.metricValues] : []
+    for (const fallbackMetric of fallback.metricValues) {
+      const hasMetric = mergedMetrics.some((metric) => normalizeEvidenceMetricLabel(metric.label) === normalizeEvidenceMetricLabel(fallbackMetric.label))
+      if (!hasMetric) mergedMetrics.push(fallbackMetric)
+    }
+    return { ...card, metricValues: mergedMetrics }
+  })
+}
+
+function normalizeEvidenceMetricLabel(label: string): string {
+  const normalized = label.trim().toLowerCase()
+  if (normalized === 'conversion rate') return 'cvr'
+  if (normalized === 'cpa/cpl') return 'cpa'
+  return normalized
 }
 
 function buildRecommendationsFromPayload(payload: InsightsAnalysisPayload): InsightsRecommendation[] {
@@ -988,7 +1058,7 @@ function normalizeEvidenceCards(raw: unknown, fallback: InsightsEvidenceCard[], 
     objectType: isTargetType(item.objectType) ? item.objectType : fallback[index]?.objectType ?? 'account',
     title: cleanText(item.title, fallback[index]?.title ?? 'หลักฐานที่ใช้'),
   }))
-  return normalized.length ? normalized : fallback
+  return normalized.length ? mergeEvidenceMetricValues(normalized, fallback) : fallback
 }
 
 function normalizeRecommendations(raw: unknown, fallback: InsightsRecommendation[], confidence: InsightsConfidence): InsightsRecommendation[] {
@@ -1071,6 +1141,18 @@ function formatNumber(value: number): string {
 
 function formatDecimal(value: number): string {
   return new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 }).format(value)
+}
+
+function formatOptionalMoney(value: number | null): string {
+  return value === null ? 'รอข้อมูล' : formatMoney(value)
+}
+
+function formatOptionalNumber(value: number | null): string {
+  return value === null ? 'รอข้อมูล' : formatNumber(value)
+}
+
+function formatOptionalPercent(value: number | null): string {
+  return value === null ? 'รอข้อมูล' : `${formatDecimal(value)}%`
 }
 
 function formatDateTime(value: string): string {

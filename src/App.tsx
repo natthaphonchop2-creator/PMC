@@ -455,10 +455,10 @@ function automationDisplayLabel(mode: string) {
 
 const sectionTooltips: Record<string, string> = {
   'Ads Dashboard': 'ภาพรวมแคมเปญ คำแนะนำ และ KPI ที่ควรตรวจวันนี้',
-  'Performance Overview': 'ดูแนวโน้มค่าโฆษณา รายได้ และยอดนัดหมายจากข้อมูลล่าสุด',
-  'Top Campaigns': 'แคมเปญที่ทำผลงานดีที่สุดตามผลลัพธ์และผลตอบแทน',
+  'แนวโน้มผลงานรายวัน': 'ดูแนวโน้มค่าโฆษณา รายได้ และยอดนัดหมายจากข้อมูลล่าสุด',
+  'แคมเปญที่ควรดูก่อน': 'แคมเปญที่ทำผลงานดีที่สุดตามผลลัพธ์และผลตอบแทน',
   'คำแนะนำที่รออนุมัติ': 'รายการที่ควรตรวจวันนี้ก่อนกดรีวิวหรือปฏิเสธ',
-  'PMC Insights': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
+  'สิ่งที่ต้องตรวจต่อ': 'สรุปสัญญาณล่าสุดจากข้อมูล Ads Dashboard',
   'ตัวจัดการโฆษณา': 'จัดการแคมเปญ ชุดโฆษณา และโฆษณา รวมเปิด ปิด แก้ไข หรือลบ',
   'แคมเปญที่เลือก': 'ดูรายละเอียดของแคมเปญที่กำลังเลือกอยู่ก่อนทำงานต่อ',
   Insights: 'สรุป AI brief ตัวเลข สูตรวิเคราะห์ และหลักฐานจากข้อมูลโฆษณาล่าสุด',
@@ -1182,12 +1182,12 @@ function buildWebsiteContext({
 function visibleCardsForTab(activeTab: TabId, selectedCampaignName?: string) {
   const cards: Record<TabId, string[]> = {
     ads: ['ตัวจัดการโฆษณา', 'แคมเปญที่เลือก', selectedCampaignName ? `เลือก: ${selectedCampaignName}` : 'ยังไม่ได้เลือกแคมเปญ'],
-    analytics: ['Ads Dashboard', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'Performance Overview', 'Top Campaigns', 'PMC Insights'],
+    analytics: ['ภาพรวมโฆษณา', 'Impressions', 'Clicks', 'Conversions', 'Cost', 'แนวโน้มผลงานรายวัน', 'แคมเปญที่ควรดูก่อน', 'สิ่งที่ต้องตรวจต่อ'],
     audience: ['กลุ่มเป้าหมาย', 'ปริมาณของกลุ่มเป้าหมาย'],
     creative: ['Automation Ads', 'workflow โฆษณาอัตโนมัติ'],
     help: ['ศูนย์ช่วยเหลือ', 'Playbook'],
     library: ['คลังโฆษณา', 'ความเสี่ยงของข้อความ'],
-    marketer: ['Insights', 'สรุปล่าสุดจาก AI', 'ตัวเลขสำคัญ', 'คำแนะนำที่ควรตรวจ'],
+    marketer: ['Insights', 'สรุปเพื่อการตัดสินใจ', 'ตัวเลขที่ต้องดูตอนนี้', 'คำแนะนำที่รออนุมัติ'],
     optimization: ['Optimizer & Automation', 'บอร์ดตัดสินใจ', 'คิวคำสั่ง Auto Ads'],
     reports: ['ตัวสร้างรายงาน', 'รายงานฉบับร่าง'],
     settings: ['ตั้งค่าบัญชีโฆษณา', 'สถานะการเชื่อมต่อ'],
@@ -1253,7 +1253,7 @@ function PmcAdsAgentApp() {
   const trendPoints = useMemo(() => mapTrendData(visibleWorkspace?.trendData ?? []), [visibleWorkspace])
   const funnelMetrics = visibleWorkspace?.funnelMetrics ?? []
   const confirmingRecommendation = confirmingId ? activeRecommendations.find((item) => item.id === confirmingId) : undefined
-  const isPageLoading = dataState === 'loading' && activeTab !== 'analytics'
+  const isPageLoading = dataState === 'loading'
   const websiteContext = useMemo(
     () =>
       buildWebsiteContext({
@@ -1906,9 +1906,11 @@ function PmcAdsAgentApp() {
 }
 
 function PageSkeleton({ activeTab }: { activeTab: TabId }) {
+  if (activeTab === 'analytics') return <AdsDashboardSkeleton />
+
   const titles: Record<TabId, string> = {
     ads: 'กำลังโหลดตัวจัดการโฆษณา',
-    analytics: 'กำลังโหลด Ads Dashboard',
+    analytics: 'กำลังโหลดภาพรวมโฆษณา',
     audience: 'กำลังโหลดกลุ่มเป้าหมาย',
     creative: 'กำลังโหลด Automation Ads',
     help: 'กำลังโหลดศูนย์ช่วยเหลือ',
@@ -1930,7 +1932,7 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
     reports: 2,
     settings: 3,
   }
-  const showChart = activeTab === 'analytics' || activeTab === 'optimization'
+  const showChart = activeTab === 'optimization'
   const showTable = activeTab === 'ads' || activeTab === 'library' || activeTab === 'audience' || activeTab === 'settings'
   const showAiPanel = activeTab === 'marketer' || activeTab === 'creative'
 
@@ -1982,6 +1984,77 @@ function PageSkeleton({ activeTab }: { activeTab: TabId }) {
           <MasterAgentSkeleton />
         </section>
       ) : null}
+    </div>
+  )
+}
+
+function AdsDashboardSkeleton() {
+  return (
+    <div className="ads-dashboard-skeleton ads-dashboard-layout page-skeleton" aria-live="polite" aria-busy="true" aria-label="กำลังโหลดภาพรวมโฆษณา">
+      <section className="ads-dashboard-skeleton-head">
+        <div>
+          <span className="skeleton-chip" />
+          <h2>กำลังโหลดภาพรวมโฆษณา</h2>
+          <p>กำลังอ่าน KPI กราฟรายวัน และแคมเปญที่ควรตรวจ</p>
+        </div>
+        <span className="skeleton-button" />
+      </section>
+
+      <section className="ads-dashboard-skeleton-status" aria-label="กำลังโหลดสถานะข้อมูล">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <article key={`dashboard-status-skeleton-${index}`}>
+            <span className="skeleton-pill" />
+            <span className="skeleton-line wide" />
+          </article>
+        ))}
+      </section>
+
+      <section className="ads-dashboard-metric-grid" aria-label="กำลังโหลดตัวเลขหลัก">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <article className="ads-dashboard-metric-card skeleton-card" key={`dashboard-metric-skeleton-${index}`}>
+            <span className="skeleton-chip" />
+            <div className="ads-dashboard-metric-main">
+              <span className="skeleton-pill" />
+              <span className="skeleton-line wide" />
+              <span className="skeleton-line" />
+            </div>
+            <div className="ads-dashboard-metric-footer">
+              <span className="skeleton-line short" />
+              <span className="skeleton-line wide" />
+            </div>
+          </article>
+        ))}
+      </section>
+
+      <section className="ads-dashboard-main-grid" aria-label="กำลังโหลดกราฟและอันดับแคมเปญ">
+        <article className="ads-dashboard-panel skeleton-card performance-panel">
+          <span className="skeleton-pill" />
+          <div className="ads-dashboard-skeleton-chart">
+            {Array.from({ length: 12 }).map((_, index) => (
+              <span key={`dashboard-chart-skeleton-${index}`} style={{ height: `${28 + (index % 5) * 13}%` }} />
+            ))}
+          </div>
+        </article>
+        <article className="ads-dashboard-panel skeleton-card">
+          <span className="skeleton-pill" />
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div className="ads-dashboard-skeleton-row" key={`dashboard-ranking-skeleton-${index}`}>
+              <span className="skeleton-chip" />
+              <span className="skeleton-line wide" />
+            </div>
+          ))}
+        </article>
+      </section>
+
+      <section className="ads-dashboard-lower-grid" aria-label="กำลังโหลดตัวเลขรอง">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <article className="ads-dashboard-metric-card skeleton-card" key={`dashboard-lower-skeleton-${index}`}>
+            <span className="skeleton-pill" />
+            <span className="skeleton-line wide" />
+            <span className="skeleton-line" />
+          </article>
+        ))}
+      </section>
     </div>
   )
 }
@@ -2204,16 +2277,21 @@ export function AnalyticsPage({
     { icon: BarChart3, label: 'Conversions', tone: 'purple', value: fmtNum(dashboardConversions), helper: 'ผลลัพธ์ที่เกิดขึ้นจากโฆษณาและการนัดหมาย', change: conversionRatePeriodChange(trendData), sparkline: { label: 'สรุปยอดนัดหมายรายวัน', source: conversionTrendSparkline.length ? 'daily-trend' : 'empty', values: conversionTrendSparkline } },
     { icon: CircleDollarSign, label: 'Cost', tone: 'gold', value: fmtMoneyShort(summary.spend), helper: 'ค่าโฆษณารวมในช่วงที่เลือก', change: periodChange(metricTrendValues(trendData, (point) => point.spend), 'จากค่าโฆษณารายวัน'), sparkline: { label: 'สรุปค่าโฆษณารายวัน', source: spendTrendSparkline.length ? 'daily-trend' : 'empty', values: spendTrendSparkline } },
   ]
+  const statusItems = [
+    { label: 'ช่วงข้อมูล', value: selectedDateLabel },
+    { label: 'ข้อมูลรายวัน', value: trendData.length ? `${fmtNum(trendData.length)} วัน` : 'รอข้อมูลรายวัน' },
+    { label: 'จัดอันดับจาก', value: topCampaigns.length ? `${fmtNum(topCampaigns.length)} แคมเปญแรก` : 'รอข้อมูลแคมเปญ' },
+  ]
 
   return (
     <>
       <div className="ads-dashboard-layout">
-      <section className="ads-dashboard-head" aria-label="Ads Dashboard actions">
+      <section className="ads-dashboard-head" aria-label="คำสั่งภาพรวมโฆษณา">
         <div>
-          <h2>Ads Dashboard</h2>
+          <h2>ภาพรวมโฆษณา</h2>
           <label className="ads-dashboard-date-pill">
             <CalendarDays size={15} />
-            <select aria-label="ช่วงข้อมูล Ads Dashboard" value={selectedDateLabel} onChange={(event) => handleDatePresetChange(event.currentTarget.value)}>
+            <select aria-label="ช่วงข้อมูลภาพรวมโฆษณา" value={selectedDateLabel} onChange={(event) => handleDatePresetChange(event.currentTarget.value)}>
               {datePresetOptions.map((option) => (
                 <option key={option} value={option}>
                   {option}
@@ -2226,13 +2304,22 @@ export function AnalyticsPage({
         <div className="ads-dashboard-actions">
           <button className="clinic-secondary-button" type="button" disabled aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน" title="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน">
             <SlidersHorizontal size={15} />
-            Customize Dashboard
+            จัดมุมมอง
           </button>
           <button className="clinic-primary-button" type="button" onClick={() => setCampaignComposerOpen(true)} aria-haspopup="dialog" aria-label="สร้างแคมเปญใหม่">
             <Plus size={15} />
-            New Campaign
+            สร้างแคมเปญ
           </button>
         </div>
+      </section>
+
+      <section className="ads-dashboard-status-strip" aria-label="สถานะข้อมูลภาพรวมโฆษณา">
+        {statusItems.map((item) => (
+          <article key={item.label}>
+            <span>{item.label}</span>
+            <strong>{item.value}</strong>
+          </article>
+        ))}
       </section>
 
       <section className="ads-dashboard-metric-grid" aria-label="Ads Dashboard metrics">
@@ -2242,10 +2329,10 @@ export function AnalyticsPage({
       </section>
 
       <section className="ads-dashboard-main-grid">
-        <DashboardPanel className="performance-panel" title="Performance Overview" subtitle="ค่าโฆษณา รายได้ และยอดนัดหมายจากข้อมูลล่าสุด">
+        <DashboardPanel className="performance-panel" title="แนวโน้มผลงานรายวัน" subtitle="ค่าโฆษณา รายได้ และยอดนัดหมายจากข้อมูลล่าสุด">
           <RevenueOverviewChart embedded trendData={trendData} />
         </DashboardPanel>
-        <DashboardPanel action={<button className="ads-dashboard-select-pill" type="button" disabled>ตามผลลัพธ์ <ChevronDown size={14} /></button>} title="Top Campaigns" subtitle="เรียงตามผลลัพธ์และผลตอบแทน">
+        <DashboardPanel action={<button className="ads-dashboard-select-pill" type="button" disabled>ตามผลลัพธ์ <ChevronDown size={14} /></button>} title="แคมเปญที่ควรดูก่อน" subtitle="เรียงตามผลลัพธ์และผลตอบแทน">
           <TopCampaignsList campaigns={topCampaigns} onOpenCampaigns={onOpenCampaigns} />
         </DashboardPanel>
       </section>
@@ -2254,7 +2341,7 @@ export function AnalyticsPage({
         <DashboardMetricCard metric={{ icon: CircleDollarSign, label: 'Cost per Result', tone: 'green', value: summary.cpa > 0 ? fmtMoney(summary.cpa) : 'รอข้อมูล', helper: 'ค่าโฆษณาต่อหนึ่งผลลัพธ์', change: { label: summary.cpa > 0 ? 'คำนวณแล้ว' : 'รอข้อมูล', tone: summary.cpa > 0 ? 'good' : 'neutral', detail: 'จากช่วงที่เลือก' }, sparkline: { label: 'สรุปต้นทุนต่อผลลัพธ์รายวัน', source: cpaTrendSparkline.length ? 'daily-trend' : 'empty', values: cpaTrendSparkline } }} />
         <DashboardMetricCard metric={{ icon: Percent, label: 'CTR', tone: 'blue', value: dashboardCtr > 0 ? `${dashboardCtr.toFixed(2)}%` : 'รอข้อมูล', helper: 'อัตราคนเห็นแล้วกดโฆษณา', change: { label: dashboardCtr > 0 ? 'คำนวณแล้ว' : 'รอข้อมูล', tone: dashboardCtr > 0 ? 'good' : 'neutral', detail: impressionsCount && clicksCount ? 'จากช่วงที่เลือก' : 'จากแคมเปญล่าสุด' }, sparkline: { label: ctrTrendSparkline.length ? 'สรุป CTR รายวัน' : 'สรุป CTR ตามแคมเปญ', source: ctrTrendSparkline.length ? 'daily-trend' : campaignCtrSparkline.length ? 'campaign-summary' : 'empty', values: ctrTrendSparkline.length ? ctrTrendSparkline : campaignCtrSparkline } }} />
         <DashboardMetricCard metric={{ icon: LineChart, label: 'ROAS', tone: 'purple', value: summary.roas > 0 ? `${summary.roas.toFixed(2)}x` : 'รอข้อมูล', helper: 'รายได้เทียบกับค่าโฆษณา', change: { label: summary.roas > 0 ? 'คำนวณแล้ว' : 'รอข้อมูล', tone: summary.roas > 0 ? 'good' : 'neutral', detail: 'จากช่วงที่เลือก' }, sparkline: { label: roasTrendSparkline.length ? 'สรุปผลตอบแทนรายวัน' : 'สรุปผลตอบแทนตามแคมเปญ', source: roasTrendSparkline.length ? 'daily-trend' : campaignRoasSparkline.length ? 'campaign-summary' : 'empty', values: roasTrendSparkline.length ? roasTrendSparkline : campaignRoasSparkline } }} />
-        <DashboardPanel className="ads-insight-panel" title="PMC Insights" subtitle="สรุปสิ่งที่ควรตรวจจากข้อมูลล่าสุด">
+        <DashboardPanel className="ads-insight-panel" title="สิ่งที่ต้องตรวจต่อ" subtitle="สรุปสัญญาณที่ควรเปิดดูใน Insights">
           <DashboardInsightsBanner onOpenInsights={onOpenInsights} recommendations={recommendations} summary={summary} />
         </DashboardPanel>
       </section>
@@ -2293,8 +2380,8 @@ function DashboardMetricCard({ metric }: { metric: DashboardMetric }) {
   const Icon = metric.icon
 
   return (
-    <article className="ads-dashboard-metric-card">
-      <span className={`ads-dashboard-metric-icon ${metric.tone}`}>
+    <article className="ads-dashboard-metric-card" aria-label={`${metric.label}: ${metric.value} · ${metric.helper}`}>
+      <span className={`ads-dashboard-metric-icon ${metric.tone}`} aria-hidden="true">
         <Icon size={22} />
       </span>
       <div className="ads-dashboard-metric-main">
@@ -2378,7 +2465,7 @@ function NewCampaignComposer({ onClose }: { onClose: () => void }) {
         <button className="modal-close" type="button" onClick={onClose} aria-label="ปิดหน้าสร้างแคมเปญ">
           <X size={16} />
         </button>
-        <span className="status-badge info">New Campaign</span>
+        <span className="status-badge info">แคมเปญใหม่</span>
         <h2 id="new-campaign-title">สร้างแคมเปญใหม่</h2>
         <p>กรอกข้อมูลหลักเพื่อเตรียมแคมเปญก่อนสร้างจริงในบัญชีโฆษณา</p>
 
@@ -2488,14 +2575,15 @@ function dashboardPerformanceState(summary: Summary, recommendations: Recommenda
 
 function DashboardInsightsBanner({ onOpenInsights, recommendations, summary }: { onOpenInsights?: () => void; recommendations: Recommendation[]; summary: Summary }) {
   const performance = dashboardPerformanceState(summary, recommendations)
+  const performanceLabel = dashboardPerformanceLabel(performance.label)
 
   return (
-    <div className={`ads-insight-banner ${performance.tone}`} aria-label={`Your ads are performing ${performance.label}`} data-performance-state={performance.tone}>
+    <div className={`ads-insight-banner ${performance.tone}`} aria-label={`สถานะผลงานโฆษณา ${performanceLabel}`} data-performance-state={performance.tone}>
       <div className="ads-insight-copy">
         <strong>
-          Your ads are
+          สถานะโฆษณา
           <br />
-          performing <b className={`ads-insight-status ${performance.tone}`}>{performance.label}</b>
+          <b className={`ads-insight-status ${performance.tone}`}>{performanceLabel}</b>
         </strong>
         <button className="clinic-secondary-button ads-insight-open-button" type="button" onClick={() => onOpenInsights?.()} aria-label="เปิดเมนู Insights จากแถบด้านซ้าย">
           เปิด Insights
@@ -2506,6 +2594,12 @@ function DashboardInsightsBanner({ onOpenInsights, recommendations, summary }: {
       </div>
     </div>
   )
+}
+
+function dashboardPerformanceLabel(label: AdsPerformanceState['label']) {
+  if (label === 'Good') return 'ดี'
+  if (label === 'Average') return 'ต้องติดตาม'
+  return 'ต้องตรวจ'
 }
 
 function funnelMetricCount(funnelMetrics: MetaFunnelMetric[], stage: string) {
@@ -2759,7 +2853,7 @@ function RevenueOverviewChart({ embedded = false, trendData }: { embedded?: bool
       action={<StatusBadge label="รายวัน" tone="info" />}
       className="revenue-chart-panel"
       collapsible
-      title="Performance Overview"
+      title="แนวโน้มผลงานรายวัน"
       subtitle="ค่าโฆษณา รายได้ และยอดนัดหมายรายวันจากข้อมูลล่าสุด"
     >
       {content}
@@ -4092,9 +4186,9 @@ export function InsightsPage({
       setCachedInsight(normalized)
       writeInsightsCache(normalized)
       onBrainApprovalActions(result.approvalActions ?? [])
-      setActionMessage(`วิเคราะห์ล่าสุดแล้ว: ${normalized.recommendations.length} คำแนะนำ และ ${normalized.evidenceCards.length} หลักฐาน`)
+      setActionMessage(`อัปเดตบทวิเคราะห์แล้ว: ${normalized.recommendations.length} คำแนะนำ และ ${normalized.evidenceCards.length} หลักฐาน`)
     } catch (error) {
-      setAiError(error instanceof Error ? formatApiMessage(error.message) : 'AI วิเคราะห์ Insights ไม่สำเร็จ')
+      setAiError(error instanceof Error ? formatApiMessage(error.message) : 'อัปเดตบทวิเคราะห์ไม่สำเร็จ')
     } finally {
       setIsAiRunning(false)
     }
@@ -4125,7 +4219,7 @@ export function InsightsPage({
         <section className="insights-workspace">
           <div className="insights-brief-panel">
             <StatusBadge label="ข้อมูลยังไม่พอ" tone="watch" />
-            <EmptyState title="ต้อง Sync Meta ก่อนใช้ Insights" detail="เมื่อมีข้อมูล Campaign, Ad Set, Ads และ trend แล้ว ระบบจะสร้าง AI brief และสูตรวิเคราะห์ให้ทันที" />
+            <EmptyState title="ยังไม่มีข้อมูลสำหรับ Insights" detail="ซิงก์ Meta ให้มีแคมเปญ ชุดโฆษณา โฆษณา และแนวโน้มก่อน แล้วหน้านี้จะสรุปตัวเลข สาเหตุ และคำแนะนำให้ตรวจ" />
           </div>
         </section>
       </TwoColumnPage>
@@ -4185,14 +4279,14 @@ function InsightsBriefPanel({
 }) {
   const analyzedAt = formatShortDateTime(insight.analyzedAt)
   const metaSyncedAt = workspace.updatedAt ? formatShortDateTime(workspace.updatedAt) : 'รอข้อมูล'
-  const cacheLabel = insight.source === 'ai' ? 'ข้อมูล AI ล่าสุด' : insight.source === 'cached' ? 'แคชล่าสุด' : 'สรุปจากสูตรล่าสุด'
+  const cacheLabel = insight.source === 'ai' ? 'บทวิเคราะห์ที่อัปเดตแล้ว' : insight.source === 'cached' ? 'ใช้บทวิเคราะห์ที่บันทึกไว้' : 'คำนวณจากข้อมูลล่าสุด'
 
   return (
     <section className="insights-brief-panel">
       <div className="insights-brief-head">
         <div>
           <div className="recommendation-badges">
-            <StatusBadge label="สรุปล่าสุดจาก AI" tone="violet" />
+            <StatusBadge label="สรุปเพื่อการตัดสินใจ" tone="violet" />
             <StatusBadge label={cacheLabel} tone={insight.source === 'ai' ? 'good' : 'watch'} />
           </div>
           <h2>{insight.brief.title}</h2>
@@ -4200,7 +4294,7 @@ function InsightsBriefPanel({
         </div>
         <button className="primary-button insights-refresh-button" type="button" onClick={onRefresh} disabled={isAiRunning}>
           <BrainCircuit size={16} />
-          {isAiRunning ? 'กำลังวิเคราะห์' : 'วิเคราะห์ใหม่ด้วย AI'}
+          {isAiRunning ? 'กำลังอัปเดต' : 'อัปเดตบทวิเคราะห์'}
         </button>
       </div>
       <div className="insights-brief-meta">
@@ -4251,10 +4345,10 @@ function InsightsMetricScoreboard({ metrics }: { metrics: InsightsDerivedMetric[
     <section className="insights-section">
       <div className="insights-section-head">
         <div>
-          <h2>ตัวเลขสำคัญ</h2>
-          <p>Scoreboard และกราฟใช้ metric source ชุดเดียวกัน</p>
+          <h2>ตัวเลขที่ต้องดูตอนนี้</h2>
+          <p>ตัวเลขและกราฟใช้ชุดข้อมูลเดียวกันจาก Meta workspace</p>
         </div>
-        <StatusBadge label={`${metrics.length} metrics`} tone="info" />
+        <StatusBadge label={`${metrics.length} ตัวชี้วัด`} tone="info" />
       </div>
       <div className="insights-scoreboard">
         {metrics.map((metric) => (
@@ -4279,14 +4373,14 @@ function InsightsTrendCharts({ trends }: { trends: InsightsMetrics['trends'] }) 
     <section className="insights-section">
       <div className="insights-section-head">
         <div>
-          <h2>กราฟแนวโน้ม</h2>
-          <p>ใช้ข้อมูลรายวันจาก Meta workspace และสูตร derived metrics</p>
+          <h2>แนวโน้มรายวัน</h2>
+          <p>ดูทิศทางค่าโฆษณา ผลลัพธ์ CPA ROAS และ CTR จากข้อมูลที่ซิงก์</p>
         </div>
         <StatusBadge label={`${trends.length} วัน`} tone="neutral" />
       </div>
       <div className="insights-chart-grid">
         <article className="insights-chart-card">
-          <h3>Spend vs Results</h3>
+          <h3>ค่าโฆษณาเทียบผลลัพธ์</h3>
           <ResponsiveContainer height={220} width="100%">
             <BarChart data={trends} margin={{ bottom: 0, left: -18, right: 8, top: 12 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -4384,10 +4478,10 @@ function InsightsDecisionRiver({
     <section className="insights-decision-river" aria-labelledby="insights-decision-river-title">
       <div className="insights-section-head">
         <div>
-          <h2 id="insights-decision-river-title">Decision River</h2>
-          <p>เห็นเส้นทางจาก driver metrics ไป CPA และ ROAS พร้อมหลักฐานก่อนตัดสินใจ</p>
+          <h2 id="insights-decision-river-title">เส้นทางสาเหตุ CPA/ROAS</h2>
+          <p>ดูว่า Spend, CPM, CTR, CVR และ Frequency กำลังดัน CPA/ROAS ไปทางไหน พร้อมหลักฐานก่อนอนุมัติ</p>
         </div>
-        <div className="insights-river-legend" aria-label="Decision River legend">
+        <div className="insights-river-legend" aria-label="คำอธิบายสถานะสาเหตุ">
           <span><i className="pressure" /> กดดัน KPI</span>
           <span><i className="relief" /> ช่วยดีขึ้น</span>
           <span><i className="neutral" /> ทรงตัว/รอข้อมูล</span>
@@ -4395,7 +4489,7 @@ function InsightsDecisionRiver({
       </div>
 
       <div className="insights-river-desktop">
-        <div className="insights-river-lanes" aria-label="Drivers">
+        <div className="insights-river-lanes" aria-label="ตัวแปรที่กระทบ CPA และ ROAS">
           {model.drivers.map((driver) => (
             <InsightsRiverDriverButton
               driver={driver}
@@ -4407,21 +4501,22 @@ function InsightsDecisionRiver({
           ))}
         </div>
         <InsightsRiverFlow drivers={model.drivers} selectedDriverId={selectedDriverId} />
-        <div className="insights-river-outcomes" aria-label="Outcomes">
+        <div className="insights-river-outcomes" aria-label="ผลลัพธ์ CPA และ ROAS">
           {model.outcomes.map((outcome) => (
             <InsightsRiverOutcomeCard key={outcome.id} outcome={outcome} />
           ))}
         </div>
         <InsightsRiverEvidencePanel
           caveats={model.caveats}
+          driver={selectedDriver}
           evidenceCards={selectedEvidenceCards}
           evidenceCounts={model.evidenceCounts}
           signalCounts={model.signalCounts}
         />
       </div>
 
-      <div className="insights-river-mobile" aria-label="Decision River mobile view">
-        <div className="insights-river-mobile-tabs" role="tablist" aria-label="Decision River sections" onKeyDown={handleMobileTabsKeyDown}>
+      <div className="insights-river-mobile" aria-label="มุมมองเส้นทางสาเหตุบนมือถือ">
+        <div className="insights-river-mobile-tabs" role="tablist" aria-label="ส่วนของเส้นทางสาเหตุ" onKeyDown={handleMobileTabsKeyDown}>
           <button
             aria-controls="insights-river-mobile-drivers"
             aria-selected={mobileSection === 'drivers'}
@@ -4432,7 +4527,7 @@ function InsightsDecisionRiver({
             type="button"
             onClick={() => selectMobileSection('drivers')}
           >
-            Drivers
+            ตัวแปร
           </button>
           <button
             aria-controls="insights-river-mobile-outcomes"
@@ -4444,7 +4539,7 @@ function InsightsDecisionRiver({
             type="button"
             onClick={() => selectMobileSection('outcomes')}
           >
-            Outcomes
+            ผลลัพธ์
           </button>
           <button
             aria-controls="insights-river-mobile-evidence"
@@ -4456,7 +4551,7 @@ function InsightsDecisionRiver({
             type="button"
             onClick={() => selectMobileSection('evidence')}
           >
-            Evidence
+            หลักฐาน
           </button>
         </div>
         <div
@@ -4494,21 +4589,21 @@ function InsightsDecisionRiver({
           id="insights-river-mobile-evidence"
           role="tabpanel"
         >
-          <InsightsRiverEvidenceList evidenceCards={selectedEvidenceCards} />
+          <InsightsRiverEvidenceList driver={selectedDriver} evidenceCards={selectedEvidenceCards} />
         </div>
       </div>
 
       <InsightsRiverRecommendationStrip recommendation={topRecommendation} />
 
       {isEvidenceOpen ? (
-        <div className="insights-river-evidence-sheet" role="region" aria-label={`${selectedDriver.label} evidence preview`}>
+        <div className="insights-river-evidence-sheet" role="region" aria-label={`หลักฐานของ ${selectedDriver.label}`}>
           <div>
-            <strong>{selectedDriver.label} Evidence Preview</strong>
-            <button className="modal-close" type="button" onClick={closeEvidenceAndRestoreFocus} aria-label="ปิดหลักฐาน Decision River">
+            <strong>หลักฐานของ {selectedDriver.label}</strong>
+            <button className="modal-close" type="button" onClick={closeEvidenceAndRestoreFocus} aria-label="ปิดหลักฐานเส้นทางสาเหตุ">
               <X size={16} />
             </button>
           </div>
-          <InsightsRiverEvidenceList evidenceCards={selectedEvidenceCards} />
+          <InsightsRiverEvidenceList driver={selectedDriver} evidenceCards={selectedEvidenceCards} />
           <div className="insights-river-sheet-actions">
             <button className="outline-button" type="button" onClick={onViewEvidenceDetails}>ดูรายละเอียด</button>
           </div>
@@ -4565,7 +4660,7 @@ function InsightsRiverOutcomeCard({ outcome }: { outcome: InsightsRiverOutcome }
 
 function InsightsRiverFlow({ drivers, selectedDriverId }: { drivers: InsightsRiverLane[]; selectedDriverId: InsightsRiverDriverKey }) {
   return (
-    <svg className="insights-river-flow" viewBox="0 0 220 360" role="img" aria-label="Driver flow into CPA and ROAS outcomes">
+    <svg className="insights-river-flow" viewBox="0 0 220 360" role="img" aria-label="เส้นเชื่อมจากตัวแปรไปยัง CPA และ ROAS">
       {drivers.map((driver, index) => {
         const y = 34 + index * 66
         const selected = driver.id === selectedDriverId
@@ -4585,29 +4680,31 @@ function InsightsRiverFlow({ drivers, selectedDriverId }: { drivers: InsightsRiv
 
 function InsightsRiverEvidencePanel({
   caveats,
+  driver,
   evidenceCards,
   evidenceCounts,
   signalCounts,
 }: {
   caveats: string[]
+  driver: InsightsRiverLane
   evidenceCards: InsightsEvidenceCard[]
   evidenceCounts: InsightsDecisionRiverModel['evidenceCounts']
   signalCounts: InsightsDecisionRiverModel['signalCounts']
 }) {
   return (
-    <aside className="insights-river-evidence-panel" aria-label="Decision River evidence">
+    <aside className="insights-river-evidence-panel" aria-label="หลักฐานของเส้นทางสาเหตุ">
       <div className="insights-river-confidence-card">
         <strong>{signalCounts.supporting} หลักฐานหนุน</strong>
         <span>{signalCounts.neutral} กลาง · {signalCounts.contradicting} กดดัน</span>
       </div>
-      <div className="insights-river-counts" aria-label="Evidence counts">
-        <MetricLine label="Campaigns" value={String(evidenceCounts.campaign)} />
-        <MetricLine label="Ad Sets" value={String(evidenceCounts.adset)} />
-        <MetricLine label="Ads" value={String(evidenceCounts.ad)} />
+      <div className="insights-river-counts" aria-label="จำนวนหลักฐาน">
+        <MetricLine label="แคมเปญ" value={String(evidenceCounts.campaign)} />
+        <MetricLine label="ชุดโฆษณา" value={String(evidenceCounts.adset)} />
+        <MetricLine label="โฆษณา" value={String(evidenceCounts.ad)} />
       </div>
-      <InsightsRiverEvidenceList evidenceCards={evidenceCards} />
+      <InsightsRiverEvidenceList driver={driver} evidenceCards={evidenceCards} />
       <div className="insights-river-caveats">
-        <strong>แหล่งข้อมูลและข้อควรระวัง</strong>
+        <strong>ที่มาข้อมูลและข้อควรระวัง</strong>
         {caveats.map((caveat) => (
           <span key={caveat}>{caveat}</span>
         ))}
@@ -4616,33 +4713,88 @@ function InsightsRiverEvidencePanel({
   )
 }
 
-function InsightsRiverEvidenceList({ evidenceCards }: { evidenceCards: InsightsEvidenceCard[] }) {
+function InsightsRiverEvidenceList({ driver, evidenceCards }: { driver: InsightsRiverLane; evidenceCards: InsightsEvidenceCard[] }) {
   return (
     <div className="insights-river-evidence-list">
-      {evidenceCards.length ? evidenceCards.map((card) => (
-        <article key={card.id}>
-          <span>{objectTypeLabelForInsight(card.objectType)}</span>
-          <strong>{card.objectName}</strong>
-          <small>{card.formulaResult}</small>
-        </article>
-      )) : <p>ยังไม่มีหลักฐานเฉพาะ driver นี้ ใช้ภาพรวมบัญชีและสูตร diagnostic ก่อน</p>}
+      {evidenceCards.length ? evidenceCards.map((card) => {
+        const detail = insightEvidenceDetailForDriver(card, driver.id)
+        return (
+          <article aria-label={`${card.objectName}: ${detail.summary}`} key={card.id}>
+            <span>{objectTypeLabelForInsight(card.objectType)}</span>
+            <strong>{card.objectName}</strong>
+            <small>{detail.summary}</small>
+            {detail.metrics.length ? (
+              <dl className="insights-river-evidence-metrics" aria-label={`ตัวเลข ${driver.label} ของ ${card.objectName}`}>
+                {detail.metrics.map((metric) => (
+                  <div key={`${card.id}-${metric.label}`}>
+                    <dt>{metric.label}</dt>
+                    <dd>{metric.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </article>
+        )
+      }) : <p>ยังไม่มีหลักฐานเฉพาะตัวแปรนี้ ใช้ภาพรวมบัญชีและสูตรสาเหตุก่อน</p>}
     </div>
   )
+}
+
+type InsightsEvidenceMetric = InsightsEvidenceCard['metricValues'][number]
+
+const INSIGHTS_DRIVER_EVIDENCE_LABELS: Record<InsightsRiverDriverKey, string[]> = {
+  conversion_rate: ['CVR', 'Results', 'Clicks'],
+  cpm: ['CPM', 'Impressions', 'Spend'],
+  ctr: ['CTR', 'Clicks', 'Impressions'],
+  frequency: ['Frequency', 'CTR', 'ROAS'],
+  spend: ['Spend', 'Results', 'CPA', 'ROAS'],
+}
+
+function insightEvidenceDetailForDriver(card: InsightsEvidenceCard, driverId: InsightsRiverDriverKey): { metrics: InsightsEvidenceMetric[]; summary: string } {
+  const metrics = evidenceMetricsForDriver(card, driverId)
+  return {
+    metrics,
+    summary: metrics.length
+      ? metrics.map((metric) => `${metric.label} ${metric.value}`).join(' · ')
+      : card.formulaResult,
+  }
+}
+
+function evidenceMetricsForDriver(card: InsightsEvidenceCard, driverId: InsightsRiverDriverKey): InsightsEvidenceMetric[] {
+  const metricByLabel = new Map(card.metricValues.map((metric) => [normalizeInsightEvidenceMetricLabel(metric.label), metric]))
+  return INSIGHTS_DRIVER_EVIDENCE_LABELS[driverId].flatMap((label) => {
+    const metric = metricByLabel.get(normalizeInsightEvidenceMetricLabel(label))
+    return metric ? [{ label: insightEvidenceMetricDisplayLabel(metric.label), value: metric.value }] : []
+  })
+}
+
+function normalizeInsightEvidenceMetricLabel(label: string): string {
+  const normalized = label.trim().toLowerCase()
+  if (normalized === 'conversion rate') return 'cvr'
+  if (normalized === 'cpa/cpl') return 'cpa'
+  return normalized
+}
+
+function insightEvidenceMetricDisplayLabel(label: string): string {
+  const normalized = normalizeInsightEvidenceMetricLabel(label)
+  if (normalized === 'cvr') return 'CVR'
+  if (normalized === 'cpa') return 'CPA'
+  return label
 }
 
 function InsightsRiverRecommendationStrip({ recommendation }: { recommendation?: InsightsRecommendation }) {
   if (!recommendation) {
     return (
       <div className="insights-river-recommendation">
-        <strong>Approval required before Meta changes</strong>
-        <span>ยังไม่มีคำแนะนำที่เปิดอนุมัติได้จากข้อมูลชุดนี้</span>
+        <strong>ตรวจและอนุมัติก่อนเปลี่ยน Meta</strong>
+        <span>ยังไม่มีคำแนะนำที่พร้อมเปิดอนุมัติจากข้อมูลชุดนี้</span>
       </div>
     )
   }
 
   return (
     <div className="insights-river-recommendation">
-      <strong>Approval required before Meta changes</strong>
+      <strong>ตรวจและอนุมัติก่อนเปลี่ยน Meta</strong>
       <span>{recommendation.title}</span>
       <em>{recommendation.requiresApproval ? 'ต้องอนุมัติก่อนส่ง Meta' : 'รีวิวเท่านั้น'}</em>
     </div>
@@ -4676,8 +4828,8 @@ function InsightsFormulaDiagnostics({ diagnostics }: { diagnostics: InsightsForm
     <section className="insights-section">
       <div className="insights-section-head">
         <div>
-          <h2>วิเคราะห์สาเหตุ</h2>
-          <p>สูตร diagnostic แยกปัญหา CPA, ROAS, fatigue, waste, momentum และคุณภาพข้อมูล</p>
+          <h2>สาเหตุที่ควรตรวจ</h2>
+          <p>แยก CPA, ROAS, creative fatigue, budget waste, momentum และคุณภาพข้อมูล</p>
         </div>
       </div>
       <div className="insights-formula-grid">
@@ -4702,8 +4854,8 @@ function InsightsEvidenceCards({ evidenceCards }: { evidenceCards: InsightsEvide
     <section className="insights-section" id="insights-evidence-detail-section" tabIndex={-1}>
       <div className="insights-section-head">
         <div>
-          <h2>หลักฐานที่ใช้</h2>
-          <p>ผูกข้อสรุปกลับไปที่ Campaign, Ad Set, Ad หรือภาพรวมบัญชี</p>
+          <h2>หลักฐานประกอบ</h2>
+          <p>ผูกข้อสรุปกลับไปที่แคมเปญ ชุดโฆษณา โฆษณา หรือภาพรวมบัญชี</p>
         </div>
       </div>
       <div className="insights-evidence-grid">
@@ -4742,8 +4894,8 @@ function InsightsRecommendationList({
     <section className="insights-section">
       <div className="insights-section-head">
         <div>
-          <h2>คำแนะนำที่ควรตรวจ</h2>
-          <p>อ่านหลักฐานก่อนตัดสินใจ และต้องอนุมัติก่อนส่ง Meta ทุกครั้ง</p>
+          <h2>คำแนะนำที่รออนุมัติ</h2>
+          <p>ตรวจหลักฐานก่อนตัดสินใจ และอนุมัติก่อนส่งคำสั่งไป Meta ทุกครั้ง</p>
         </div>
       </div>
       <div className="insights-recommendation-list">
@@ -4766,7 +4918,7 @@ function InsightsRecommendationList({
               </div>
               <button className={approval.allowed || isApprovedPlan ? 'primary-button' : 'outline-button'} type="button" onClick={() => onOpenApproval(recommendation)}>
                 <BookOpenCheck size={14} />
-                {isApprovedPlan ? 'ดำเนินการแผน' : approval.allowed ? 'เปิดอนุมัติ' : 'ดูเหตุผล'}
+                {isApprovedPlan ? 'ไปที่แผน' : approval.allowed ? 'ตรวจเพื่ออนุมัติ' : 'ดูเหตุผล'}
               </button>
             </article>
           )
@@ -4807,10 +4959,10 @@ function insightsRecommendationToMetaAction(recommendation: InsightsRecommendati
 }
 
 function objectTypeLabelForInsight(type: InsightsEvidenceCard['objectType']) {
-  if (type === 'campaign') return 'Campaign'
-  if (type === 'adset') return 'Ad Set'
-  if (type === 'ad') return 'Ad'
-  return 'Account'
+  if (type === 'campaign') return 'แคมเปญ'
+  if (type === 'adset') return 'ชุดโฆษณา'
+  if (type === 'ad') return 'โฆษณา'
+  return 'ภาพรวมบัญชี'
 }
 
 function MasterAgentSkeleton() {

@@ -87,11 +87,11 @@ type OutcomeMeta = {
 }
 
 const DRIVER_META: DriverMeta[] = [
-  { description: 'Total amount spent', id: 'spend', label: 'Spend', metricKey: 'spend' },
-  { description: 'Cost per 1,000 impressions', id: 'cpm', label: 'CPM', metricKey: 'cpm' },
-  { description: 'Click-through rate', id: 'ctr', label: 'CTR', metricKey: 'ctr' },
-  { description: 'Conversion rate', id: 'conversion_rate', label: 'CVR', metricKey: 'conversion_rate' },
-  { description: 'Avg. frequency and fatigue risk', id: 'frequency', label: 'Frequency / Fatigue', metricKey: 'frequency' },
+  { description: 'งบโฆษณารวมในช่วงที่เลือก', id: 'spend', label: 'Spend', metricKey: 'spend' },
+  { description: 'ต้นทุนต่อการแสดงผล 1,000 ครั้ง', id: 'cpm', label: 'CPM', metricKey: 'cpm' },
+  { description: 'อัตราคนเห็นแล้วกดโฆษณา', id: 'ctr', label: 'CTR', metricKey: 'ctr' },
+  { description: 'อัตราคลิกที่กลายเป็นผลลัพธ์', id: 'conversion_rate', label: 'CVR', metricKey: 'conversion_rate' },
+  { description: 'ความถี่เห็นโฆษณาและสัญญาณ creative ล้า', id: 'frequency', label: 'Frequency', metricKey: 'frequency' },
 ]
 
 const OUTCOME_META: OutcomeMeta[] = [
@@ -273,13 +273,13 @@ function evidenceScoreForDriver(driverId: InsightsRiverDriverKey, card: Insights
     case 'spend':
       return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['spend'])
     case 'cpm':
-      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['spend', 'impressions'])
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['cpm', 'spend', 'impressions'])
     case 'ctr':
       return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['ctr', 'click'])
     case 'conversion_rate':
-      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['result', 'cpa', 'conversion'])
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['cvr', 'conversion rate', 'result', 'click'])
     case 'frequency':
-      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['frequency', 'roas', 'fatigue'])
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['frequency', 'fatigue'])
   }
 }
 

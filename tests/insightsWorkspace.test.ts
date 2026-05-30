@@ -40,6 +40,27 @@ describe('insightsWorkspace helpers', () => {
     expect(metrics.trends[0]).toEqual(expect.objectContaining({ spend: 1000, results: 5, roas: 2 }))
   })
 
+  it('adds driver-level values to campaign evidence cards from ad activity', () => {
+    const workspace = workspaceFixture()
+    const metrics = deriveInsightsMetrics(workspace)
+    const evidenceCard = metrics.evidenceCards.find((card) => card.objectId === 'cmp-1')
+    const fallbackInsight = buildFallbackInsightsCache(buildInsightsAnalysisPayload({ accountName: 'PMC', datePreset: 'เดือนนี้', workspace }))
+    const fallbackCard = fallbackInsight.evidenceCards.find((card) => card.objectId === 'cmp-1')
+
+    expect(evidenceCard?.metricValues).toEqual(expect.arrayContaining([
+      { label: 'Clicks', value: '100' },
+      { label: 'Impressions', value: '2,000' },
+      { label: 'CVR', value: '15%' },
+      { label: 'CPM', value: '฿1,000' },
+      { label: 'Frequency', value: '2.2x' },
+    ]))
+    expect(fallbackCard?.metricValues).toEqual(expect.arrayContaining([
+      { label: 'Clicks', value: '100' },
+      { label: 'CVR', value: '15%' },
+      { label: 'CPM', value: '฿1,000' },
+    ]))
+  })
+
   it('calculates percent change from real trend comparison windows', () => {
     const workspace = workspaceFixture()
     const metrics = deriveInsightsMetrics(workspace)

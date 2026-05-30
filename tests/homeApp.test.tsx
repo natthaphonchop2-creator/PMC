@@ -145,21 +145,21 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('สรุปล่าสุดจาก AI')
-    expect(text).toContain('วิเคราะห์ใหม่ด้วย AI')
+    expect(text).toContain('สรุปเพื่อการตัดสินใจ')
+    expect(text).toContain('อัปเดตบทวิเคราะห์')
     expect(text).toContain('ความมั่นใจ')
     expect(text).toContain('วันนี้ควรรู้อะไร')
-    expect(text).toContain('ตัวเลขสำคัญ')
-    expect(text).toContain('กราฟแนวโน้ม')
-    expect(text).toContain('วิเคราะห์สาเหตุ')
-    expect(text).toContain('หลักฐานที่ใช้')
-    expect(text).toContain('คำแนะนำที่ควรตรวจ')
-    expect(text).toContain('Decision River')
-    expect(text).toContain('Drivers')
-    expect(text).toContain('Outcomes')
-    expect(text).toContain('Evidence')
-    expect(text).toContain('แหล่งข้อมูลและข้อควรระวัง')
-    expect(text).toContain('Approval required before Meta changes')
+    expect(text).toContain('ตัวเลขที่ต้องดูตอนนี้')
+    expect(text).toContain('แนวโน้มรายวัน')
+    expect(text).toContain('สาเหตุที่ควรตรวจ')
+    expect(text).toContain('หลักฐานประกอบ')
+    expect(text).toContain('คำแนะนำที่รออนุมัติ')
+    expect(text).toContain('เส้นทางสาเหตุ CPA/ROAS')
+    expect(text).toContain('ตัวแปร')
+    expect(text).toContain('ผลลัพธ์')
+    expect(text).toContain('หลักฐาน')
+    expect(text).toContain('ที่มาข้อมูลและข้อควรระวัง')
+    expect(text).toContain('ตรวจและอนุมัติก่อนเปลี่ยน Meta')
     expect(html).toContain('class="insights-scoreboard"')
     expect(html).toContain('class="insights-chart-grid"')
     expect(html).toContain('class="insights-formula-grid"')
@@ -176,12 +176,13 @@ describe('Home app shell', () => {
     expect(html).toContain('aria-controls="insights-river-mobile-drivers"')
     expect(html).toContain('id="insights-river-mobile-drivers"')
     expect(html).toContain('aria-selected="true"')
-    expect(html).toContain('aria-label="Decision River mobile view"')
-    expect(html).toContain('aria-label="Decision River evidence"')
+    expect(html).toContain('aria-label="มุมมองเส้นทางสาเหตุบนมือถือ"')
+    expect(html).toContain('aria-label="หลักฐานของเส้นทางสาเหตุ"')
+    expect(html).toContain('class="insights-river-evidence-metrics"')
     expect(html).toContain('data-river-driver-id="cpm"')
     expect(html).toContain('id="insights-evidence-detail-section"')
     expect(html).toMatch(/<button(?=[^>]*class="insights-river-driver [^"]*selected")(?=[^>]*aria-pressed="true")(?=[^>]*data-river-driver-id=)[^>]*>/)
-    expect(text).toContain('ต้องอนุมัติก่อนส่ง Meta')
+    expect(text).toContain('อนุมัติก่อนส่งคำสั่งไป Meta ทุกครั้ง')
     expect(text).not.toContain('ผู้ช่วย Insights')
     expect(text).not.toContain('แผนที่เลือกทำต่อ')
     expect(html).not.toContain('ai-brain-panel')
@@ -199,9 +200,13 @@ describe('Home app shell', () => {
     expect(css).toContain('.insights-river-desktop')
     expect(css).toContain('.insights-river-mobile')
     expect(css).toContain('.insights-river-evidence-sheet')
+    expect(css).toContain('.insights-river-evidence-metrics')
     expect(css).toContain('.two-column-page.single-column')
     expect(css).toContain('container-name: insights-decision-river')
     expect(css).toContain('container-type: inline-size')
+    expect(css).toContain('content-visibility: auto')
+    expect(css).toContain('contain-intrinsic-size: auto 420px')
+    expect(css).toContain('contain: layout style paint')
     expect(css).toContain('.insights-river-driver.critical')
     expect(css).toContain('.insights-river-driver.good')
     expect(css).toContain('.insights-river-outcome.critical')
@@ -419,36 +424,21 @@ describe('Home app shell', () => {
     expect(inspectorSource).toContain('id="ad-groups-ads-detail"')
   })
 
-  it('renders the approved Ads Dashboard sections from existing Ads Agent data', () => {
+  it('renders a dedicated Ads Dashboard skeleton while initial data loads', () => {
     withPathname('/ads-agent', () => {
       const html = renderToStaticMarkup(<App />)
       const text = visibleText(html)
 
       expect(text).toContain('Ads Dashboard')
-      expect(text).toContain('Customize Dashboard')
-      expect(html).toMatch(
-        /<button(?=[^>]*class="clinic-secondary-button")(?=[^>]*disabled)(?=[^>]*aria-label="ปรับแต่งแดชบอร์ดยังไม่พร้อมใช้งาน")[^>]*>[\s\S]*Customize Dashboard[\s\S]*<\/button>/,
-      )
-      expect(text).toContain('New Campaign')
-      expect(text).toContain('Impressions')
-      expect(text).toContain('Clicks')
-      expect(text).toContain('Conversions')
-      expect(html).toMatch(
-        /<article[^>]*class="[^"]*ads-dashboard-metric-card[^"]*"[^>]*>(?:(?!<\/article>)[\s\S])*<span>Cost<\/span>(?:(?!<\/article>)[\s\S])*<\/article>/,
-      )
-      expect(countOccurrences(html, '<h2>Performance Overview</h2>')).toBe(1)
-      expect(html).not.toContain('class="panel revenue-chart-panel"')
-      expect(text).toContain('Top Campaigns')
+      expect(text).toContain('กำลังโหลดภาพรวมโฆษณา')
+      expect(text).toContain('กำลังอ่าน KPI กราฟรายวัน และแคมเปญที่ควรตรวจ')
+      expect(html).toContain('class="ads-dashboard-skeleton ads-dashboard-layout page-skeleton"')
+      expect(html).toContain('aria-busy="true"')
+      expect(html).toContain('aria-label="กำลังโหลดภาพรวมโฆษณา"')
+      expect(html).toContain('class="ads-dashboard-skeleton-chart"')
+      expect(countOccurrences(html, 'class="ads-dashboard-metric-card skeleton-card"')).toBe(8)
+      expect(text).not.toContain('จัดมุมมอง')
       expect(text).not.toContain('Conversions by Region')
-      expect(text).toContain('Cost per Result')
-      expect(text).toContain('CTR')
-      expect(text).toContain('ROAS')
-      expect(text).toContain('PMC Insights')
-      expect(html).not.toContain('ads-region-panel')
-      expect(html).not.toContain('ads-region-map')
-      expect(countOccurrences(html, 'class="ads-dashboard-metric-card"')).toBe(7)
-      expect(text).not.toContain('Revenue Overview')
-      expect(html).not.toContain('role="table" aria-label="ผลงานแคมเปญ"')
     })
   })
 
@@ -472,7 +462,7 @@ describe('Home app shell', () => {
       />,
     )
     const source = readText('../src/App.tsx')
-    const buttonMatch = html.match(/<button(?=[^>]*aria-label="สร้างแคมเปญใหม่")(?=[^>]*aria-haspopup="dialog")[^>]*>[\s\S]*New Campaign[\s\S]*?<\/button>/)
+    const buttonMatch = html.match(/<button(?=[^>]*aria-label="สร้างแคมเปญใหม่")(?=[^>]*aria-haspopup="dialog")[^>]*>[\s\S]*สร้างแคมเปญ[\s\S]*?<\/button>/)
 
     expect(buttonMatch?.[0]).toBeTruthy()
     expect(buttonMatch?.[0]).not.toContain('disabled')
@@ -504,7 +494,7 @@ describe('Home app shell', () => {
     const source = readText('../src/App.tsx')
 
     expect(html).toContain('class="ads-dashboard-date-pill"')
-    expect(html).toContain('aria-label="ช่วงข้อมูล Ads Dashboard"')
+    expect(html).toContain('aria-label="ช่วงข้อมูลภาพรวมโฆษณา"')
     expect(html).toContain('<option value="ข้อมูลทั้งหมด">ข้อมูลทั้งหมด</option>')
     expect(html).toContain('<option value="7 วันล่าสุด">7 วันล่าสุด</option>')
     expect(html).toMatch(/<option(?=[^>]*value="30 วันล่าสุด")(?=[^>]*selected="")[^>]*>30 วันล่าสุด<\/option>/)
@@ -753,8 +743,8 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('Ads Dashboard')
-    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('ภาพรวมโฆษณา')
+    expect(text).toContain('แคมเปญที่ควรดูก่อน')
     expect(text).toContain('ตัวรี MSG เติมไขมัน 9900 24.7.67')
     expect(text).toContain('ตัวรี MSG เติมไขมัน 9900 CA เพจTab')
     expect(text).toContain('ตัวรี MSG เติมไขมัน 9900 CA เพจFifth')
@@ -794,9 +784,9 @@ describe('Home app shell', () => {
     const badText = visibleText(renderDashboard({ bookings: 0, revenue: 0, roas: 0, spend: 20000 }))
     const html = renderDashboard({ bookings: 8, revenue: 72000, roas: 0.93, spend: 708000 })
 
-    expect(goodText).toContain('Your ads are performing Good')
-    expect(mediumText).toContain('Your ads are performing Average')
-    expect(badText).toContain('Your ads are performing Poor')
+    expect(goodText).toContain('สถานะโฆษณา ดี')
+    expect(mediumText).toContain('สถานะโฆษณา ต้องติดตาม')
+    expect(badText).toContain('สถานะโฆษณา ต้องตรวจ')
     expect(html).toContain('src="/pmc-insights-performance.svg"')
     expect(html).not.toContain('ads-insight-label')
     expect(html).not.toContain('รอคำแนะนำใหม่จากข้อมูลจริง')
@@ -906,19 +896,19 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('Ads Dashboard')
-    expect(text).toContain('Customize Dashboard')
-    expect(text).toContain('New Campaign')
+    expect(text).toContain('ภาพรวมโฆษณา')
+    expect(text).toContain('จัดมุมมอง')
+    expect(text).toContain('สร้างแคมเปญ')
     expect(text).toContain('Impressions')
     expect(text).toContain('Clicks')
     expect(text).toContain('Conversions')
     expect(text).toContain('Cost')
-    expect(text).toContain('Performance Overview')
-    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('แนวโน้มผลงานรายวัน')
+    expect(text).toContain('แคมเปญที่ควรดูก่อน')
     expect(text).not.toContain('Conversions by Region')
     expect(text).not.toContain('Bangkok')
     expect(text).not.toContain('Chiang Mai')
-    expect(text).toContain('PMC Insights')
+    expect(text).toContain('สิ่งที่ต้องตรวจต่อ')
     expect(text).toContain('Cost per Result')
     expect(text).toContain('CTR')
     expect(text).toContain('ROAS')
@@ -965,10 +955,10 @@ describe('Home app shell', () => {
     expect(html).toContain('ads-dashboard-metric-grid')
     expect(html).toContain('ads-dashboard-main-grid')
     expect(html).toContain('ads-dashboard-lower-grid')
-    expect(text).toContain('Performance Overview')
-    expect(text).toContain('Top Campaigns')
+    expect(text).toContain('แนวโน้มผลงานรายวัน')
+    expect(text).toContain('แคมเปญที่ควรดูก่อน')
     expect(text).not.toContain('Conversions by Region')
-    expect(text).toContain('PMC Insights')
+    expect(text).toContain('สิ่งที่ต้องตรวจต่อ')
     expect(text).toContain('Cost per Result')
     expect(text).toContain('CTR')
     expect(text).toContain('ROAS')
@@ -1238,7 +1228,7 @@ describe('Home app shell', () => {
     expect(countOccurrences(html, 'data-chart-source="real"')).toBe(1)
     expect(html).toContain('data-chart-style="separated-lines"')
     expect(html).toContain('data-chart-layout="separated-lanes"')
-    expect(html).toContain('Performance Overview')
+    expect(html).toContain('แนวโน้มผลงานรายวัน')
     expect(html).toContain('aria-label="กราฟรายวันแบบแยกเส้นรายได้ ค่าโฆษณา และยอดนัดหมาย"')
     expect(html).not.toContain('Revenue Overview')
     expect(html).not.toContain('aria-label="Revenue by Campaign chart"')
@@ -1470,8 +1460,8 @@ describe('Home app shell', () => {
     )
     const text = visibleText(html)
 
-    expect(text).toContain('PMC Insights')
-    expect(text).toContain('Your ads are performing Poor')
+    expect(text).toContain('สิ่งที่ต้องตรวจต่อ')
+    expect(text).toContain('สถานะโฆษณา ต้องตรวจ')
     expect(text).not.toContain('ป้องกันงบและตรวจ Tracking')
     expect(text).not.toContain('Meta metrics')
     expect(text).not.toContain('PMC Master Agent')
@@ -1732,6 +1722,10 @@ describe('Home app shell', () => {
     expect(appCss).toMatch(/\.ads-dashboard-head\s*\{[^}]*align-items:\s*flex-start;/)
     expect(appCss).toMatch(/\.ads-dashboard-date-pill\s*\{[^}]*margin-top:\s*10px;/)
     expect(appCss).toMatch(/\.ads-dashboard-actions\s*\{[^}]*align-self:\s*flex-start;[^}]*flex-wrap:\s*nowrap;[^}]*padding-top:\s*15px;/)
+    expect(appCss).toContain('.ads-dashboard-status-strip')
+    expect(appCss).toContain('content-visibility: auto')
+    expect(appCss).toContain('contain-intrinsic-size: auto 170px')
+    expect(appCss).toContain('contain: layout style paint')
     expect(appCss).toMatch(/\.ads-workspace-shell \.clinic-primary-button,\s*\.ads-workspace-shell \.clinic-secondary-button\s*\{[^}]*white-space:\s*nowrap;/)
   })
 
@@ -1791,8 +1785,8 @@ describe('Home app shell', () => {
   it('keeps Insights copy user-facing instead of internal agent labels', () => {
     const appSource = readText('../src/App.tsx')
 
-    expect(appSource).toContain('สรุปล่าสุดจาก AI')
-    expect(appSource).toContain('คำแนะนำที่ควรตรวจ')
+    expect(appSource).toContain('สรุปเพื่อการตัดสินใจ')
+    expect(appSource).toContain('คำแนะนำที่รออนุมัติ')
     expect(appSource).not.toContain('ผู้ช่วย Insights')
     expect(appSource).not.toContain('PMC Master Agent')
     expect(appSource).not.toContain('เรียก Master Agent')
@@ -2032,7 +2026,7 @@ function websiteContextForInsights(): WebsiteContext {
     dataState: 'live',
     datePreset: 'เดือนนี้',
     route: '/ads-agent',
-    visibleCards: ['Insights', 'สรุปล่าสุดจาก AI', 'ตัวเลขสำคัญ'],
+    visibleCards: ['Insights', 'สรุปเพื่อการตัดสินใจ', 'ตัวเลขที่ต้องดูตอนนี้'],
     visibleTableRows: [],
   }
 }
@@ -2042,7 +2036,7 @@ function visibleText(html: string) {
 }
 
 function dashboardMetricCardHtml(html: string, label: string) {
-  const match = html.match(new RegExp(`<article class="ads-dashboard-metric-card">(?:(?!</article>)[\\s\\S])*<span>${label}</span>(?:(?!</article>)[\\s\\S])*</article>`))
+  const match = html.match(new RegExp(`<article(?=[^>]*class="ads-dashboard-metric-card")[^>]*>(?:(?!</article>)[\\s\\S])*<span>${label}</span>(?:(?!</article>)[\\s\\S])*</article>`))
   expect(match?.[0]).toBeTruthy()
   return match?.[0] ?? ''
 }

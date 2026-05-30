@@ -22,7 +22,7 @@ describe('insightsDecisionRiver model', () => {
     expect(model.drivers.find((driver) => driver.id === 'conversion_rate')?.sparkline).toHaveLength(4)
   })
 
-  it('selects driver-specific evidence instead of reusing one generic slice', () => {
+  it('selects evidence cards that carry values for the selected driver', () => {
     const workspace = workspaceFixture()
     const metrics = deriveInsightsMetrics(workspace)
     const insight = buildFallbackInsightsCache(buildInsightsAnalysisPayload({ accountName: 'PMC', datePreset: 'เดือนนี้', workspace }))
@@ -30,10 +30,14 @@ describe('insightsDecisionRiver model', () => {
     const model = buildInsightsDecisionRiverModel({ insight: { ...insight, evidenceCards: metrics.evidenceCards }, metrics })
     const ctrEvidence = model.drivers.find((driver) => driver.id === 'ctr')?.evidenceIds ?? []
     const cvrEvidence = model.drivers.find((driver) => driver.id === 'conversion_rate')?.evidenceIds ?? []
+    const cardsById = new Map(metrics.evidenceCards.map((card) => [card.id, card]))
 
     expect(ctrEvidence.every((id) => id.startsWith('evidence-campaign-'))).toBe(true)
-    expect(cvrEvidence).toContain('evidence-account-scoreboard')
-    expect(cvrEvidence).not.toEqual(ctrEvidence)
+    expect(cvrEvidence.every((id) => id.startsWith('evidence-campaign-'))).toBe(true)
+    expect(cvrEvidence.map((id) => cardsById.get(id)?.metricValues)).toEqual(expect.arrayContaining([
+      expect.arrayContaining([{ label: 'CVR', value: '15%' }]),
+      expect.arrayContaining([{ label: 'CVR', value: '10%' }]),
+    ]))
   })
 
   it('classifies pressure direction according to metric meaning', () => {
