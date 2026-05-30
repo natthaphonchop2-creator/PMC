@@ -2696,7 +2696,7 @@ input:focus-visible {
   font-size: 14px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
   .insights-river-desktop {
     display: none;
   }
@@ -2730,6 +2730,12 @@ input:focus-visible {
 
   .insights-river-recommendation em {
     justify-self: start;
+  }
+}
+
+@media (max-width: 900px) {
+  .insights-river-mobile-tabs {
+    top: 0;
   }
 }
 

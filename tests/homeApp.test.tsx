@@ -187,14 +187,18 @@ describe('Home app shell', () => {
 
   it('defines responsive Decision River styles for desktop and mobile', () => {
     const css = readText('../src/App.css')
+    const mobileTabsRule = extractCssRule(css, '.insights-river-mobile-tabs')
+    const mobileTabsButtonRule = extractCssRule(css, '.insights-river-mobile-tabs button')
+    const tabletRiverMedia = extractCssBlocks(css, '@media (max-width: 1180px)').join('\n')
 
     expect(css).toContain('.insights-river-desktop')
     expect(css).toContain('.insights-river-mobile')
     expect(css).toContain('.insights-river-evidence-sheet')
     expect(css).toContain('@media (max-width: 900px)')
-    expect(css).toContain('display: none')
-    expect(css).toContain('position: sticky')
-    expect(css).toContain('min-height: 44px')
+    expect(mobileTabsRule).toContain('position: sticky')
+    expect(mobileTabsButtonRule).toContain('min-height: 44px')
+    expect(tabletRiverMedia).toMatch(/\.insights-river-desktop\s*\{[^}]*display:\s*none/)
+    expect(tabletRiverMedia).toMatch(/\.insights-river-mobile\s*\{[^}]*display:\s*grid/)
   })
 
   it('sends structured Insights payload to the real AI brain endpoint', () => {
@@ -1833,6 +1837,41 @@ function countOccurrences(value: string, needle: string) {
 
 function readText(relativePath: string) {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
+}
+
+function extractCssRule(css: string, selector: string) {
+  return extractCssBlock(css, selector)
+}
+
+function extractCssBlocks(css: string, marker: string) {
+  const blocks: string[] = []
+  let searchFrom = 0
+  while (searchFrom < css.length) {
+    const markerIndex = css.indexOf(marker, searchFrom)
+    if (markerIndex === -1) break
+    const block = extractCssBlock(css.slice(markerIndex), marker)
+    blocks.push(block)
+    searchFrom = markerIndex + block.length
+  }
+
+  expect(blocks.length).toBeGreaterThan(0)
+  return blocks
+}
+
+function extractCssBlock(css: string, marker: string) {
+  const markerIndex = css.indexOf(marker)
+  expect(markerIndex).toBeGreaterThanOrEqual(0)
+  const openBraceIndex = css.indexOf('{', markerIndex)
+  expect(openBraceIndex).toBeGreaterThan(markerIndex)
+
+  let depth = 0
+  for (let index = openBraceIndex; index < css.length; index += 1) {
+    if (css[index] === '{') depth += 1
+    else if (css[index] === '}') depth -= 1
+    if (depth === 0) return css.slice(markerIndex, index + 1)
+  }
+
+  throw new Error(`Could not extract CSS block for ${marker}`)
 }
 
 function adSetForDashboard(overrides = {}) {
