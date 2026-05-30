@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenCheck,
@@ -4338,7 +4338,7 @@ function InsightsDecisionRiver({
     document.getElementById(`insights-river-tab-${section}`)?.focus()
   }
 
-  const handleMobileTabsKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const handleMobileTabsKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const currentIndex = mobileSections.indexOf(mobileSection)
     let nextSection: typeof mobileSections[number] | null = null
 
