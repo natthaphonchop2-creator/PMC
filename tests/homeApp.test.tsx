@@ -154,11 +154,22 @@ describe('Home app shell', () => {
     expect(text).toContain('วิเคราะห์สาเหตุ')
     expect(text).toContain('หลักฐานที่ใช้')
     expect(text).toContain('คำแนะนำที่ควรตรวจ')
+    expect(text).toContain('Decision River')
+    expect(text).toContain('Drivers')
+    expect(text).toContain('Outcomes')
+    expect(text).toContain('Evidence')
+    expect(text).toContain('Source & caveats')
+    expect(text).toContain('Approval required before Meta changes')
     expect(html).toContain('class="insights-scoreboard"')
     expect(html).toContain('class="insights-chart-grid"')
     expect(html).toContain('class="insights-formula-grid"')
     expect(html).toContain('class="insights-evidence-grid"')
     expect(html).toContain('class="insights-recommendation-list"')
+    expect(html).toContain('class="insights-decision-river"')
+    expect(html).toContain('class="insights-river-desktop"')
+    expect(html).toContain('class="insights-river-mobile"')
+    expect(html).toContain('role="tablist"')
+    expect(html).toContain('aria-label="Decision River mobile view"')
     expect(text).toContain('ต้องอนุมัติก่อนส่ง Meta')
     expect(text).not.toContain('ผู้ช่วย Insights')
     expect(text).not.toContain('แผนที่เลือกทำต่อ')
@@ -1943,7 +1954,7 @@ function websiteContextForInsights(): WebsiteContext {
 }
 
 function visibleText(html: string) {
-  return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  return html.replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
 }
 
 function dashboardMetricCardHtml(html: string, label: string) {

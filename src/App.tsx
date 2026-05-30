@@ -83,6 +83,13 @@ import {
   type InsightsRecommendation,
 } from './insightsWorkspace'
 import {
+  buildInsightsDecisionRiverModel,
+  type InsightsDecisionRiverModel,
+  type InsightsRiverDriverKey,
+  type InsightsRiverLane,
+  type InsightsRiverOutcome,
+} from './insightsDecisionRiver'
+import {
   automationActionLabel,
   automationFreshnessLabel,
   automationQueueStatusLabel,
@@ -4038,6 +4045,17 @@ export function InsightsPage({
 
   const fallbackInsight = useMemo(() => (analysisPayload ? buildFallbackInsightsCache(analysisPayload) : null), [analysisPayload])
   const visibleInsight = cachedInsight ?? fallbackInsight
+  const decisionRiverModel = useMemo<InsightsDecisionRiverModel | null>(
+    () => (metrics && visibleInsight ? buildInsightsDecisionRiverModel({ insight: visibleInsight, metrics }) : null),
+    [metrics, visibleInsight],
+  )
+  const defaultRiverDriverId = decisionRiverModel?.defaultDriverId
+  const [selectedRiverDriver, setSelectedRiverDriver] = useState<InsightsRiverDriverKey>('cpm')
+  const [isRiverEvidenceOpen, setIsRiverEvidenceOpen] = useState(false)
+
+  useEffect(() => {
+    if (defaultRiverDriverId) setSelectedRiverDriver(defaultRiverDriverId)
+  }, [defaultRiverDriverId])
 
   const runInsightsAiAnalysis = useCallback(async () => {
     if (!workspace || !analysisPayload || isAiRunning) return
@@ -4118,6 +4136,18 @@ export function InsightsPage({
           workspace={workspace}
         />
         {actionMessage ? <p className="insights-action-message">{actionMessage}</p> : null}
+        {decisionRiverModel ? (
+          <InsightsDecisionRiver
+            evidenceCards={visibleInsight.evidenceCards.length ? visibleInsight.evidenceCards : metrics.evidenceCards}
+            isEvidenceOpen={isRiverEvidenceOpen}
+            model={decisionRiverModel}
+            onCloseEvidence={() => setIsRiverEvidenceOpen(false)}
+            onOpenEvidence={() => setIsRiverEvidenceOpen(true)}
+            onSelectDriver={setSelectedRiverDriver}
+            selectedDriverId={selectedRiverDriver}
+            topRecommendation={(visibleInsight.recommendations.length ? visibleInsight.recommendations : metrics.recommendations)[0]}
+          />
+        ) : null}
         <InsightsMetricScoreboard metrics={metrics.scoreboard} />
         <InsightsTrendCharts trends={metrics.trends} />
         <InsightsFormulaDiagnostics diagnostics={visibleInsight.metricDiagnostics} />
@@ -4273,6 +4303,259 @@ function InsightsTrendCharts({ trends }: { trends: InsightsMetrics['trends'] }) 
       </div>
     </section>
   )
+}
+
+function InsightsDecisionRiver({
+  evidenceCards,
+  isEvidenceOpen,
+  model,
+  onCloseEvidence,
+  onOpenEvidence,
+  onSelectDriver,
+  selectedDriverId,
+  topRecommendation,
+}: {
+  evidenceCards: InsightsEvidenceCard[]
+  isEvidenceOpen: boolean
+  model: InsightsDecisionRiverModel
+  onCloseEvidence: () => void
+  onOpenEvidence: () => void
+  onSelectDriver: (driverId: InsightsRiverDriverKey) => void
+  selectedDriverId: InsightsRiverDriverKey
+  topRecommendation?: InsightsRecommendation
+}) {
+  const selectedDriver = model.drivers.find((driver) => driver.id === selectedDriverId) ?? model.drivers[0]
+  const selectedEvidenceCards = evidenceCards.filter((card) => selectedDriver.evidenceIds.includes(card.id)).slice(0, 3)
+
+  return (
+    <section className="insights-decision-river" aria-labelledby="insights-decision-river-title">
+      <div className="insights-section-head">
+        <div>
+          <h2 id="insights-decision-river-title">Decision River</h2>
+          <p>เห็นเส้นทางจาก driver metrics ไป CPA และ ROAS พร้อมหลักฐานก่อนตัดสินใจ</p>
+        </div>
+        <div className="insights-river-legend" aria-label="Decision River legend">
+          <span><i className="pressure" /> Pressure</span>
+          <span><i className="relief" /> Relief</span>
+          <span><i className="neutral" /> Neutral</span>
+        </div>
+      </div>
+
+      <div className="insights-river-desktop">
+        <div className="insights-river-lanes" aria-label="Drivers">
+          {model.drivers.map((driver) => (
+            <InsightsRiverDriverButton
+              driver={driver}
+              isSelected={driver.id === selectedDriverId}
+              key={driver.id}
+              onOpenEvidence={onOpenEvidence}
+              onSelectDriver={onSelectDriver}
+            />
+          ))}
+        </div>
+        <InsightsRiverFlow drivers={model.drivers} selectedDriverId={selectedDriverId} />
+        <div className="insights-river-outcomes" aria-label="Outcomes">
+          {model.outcomes.map((outcome) => (
+            <InsightsRiverOutcomeCard key={outcome.id} outcome={outcome} />
+          ))}
+        </div>
+        <InsightsRiverEvidencePanel
+          caveats={model.caveats}
+          evidenceCards={selectedEvidenceCards}
+          evidenceCounts={model.evidenceCounts}
+          signalCounts={model.signalCounts}
+        />
+      </div>
+
+      <div className="insights-river-mobile" aria-label="Decision River mobile view">
+        <div className="insights-river-mobile-tabs" role="tablist" aria-label="Decision River sections">
+          <button className="active" type="button">Drivers</button>
+          <button type="button">Outcomes</button>
+          <button type="button" onClick={onOpenEvidence}>Evidence</button>
+        </div>
+        <div className="insights-river-mobile-stepper">
+          {model.drivers.map((driver) => (
+            <InsightsRiverDriverButton
+              driver={driver}
+              isSelected={driver.id === selectedDriverId}
+              key={driver.id}
+              onOpenEvidence={onOpenEvidence}
+              onSelectDriver={onSelectDriver}
+            />
+          ))}
+        </div>
+        <div className="insights-river-mobile-outcomes">
+          {model.outcomes.map((outcome) => (
+            <InsightsRiverOutcomeCard key={outcome.id} outcome={outcome} />
+          ))}
+        </div>
+      </div>
+
+      <InsightsRiverRecommendationStrip recommendation={topRecommendation} />
+
+      {isEvidenceOpen ? (
+        <div className="insights-river-evidence-sheet" role="dialog" aria-modal="false" aria-label={`${selectedDriver.label} evidence preview`}>
+          <div>
+            <strong>{selectedDriver.label} Evidence Preview</strong>
+            <button className="modal-close" type="button" onClick={onCloseEvidence} aria-label="ปิดหลักฐาน Decision River">
+              <X size={16} />
+            </button>
+          </div>
+          <InsightsRiverEvidenceList evidenceCards={selectedEvidenceCards} />
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function InsightsRiverDriverButton({
+  driver,
+  isSelected,
+  onOpenEvidence,
+  onSelectDriver,
+}: {
+  driver: InsightsRiverLane
+  isSelected: boolean
+  onOpenEvidence: () => void
+  onSelectDriver: (driverId: InsightsRiverDriverKey) => void
+}) {
+  return (
+    <button
+      className={`insights-river-driver ${driver.tone} ${isSelected ? 'selected' : ''}`}
+      type="button"
+      onClick={() => {
+        onSelectDriver(driver.id)
+        onOpenEvidence()
+      }}
+      aria-pressed={isSelected}
+      aria-label={`${driver.label}: ${driver.statusLabel}, ${driver.formattedValue}, ${driver.changeLabel}`}
+    >
+      <span>
+        <strong>{driver.label}</strong>
+        <small>{driver.description}</small>
+      </span>
+      <InsightsMiniSparkline values={driver.sparkline} tone={driver.tone} />
+      <em>{driver.statusLabel} · {driver.changeLabel}</em>
+    </button>
+  )
+}
+
+function InsightsRiverOutcomeCard({ outcome }: { outcome: InsightsRiverOutcome }) {
+  return (
+    <article className={`insights-river-outcome ${outcome.tone}`}>
+      <span>{outcome.label}</span>
+      <strong>{outcome.formattedValue}</strong>
+      <InsightsMiniSparkline values={outcome.sparkline} tone={outcome.tone} />
+      <small>{outcome.statusLabel}</small>
+    </article>
+  )
+}
+
+function InsightsRiverFlow({ drivers, selectedDriverId }: { drivers: InsightsRiverLane[]; selectedDriverId: InsightsRiverDriverKey }) {
+  return (
+    <svg className="insights-river-flow" viewBox="0 0 220 360" role="img" aria-label="Driver flow into CPA and ROAS outcomes">
+      {drivers.map((driver, index) => {
+        const y = 34 + index * 66
+        const selected = driver.id === selectedDriverId
+        return (
+          <path
+            d={`M 8 ${y} C 82 ${y}, 96 120, 128 164 S 168 228, 212 228`}
+            key={driver.id}
+            className={`${driver.tone} ${selected ? 'selected' : ''}`}
+            fill="none"
+            strokeWidth={selected ? 4 : 2}
+          />
+        )
+      })}
+    </svg>
+  )
+}
+
+function InsightsRiverEvidencePanel({
+  caveats,
+  evidenceCards,
+  evidenceCounts,
+  signalCounts,
+}: {
+  caveats: string[]
+  evidenceCards: InsightsEvidenceCard[]
+  evidenceCounts: InsightsDecisionRiverModel['evidenceCounts']
+  signalCounts: InsightsDecisionRiverModel['signalCounts']
+}) {
+  return (
+    <aside className="insights-river-evidence-panel">
+      <div className="insights-river-confidence-card">
+        <strong>{signalCounts.supporting} supporting</strong>
+        <span>{signalCounts.neutral} neutral · {signalCounts.contradicting} pressure</span>
+      </div>
+      <div className="insights-river-counts" aria-label="Evidence counts">
+        <MetricLine label="Campaigns" value={String(evidenceCounts.campaign)} />
+        <MetricLine label="Ad Sets" value={String(evidenceCounts.adset)} />
+        <MetricLine label="Ads" value={String(evidenceCounts.ad)} />
+      </div>
+      <InsightsRiverEvidenceList evidenceCards={evidenceCards} />
+      <div className="insights-river-caveats">
+        <strong>Source & caveats</strong>
+        {caveats.map((caveat) => (
+          <span key={caveat}>{caveat}</span>
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+function InsightsRiverEvidenceList({ evidenceCards }: { evidenceCards: InsightsEvidenceCard[] }) {
+  return (
+    <div className="insights-river-evidence-list">
+      {evidenceCards.length ? evidenceCards.map((card) => (
+        <article key={card.id}>
+          <span>{objectTypeLabelForInsight(card.objectType)}</span>
+          <strong>{card.objectName}</strong>
+          <small>{card.formulaResult}</small>
+        </article>
+      )) : <p>ยังไม่มีหลักฐานเฉพาะ driver นี้ ใช้ภาพรวมบัญชีและสูตร diagnostic ก่อน</p>}
+    </div>
+  )
+}
+
+function InsightsRiverRecommendationStrip({ recommendation }: { recommendation?: InsightsRecommendation }) {
+  if (!recommendation) {
+    return (
+      <div className="insights-river-recommendation">
+        <strong>Approval required before Meta changes</strong>
+        <span>ยังไม่มีคำแนะนำที่เปิดอนุมัติได้จากข้อมูลชุดนี้</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="insights-river-recommendation">
+      <strong>Approval required before Meta changes</strong>
+      <span>{recommendation.title}</span>
+      <em>{recommendation.requiresApproval ? 'ต้องอนุมัติก่อนส่ง Meta' : 'รีวิวเท่านั้น'}</em>
+    </div>
+  )
+}
+
+function InsightsMiniSparkline({ tone, values }: { tone: Tone; values: number[] }) {
+  const points = sparklinePoints(values)
+  return (
+    <svg className={`insights-mini-sparkline ${tone}`} viewBox="0 0 80 26" aria-hidden="true">
+      <polyline fill="none" points={points} strokeWidth="2" />
+    </svg>
+  )
+}
+
+function sparklinePoints(values: number[]): string {
+  if (!values.length) return '0,18 80,18'
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = Math.max(1, max - min)
+  return values.map((value, index) => {
+    const x = values.length === 1 ? 40 : (index / (values.length - 1)) * 80
+    const y = 22 - ((value - min) / range) * 18
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
 }
 
 function InsightsFormulaDiagnostics({ diagnostics }: { diagnostics: InsightsFormulaDiagnostic[] }) {
