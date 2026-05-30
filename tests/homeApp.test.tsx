@@ -197,6 +197,15 @@ describe('Home app shell', () => {
     expect(endpointSource).toContain('insightsPayload: structuredInsightsPayload')
   })
 
+  it('initializes the Insights Decision River selection from the model default', () => {
+    const source = readText('../src/App.tsx')
+    const pageSource = source.slice(source.indexOf('export function InsightsPage'), source.indexOf('function InsightsBriefPanel'))
+
+    expect(pageSource).toContain("const defaultRiverDriverId = decisionRiverModel?.defaultDriverId ?? 'cpm'")
+    expect(pageSource).toContain('useState<InsightsRiverDriverKey>(() => defaultRiverDriverId)')
+    expect(pageSource).toContain('setSelectedRiverDriver(defaultRiverDriverId)')
+  })
+
   it('keeps Insights recommendations approval-gated and avoids direct Meta writes', () => {
     const source = readText('../src/App.tsx')
     const pageSource = source.slice(source.indexOf('export function InsightsPage'), source.indexOf('function InsightsBriefPanel'))

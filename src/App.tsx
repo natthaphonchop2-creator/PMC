@@ -4049,12 +4049,12 @@ export function InsightsPage({
     () => (metrics && visibleInsight ? buildInsightsDecisionRiverModel({ insight: visibleInsight, metrics }) : null),
     [metrics, visibleInsight],
   )
-  const defaultRiverDriverId = decisionRiverModel?.defaultDriverId
-  const [selectedRiverDriver, setSelectedRiverDriver] = useState<InsightsRiverDriverKey>('cpm')
+  const defaultRiverDriverId = decisionRiverModel?.defaultDriverId ?? 'cpm'
+  const [selectedRiverDriver, setSelectedRiverDriver] = useState<InsightsRiverDriverKey>(() => defaultRiverDriverId)
   const [isRiverEvidenceOpen, setIsRiverEvidenceOpen] = useState(false)
 
   useEffect(() => {
-    if (defaultRiverDriverId) setSelectedRiverDriver(defaultRiverDriverId)
+    setSelectedRiverDriver(defaultRiverDriverId)
   }, [defaultRiverDriverId])
 
   const runInsightsAiAnalysis = useCallback(async () => {
