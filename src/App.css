@@ -2397,11 +2397,13 @@ input:focus-visible {
   box-shadow: 0 0 0 3px rgba(47, 134, 235, 0.1);
 }
 
-.insights-river-driver.pressure {
+.insights-river-driver.pressure,
+.insights-river-driver.critical {
   border-left: 4px solid #b95549;
 }
 
-.insights-river-driver.relief {
+.insights-river-driver.relief,
+.insights-river-driver.good {
   border-left: 4px solid #2f8f62;
 }
 
@@ -2441,12 +2443,14 @@ input:focus-visible {
   padding: 5px 8px;
 }
 
-.insights-river-driver.pressure em {
+.insights-river-driver.pressure em,
+.insights-river-driver.critical em {
   background: rgba(185, 85, 73, 0.12);
   color: #8a3c35;
 }
 
-.insights-river-driver.relief em {
+.insights-river-driver.relief em,
+.insights-river-driver.good em {
   background: rgba(47, 143, 98, 0.12);
   color: #216646;
 }
@@ -2468,11 +2472,13 @@ input:focus-visible {
   opacity: 0.92;
 }
 
-.insights-river-flow path.pressure {
+.insights-river-flow path.pressure,
+.insights-river-flow path.critical {
   stroke: #b95549;
 }
 
-.insights-river-flow path.relief {
+.insights-river-flow path.relief,
+.insights-river-flow path.good {
   stroke: #2f8f62;
 }
 
@@ -2498,11 +2504,13 @@ input:focus-visible {
   min-height: 132px;
 }
 
-.insights-river-outcome.pressure {
+.insights-river-outcome.pressure,
+.insights-river-outcome.critical {
   border-top: 3px solid #b95549;
 }
 
-.insights-river-outcome.relief {
+.insights-river-outcome.relief,
+.insights-river-outcome.good {
   border-top: 3px solid #2f8f62;
 }
 
@@ -2623,11 +2631,13 @@ input:focus-visible {
   stroke: #8a7a68;
 }
 
-.insights-mini-sparkline.pressure polyline {
+.insights-mini-sparkline.pressure polyline,
+.insights-mini-sparkline.critical polyline {
   stroke: #b95549;
 }
 
-.insights-mini-sparkline.relief polyline {
+.insights-mini-sparkline.relief polyline,
+.insights-mini-sparkline.good polyline {
   stroke: #2f8f62;
 }
 
