@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenCheck,
@@ -4326,6 +4326,32 @@ function InsightsDecisionRiver({
 }) {
   const selectedDriver = model.drivers.find((driver) => driver.id === selectedDriverId) ?? model.drivers[0]
   const selectedEvidenceCards = evidenceCards.filter((card) => selectedDriver.evidenceIds.includes(card.id)).slice(0, 3)
+  const mobileSections = ['drivers', 'outcomes', 'evidence'] as const
+  const [mobileSection, setMobileSection] = useState<'drivers' | 'outcomes' | 'evidence'>('drivers')
+
+  const selectMobileSection = (section: typeof mobileSections[number]) => {
+    setMobileSection(section)
+    if (section === 'evidence') onOpenEvidence()
+  }
+
+  const focusMobileTab = (section: typeof mobileSections[number]) => {
+    document.getElementById(`insights-river-tab-${section}`)?.focus()
+  }
+
+  const handleMobileTabsKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = mobileSections.indexOf(mobileSection)
+    let nextSection: typeof mobileSections[number] | null = null
+
+    if (event.key === 'ArrowRight') nextSection = mobileSections[(currentIndex + 1) % mobileSections.length]
+    else if (event.key === 'ArrowLeft') nextSection = mobileSections[(currentIndex - 1 + mobileSections.length) % mobileSections.length]
+    else if (event.key === 'Home') nextSection = mobileSections[0]
+    else if (event.key === 'End') nextSection = mobileSections[mobileSections.length - 1]
+
+    if (!nextSection) return
+    event.preventDefault()
+    selectMobileSection(nextSection)
+    focusMobileTab(nextSection)
+  }
 
   return (
     <section className="insights-decision-river" aria-labelledby="insights-decision-river-title">
@@ -4368,12 +4394,51 @@ function InsightsDecisionRiver({
       </div>
 
       <div className="insights-river-mobile" aria-label="Decision River mobile view">
-        <div className="insights-river-mobile-tabs" role="tablist" aria-label="Decision River sections">
-          <button className="active" type="button">Drivers</button>
-          <button type="button">Outcomes</button>
-          <button type="button" onClick={onOpenEvidence}>Evidence</button>
+        <div className="insights-river-mobile-tabs" role="tablist" aria-label="Decision River sections" onKeyDown={handleMobileTabsKeyDown}>
+          <button
+            aria-controls="insights-river-mobile-drivers"
+            aria-selected={mobileSection === 'drivers'}
+            className={mobileSection === 'drivers' ? 'active' : ''}
+            id="insights-river-tab-drivers"
+            role="tab"
+            tabIndex={mobileSection === 'drivers' ? 0 : -1}
+            type="button"
+            onClick={() => selectMobileSection('drivers')}
+          >
+            Drivers
+          </button>
+          <button
+            aria-controls="insights-river-mobile-outcomes"
+            aria-selected={mobileSection === 'outcomes'}
+            className={mobileSection === 'outcomes' ? 'active' : ''}
+            id="insights-river-tab-outcomes"
+            role="tab"
+            tabIndex={mobileSection === 'outcomes' ? 0 : -1}
+            type="button"
+            onClick={() => selectMobileSection('outcomes')}
+          >
+            Outcomes
+          </button>
+          <button
+            aria-controls="insights-river-mobile-evidence"
+            aria-selected={mobileSection === 'evidence'}
+            className={mobileSection === 'evidence' ? 'active' : ''}
+            id="insights-river-tab-evidence"
+            role="tab"
+            tabIndex={mobileSection === 'evidence' ? 0 : -1}
+            type="button"
+            onClick={() => selectMobileSection('evidence')}
+          >
+            Evidence
+          </button>
         </div>
-        <div className="insights-river-mobile-stepper">
+        <div
+          aria-labelledby="insights-river-tab-drivers"
+          className="insights-river-mobile-stepper"
+          hidden={mobileSection !== 'drivers'}
+          id="insights-river-mobile-drivers"
+          role="tabpanel"
+        >
           {model.drivers.map((driver) => (
             <InsightsRiverDriverButton
               driver={driver}
@@ -4384,17 +4449,32 @@ function InsightsDecisionRiver({
             />
           ))}
         </div>
-        <div className="insights-river-mobile-outcomes">
+        <div
+          aria-labelledby="insights-river-tab-outcomes"
+          className="insights-river-mobile-outcomes"
+          hidden={mobileSection !== 'outcomes'}
+          id="insights-river-mobile-outcomes"
+          role="tabpanel"
+        >
           {model.outcomes.map((outcome) => (
             <InsightsRiverOutcomeCard key={outcome.id} outcome={outcome} />
           ))}
+        </div>
+        <div
+          aria-labelledby="insights-river-tab-evidence"
+          className="insights-river-mobile-evidence"
+          hidden={mobileSection !== 'evidence'}
+          id="insights-river-mobile-evidence"
+          role="tabpanel"
+        >
+          <InsightsRiverEvidenceList evidenceCards={selectedEvidenceCards} />
         </div>
       </div>
 
       <InsightsRiverRecommendationStrip recommendation={topRecommendation} />
 
       {isEvidenceOpen ? (
-        <div className="insights-river-evidence-sheet" role="dialog" aria-modal="false" aria-label={`${selectedDriver.label} evidence preview`}>
+        <div className="insights-river-evidence-sheet" role="region" aria-label={`${selectedDriver.label} evidence preview`}>
           <div>
             <strong>{selectedDriver.label} Evidence Preview</strong>
             <button className="modal-close" type="button" onClick={onCloseEvidence} aria-label="ปิดหลักฐาน Decision River">
@@ -4483,7 +4563,7 @@ function InsightsRiverEvidencePanel({
   signalCounts: InsightsDecisionRiverModel['signalCounts']
 }) {
   return (
-    <aside className="insights-river-evidence-panel">
+    <aside className="insights-river-evidence-panel" aria-label="Decision River evidence">
       <div className="insights-river-confidence-card">
         <strong>{signalCounts.supporting} supporting</strong>
         <span>{signalCounts.neutral} neutral · {signalCounts.contradicting} pressure</span>

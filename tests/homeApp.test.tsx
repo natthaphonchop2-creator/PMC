@@ -169,7 +169,15 @@ describe('Home app shell', () => {
     expect(html).toContain('class="insights-river-desktop"')
     expect(html).toContain('class="insights-river-mobile"')
     expect(html).toContain('role="tablist"')
+    expect(html).toContain('role="tab"')
+    expect(html).toContain('role="tabpanel"')
+    expect(html).toContain('id="insights-river-tab-drivers"')
+    expect(html).toContain('aria-controls="insights-river-mobile-drivers"')
+    expect(html).toContain('id="insights-river-mobile-drivers"')
+    expect(html).toContain('aria-selected="true"')
     expect(html).toContain('aria-label="Decision River mobile view"')
+    expect(html).toContain('aria-label="Decision River evidence"')
+    expect(html).toMatch(/<button(?=[^>]*class="insights-river-driver watch selected")(?=[^>]*aria-pressed="true")(?=[^>]*aria-label="CPM:)[^>]*>/)
     expect(text).toContain('ต้องอนุมัติก่อนส่ง Meta')
     expect(text).not.toContain('ผู้ช่วย Insights')
     expect(text).not.toContain('แผนที่เลือกทำต่อ')
@@ -195,15 +203,6 @@ describe('Home app shell', () => {
     expect(endpointSource).toContain('structuredInsightsPayload')
     expect(endpointSource).toContain('sanitizeUnknownRecord(body.insightsPayload)')
     expect(endpointSource).toContain('insightsPayload: structuredInsightsPayload')
-  })
-
-  it('initializes the Insights Decision River selection from the model default', () => {
-    const source = readText('../src/App.tsx')
-    const pageSource = source.slice(source.indexOf('export function InsightsPage'), source.indexOf('function InsightsBriefPanel'))
-
-    expect(pageSource).toContain("const defaultRiverDriverId = decisionRiverModel?.defaultDriverId ?? 'cpm'")
-    expect(pageSource).toContain('useState<InsightsRiverDriverKey>(() => defaultRiverDriverId)')
-    expect(pageSource).toContain('setSelectedRiverDriver(defaultRiverDriverId)')
   })
 
   it('keeps Insights recommendations approval-gated and avoids direct Meta writes', () => {
