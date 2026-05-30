@@ -4055,6 +4055,15 @@ export function InsightsPage({
   const selectedRiverDriver = hasSelectedRiverDriverOverride ? selectedRiverDriverOverride : defaultRiverDriverId
   const [isRiverEvidenceOpen, setIsRiverEvidenceOpen] = useState(false)
 
+  const viewDetailedEvidence = useCallback(() => {
+    setIsRiverEvidenceOpen(false)
+    window.setTimeout(() => {
+      const evidenceSection = document.getElementById('insights-evidence-detail-section')
+      evidenceSection?.scrollIntoView({ block: 'start' })
+      evidenceSection?.focus()
+    }, 0)
+  }, [])
+
   const runInsightsAiAnalysis = useCallback(async () => {
     if (!workspace || !analysisPayload || isAiRunning) return
     setIsAiRunning(true)
@@ -4142,6 +4151,7 @@ export function InsightsPage({
             onCloseEvidence={() => setIsRiverEvidenceOpen(false)}
             onOpenEvidence={() => setIsRiverEvidenceOpen(true)}
             onSelectDriver={setSelectedRiverDriverOverride}
+            onViewEvidenceDetails={viewDetailedEvidence}
             selectedDriverId={selectedRiverDriver}
             topRecommendation={(visibleInsight.recommendations.length ? visibleInsight.recommendations : metrics.recommendations)[0]}
           />
@@ -4310,6 +4320,7 @@ function InsightsDecisionRiver({
   onCloseEvidence,
   onOpenEvidence,
   onSelectDriver,
+  onViewEvidenceDetails,
   selectedDriverId,
   topRecommendation,
 }: {
@@ -4319,6 +4330,7 @@ function InsightsDecisionRiver({
   onCloseEvidence: () => void
   onOpenEvidence: () => void
   onSelectDriver: (driverId: InsightsRiverDriverKey) => void
+  onViewEvidenceDetails: () => void
   selectedDriverId: InsightsRiverDriverKey
   topRecommendation?: InsightsRecommendation
 }) {
@@ -4330,6 +4342,19 @@ function InsightsDecisionRiver({
   const selectMobileSection = (section: typeof mobileSections[number]) => {
     setMobileSection(section)
     if (section === 'evidence') onOpenEvidence()
+  }
+
+  const restoreSelectedDriverFocus = () => {
+    window.setTimeout(() => {
+      const selectedButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.insights-decision-river [data-river-driver-id]'))
+        .find((button) => button.dataset.riverDriverId === selectedDriver.id && button.offsetParent !== null)
+      selectedButton?.focus()
+    }, 0)
+  }
+
+  const closeEvidenceAndRestoreFocus = () => {
+    onCloseEvidence()
+    restoreSelectedDriverFocus()
   }
 
   const focusMobileTab = (section: typeof mobileSections[number]) => {
@@ -4475,11 +4500,14 @@ function InsightsDecisionRiver({
         <div className="insights-river-evidence-sheet" role="region" aria-label={`${selectedDriver.label} evidence preview`}>
           <div>
             <strong>{selectedDriver.label} Evidence Preview</strong>
-            <button className="modal-close" type="button" onClick={onCloseEvidence} aria-label="ปิดหลักฐาน Decision River">
+            <button className="modal-close" type="button" onClick={closeEvidenceAndRestoreFocus} aria-label="ปิดหลักฐาน Decision River">
               <X size={16} />
             </button>
           </div>
           <InsightsRiverEvidenceList evidenceCards={selectedEvidenceCards} />
+          <div className="insights-river-sheet-actions">
+            <button className="outline-button" type="button" onClick={onViewEvidenceDetails}>ดูรายละเอียด</button>
+          </div>
         </div>
       ) : null}
     </section>
@@ -4507,6 +4535,7 @@ function InsightsRiverDriverButton({
       }}
       aria-pressed={isSelected}
       aria-label={`${driver.label}: ${driver.statusLabel}, ${driver.formattedValue}, ${driver.changeLabel}`}
+      data-river-driver-id={driver.id}
     >
       <span>
         <strong>{driver.label}</strong>
@@ -4664,7 +4693,7 @@ function InsightsFormulaDiagnostics({ diagnostics }: { diagnostics: InsightsForm
 
 function InsightsEvidenceCards({ evidenceCards }: { evidenceCards: InsightsEvidenceCard[] }) {
   return (
-    <section className="insights-section">
+    <section className="insights-section" id="insights-evidence-detail-section" tabIndex={-1}>
       <div className="insights-section-head">
         <div>
           <h2>หลักฐานที่ใช้</h2>
@@ -7732,7 +7761,7 @@ function HelpCenterPage({
 
 function TwoColumnPage({ aside, children }: { aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="two-column-page ads-tool-window">
+    <div className={`two-column-page ads-tool-window ${aside ? 'has-right-rail' : 'single-column'}`}>
       <section className="main-stack">{children}</section>
       {aside ? <aside className="right-rail">{aside}</aside> : null}
     </div>

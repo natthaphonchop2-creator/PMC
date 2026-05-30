@@ -22,6 +22,20 @@ describe('insightsDecisionRiver model', () => {
     expect(model.drivers.find((driver) => driver.id === 'conversion_rate')?.sparkline).toHaveLength(4)
   })
 
+  it('selects driver-specific evidence instead of reusing one generic slice', () => {
+    const workspace = workspaceFixture()
+    const metrics = deriveInsightsMetrics(workspace)
+    const insight = buildFallbackInsightsCache(buildInsightsAnalysisPayload({ accountName: 'PMC', datePreset: 'เดือนนี้', workspace }))
+
+    const model = buildInsightsDecisionRiverModel({ insight: { ...insight, evidenceCards: metrics.evidenceCards }, metrics })
+    const ctrEvidence = model.drivers.find((driver) => driver.id === 'ctr')?.evidenceIds ?? []
+    const cvrEvidence = model.drivers.find((driver) => driver.id === 'conversion_rate')?.evidenceIds ?? []
+
+    expect(ctrEvidence.every((id) => id.startsWith('evidence-campaign-'))).toBe(true)
+    expect(cvrEvidence).toContain('evidence-account-scoreboard')
+    expect(cvrEvidence).not.toEqual(ctrEvidence)
+  })
+
   it('classifies pressure direction according to metric meaning', () => {
     expect(pressureToneForDriver('cpm', 0.18)).toEqual({ label: 'Pressure', tone: 'watch', direction: 'up' })
     expect(pressureToneForDriver('cpm', -0.18)).toEqual({ label: 'Relief', tone: 'good', direction: 'down' })

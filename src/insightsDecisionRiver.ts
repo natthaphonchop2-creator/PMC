@@ -130,7 +130,7 @@ export function pressureToneForDriver(metricKey: InsightsRiverDriverKey, changeR
 
 function buildDriverLane(driver: DriverMeta, metrics: InsightsMetrics, evidenceCards: InsightsEvidenceCard[]): InsightsRiverLane {
   const metric = findMetric(metrics.scoreboard, driver.metricKey)
-  const evidenceIds = evidenceCards.slice(0, 3).map((card) => card.id)
+  const evidenceIds = evidenceIdsForDriver(driver.id, evidenceCards)
   if (metric.availability === 'unavailable') {
     return {
       changeLabel: 'รอข้อมูล',
@@ -210,6 +210,61 @@ function findMetric(metrics: InsightsDerivedMetric[], key: InsightsMetricKey): I
   const metric = metrics.find((item) => item.key === key)
   if (!metric) throw new Error(`Missing Insights metric: ${key}`)
   return metric
+}
+
+function evidenceIdsForDriver(driverId: InsightsRiverDriverKey, evidenceCards: InsightsEvidenceCard[]): string[] {
+  const fallbackIds = evidenceCards.slice(0, 2).map((card) => card.id)
+  const scored = evidenceCards
+    .map((card, index) => ({
+      card,
+      index,
+      score: evidenceScoreForDriver(driverId, card),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, 2)
+    .map((item) => item.card.id)
+
+  return scored.length ? scored : fallbackIds
+}
+
+function evidenceScoreForDriver(driverId: InsightsRiverDriverKey, card: InsightsEvidenceCard): number {
+  const metricLabels = card.metricValues.map((metric) => metric.label.toLowerCase())
+  const title = card.title.toLowerCase()
+  const result = card.formulaResult.toLowerCase()
+  const isAccount = card.objectType === 'account'
+  const isCampaign = card.objectType === 'campaign'
+
+  switch (driverId) {
+    case 'spend':
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['spend'])
+    case 'cpm':
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['spend', 'impressions'])
+    case 'ctr':
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['ctr', 'click'])
+    case 'conversion_rate':
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['result', 'cpa', 'conversion'])
+    case 'frequency':
+      return scoreEvidence({ isAccount, isCampaign, metricLabels, result, title }, ['frequency', 'roas', 'fatigue'])
+  }
+}
+
+function scoreEvidence(
+  evidence: {
+    isAccount: boolean
+    isCampaign: boolean
+    metricLabels: string[]
+    result: string
+    title: string
+  },
+  keywords: string[],
+): number {
+  const metricHits = evidence.metricLabels.filter((label) => keywords.some((keyword) => label.includes(keyword))).length
+  const textHits = keywords.filter((keyword) => evidence.title.includes(keyword) || evidence.result.includes(keyword)).length
+  const contentScore = metricHits * 4 + textHits * 2
+  if (contentScore === 0) return 0
+  const objectWeight = evidence.isCampaign ? 2 : evidence.isAccount ? 1 : 0
+  return contentScore + objectWeight
 }
 
 function sparklineForMetric(metrics: InsightsMetrics, key: InsightsMetricKey): number[] {
