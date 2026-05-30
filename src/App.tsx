@@ -4050,12 +4050,10 @@ export function InsightsPage({
     [metrics, visibleInsight],
   )
   const defaultRiverDriverId = decisionRiverModel?.defaultDriverId ?? 'cpm'
-  const [selectedRiverDriver, setSelectedRiverDriver] = useState<InsightsRiverDriverKey>(() => defaultRiverDriverId)
+  const [selectedRiverDriverOverride, setSelectedRiverDriverOverride] = useState<InsightsRiverDriverKey | null>(null)
+  const hasSelectedRiverDriverOverride = selectedRiverDriverOverride !== null && Boolean(decisionRiverModel?.drivers.some((driver) => driver.id === selectedRiverDriverOverride))
+  const selectedRiverDriver = hasSelectedRiverDriverOverride ? selectedRiverDriverOverride : defaultRiverDriverId
   const [isRiverEvidenceOpen, setIsRiverEvidenceOpen] = useState(false)
-
-  useEffect(() => {
-    setSelectedRiverDriver(defaultRiverDriverId)
-  }, [defaultRiverDriverId])
 
   const runInsightsAiAnalysis = useCallback(async () => {
     if (!workspace || !analysisPayload || isAiRunning) return
@@ -4143,7 +4141,7 @@ export function InsightsPage({
             model={decisionRiverModel}
             onCloseEvidence={() => setIsRiverEvidenceOpen(false)}
             onOpenEvidence={() => setIsRiverEvidenceOpen(true)}
-            onSelectDriver={setSelectedRiverDriver}
+            onSelectDriver={setSelectedRiverDriverOverride}
             selectedDriverId={selectedRiverDriver}
             topRecommendation={(visibleInsight.recommendations.length ? visibleInsight.recommendations : metrics.recommendations)[0]}
           />
