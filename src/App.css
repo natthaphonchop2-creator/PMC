@@ -2319,6 +2319,420 @@ input:focus-visible {
   color: #875d2e;
 }
 
+.insights-decision-river {
+  display: grid;
+  gap: 14px;
+}
+
+.insights-river-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #7b6a58;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.insights-river-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.insights-river-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.insights-river-legend .pressure {
+  background: #b95549;
+}
+
+.insights-river-legend .relief {
+  background: #2f8f62;
+}
+
+.insights-river-legend .neutral {
+  background: #8a7a68;
+}
+
+.insights-river-desktop {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.95fr) minmax(150px, 0.55fr) minmax(170px, 0.72fr) minmax(260px, 0.95fr);
+  gap: 12px;
+  align-items: stretch;
+  margin-top: 2px;
+}
+
+.insights-river-lanes,
+.insights-river-outcomes,
+.insights-river-mobile-stepper,
+.insights-river-mobile-outcomes,
+.insights-river-mobile-evidence,
+.insights-river-evidence-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.insights-river-driver {
+  width: 100%;
+  min-height: 96px;
+  border: 1px solid rgba(121, 92, 57, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #2f271e;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 12px;
+  text-align: left;
+}
+
+.insights-river-driver.selected {
+  border-color: rgba(47, 134, 235, 0.42);
+  box-shadow: 0 0 0 3px rgba(47, 134, 235, 0.1);
+}
+
+.insights-river-driver.pressure {
+  border-left: 4px solid #b95549;
+}
+
+.insights-river-driver.relief {
+  border-left: 4px solid #2f8f62;
+}
+
+.insights-river-driver.neutral,
+.insights-river-driver.watch {
+  border-left: 4px solid #b98247;
+}
+
+.insights-river-driver span {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.insights-river-driver strong {
+  color: #2f271e;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.insights-river-driver small {
+  color: #756656;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.insights-river-driver em {
+  grid-column: 1 / -1;
+  justify-self: end;
+  border-radius: 999px;
+  background: rgba(121, 92, 57, 0.08);
+  color: #6c5946;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.2;
+  padding: 5px 8px;
+}
+
+.insights-river-driver.pressure em {
+  background: rgba(185, 85, 73, 0.12);
+  color: #8a3c35;
+}
+
+.insights-river-driver.relief em {
+  background: rgba(47, 143, 98, 0.12);
+  color: #216646;
+}
+
+.insights-river-flow {
+  width: 100%;
+  min-height: 100%;
+  align-self: stretch;
+  overflow: visible;
+}
+
+.insights-river-flow path {
+  opacity: 0.38;
+  stroke: #8a7a68;
+  transition: opacity 160ms ease, stroke-width 160ms ease;
+}
+
+.insights-river-flow path.selected {
+  opacity: 0.92;
+}
+
+.insights-river-flow path.pressure {
+  stroke: #b95549;
+}
+
+.insights-river-flow path.relief {
+  stroke: #2f8f62;
+}
+
+.insights-river-flow path.neutral,
+.insights-river-flow path.watch {
+  stroke: #b98247;
+}
+
+.insights-river-outcome,
+.insights-river-confidence-card,
+.insights-river-evidence-list article,
+.insights-river-recommendation {
+  min-width: 0;
+  border: 1px solid rgba(121, 92, 57, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 12px;
+}
+
+.insights-river-outcome {
+  display: grid;
+  gap: 7px;
+  min-height: 132px;
+}
+
+.insights-river-outcome.pressure {
+  border-top: 3px solid #b95549;
+}
+
+.insights-river-outcome.relief {
+  border-top: 3px solid #2f8f62;
+}
+
+.insights-river-outcome.neutral,
+.insights-river-outcome.watch {
+  border-top: 3px solid #b98247;
+}
+
+.insights-river-outcome span,
+.insights-river-evidence-list span {
+  color: #7b6a58;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.insights-river-outcome strong,
+.insights-river-confidence-card strong,
+.insights-river-evidence-list strong,
+.insights-river-recommendation strong {
+  color: #2f271e;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.insights-river-outcome strong {
+  font-size: 24px;
+}
+
+.insights-river-outcome small,
+.insights-river-confidence-card span,
+.insights-river-evidence-list small,
+.insights-river-evidence-list p,
+.insights-river-recommendation span,
+.insights-river-recommendation em {
+  margin: 0;
+  color: #756656;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.insights-river-evidence-panel {
+  align-self: start;
+  position: sticky;
+  top: 18px;
+  border: 1px solid rgba(121, 92, 57, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.64);
+  padding: 12px;
+}
+
+.insights-river-counts {
+  display: grid;
+  gap: 6px;
+}
+
+.insights-river-caveats {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid rgba(121, 92, 57, 0.12);
+  padding-top: 10px;
+}
+
+.insights-river-caveats strong {
+  color: #2f271e;
+  font-size: 13px;
+}
+
+.insights-river-caveats span {
+  color: #756656;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.insights-river-evidence-list {
+  display: grid;
+  gap: 8px;
+}
+
+.insights-river-evidence-list article {
+  display: grid;
+  gap: 5px;
+}
+
+.insights-river-evidence-list p {
+  border: 1px dashed rgba(121, 92, 57, 0.18);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.insights-river-recommendation {
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border-color: rgba(185, 130, 71, 0.22);
+  background: rgba(255, 250, 242, 0.82);
+}
+
+.insights-river-recommendation em {
+  justify-self: end;
+  border-radius: 999px;
+  background: rgba(185, 130, 71, 0.14);
+  color: #875d2e;
+  font-weight: 900;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.insights-mini-sparkline {
+  width: 80px;
+  height: 26px;
+  justify-self: end;
+}
+
+.insights-mini-sparkline polyline {
+  stroke: #8a7a68;
+}
+
+.insights-mini-sparkline.pressure polyline {
+  stroke: #b95549;
+}
+
+.insights-mini-sparkline.relief polyline {
+  stroke: #2f8f62;
+}
+
+.insights-mini-sparkline.neutral polyline,
+.insights-mini-sparkline.watch polyline {
+  stroke: #b98247;
+}
+
+.insights-river-mobile {
+  display: none;
+}
+
+.insights-river-mobile-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid rgba(121, 92, 57, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 252, 247, 0.96);
+  padding: 6px;
+}
+
+.insights-river-mobile-tabs button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #756656;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.insights-river-mobile-tabs button.active,
+.insights-river-mobile-tabs button[aria-selected="true"] {
+  background: #fff;
+  color: #2f271e;
+  box-shadow: 0 0 0 1px rgba(121, 92, 57, 0.14);
+}
+
+.insights-river-mobile [role="tabpanel"][hidden] {
+  display: none;
+}
+
+.insights-river-evidence-sheet {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(121, 92, 57, 0.16);
+  border-radius: 8px;
+  background: #fffdf9;
+  box-shadow: 0 16px 34px rgba(71, 53, 31, 0.12);
+  padding: 12px;
+}
+
+.insights-river-evidence-sheet > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.insights-river-evidence-sheet strong {
+  color: #2f271e;
+  font-size: 14px;
+}
+
+@media (max-width: 900px) {
+  .insights-river-desktop {
+    display: none;
+  }
+
+  .insights-river-mobile {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .insights-river-driver {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 86px;
+  }
+
+  .insights-river-driver em {
+    justify-self: start;
+  }
+
+  .insights-river-mobile-outcomes {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-mobile-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-recommendation {
+    grid-template-columns: 1fr;
+  }
+
+  .insights-river-recommendation em {
+    justify-self: start;
+  }
+}
+
 .confidence {
   margin-left: auto;
   color: var(--violet);

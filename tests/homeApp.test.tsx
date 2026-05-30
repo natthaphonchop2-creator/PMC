@@ -185,6 +185,18 @@ describe('Home app shell', () => {
     expect(html).not.toContain('master-agent-launch')
   })
 
+  it('defines responsive Decision River styles for desktop and mobile', () => {
+    const css = readText('../src/App.css')
+
+    expect(css).toContain('.insights-river-desktop')
+    expect(css).toContain('.insights-river-mobile')
+    expect(css).toContain('.insights-river-evidence-sheet')
+    expect(css).toContain('@media (max-width: 900px)')
+    expect(css).toContain('display: none')
+    expect(css).toContain('position: sticky')
+    expect(css).toContain('min-height: 44px')
+  })
+
   it('sends structured Insights payload to the real AI brain endpoint', () => {
     const source = readText('../src/App.tsx')
     const pageSource = source.slice(source.indexOf('export function InsightsPage'), source.indexOf('function InsightsBriefPanel'))
