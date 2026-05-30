@@ -11,9 +11,24 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 ## Current Version
 
 - Version: `0.1.0`
-- Date: 2026-05-29
-- Branch: `codex/PMC`
+- Date: 2026-05-30
+- Branch: `main`
 - Release folder: `docs/releases/2026-05-29-v0.1.0/`
+
+## 2026-05-30 - Ads Dashboard and Insights polish deploy
+
+- Updated Ads Dashboard copy to user-facing Thai labels and section names.
+- Added Ads Dashboard data status strip for selected date window, daily data count, and campaign ranking scope.
+- Added dedicated Ads Dashboard skeleton loading layout for KPI cards, daily trend chart, campaign ranking, and lower metric cards.
+- Refined Insights copy away from internal agent labels toward decision-support language.
+- Fixed Decision River evidence summaries so the selected driver controls the visible values.
+- Added campaign evidence metrics from ad activity: Spend, Results, Clicks, Impressions, CTR, CVR, CPM, Frequency, ROAS, and CPA.
+- Updated cached AI evidence handling so older cached cards can receive freshly derived metric values.
+- Updated Decision River scoring so CVR, CPM, and Frequency select evidence cards that contain matching driver metrics.
+- Added compact evidence metric grid styles for desktop and mobile.
+- Verified CVR evidence sheet in headless Chrome: CVR evidence showed CVR, Results, and Clicks, did not show generic ROAS/CPA as the main summary, and had no horizontal overflow.
+- Updated regression tests for Ads Dashboard skeleton loading, user-facing copy, Decision River evidence rendering, and derived campaign evidence values.
+- Added daily Obsidian project update notes under `Projects/PMC Ads Agent/PROJECT_UPDATES/`.
 
 ## 2026-05-29 - v0.1.0
 
