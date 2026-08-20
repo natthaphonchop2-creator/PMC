@@ -190,3 +190,18 @@ Verified locally with synthetic identity only:
 - no live Cloud Run, Apps Script, Form, Sheet, Calendar, or LINE-group state was changed in this local verification stage.
 
 Live cutover remains **NO-GO** until `CONFIG_STAFF` is prepared and all seven personal closer emails are entered directly in Sheet without exposing them in source, commands, docs, or chat.
+
+## Deferred live cutover record — 2026-08-21
+
+Completed safely before the owner deferred personal-email entry:
+
+- deployed the new keyless Cloud Run revision with the public PMC logo route;
+- Cloud Run health/logo GET/logo HEAD returned `200`;
+- the live logo is PNG `256x256` with alpha;
+- evidence missing/altered token behavior remained `400`/`403`;
+- Service Identity and Secret Manager remained attached with no JSON credential environment;
+- created `CONFIG_STAFF` with seven legacy IDs/names/LINE mappings, blank personal emails, and both initial role flags enabled;
+- inserted `aeId` and `aeName` without shifting the verified historical booking sample; and
+- left the production Apps Script deployment and Booking Form label/accepting state unchanged.
+
+The owner explicitly deferred email mapping and Form/Apps Script cutover. Resume only after all seven personal emails are entered directly in `CONFIG_STAFF`; then validate uniqueness, pause the Form, push/deploy the new Apps Script version, rename/sync the AE field, and resume responses.

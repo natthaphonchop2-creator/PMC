@@ -46,6 +46,8 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Implemented the first nine plan tasks on the isolated feature branch: canonical Staff roles, AE-safe schema migration, verified closer/AE attribution, Dashboard/call propagation, Minimal Receipt Flex, an optimized `256x256` transparent PMC monogram, a public immutable Cloud Run logo route, and safe Form cutover controls.
 - Verified Booking tests `83/83`, full tests `295/295`, typecheck, lint, Apps Script/client/server builds, and diff checks. Official LINE validation returned `200`; Admin had logo/evidence, doctor had no evidence, and neither visible Case ID nor staff email was present.
 - Live Cloud Run/Apps Script/Form cutover remains gated on preparing `CONFIG_STAFF` and entering the seven personal closer emails directly in Sheet.
+- Deployed the keyless Cloud Run logo revision and prepared the live Sheet safely: logo/health checks passed, evidence token boundaries remained intact, `CONFIG_STAFF` contains seven blank-email staff rows, AE columns are present, and historical sample data remained aligned.
+- The owner deferred personal-email entry and the Form/Apps Script cutover. Production booking triggers and Form labeling therefore remain on the previous live behavior until the deferred checkpoint resumes.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
