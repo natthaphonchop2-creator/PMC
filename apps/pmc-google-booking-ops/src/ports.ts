@@ -176,6 +176,22 @@ export interface LineMessage {
 export interface LinePort {
   push(message: LineMessage): void
 }
+
+export interface EvidenceImageRef {
+  previewUrl: string
+  fullUrl: string
+}
+
+export interface BookingEvidenceImages {
+  payment: EvidenceImageRef | null
+  chats: EvidenceImageRef[]
+  totalChatCount: number
+}
+
+export interface EvidenceMediaPort {
+  images(caseId: string, paymentFileIds: string[], chatFileIds: string[]): BookingEvidenceImages
+}
+
 export interface FormsPort {
   syncBookingChoices(adminNames: string[], doctorIds: string[], serviceIds: string[], channelIds: string[]): void
   syncCallResultChoices(results: string[]): void
@@ -196,6 +212,7 @@ export interface SecretsPort {
 export interface CryptoPort {
   hmacSha256Hex(value: string, secret: string): string
   sha256Hex(value: string): string
+  base64UrlUtf8(value: string): string
 }
 
 export interface DashboardPort {
@@ -222,6 +239,7 @@ export interface BookingPorts {
   files: FilePort
   secrets: SecretsPort
   crypto: CryptoPort
+  media: EvidenceMediaPort
   dashboard: DashboardPort
   backups: BackupPort
 }

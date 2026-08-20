@@ -169,6 +169,8 @@ export function createAppsScriptCryptoPort(): CryptoPort {
   return {
     hmacSha256Hex: (value, secret) => hex(Utilities.computeHmacSha256Signature(value, secret)),
     sha256Hex: (value) => hex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value)),
+    base64UrlUtf8: (value) =>
+      Utilities.base64EncodeWebSafe(value, Utilities.Charset.UTF_8).replace(/=+$/, ''),
   }
 }
 

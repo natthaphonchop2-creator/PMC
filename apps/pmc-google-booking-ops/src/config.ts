@@ -9,6 +9,8 @@ export const SCRIPT_PROPERTY_KEYS = {
   lineAccessToken: 'LINE_CHANNEL_ACCESS_TOKEN',
   lineDirectoryCaptureEnabled: 'LINE_DIRECTORY_CAPTURE_ENABLED',
   bookingIngressSecret: 'PMC_BOOKING_INGRESS_SECRET',
+  mediaBaseUrl: 'BOOKING_MEDIA_BASE_URL',
+  mediaSigningSecret: 'BOOKING_MEDIA_SIGNING_SECRET',
 } as const
 
 export const BOOKING_FORM_LABELS = {

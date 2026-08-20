@@ -4,6 +4,7 @@ import { createGoogleBackupPort, createGoogleDrivePort } from './adapters/google
 import { ensureCaseEvidenceFolder } from './adapters/googleDrive'
 import { createGoogleFilePort } from './adapters/googleFiles'
 import { createGoogleFormsPort } from './adapters/googleForms'
+import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import { createAppsScriptCryptoPort, createGoogleLinePort, sendBookingConfirmationMessages } from './adapters/lineMessaging'
 import { sendDoctorBookingMessage } from './adapters/lineMessaging'
 import { createGoogleDashboardPort, createGoogleSheetStore, ensureSheetTopology } from './adapters/googleSheets'
@@ -27,6 +28,8 @@ const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.adminLineGroupId,
   SCRIPT_PROPERTY_KEYS.lineAccessToken,
   SCRIPT_PROPERTY_KEYS.bookingIngressSecret,
+  SCRIPT_PROPERTY_KEYS.mediaBaseUrl,
+  SCRIPT_PROPERTY_KEYS.mediaSigningSecret,
 ] as const
 
 export function validateRuntimeProperties(properties: Record<string, string | undefined>): void {
@@ -92,6 +95,7 @@ export function createRuntime(): BookingPorts {
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
   const store = createGoogleSheetStore(spreadsheet)
   const clock = { nowIso: bangkokNow }
+  const crypto = createAppsScriptCryptoPort()
   const locks = {
     withLock<T>(operation: () => T): T {
       const lock = LockService.getScriptLock()
@@ -122,7 +126,12 @@ export function createRuntime(): BookingPorts {
       lineDirectoryCaptureEnabled: () =>
         properties[SCRIPT_PROPERTY_KEYS.lineDirectoryCaptureEnabled] === 'true',
     },
-    crypto: createAppsScriptCryptoPort(),
+    crypto,
+    media: createEvidenceMediaPort(
+      properties[SCRIPT_PROPERTY_KEYS.mediaBaseUrl],
+      properties[SCRIPT_PROPERTY_KEYS.mediaSigningSecret],
+      crypto,
+    ),
     dashboard: createGoogleDashboardPort(spreadsheet),
     backups: createGoogleBackupPort(
       properties[SCRIPT_PROPERTY_KEYS.spreadsheetId],

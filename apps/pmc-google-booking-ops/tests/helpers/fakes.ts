@@ -186,6 +186,26 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     crypto: {
       hmacSha256Hex: (value, secret) => createHmac('sha256', secret).update(value).digest('hex'),
       sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
+      base64UrlUtf8: (value) => Buffer.from(value, 'utf8').toString('base64url'),
+    },
+    media: {
+      images(caseId, paymentFileIds, chatFileIds) {
+        const ref = (fileId: string, variant: 'preview' | 'full') =>
+          `https://media.test/${caseId}/${fileId}/${variant}`
+        return {
+          payment: paymentFileIds[0]
+            ? {
+                previewUrl: ref(paymentFileIds[0], 'preview'),
+                fullUrl: ref(paymentFileIds[0], 'full'),
+              }
+            : null,
+          chats: chatFileIds.slice(0, 3).map((fileId) => ({
+            previewUrl: ref(fileId, 'preview'),
+            fullUrl: ref(fileId, 'full'),
+          })),
+          totalChatCount: chatFileIds.length,
+        }
+      },
     },
     dashboard: createFakeDashboard(),
     backups: createFakeBackups(),
