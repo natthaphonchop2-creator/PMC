@@ -223,6 +223,39 @@ For controlled directory capture:
 
 The PMC Web bridge verifies LINE's raw-body signature. Apps Script accepts only the second timestamped HMAC payload and rejects replays.
 
+## Evidence Image Service Account
+
+Evidence previews use a Google Service Account only as a read-only identity for the private `PMC Bookings` Drive hierarchy.
+
+1. Enable Google Drive API in the Service Account's Cloud project.
+2. Share only the `PMC Bookings` root folder to the Service Account email as `Viewer`.
+3. Do not share the central Spreadsheet, Forms, Calendars, Cloud project, JERA folder, or backup folder.
+4. Keep the downloaded JSON only in the ignored local `API/` folder and Render secret storage.
+5. Never paste the JSON, private key, client email, file IDs, or signed media URLs into chat, source, logs, or Sheet cells.
+6. Restrict both Google Form evidence questions to image uploads; phase 1 supports JPEG and PNG only.
+
+Render secret names:
+
+```text
+BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON
+BOOKING_MEDIA_SIGNING_SECRET
+```
+
+Apps Script property names:
+
+```text
+BOOKING_MEDIA_BASE_URL
+BOOKING_MEDIA_SIGNING_SECRET
+```
+
+Use a synthetic JPEG/PNG file inside `PMC Bookings` for the access verifier. Set the two variables locally without printing their values, then run:
+
+```bash
+npm run booking:verify-evidence-access
+```
+
+The verifier reports only credential type and read-only capability booleans. It never attempts a write. Remove the synthetic verifier file after the pilot.
+
 ## Shared Admin link
 
 Publish one internal Form link for all Admins. Each submission requires the Admin to choose their own name. Do not use email/name mismatch rules because every Admin submits through the same company account.
