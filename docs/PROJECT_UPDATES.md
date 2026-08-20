@@ -34,6 +34,15 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Verified `64/64` Booking tests and `275/275` full-project tests plus typecheck, lint, build, and diff checks.
 - Kept real-customer rollout at **NO-GO** because both Google Form File Upload questions still accept `ANY` file type. Google Forms API cannot update these items and the available browser accounts do not own the form; the form owner must set both questions to **Image only** before go-live.
 
+## 2026-08-21 - Staff identity, AE attribution, and Minimal Flex design
+
+- Approved verified personal-email attribution for the Admin who closes a booking, with no manual closer field in the Form and no staff email displayed in LINE.
+- Approved a required `AE ผู้เปิดแชท` dropdown that replaces the current Admin dropdown; closer and AE may be the same person.
+- Selected one canonical `CONFIG_STAFF` directory with closer/AE role flags so future AE-only and Admin-only staff do not require separate duplicate tables.
+- Approved separate `adminId/adminName` and `aeId/aeName` booking attribution while keeping call ownership with the Admin closer and leaving commission rules undefined.
+- Approved the clean Minimal Receipt Flex direction for both Admin and doctor groups: centered generated PMC monogram, generous white space, thin separators, no Case ID/evidence count/status badge, and small fixed evidence thumbnails only in the Admin group.
+- Added the design specification at `docs/superpowers/specs/2026-08-21-pmc-booking-staff-ae-minimal-flex-design.md`; implementation remains gated on written-spec approval and the seven personal-email mappings.
+
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
 - Updated Ads Dashboard copy to user-facing Thai labels and section names.
