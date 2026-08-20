@@ -35,4 +35,11 @@ describe('Apps Script bundle', () => {
       executeAs: 'USER_DEPLOYING',
     })
   })
+
+  it('avoids structuredClone because the Apps Script V8 global is not guaranteed', () => {
+    execFileSync('npm', ['run', 'booking:build'], { stdio: 'pipe' })
+    const bundle = readFileSync('apps/pmc-google-booking-ops/dist/Code.js', 'utf8')
+
+    expect(bundle).not.toContain('structuredClone(')
+  })
 })

@@ -8,6 +8,10 @@ export interface SheetStore {
   replace(tab: string, rows: SheetRow[]): void
 }
 
+function clonePlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 function asBooking(row: SheetRow): BookingCase {
   return row as unknown as BookingCase
 }
@@ -64,7 +68,7 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
           throw new Error('form response already processed')
         }
         store.replace('BOOKING_MASTER', [...rows, booking as unknown as SheetRow])
-        return structuredClone(booking)
+        return clonePlain(booking)
       })
     },
     getByCaseId(caseId: string): BookingCase | null {
@@ -106,7 +110,7 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
           timestamp: clock.nowIso(),
           correlationId: context.correlationId,
         })
-        return structuredClone(after)
+        return clonePlain(after)
       })
     },
     list(): BookingCase[] {
@@ -119,7 +123,7 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       const rows = store.read('CALL_QUEUE')
       if (rows.some((row) => row.taskId === task.taskId)) throw new Error('call task already exists')
       store.replace('CALL_QUEUE', [...rows, task as unknown as SheetRow])
-      return structuredClone(task)
+      return clonePlain(task)
     },
     update(taskId: string, expectedVersion: number, patch: Partial<CallTask>): CallTask {
       const rows = store.read('CALL_QUEUE')
@@ -131,7 +135,7 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       const updated = [...rows]
       updated[index] = after as unknown as SheetRow
       store.replace('CALL_QUEUE', updated)
-      return structuredClone(after)
+      return clonePlain(after)
     },
     list(): CallTask[] {
       return store.read('CALL_QUEUE') as unknown as CallTask[]
@@ -257,7 +261,7 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
         const next = [...rows]
         next[index] = updated
         store.replace('RETENTION_QUEUE', next)
-        return structuredClone(updated)
+        return clonePlain(updated)
       },
     },
     audit,

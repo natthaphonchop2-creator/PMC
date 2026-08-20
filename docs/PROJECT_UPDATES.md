@@ -24,6 +24,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added synthetic end-to-end tests, setup instructions, and a production pilot runbook. Real Google/LINE assets and real customer use remain setup-gated until the pilot receives manager sign-off.
 - Reconciled the new Form with the current Microsoft Form: added an optional page/channel Dropdown, seeded seven Admin names plus existing service/channel choices, and changed attribution to the selected Admin because all staff share one Google account.
 - Provisioned the company Google Sheet, Forms, private Drive folders, doctor Calendars, Apps Script triggers, Render-to-Apps-Script HMAC ingress, and three LINE group mappings for the synthetic pilot. The pilot uses Admin-group-only reminders until individual Admin LINE IDs are intentionally mapped.
+- Fixed the first live synthetic Form execution by removing the unsupported `structuredClone` dependency from the Apps Script bundle; the stalled synthetic row was audit-recorded and removed before any Drive, Calendar, LINE, or call-task side effect occurred.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
