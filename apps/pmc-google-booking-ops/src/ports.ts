@@ -16,6 +16,16 @@ export interface AdminConfig {
   active: boolean
 }
 
+export interface StaffConfig {
+  id: string
+  name: string
+  email: string
+  lineUserId: string
+  canCloseBooking: boolean
+  canBeAe: boolean
+  active: boolean
+}
+
 export interface DoctorConfig {
   id: string
   name: string
@@ -38,6 +48,11 @@ export interface ChannelConfig {
 }
 
 export interface ConfigPort {
+  findCloserByEmail(email: string): StaffConfig | null
+  findEligibleAeByName(name: string): StaffConfig | null
+  findStaffById(id: string): StaffConfig | null
+  listStaff(): StaffConfig[]
+  listEligibleAes(): StaffConfig[]
   findAdminByName(name: string): AdminConfig | null
   findAdminById(id: string): AdminConfig | null
   findDoctor(id: string): DoctorConfig | null

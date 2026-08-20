@@ -129,6 +129,92 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     clock: { nowIso: () => now },
     locks: { withLock: (operation) => operation() },
     config: {
+      findCloserByEmail: (email) =>
+        email.trim().toLowerCase() === 'admin@example.com'
+          ? {
+              id: 'admin-1',
+              name: 'Admin A',
+              email: 'admin@example.com',
+              lineUserId: 'admin-user-1',
+              canCloseBooking: true,
+              canBeAe: true,
+              active: true,
+            }
+          : null,
+      findEligibleAeByName: (name) =>
+        name === 'Admin A'
+          ? {
+              id: 'admin-1',
+              name: 'Admin A',
+              email: 'admin@example.com',
+              lineUserId: 'admin-user-1',
+              canCloseBooking: true,
+              canBeAe: true,
+              active: true,
+            }
+          : name === 'เอม'
+            ? {
+                id: 'staff-ae',
+                name: 'เอม',
+                email: '',
+                lineUserId: '',
+                canCloseBooking: false,
+                canBeAe: true,
+                active: true,
+              }
+            : null,
+      findStaffById: (id) =>
+        id === 'admin-1'
+          ? {
+              id: 'admin-1',
+              name: 'Admin A',
+              email: 'admin@example.com',
+              lineUserId: 'admin-user-1',
+              canCloseBooking: true,
+              canBeAe: true,
+              active: true,
+            }
+          : null,
+      listStaff: () => [
+        {
+          id: 'admin-1',
+          name: 'Admin A',
+          email: 'admin@example.com',
+          lineUserId: 'admin-user-1',
+          canCloseBooking: true,
+          canBeAe: true,
+          active: true,
+        },
+        {
+          id: 'staff-ae',
+          name: 'เอม',
+          email: '',
+          lineUserId: '',
+          canCloseBooking: false,
+          canBeAe: true,
+          active: true,
+        },
+      ],
+      listEligibleAes: () => [
+        {
+          id: 'admin-1',
+          name: 'Admin A',
+          email: 'admin@example.com',
+          lineUserId: 'admin-user-1',
+          canCloseBooking: true,
+          canBeAe: true,
+          active: true,
+        },
+        {
+          id: 'staff-ae',
+          name: 'เอม',
+          email: '',
+          lineUserId: '',
+          canCloseBooking: false,
+          canBeAe: true,
+          active: true,
+        },
+      ],
       findAdminByName: (name) =>
         name === 'Admin A'
           ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true }

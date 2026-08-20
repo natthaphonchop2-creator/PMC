@@ -14,9 +14,10 @@ import {
 import { sendDoctorBookingMessage } from './adapters/lineMessaging'
 import { createGoogleDashboardPort, createGoogleSheetStore, ensureSheetTopology } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
+import { resolveCloserByEmail, resolveEligibleAeByName } from './domain/staffDirectory'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
-import type { AdminConfig, BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig } from './ports'
+import type { AdminConfig, BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
 import { createBookingRepositories, type SheetStore } from './repositories'
 import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminders } from './workflows/callQueue'
 import { writeDashboard } from './workflows/dashboard'
@@ -55,6 +56,12 @@ function createConfigPort(store: SheetStore, adminLineGroupId: string): ConfigPo
       lineUserId: String(row.lineUserId),
       active: isActive(row.active),
     }))
+  const staff = (): StaffConfig[] =>
+    admins().map((admin) => ({
+      ...admin,
+      canCloseBooking: true,
+      canBeAe: true,
+    }))
   const doctors = (): DoctorConfig[] =>
     store.read('CONFIG_DOCTORS').map((row) => ({
       id: String(row.id),
@@ -77,6 +84,11 @@ function createConfigPort(store: SheetStore, adminLineGroupId: string): ConfigPo
       active: isActive(row.active),
     }))
   return {
+    findCloserByEmail: (email) => resolveCloserByEmail(staff(), email),
+    findEligibleAeByName: (name) => resolveEligibleAeByName(staff(), name),
+    findStaffById: (id) => staff().find((item) => item.id === id) ?? null,
+    listStaff: staff,
+    listEligibleAes: () => staff().filter((item) => item.active && item.canBeAe),
     findAdminByName: (name) => admins().find((admin) => admin.name === name) ?? null,
     findAdminById: (id) => admins().find((admin) => admin.id === id) ?? null,
     findDoctor: (id) => doctors().find((doctor) => doctor.id === id) ?? null,
