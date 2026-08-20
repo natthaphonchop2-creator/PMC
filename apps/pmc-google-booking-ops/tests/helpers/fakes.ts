@@ -1,5 +1,5 @@
 import type { BookingCase, BookingIntake } from '../../src/domain/types'
-import type { BookingPorts, DrivePort } from '../../src/ports'
+import type { BookingPorts, CalendarEventInput, CalendarPort, DrivePort } from '../../src/ports'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
 
 class MemorySheetStore implements SheetStore {
@@ -80,9 +80,15 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
 
 export interface TestPorts extends BookingPorts {
   bookings: ReturnType<typeof createMemoryRepositories>['bookings']
+  calendar: FakeCalendarPort
 }
 
-export function createTestPorts(): TestPorts {
+export interface TestPortOptions {
+  calendarConflicts?: boolean
+  calendarCreateFails?: boolean
+}
+
+export function createTestPorts(options: TestPortOptions = {}): TestPorts {
   const repositories = createMemoryRepositories()
   return {
     clock: { nowIso: () => '2026-08-20T09:00:00+07:00' },
@@ -102,10 +108,33 @@ export function createTestPorts(): TestPorts {
     repositories,
     bookings: repositories.bookings,
     drive: createFakeDrive(),
-    calendar: {},
+    calendar: createFakeCalendar(options),
     line: {},
     forms: {},
     files: {},
+  }
+}
+
+export interface FakeCalendarPort extends CalendarPort {
+  createdEvents(): CalendarEventInput[]
+  updatedEvents(): Array<{ eventId: string; input: CalendarEventInput }>
+}
+
+export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarPort {
+  const created: CalendarEventInput[] = []
+  const updated: Array<{ eventId: string; input: CalendarEventInput }> = []
+  return {
+    hasConflict: () => options.calendarConflicts ?? false,
+    createEvent(input) {
+      if (options.calendarCreateFails) throw new Error('Calendar create failed')
+      created.push(structuredClone(input))
+      return `event-${input.externalId}`
+    },
+    updateEvent(eventId, input) {
+      updated.push({ eventId, input: structuredClone(input) })
+    },
+    createdEvents: () => structuredClone(created),
+    updatedEvents: () => structuredClone(updated),
   }
 }
 

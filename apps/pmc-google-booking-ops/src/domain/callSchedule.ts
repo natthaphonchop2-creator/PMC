@@ -27,3 +27,11 @@ export function deriveCallWindow(appointmentStartIso: string): { start: string; 
     end: `${end.toISOString().slice(0, 10)}T23:59:59${offset}`,
   }
 }
+
+export function addMinutesInBangkok(valueIso: string, minutes: number): string {
+  if (!ISO_WITH_OFFSET.test(valueIso) || !Number.isInteger(minutes)) throw new Error('invalid appointment duration')
+  const date = new Date(valueIso)
+  if (Number.isNaN(date.getTime())) throw new Error('invalid appointment timestamp')
+  const bangkok = new Date(date.getTime() + (minutes + 7 * 60) * 60_000)
+  return `${bangkok.toISOString().slice(0, 19)}+07:00`
+}

@@ -106,7 +106,20 @@ export interface DrivePort {
   moveAndRenameFile(fileId: string, folderId: string, name: string): string
   folderUrl(folderId: string): string
 }
-export type CalendarPort = object
+export interface CalendarEventInput {
+  calendarId: string
+  externalId: string
+  summary: string
+  description: string
+  start: string
+  end: string
+}
+
+export interface CalendarPort {
+  hasConflict(calendarId: string, start: string, end: string, excludeEventId?: string | null): boolean
+  createEvent(input: CalendarEventInput): string
+  updateEvent(eventId: string, input: CalendarEventInput): void
+}
 export type LinePort = object
 export type FormsPort = object
 export type FilePort = object

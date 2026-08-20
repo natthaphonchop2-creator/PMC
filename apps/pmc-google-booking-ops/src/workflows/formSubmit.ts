@@ -1,16 +1,10 @@
-import { addCalendarMonths, deriveCallWindow } from '../domain/callSchedule'
+import { addCalendarMonths, addMinutesInBangkok, deriveCallWindow } from '../domain/callSchedule'
 import { formatCaseId } from '../domain/caseId'
 import { maskThaiPhone, normalizeCustomerName, normalizeThaiPhone } from '../domain/normalize'
 import type { BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
-
-function bangkokIsoAfterMinutes(startIso: string, minutes: number): string {
-  const date = new Date(startIso)
-  if (Number.isNaN(date.getTime())) throw new Error('invalid appointment timestamp')
-  const bangkok = new Date(date.getTime() + (minutes + 7 * 60) * 60_000)
-  return `${bangkok.toISOString().slice(0, 19)}+07:00`
-}
+import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
 
 function validateEvidence(intake: BookingIntake): void {
   if (!intake.paymentEvidenceFileIds.length) throw new Error('payment evidence is required')
@@ -40,7 +34,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   const phoneNormalized = normalizeThaiPhone(intake.phone)
   const customerNameNormalized = normalizeCustomerName(intake.customerName)
   const appointmentStart = `${intake.appointmentDate}T${intake.appointmentTime}:00+07:00`
-  const appointmentEnd = bangkokIsoAfterMinutes(appointmentStart, service.durationMinutes)
+  const appointmentEnd = addMinutesInBangkok(appointmentStart, service.durationMinutes)
   const callWindow = deriveCallWindow(appointmentStart)
   const sequence = ports.repositories.bookings.allocateMonthlySequence(intake.submittedAt.slice(0, 7))
   const caseId = formatCaseId(intake.submittedAt, sequence)
@@ -115,9 +109,10 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   })
   if (!identityMatches) return inserted
 
+  let current: BookingCase
   try {
     const evidence = ensureCaseEvidenceFolder(inserted, intake, ports.drive)
-    return ports.repositories.bookings.update(
+    current = ports.repositories.bookings.update(
       caseId,
       inserted.version,
       {
@@ -144,6 +139,42 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       caseId,
       inserted.version,
       { driveState: 'RETRY' },
+      { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
+    )
+  }
+
+  if (ports.calendar.hasConflict(current.calendarId ?? '', current.appointmentStart, current.appointmentEnd)) {
+    return ports.repositories.bookings.update(
+      caseId,
+      current.version,
+      { status: 'TIME_CONFLICT', calendarState: 'CONFLICT' },
+      { actor: 'system', reason: 'Doctor Calendar overlap', correlationId: intake.formResponseId },
+    )
+  }
+
+  try {
+    const calendarEventId = ensureDoctorCalendarEvent(current, ports.calendar)
+    return ports.repositories.bookings.update(
+      caseId,
+      current.version,
+      { calendarEventId, calendarState: 'OK', status: 'BOOKING_CONFIRMED' },
+      { actor: 'system', reason: 'Doctor Calendar event created', correlationId: intake.formResponseId },
+    )
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : 'Calendar operation failed'
+    ports.repositories.retries.enqueue({
+      id: `RETRY-${caseId}-CALENDAR`,
+      caseId,
+      operation: 'CALENDAR_EVENT',
+      idempotencyKey: `${caseId}:CALENDAR_EVENT`,
+      attempts: 0,
+      status: 'PENDING',
+      safeError,
+    })
+    return ports.repositories.bookings.update(
+      caseId,
+      current.version,
+      { calendarState: 'RETRY' },
       { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
     )
   }
