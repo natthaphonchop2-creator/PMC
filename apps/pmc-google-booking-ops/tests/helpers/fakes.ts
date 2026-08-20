@@ -1,5 +1,5 @@
 import type { BookingCase, BookingIntake } from '../../src/domain/types'
-import type { BookingPorts } from '../../src/ports'
+import type { BookingPorts, DrivePort } from '../../src/ports'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
 
 class MemorySheetStore implements SheetStore {
@@ -101,7 +101,7 @@ export function createTestPorts(): TestPorts {
     },
     repositories,
     bookings: repositories.bookings,
-    drive: {},
+    drive: createFakeDrive(),
     calendar: {},
     line: {},
     forms: {},
@@ -125,5 +125,54 @@ export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingI
     paymentEvidenceFileIds: ['payment-file-1'],
     chatEvidenceFileIds: ['chat-file-1'],
     ...patch,
+  }
+}
+
+export interface FakeDrivePort extends DrivePort {
+  createdFolderCount(): number
+  movedFileCount(): number
+  publicLinks(): string[]
+}
+
+export function createFakeDrive(): FakeDrivePort {
+  const folders = new Map<string, { parentId: string; name: string; marker: string }>()
+  const files = new Map<string, { name: string; folderId: string | null }>([
+    ['payment-file-1', { name: 'payment.jpg', folderId: null }],
+    ['chat-file-1', { name: 'chat.jpg', folderId: null }],
+    ['chat-file-2', { name: 'chat.png', folderId: null }],
+  ])
+  let moved = 0
+
+  return {
+    rootFolderId: () => 'drive-root',
+    ensureChildFolder(parentId, name, marker) {
+      const existing = [...folders.entries()].find(
+        ([, folder]) => folder.parentId === parentId && folder.name === name && folder.marker === marker,
+      )
+      if (existing) return { id: existing[0], name }
+      const id = `folder-${folders.size + 1}`
+      folders.set(id, { parentId, name, marker })
+      return { id, name }
+    },
+    fileName(fileId) {
+      const file = files.get(fileId)
+      if (!file) throw new Error('file not found')
+      return file.name
+    },
+    findFileByName(folderId, name) {
+      return [...files.entries()].find(([, file]) => file.folderId === folderId && file.name === name)?.[0] ?? null
+    },
+    moveAndRenameFile(fileId, folderId, name) {
+      const file = files.get(fileId)
+      if (!file) throw new Error('file not found')
+      file.folderId = folderId
+      file.name = name
+      moved += 1
+      return fileId
+    },
+    folderUrl: (folderId) => `https://drive.google.com/drive/folders/${folderId}`,
+    createdFolderCount: () => folders.size,
+    movedFileCount: () => moved,
+    publicLinks: () => [],
   }
 }

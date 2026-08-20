@@ -3,6 +3,7 @@ import { formatCaseId } from '../domain/caseId'
 import { maskThaiPhone, normalizeCustomerName, normalizeThaiPhone } from '../domain/normalize'
 import type { BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
+import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 
 function bangkokIsoAfterMinutes(startIso: string, minutes: number): string {
   const date = new Date(startIso)
@@ -112,5 +113,38 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     timestamp: ports.clock.nowIso(),
     correlationId: intake.formResponseId,
   })
-  return inserted
+  if (!identityMatches) return inserted
+
+  try {
+    const evidence = ensureCaseEvidenceFolder(inserted, intake, ports.drive)
+    return ports.repositories.bookings.update(
+      caseId,
+      inserted.version,
+      {
+        driveFolderId: evidence.folderId,
+        driveFolderUrl: evidence.folderUrl,
+        paymentEvidenceCount: intake.paymentEvidenceFileIds.length,
+        chatEvidenceCount: intake.chatEvidenceFileIds.length,
+        driveState: 'OK',
+      },
+      { actor: intake.submitterEmail, reason: 'Drive evidence stored', correlationId: intake.formResponseId },
+    )
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : 'Drive operation failed'
+    ports.repositories.retries.enqueue({
+      id: `RETRY-${caseId}-DRIVE`,
+      caseId,
+      operation: 'DRIVE_EVIDENCE',
+      idempotencyKey: `${caseId}:DRIVE_EVIDENCE`,
+      attempts: 0,
+      status: 'PENDING',
+      safeError,
+    })
+    return ports.repositories.bookings.update(
+      caseId,
+      inserted.version,
+      { driveState: 'RETRY' },
+      { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
+    )
+  }
 }

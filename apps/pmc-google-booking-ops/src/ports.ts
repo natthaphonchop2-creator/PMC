@@ -98,7 +98,14 @@ export interface BookingRepositories {
   audit: AuditRepository
 }
 
-export type DrivePort = object
+export interface DrivePort {
+  rootFolderId(): string
+  ensureChildFolder(parentId: string, name: string, marker: string): { id: string; name: string }
+  fileName(fileId: string): string
+  findFileByName(folderId: string, name: string): string | null
+  moveAndRenameFile(fileId: string, folderId: string, name: string): string
+  folderUrl(folderId: string): string
+}
 export type CalendarPort = object
 export type LinePort = object
 export type FormsPort = object
