@@ -136,7 +136,27 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
     },
     reconciliation: { create: (input) => append(store, 'RECONCILIATION', input) },
     retries: { enqueue: (input) => append(store, 'RETRY_QUEUE', input) },
-    lineDirectory: { remember: (input) => append(store, 'CONFIG_LINE_DIRECTORY', input) },
+    lineDirectory: {
+      remember(input) {
+        const rows = store.read('CONFIG_LINE_DIRECTORY')
+        if (!rows.some((row) => row.sourceType === input.sourceType && row.sourceId === input.sourceId)) {
+          store.replace('CONFIG_LINE_DIRECTORY', [...rows, input])
+        }
+      },
+      list() {
+        return store.read('CONFIG_LINE_DIRECTORY') as unknown as Array<{
+          sourceType: 'user' | 'group'
+          sourceId: string
+          capturedAt: string
+        }>
+      },
+      hasNonce(nonce) {
+        return store.read('LINE_INGRESS_NONCES').some((row) => row.nonce === nonce)
+      },
+      rememberNonce(nonce, capturedAt) {
+        append(store, 'LINE_INGRESS_NONCES', { nonce, capturedAt })
+      },
+    },
     retention: { queue: (input) => append(store, 'RETENTION_QUEUE', input) },
     audit,
   }

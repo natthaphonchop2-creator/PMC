@@ -5,6 +5,7 @@ import type { BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
+import { sendDoctorBookingMessage } from '../adapters/lineMessaging'
 
 function validateEvidence(intake: BookingIntake): void {
   if (!intake.paymentEvidenceFileIds.length) throw new Error('payment evidence is required')
@@ -154,7 +155,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
 
   try {
     const calendarEventId = ensureDoctorCalendarEvent(current, ports.calendar)
-    return ports.repositories.bookings.update(
+    current = ports.repositories.bookings.update(
       caseId,
       current.version,
       { calendarEventId, calendarState: 'OK', status: 'BOOKING_CONFIRMED' },
@@ -175,6 +176,33 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       caseId,
       current.version,
       { calendarState: 'RETRY' },
+      { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
+    )
+  }
+
+  try {
+    sendDoctorBookingMessage(current, ports.line)
+    return ports.repositories.bookings.update(
+      caseId,
+      current.version,
+      { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
+      { actor: 'system', reason: 'Doctor LINE notification sent', correlationId: intake.formResponseId },
+    )
+  } catch (error) {
+    const safeError = error instanceof Error ? error.message : 'LINE notification failed'
+    ports.repositories.retries.enqueue({
+      id: `RETRY-${caseId}-LINE`,
+      caseId,
+      operation: 'DOCTOR_LINE',
+      idempotencyKey: `${caseId}:BOOKING_CONFIRMED`,
+      attempts: 0,
+      status: 'PENDING',
+      safeError,
+    })
+    return ports.repositories.bookings.update(
+      caseId,
+      current.version,
+      { lineState: 'RETRY' },
       { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
     )
   }

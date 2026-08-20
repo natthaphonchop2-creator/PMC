@@ -1,5 +1,7 @@
+import { createHash, createHmac } from 'node:crypto'
 import type { BookingCase, BookingIntake } from '../../src/domain/types'
-import type { BookingPorts, CalendarEventInput, CalendarPort, DrivePort } from '../../src/ports'
+import type { BookingPorts, CalendarEventInput, CalendarPort, DrivePort, LineMessage, LinePort } from '../../src/ports'
+import type { BookingIngressPayload } from '../../src/adapters/lineMessaging'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
 
 class MemorySheetStore implements SheetStore {
@@ -81,17 +83,24 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
 export interface TestPorts extends BookingPorts {
   bookings: ReturnType<typeof createMemoryRepositories>['bookings']
   calendar: FakeCalendarPort
+  line: FakeLinePort
+  lineDirectory: ReturnType<typeof createMemoryRepositories>['lineDirectory']
+  signedBookingIngressFixture(sourceType: 'user' | 'group', sourceId: string): BookingIngressPayload
 }
 
 export interface TestPortOptions {
   calendarConflicts?: boolean
   calendarCreateFails?: boolean
+  lineDirectoryCaptureEnabled?: boolean
+  now?: string
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
   const repositories = createMemoryRepositories()
+  const now = options.now ?? '2026-08-20T09:00:00+07:00'
+  const ingressSecret = 'ingress-secret'
   return {
-    clock: { nowIso: () => '2026-08-20T09:00:00+07:00' },
+    clock: { nowIso: () => now },
     locks: { withLock: (operation) => operation() },
     config: {
       findAdminByName: (name) =>
@@ -107,11 +116,49 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     },
     repositories,
     bookings: repositories.bookings,
+    lineDirectory: repositories.lineDirectory,
     drive: createFakeDrive(),
     calendar: createFakeCalendar(options),
-    line: {},
+    line: createFakeLine(),
     forms: {},
     files: {},
+    secrets: {
+      lineAccessToken: () => 'line-access-token',
+      bookingIngressSecret: () => ingressSecret,
+      lineDirectoryCaptureEnabled: () => options.lineDirectoryCaptureEnabled ?? false,
+    },
+    crypto: {
+      hmacSha256Hex: (value, secret) => createHmac('sha256', secret).update(value).digest('hex'),
+      sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
+    },
+    signedBookingIngressFixture(sourceType, sourceId) {
+      const timestamp = Math.floor(Date.parse(now) / 1000)
+      const nonce = 'nonce-1'
+      const canonical = `${timestamp}.${nonce}.${sourceType}.${sourceId}`
+      return {
+        timestamp,
+        nonce,
+        sourceType,
+        sourceId,
+        signature: createHmac('sha256', ingressSecret).update(canonical).digest('hex'),
+      }
+    },
+  }
+}
+
+export interface FakeLinePort extends LinePort {
+  doctorMessages(): LineMessage[]
+  adminMessages(): LineMessage[]
+}
+
+export function createFakeLine(): FakeLinePort {
+  const messages: LineMessage[] = []
+  return {
+    push(message) {
+      messages.push(structuredClone(message))
+    },
+    doctorMessages: () => structuredClone(messages.filter((message) => message.audience === 'doctor')),
+    adminMessages: () => structuredClone(messages.filter((message) => message.audience === 'admin')),
   }
 }
 

@@ -1,4 +1,5 @@
 import { calendarEventInput } from '../adapters/googleCalendar'
+import { sendDoctorBookingMessage } from '../adapters/lineMessaging'
 import { addMinutesInBangkok, deriveCallWindow } from '../domain/callSchedule'
 import type { BookingCase } from '../domain/types'
 import type { BookingPorts } from '../ports'
@@ -41,7 +42,7 @@ export function rescheduleBooking(caseId: string, input: RescheduleInput, ports:
   ports.calendar.updateEvent(booking.calendarEventId, calendarEventInput(candidate))
   const callWindow = deriveCallWindow(input.appointmentStart)
   const appointmentDate = input.appointmentStart.slice(0, 10)
-  return ports.repositories.bookings.update(
+  let updated = ports.repositories.bookings.update(
     caseId,
     booking.version,
     {
@@ -60,4 +61,28 @@ export function rescheduleBooking(caseId: string, input: RescheduleInput, ports:
       correlationId: `${caseId}:RESCHEDULE:${booking.version + 1}`,
     },
   )
+  try {
+    sendDoctorBookingMessage(updated, ports.line, 'RESCHEDULED')
+    updated = ports.repositories.bookings.update(
+      caseId,
+      updated.version,
+      { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
+      {
+        actor: 'system',
+        reason: 'Doctor LINE reschedule notification sent',
+        correlationId: `${caseId}:RESCHEDULE_LINE:${updated.version + 1}`,
+      },
+    )
+  } catch (error) {
+    ports.repositories.retries.enqueue({
+      id: `RETRY-${caseId}-RESCHEDULE-LINE`,
+      caseId,
+      operation: 'DOCTOR_LINE_RESCHEDULE',
+      idempotencyKey: `${caseId}:RESCHEDULED:${updated.version}`,
+      attempts: 0,
+      status: 'PENDING',
+      safeError: error instanceof Error ? error.message : 'LINE reschedule notification failed',
+    })
+  }
+  return updated
 }

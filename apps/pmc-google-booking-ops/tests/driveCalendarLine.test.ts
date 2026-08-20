@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ensureCaseEvidenceFolder } from '../src/adapters/googleDrive'
+import { handleLineDirectoryIngress } from '../src/adapters/lineMessaging'
 import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { rescheduleBooking } from '../src/workflows/bookingUpdate'
 import { bookingFixture, createFakeDrive, createTestPorts, validBookingIntake } from './helpers/fakes'
@@ -73,5 +74,69 @@ describe('doctor Calendar', () => {
     expect(updated.appointmentEnd).toBe('2026-08-21T15:00:00+07:00')
     expect(ports.calendar.createdEvents()).toHaveLength(1)
     expect(ports.calendar.updatedEvents()).toHaveLength(1)
+  })
+})
+
+describe('LINE routing', () => {
+  it('sends a confirmed booking only to the selected doctor group', () => {
+    const ports = createTestPorts()
+    submitBookingIntake(validBookingIntake(), ports)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()[0].to).toBe('doctor-group-1')
+  })
+
+  it('excludes evidence, full phone, Drive links, and national-ID-like values', () => {
+    const ports = createTestPorts()
+    submitBookingIntake(validBookingIntake(), ports)
+    const payload = JSON.stringify(ports.line.doctorMessages()[0])
+    expect(payload).not.toContain('0812345678')
+    expect(payload).not.toContain('drive.google.com')
+    expect(payload).not.toMatch(/\b\d{13}\b/)
+  })
+
+  it('does not send doctor LINE before Calendar success', () => {
+    const ports = createTestPorts({ calendarCreateFails: true })
+    const result = submitBookingIntake(validBookingIntake(), ports)
+    expect(result.calendarState).toBe('RETRY')
+    expect(ports.line.doctorMessages()).toEqual([])
+  })
+
+  it('sends a reschedule message to the same doctor group', () => {
+    const ports = createTestPorts()
+    const booking = submitBookingIntake(validBookingIntake(), ports)
+    rescheduleBooking(
+      booking.caseId,
+      { appointmentStart: '2026-08-21T14:00:00+07:00', reason: 'customer requested' },
+      ports,
+    )
+    expect(ports.line.doctorMessages().map((message) => message.eventType)).toEqual([
+      'BOOKING_CONFIRMED',
+      'RESCHEDULED',
+    ])
+  })
+
+  it('rejects invalid internal ingress HMAC before a directory write', () => {
+    const ports = createTestPorts({ lineDirectoryCaptureEnabled: true })
+    expect(() =>
+      handleLineDirectoryIngress(
+        {
+          timestamp: 1_787_191_200,
+          nonce: 'nonce-1',
+          sourceType: 'group',
+          sourceId: 'doctor-group-1',
+          signature: 'invalid',
+        },
+        ports,
+      ),
+    ).toThrow('invalid booking ingress signature')
+    expect(ports.lineDirectory.list()).toEqual([])
+  })
+
+  it('captures a verified LINE source ID without message content', () => {
+    const ports = createTestPorts({ lineDirectoryCaptureEnabled: true })
+    handleLineDirectoryIngress(ports.signedBookingIngressFixture('group', 'doctor-group-1'), ports)
+    expect(ports.lineDirectory.list()).toEqual([
+      { sourceType: 'group', sourceId: 'doctor-group-1', capturedAt: '2026-08-20T09:00:00+07:00' },
+    ])
   })
 })

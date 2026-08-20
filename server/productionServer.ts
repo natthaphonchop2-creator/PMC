@@ -6,6 +6,7 @@ import { extname, join, resolve } from 'node:path'
 import { createMetaApiMiddleware } from './metaApiPlugin.js'
 import { createOpenAiMiddleware } from './openAiPlugin.js'
 import { createPageAutomationMiddleware } from './pageAutomationPlugin.js'
+import { createBookingLineWebhookMiddleware } from './bookingLineWebhook.js'
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
@@ -17,6 +18,7 @@ const indexHtml = join(distDir, 'index.html')
 const metaApi = createMetaApiMiddleware(process.env)
 const openAiApi = createOpenAiMiddleware(process.env)
 const pageAutomationApi = createPageAutomationMiddleware(process.env)
+const bookingLineWebhook = createBookingLineWebhookMiddleware(process.env)
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -37,6 +39,17 @@ const server = createServer(async (req, res) => {
     res.setHeader('content-type', 'application/json; charset=utf-8')
     res.setHeader('cache-control', 'no-cache')
     res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
+  if (req.method === 'POST' && req.url === '/api/booking-line/webhook') {
+    try {
+      await bookingLineWebhook(req, res)
+    } catch {
+      res.statusCode = 500
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({ error: 'Booking LINE webhook failed' }))
+    }
     return
   }
 

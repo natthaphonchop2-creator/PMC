@@ -76,6 +76,9 @@ export interface RetryRepository {
 
 export interface LineDirectoryRepository {
   remember(input: { sourceType: 'user' | 'group'; sourceId: string; capturedAt: string }): void
+  list(): Array<{ sourceType: 'user' | 'group'; sourceId: string; capturedAt: string }>
+  hasNonce(nonce: string): boolean
+  rememberNonce(nonce: string, capturedAt: string): void
 }
 
 export interface RetentionRepository {
@@ -120,9 +123,31 @@ export interface CalendarPort {
   createEvent(input: CalendarEventInput): string
   updateEvent(eventId: string, input: CalendarEventInput): void
 }
-export type LinePort = object
+export interface LineMessage {
+  to: string
+  audience: 'doctor' | 'admin'
+  eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' | 'DAILY_SCHEDULE' | 'CALL_REMINDER' | 'EXPIRY_REMINDER'
+  caseIds: string[]
+  text: string
+  retryKey: string
+}
+
+export interface LinePort {
+  push(message: LineMessage): void
+}
 export type FormsPort = object
 export type FilePort = object
+
+export interface SecretsPort {
+  lineAccessToken(): string
+  bookingIngressSecret(): string
+  lineDirectoryCaptureEnabled(): boolean
+}
+
+export interface CryptoPort {
+  hmacSha256Hex(value: string, secret: string): string
+  sha256Hex(value: string): string
+}
 
 export interface BookingPorts {
   clock: Clock
@@ -134,4 +159,6 @@ export interface BookingPorts {
   line: LinePort
   forms: FormsPort
   files: FilePort
+  secrets: SecretsPort
+  crypto: CryptoPort
 }

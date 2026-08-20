@@ -66,6 +66,7 @@ export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
   CONFIG_SERVICES: ['id', 'name', 'durationMinutes', 'active'],
   CONFIG_RULES: ['key', 'value', 'updatedAt', 'updatedBy'],
   CONFIG_LINE_DIRECTORY: ['sourceType', 'sourceId', 'capturedAt', 'alias'],
+  LINE_INGRESS_NONCES: ['nonce', 'capturedAt'],
   FORM_RESPONSE_MAP: ['formResponseId', 'caseId'],
   SYSTEM_SEQUENCES: ['month', 'sequence'],
   RETENTION_QUEUE: ['id', 'caseId', 'eligibleAt', 'status', 'approvedBy', 'approvedAt', 'reason', 'version'],
