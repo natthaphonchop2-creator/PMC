@@ -16,6 +16,7 @@ lerna-debug.log*
 .meta-api.local.json
 .openai-api.local.json
 .mcp.local.json
+/API/
 knowledge-base/runtime/
 .superpowers/
 .worktrees/
