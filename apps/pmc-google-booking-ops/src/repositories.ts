@@ -162,8 +162,28 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       hasFileHash(hash) {
         return store.read('JERA_IMPORT_FILES').some((row) => row.hash === hash)
       },
+      recordFile(input) {
+        append(store, 'JERA_IMPORT_FILES', input as unknown as SheetRow)
+      },
+      completed() {
+        return store.read('JERA_IMPORT_FILES').filter((row) => row.status === 'COMPLETED') as unknown as ReturnType<
+          BookingRepositories['imports']['completed']
+        >
+      },
+      hasPaymentId(paymentId) {
+        return store.read('JERA_IMPORT_RAW').some((row) => row.paymentId === paymentId && Boolean(row.caseId))
+      },
+      rememberPaymentId(paymentId, caseId, fileId) {
+        append(store, 'JERA_IMPORT_RAW', { paymentId, caseId, fileId, consumed: true })
+      },
+      appendRaw(input) {
+        append(store, 'JERA_IMPORT_RAW', input)
+      },
     },
-    reconciliation: { create: (input) => append(store, 'RECONCILIATION', input) },
+    reconciliation: {
+      create: (input) => append(store, 'RECONCILIATION', input),
+      listOpen: () => store.read('RECONCILIATION').filter((row) => row.status === 'OPEN'),
+    },
     retries: { enqueue: (input) => append(store, 'RETRY_QUEUE', input) },
     lineDirectory: {
       remember(input) {

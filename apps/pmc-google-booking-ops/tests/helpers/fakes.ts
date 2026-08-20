@@ -1,6 +1,14 @@
 import { createHash, createHmac } from 'node:crypto'
 import type { BookingCase, BookingIntake, CallTask } from '../../src/domain/types'
-import type { BookingPorts, CalendarEventInput, CalendarPort, DrivePort, LineMessage, LinePort } from '../../src/ports'
+import type {
+  BookingPorts,
+  CalendarEventInput,
+  CalendarPort,
+  DrivePort,
+  FilePort,
+  LineMessage,
+  LinePort,
+} from '../../src/ports'
 import type { BookingIngressPayload } from '../../src/adapters/lineMessaging'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
 
@@ -88,8 +96,11 @@ export interface TestPorts extends BookingPorts {
   calls: ReturnType<typeof createMemoryRepositories>['calls'] & {
     insertFixture(patch?: Partial<CallTask>): CallTask
   }
+  imports: ReturnType<typeof createMemoryRepositories>['imports']
+  reconciliation: ReturnType<typeof createMemoryRepositories>['reconciliation']
   bookingFixture(patch?: Partial<BookingCase>): BookingCase
   signedBookingIngressFixture(sourceType: 'user' | 'group', sourceId: string): BookingIngressPayload
+  files: FakeFilePort
 }
 
 export interface TestPortOptions {
@@ -97,6 +108,7 @@ export interface TestPortOptions {
   calendarCreateFails?: boolean
   lineDirectoryCaptureEnabled?: boolean
   now?: string
+  jeraPhone?: string
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
@@ -132,12 +144,14 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
         return repositories.calls.insert(callTaskFixture(patch))
       },
     }),
+    imports: repositories.imports,
+    reconciliation: repositories.reconciliation,
     lineDirectory: repositories.lineDirectory,
     drive: createFakeDrive(),
     calendar: createFakeCalendar(options),
     line: createFakeLine(),
     forms: {},
-    files: {},
+    files: createFakeFiles(options.jeraPhone ?? '0812345678'),
     secrets: {
       lineAccessToken: () => 'line-access-token',
       bookingIngressSecret: () => ingressSecret,
@@ -160,6 +174,58 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       }
     },
     bookingFixture,
+  }
+}
+
+export function jeraReportFixture(phone = '0812345678'): string {
+  return [
+    'รายงานยอดขาย:',
+    'ช่วงวันที่\t2026-08-19',
+    [
+      'วันที่',
+      'เวลา',
+      'รหัสใบชำระเงิน',
+      'ผู้ป่วย',
+      'HN',
+      'มือถือ',
+      'สถานะ',
+      'ยอดเงินที่ได้รับจริง',
+    ].join('\t'),
+    ['2026-08-19', '10:00:00', 'PAY-001', 'สมหญิง ใจดี', 'HN-001', phone, 'ชำระแล้ว', '5000'].join('\t'),
+    ['รายละเอียดบริการ', '1', '5000'].join('\t'),
+    ['2026-08-19', '11:00', 'PAY-002', 'ลูกค้าคืนเงิน', 'HN-002', '0899999999', 'คืนมัดจำ', '-1000'].join('\t'),
+    'รวม\t4000',
+  ].join('\n')
+}
+
+function jeraImportFixture(phone: string): string {
+  return jeraReportFixture(phone).split('\n').slice(0, 5).join('\n')
+}
+
+export interface FakeFilePort extends FilePort {
+  importedFileIds(): string[]
+  quarantinedFileIds(): string[]
+}
+
+export function createFakeFiles(phone: string): FakeFilePort {
+  const text = jeraImportFixture(phone)
+  const incoming = ['jera-file-1', 'jera-file-1-copy']
+  const imported: string[] = []
+  const quarantined: string[] = []
+  return {
+    readText(fileId) {
+      if (!incoming.includes(fileId)) throw new Error('file not found')
+      return text
+    },
+    listIncomingFileIds: () => [...incoming],
+    moveToImported(fileId) {
+      if (!imported.includes(fileId)) imported.push(fileId)
+    },
+    quarantine(fileId) {
+      if (!quarantined.includes(fileId)) quarantined.push(fileId)
+    },
+    importedFileIds: () => [...imported],
+    quarantinedFileIds: () => [...quarantined],
   }
 }
 

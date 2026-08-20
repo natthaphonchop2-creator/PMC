@@ -70,10 +70,26 @@ export interface CallTaskRepository {
 
 export interface ImportRepository {
   hasFileHash(hash: string): boolean
+  recordFile(input: ImportFileRecord): void
+  completed(): ImportFileRecord[]
+  hasPaymentId(paymentId: string): boolean
+  rememberPaymentId(paymentId: string, caseId: string, fileId: string): void
+  appendRaw(input: Record<string, unknown>): void
+}
+
+export interface ImportFileRecord {
+  fileId: string
+  hash: string
+  status: 'COMPLETED' | 'QUARANTINED'
+  transactionCount: number
+  rejectedCount: number
+  importedAt: string
+  safeError: string
 }
 
 export interface ReconciliationRepository {
   create(input: Record<string, unknown>): void
+  listOpen(): Record<string, unknown>[]
 }
 
 export interface RetryRepository {
@@ -142,7 +158,12 @@ export interface LinePort {
   push(message: LineMessage): void
 }
 export type FormsPort = object
-export type FilePort = object
+export interface FilePort {
+  readText(fileId: string, encoding: 'Windows-874'): string
+  listIncomingFileIds(): string[]
+  moveToImported(fileId: string): void
+  quarantine(fileId: string): void
+}
 
 export interface SecretsPort {
   lineAccessToken(): string
