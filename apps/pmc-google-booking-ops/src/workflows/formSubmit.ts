@@ -24,8 +24,10 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     throw new Error('form response already processed')
   }
 
-  const admin = ports.config.findAdminByName(intake.aeName)
-  if (!admin?.active) throw new Error('selected Admin is not active')
+  const closer = ports.config.findCloserByEmail(intake.submitterEmail)
+  if (!closer) throw new Error('submitter is not an active booking closer')
+  const ae = ports.config.findEligibleAeByName(intake.aeName)
+  if (!ae) throw new Error('selected AE is not active or eligible')
   const doctor = ports.config.findDoctor(intake.doctorId)
   if (!doctor?.active) throw new Error('selected doctor is not active')
   const service = ports.config.findService(intake.serviceId)
@@ -50,12 +52,12 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     version: 1,
     status: 'FORM_SUBMITTED',
     formResponseId: intake.formResponseId,
-    adminId: admin.id,
-    adminName: admin.name,
-    submitterEmail: intake.submitterEmail,
-    adminIdentityStatus: 'SHARED_ACCOUNT',
-    aeId: null,
-    aeName: null,
+    adminId: closer.id,
+    adminName: closer.name,
+    submitterEmail: intake.submitterEmail.trim().toLowerCase(),
+    adminIdentityStatus: 'VERIFIED_EMAIL',
+    aeId: ae.id,
+    aeName: ae.name,
     customerName: intake.customerName.trim(),
     customerNameNormalized,
     phoneNormalized,
@@ -82,7 +84,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     firstCallWindowEnd: callWindow.end,
     nextCallAt: `${intake.appointmentDate}T09:00:00+07:00`,
     lastCallAt: null,
-    callOwnerAdminId: admin.id,
+    callOwnerAdminId: closer.id,
     jeraPaymentId: null,
     jeraStatus: null,
     jeraClosedAt: null,
@@ -110,7 +112,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     action: 'BOOKING_CREATED',
     target: 'BOOKING_MASTER',
     before: null,
-    after: { status: booking.status },
+    after: { status: booking.status, adminId: closer.id, aeId: ae.id },
     reason: 'Google Form submission',
     timestamp: ports.clock.nowIso(),
     correlationId: intake.formResponseId,

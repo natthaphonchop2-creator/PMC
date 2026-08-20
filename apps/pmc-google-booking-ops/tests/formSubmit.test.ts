@@ -97,12 +97,55 @@ describe('booking Form workflow', () => {
     expect(ports.bookings.list()).toHaveLength(1)
   })
 
-  it('attributes the booking to selected Admin when all staff share one Google email', () => {
+  it('attributes closer from verified email and AE from the required choice', () => {
     const ports = createTestPorts()
-    const result = submitBookingIntake(validBookingIntake({ submitterEmail: 'shared@example.com' }), ports)
-    expect(result.status).toBe('BOOKING_CONFIRMED')
-    expect(result.adminId).toBe('admin-1')
-    expect(result.adminIdentityStatus).toBe('SHARED_ACCOUNT')
+    const result = submitBookingIntake(
+      validBookingIntake({ submitterEmail: 'admin@example.com', aeName: 'เอม' }),
+      ports,
+    )
+    expect(result).toMatchObject({
+      adminId: 'admin-1',
+      adminName: 'Admin A',
+      adminIdentityStatus: 'VERIFIED_EMAIL',
+      aeId: 'staff-ae',
+      aeName: 'เอม',
+      callOwnerAdminId: 'admin-1',
+    })
+  })
+
+  it('accepts the closer as AE in the same booking', () => {
+    const result = submitBookingIntake(
+      validBookingIntake({ aeName: 'Admin A' }),
+      createTestPorts(),
+    )
+    expect(result.aeId).toBe(result.adminId)
+  })
+
+  it('rejects unknown closer email before sequence allocation or side effects', () => {
+    const ports = createTestPorts()
+    expect(() =>
+      submitBookingIntake(
+        validBookingIntake({ submitterEmail: 'unknown@example.com' }),
+        ports,
+      ),
+    ).toThrow('submitter is not an active booking closer')
+    expect(ports.bookings.list()).toEqual([])
+    expect(ports.calendar.createdEvents()).toEqual([])
+    expect(ports.line.adminMessages()).toEqual([])
+
+    const firstValid = submitBookingIntake(
+      validBookingIntake({ formResponseId: 'response-2' }),
+      ports,
+    )
+    expect(firstValid.caseId).toBe('PMC-202608-0001')
+  })
+
+  it('rejects an ineligible AE before any booking side effect', () => {
+    const ports = createTestPorts()
+    expect(() =>
+      submitBookingIntake(validBookingIntake({ aeName: 'Admin Only' }), ports),
+    ).toThrow('selected AE is not active or eligible')
+    expect(ports.bookings.list()).toEqual([])
   })
 
   it('rejects missing slip or chat evidence before reserving a Case ID', () => {
