@@ -23,4 +23,16 @@ describe('Apps Script bundle', () => {
       expect(sandbox[name]).toBeTypeOf('function')
     }
   })
+
+  it('declares the HMAC-protected LINE ingress as a deployable web app', () => {
+    execFileSync('npm', ['run', 'booking:build'], { stdio: 'pipe' })
+    const manifest = JSON.parse(
+      readFileSync('apps/pmc-google-booking-ops/dist/appsscript.json', 'utf8'),
+    ) as { webapp?: { access?: string; executeAs?: string } }
+
+    expect(manifest.webapp).toEqual({
+      access: 'ANYONE_ANONYMOUS',
+      executeAs: 'USER_DEPLOYING',
+    })
+  })
 })

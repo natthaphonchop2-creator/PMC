@@ -36,3 +36,9 @@ services:
         value: gpt-5.5
       - key: OPENAI_MAX_OUTPUT_TOKENS
         value: "2800"
+      - key: BOOKING_LINE_CHANNEL_SECRET
+        sync: false
+      - key: BOOKING_APPS_SCRIPT_INGRESS_URL
+        sync: false
+      - key: BOOKING_INGRESS_SECRET
+        sync: false
