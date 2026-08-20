@@ -25,4 +25,29 @@ export default defineConfig([
       globals: globals.node,
     },
   },
+  {
+    files: ['apps/pmc-google-booking-ops/src/**/*.ts'],
+    languageOptions: {
+      globals: {
+        Calendar: 'readonly',
+        CalendarApp: 'readonly',
+        ContentService: 'readonly',
+        DriveApp: 'readonly',
+        FormApp: 'readonly',
+        LockService: 'readonly',
+        PropertiesService: 'readonly',
+        ScriptApp: 'readonly',
+        Session: 'readonly',
+        SpreadsheetApp: 'readonly',
+        UrlFetchApp: 'readonly',
+        Utilities: 'readonly',
+      },
+    },
+  },
+  {
+    files: ['apps/pmc-google-booking-ops/scripts/**/*.mjs', 'apps/pmc-google-booking-ops/tests/**/*.ts'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 ])

@@ -19,6 +19,8 @@ lerna-debug.log*
 knowledge-base/runtime/
 .superpowers/
 .worktrees/
+apps/pmc-google-booking-ops/dist/
+apps/pmc-google-booking-ops/.clasp.json
 
 node_modules
 dist
