@@ -7,6 +7,7 @@ import { createMetaApiMiddleware } from './metaApiPlugin.js'
 import { createOpenAiMiddleware } from './openAiPlugin.js'
 import { createPageAutomationMiddleware } from './pageAutomationPlugin.js'
 import { createBookingLineWebhookMiddleware } from './bookingLineWebhook.js'
+import { createBookingEvidenceProxyMiddleware } from './bookingEvidenceProxy.js'
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
@@ -19,6 +20,7 @@ const metaApi = createMetaApiMiddleware(process.env)
 const openAiApi = createOpenAiMiddleware(process.env)
 const pageAutomationApi = createPageAutomationMiddleware(process.env)
 const bookingLineWebhook = createBookingLineWebhookMiddleware(process.env)
+const bookingEvidenceProxy = createBookingEvidenceProxyMiddleware(process.env)
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -49,6 +51,17 @@ const server = createServer(async (req, res) => {
       res.statusCode = 500
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.end(JSON.stringify({ error: 'Booking LINE webhook failed' }))
+    }
+    return
+  }
+
+  if (req.url?.startsWith('/api/booking-evidence/image')) {
+    try {
+      await bookingEvidenceProxy(req, res)
+    } catch {
+      res.statusCode = 500
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({ error: 'Booking evidence proxy failed' }))
     }
     return
   }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import sharp from 'sharp'
 import {
   createBookingEvidenceProxyHandler,
+  createBookingEvidenceProxyMiddleware,
+  createSharpBookingEvidencePreviewPort,
   type BookingEvidenceDrivePort,
   type BookingEvidencePreviewPort,
 } from '../server/bookingEvidenceProxy'
@@ -19,6 +23,27 @@ const basePayload: BookingEvidenceTokenPayload = {
   variant: 'preview',
 }
 const previewToken = signBookingEvidenceToken(basePayload, secret)
+
+async function invoke(
+  middleware: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  url: string,
+  method = 'GET',
+) {
+  const headers: Record<string, string> = {}
+  let body = Buffer.alloc(0)
+  const req = { method, url, headers: {} } as IncomingMessage
+  const res = {
+    statusCode: 200,
+    setHeader(name: string, value: string) {
+      headers[name.toLowerCase()] = String(value)
+    },
+    end(value: string | Buffer = '') {
+      body = Buffer.isBuffer(value) ? value : Buffer.from(String(value))
+    },
+  } as unknown as ServerResponse
+  await middleware(req, res)
+  return { status: res.statusCode, headers, body }
+}
 
 function dependencies(options: {
   metadata?: Partial<Awaited<ReturnType<BookingEvidenceDrivePort['metadata']>>>
@@ -129,5 +154,78 @@ describe('booking evidence proxy handler', () => {
       expect(serialized).not.toContain('provider detail')
       expect(serialized).not.toContain('decoder detail')
     }
+  })
+})
+
+describe('booking evidence proxy middleware', () => {
+  const fakeDependencies = dependencies()
+
+  it('stays safely unavailable before both server secrets are configured', async () => {
+    const middleware = createBookingEvidenceProxyMiddleware({}, fakeDependencies)
+    const response = await invoke(middleware, `/api/booking-evidence/image?t=${previewToken}`)
+
+    expect(response.status).toBe(503)
+    expect(response.body.toString()).toContain('not configured')
+    expect(response.body.toString()).not.toContain(previewToken)
+  })
+
+  it('serves a valid signed preview with hardened headers', async () => {
+    const middleware = createBookingEvidenceProxyMiddleware(
+      {
+        BOOKING_MEDIA_SIGNING_SECRET: secret,
+        BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON: '{}',
+      },
+      fakeDependencies,
+    )
+    const response = await invoke(middleware, `/api/booking-evidence/image?t=${previewToken}`)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual(Buffer.from('preview-jpeg'))
+    expect(response.headers).toMatchObject({
+      'content-type': 'image/jpeg',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'content-disposition': 'inline',
+    })
+  })
+
+  it('supports HEAD and rejects missing tokens or unsupported methods', async () => {
+    const middleware = createBookingEvidenceProxyMiddleware(
+      {
+        BOOKING_MEDIA_SIGNING_SECRET: secret,
+        BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON: '{}',
+      },
+      fakeDependencies,
+    )
+
+    expect((await invoke(middleware, '/api/booking-evidence/image')).status).toBe(400)
+    expect((await invoke(middleware, `/api/booking-evidence/image?t=${previewToken}`, 'POST')).status).toBe(405)
+    const head = await invoke(middleware, `/api/booking-evidence/image?t=${previewToken}`, 'HEAD')
+    expect(head.status).toBe(200)
+    expect(head.body).toEqual(Buffer.alloc(0))
+    expect(head.headers['content-type']).toBe('image/jpeg')
+  })
+})
+
+describe('booking evidence Sharp preview', () => {
+  it('returns a mobile-safe JPEG inside 1024x1024 and below 1 MB', async () => {
+    const source = await sharp({
+      create: {
+        width: 1_600,
+        height: 1_200,
+        channels: 3,
+        background: { r: 240, g: 210, b: 210 },
+      },
+    })
+      .png()
+      .toBuffer()
+
+    const output = await createSharpBookingEvidencePreviewPort().jpegPreview(source)
+    const metadata = await sharp(output).metadata()
+
+    expect(metadata.format).toBe('jpeg')
+    expect(metadata.width).toBeLessThanOrEqual(1_024)
+    expect(metadata.height).toBeLessThanOrEqual(1_024)
+    expect(output.byteLength).toBeLessThan(1_000_000)
   })
 })
