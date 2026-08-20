@@ -22,7 +22,7 @@ describe('dedicated booking evidence server', () => {
   it('serves health without invoking the evidence proxy', async () => {
     let proxyCalls = 0
     const handler = createBookingEvidenceRequestHandler(async () => { proxyCalls += 1 })
-    const response = await invoke(handler, '/healthz')
+    const response = await invoke(handler, '/health')
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toEqual({ ok: true })
     expect(proxyCalls).toBe(0)

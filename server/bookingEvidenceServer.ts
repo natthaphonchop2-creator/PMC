@@ -8,7 +8,7 @@ type EvidenceMiddleware = (req: IncomingMessage, res: ServerResponse) => Promise
 
 export function createBookingEvidenceRequestHandler(evidenceProxy: EvidenceMiddleware) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.url === '/healthz') {
+    if (req.url === '/health') {
       res.statusCode = 200
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.setHeader('cache-control', 'no-cache')

@@ -50,6 +50,7 @@ apps/pmc-google-booking-ops/tests/evidenceMedia.test.ts
 ```text
 package.json
 package-lock.json
+Procfile
 .env.example
 apps/pmc-google-booking-ops/src/config.ts
 apps/pmc-google-booking-ops/src/ports.ts
@@ -379,7 +380,7 @@ git commit -m "feat: add private booking evidence proxy handler"
 
 **Interfaces:**
 - Consumes: pure proxy handler from Task 2.
-- Produces: `createBookingEvidenceProxyMiddleware(env)` and a dedicated Cloud Run server exposing only `/healthz` and `GET|HEAD /api/booking-evidence/image`.
+- Produces: `createBookingEvidenceProxyMiddleware(env)` and a dedicated Cloud Run server exposing only `/health` and `GET|HEAD /api/booking-evidence/image`.
 
 - [ ] **Step 1: Add failing middleware tests**
 
@@ -494,7 +495,7 @@ async jpegPreview(input) {
 
 - [ ] **Step 6: Implement middleware and the dedicated Cloud Run server**
 
-The middleware accepts `GET|HEAD`, reads only `t`, sets `no-store`, `nosniff`, and `inline`, and JSON-encodes generic errors. `bookingEvidenceServer.ts` exposes `/healthz`, delegates only the evidence path, returns `404` elsewhere, and starts on `PORT` with:
+The middleware accepts `GET|HEAD`, reads only `t`, sets `no-store`, `nosniff`, and `inline`, and JSON-encodes generic errors. `bookingEvidenceServer.ts` exposes `/health`, delegates only the evidence path, returns `404` elsewhere, and starts on `PORT` with:
 
 ```ts
 npm run start:booking-evidence
@@ -871,7 +872,7 @@ secret env: BOOKING_MEDIA_SIGNING_SECRET from Secret Manager
 
 - [ ] **Step 7: Verify keyless health/config gates**
 
-Verify `/healthz` returns `200`, missing token returns `400`, altered signature returns `403`, and Cloud Run revision metadata shows the attached Service Account. No JSON credential exists locally or in Cloud Run environment variables.
+Verify `/health` returns `200`, missing token returns `400`, altered signature returns `403`, and Cloud Run revision metadata shows the attached Service Account. No JSON credential exists locally or in Cloud Run environment variables.
 
 - [ ] **Step 8: Commit revised setup docs**
 
@@ -912,7 +913,7 @@ Expected: every command exits 0. The existing Vite chunk notice may remain a war
 Verify the Task 7 Cloud Run revision uses the approved Service Identity/config and:
 
 ```text
-GET /healthz -> 200
+GET /health -> 200
 GET /api/booking-evidence/image -> 503 or 400 with generic JSON
 ```
 
