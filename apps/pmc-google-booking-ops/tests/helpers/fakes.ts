@@ -1,4 +1,5 @@
-import type { BookingCase } from '../../src/domain/types'
+import type { BookingCase, BookingIntake } from '../../src/domain/types'
+import type { BookingPorts } from '../../src/ports'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
 
 class MemorySheetStore implements SheetStore {
@@ -73,6 +74,56 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
     createdBy: 'admin@example.com',
     updatedAt: '2026-08-20T09:00:00+07:00',
     updatedBy: 'admin@example.com',
+    ...patch,
+  }
+}
+
+export interface TestPorts extends BookingPorts {
+  bookings: ReturnType<typeof createMemoryRepositories>['bookings']
+}
+
+export function createTestPorts(): TestPorts {
+  const repositories = createMemoryRepositories()
+  return {
+    clock: { nowIso: () => '2026-08-20T09:00:00+07:00' },
+    locks: { withLock: (operation) => operation() },
+    config: {
+      findAdminByName: (name) =>
+        name === 'Admin A'
+          ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true }
+          : null,
+      findDoctor: (id) =>
+        id === 'doctor-1'
+          ? { id: 'doctor-1', name: 'Doctor One', calendarId: 'doctor-calendar-1', lineGroupId: 'doctor-group-1', active: true }
+          : null,
+      findService: (id) =>
+        id === 'service-1' ? { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true } : null,
+    },
+    repositories,
+    bookings: repositories.bookings,
+    drive: {},
+    calendar: {},
+    line: {},
+    forms: {},
+    files: {},
+  }
+}
+
+export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingIntake {
+  return {
+    formResponseId: 'response-1',
+    submittedAt: '2026-08-20T09:00:00+07:00',
+    submitterEmail: 'admin@example.com',
+    adminName: 'Admin A',
+    customerName: 'ลูกค้าทดสอบ',
+    phone: '0812345678',
+    doctorId: 'doctor-1',
+    serviceId: 'service-1',
+    appointmentDate: '2026-08-20',
+    appointmentTime: '13:00',
+    depositAmount: 1000,
+    paymentEvidenceFileIds: ['payment-file-1'],
+    chatEvidenceFileIds: ['chat-file-1'],
     ...patch,
   }
 }

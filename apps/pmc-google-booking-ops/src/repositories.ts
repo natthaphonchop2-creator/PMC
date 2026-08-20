@@ -41,8 +41,11 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
     },
     findByFormResponseId(formResponseId: string): BookingCase | null {
       const mapped = store.read('FORM_RESPONSE_MAP').find((row) => row.formResponseId === formResponseId)
-      if (!mapped) return null
-      return this.getByCaseId(String(mapped.caseId))
+      const caseId = mapped?.caseId
+      const row = store
+        .read('BOOKING_MASTER')
+        .find((candidate) => (caseId ? candidate.caseId === caseId : candidate.formResponseId === formResponseId))
+      return row ? asBooking(row) : null
     },
     rememberFormResponse(formResponseId: string, caseId: string): void {
       locks.withLock(() => {
@@ -57,6 +60,9 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       return locks.withLock(() => {
         const rows = store.read('BOOKING_MASTER')
         if (rows.some((row) => row.caseId === booking.caseId)) throw new Error('case ID already exists')
+        if (rows.some((row) => row.formResponseId === booking.formResponseId)) {
+          throw new Error('form response already processed')
+        }
         store.replace('BOOKING_MASTER', [...rows, booking as unknown as SheetRow])
         return structuredClone(booking)
       })
