@@ -223,22 +223,22 @@ For controlled directory capture:
 
 The PMC Web bridge verifies LINE's raw-body signature. Apps Script accepts only the second timestamped HMAC payload and rejects replays.
 
-## Evidence Image Service Account
+## Evidence Image Cloud Run Service Identity
 
-Evidence previews use a Google Service Account only as a read-only identity for the private `PMC Bookings` Drive hierarchy.
+Evidence previews run in a dedicated Cloud Run service using a keyless Google Service Account identity. Organization policy `iam.disableServiceAccountKeyCreation` remains enabled; no JSON key is created or stored.
 
-1. Enable Google Drive API in the Service Account's Cloud project.
-2. Share only the `PMC Bookings` root folder to the Service Account email as `Viewer`.
-3. Do not share the central Spreadsheet, Forms, Calendars, Cloud project, JERA folder, or backup folder.
-4. Keep the downloaded JSON only in the ignored local `API/` folder and Render secret storage.
-5. Never paste the JSON, private key, client email, file IDs, or signed media URLs into chat, source, logs, or Sheet cells.
-6. Restrict both Google Form evidence questions to image uploads; phase 1 supports JPEG and PNG only.
+1. Enable Cloud Run, Cloud Build, Artifact Registry, Secret Manager, and Google Drive APIs in the PMC Cloud project.
+2. Create/select Service Account `pmc-booking-evidence` without a key and without project data roles.
+3. Attach that Service Account as the Cloud Run Service Identity.
+4. Share only the `PMC Bookings` root folder to the Service Account email as `Viewer`.
+5. Do not share the central Spreadsheet, Forms, Calendars, JERA folder, backup folder, or project Editor/Owner roles.
+6. Store `BOOKING_MEDIA_SIGNING_SECRET` in Secret Manager and grant this Service Account access only to that secret.
+7. Restrict both Google Form evidence questions to image uploads; phase 1 supports JPEG and PNG only.
 
-Render secret names:
+Cloud Run starts the dedicated entrypoint:
 
-```text
-BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON
-BOOKING_MEDIA_SIGNING_SECRET
+```bash
+npm run start:booking-evidence
 ```
 
 Apps Script property names:
@@ -248,13 +248,7 @@ BOOKING_MEDIA_BASE_URL
 BOOKING_MEDIA_SIGNING_SECRET
 ```
 
-Use a synthetic JPEG/PNG file inside `PMC Bookings` for the access verifier. Set the two variables locally without printing their values, then run:
-
-```bash
-npm run booking:verify-evidence-access
-```
-
-The verifier reports only credential type and read-only capability booleans. It never attempts a write. Remove the synthetic verifier file after the pilot.
+The deployed signed proxy is the production read-only verification path. Test it with synthetic evidence, then remove the synthetic file after the pilot. Never paste Service Account email, file IDs, signed URLs, or secret values into chat, source, logs, or Sheet cells.
 
 ## Shared Admin link
 

@@ -12,10 +12,10 @@
     "booking:typecheck": "tsc -p apps/pmc-google-booking-ops/tsconfig.json --noEmit",
     "booking:build": "node apps/pmc-google-booking-ops/scripts/build.mjs",
     "booking:push": "cd apps/pmc-google-booking-ops && clasp push",
-    "booking:verify-evidence-access": "node scripts/verifyBookingEvidenceAccess.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "node dist-server/server/productionServer.js",
+    "start:booking-evidence": "node dist-server/server/bookingEvidenceServer.js",
     "test": "vitest run"
   },
   "dependencies": {

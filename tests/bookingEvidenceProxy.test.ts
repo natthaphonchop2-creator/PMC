@@ -173,7 +173,6 @@ describe('booking evidence proxy middleware', () => {
     const middleware = createBookingEvidenceProxyMiddleware(
       {
         BOOKING_MEDIA_SIGNING_SECRET: secret,
-        BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON: '{}',
       },
       fakeDependencies,
     )
@@ -193,7 +192,6 @@ describe('booking evidence proxy middleware', () => {
     const middleware = createBookingEvidenceProxyMiddleware(
       {
         BOOKING_MEDIA_SIGNING_SECRET: secret,
-        BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON: '{}',
       },
       fakeDependencies,
     )

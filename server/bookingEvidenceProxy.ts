@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { google } from 'googleapis'
-import type { JWTInput } from 'google-auth-library'
 import sharp from 'sharp'
 import { verifyBookingEvidenceToken } from './bookingEvidenceToken.js'
 
@@ -101,7 +100,6 @@ export function createBookingEvidenceProxyHandler(config: {
 }
 
 interface BookingEvidenceProxyEnv {
-  BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON?: string
   BOOKING_MEDIA_SIGNING_SECRET?: string
 }
 
@@ -122,11 +120,8 @@ export function createSharpBookingEvidencePreviewPort(): BookingEvidencePreviewP
   }
 }
 
-function createRealDependencies(credentialJson: string): BookingEvidenceProxyDependencies {
-  const credentials = JSON.parse(credentialJson) as JWTInput
-  if (credentials.type !== 'service_account') throw new Error('Invalid Service Account configuration')
+function createRealDependencies(): BookingEvidenceProxyDependencies {
   const auth = new google.auth.GoogleAuth({
-    credentials,
     scopes: ['https://www.googleapis.com/auth/drive.readonly'],
   })
   const api = google.drive({ version: 'v3', auth })
@@ -163,11 +158,10 @@ export function createBookingEvidenceProxyMiddleware(
   injected?: BookingEvidenceProxyDependencies,
 ) {
   const signingSecret = env.BOOKING_MEDIA_SIGNING_SECRET?.trim() ?? ''
-  const credentialJson = env.BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON?.trim() ?? ''
   let dependencies: BookingEvidenceProxyDependencies | null = null
-  if (signingSecret && credentialJson) {
+  if (signingSecret) {
     try {
-      dependencies = injected ?? createRealDependencies(credentialJson)
+      dependencies = injected ?? createRealDependencies()
     } catch {
       dependencies = null
     }

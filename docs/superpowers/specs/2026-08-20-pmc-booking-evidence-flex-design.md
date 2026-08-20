@@ -13,7 +13,9 @@ The selected doctor group continues to receive the full operational customer ide
 
 ## 2. Approved Decisions
 
-- Use the existing Render service as a signed Google Drive media proxy.
+- Use a dedicated public Cloud Run service as the signed Google Drive media proxy.
+- Attach the `pmc-booking-evidence` Service Account as Cloud Run Service Identity; do not create or store a Service Account key.
+- Keep the existing Render service responsible only for PMC Web and the LINE raw-body webhook.
 - Keep all evidence files private in the company-owned `PMC Bookings` Drive hierarchy.
 - Use a Google Service Account with read-only access to the `PMC Bookings` root.
 - Evidence URLs do not expire.
@@ -103,7 +105,7 @@ Private Google Drive evidence folder
         |
         | Service Account read-only access
         v
-Render /api/booking-evidence/image?t=<signed-token>
+Cloud Run /api/booking-evidence/image?t=<signed-token>
         |
         | verifies HMAC and fetches by Drive file ID
         v
@@ -120,9 +122,9 @@ LINE Flex image component (Admin group only)
    - never sends the signing secret or raw Drive credentials to LINE;
    - routes evidence URLs only to the Admin Flex builder.
 
-2. **Render evidence proxy**
+2. **Cloud Run evidence proxy**
    - verifies the signed token before contacting Google Drive;
-   - uses Service Account credentials from Render environment secrets;
+   - uses Application Default Credentials from the attached Cloud Run Service Identity;
    - validates file type and size;
    - returns resized preview or original image;
    - never lists a Drive directory.
@@ -144,7 +146,7 @@ LINE Flex image component (Admin group only)
 The URL contains one opaque base64url payload and one HMAC signature:
 
 ```text
-https://pmc-ads-agent.onrender.com/api/booking-evidence/image?t=<payload>.<signature>
+BOOKING_MEDIA_BASE_URL?t=<payload>.<signature>
 ```
 
 Decoded payload fields:
@@ -166,7 +168,7 @@ There is no expiry field. This is an explicit owner-approved risk decision.
 
 ### 6.2 Verification
 
-Render must:
+Cloud Run must:
 
 1. split token into exactly two parts;
 2. reject malformed base64url;
@@ -189,7 +191,7 @@ Render must:
 
 ## 7. Google Service Account Boundary
 
-Render receives Service Account credentials through `BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON` as a secret environment variable.
+Cloud Run receives short-lived Service Account credentials automatically through Service Identity and Application Default Credentials. No Service Account JSON key exists.
 
 The Service Account:
 
@@ -204,21 +206,20 @@ Credentials are never stored in source control, Sheet cells, Apps Script source,
 
 ## 8. Runtime Configuration
 
-### 8.1 Render secrets
+### 8.1 Cloud Run secret binding
 
 ```text
-BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON
 BOOKING_MEDIA_SIGNING_SECRET
 ```
 
 ### 8.2 Apps Script properties
 
 ```text
-BOOKING_MEDIA_BASE_URL=https://pmc-ads-agent.onrender.com/api/booking-evidence/image
+BOOKING_MEDIA_BASE_URL
 BOOKING_MEDIA_SIGNING_SECRET
 ```
 
-The signing secret must be identical in Render and Apps Script. Setup must fail by property name only if either property is missing; it must never log the value.
+The signing secret must be identical in Cloud Run Secret Manager binding and Apps Script. Setup must fail by property name only if either property is missing; it must never log the value.
 
 ## 9. Evidence Data Flow
 
@@ -316,7 +317,7 @@ This does not prevent screenshots, forwarding an already-rendered image, device 
 ### 13.2 Integration tests
 
 - mocked Drive metadata/media responses;
-- Render proxy valid/invalid HTTP cases;
+- Cloud Run proxy valid/invalid HTTP cases;
 - full Booking workflow with one payment and multiple chat images;
 - LINE official message-object validation for both audiences.
 
@@ -337,21 +338,22 @@ This does not prevent screenshots, forwarding an already-rendered image, device 
 1. Create/select the company Service Account.
 2. Enable Drive API in its Cloud project.
 3. Share only `PMC Bookings` root as Viewer to the Service Account email.
-4. Store Service Account JSON and signing secret in Render.
-5. Store matching base URL and signing secret in Apps Script Properties.
-6. Deploy proxy with no Flex image references yet.
-7. Verify valid/invalid synthetic proxy requests.
-8. Update Admin Flex builder and LINE retry payload.
-9. Validate messages with the LINE push-message validator.
-10. Run synthetic production pilot.
-11. Enable evidence images only after owner review.
+4. Store the signing secret in Secret Manager and grant the Cloud Run Service Identity Secret Accessor only for that secret.
+5. Deploy the dedicated Cloud Run service in Singapore with request-based billing, minimum instances `0`, maximum instances `2`, memory `512 MiB`, CPU `1`, and public ingress protected by HMAC.
+6. Store the Cloud Run base URL and matching signing secret in Apps Script Properties.
+7. Deploy proxy with no Flex image references yet.
+8. Verify valid/invalid synthetic proxy requests.
+9. Update Admin Flex builder and LINE retry payload.
+10. Validate messages with the LINE push-message validator.
+11. Run synthetic production pilot.
+12. Enable evidence images only after owner review.
 
 ## 15. Rollback
 
 - Disable evidence images in the Admin Flex builder.
 - Keep text/full operational Flex summaries working.
-- Remove Service Account access to `PMC Bookings`.
-- Rotate or remove `BOOKING_MEDIA_SIGNING_SECRET` from Render and Apps Script.
+- Remove Service Account access to `PMC Bookings` or detach the Cloud Run Service Identity.
+- Rotate or remove `BOOKING_MEDIA_SIGNING_SECRET` from Secret Manager and Apps Script.
 - Leave Drive evidence and booking records intact.
 - Do not delete audit evidence during rollback.
 

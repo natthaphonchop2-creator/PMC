@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Serve private Google Drive payment/chat images through permanent HMAC-signed Render URLs and display approved evidence previews only in the serious white Admin LINE Flex booking card.
+**Goal:** Serve private Google Drive payment/chat images through permanent HMAC-signed Cloud Run URLs and display approved evidence previews only in the serious white Admin LINE Flex booking card.
 
-**Architecture:** Apps Script signs deterministic evidence tokens from Case ID and Drive file IDs. The existing Render service verifies the tokens, uses a read-only Google Service Account to fetch private Drive media, and returns JPEG/PNG preview/full variants. Admin Flex receives one slip and up to three chat images; doctor Flex receives no evidence URL.
+**Architecture:** Apps Script signs deterministic evidence tokens from Case ID and Drive file IDs. A dedicated public Cloud Run service verifies tokens and uses its attached keyless Service Identity through Application Default Credentials to fetch private Drive media. Render remains responsible only for PMC Web and the LINE webhook.
 
-**Tech Stack:** TypeScript 6, Node.js HTTP server, Vitest 4, Google Drive API v3, `googleapis`, `sharp`, Google Apps Script V8, LINE Messaging API Flex Messages, Render.
+**Tech Stack:** TypeScript 6, Node.js HTTP server, Vitest 4, Google Drive API v3, `googleapis`, `sharp`, Google Apps Script V8, LINE Messaging API Flex Messages, Cloud Run, Secret Manager.
 
 **Spec:** `docs/superpowers/specs/2026-08-20-pmc-booking-evidence-flex-design.md`
 
@@ -20,8 +20,9 @@
 - Show one payment slip and at most three chat previews.
 - Support only JPEG and PNG, maximum 10 MB per source file.
 - Preview output is JPEG, inside 1024 x 1024, quality 82, without enlargement.
+- Cloud Run uses Service Identity/ADC; Service Account key creation stays disabled.
 - Service Account has Viewer access only to the `PMC Bookings` root and no Sheets, Calendar, Forms, or LINE permission.
-- Never put Service Account JSON, signing secrets, signed evidence URLs, raw evidence, or customer PII in source control, logs, audit payloads, or test fixtures.
+- Never put signing secrets, signed evidence URLs, raw evidence, or customer PII in source control, logs, audit payloads, or test fixtures.
 - Invalid signature returns `403`; missing/trashed files return `404`; unsupported MIME returns `415`; oversized media returns `413`.
 - The existing text/full-operational Flex summary must still send if evidence preview generation fails.
 - LINE and Drive retries remain idempotent.
@@ -36,10 +37,10 @@
 ```text
 server/bookingEvidenceToken.ts
 server/bookingEvidenceProxy.ts
+server/bookingEvidenceServer.ts
 tests/bookingEvidenceToken.test.ts
 tests/bookingEvidenceProxy.test.ts
-scripts/verifyBookingEvidenceAccess.mjs
-tests/verifyBookingEvidenceAccess.test.ts
+tests/bookingEvidenceServer.test.ts
 apps/pmc-google-booking-ops/src/adapters/evidenceMedia.ts
 apps/pmc-google-booking-ops/tests/evidenceMedia.test.ts
 ```
@@ -50,8 +51,6 @@ apps/pmc-google-booking-ops/tests/evidenceMedia.test.ts
 package.json
 package-lock.json
 .env.example
-render.yaml
-server/productionServer.ts
 apps/pmc-google-booking-ops/src/config.ts
 apps/pmc-google-booking-ops/src/ports.ts
 apps/pmc-google-booking-ops/src/runtime.ts
@@ -257,7 +256,7 @@ git commit -m "feat: add booking evidence token contract"
 
 ---
 
-### Task 2: Build the Pure Render Evidence Proxy Handler
+### Task 2: Build the Pure Evidence Proxy Handler
 
 **Files:**
 - Create: `server/bookingEvidenceProxy.ts`
@@ -367,20 +366,20 @@ git commit -m "feat: add private booking evidence proxy handler"
 
 ---
 
-### Task 3: Add the Google Drive Adapter, Image Preview, and Public Signed Route
+### Task 3: Add the Keyless Drive Adapter, Image Preview, and Dedicated Cloud Run Server
 
 **Files:**
 - Modify: `package.json`
 - Modify: `package-lock.json`
 - Modify: `.env.example`
-- Modify: `render.yaml`
 - Modify: `server/bookingEvidenceProxy.ts`
-- Modify: `server/productionServer.ts`
+- Create: `server/bookingEvidenceServer.ts`
 - Modify: `tests/bookingEvidenceProxy.test.ts`
+- Create: `tests/bookingEvidenceServer.test.ts`
 
 **Interfaces:**
 - Consumes: pure proxy handler from Task 2.
-- Produces: `createBookingEvidenceProxyMiddleware(env)` mounted at `GET|HEAD /api/booking-evidence/image` before Basic Auth.
+- Produces: `createBookingEvidenceProxyMiddleware(env)` and a dedicated Cloud Run server exposing only `/healthz` and `GET|HEAD /api/booking-evidence/image`.
 
 - [ ] **Step 1: Add failing middleware tests**
 
@@ -428,7 +427,7 @@ const token = signBookingEvidenceToken({
   variant: 'preview',
 }, 'unit-test-secret')
 const configuredMiddleware = createBookingEvidenceProxyMiddleware(
-  { BOOKING_MEDIA_SIGNING_SECRET: 'unit-test-secret', BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON: '{}' },
+  { BOOKING_MEDIA_SIGNING_SECRET: 'unit-test-secret' },
   fakeDependencies,
 )
 const valid = await invoke(configuredMiddleware, `/api/booking-evidence/image?t=${token}`)
@@ -459,9 +458,9 @@ npm install googleapis sharp
 
 Confirm both are direct runtime dependencies in `package.json`.
 
-- [ ] **Step 4: Implement the read-only Drive adapter**
+- [ ] **Step 4: Implement the keyless read-only Drive adapter**
 
-In `server/bookingEvidenceProxy.ts`, parse `BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON`, create `google.auth.GoogleAuth` with only `https://www.googleapis.com/auth/drive.readonly`, then:
+In `server/bookingEvidenceProxy.ts`, create `google.auth.GoogleAuth` with no credential object and only `https://www.googleapis.com/auth/drive.readonly`. Cloud Run supplies ADC from its attached Service Identity. Then:
 
 ```ts
 metadata(fileId) {
@@ -493,35 +492,31 @@ async jpegPreview(input) {
 }
 ```
 
-- [ ] **Step 6: Implement middleware and mount it before Basic Auth**
+- [ ] **Step 6: Implement middleware and the dedicated Cloud Run server**
 
-The middleware accepts `GET|HEAD`, reads only `t`, sets `no-store`, `nosniff`, and `inline`, and JSON-encodes generic errors. In `productionServer.ts`:
+The middleware accepts `GET|HEAD`, reads only `t`, sets `no-store`, `nosniff`, and `inline`, and JSON-encodes generic errors. `bookingEvidenceServer.ts` exposes `/healthz`, delegates only the evidence path, returns `404` elsewhere, and starts on `PORT` with:
 
 ```ts
-if (req.url?.startsWith('/api/booking-evidence/image')) {
-  await bookingEvidenceProxy(req, res)
-  return
-}
+npm run start:booking-evidence
 ```
 
-Place it after `/healthz` and before Basic Auth.
+Do not mount this route in Render's `productionServer.ts`.
 
-- [ ] **Step 7: Add secret names**
+- [ ] **Step 7: Add the dedicated start command and local secret name**
 
-Append to `.env.example` and `render.yaml` (`sync: false`):
+Add `start:booking-evidence` to `package.json` and append only this local/Cloud Run variable name to `.env.example`:
 
 ```text
-BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON
 BOOKING_MEDIA_SIGNING_SECRET
 ```
 
 - [ ] **Step 8: Verify and commit**
 
 ```bash
-npm run test -- tests/bookingEvidenceToken.test.ts tests/bookingEvidenceProxy.test.ts
+npm run test -- tests/bookingEvidenceToken.test.ts tests/bookingEvidenceProxy.test.ts tests/bookingEvidenceServer.test.ts
 npm run lint
 npm run build:server
-git add package.json package-lock.json .env.example render.yaml server/bookingEvidenceProxy.ts server/productionServer.ts tests/bookingEvidenceProxy.test.ts
+git add package.json package-lock.json .env.example server/bookingEvidenceProxy.ts server/bookingEvidenceServer.ts tests/bookingEvidenceProxy.test.ts tests/bookingEvidenceServer.test.ts
 git commit -m "feat: serve signed private booking evidence"
 ```
 
@@ -825,147 +820,65 @@ git commit -m "feat: route booking evidence through LINE retries"
 
 ---
 
-### Task 7: Add a Read-Only Service Account Verification Workflow
+### Task 7: Configure Keyless Cloud Run Service Identity
 
 **Files:**
-- Create: `scripts/verifyBookingEvidenceAccess.mjs`
-- Create: `tests/verifyBookingEvidenceAccess.test.ts`
-- Modify: `package.json`
 - Modify: `apps/pmc-google-booking-ops/docs/setup.md`
-- Modify: `.gitignore` only if `/API/` is absent.
+- Modify: `docs/superpowers/specs/2026-08-20-pmc-booking-evidence-flex-design.md`
 
 **Interfaces:**
-- Consumes: `BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON`, `BOOKING_EVIDENCE_TEST_FILE_ID`.
-- Produces: safe booleans only; never prints credentials, IDs, filenames, URLs, or content.
+- Consumes: Cloud Run service `pmc-booking-evidence-proxy`, keyless Service Account `pmc-booking-evidence`, Secret Manager secret `pmc-booking-media-signing-secret`.
+- Produces: a public Cloud Run base URL whose evidence route uses ADC and read-only Drive folder sharing.
 
-- [ ] **Step 1: Write the failing safe-output test**
+- [ ] **Step 1: Verify organization policy remains enforced**
 
-```ts
-import { expect, it } from 'vitest'
-import { verifyBookingEvidenceAccess } from '../scripts/verifyBookingEvidenceAccess.mjs'
+Confirm `iam.disableServiceAccountKeyCreation` remains enabled. Do not create/download a Service Account key and do not weaken the organization policy.
 
-it('reports read-only access without identifiers or content', async () => {
-  const result = await verifyBookingEvidenceAccess({
-    credentialJson: JSON.stringify({ type: 'service_account', client_email: 'test@example.invalid', private_key: 'test' }),
-    fileId: 'synthetic-file-id',
-    drive: {
-      metadata: async () => ({ mimeType: 'image/jpeg' }),
-      firstBytes: async () => Buffer.from('synthetic'),
-    },
-  })
-  expect(result).toEqual({
-    credentialType: 'service_account',
-    metadataReadable: true,
-    mediaReadable: true,
-    mimeAllowed: true,
-    writeCapabilityRequested: false,
-  })
-  expect(JSON.stringify(result)).not.toContain('synthetic-file-id')
-  expect(JSON.stringify(result)).not.toContain('test@example.invalid')
-})
+- [ ] **Step 2: Enable required APIs**
+
+Enable Cloud Run, Cloud Build, Artifact Registry, Secret Manager, Google Drive, and Service Usage APIs in the approved PMC Cloud project. Resolve the project ID locally without printing credentials.
+
+- [ ] **Step 3: Verify/create the keyless Service Account**
+
+Create or reuse `pmc-booking-evidence` without a key and without project Editor/Owner/data roles. Grant the deployer only `roles/iam.serviceAccountUser` on this Service Account when required to attach it to Cloud Run.
+
+- [ ] **Step 4: Share only the Drive root**
+
+Share `PMC Bookings` as Viewer to the Service Account principal. Do not share the central Sheet, Forms, Calendars, JERA, backup folder, or any broader Drive root.
+
+- [ ] **Step 5: Store the HMAC secret in Secret Manager**
+
+Generate a random secret of at least 32 bytes without printing it. Store it as a Secret Manager version named `pmc-booking-media-signing-secret`. Grant the Cloud Run Service Account `roles/secretmanager.secretAccessor` only on that secret.
+
+- [ ] **Step 6: Deploy the dedicated service keylessly**
+
+Deploy from source in `asia-southeast1` with:
+
+```text
+service name: pmc-booking-evidence-proxy
+command: node
+args: dist-server/server/bookingEvidenceServer.js
+service account: pmc-booking-evidence
+allow unauthenticated: true
+request-based billing
+minimum instances: 0
+maximum instances: 2
+memory: 512 MiB
+CPU: 1
+concurrency: 20
+secret env: BOOKING_MEDIA_SIGNING_SECRET from Secret Manager
 ```
 
-- [ ] **Step 2: Run RED**
+- [ ] **Step 7: Verify keyless health/config gates**
+
+Verify `/healthz` returns `200`, missing token returns `400`, altered signature returns `403`, and Cloud Run revision metadata shows the attached Service Account. No JSON credential exists locally or in Cloud Run environment variables.
+
+- [ ] **Step 8: Commit revised setup docs**
 
 ```bash
-npm run test -- tests/verifyBookingEvidenceAccess.test.ts
+git add apps/pmc-google-booking-ops/docs/setup.md docs/superpowers/specs/2026-08-20-pmc-booking-evidence-flex-design.md
+git commit -m "docs: configure keyless booking evidence proxy"
 ```
-
-Expected: FAIL because the verifier module does not exist.
-
-- [ ] **Step 3: Write the verifier**
-
-The script exports an injected function for tests and uses the real read-only Drive adapter only in CLI mode:
-
-```js
-export async function verifyBookingEvidenceAccess({ credentialJson, fileId, drive }) {
-  const credentials = JSON.parse(credentialJson)
-  if (credentials.type !== 'service_account') throw new Error('Expected service_account credential')
-  const metadata = await drive.metadata(fileId)
-  const bytes = await drive.firstBytes(fileId)
-  return {
-    credentialType: 'service_account',
-    metadataReadable: true,
-    mediaReadable: Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= 64,
-    mimeAllowed: ['image/jpeg', 'image/png'].includes(metadata.mimeType),
-    writeCapabilityRequested: false,
-  }
-}
-
-async function realDrive(credentials) {
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
-  })
-  const api = google.drive({ version: 'v3', auth })
-  return {
-    async metadata(fileId) {
-      const result = await api.files.get({ fileId, fields: 'mimeType' })
-      return { mimeType: String(result.data.mimeType ?? '') }
-    },
-    async firstBytes(fileId) {
-      const result = await api.files.get(
-        { fileId, alt: 'media' },
-        { responseType: 'arraybuffer', headers: { Range: 'bytes=0-63' } },
-      )
-      return Buffer.from(result.data)
-    },
-  }
-}
-```
-
-The CLI must parse `BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON`, create `realDrive`, read `BOOKING_EVIDENCE_TEST_FILE_ID`, call the exported function, print only the safe result, and exit 1 if any boolean except `writeCapabilityRequested` is false or if `writeCapabilityRequested` is not false.
-
-Output exactly this shape:
-
-```json
-{
-  "credentialType": "service_account",
-  "metadataReadable": true,
-  "mediaReadable": true,
-  "mimeAllowed": true,
-  "writeCapabilityRequested": false
-}
-```
-
-Exit non-zero if any boolean would be false. Never test a write action.
-
-- [ ] **Step 4: Add the package command**
-
-```json
-"booking:verify-evidence-access": "node scripts/verifyBookingEvidenceAccess.mjs"
-```
-
-- [ ] **Step 5: Document secure setup**
-
-Document these exact rules:
-
-- Service Account JSON stays in ignored local `API/` and Render secret storage;
-- never paste it into chat;
-- share only `PMC Bookings` as Viewer;
-- use one synthetic JPEG/PNG for the verifier;
-- do not grant Sheets, Calendar, Forms, Project Editor, or Owner access;
-- remove the synthetic file after pilot.
-
-- [ ] **Step 6: Run tests and safe access verification**
-
-Set both variables without printing them and run:
-
-```bash
-npm run booking:verify-evidence-access
-npm run test -- tests/verifyBookingEvidenceAccess.test.ts
-```
-
-Expected: all five safe fields pass.
-
-- [ ] **Step 7: Commit code/docs only**
-
-```bash
-git add scripts/verifyBookingEvidenceAccess.mjs tests/verifyBookingEvidenceAccess.test.ts package.json package-lock.json apps/pmc-google-booking-ops/docs/setup.md .gitignore
-git commit -m "chore: verify booking evidence Drive access"
-```
-
-Never stage Credential JSON or synthetic evidence.
 
 ---
 
@@ -978,7 +891,7 @@ Never stage Credential JSON or synthetic evidence.
 
 **Interfaces:**
 - Consumes: Tasks 1-7 and company-owned credentials.
-- Produces: verified Render proxy, Apps Script deployment, LINE Flex evidence proof, and go/no-go record.
+- Produces: verified keyless Cloud Run proxy, Apps Script deployment, LINE Flex evidence proof, and go/no-go record.
 
 - [ ] **Step 1: Run complete local verification**
 
@@ -994,30 +907,26 @@ git diff --check
 
 Expected: every command exits 0. The existing Vite chunk notice may remain a warning.
 
-- [ ] **Step 2: Deploy Render code with secrets absent**
+- [ ] **Step 2: Verify the Cloud Run revision before Apps Script enablement**
 
-Push the approved branch to `main`, wait for Render, then verify:
+Verify the Task 7 Cloud Run revision uses the approved Service Identity/config and:
 
 ```text
 GET /healthz -> 200
 GET /api/booking-evidence/image -> 503 or 400 with generic JSON
 ```
 
-No Drive access occurs before configuration.
+Render remains unchanged and no Service Account JSON exists.
 
 - [ ] **Step 3: Configure secrets without printing values**
 
 ```text
-Render:
-  BOOKING_GOOGLE_SERVICE_ACCOUNT_JSON
-  BOOKING_MEDIA_SIGNING_SECRET
-
 Apps Script:
   BOOKING_MEDIA_BASE_URL
   BOOKING_MEDIA_SIGNING_SECRET
 ```
 
-Use one cryptographically random secret of at least 32 bytes in both systems.
+Set `BOOKING_MEDIA_BASE_URL` to the Cloud Run evidence endpoint. Read the existing Secret Manager value through an approved local command and set the same value in Apps Script without printing or storing it in source/Sheet.
 
 - [ ] **Step 4: Verify negative proxy cases**
 
@@ -1067,7 +976,7 @@ Expected:
 
 - [ ] **Step 9: Record safe pilot evidence**
 
-Record only Case ID, pass/fail booleans, HTTP statuses, Apps Script version, Render commit SHA, audience names, image count, and audit event IDs. Do not record signed URLs, file IDs, tokens, credentials, customer identity, or image content.
+Record only Case ID, pass/fail booleans, HTTP statuses, Apps Script version, Cloud Run revision/commit SHA, audience names, image count, and audit event IDs. Do not record signed URLs, file IDs, tokens, credentials, customer identity, or image content.
 
 - [ ] **Step 10: Commit final documentation**
 
