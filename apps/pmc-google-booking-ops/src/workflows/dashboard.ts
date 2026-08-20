@@ -17,6 +17,7 @@ export interface DashboardSnapshot {
     caseId: string
     status: string
     adminId: string | null
+    aeId: string | null
     doctorId: string
     channelId: string | null
     appointmentStart: string
@@ -41,6 +42,7 @@ export function buildDashboardSnapshot(bookings: BookingCase[], calls: CallTask[
       caseId: booking.caseId,
       status: booking.status,
       adminId: booking.adminId,
+      aeId: booking.aeId,
       doctorId: booking.doctorId,
       channelId: booking.channelId,
       appointmentStart: booking.appointmentStart,

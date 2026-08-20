@@ -91,6 +91,7 @@ export function createGoogleDashboardPort(
         'caseId',
         'status',
         'adminId',
+        'aeId',
         'doctorId',
         'channelId',
         'appointmentStart',

@@ -217,14 +217,6 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           active: true,
         },
       ],
-      findAdminByName: (name) =>
-        name === 'Admin A'
-          ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true }
-          : null,
-      findAdminById: (id) =>
-        id === 'admin-1'
-          ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true }
-          : null,
       findDoctor: (id) =>
         id === 'doctor-1'
           ? { id: 'doctor-1', name: 'Doctor One', calendarId: 'doctor-calendar-1', lineGroupId: 'doctor-group-1', active: true }
@@ -237,9 +229,6 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
         id === 'เพจหลัก' ? { id: 'เพจหลัก', name: 'เพจหลัก', active: true } : null,
       adminLineGroupId: () => 'admin-group',
       brandLogoUrl: () => 'https://evidence.example/assets/pmc-flex-logo-v1.png',
-      listAdmins: () => [
-        { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true },
-      ],
       listDoctors: () => [
         { id: 'doctor-1', name: 'Doctor One', calendarId: 'doctor-calendar-1', lineGroupId: 'doctor-group-1', active: true },
         { id: 'doctor-2', name: 'Doctor Two', calendarId: 'doctor-calendar-2', lineGroupId: 'doctor-group-2', active: true },

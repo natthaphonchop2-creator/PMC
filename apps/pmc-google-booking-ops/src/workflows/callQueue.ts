@@ -73,7 +73,7 @@ export function runDailyCallReminders(ports: BookingPorts): void {
     if (bangkokDate(task.nextCallAt) > today || task.lastReminderDate === today) continue
     const booking = ports.repositories.bookings.getByCaseId(task.caseId)
     if (!booking || ['CLOSED_JERA', 'REFUNDED', 'EXPIRED_6M'].includes(booking.status)) continue
-    const owner = ports.config.findAdminById(task.ownerAdminId)
+    const owner = ports.config.findStaffById(task.ownerAdminId)
     if (!owner?.active) throw new Error(`call owner is not active: ${task.ownerAdminId}`)
     ports.line.push(adminReminderMessage(booking, task, ports.config.adminLineGroupId(), 'CALL_REMINDER'))
     if (owner.lineUserId) ports.line.push(adminReminderMessage(booking, task, owner.lineUserId, 'CALL_REMINDER'))
@@ -176,7 +176,7 @@ export function runDepositExpiryReminders(ports: BookingPorts): void {
       continue
     }
     if (![30, 14, 7].includes(daysRemaining)) continue
-    const owner = booking.adminId ? ports.config.findAdminById(booking.adminId) : null
+    const owner = booking.adminId ? ports.config.findStaffById(booking.adminId) : null
     const task = ports.repositories.calls.getOpenByCase(booking.caseId) ?? createInitialCallTask(booking, ports)
     ports.line.push(adminReminderMessage(booking, task, ports.config.adminLineGroupId(), 'EXPIRY_REMINDER'))
     if (owner?.lineUserId) ports.line.push(adminReminderMessage(booking, task, owner.lineUserId, 'EXPIRY_REMINDER'))

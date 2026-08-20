@@ -26,7 +26,7 @@ import {
 } from './domain/staffDirectory'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
-import type { AdminConfig, BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
+import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
 import { createBookingRepositories, type SheetStore } from './repositories'
 import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminders } from './workflows/callQueue'
 import { writeDashboard } from './workflows/dashboard'
@@ -62,14 +62,6 @@ function createConfigPort(
   adminLineGroupId: string,
   brandLogoUrl: string,
 ): ConfigPort {
-  const admins = (): AdminConfig[] =>
-    store.read('CONFIG_ADMINS').map((row) => ({
-      id: String(row.id),
-      name: String(row.name),
-      email: String(row.email).toLowerCase(),
-      lineUserId: String(row.lineUserId),
-      active: isActive(row.active),
-    }))
   const staff = (): StaffConfig[] =>
     store.read('CONFIG_STAFF').map((row) => ({
       id: String(row.id),
@@ -107,14 +99,11 @@ function createConfigPort(
     findStaffById: (id) => staff().find((item) => item.id === id) ?? null,
     listStaff: staff,
     listEligibleAes: () => staff().filter((item) => item.active && item.canBeAe),
-    findAdminByName: (name) => admins().find((admin) => admin.name === name) ?? null,
-    findAdminById: (id) => admins().find((admin) => admin.id === id) ?? null,
     findDoctor: (id) => doctors().find((doctor) => doctor.id === id) ?? null,
     findService: (id) => services().find((service) => service.id === id) ?? null,
     findChannel: (id) => channels().find((channel) => channel.id === id) ?? null,
     adminLineGroupId: () => adminLineGroupId,
     brandLogoUrl: () => brandLogoUrl,
-    listAdmins: admins,
     listDoctors: doctors,
     listServices: services,
     listChannels: channels,

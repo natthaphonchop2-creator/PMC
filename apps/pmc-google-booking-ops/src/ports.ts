@@ -8,14 +8,6 @@ export interface LockPort {
   withLock<T>(operation: () => T): T
 }
 
-export interface AdminConfig {
-  id: string
-  name: string
-  email: string
-  lineUserId: string
-  active: boolean
-}
-
 export interface StaffConfig {
   id: string
   name: string
@@ -53,14 +45,11 @@ export interface ConfigPort {
   findStaffById(id: string): StaffConfig | null
   listStaff(): StaffConfig[]
   listEligibleAes(): StaffConfig[]
-  findAdminByName(name: string): AdminConfig | null
-  findAdminById(id: string): AdminConfig | null
   findDoctor(id: string): DoctorConfig | null
   findService(id: string): ServiceConfig | null
   findChannel(id: string): ChannelConfig | null
   adminLineGroupId(): string
   brandLogoUrl(): string
-  listAdmins(): AdminConfig[]
   listDoctors(): DoctorConfig[]
   listServices(): ServiceConfig[]
   listChannels(): ChannelConfig[]
