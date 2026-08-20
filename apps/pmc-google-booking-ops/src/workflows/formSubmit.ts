@@ -6,6 +6,7 @@ import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
 import { sendDoctorBookingMessage } from '../adapters/lineMessaging'
+import { createInitialCallTask } from './callQueue'
 
 function validateEvidence(intake: BookingIntake): void {
   if (!intake.paymentEvidenceFileIds.length) throw new Error('payment evidence is required')
@@ -181,6 +182,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   }
 
   try {
+    createInitialCallTask(current, ports)
     sendDoctorBookingMessage(current, ports.line)
     return ports.repositories.bookings.update(
       caseId,

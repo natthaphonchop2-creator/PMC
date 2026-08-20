@@ -1,8 +1,14 @@
-import type { BookingIntake } from '../domain/types'
+import type { BookingIntake, CallResult } from '../domain/types'
 import { BOOKING_FORM_LABELS } from '../config'
 
 export interface BookingFormEventInput {
   responseKey: string
+  submittedAt: string
+  submitterEmail: string
+  namedValues: Record<string, string[]>
+}
+
+export interface CallResultFormEventInput {
   submittedAt: string
   submitterEmail: string
   namedValues: Record<string, string[]>
@@ -33,5 +39,33 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     depositAmount: Number(requiredValue(event.namedValues, BOOKING_FORM_LABELS.depositAmount).replace(/,/g, '')),
     paymentEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.paymentEvidence)),
     chatEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.chatEvidence)),
+  }
+}
+
+const CALL_RESULTS = new Set<CallResult>([
+  'REBOOKED',
+  'NO_ANSWER',
+  'CALL_BACK_REQUESTED',
+  'NOT_READY',
+  'DECLINED',
+  'WRONG_NUMBER',
+])
+
+export function parseCallResultFormEvent(event: CallResultFormEventInput): {
+  caseId: string
+  result: CallResult
+  nextCallAt: string | null
+  note: string
+  actor: string
+} {
+  const result = requiredValue(event.namedValues, 'ผลการโทร') as CallResult
+  if (!CALL_RESULTS.has(result)) throw new Error('unsupported call result')
+  const nextDate = event.namedValues['วันโทรครั้งถัดไป']?.[0]?.trim() ?? ''
+  return {
+    caseId: requiredValue(event.namedValues, 'Case ID'),
+    result,
+    nextCallAt: nextDate ? `${nextDate}T09:00:00+07:00` : null,
+    note: event.namedValues['หมายเหตุ']?.[0]?.trim() ?? '',
+    actor: event.submitterEmail.trim().toLowerCase(),
   }
 }

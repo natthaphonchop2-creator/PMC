@@ -1,5 +1,5 @@
 import { createHash, createHmac } from 'node:crypto'
-import type { BookingCase, BookingIntake } from '../../src/domain/types'
+import type { BookingCase, BookingIntake, CallTask } from '../../src/domain/types'
 import type { BookingPorts, CalendarEventInput, CalendarPort, DrivePort, LineMessage, LinePort } from '../../src/ports'
 import type { BookingIngressPayload } from '../../src/adapters/lineMessaging'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
@@ -16,11 +16,11 @@ class MemorySheetStore implements SheetStore {
   }
 }
 
-export function createMemoryRepositories() {
+export function createMemoryRepositories(now = '2026-08-20T09:00:00+07:00') {
   return createBookingRepositories(
     new MemorySheetStore(),
     { withLock: (operation) => operation() },
-    { nowIso: () => '2026-08-20T09:00:00+07:00' },
+    { nowIso: () => now },
   )
 }
 
@@ -85,6 +85,10 @@ export interface TestPorts extends BookingPorts {
   calendar: FakeCalendarPort
   line: FakeLinePort
   lineDirectory: ReturnType<typeof createMemoryRepositories>['lineDirectory']
+  calls: ReturnType<typeof createMemoryRepositories>['calls'] & {
+    insertFixture(patch?: Partial<CallTask>): CallTask
+  }
+  bookingFixture(patch?: Partial<BookingCase>): BookingCase
   signedBookingIngressFixture(sourceType: 'user' | 'group', sourceId: string): BookingIngressPayload
 }
 
@@ -96,8 +100,8 @@ export interface TestPortOptions {
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
-  const repositories = createMemoryRepositories()
   const now = options.now ?? '2026-08-20T09:00:00+07:00'
+  const repositories = createMemoryRepositories(now)
   const ingressSecret = 'ingress-secret'
   return {
     clock: { nowIso: () => now },
@@ -107,15 +111,27 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
         name === 'Admin A'
           ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true }
           : null,
+      findAdminById: (id) =>
+        id === 'admin-1'
+          ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true }
+          : null,
       findDoctor: (id) =>
         id === 'doctor-1'
           ? { id: 'doctor-1', name: 'Doctor One', calendarId: 'doctor-calendar-1', lineGroupId: 'doctor-group-1', active: true }
-          : null,
+          : id === 'doctor-2'
+            ? { id: 'doctor-2', name: 'Doctor Two', calendarId: 'doctor-calendar-2', lineGroupId: 'doctor-group-2', active: true }
+            : null,
       findService: (id) =>
         id === 'service-1' ? { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true } : null,
+      adminLineGroupId: () => 'admin-group',
     },
     repositories,
     bookings: repositories.bookings,
+    calls: Object.assign(repositories.calls, {
+      insertFixture(patch: Partial<CallTask> = {}) {
+        return repositories.calls.insert(callTaskFixture(patch))
+      },
+    }),
     lineDirectory: repositories.lineDirectory,
     drive: createFakeDrive(),
     calendar: createFakeCalendar(options),
@@ -143,6 +159,24 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
         signature: createHmac('sha256', ingressSecret).update(canonical).digest('hex'),
       }
     },
+    bookingFixture,
+  }
+}
+
+export function callTaskFixture(patch: Partial<CallTask> = {}): CallTask {
+  return {
+    taskId: 'CALL-PMC-202608-0001-1',
+    caseId: 'PMC-202608-0001',
+    ownerAdminId: 'admin-1',
+    status: 'PENDING',
+    windowStart: '2026-08-20T00:00:00+07:00',
+    windowEnd: '2026-08-27T23:59:59+07:00',
+    nextCallAt: '2026-08-20T09:00:00+07:00',
+    lastReminderDate: null,
+    result: null,
+    note: '',
+    version: 1,
+    ...patch,
   }
 }
 

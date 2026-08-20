@@ -1,4 +1,4 @@
-import type { AuditEvent, BookingCase } from './domain/types'
+import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { BookingRepositories, Clock, LockPort, MutationContext } from './ports'
 
 export type SheetRow = Record<string, unknown>
@@ -114,21 +114,50 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
     },
   }
 
+  const calls = {
+    insert(task: CallTask): CallTask {
+      const rows = store.read('CALL_QUEUE')
+      if (rows.some((row) => row.taskId === task.taskId)) throw new Error('call task already exists')
+      store.replace('CALL_QUEUE', [...rows, task as unknown as SheetRow])
+      return structuredClone(task)
+    },
+    update(taskId: string, expectedVersion: number, patch: Partial<CallTask>): CallTask {
+      const rows = store.read('CALL_QUEUE')
+      const index = rows.findIndex((row) => row.taskId === taskId)
+      if (index === -1) throw new Error('call task not found')
+      const before = rows[index] as unknown as CallTask
+      if (before.version !== expectedVersion) throw new Error('call task version conflict')
+      const after = { ...before, ...patch, taskId: before.taskId, version: before.version + 1 }
+      const updated = [...rows]
+      updated[index] = after as unknown as SheetRow
+      store.replace('CALL_QUEUE', updated)
+      return structuredClone(after)
+    },
+    list(): CallTask[] {
+      return store.read('CALL_QUEUE') as unknown as CallTask[]
+    },
+    getOpenByCase(caseId: string): CallTask | null {
+      const row = store
+        .read('CALL_QUEUE')
+        .find((candidate) => candidate.caseId === caseId && !['DONE', 'CANCELLED'].includes(String(candidate.status)))
+      return row ? (row as unknown as CallTask) : null
+    },
+    cancelOpenByCase(caseId: string, reason: string): void {
+      const rows = store.read('CALL_QUEUE')
+      store.replace(
+        'CALL_QUEUE',
+        rows.map((row) =>
+          row.caseId === caseId && !['DONE', 'CANCELLED'].includes(String(row.status))
+            ? { ...row, status: 'CANCELLED', note: reason, version: Number(row.version) + 1 }
+            : row,
+        ),
+      )
+    },
+  }
+
   return {
     bookings,
-    calls: {
-      cancelOpenByCase(caseId, reason) {
-        const rows = store.read('CALL_QUEUE')
-        store.replace(
-          'CALL_QUEUE',
-          rows.map((row) =>
-            row.caseId === caseId && !['DONE', 'CANCELLED'].includes(String(row.status))
-              ? { ...row, status: 'CANCELLED', note: reason }
-              : row,
-          ),
-        )
-      },
-    },
+    calls,
     imports: {
       hasFileHash(hash) {
         return store.read('JERA_IMPORT_FILES').some((row) => row.hash === hash)

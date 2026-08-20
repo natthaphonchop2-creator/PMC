@@ -1,4 +1,4 @@
-import type { AuditEvent, BookingCase } from './domain/types'
+import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 
 export interface Clock {
   nowIso(): string
@@ -33,8 +33,10 @@ export interface ServiceConfig {
 
 export interface ConfigPort {
   findAdminByName(name: string): AdminConfig | null
+  findAdminById(id: string): AdminConfig | null
   findDoctor(id: string): DoctorConfig | null
   findService(id: string): ServiceConfig | null
+  adminLineGroupId(): string
 }
 
 export interface BookingRepository {
@@ -59,6 +61,10 @@ export interface MutationContext {
 }
 
 export interface CallTaskRepository {
+  insert(task: CallTask): CallTask
+  update(taskId: string, expectedVersion: number, patch: Partial<CallTask>): CallTask
+  list(): CallTask[]
+  getOpenByCase(caseId: string): CallTask | null
   cancelOpenByCase(caseId: string, reason: string): void
 }
 

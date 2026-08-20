@@ -15,6 +15,21 @@ export type BookingStatus =
 export type CallStatus = 'PENDING' | 'ACTIVE' | 'DONE' | 'OVERDUE' | 'CANCELLED'
 export type CommissionEligibility = 'NOT_ELIGIBLE' | 'PENDING_RULE' | 'ELIGIBLE'
 export type StepState = 'PENDING' | 'OK' | 'RETRY' | 'FAILED'
+export type CallResult = 'REBOOKED' | 'NO_ANSWER' | 'CALL_BACK_REQUESTED' | 'NOT_READY' | 'DECLINED' | 'WRONG_NUMBER'
+
+export interface CallTask {
+  taskId: string
+  caseId: string
+  ownerAdminId: string
+  status: 'PENDING' | 'ACTIVE' | 'DONE' | 'OVERDUE' | 'CANCELLED'
+  windowStart: string
+  windowEnd: string
+  nextCallAt: string
+  lastReminderDate: string | null
+  result: CallResult | null
+  note: string
+  version: number
+}
 
 export interface BookingIntake {
   formResponseId: string
