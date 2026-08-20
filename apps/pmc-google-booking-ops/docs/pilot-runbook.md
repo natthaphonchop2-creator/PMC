@@ -38,9 +38,22 @@ Expected:
 - one Case ID;
 - one private Drive folder with renamed synthetic evidence;
 - one event in the selected doctor's Calendar;
-- one safe LINE message only in that doctor's group;
+- one Admin-group LINE Flex with the approved slip/chat previews;
+- one doctor-group LINE Flex with the necessary booking identity and no evidence image or URL;
 - one open call task beginning on appointment day; and
 - Dashboard booking/deposit counts increase once.
+
+### 1A. Evidence media and Flex delivery
+
+Expected:
+
+- Cloud Run `/health` returns `200`, a missing token returns `400`, and an altered token returns `403`;
+- valid synthetic JPEG/PNG previews return `200` without making Drive public;
+- fetching the same permanent preview URL twice returns identical bytes;
+- removing the Service Identity's Viewer permission makes the URL unavailable and restoring it recovers the same URL;
+- the LINE official validator accepts both audience payloads;
+- Admin receives the preview images and doctor receives no evidence component; and
+- audit rows contain audience, version, count, and status only—never a signed URL, token, file ID, customer identity, or image content.
 
 ### 2. Calendar conflict
 
@@ -138,6 +151,7 @@ git diff --check
 Production is **NO-GO** if any of these are true:
 
 - any test/build/lint command fails;
+- either Google Form evidence question accepts file types other than images;
 - a doctor receives another doctor's case;
 - a LINE payload contains raw evidence, an unrestricted Drive link, or a national-ID-like value, or customer identity is routed to an unmapped group;
 - Google closes a case without unique JERA `ชำระแล้ว` evidence;
@@ -147,3 +161,17 @@ Production is **NO-GO** if any of these are true:
 - Google/LINE assets are not company-owned.
 
 Production becomes **GO** only after the manager signs the evidence register and explicitly authorizes real-customer use.
+
+## Evidence Flex pilot record — 2026-08-20
+
+Verified with the approved synthetic case only:
+
+- dedicated keyless Cloud Run Service Identity is healthy and has no Service Account JSON credential;
+- valid evidence previews returned `200`; missing/altered tokens returned `400`/`403`;
+- one synthetic slip and one synthetic chat preview were fetched successfully;
+- permanent preview bytes were stable, folder-permission revocation returned `404`, and restoring Viewer access recovered `200` on the same URL;
+- Apps Script production deployment is version `5`; the temporary evidence setup file was removed from the remote project;
+- LINE official validation returned `200`;
+- one Admin pilot push and one doctor pilot push returned `200`, with separate no-duplicate audit markers;
+- Booking tests passed `64/64`; full project tests passed `275/275`; typecheck, lint, build, and `git diff --check` passed; and
+- the two Google Form evidence questions still report file type `ANY`. Google Forms API does not support updating existing File Upload questions and the available browser accounts do not own the form. Real-customer use remains **NO-GO** until the form owner sets both questions to **Image only** and the setting is read back as `IMAGE`.

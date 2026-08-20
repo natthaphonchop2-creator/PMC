@@ -990,6 +990,15 @@ Update Obsidian `Current Work.md` with the same safe summary outside Git.
 
 ## Final Go/No-Go Gate
 
+### Execution record — 2026-08-20
+
+- Local verification passed: Booking `64/64`, full project `275/275`, typecheck, lint, build, and diff check.
+- Keyless Cloud Run health/token/permanence/Drive-permission revocation checks passed without a JSON credential.
+- Apps Script version `5` is deployed and the temporary setup file is removed.
+- LINE official validation and one-time synthetic Admin/doctor pushes returned `200`; no-duplicate audit markers were written without URLs or tokens.
+- The synthetic case contained one slip and one chat image, so the production route and both preview types were proven but the three-chat visual-density scenario remains a later QA case.
+- Real-customer evidence remains **NO-GO** until the Google Form owner changes both File Upload questions from `ANY` to `IMAGE` and the Forms API readback confirms the setting.
+
 Evidence images remain **NO-GO** if any condition is true:
 
 - Service Account can write Drive or access unrelated PMC resources;
@@ -1000,6 +1009,7 @@ Evidence images remain **NO-GO** if any condition is true:
 - evidence URL/token appears in logs or audit;
 - preview exceeds LINE's size/dimension contract;
 - retry duplicates Admin/doctor messages;
+- either Google Form evidence question accepts a type other than `IMAGE`;
 - any local test/lint/typecheck/build fails;
 - synthetic pilot cannot revoke access through folder permission removal and signing-secret rotation.
 

@@ -233,7 +233,7 @@ Evidence previews run in a dedicated Cloud Run service using a keyless Google Se
 4. Share only the `PMC Bookings` root folder to the Service Account email as `Viewer`.
 5. Do not share the central Spreadsheet, Forms, Calendars, JERA folder, backup folder, or project Editor/Owner roles.
 6. Store `BOOKING_MEDIA_SIGNING_SECRET` in Secret Manager and grant this Service Account access only to that secret.
-7. Restrict both Google Form evidence questions to image uploads; phase 1 supports JPEG and PNG only.
+7. In the Google Form editor, restrict both evidence questions to **Image** uploads; phase 1 supports JPEG and PNG only. This is an owner-account UI step: Google Forms API currently rejects updates to existing File Upload questions. Read the form back through Forms API and require `types=[IMAGE]` before real-customer go-live.
 
 Cloud Run starts the dedicated entrypoint:
 

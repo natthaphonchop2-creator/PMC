@@ -26,9 +26,13 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Provisioned the company Google Sheet, Forms, private Drive folders, doctor Calendars, Apps Script triggers, Render-to-Apps-Script HMAC ingress, and three LINE group mappings for the synthetic pilot. The pilot uses Admin-group-only reminders until individual Admin LINE IDs are intentionally mapped.
 - Fixed the first live synthetic Form execution by removing the unsupported `structuredClone` dependency from the Apps Script bundle; the stalled synthetic row was audit-recorded and removed before any Drive, Calendar, LINE, or call-task side effect occurred.
 - Added validated Misty Rose (`#FEE5E0`) Flex booking confirmations for both the Admin group and selected doctor group, with audience-specific full operational fields and no evidence files or Drive links.
-- Approved and specified a serious white Admin Flex evidence layout backed by a permanent HMAC-signed Render media proxy and a read-only Google Drive Service Account; evidence remains private in Drive and is excluded from doctor groups.
+- Approved and specified a serious white Admin Flex evidence layout backed by permanent HMAC-signed Cloud Run media URLs and a read-only Google Drive Service Identity; evidence remains private in Drive and is excluded from doctor groups.
 - Added the TDD implementation plan for the evidence proxy, cross-runtime signer, white Admin evidence Flex, retry wiring, read-only Service Account verification, deployment, revocation checks, and synthetic pilot gate.
 - Revised evidence delivery to a dedicated Cloud Run Service Identity after organization policy blocked Service Account key creation; the keyless ADC path keeps Render unchanged and preserves the private Drive boundary.
+- Deployed and verified the dedicated keyless Cloud Run evidence service with Secret Manager, minimum instances `0`, maximum instances `2`, Viewer-only access to the PMC Bookings folder, and no Service Account JSON credential; health, missing-token, altered-token, permanent-byte, and permission revocation/recovery checks passed.
+- Deployed Apps Script version `5`, removed the temporary evidence setup file, validated both audience payloads through the official LINE endpoint, and sent one audited synthetic pilot message to the Admin group and selected doctor group. Admin received one slip and one chat preview; doctor received booking details with no evidence component.
+- Verified `64/64` Booking tests and `275/275` full-project tests plus typecheck, lint, build, and diff checks.
+- Kept real-customer rollout at **NO-GO** because both Google Form File Upload questions still accept `ANY` file type. Google Forms API cannot update these items and the available browser accounts do not own the form; the form owner must set both questions to **Image only** before go-live.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
