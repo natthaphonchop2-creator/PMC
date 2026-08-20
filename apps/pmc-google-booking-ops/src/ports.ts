@@ -169,6 +169,7 @@ export interface LineMessage {
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' | 'DAILY_SCHEDULE' | 'CALL_REMINDER' | 'EXPIRY_REMINDER'
   caseIds: string[]
   text: string
+  apiMessage?: Record<string, unknown>
   retryKey: string
 }
 

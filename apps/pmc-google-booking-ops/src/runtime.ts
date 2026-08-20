@@ -4,7 +4,7 @@ import { createGoogleBackupPort, createGoogleDrivePort } from './adapters/google
 import { ensureCaseEvidenceFolder } from './adapters/googleDrive'
 import { createGoogleFilePort } from './adapters/googleFiles'
 import { createGoogleFormsPort } from './adapters/googleForms'
-import { createAppsScriptCryptoPort, createGoogleLinePort } from './adapters/lineMessaging'
+import { createAppsScriptCryptoPort, createGoogleLinePort, sendBookingConfirmationMessages } from './adapters/lineMessaging'
 import { sendDoctorBookingMessage } from './adapters/lineMessaging'
 import { createGoogleDashboardPort, createGoogleSheetStore, ensureSheetTopology } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
@@ -161,12 +161,16 @@ export function runEligibleRetries(ports: BookingPorts): void {
     }
     try {
       const operation = String(retry.operation)
-      if (operation === 'DOCTOR_LINE' || operation === 'DOCTOR_LINE_RESCHEDULE') {
-        sendDoctorBookingMessage(
-          booking,
-          ports.line,
-          operation === 'DOCTOR_LINE_RESCHEDULE' ? 'RESCHEDULED' : 'BOOKING_CONFIRMED',
+      if (operation === 'BOOKING_LINE') {
+        sendBookingConfirmationMessages(booking, ports.line, ports.config.adminLineGroupId())
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
+          { actor: 'system', reason: 'LINE retry succeeded', correlationId: id },
         )
+      } else if (operation === 'DOCTOR_LINE' || operation === 'DOCTOR_LINE_RESCHEDULE') {
+        sendDoctorBookingMessage(booking, ports.line, operation === 'DOCTOR_LINE_RESCHEDULE' ? 'RESCHEDULED' : 'BOOKING_CONFIRMED')
         ports.repositories.bookings.update(
           caseId,
           booking.version,

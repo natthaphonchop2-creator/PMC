@@ -58,9 +58,52 @@ export function handleLineDirectoryIngress(payload: BookingIngressPayload, ports
   })
 }
 
-function maskedName(value: string): string {
-  const first = [...value.trim()][0]
-  return first ? `${first}***` : 'ลูกค้า'
+const MISTY_ROSE = '#FEE5E0'
+
+function appointmentDisplay(value: string): string {
+  const [date, time = ''] = value.split('T')
+  const [year, month, day] = date.split('-')
+  return `${day}/${month}/${year} ${time.slice(0, 5)}`.trim()
+}
+
+function moneyDisplay(value: number): string {
+  return value.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+function flexRow(label: string, value: string): Record<string, unknown> {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    spacing: 'sm',
+    contents: [
+      { type: 'text', text: label, size: 'sm', color: '#8A5A52', flex: 3, wrap: true },
+      { type: 'text', text: value, size: 'sm', color: '#3D2C29', flex: 7, wrap: true },
+    ],
+  }
+}
+
+function bookingFlex(title: string, caseId: string, rows: Array<[string, string]>): Record<string, unknown> {
+  return {
+    type: 'flex',
+    altText: `${title} · ${caseId}`,
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        paddingAll: '20px',
+        backgroundColor: MISTY_ROSE,
+        contents: [
+          { type: 'text', text: title, weight: 'bold', size: 'xl', color: '#7A3E38', wrap: true },
+          { type: 'text', text: caseId, size: 'sm', color: '#8A5A52', wrap: true },
+          { type: 'separator', color: '#E7B8AF', margin: 'md' },
+          ...rows.map(([label, value]) => flexRow(label, value)),
+        ],
+      },
+    },
+  }
 }
 
 export function doctorBookingMessage(
@@ -68,19 +111,43 @@ export function doctorBookingMessage(
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED',
 ): LineMessage {
   if (!booking.doctorLineGroupId) throw new Error('doctor LINE group is not configured')
+  const title = eventType === 'BOOKING_CONFIRMED' ? 'นัดใหม่' : eventType === 'RESCHEDULED' ? 'เปลี่ยนเวลานัด' : 'ยกเลิกนัด'
   return {
     to: booking.doctorLineGroupId,
     audience: 'doctor',
     eventType,
     caseIds: [booking.caseId],
-    text: [
-      eventType === 'BOOKING_CONFIRMED' ? 'นัดใหม่' : eventType === 'RESCHEDULED' ? 'เปลี่ยนเวลานัด' : 'ยกเลิกนัด',
-      booking.caseId,
-      maskedName(booking.customerName),
-      booking.serviceId,
-      booking.appointmentStart,
-    ].join(' · '),
+    text: [title, booking.caseId, booking.customerName, booking.phoneNormalized, booking.serviceId, booking.appointmentStart].join(' · '),
+    apiMessage: bookingFlex(title, booking.caseId, [
+      ['ลูกค้า', booking.customerName],
+      ['เบอร์โทร', booking.phoneNormalized],
+      ['โปรแกรม', booking.serviceId],
+      ['วัน–เวลา', appointmentDisplay(booking.appointmentStart)],
+      ['Admin', booking.adminName],
+    ]),
     retryKey: `${booking.caseId}:${eventType}:${booking.version}`,
+  }
+}
+
+export function adminBookingMessage(booking: BookingCase, adminLineGroupId: string): LineMessage {
+  return {
+    to: adminLineGroupId,
+    audience: 'admin',
+    eventType: 'BOOKING_CONFIRMED',
+    caseIds: [booking.caseId],
+    text: ['จองเคสใหม่', booking.caseId, booking.customerName, booking.phoneNormalized, booking.doctorId, booking.serviceId].join(' · '),
+    apiMessage: bookingFlex('จองเคสใหม่', booking.caseId, [
+      ['Admin', booking.adminName],
+      ['ลูกค้า', booking.customerName],
+      ['เบอร์โทร', booking.phoneNormalized],
+      ['หมอ', booking.doctorId],
+      ['โปรแกรม', booking.serviceId],
+      ['วัน–เวลา', appointmentDisplay(booking.appointmentStart)],
+      ['ยอดจอง', `${moneyDisplay(booking.depositAmount)} บาท`],
+      ['ช่องทาง', booking.channelId || 'ไม่ระบุ'],
+      ['หลักฐาน', `สลิป ${booking.paymentEvidenceCount} · แชท ${booking.chatEvidenceCount}`],
+    ]),
+    retryKey: `${booking.caseId}:ADMIN_BOOKING_CONFIRMED:${booking.version}`,
   }
 }
 
@@ -90,6 +157,11 @@ export function sendDoctorBookingMessage(
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' = 'BOOKING_CONFIRMED',
 ): void {
   line.push(doctorBookingMessage(booking, eventType))
+}
+
+export function sendBookingConfirmationMessages(booking: BookingCase, line: LinePort, adminLineGroupId: string): void {
+  line.push(adminBookingMessage(booking, adminLineGroupId))
+  line.push(doctorBookingMessage(booking, 'BOOKING_CONFIRMED'))
 }
 
 export function createAppsScriptCryptoPort(): CryptoPort {
@@ -114,7 +186,10 @@ export function createGoogleLinePort(accessToken: string): LinePort {
           Authorization: `Bearer ${accessToken}`,
           'X-Line-Retry-Key': retryUuid,
         },
-        payload: JSON.stringify({ to: message.to, messages: [{ type: 'text', text: message.text }] }),
+        payload: JSON.stringify({
+          to: message.to,
+          messages: [message.apiMessage ?? { type: 'text', text: message.text }],
+        }),
         muteHttpExceptions: true,
       })
       const status = response.getResponseCode()

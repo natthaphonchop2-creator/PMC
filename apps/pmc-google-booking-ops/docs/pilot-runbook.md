@@ -139,7 +139,7 @@ Production is **NO-GO** if any of these are true:
 
 - any test/build/lint command fails;
 - a doctor receives another doctor's case;
-- a LINE payload contains raw evidence, a full phone, or a national-ID-like value;
+- a LINE payload contains raw evidence, an unrestricted Drive link, or a national-ID-like value, or customer identity is routed to an unmapped group;
 - Google closes a case without unique JERA `ชำระแล้ว` evidence;
 - replay creates a duplicate side effect;
 - a manager cannot trace a controlled change through `AUDIT_LOG`;

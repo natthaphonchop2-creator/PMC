@@ -20,10 +20,11 @@ describe('PMC booking end to end', () => {
     expect(booking.status).toBe('BOOKING_CONFIRMED')
     expect(ports.drive.createdFolderCount()).toBe(3)
     expect(ports.calendar.createdEvents()).toHaveLength(1)
+    expect(ports.line.adminMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()).toHaveLength(1)
 
     runDailyCallReminders(ports)
-    expect(ports.line.adminMessages()).toHaveLength(2)
+    expect(ports.line.adminMessages()).toHaveLength(3)
 
     importJeraFile('jera-file-1', ports)
     expect(ports.bookings.getByCaseId(booking.caseId)?.status).toBe('CLOSED_JERA')
@@ -48,6 +49,8 @@ describe('PMC booking end to end', () => {
     expect(ports.bookings.getByCaseId(booking.caseId)?.lineState).toBe('OK')
     expect(ports.drive.createdFolderCount()).toBe(3)
     expect(ports.calendar.createdEvents()).toHaveLength(1)
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
     expect(ports.retries.listPending()).toHaveLength(0)
   })
 

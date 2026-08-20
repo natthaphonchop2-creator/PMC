@@ -125,6 +125,8 @@ Use the same company Google email for each row. LINE user IDs remain individual 
 
 For the initial group-only pilot, `lineUserId` may remain blank. Call and expiry reminders still go to the Admin group, and the runtime skips the direct-owner copy until an individual LINE user ID is mapped.
 
+Confirmed bookings send validated Misty Rose (`#FEE5E0`) Flex Messages to both mapped groups. The Admin group receives the full operational booking summary; the selected doctor group receives full customer name/phone plus the service, appointment, and Admin owner. Slip/chat files, national IDs, and Drive links remain excluded from LINE.
+
 ### CONFIG_DOCTORS
 
 ```text

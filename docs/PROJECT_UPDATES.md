@@ -25,6 +25,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Reconciled the new Form with the current Microsoft Form: added an optional page/channel Dropdown, seeded seven Admin names plus existing service/channel choices, and changed attribution to the selected Admin because all staff share one Google account.
 - Provisioned the company Google Sheet, Forms, private Drive folders, doctor Calendars, Apps Script triggers, Render-to-Apps-Script HMAC ingress, and three LINE group mappings for the synthetic pilot. The pilot uses Admin-group-only reminders until individual Admin LINE IDs are intentionally mapped.
 - Fixed the first live synthetic Form execution by removing the unsupported `structuredClone` dependency from the Apps Script bundle; the stalled synthetic row was audit-recorded and removed before any Drive, Calendar, LINE, or call-task side effect occurred.
+- Added validated Misty Rose (`#FEE5E0`) Flex booking confirmations for both the Admin group and selected doctor group, with audience-specific full operational fields and no evidence files or Drive links.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

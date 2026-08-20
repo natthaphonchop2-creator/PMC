@@ -24,7 +24,7 @@
 - Call reminders go to both the Admin group and the direct Admin owner.
 - Only a unique reconciliation to JERA status `ชำระแล้ว` may produce `CLOSED_JERA`.
 - No Thai national ID number may be stored in Google Form, Sheets, Drive metadata, Calendar, LINE, logs, or test fixtures.
-- No payment slip, chat screenshot, full phone number, or unrestricted Drive link may be sent to doctor LINE groups.
+- No payment slip, chat screenshot, national ID, or unrestricted Drive link may be sent to LINE groups. Approved mapped Admin/doctor groups may receive the full operational customer name and phone required by the selected audience.
 - LINE directory capture stores only source type, LINE user/group ID, and capture time; it never stores incoming message text.
 - Commission eligibility may be `PENDING_RULE`; commission amount must stay blank until a separate owner-approved rule exists.
 - Evidence deletion requires manager approval and becomes eligible 90 days after close, refund, or expiry.
@@ -1016,9 +1016,9 @@ Expected: FAIL because LINE routing is absent.
 
 - [ ] **Step 3: Implement LINE adapter and message builders**
 
-Use `UrlFetchApp.fetch` only inside the Apps Script adapter. Read the outbound access token from Script Properties. Every push uses a retry key derived from `caseId:eventType:version`. Message builders accept masked fields only.
+Use `UrlFetchApp.fetch` only inside the Apps Script adapter. Read the outbound access token from Script Properties. Every push uses a retry key derived from `caseId:eventType:version`. Booking confirmations use validated Misty Rose (`#FEE5E0`) Flex Messages and audience-specific approved fields.
 
-Doctor message events are `BOOKING_CONFIRMED`, `RESCHEDULED`, `CANCELLED`, and `DAILY_SCHEDULE`. Admin task messages are separate builders and may include masked phone plus a prefilled internal action link.
+Doctor message events are `BOOKING_CONFIRMED`, `RESCHEDULED`, `CANCELLED`, and `DAILY_SCHEDULE`. A confirmed booking sends one full operational summary to the Admin group and one necessary clinical-scheduling summary to the selected doctor group. Admin task messages remain separate builders.
 
 Apps Script Web Apps do not expose `x-line-signature`, so LINE must never call Apps Script directly. `server/bookingLineWebhook.ts` receives `/api/booking-line/webhook` before Basic Auth, reads the exact raw body, verifies LINE HMAC-SHA256 with `BOOKING_LINE_CHANNEL_SECRET`, discards message content, and forwards only source type/ID plus timestamp and nonce to the Apps Script ingress URL. The forwarded JSON is signed with `BOOKING_INGRESS_SECRET`. Add the three variable names with empty values and safe comments to `.env.example`.
 

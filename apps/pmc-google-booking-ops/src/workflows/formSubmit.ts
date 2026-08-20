@@ -5,7 +5,7 @@ import type { BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
-import { sendDoctorBookingMessage } from '../adapters/lineMessaging'
+import { sendBookingConfirmationMessages } from '../adapters/lineMessaging'
 import { createInitialCallTask } from './callQueue'
 
 function validateEvidence(intake: BookingIntake): void {
@@ -189,7 +189,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
 
   try {
     createInitialCallTask(current, ports)
-    sendDoctorBookingMessage(current, ports.line)
+    sendBookingConfirmationMessages(current, ports.line, ports.config.adminLineGroupId())
     return ports.repositories.bookings.update(
       caseId,
       current.version,
@@ -201,7 +201,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     ports.repositories.retries.enqueue({
       id: `RETRY-${caseId}-LINE`,
       caseId,
-      operation: 'DOCTOR_LINE',
+      operation: 'BOOKING_LINE',
       idempotencyKey: `${caseId}:BOOKING_CONFIRMED`,
       attempts: 0,
       status: 'PENDING',

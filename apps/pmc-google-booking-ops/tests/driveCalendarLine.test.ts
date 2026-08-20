@@ -78,20 +78,37 @@ describe('doctor Calendar', () => {
 })
 
 describe('LINE routing', () => {
-  it('sends a confirmed booking only to the selected doctor group', () => {
+  it('sends a confirmed booking to the Admin group and selected doctor group', () => {
     const ports = createTestPorts()
     submitBookingIntake(validBookingIntake(), ports)
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.adminMessages()[0].to).toBe('admin-group')
     expect(ports.line.doctorMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()[0].to).toBe('doctor-group-1')
   })
 
-  it('excludes evidence, full phone, Drive links, and national-ID-like values', () => {
+  it('uses Misty Rose Flex Messages with full operational data for each audience', () => {
     const ports = createTestPorts()
     submitBookingIntake(validBookingIntake(), ports)
-    const payload = JSON.stringify(ports.line.doctorMessages()[0])
-    expect(payload).not.toContain('0812345678')
-    expect(payload).not.toContain('drive.google.com')
-    expect(payload).not.toMatch(/\b\d{13}\b/)
+    const adminPayload = JSON.stringify(ports.line.adminMessages()[0])
+    const doctorPayload = JSON.stringify(ports.line.doctorMessages()[0])
+
+    for (const payload of [adminPayload, doctorPayload]) {
+      expect(payload).toContain('"type":"flex"')
+      expect(payload).toContain('#FEE5E0')
+      expect(payload).toContain('ลูกค้าทดสอบ')
+      expect(payload).toContain('0812345678')
+      expect(payload).toContain('service-1')
+      expect(payload).toContain('20/08/2026 13:00')
+      expect(payload).toContain('Admin A')
+      expect(payload).not.toContain('drive.google.com')
+      expect(payload).not.toMatch(/\b\d{13}\b/)
+    }
+
+    expect(adminPayload).toContain('1,000')
+    expect(adminPayload).toContain('สลิป 1')
+    expect(adminPayload).toContain('แชท 1')
+    expect(doctorPayload).not.toContain('ยอดจอง')
   })
 
   it('does not send doctor LINE before Calendar success', () => {

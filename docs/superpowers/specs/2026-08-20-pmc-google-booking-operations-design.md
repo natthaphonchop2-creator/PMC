@@ -420,18 +420,19 @@ Call reminders are sent to both:
 
 ### 10.3 Minimum necessary information
 
-LINE messages contain only operationally necessary fields:
+Booking-confirmation LINE messages use Misty Rose (`#FEE5E0`) Flex Messages. The mapped Admin operations group receives the full operational booking summary: Case ID, Admin owner, full customer name and phone, doctor, service, appointment, deposit amount, channel, and evidence counts. The selected doctor's mapped group receives Case ID, full customer name and phone, service, appointment, and Admin owner.
+
+Other LINE messages contain only operationally necessary fields:
 
 - Case ID;
-- masked customer name;
-- masked phone when needed by the Admin;
+- approved customer identity for the mapped audience;
 - doctor;
 - appointment date/time;
 - service/program;
 - task state; and
 - safe notes.
 
-LINE messages never contain national ID numbers, slip images, chat evidence, or unrestricted Drive links.
+LINE messages never contain national ID numbers, slip images, chat evidence files, or unrestricted Drive links. Customer identity is never routed to an unmapped group.
 
 ### 10.4 Secrets and verification
 
@@ -671,7 +672,7 @@ Protected ranges prevent edits to IDs, system states, timestamps, external IDs, 
 
 - No national ID field.
 - No full phone or evidence on Dashboard.
-- No payment/chat evidence in LINE.
+- No payment/chat evidence files in LINE; mapped operational groups may receive approved full booking fields.
 - No public Drive links.
 - No secrets in Sheet cells or source control.
 
