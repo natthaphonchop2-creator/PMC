@@ -42,6 +42,8 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
     adminName: 'Admin A',
     submitterEmail: 'admin@example.com',
     adminIdentityStatus: 'SHARED_ACCOUNT',
+    aeId: 'staff-ae',
+    aeName: 'เอม',
     customerName: 'ลูกค้าทดสอบ',
     customerNameNormalized: 'ลูกค้าทดสอบ',
     phoneNormalized: '0812345678',

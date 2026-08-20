@@ -12,8 +12,17 @@ function clonePlain<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function nullableString(value: unknown): string | null {
+  const normalized = String(value ?? '').trim()
+  return normalized || null
+}
+
 function asBooking(row: SheetRow): BookingCase {
-  return row as unknown as BookingCase
+  return {
+    ...row,
+    aeId: nullableString(row.aeId),
+    aeName: nullableString(row.aeName),
+  } as unknown as BookingCase
 }
 
 function append(store: SheetStore, tab: string, row: SheetRow): void {

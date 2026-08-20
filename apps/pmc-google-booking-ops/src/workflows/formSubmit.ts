@@ -54,6 +54,8 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     adminName: admin.name,
     submitterEmail: intake.submitterEmail,
     adminIdentityStatus: 'SHARED_ACCOUNT',
+    aeId: null,
+    aeName: null,
     customerName: intake.customerName.trim(),
     customerNameNormalized,
     phoneNormalized,
