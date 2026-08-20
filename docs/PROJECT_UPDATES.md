@@ -27,6 +27,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Fixed the first live synthetic Form execution by removing the unsupported `structuredClone` dependency from the Apps Script bundle; the stalled synthetic row was audit-recorded and removed before any Drive, Calendar, LINE, or call-task side effect occurred.
 - Added validated Misty Rose (`#FEE5E0`) Flex booking confirmations for both the Admin group and selected doctor group, with audience-specific full operational fields and no evidence files or Drive links.
 - Approved and specified a serious white Admin Flex evidence layout backed by a permanent HMAC-signed Render media proxy and a read-only Google Drive Service Account; evidence remains private in Drive and is excluded from doctor groups.
+- Added the TDD implementation plan for the evidence proxy, cross-runtime signer, white Admin evidence Flex, retry wiring, read-only Service Account verification, deployment, revocation checks, and synthetic pilot gate.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
