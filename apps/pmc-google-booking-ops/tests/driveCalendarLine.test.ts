@@ -4,6 +4,7 @@ import {
   adminBookingMessage,
   doctorBookingMessage,
   handleLineDirectoryIngress,
+  isLinePushAcceptedStatus,
 } from '../src/adapters/lineMessaging'
 import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { rescheduleBooking } from '../src/workflows/bookingUpdate'
@@ -177,6 +178,14 @@ describe('LINE routing', () => {
     const result = submitBookingIntake(validBookingIntake(), ports)
     expect(result.calendarState).toBe('RETRY')
     expect(ports.line.doctorMessages()).toEqual([])
+  })
+
+  it('treats LINE retry-key 409 as an accepted idempotent push', () => {
+    expect(isLinePushAcceptedStatus(200)).toBe(true)
+    expect(isLinePushAcceptedStatus(202)).toBe(true)
+    expect(isLinePushAcceptedStatus(409)).toBe(true)
+    expect(isLinePushAcceptedStatus(400)).toBe(false)
+    expect(isLinePushAcceptedStatus(500)).toBe(false)
   })
 
   it('sends a reschedule message to the same doctor group', () => {

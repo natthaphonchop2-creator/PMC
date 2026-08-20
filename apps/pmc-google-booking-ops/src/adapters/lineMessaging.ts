@@ -205,6 +205,7 @@ function adminEvidenceContents(evidence: BookingEvidenceImages): Array<Record<st
 export function doctorBookingMessage(
   booking: BookingCase,
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED',
+  messageVersion = booking.version,
 ): LineMessage {
   if (!booking.doctorLineGroupId) throw new Error('doctor LINE group is not configured')
   const title = eventType === 'BOOKING_CONFIRMED' ? 'นัดใหม่' : eventType === 'RESCHEDULED' ? 'เปลี่ยนเวลานัด' : 'ยกเลิกนัด'
@@ -221,7 +222,7 @@ export function doctorBookingMessage(
       ['วัน–เวลา', appointmentDisplay(booking.appointmentStart)],
       ['Admin', booking.adminName],
     ]),
-    retryKey: `${booking.caseId}:${eventType}:${booking.version}`,
+    retryKey: `${booking.caseId}:${eventType}:${messageVersion}`,
   }
 }
 
@@ -233,6 +234,7 @@ export function adminBookingMessage(
     chats: [],
     totalChatCount: booking.chatEvidenceCount,
   },
+  messageVersion = booking.version,
 ): LineMessage {
   return {
     to: adminLineGroupId,
@@ -256,7 +258,7 @@ export function adminBookingMessage(
       ],
       adminEvidenceContents(evidence),
     ),
-    retryKey: `${booking.caseId}:ADMIN_BOOKING_CONFIRMED:${booking.version}`,
+    retryKey: `${booking.caseId}:ADMIN_BOOKING_CONFIRMED:${messageVersion}`,
   }
 }
 
@@ -273,9 +275,10 @@ export function sendBookingConfirmationMessages(
   line: LinePort,
   adminLineGroupId: string,
   evidence?: BookingEvidenceImages,
+  messageVersion = booking.version,
 ): void {
-  line.push(adminBookingMessage(booking, adminLineGroupId, evidence))
-  line.push(doctorBookingMessage(booking, 'BOOKING_CONFIRMED'))
+  line.push(adminBookingMessage(booking, adminLineGroupId, evidence, messageVersion))
+  line.push(doctorBookingMessage(booking, 'BOOKING_CONFIRMED', messageVersion))
 }
 
 export function createAppsScriptCryptoPort(): CryptoPort {
@@ -286,6 +289,10 @@ export function createAppsScriptCryptoPort(): CryptoPort {
     base64UrlUtf8: (value) =>
       Utilities.base64EncodeWebSafe(value, Utilities.Charset.UTF_8).replace(/=+$/, ''),
   }
+}
+
+export function isLinePushAcceptedStatus(status: number): boolean {
+  return (status >= 200 && status < 300) || status === 409
 }
 
 export function createGoogleLinePort(accessToken: string): LinePort {
@@ -309,7 +316,7 @@ export function createGoogleLinePort(accessToken: string): LinePort {
         muteHttpExceptions: true,
       })
       const status = response.getResponseCode()
-      if (status < 200 || status >= 300) throw new Error(`LINE push failed with status ${status}`)
+      if (!isLinePushAcceptedStatus(status)) throw new Error(`LINE push failed with status ${status}`)
     },
   }
 }

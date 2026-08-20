@@ -5,7 +5,12 @@ import { ensureCaseEvidenceFolder } from './adapters/googleDrive'
 import { createGoogleFilePort } from './adapters/googleFiles'
 import { createGoogleFormsPort } from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
-import { createAppsScriptCryptoPort, createGoogleLinePort, sendBookingConfirmationMessages } from './adapters/lineMessaging'
+import {
+  adminBookingMessage,
+  createAppsScriptCryptoPort,
+  createGoogleLinePort,
+  sendBookingConfirmationMessages,
+} from './adapters/lineMessaging'
 import { sendDoctorBookingMessage } from './adapters/lineMessaging'
 import { createGoogleDashboardPort, createGoogleSheetStore, ensureSheetTopology } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
@@ -171,12 +176,51 @@ export function runEligibleRetries(ports: BookingPorts): void {
     try {
       const operation = String(retry.operation)
       if (operation === 'BOOKING_LINE') {
-        sendBookingConfirmationMessages(booking, ports.line, ports.config.adminLineGroupId())
+        const payload = retryPayload(retry.payload)
+        const paymentEvidenceFileIds = (payload.paymentEvidenceFileIds as string[]) ?? []
+        const chatEvidenceFileIds = (payload.chatEvidenceFileIds as string[]) ?? []
+        const messageVersion = Number(payload.messageVersion) || booking.version
+        const evidence = ports.media.images(
+          booking.caseId,
+          paymentEvidenceFileIds,
+          chatEvidenceFileIds,
+        )
+        sendBookingConfirmationMessages(
+          booking,
+          ports.line,
+          ports.config.adminLineGroupId(),
+          evidence,
+          messageVersion,
+        )
         ports.repositories.bookings.update(
           caseId,
           booking.version,
           { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
           { actor: 'system', reason: 'LINE retry succeeded', correlationId: id },
+        )
+      } else if (operation === 'ADMIN_EVIDENCE_LINE') {
+        const payload = retryPayload(retry.payload)
+        const paymentEvidenceFileIds = (payload.paymentEvidenceFileIds as string[]) ?? []
+        const chatEvidenceFileIds = (payload.chatEvidenceFileIds as string[]) ?? []
+        const messageVersion = Number(payload.messageVersion) || booking.version
+        const evidence = ports.media.images(
+          booking.caseId,
+          paymentEvidenceFileIds,
+          chatEvidenceFileIds,
+        )
+        const message = adminBookingMessage(
+          booking,
+          ports.config.adminLineGroupId(),
+          evidence,
+          messageVersion,
+        )
+        message.retryKey = `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`
+        ports.line.push(message)
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { lineState: 'OK' },
+          { actor: 'system', reason: 'Admin evidence LINE retry succeeded', correlationId: id },
         )
       } else if (operation === 'DOCTOR_LINE' || operation === 'DOCTOR_LINE_RESCHEDULE') {
         sendDoctorBookingMessage(booking, ports.line, operation === 'DOCTOR_LINE_RESCHEDULE' ? 'RESCHEDULED' : 'BOOKING_CONFIRMED')

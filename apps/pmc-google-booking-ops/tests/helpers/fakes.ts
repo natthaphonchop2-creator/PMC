@@ -117,6 +117,8 @@ export interface TestPortOptions {
   now?: string
   jeraPhone?: string
   linePushFails?: boolean
+  lineFailsAtPush?: number
+  mediaSigningFailsOnce?: boolean
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
@@ -172,7 +174,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     lineDirectory: repositories.lineDirectory,
     drive: createFakeDrive(),
     calendar: createFakeCalendar(options),
-    line: createFakeLine(options.linePushFails ?? false),
+    line: createFakeLine(options.linePushFails ?? false, options.lineFailsAtPush),
     forms: {
       syncBookingChoices: () => undefined,
       syncCallResultChoices: () => undefined,
@@ -188,8 +190,14 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
       base64UrlUtf8: (value) => Buffer.from(value, 'utf8').toString('base64url'),
     },
-    media: {
+    media: (() => {
+      let shouldFail = options.mediaSigningFailsOnce ?? false
+      return {
       images(caseId, paymentFileIds, chatFileIds) {
+        if (shouldFail) {
+          shouldFail = false
+          throw new Error('evidence signer unavailable')
+        }
         const ref = (fileId: string, variant: 'preview' | 'full') =>
           `https://media.test/${caseId}/${fileId}/${variant}`
         return {
@@ -206,7 +214,8 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           totalChatCount: chatFileIds.length,
         }
       },
-    },
+      }
+    })(),
     dashboard: createFakeDashboard(),
     backups: createFakeBackups(),
     signedBookingIngressFixture(sourceType, sourceId) {
@@ -346,18 +355,29 @@ export interface FakeLinePort extends LinePort {
   allowPushes(): void
 }
 
-export function createFakeLine(initiallyFailing = false): FakeLinePort {
+export function createFakeLine(initiallyFailing = false, initialFailAtPush?: number): FakeLinePort {
   const messages: LineMessage[] = []
+  const acceptedRetryKeys = new Set<string>()
   let failing = initiallyFailing
+  let failAtPush = initialFailAtPush
+  let attempts = 0
   return {
     push(message) {
+      attempts += 1
+      if (acceptedRetryKeys.has(message.retryKey)) return
+      if (failAtPush === attempts) {
+        failAtPush = undefined
+        throw new Error('LINE push failed with status 500')
+      }
       if (failing) throw new Error('LINE push failed with status 500')
+      acceptedRetryKeys.add(message.retryKey)
       messages.push(structuredClone(message))
     },
     doctorMessages: () => structuredClone(messages.filter((message) => message.audience === 'doctor')),
     adminMessages: () => structuredClone(messages.filter((message) => message.audience === 'admin')),
     allowPushes() {
       failing = false
+      failAtPush = undefined
     },
   }
 }

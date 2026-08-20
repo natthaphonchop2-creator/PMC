@@ -187,14 +187,60 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     )
   }
 
+  let evidence
+  let mediaSafeError: string | null = null
+  try {
+    evidence = ports.media.images(
+      current.caseId,
+      intake.paymentEvidenceFileIds,
+      intake.chatEvidenceFileIds,
+    )
+  } catch (error) {
+    mediaSafeError = error instanceof Error ? error.message : 'Evidence media signing failed'
+    evidence = {
+      payment: null,
+      chats: [],
+      totalChatCount: intake.chatEvidenceFileIds.length,
+    }
+  }
+
   try {
     createInitialCallTask(current, ports)
-    sendBookingConfirmationMessages(current, ports.line, ports.config.adminLineGroupId())
+    sendBookingConfirmationMessages(
+      current,
+      ports.line,
+      ports.config.adminLineGroupId(),
+      evidence,
+      current.version,
+    )
+    if (mediaSafeError) {
+      ports.repositories.retries.enqueue({
+        id: `RETRY-${caseId}-ADMIN-EVIDENCE`,
+        caseId,
+        operation: 'ADMIN_EVIDENCE_LINE',
+        idempotencyKey: `${caseId}:ADMIN_EVIDENCE_READY:${current.version}`,
+        attempts: 0,
+        status: 'PENDING',
+        safeError: mediaSafeError,
+        payload: {
+          paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
+          chatEvidenceFileIds: intake.chatEvidenceFileIds,
+          messageVersion: current.version,
+        },
+      })
+    }
     return ports.repositories.bookings.update(
       caseId,
       current.version,
-      { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
-      { actor: 'system', reason: 'Doctor LINE notification sent', correlationId: intake.formResponseId },
+      {
+        lineState: mediaSafeError ? 'RETRY' : 'OK',
+        doctorLineNotifiedAt: ports.clock.nowIso(),
+      },
+      {
+        actor: 'system',
+        reason: mediaSafeError ? mediaSafeError : 'Admin and doctor LINE notifications sent',
+        correlationId: intake.formResponseId,
+      },
     )
   } catch (error) {
     const safeError = error instanceof Error ? error.message : 'LINE notification failed'
@@ -206,6 +252,11 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       attempts: 0,
       status: 'PENDING',
       safeError,
+      payload: {
+        paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
+        chatEvidenceFileIds: intake.chatEvidenceFileIds,
+        messageVersion: current.version,
+      },
     })
     return ports.repositories.bookings.update(
       caseId,

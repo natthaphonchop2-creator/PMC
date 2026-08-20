@@ -41,9 +41,22 @@ describe('PMC booking end to end', () => {
 
   it('retries a failed LINE step without duplicating Drive or Calendar', () => {
     const ports = createTestPorts({ linePushFails: true })
-    const booking = submitBookingIntake(validBookingIntake(), ports)
+    const booking = submitBookingIntake(
+      validBookingIntake({
+        paymentEvidenceFileIds: ['payment-file-1'],
+        chatEvidenceFileIds: ['chat-file-1', 'chat-file-2'],
+      }),
+      ports,
+    )
     expect(booking.lineState).toBe('RETRY')
     expect(ports.retries.listPending()).toHaveLength(1)
+    expect(ports.retries.listPending()[0]).toMatchObject({
+      operation: 'BOOKING_LINE',
+      payload: {
+        paymentEvidenceFileIds: ['payment-file-1'],
+        chatEvidenceFileIds: ['chat-file-1', 'chat-file-2'],
+      },
+    })
     ports.line.allowPushes()
     runEligibleRetries(ports)
     expect(ports.bookings.getByCaseId(booking.caseId)?.lineState).toBe('OK')
@@ -51,6 +64,44 @@ describe('PMC booking end to end', () => {
     expect(ports.calendar.createdEvents()).toHaveLength(1)
     expect(ports.line.adminMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain('payment-file-1')
+    expect(JSON.stringify(ports.line.doctorMessages()[0].apiMessage)).not.toContain('payment-file-1')
+    expect(ports.retries.listPending()).toHaveLength(0)
+  })
+
+  it('deduplicates Admin when doctor delivery fails after Admin succeeds', () => {
+    const ports = createTestPorts({ lineFailsAtPush: 2 })
+    const booking = submitBookingIntake(validBookingIntake(), ports)
+
+    expect(booking.lineState).toBe('RETRY')
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toHaveLength(0)
+
+    runEligibleRetries(ports)
+
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(ports.retries.listPending()).toHaveLength(0)
+  })
+
+  it('sends summaries and retries only Admin evidence after one signer failure', () => {
+    const ports = createTestPorts({ mediaSigningFailsOnce: true })
+    const booking = submitBookingIntake(validBookingIntake(), ports)
+
+    expect(booking.lineState).toBe('RETRY')
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain(
+      'รูปหลักฐานยังไม่พร้อมแสดง',
+    )
+    expect(ports.retries.listPending()).toHaveLength(1)
+    expect(ports.retries.listPending()[0]).toMatchObject({ operation: 'ADMIN_EVIDENCE_LINE' })
+
+    runEligibleRetries(ports)
+
+    expect(ports.line.adminMessages()).toHaveLength(2)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(JSON.stringify(ports.line.adminMessages()[1].apiMessage)).toContain('payment-file-1')
     expect(ports.retries.listPending()).toHaveLength(0)
   })
 
