@@ -43,6 +43,20 @@ describe('call queue', () => {
     expect(ports.line.adminMessages().map((message) => message.to)).toEqual(['admin-group', 'admin-user-1'])
   })
 
+  it('routes reminders only to the Admin group when the owner has no direct LINE mapping', () => {
+    const ports = createTestPorts({ now: '2026-08-20T09:00:00+07:00' })
+    ports.config.findAdminById = (id) =>
+      id === 'admin-1'
+        ? { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: '', active: true }
+        : null
+    ports.bookings.insert(ports.bookingFixture())
+    ports.calls.insertFixture({ nextCallAt: '2026-08-20T09:00:00+07:00' })
+
+    runDailyCallReminders(ports)
+
+    expect(ports.line.adminMessages().map((message) => message.to)).toEqual(['admin-group'])
+  })
+
   it('does not duplicate reminders on the same day', () => {
     const ports = createTestPorts({ now: '2026-08-21T09:00:00+07:00' })
     ports.bookings.insert(ports.bookingFixture())

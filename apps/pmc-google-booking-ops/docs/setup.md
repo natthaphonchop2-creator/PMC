@@ -123,6 +123,8 @@ Initial Admin names from the current operating Form are:
 
 Use the same company Google email for each row. LINE user IDs remain individual where direct reminders are required.
 
+For the initial group-only pilot, `lineUserId` may remain blank. Call and expiry reminders still go to the Admin group, and the runtime skips the direct-owner copy until an individual LINE user ID is mapped.
+
 ### CONFIG_DOCTORS
 
 ```text

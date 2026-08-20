@@ -76,7 +76,7 @@ export function runDailyCallReminders(ports: BookingPorts): void {
     const owner = ports.config.findAdminById(task.ownerAdminId)
     if (!owner?.active) throw new Error(`call owner is not active: ${task.ownerAdminId}`)
     ports.line.push(adminReminderMessage(booking, task, ports.config.adminLineGroupId(), 'CALL_REMINDER'))
-    ports.line.push(adminReminderMessage(booking, task, owner.lineUserId, 'CALL_REMINDER'))
+    if (owner.lineUserId) ports.line.push(adminReminderMessage(booking, task, owner.lineUserId, 'CALL_REMINDER'))
     const overdue = Date.parse(now) > Date.parse(task.windowEnd)
     ports.repositories.calls.update(task.taskId, task.version, {
       lastReminderDate: today,
