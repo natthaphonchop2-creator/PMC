@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { ensureCaseEvidenceFolder } from '../src/adapters/googleDrive'
-import { handleLineDirectoryIngress } from '../src/adapters/lineMessaging'
+import {
+  adminBookingMessage,
+  doctorBookingMessage,
+  handleLineDirectoryIngress,
+} from '../src/adapters/lineMessaging'
 import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { rescheduleBooking } from '../src/workflows/bookingUpdate'
 import { bookingFixture, createFakeDrive, createTestPorts, validBookingIntake } from './helpers/fakes'
@@ -78,6 +82,28 @@ describe('doctor Calendar', () => {
 })
 
 describe('LINE routing', () => {
+  const evidence = {
+    payment: {
+      previewUrl: 'https://media.test/pay-preview',
+      fullUrl: 'https://media.test/pay-full',
+    },
+    chats: [
+      {
+        previewUrl: 'https://media.test/chat-1-preview',
+        fullUrl: 'https://media.test/chat-1-full',
+      },
+      {
+        previewUrl: 'https://media.test/chat-2-preview',
+        fullUrl: 'https://media.test/chat-2-full',
+      },
+      {
+        previewUrl: 'https://media.test/chat-3-preview',
+        fullUrl: 'https://media.test/chat-3-full',
+      },
+    ],
+    totalChatCount: 5,
+  }
+
   it('sends a confirmed booking to the Admin group and selected doctor group', () => {
     const ports = createTestPorts()
     submitBookingIntake(validBookingIntake(), ports)
@@ -87,7 +113,7 @@ describe('LINE routing', () => {
     expect(ports.line.doctorMessages()[0].to).toBe('doctor-group-1')
   })
 
-  it('uses Misty Rose Flex Messages with full operational data for each audience', () => {
+  it('uses white Flex Messages with full operational data for each audience', () => {
     const ports = createTestPorts()
     submitBookingIntake(validBookingIntake(), ports)
     const adminPayload = JSON.stringify(ports.line.adminMessages()[0])
@@ -95,7 +121,7 @@ describe('LINE routing', () => {
 
     for (const payload of [adminPayload, doctorPayload]) {
       expect(payload).toContain('"type":"flex"')
-      expect(payload).toContain('#FEE5E0')
+      expect(payload).toContain('#FFFFFF')
       expect(payload).toContain('ลูกค้าทดสอบ')
       expect(payload).toContain('0812345678')
       expect(payload).toContain('service-1')
@@ -109,6 +135,41 @@ describe('LINE routing', () => {
     expect(adminPayload).toContain('สลิป 1')
     expect(adminPayload).toContain('แชท 1')
     expect(doctorPayload).not.toContain('ยอดจอง')
+  })
+
+  it('uses a serious white Admin evidence card and keeps doctor payload evidence-free', () => {
+    const booking = bookingFixture({
+      doctorLineGroupId: 'doctor-group-1',
+      calendarId: 'doctor-calendar-1',
+    })
+    const adminJson = JSON.stringify(adminBookingMessage(booking, 'admin-group', evidence))
+    const doctorJson = JSON.stringify(doctorBookingMessage(booking, 'BOOKING_CONFIRMED'))
+
+    expect(adminJson).toContain('#FFFFFF')
+    expect(adminJson).not.toContain('#FEE5E0')
+    expect(adminJson).toContain('หลักฐานการโอน')
+    expect(adminJson).toContain('หลักฐานแชท')
+    expect(adminJson).toContain('https://media.test/pay-preview')
+    expect(adminJson).toContain('https://media.test/chat-3-preview')
+    expect(adminJson).toContain('+2 รูปเพิ่มเติมใน Drive')
+    expect(adminJson).toContain('https://media.test/pay-full')
+    expect(adminJson).toContain('https://media.test/chat-3-full')
+    expect(adminJson).toContain('"aspectMode":"fit"')
+    expect(adminJson).not.toContain('"aspectMode":"contain"')
+    expect(doctorJson).not.toContain('media.test')
+    expect(doctorJson).not.toContain('หลักฐานการโอน')
+  })
+
+  it('shows a safe fallback when evidence URLs are unavailable', () => {
+    const payload = JSON.stringify(
+      adminBookingMessage(bookingFixture(), 'admin-group', {
+        payment: null,
+        chats: [],
+        totalChatCount: 2,
+      }),
+    )
+    expect(payload).toContain('รูปหลักฐานยังไม่พร้อมแสดง')
+    expect(payload).not.toContain('"type":"image"')
   })
 
   it('does not send doctor LINE before Calendar success', () => {

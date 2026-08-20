@@ -696,7 +696,7 @@ After booking rows append:
 
 - separator;
 - `หลักฐานการโอน` label;
-- payment image with `aspectRatio: '20:13'`, `aspectMode: 'contain'`, and URI action to full URL;
+- payment image with `aspectRatio: '20:13'`, `aspectMode: 'fit'`, and URI action to full URL;
 - `หลักฐานแชท` label;
 - horizontal box of up to three chat images;
 - `+N รูปเพิ่มเติมใน Drive` when `totalChatCount > chats.length`.
