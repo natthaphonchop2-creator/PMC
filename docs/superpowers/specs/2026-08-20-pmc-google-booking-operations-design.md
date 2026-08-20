@@ -803,4 +803,3 @@ The design succeeds when:
 - exceptions are visible and controlled rather than silently guessed;
 - management can see trusted operational counts from one Sheet; and
 - no national ID number is stored in the Google/LINE workflow.
-
