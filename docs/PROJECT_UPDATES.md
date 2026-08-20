@@ -42,6 +42,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Approved separate `adminId/adminName` and `aeId/aeName` booking attribution while keeping call ownership with the Admin closer and leaving commission rules undefined.
 - Approved the clean Minimal Receipt Flex direction for both Admin and doctor groups: centered generated PMC monogram, generous white space, thin separators, no Case ID/evidence count/status badge, and small fixed evidence thumbnails only in the Admin group.
 - Added the design specification at `docs/superpowers/specs/2026-08-21-pmc-booking-staff-ae-minimal-flex-design.md`; implementation remains gated on written-spec approval and the seven personal-email mappings.
+- Added a ten-task TDD implementation plan covering Staff contracts, schema migration, Form/runtime cutover, verified closer/AE attribution, Dashboard/call propagation, Minimal Receipt Flex, the public Cloud Run logo route, safe migration entrypoints, local validation, and the synthetic live pilot.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

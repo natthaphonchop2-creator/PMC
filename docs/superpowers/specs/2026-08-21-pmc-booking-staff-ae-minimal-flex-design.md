@@ -212,6 +212,7 @@ This design supersedes the visible layout sections in the 2026-08-20 evidence Fl
 - no hero block and no carousel;
 - small centered PMC monogram at the top;
 - centered clinic label, message title, appointment date, and appointment time;
+- appointment date uses Thai month text and Buddhist Era year, for example `21 สิงหาคม 2569`; time uses `เวลา 05:00 น.`;
 - dark neutral text, medium gray secondary text, thin light-gray separators;
 - gold restricted to the monogram and message-title accent;
 - no status badge, colored card, section icon, profile chip, gradient background, or footer action;
