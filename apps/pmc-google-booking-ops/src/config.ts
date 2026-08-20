@@ -11,10 +11,11 @@ export const SCRIPT_PROPERTY_KEYS = {
   bookingIngressSecret: 'PMC_BOOKING_INGRESS_SECRET',
   mediaBaseUrl: 'BOOKING_MEDIA_BASE_URL',
   mediaSigningSecret: 'BOOKING_MEDIA_SIGNING_SECRET',
+  brandLogoUrl: 'BOOKING_BRAND_LOGO_URL',
 } as const
 
 export const BOOKING_FORM_LABELS = {
-  adminName: 'Admin ผู้รับจอง',
+  aeName: 'AE ผู้เปิดแชท',
   customerName: 'ชื่อลูกค้า',
   phone: 'เบอร์มือถือ',
   doctorId: 'หมอ',

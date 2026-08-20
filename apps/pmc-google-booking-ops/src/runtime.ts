@@ -12,9 +12,18 @@ import {
   sendBookingConfirmationMessages,
 } from './adapters/lineMessaging'
 import { sendDoctorBookingMessage } from './adapters/lineMessaging'
-import { createGoogleDashboardPort, createGoogleSheetStore, ensureSheetTopology } from './adapters/googleSheets'
+import {
+  createGoogleDashboardPort,
+  createGoogleSheetStore,
+  ensureSheetTopology,
+  migrateBookingMasterStaffColumns,
+} from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
-import { resolveCloserByEmail, resolveEligibleAeByName } from './domain/staffDirectory'
+import {
+  resolveCloserByEmail,
+  resolveEligibleAeByName,
+  validateStaffDirectory,
+} from './domain/staffDirectory'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { AdminConfig, BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
@@ -36,6 +45,7 @@ const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.bookingIngressSecret,
   SCRIPT_PROPERTY_KEYS.mediaBaseUrl,
   SCRIPT_PROPERTY_KEYS.mediaSigningSecret,
+  SCRIPT_PROPERTY_KEYS.brandLogoUrl,
 ] as const
 
 export function validateRuntimeProperties(properties: Record<string, string | undefined>): void {
@@ -47,7 +57,11 @@ function isActive(value: unknown): boolean {
   return value === true || String(value).toLowerCase() === 'true' || String(value) === '1'
 }
 
-function createConfigPort(store: SheetStore, adminLineGroupId: string): ConfigPort {
+function createConfigPort(
+  store: SheetStore,
+  adminLineGroupId: string,
+  brandLogoUrl: string,
+): ConfigPort {
   const admins = (): AdminConfig[] =>
     store.read('CONFIG_ADMINS').map((row) => ({
       id: String(row.id),
@@ -57,10 +71,14 @@ function createConfigPort(store: SheetStore, adminLineGroupId: string): ConfigPo
       active: isActive(row.active),
     }))
   const staff = (): StaffConfig[] =>
-    admins().map((admin) => ({
-      ...admin,
-      canCloseBooking: true,
-      canBeAe: true,
+    store.read('CONFIG_STAFF').map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      email: String(row.email).trim().toLowerCase(),
+      lineUserId: String(row.lineUserId),
+      canCloseBooking: isActive(row.canCloseBooking),
+      canBeAe: isActive(row.canBeAe),
+      active: isActive(row.active),
     }))
   const doctors = (): DoctorConfig[] =>
     store.read('CONFIG_DOCTORS').map((row) => ({
@@ -95,6 +113,7 @@ function createConfigPort(store: SheetStore, adminLineGroupId: string): ConfigPo
     findService: (id) => services().find((service) => service.id === id) ?? null,
     findChannel: (id) => channels().find((channel) => channel.id === id) ?? null,
     adminLineGroupId: () => adminLineGroupId,
+    brandLogoUrl: () => brandLogoUrl,
     listAdmins: admins,
     listDoctors: doctors,
     listServices: services,
@@ -127,7 +146,11 @@ export function createRuntime(): BookingPorts {
   return {
     clock,
     locks,
-    config: createConfigPort(store, properties[SCRIPT_PROPERTY_KEYS.adminLineGroupId]),
+    config: createConfigPort(
+      store,
+      properties[SCRIPT_PROPERTY_KEYS.adminLineGroupId],
+      properties[SCRIPT_PROPERTY_KEYS.brandLogoUrl],
+    ),
     repositories: createBookingRepositories(store, locks, clock),
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
     calendar: createGoogleCalendarPort(),
@@ -259,7 +282,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           formResponseId: booking.formResponseId,
           submittedAt: booking.depositReceivedAt,
           submitterEmail: booking.submitterEmail,
-          adminName: booking.adminName,
+          aeName: booking.aeName ?? booking.adminName,
           customerName: booking.customerName,
           phone: booking.phoneNormalized,
           doctorId: booking.doctorId,
@@ -296,8 +319,13 @@ export function runIntegrityAndBackupWorkflow(ports: BookingPorts): string[] {
   return report.codes
 }
 
-export function isConfigurationReady(counts: { admins: number; doctors: number; services: number }): boolean {
-  return counts.admins > 0 && counts.doctors > 0 && counts.services > 0
+export function isConfigurationReady(counts: {
+  staff: number
+  aes: number
+  doctors: number
+  services: number
+}): boolean {
+  return counts.staff > 0 && counts.aes > 0 && counts.doctors > 0 && counts.services > 0
 }
 
 function ensureFormTrigger(handler: string, formId: string): boolean {
@@ -314,7 +342,8 @@ function ensureClockTrigger(handler: string, create: (builder: GoogleAppsScript.
 
 export function setupSystem(): {
   createdTriggers: number
-  syncedAdmins: number
+  syncedStaff: number
+  syncedAes: number
   syncedDoctors: number
   syncedServices: number
   syncedChannels: number
@@ -322,23 +351,33 @@ export function setupSystem(): {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
+  migrateBookingMasterStaffColumns(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const runtime = createRuntime()
-  const admins = runtime.config.listAdmins().filter((admin) => admin.active)
+  const staff = runtime.config.listStaff().filter((item) => item.active)
+  const aes = runtime.config.listEligibleAes()
+  validateStaffDirectory(staff)
+  if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   const doctors = runtime.config.listDoctors().filter((doctor) => doctor.active)
   const services = runtime.config.listServices().filter((service) => service.active)
   const channels = runtime.config.listChannels().filter((channel) => channel.active)
-  if (!isConfigurationReady({ admins: admins.length, doctors: doctors.length, services: services.length })) {
+  if (!isConfigurationReady({
+    staff: staff.length,
+    aes: aes.length,
+    doctors: doctors.length,
+    services: services.length,
+  })) {
     return {
       createdTriggers: 0,
-      syncedAdmins: admins.length,
+      syncedStaff: staff.length,
+      syncedAes: aes.length,
       syncedDoctors: doctors.length,
       syncedServices: services.length,
       syncedChannels: channels.length,
     }
   }
   runtime.forms.syncBookingChoices(
-    admins.map((admin) => admin.name),
+    aes.map((ae) => ae.name),
     doctors.map((doctor) => doctor.id),
     services.map((service) => service.id),
     channels.map((channel) => channel.id),
@@ -361,7 +400,8 @@ export function setupSystem(): {
   ].filter(Boolean).length
   return {
     createdTriggers: created,
-    syncedAdmins: admins.length,
+    syncedStaff: staff.length,
+    syncedAes: aes.length,
     syncedDoctors: doctors.length,
     syncedServices: services.length,
     syncedChannels: channels.length,

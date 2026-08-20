@@ -236,6 +236,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       findChannel: (id) =>
         id === 'เพจหลัก' ? { id: 'เพจหลัก', name: 'เพจหลัก', active: true } : null,
       adminLineGroupId: () => 'admin-group',
+      brandLogoUrl: () => 'https://evidence.example/assets/pmc-flex-logo-v1.png',
       listAdmins: () => [
         { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true },
       ],
@@ -266,6 +267,10 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     forms: {
       syncBookingChoices: () => undefined,
       syncCallResultChoices: () => undefined,
+      bookingCollectsEmail: () => true,
+      pauseBookingResponses: () => undefined,
+      renameAdminFieldToAe: () => undefined,
+      resumeBookingResponses: () => undefined,
     },
     files: createFakeFiles(options.jeraPhone ?? '0812345678'),
     secrets: {
@@ -498,7 +503,7 @@ export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingI
     formResponseId: 'response-1',
     submittedAt: '2026-08-20T09:00:00+07:00',
     submitterEmail: 'admin@example.com',
-    adminName: 'Admin A',
+    aeName: 'Admin A',
     customerName: 'ลูกค้าทดสอบ',
     phone: '0812345678',
     doctorId: 'doctor-1',

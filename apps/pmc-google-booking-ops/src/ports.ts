@@ -59,6 +59,7 @@ export interface ConfigPort {
   findService(id: string): ServiceConfig | null
   findChannel(id: string): ChannelConfig | null
   adminLineGroupId(): string
+  brandLogoUrl(): string
   listAdmins(): AdminConfig[]
   listDoctors(): DoctorConfig[]
   listServices(): ServiceConfig[]
@@ -208,8 +209,12 @@ export interface EvidenceMediaPort {
 }
 
 export interface FormsPort {
-  syncBookingChoices(adminNames: string[], doctorIds: string[], serviceIds: string[], channelIds: string[]): void
+  syncBookingChoices(aeNames: string[], doctorIds: string[], serviceIds: string[], channelIds: string[]): void
   syncCallResultChoices(results: string[]): void
+  bookingCollectsEmail(): boolean
+  pauseBookingResponses(): void
+  renameAdminFieldToAe(): void
+  resumeBookingResponses(): void
 }
 export interface FilePort {
   readText(fileId: string, encoding: 'Windows-874'): string

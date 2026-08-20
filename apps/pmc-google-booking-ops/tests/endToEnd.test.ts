@@ -117,7 +117,7 @@ describe('PMC booking end to end', () => {
   })
 
   it('does not activate Forms or triggers until all three configuration lists are populated', () => {
-    expect(isConfigurationReady({ admins: 1, doctors: 0, services: 1 })).toBe(false)
-    expect(isConfigurationReady({ admins: 1, doctors: 1, services: 1 })).toBe(true)
+    expect(isConfigurationReady({ staff: 1, aes: 1, doctors: 0, services: 1 })).toBe(false)
+    expect(isConfigurationReady({ staff: 1, aes: 1, doctors: 1, services: 1 })).toBe(true)
   })
 })

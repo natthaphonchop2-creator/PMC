@@ -30,7 +30,7 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     formResponseId: event.responseKey,
     submittedAt: event.submittedAt,
     submitterEmail: event.submitterEmail.trim().toLowerCase(),
-    adminName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.adminName),
+    aeName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.aeName),
     customerName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.customerName),
     phone: requiredValue(event.namedValues, BOOKING_FORM_LABELS.phone),
     doctorId: requiredValue(event.namedValues, BOOKING_FORM_LABELS.doctorId),
@@ -119,9 +119,9 @@ function listItem(form: GoogleAppsScript.Forms.Form, title: string): GoogleAppsS
 
 export function createGoogleFormsPort(bookingFormId: string, callResultFormId: string): FormsPort {
   return {
-    syncBookingChoices(adminNames, doctorIds, serviceIds, channelIds) {
+    syncBookingChoices(aeNames, doctorIds, serviceIds, channelIds) {
       const form = FormApp.openById(bookingFormId)
-      listItem(form, BOOKING_FORM_LABELS.adminName).setChoiceValues(adminNames)
+      listItem(form, BOOKING_FORM_LABELS.aeName).setChoiceValues(aeNames)
       listItem(form, BOOKING_FORM_LABELS.doctorId).setChoiceValues(doctorIds)
       listItem(form, BOOKING_FORM_LABELS.serviceId).setChoiceValues(serviceIds)
       if (channelIds.length) listItem(form, BOOKING_FORM_LABELS.channelId).setChoiceValues(channelIds)
@@ -129,6 +129,23 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
     syncCallResultChoices(results) {
       const form = FormApp.openById(callResultFormId)
       listItem(form, 'ผลการโทร').setChoiceValues(results)
+    },
+    bookingCollectsEmail() {
+      return FormApp.openById(bookingFormId).collectsEmail()
+    },
+    pauseBookingResponses() {
+      FormApp.openById(bookingFormId).setAcceptingResponses(false)
+    },
+    renameAdminFieldToAe() {
+      const form = FormApp.openById(bookingFormId)
+      const candidates = form
+        .getItems(FormApp.ItemType.LIST)
+        .filter((item) => ['Admin ผู้รับจอง', BOOKING_FORM_LABELS.aeName].includes(item.getTitle()))
+      if (candidates.length !== 1) throw new Error('expected one Admin/AE Form field')
+      candidates[0].asListItem().setTitle(BOOKING_FORM_LABELS.aeName).setRequired(true)
+    },
+    resumeBookingResponses() {
+      FormApp.openById(bookingFormId).setAcceptingResponses(true)
     },
   }
 }

@@ -24,7 +24,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     throw new Error('form response already processed')
   }
 
-  const admin = ports.config.findAdminByName(intake.adminName)
+  const admin = ports.config.findAdminByName(intake.aeName)
   if (!admin?.active) throw new Error('selected Admin is not active')
   const doctor = ports.config.findDoctor(intake.doctorId)
   if (!doctor?.active) throw new Error('selected doctor is not active')
