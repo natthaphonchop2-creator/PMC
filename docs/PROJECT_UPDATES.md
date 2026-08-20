@@ -43,7 +43,9 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Approved the clean Minimal Receipt Flex direction for both Admin and doctor groups: centered generated PMC monogram, generous white space, thin separators, no Case ID/evidence count/status badge, and small fixed evidence thumbnails only in the Admin group.
 - Added the design specification at `docs/superpowers/specs/2026-08-21-pmc-booking-staff-ae-minimal-flex-design.md`; implementation remains gated on written-spec approval and the seven personal-email mappings.
 - Added a ten-task TDD implementation plan covering Staff contracts, schema migration, Form/runtime cutover, verified closer/AE attribution, Dashboard/call propagation, Minimal Receipt Flex, the public Cloud Run logo route, safe migration entrypoints, local validation, and the synthetic live pilot.
-- Implemented the first seven plan tasks on the isolated feature branch: canonical Staff roles, AE-safe schema migration, verified closer/AE attribution, Dashboard/call propagation, Minimal Receipt Flex, an optimized `256x256` transparent PMC monogram, and a public immutable Cloud Run logo route. Live Form/Apps Script cutover remains gated on migration controls and personal-email mapping.
+- Implemented the first nine plan tasks on the isolated feature branch: canonical Staff roles, AE-safe schema migration, verified closer/AE attribution, Dashboard/call propagation, Minimal Receipt Flex, an optimized `256x256` transparent PMC monogram, a public immutable Cloud Run logo route, and safe Form cutover controls.
+- Verified Booking tests `83/83`, full tests `295/295`, typecheck, lint, Apps Script/client/server builds, and diff checks. Official LINE validation returned `200`; Admin had logo/evidence, doctor had no evidence, and neither visible Case ID nor staff email was present.
+- Live Cloud Run/Apps Script/Form cutover remains gated on preparing `CONFIG_STAFF` and entering the seven personal closer emails directly in Sheet.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

@@ -175,3 +175,18 @@ Verified with the approved synthetic case only:
 - one Admin pilot push and one doctor pilot push returned `200`, with separate no-duplicate audit markers;
 - Booking tests passed `64/64`; full project tests passed `275/275`; typecheck, lint, build, and `git diff --check` passed; and
 - the two Google Form evidence questions still report file type `ANY`. Google Forms API does not support updating existing File Upload questions and the available browser accounts do not own the form. Real-customer use remains **NO-GO** until the form owner sets both questions to **Image only** and the setting is read back as `IMAGE`.
+
+## Staff / AE Minimal Flex pre-deployment record — 2026-08-21
+
+Verified locally with synthetic identity only:
+
+- Booking tests passed `83/83`; full project tests passed `295/295`;
+- Booking typecheck/build, project lint/build, and `git diff --check` passed;
+- official LINE push-message validation returned `200` with no details;
+- Admin payload contained the generated-logo URL and payment/chat evidence;
+- doctor payload contained no payment/chat evidence;
+- visible Admin/doctor Flex text contained no Case ID;
+- neither payload contained the synthetic staff email; and
+- no live Cloud Run, Apps Script, Form, Sheet, Calendar, or LINE-group state was changed in this local verification stage.
+
+Live cutover remains **NO-GO** until `CONFIG_STAFF` is prepared and all seven personal closer emails are entered directly in Sheet without exposing them in source, commands, docs, or chat.
