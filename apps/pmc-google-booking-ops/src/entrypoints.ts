@@ -11,6 +11,9 @@ import {
 } from './adapters/lineMessaging'
 import {
   createRuntime,
+  pauseAndCutoverBookingFormWorkflow,
+  prepareStaffAeMigrationWorkflow,
+  resumeBookingFormAfterAeCutoverWorkflow,
   runDailyOperationsWorkflow,
   runIntegrityAndBackupWorkflow,
   setupSystem,
@@ -46,4 +49,16 @@ export function runIntegrityChecks() {
 
 export function setupPmcBookingSystem() {
   return setupSystem()
+}
+
+export function preparePmcStaffAeMigration() {
+  return prepareStaffAeMigrationWorkflow()
+}
+
+export function pauseAndCutoverPmcBookingForm() {
+  return pauseAndCutoverBookingFormWorkflow()
+}
+
+export function resumePmcBookingFormAfterAeCutover() {
+  return resumeBookingFormAfterAeCutoverWorkflow()
 }

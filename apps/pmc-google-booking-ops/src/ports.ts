@@ -201,6 +201,7 @@ export interface FormsPort {
   syncBookingChoices(aeNames: string[], doctorIds: string[], serviceIds: string[], channelIds: string[]): void
   syncCallResultChoices(results: string[]): void
   bookingCollectsEmail(): boolean
+  bookingHasAeField(): boolean
   pauseBookingResponses(): void
   renameAdminFieldToAe(): void
   resumeBookingResponses(): void

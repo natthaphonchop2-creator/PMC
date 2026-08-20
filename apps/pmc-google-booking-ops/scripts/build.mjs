@@ -20,6 +20,9 @@ function runDailyOperations() { return PmcBooking.runDailyOperations(); }
 function pollJeraIncoming() { return PmcBooking.pollJeraIncoming(); }
 function runIntegrityChecks() { return PmcBooking.runIntegrityChecks(); }
 function setupPmcBookingSystem() { return PmcBooking.setupPmcBookingSystem(); }
+function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigration(); }
+function pauseAndCutoverPmcBookingForm() { return PmcBooking.pauseAndCutoverPmcBookingForm(); }
+function resumePmcBookingFormAfterAeCutover() { return PmcBooking.resumePmcBookingFormAfterAeCutover(); }
 `,
   },
   format: 'iife',

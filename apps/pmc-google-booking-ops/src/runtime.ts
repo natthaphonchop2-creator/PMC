@@ -32,6 +32,7 @@ import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminde
 import { writeDashboard } from './workflows/dashboard'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention } from './workflows/retention'
+import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
 
 const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.spreadsheetId,
@@ -402,4 +403,54 @@ export function setupSystem(): {
     syncedServices: services.length,
     syncedChannels: channels.length,
   }
+}
+
+export function prepareStaffAeMigrationWorkflow(): {
+  staffRows: number
+  missingPersonalEmailNames: string[]
+} {
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  validateRuntimeProperties(properties)
+  const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
+  migrateBookingMasterStaffColumns(spreadsheet)
+  ensureSheetTopology(spreadsheet)
+  const store = createGoogleSheetStore(spreadsheet)
+  let staffRows = store.read('CONFIG_STAFF')
+  if (!staffRows.length) {
+    staffRows = seedStaffRowsFromLegacy(store.read('CONFIG_ADMINS'))
+    store.replace('CONFIG_STAFF', staffRows)
+  }
+  return {
+    staffRows: staffRows.length,
+    missingPersonalEmailNames: staffRows
+      .filter((row) => isActive(row.active) && isActive(row.canCloseBooking) && !String(row.email).trim())
+      .map((row) => String(row.name)),
+  }
+}
+
+export function pauseAndCutoverBookingFormWorkflow(): {
+  paused: true
+  syncedAes: number
+} {
+  const runtime = createRuntime()
+  const { activeAes } = validateStaffDirectory(runtime.config.listStaff())
+  if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
+  runtime.forms.pauseBookingResponses()
+  runtime.forms.renameAdminFieldToAe()
+  runtime.forms.syncBookingChoices(
+    activeAes.map((ae) => ae.name),
+    runtime.config.listDoctors().filter((doctor) => doctor.active).map((doctor) => doctor.id),
+    runtime.config.listServices().filter((service) => service.active).map((service) => service.id),
+    runtime.config.listChannels().filter((channel) => channel.active).map((channel) => channel.id),
+  )
+  return { paused: true, syncedAes: activeAes.length }
+}
+
+export function resumeBookingFormAfterAeCutoverWorkflow(): { acceptingResponses: true } {
+  const runtime = createRuntime()
+  validateStaffDirectory(runtime.config.listStaff())
+  if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
+  if (!runtime.forms.bookingHasAeField()) throw new Error('booking Form AE field is missing')
+  runtime.forms.resumeBookingResponses()
+  return { acceptingResponses: true }
 }

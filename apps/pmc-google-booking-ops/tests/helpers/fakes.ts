@@ -257,6 +257,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       syncBookingChoices: () => undefined,
       syncCallResultChoices: () => undefined,
       bookingCollectsEmail: () => true,
+      bookingHasAeField: () => true,
       pauseBookingResponses: () => undefined,
       renameAdminFieldToAe: () => undefined,
       resumeBookingResponses: () => undefined,

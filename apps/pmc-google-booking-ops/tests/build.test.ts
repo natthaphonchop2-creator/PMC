@@ -19,6 +19,9 @@ describe('Apps Script bundle', () => {
       'pollJeraIncoming',
       'runIntegrityChecks',
       'setupPmcBookingSystem',
+      'preparePmcStaffAeMigration',
+      'pauseAndCutoverPmcBookingForm',
+      'resumePmcBookingFormAfterAeCutover',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }

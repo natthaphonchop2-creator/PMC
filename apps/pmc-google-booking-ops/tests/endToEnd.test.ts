@@ -9,8 +9,33 @@ import {
   validateRuntimeProperties,
 } from '../src/runtime'
 import { createTestPorts, validBookingIntake } from './helpers/fakes'
+import { seedStaffRowsFromLegacy } from '../src/workflows/staffAeMigration'
 
 describe('PMC booking end to end', () => {
+  it('seeds Staff roles from legacy Admin rows without copying the shared email', () => {
+    expect(
+      seedStaffRowsFromLegacy([
+        {
+          id: 'admin-1',
+          name: 'มัส',
+          email: 'shared@example.com',
+          lineUserId: 'line-1',
+          active: true,
+        },
+      ]),
+    ).toEqual([
+      {
+        id: 'admin-1',
+        name: 'มัส',
+        email: '',
+        lineUserId: 'line-1',
+        canCloseBooking: true,
+        canBeAe: true,
+        active: true,
+      },
+    ])
+  })
+
   it('books once, routes safely, reminds, and closes only from JERA paid evidence', () => {
     const ports = createTestPorts()
     const booking = submitBookingIntake(

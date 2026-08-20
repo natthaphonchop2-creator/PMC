@@ -133,6 +133,13 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
     bookingCollectsEmail() {
       return FormApp.openById(bookingFormId).collectsEmail()
     },
+    bookingHasAeField() {
+      const form = FormApp.openById(bookingFormId)
+      return form
+        .getItems(FormApp.ItemType.LIST)
+        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.aeName)
+        .length === 1
+    },
     pauseBookingResponses() {
       FormApp.openById(bookingFormId).setAcceptingResponses(false)
     },

@@ -252,7 +252,22 @@ The deployed signed proxy is the production read-only verification path. Test it
 
 ## Shared Admin link
 
-Publish one internal Form link for all Admins. Each submission requires the Admin to choose their own name. Do not use email/name mismatch rules because every Admin submits through the same company account.
+Publish one internal Form link for all staff. Before the verified-email cutover, version 5 uses the selected Admin name with the shared company account. After the cutover, each closer signs in with their mapped personal Google account and selects only the AE who opened the chat.
+
+## Staff / AE verified-email cutover
+
+The new runtime uses personal verified Google-account email for the Admin who closes the booking and a required `AE ผู้เปิดแชท` dropdown. Do not paste personal emails into source, commands, docs, audit summaries, or chat.
+
+Run these Apps Script functions in order:
+
+1. Set `BOOKING_BRAND_LOGO_URL` to the public HTTPS Cloud Run logo route without printing it.
+2. `preparePmcStaffAeMigration()` — inserts the nullable `aeId`/`aeName` columns and seeds `CONFIG_STAFF` from legacy names/IDs/LINE IDs without copying the shared email.
+3. Enter the seven personal emails directly in `CONFIG_STAFF`. Confirm every active closer has one unique email and both role flags are `TRUE` for the initial team.
+4. `pauseAndCutoverPmcBookingForm()` — validates Staff, pauses responses, renames the existing Admin dropdown to `AE ผู้เปิดแชท`, and syncs eligible choices.
+5. Build/push, create the next Apps Script version, and redeploy only the existing Web App deployment ID.
+6. `resumePmcBookingFormAfterAeCutover()` — revalidates Staff, email collection, and the AE field before accepting responses again.
+
+If cutover fails after the Form is paused, leave it paused. Redeploy Apps Script version 5, restore the label `Admin ผู้รับจอง`, restore the legacy choices, and then re-enable responses. Never delete `CONFIG_STAFF`, AE columns, or audit rows during rollback.
 
 ## JERA operation
 
