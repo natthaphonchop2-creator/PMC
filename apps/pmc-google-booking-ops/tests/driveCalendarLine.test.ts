@@ -10,6 +10,18 @@ import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { rescheduleBooking } from '../src/workflows/bookingUpdate'
 import { bookingFixture, createFakeDrive, createTestPorts, validBookingIntake } from './helpers/fakes'
 
+function visibleFlexText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(visibleFlexText).join(' ')
+  if (!value || typeof value !== 'object') return ''
+  return Object.entries(value as Record<string, unknown>)
+    .flatMap(([key, child]) =>
+      ['text', 'altText'].includes(key) && typeof child === 'string'
+        ? [child]
+        : [visibleFlexText(child)],
+    )
+    .join(' ')
+}
+
 describe('Drive evidence', () => {
   it('creates year, month, and customer-case folders with deterministic filenames', () => {
     const drive = createFakeDrive()
@@ -116,7 +128,7 @@ describe('LINE routing', () => {
 
   it('uses white Flex Messages with full operational data for each audience', () => {
     const ports = createTestPorts()
-    submitBookingIntake(validBookingIntake(), ports)
+    submitBookingIntake(validBookingIntake({ aeName: 'เอม' }), ports)
     const adminPayload = JSON.stringify(ports.line.adminMessages()[0])
     const doctorPayload = JSON.stringify(ports.line.doctorMessages()[0])
 
@@ -126,15 +138,16 @@ describe('LINE routing', () => {
       expect(payload).toContain('ลูกค้าทดสอบ')
       expect(payload).toContain('0812345678')
       expect(payload).toContain('service-1')
-      expect(payload).toContain('20/08/2026 13:00')
+      expect(payload).toContain('20 สิงหาคม 2569')
       expect(payload).toContain('Admin A')
+      expect(payload).toContain('เอม')
       expect(payload).not.toContain('drive.google.com')
       expect(payload).not.toMatch(/\b\d{13}\b/)
     }
 
     expect(adminPayload).toContain('1,000')
-    expect(adminPayload).toContain('สลิป 1')
-    expect(adminPayload).toContain('แชท 1')
+    expect(visibleFlexText(ports.line.adminMessages()[0].apiMessage)).not.toContain('PMC-202608-0001')
+    expect(ports.line.adminMessages()[0].text).not.toContain('PMC-202608-0001')
     expect(doctorPayload).not.toContain('ยอดจอง')
   })
 
@@ -143,22 +156,22 @@ describe('LINE routing', () => {
       doctorLineGroupId: 'doctor-group-1',
       calendarId: 'doctor-calendar-1',
     })
-    const adminJson = JSON.stringify(adminBookingMessage(booking, 'admin-group', evidence))
-    const doctorJson = JSON.stringify(doctorBookingMessage(booking, 'BOOKING_CONFIRMED'))
+    const logoUrl = 'https://evidence.example/assets/pmc-flex-logo-v1.png'
+    const adminJson = JSON.stringify(adminBookingMessage(booking, 'admin-group', evidence, logoUrl))
+    const doctorJson = JSON.stringify(doctorBookingMessage(booking, 'BOOKING_CONFIRMED', logoUrl))
 
     expect(adminJson).toContain('#FFFFFF')
     expect(adminJson).not.toContain('#FEE5E0')
-    expect(adminJson).toContain('หลักฐานการโอน')
-    expect(adminJson).toContain('หลักฐานแชท')
+    expect(adminJson).toContain('หลักฐาน')
     expect(adminJson).toContain('https://media.test/pay-preview')
     expect(adminJson).toContain('https://media.test/chat-3-preview')
-    expect(adminJson).toContain('+2 รูปเพิ่มเติมใน Drive')
+    expect(adminJson).not.toContain('รูปเพิ่มเติมใน Drive')
     expect(adminJson).toContain('https://media.test/pay-full')
     expect(adminJson).toContain('https://media.test/chat-3-full')
     expect(adminJson).toContain('"aspectMode":"fit"')
     expect(adminJson).not.toContain('"aspectMode":"contain"')
     expect(doctorJson).not.toContain('media.test')
-    expect(doctorJson).not.toContain('หลักฐานการโอน')
+    expect(doctorJson).not.toContain('หลักฐาน')
   })
 
   it('shows a safe fallback when evidence URLs are unavailable', () => {
@@ -167,10 +180,10 @@ describe('LINE routing', () => {
         payment: null,
         chats: [],
         totalChatCount: 2,
-      }),
+      }, 'https://evidence.example/assets/pmc-flex-logo-v1.png'),
     )
     expect(payload).toContain('รูปหลักฐานยังไม่พร้อมแสดง')
-    expect(payload).not.toContain('"type":"image"')
+    expect(payload).not.toContain('media.test')
   })
 
   it('does not send doctor LINE before Calendar success', () => {

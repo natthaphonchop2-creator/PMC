@@ -215,6 +215,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       ports.line,
       ports.config.adminLineGroupId(),
       evidence,
+      ports.config.brandLogoUrl(),
       current.version,
     )
     if (mediaSafeError) {

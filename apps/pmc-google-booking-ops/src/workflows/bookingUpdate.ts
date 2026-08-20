@@ -62,7 +62,7 @@ export function rescheduleBooking(caseId: string, input: RescheduleInput, ports:
     },
   )
   try {
-    sendDoctorBookingMessage(updated, ports.line, 'RESCHEDULED')
+    sendDoctorBookingMessage(updated, ports.line, ports.config.brandLogoUrl(), 'RESCHEDULED')
     updated = ports.repositories.bookings.update(
       caseId,
       updated.version,

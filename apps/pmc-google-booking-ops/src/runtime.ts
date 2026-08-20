@@ -214,6 +214,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           ports.line,
           ports.config.adminLineGroupId(),
           evidence,
+          ports.config.brandLogoUrl(),
           messageVersion,
         )
         ports.repositories.bookings.update(
@@ -236,6 +237,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           booking,
           ports.config.adminLineGroupId(),
           evidence,
+          ports.config.brandLogoUrl(),
           messageVersion,
         )
         message.retryKey = `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`
@@ -247,7 +249,12 @@ export function runEligibleRetries(ports: BookingPorts): void {
           { actor: 'system', reason: 'Admin evidence LINE retry succeeded', correlationId: id },
         )
       } else if (operation === 'DOCTOR_LINE' || operation === 'DOCTOR_LINE_RESCHEDULE') {
-        sendDoctorBookingMessage(booking, ports.line, operation === 'DOCTOR_LINE_RESCHEDULE' ? 'RESCHEDULED' : 'BOOKING_CONFIRMED')
+        sendDoctorBookingMessage(
+          booking,
+          ports.line,
+          ports.config.brandLogoUrl(),
+          operation === 'DOCTOR_LINE_RESCHEDULE' ? 'RESCHEDULED' : 'BOOKING_CONFIRMED',
+        )
         ports.repositories.bookings.update(
           caseId,
           booking.version,

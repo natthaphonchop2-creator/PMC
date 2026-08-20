@@ -6,6 +6,7 @@ import type {
   LineMessage,
   LinePort,
 } from '../ports'
+import { buildAdminMinimalReceipt, buildDoctorMinimalReceipt } from './minimalReceiptFlex'
 
 export interface BookingIngressPayload {
   timestamp: number
@@ -64,164 +65,21 @@ export function handleLineDirectoryIngress(payload: BookingIngressPayload, ports
   })
 }
 
-const FLEX_BACKGROUND = '#FFFFFF'
-const FLEX_TEXT = '#241F1C'
-const FLEX_SECONDARY = '#705C4E'
-const FLEX_GOLD = '#C99A3D'
-
-function appointmentDisplay(value: string): string {
-  const [date, time = ''] = value.split('T')
-  const [year, month, day] = date.split('-')
-  return `${day}/${month}/${year} ${time.slice(0, 5)}`.trim()
-}
-
-function moneyDisplay(value: number): string {
-  return value.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-}
-
-function flexRow(label: string, value: string): Record<string, unknown> {
-  return {
-    type: 'box',
-    layout: 'horizontal',
-    spacing: 'sm',
-    contents: [
-      { type: 'text', text: label, size: 'sm', color: FLEX_SECONDARY, flex: 3, wrap: true },
-      { type: 'text', text: value, size: 'sm', color: FLEX_TEXT, flex: 7, wrap: true },
-    ],
-  }
-}
-
-function bookingFlex(
-  title: string,
-  caseId: string,
-  rows: Array<[string, string]>,
-  extraContents: Array<Record<string, unknown>> = [],
-): Record<string, unknown> {
-  return {
-    type: 'flex',
-    altText: `${title} · ${caseId}`,
-    contents: {
-      type: 'bubble',
-      size: 'mega',
-      body: {
-        type: 'box',
-        layout: 'vertical',
-        spacing: 'md',
-        paddingAll: '20px',
-        backgroundColor: FLEX_BACKGROUND,
-        contents: [
-          { type: 'text', text: title, weight: 'bold', size: 'xl', color: FLEX_TEXT, wrap: true },
-          { type: 'text', text: caseId, size: 'sm', color: FLEX_GOLD, wrap: true },
-          { type: 'separator', color: FLEX_GOLD, margin: 'md' },
-          ...rows.map(([label, value]) => flexRow(label, value)),
-          ...extraContents,
-        ],
-      },
-    },
-  }
-}
-
-function evidenceImage(
-  previewUrl: string,
-  fullUrl: string,
-  aspectRatio: '20:13' | '1:1',
-): Record<string, unknown> {
-  return {
-    type: 'image',
-    url: previewUrl,
-    size: 'full',
-    aspectRatio,
-    aspectMode: aspectRatio === '1:1' ? 'cover' : 'fit',
-    backgroundColor: '#F7F5F2',
-    action: { type: 'uri', label: 'เปิดรูปขนาดเต็ม', uri: fullUrl },
-  }
-}
-
-function adminEvidenceContents(evidence: BookingEvidenceImages): Array<Record<string, unknown>> {
-  if (!evidence.payment && !evidence.chats.length) {
-    return [
-      { type: 'separator', color: FLEX_GOLD, margin: 'lg' },
-      {
-        type: 'text',
-        text: 'รูปหลักฐานยังไม่พร้อมแสดง',
-        size: 'sm',
-        color: FLEX_SECONDARY,
-        margin: 'md',
-        wrap: true,
-      },
-    ]
-  }
-
-  const contents: Array<Record<string, unknown>> = [
-    { type: 'separator', color: FLEX_GOLD, margin: 'lg' },
-  ]
-  if (evidence.payment) {
-    contents.push(
-      {
-        type: 'text',
-        text: 'หลักฐานการโอน',
-        weight: 'bold',
-        size: 'md',
-        color: FLEX_TEXT,
-        margin: 'md',
-      },
-      evidenceImage(evidence.payment.previewUrl, evidence.payment.fullUrl, '20:13'),
-    )
-  }
-  if (evidence.chats.length) {
-    contents.push(
-      {
-        type: 'text',
-        text: 'หลักฐานแชท',
-        weight: 'bold',
-        size: 'md',
-        color: FLEX_TEXT,
-        margin: 'md',
-      },
-      {
-        type: 'box',
-        layout: 'horizontal',
-        spacing: 'sm',
-        contents: evidence.chats.map((image) => ({
-          ...evidenceImage(image.previewUrl, image.fullUrl, '1:1'),
-          flex: 1,
-        })),
-      },
-    )
-  }
-  if (evidence.totalChatCount > evidence.chats.length) {
-    contents.push({
-      type: 'text',
-      text: `+${evidence.totalChatCount - evidence.chats.length} รูปเพิ่มเติมใน Drive`,
-      size: 'xs',
-      color: FLEX_SECONDARY,
-      margin: 'sm',
-      wrap: true,
-    })
-  }
-  return contents
-}
-
 export function doctorBookingMessage(
   booking: BookingCase,
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED',
+  brandLogoUrl: string,
   messageVersion = booking.version,
 ): LineMessage {
   if (!booking.doctorLineGroupId) throw new Error('doctor LINE group is not configured')
-  const title = eventType === 'BOOKING_CONFIRMED' ? 'นัดใหม่' : eventType === 'RESCHEDULED' ? 'เปลี่ยนเวลานัด' : 'ยกเลิกนัด'
+  const apiMessage = buildDoctorMinimalReceipt(booking, eventType, brandLogoUrl)
   return {
     to: booking.doctorLineGroupId,
     audience: 'doctor',
     eventType,
     caseIds: [booking.caseId],
-    text: [title, booking.caseId, booking.customerName, booking.phoneNormalized, booking.serviceId, booking.appointmentStart].join(' · '),
-    apiMessage: bookingFlex(title, booking.caseId, [
-      ['ลูกค้า', booking.customerName],
-      ['เบอร์โทร', booking.phoneNormalized],
-      ['โปรแกรม', booking.serviceId],
-      ['วัน–เวลา', appointmentDisplay(booking.appointmentStart)],
-      ['Admin', booking.adminName],
-    ]),
+    text: String(apiMessage.altText),
+    apiMessage,
     retryKey: `${booking.caseId}:${eventType}:${messageVersion}`,
   }
 }
@@ -229,35 +87,18 @@ export function doctorBookingMessage(
 export function adminBookingMessage(
   booking: BookingCase,
   adminLineGroupId: string,
-  evidence: BookingEvidenceImages = {
-    payment: null,
-    chats: [],
-    totalChatCount: booking.chatEvidenceCount,
-  },
+  evidence: BookingEvidenceImages,
+  brandLogoUrl: string,
   messageVersion = booking.version,
 ): LineMessage {
+  const apiMessage = buildAdminMinimalReceipt(booking, evidence, brandLogoUrl)
   return {
     to: adminLineGroupId,
     audience: 'admin',
     eventType: 'BOOKING_CONFIRMED',
     caseIds: [booking.caseId],
-    text: ['จองเคสใหม่', booking.caseId, booking.customerName, booking.phoneNormalized, booking.doctorId, booking.serviceId].join(' · '),
-    apiMessage: bookingFlex(
-      'จองเคสใหม่',
-      booking.caseId,
-      [
-        ['Admin', booking.adminName],
-        ['ลูกค้า', booking.customerName],
-        ['เบอร์โทร', booking.phoneNormalized],
-        ['หมอ', booking.doctorId],
-        ['โปรแกรม', booking.serviceId],
-        ['วัน–เวลา', appointmentDisplay(booking.appointmentStart)],
-        ['ยอดจอง', `${moneyDisplay(booking.depositAmount)} บาท`],
-        ['ช่องทาง', booking.channelId || 'ไม่ระบุ'],
-        ['หลักฐาน', `สลิป ${booking.paymentEvidenceCount} · แชท ${booking.chatEvidenceCount}`],
-      ],
-      adminEvidenceContents(evidence),
-    ),
+    text: String(apiMessage.altText),
+    apiMessage,
     retryKey: `${booking.caseId}:ADMIN_BOOKING_CONFIRMED:${messageVersion}`,
   }
 }
@@ -265,20 +106,22 @@ export function adminBookingMessage(
 export function sendDoctorBookingMessage(
   booking: BookingCase,
   line: LinePort,
+  brandLogoUrl: string,
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' = 'BOOKING_CONFIRMED',
 ): void {
-  line.push(doctorBookingMessage(booking, eventType))
+  line.push(doctorBookingMessage(booking, eventType, brandLogoUrl))
 }
 
 export function sendBookingConfirmationMessages(
   booking: BookingCase,
   line: LinePort,
   adminLineGroupId: string,
-  evidence?: BookingEvidenceImages,
+  evidence: BookingEvidenceImages,
+  brandLogoUrl: string,
   messageVersion = booking.version,
 ): void {
-  line.push(adminBookingMessage(booking, adminLineGroupId, evidence, messageVersion))
-  line.push(doctorBookingMessage(booking, 'BOOKING_CONFIRMED', messageVersion))
+  line.push(adminBookingMessage(booking, adminLineGroupId, evidence, brandLogoUrl, messageVersion))
+  line.push(doctorBookingMessage(booking, 'BOOKING_CONFIRMED', brandLogoUrl, messageVersion))
 }
 
 export function createAppsScriptCryptoPort(): CryptoPort {
