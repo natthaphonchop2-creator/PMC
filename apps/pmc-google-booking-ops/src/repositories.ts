@@ -184,7 +184,33 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       create: (input) => append(store, 'RECONCILIATION', input),
       listOpen: () => store.read('RECONCILIATION').filter((row) => row.status === 'OPEN'),
     },
-    retries: { enqueue: (input) => append(store, 'RETRY_QUEUE', input) },
+    retries: {
+      enqueue(input) {
+        const rows = store.read('RETRY_QUEUE')
+        if (!rows.some((row) => row.idempotencyKey === input.idempotencyKey && row.status === 'PENDING')) {
+          store.replace('RETRY_QUEUE', [...rows, input])
+        }
+      },
+      listPending() {
+        return store.read('RETRY_QUEUE').filter((row) => row.status === 'PENDING')
+      },
+      complete(id) {
+        store.replace(
+          'RETRY_QUEUE',
+          store.read('RETRY_QUEUE').map((row) => (row.id === id ? { ...row, status: 'DONE' } : row)),
+        )
+      },
+      fail(id, safeError) {
+        store.replace(
+          'RETRY_QUEUE',
+          store
+            .read('RETRY_QUEUE')
+            .map((row) =>
+              row.id === id ? { ...row, attempts: Number(row.attempts) + 1, safeError } : row,
+            ),
+        )
+      },
+    },
     lineDirectory: {
       remember(input) {
         const rows = store.read('CONFIG_LINE_DIRECTORY')

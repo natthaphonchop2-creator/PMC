@@ -15,6 +15,14 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Branch: `main`
 - Release folder: `docs/releases/2026-05-29-v0.1.0/`
 
+## 2026-08-20 - Google Booking Operations implementation
+
+- Added a separate TypeScript Google Apps Script package under `apps/pmc-google-booking-ops/`.
+- Implemented Quick Form validation, Admin/email matching, canonical Sheet repositories, audit/version control, private Drive evidence, doctor Calendar conflicts, and doctor-specific LINE routing.
+- Added the PMC Web raw-body LINE webhook bridge so LINE signatures are verified before sanitized source IDs reach Apps Script through an internal HMAC.
+- Implemented appointment-day call reminders, Admin group/direct routing, Day-7 overdue handling, six-calendar-month expiry, JERA CP874 import/reconciliation, dashboard metrics, integrity checks, backup deduplication, and approval-gated evidence retention.
+- Added synthetic end-to-end tests, setup instructions, and a production pilot runbook. Real Google/LINE assets and real customer use remain setup-gated until the pilot receives manager sign-off.
+
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
 - Updated Ads Dashboard copy to user-facing Thai labels and section names.

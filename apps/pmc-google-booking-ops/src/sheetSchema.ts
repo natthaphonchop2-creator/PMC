@@ -60,7 +60,7 @@ export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
   JERA_IMPORT_RAW: ['importId', 'fileId', 'paymentId', 'date', 'time', 'customerNameNormalized', 'phoneNormalized', 'status', 'actualRevenue', 'importedAt'],
   JERA_IMPORT_FILES: ['fileId', 'hash', 'status', 'transactionCount', 'rejectedCount', 'importedAt', 'safeError'],
   RECONCILIATION: ['id', 'source', 'sourceId', 'reasonCode', 'candidateCaseIds', 'status', 'resolvedCaseId', 'resolvedBy', 'resolvedAt', 'version'],
-  RETRY_QUEUE: ['id', 'caseId', 'operation', 'idempotencyKey', 'attempts', 'nextAttemptAt', 'status', 'safeError'],
+  RETRY_QUEUE: ['id', 'caseId', 'operation', 'idempotencyKey', 'attempts', 'nextAttemptAt', 'status', 'safeError', 'payload'],
   CONFIG_ADMINS: ['id', 'name', 'email', 'lineUserId', 'active'],
   CONFIG_DOCTORS: ['id', 'name', 'calendarId', 'lineGroupId', 'active'],
   CONFIG_SERVICES: ['id', 'name', 'durationMinutes', 'active'],

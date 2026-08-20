@@ -37,6 +37,9 @@ export interface ConfigPort {
   findDoctor(id: string): DoctorConfig | null
   findService(id: string): ServiceConfig | null
   adminLineGroupId(): string
+  listAdmins(): AdminConfig[]
+  listDoctors(): DoctorConfig[]
+  listServices(): ServiceConfig[]
 }
 
 export interface BookingRepository {
@@ -94,6 +97,9 @@ export interface ReconciliationRepository {
 
 export interface RetryRepository {
   enqueue(input: Record<string, unknown>): void
+  listPending(): Record<string, unknown>[]
+  complete(id: string): void
+  fail(id: string, safeError: string): void
 }
 
 export interface LineDirectoryRepository {
@@ -161,7 +167,10 @@ export interface LineMessage {
 export interface LinePort {
   push(message: LineMessage): void
 }
-export type FormsPort = object
+export interface FormsPort {
+  syncBookingChoices(adminNames: string[], doctorIds: string[], serviceIds: string[]): void
+  syncCallResultChoices(results: string[]): void
+}
 export interface FilePort {
   readText(fileId: string, encoding: 'Windows-874'): string
   listIncomingFileIds(): string[]

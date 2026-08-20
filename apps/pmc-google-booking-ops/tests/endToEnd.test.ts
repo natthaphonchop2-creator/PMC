@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest'
+import { runDailyCallReminders } from '../src/workflows/callQueue'
+import { submitBookingIntake } from '../src/workflows/formSubmit'
+import { importJeraFile } from '../src/workflows/jeraImport'
+import {
+  isConfigurationReady,
+  runDailyOperationsWorkflow,
+  runEligibleRetries,
+  validateRuntimeProperties,
+} from '../src/runtime'
+import { createTestPorts, validBookingIntake } from './helpers/fakes'
+
+describe('PMC booking end to end', () => {
+  it('books once, routes safely, reminds, and closes only from JERA paid evidence', () => {
+    const ports = createTestPorts()
+    const booking = submitBookingIntake(
+      validBookingIntake({ customerName: 'สมหญิง ใจดี', phone: '0812345678' }),
+      ports,
+    )
+    expect(booking.status).toBe('BOOKING_CONFIRMED')
+    expect(ports.drive.createdFolderCount()).toBe(3)
+    expect(ports.calendar.createdEvents()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+
+    runDailyCallReminders(ports)
+    expect(ports.line.adminMessages()).toHaveLength(2)
+
+    importJeraFile('jera-file-1', ports)
+    expect(ports.bookings.getByCaseId(booking.caseId)?.status).toBe('CLOSED_JERA')
+    expect(ports.calls.getOpenByCase(booking.caseId)).toBeNull()
+    expect(ports.bookings.getByCaseId(booking.caseId)?.commissionAmount).toBeNull()
+  })
+
+  it('runs the scheduled daily workflow and writes a dashboard snapshot', () => {
+    const ports = createTestPorts()
+    submitBookingIntake(validBookingIntake(), ports)
+    runDailyOperationsWorkflow(ports)
+    expect(ports.dashboard.lastSnapshot()?.kpis.bookings).toBe(1)
+  })
+
+  it('retries a failed LINE step without duplicating Drive or Calendar', () => {
+    const ports = createTestPorts({ linePushFails: true })
+    const booking = submitBookingIntake(validBookingIntake(), ports)
+    expect(booking.lineState).toBe('RETRY')
+    expect(ports.retries.listPending()).toHaveLength(1)
+    ports.line.allowPushes()
+    runEligibleRetries(ports)
+    expect(ports.bookings.getByCaseId(booking.caseId)?.lineState).toBe('OK')
+    expect(ports.drive.createdFolderCount()).toBe(3)
+    expect(ports.calendar.createdEvents()).toHaveLength(1)
+    expect(ports.retries.listPending()).toHaveLength(0)
+  })
+
+  it('fails setup with missing property names and never prints values', () => {
+    expect(() => validateRuntimeProperties({ PMC_SPREADSHEET_ID: 'secret-sheet-value' })).toThrow(
+      'Missing Script Properties: PMC_BOOKING_FORM_ID',
+    )
+    try {
+      validateRuntimeProperties({ PMC_SPREADSHEET_ID: 'secret-sheet-value' })
+    } catch (error) {
+      expect(String(error)).not.toContain('secret-sheet-value')
+    }
+  })
+
+  it('does not activate Forms or triggers until all three configuration lists are populated', () => {
+    expect(isConfigurationReady({ admins: 1, doctors: 0, services: 1 })).toBe(false)
+    expect(isConfigurationReady({ admins: 1, doctors: 1, services: 1 })).toBe(true)
+  })
+})

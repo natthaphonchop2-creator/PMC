@@ -22,9 +22,5 @@ describe('Apps Script bundle', () => {
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }
-
-    expect(() => (sandbox.onBookingFormSubmit as (event: unknown) => unknown)({})).toThrow(
-      'PMC booking runtime is not configured',
-    )
   })
 })

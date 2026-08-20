@@ -100,6 +100,7 @@ export interface TestPorts extends BookingPorts {
   imports: ReturnType<typeof createMemoryRepositories>['imports']
   reconciliation: ReturnType<typeof createMemoryRepositories>['reconciliation']
   retention: ReturnType<typeof createMemoryRepositories>['retention']
+  retries: ReturnType<typeof createMemoryRepositories>['retries']
   bookingFixture(patch?: Partial<BookingCase>): BookingCase
   seedIntegrityFailures(): void
   dashboard: FakeDashboardPort
@@ -114,6 +115,7 @@ export interface TestPortOptions {
   lineDirectoryCaptureEnabled?: boolean
   now?: string
   jeraPhone?: string
+  linePushFails?: boolean
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
@@ -141,6 +143,16 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       findService: (id) =>
         id === 'service-1' ? { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true } : null,
       adminLineGroupId: () => 'admin-group',
+      listAdmins: () => [
+        { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true },
+      ],
+      listDoctors: () => [
+        { id: 'doctor-1', name: 'Doctor One', calendarId: 'doctor-calendar-1', lineGroupId: 'doctor-group-1', active: true },
+        { id: 'doctor-2', name: 'Doctor Two', calendarId: 'doctor-calendar-2', lineGroupId: 'doctor-group-2', active: true },
+      ],
+      listServices: () => [
+        { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true },
+      ],
     },
     repositories,
     bookings: repositories.bookings,
@@ -152,11 +164,15 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     imports: repositories.imports,
     reconciliation: repositories.reconciliation,
     retention: repositories.retention,
+    retries: repositories.retries,
     lineDirectory: repositories.lineDirectory,
     drive: createFakeDrive(),
     calendar: createFakeCalendar(options),
-    line: createFakeLine(),
-    forms: {},
+    line: createFakeLine(options.linePushFails ?? false),
+    forms: {
+      syncBookingChoices: () => undefined,
+      syncCallResultChoices: () => undefined,
+    },
     files: createFakeFiles(options.jeraPhone ?? '0812345678'),
     secrets: {
       lineAccessToken: () => 'line-access-token',
@@ -303,16 +319,22 @@ export function callTaskFixture(patch: Partial<CallTask> = {}): CallTask {
 export interface FakeLinePort extends LinePort {
   doctorMessages(): LineMessage[]
   adminMessages(): LineMessage[]
+  allowPushes(): void
 }
 
-export function createFakeLine(): FakeLinePort {
+export function createFakeLine(initiallyFailing = false): FakeLinePort {
   const messages: LineMessage[] = []
+  let failing = initiallyFailing
   return {
     push(message) {
+      if (failing) throw new Error('LINE push failed with status 500')
       messages.push(structuredClone(message))
     },
     doctorMessages: () => structuredClone(messages.filter((message) => message.audience === 'doctor')),
     adminMessages: () => structuredClone(messages.filter((message) => message.audience === 'admin')),
+    allowPushes() {
+      failing = false
+    },
   }
 }
 

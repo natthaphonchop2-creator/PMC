@@ -136,6 +136,10 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       attempts: 0,
       status: 'PENDING',
       safeError,
+      payload: {
+        paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
+        chatEvidenceFileIds: intake.chatEvidenceFileIds,
+      },
     })
     return ports.repositories.bookings.update(
       caseId,

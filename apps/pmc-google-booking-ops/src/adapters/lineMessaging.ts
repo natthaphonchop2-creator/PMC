@@ -9,6 +9,24 @@ export interface BookingIngressPayload {
   signature: string
 }
 
+export interface AppsScriptDoPostEvent {
+  postData: { contents: string; length: number; name: string; type: string }
+}
+
+export function parseBookingIngressEvent(event: AppsScriptDoPostEvent): BookingIngressPayload {
+  const parsed = JSON.parse(event.postData.contents) as Partial<BookingIngressPayload>
+  if (
+    typeof parsed.timestamp !== 'number' ||
+    typeof parsed.nonce !== 'string' ||
+    !['user', 'group'].includes(String(parsed.sourceType)) ||
+    typeof parsed.sourceId !== 'string' ||
+    typeof parsed.signature !== 'string'
+  ) {
+    throw new Error('invalid booking ingress payload')
+  }
+  return parsed as BookingIngressPayload
+}
+
 function constantTimeEqual(left: string, right: string): boolean {
   if (left.length !== right.length) return false
   let difference = 0

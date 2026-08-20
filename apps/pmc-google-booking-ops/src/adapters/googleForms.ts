@@ -1,4 +1,5 @@
 import type { BookingIntake, CallResult } from '../domain/types'
+import type { FormsPort } from '../ports'
 import { BOOKING_FORM_LABELS } from '../config'
 
 export interface BookingFormEventInput {
@@ -67,5 +68,65 @@ export function parseCallResultFormEvent(event: CallResultFormEventInput): {
     nextCallAt: nextDate ? `${nextDate}T09:00:00+07:00` : null,
     note: event.namedValues['หมายเหตุ']?.[0]?.trim() ?? '',
     actor: event.submitterEmail.trim().toLowerCase(),
+  }
+}
+
+function bangkokIso(date: GoogleAppsScript.Base.Date): string {
+  return Utilities.formatDate(date, 'Asia/Bangkok', "yyyy-MM-dd'T'HH:mm:ssXXX")
+}
+
+function responseValues(response: string | string[] | string[][]): string[] {
+  if (typeof response === 'string') return [response]
+  return response.flat().map(String)
+}
+
+function formNamedValues(response: GoogleAppsScript.Forms.FormResponse): Record<string, string[]> {
+  return Object.fromEntries(
+    response.getItemResponses().map((itemResponse) => [
+      itemResponse.getItem().getTitle(),
+      responseValues(itemResponse.getResponse()),
+    ]),
+  )
+}
+
+export function bookingFormResponseEvent(
+  event: GoogleAppsScript.Events.FormsOnFormSubmit,
+): BookingFormEventInput {
+  return {
+    responseKey: event.response.getId(),
+    submittedAt: bangkokIso(event.response.getTimestamp()),
+    submitterEmail: event.response.getRespondentEmail(),
+    namedValues: formNamedValues(event.response),
+  }
+}
+
+export function callResultFormResponseEvent(
+  event: GoogleAppsScript.Events.FormsOnFormSubmit,
+): CallResultFormEventInput {
+  return {
+    submittedAt: bangkokIso(event.response.getTimestamp()),
+    submitterEmail: event.response.getRespondentEmail(),
+    namedValues: formNamedValues(event.response),
+  }
+}
+
+function listItem(form: GoogleAppsScript.Forms.Form, title: string): GoogleAppsScript.Forms.ListItem {
+  const item = form.getItems(FormApp.ItemType.LIST).find((candidate) => candidate.getTitle() === title)
+  if (!item) throw new Error(`missing Form list field: ${title}`)
+  return item.asListItem()
+}
+
+export function createGoogleFormsPort(bookingFormId: string, callResultFormId: string): FormsPort {
+  return {
+    syncBookingChoices(adminNames, doctorIds, serviceIds) {
+      const form = FormApp.openById(bookingFormId)
+      listItem(form, BOOKING_FORM_LABELS.adminName).setChoiceValues(adminNames)
+      listItem(form, BOOKING_FORM_LABELS.doctorId).setChoiceValues(doctorIds)
+      listItem(form, BOOKING_FORM_LABELS.serviceId).setChoiceValues(serviceIds)
+    },
+    syncCallResultChoices(results) {
+      const form = FormApp.openById(callResultFormId)
+      listItem(form, 'ผลการโทร').setChoiceValues(results)
+    },
   }
 }
