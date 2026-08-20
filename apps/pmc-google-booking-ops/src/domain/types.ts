@@ -1,6 +1,5 @@
 export type BookingStatus =
   | 'FORM_SUBMITTED'
-  | 'ADMIN_MISMATCH'
   | 'VALIDATION_ERROR'
   | 'TIME_CONFLICT'
   | 'BOOKING_CONFIRMED'
@@ -43,6 +42,7 @@ export interface BookingIntake {
   appointmentDate: string
   appointmentTime: string
   depositAmount: number
+  channelId: string | null
   paymentEvidenceFileIds: string[]
   chatEvidenceFileIds: string[]
 }
@@ -55,13 +55,14 @@ export interface BookingCase {
   adminId: string | null
   adminName: string
   submitterEmail: string
-  adminIdentityStatus: 'MATCHED' | 'MISMATCH'
+  adminIdentityStatus: 'SHARED_ACCOUNT'
   customerName: string
   customerNameNormalized: string
   phoneNormalized: string
   phoneMasked: string
   doctorId: string
   serviceId: string
+  channelId: string | null
   appointmentStart: string
   appointmentEnd: string
   depositAmount: number

@@ -14,9 +14,9 @@
 
 - Google Sheets `BOOKING_MASTER` is the operational source of truth.
 - `FORM_RESPONSES`, `JERA_IMPORT_RAW`, and `AUDIT_LOG` are append-only evidence surfaces.
-- The initial Booking Form has exactly ten required inputs and is designed for mobile completion.
+- The initial Booking Form has ten required inputs plus one optional `เพจคลินิก/ช่องทาง` Dropdown and is designed for mobile completion.
 - The Admin submits the Booking Form only after confirming the booking payment.
-- The selected Admin name and submitter Google email must match `CONFIG_ADMINS` before performance credit is allowed.
+- All Admins use one shared company Google account; the required selected Admin name is the authority for performance credit.
 - Each doctor has one Calendar and one LINE group; doctors are read-only recipients.
 - A Calendar conflict must produce `TIME_CONFLICT` and must not notify the doctor.
 - The deposit expires six calendar months after receipt, not after a fixed 180 days.
@@ -109,7 +109,6 @@ Task implementers must keep these names and shapes consistent.
 ```ts
 export type BookingStatus =
   | 'FORM_SUBMITTED'
-  | 'ADMIN_MISMATCH'
   | 'VALIDATION_ERROR'
   | 'TIME_CONFLICT'
   | 'BOOKING_CONFIRMED'
@@ -133,6 +132,7 @@ export interface BookingIntake {
   appointmentDate: string
   appointmentTime: string
   depositAmount: number
+  channelId: string | null
   paymentEvidenceFileIds: string[]
   chatEvidenceFileIds: string[]
 }
@@ -152,6 +152,7 @@ export interface BookingCase {
   phoneMasked: string
   doctorId: string
   serviceId: string
+  channelId: string | null
   appointmentStart: string
   appointmentEnd: string
   depositAmount: number
@@ -643,10 +644,12 @@ describe('booking Form workflow', () => {
     await expect(submitBookingIntake(validBookingIntake(), ports)).rejects.toThrow('form response already processed')
   })
 
-  it('flags selected Admin and submitter email mismatch', async () => {
+  it('attributes a shared-account submission to the selected Admin', async () => {
     const ports = createTestPorts()
-    const result = await submitBookingIntake(validBookingIntake({ submitterEmail: 'other@example.com' }), ports)
-    expect(result.status).toBe('ADMIN_MISMATCH')
+    const result = await submitBookingIntake(validBookingIntake({ submitterEmail: 'shared@example.com' }), ports)
+    expect(result.status).toBe('BOOKING_CONFIRMED')
+    expect(result.adminId).toBe('admin-1')
+    expect(result.adminIdentityStatus).toBe('SHARED_ACCOUNT')
   })
 
   it('rejects missing slip or chat evidence', async () => {
@@ -670,7 +673,7 @@ Expected: FAIL because the workflow and Form adapter do not exist.
 
 - [ ] **Step 3: Implement configuration reading and validation**
 
-Create `config.ts` with typed readers for active Admins, doctors, services, and rules. The adapter must map the ten exact Thai Form labels to `BookingIntake` and must fail closed when labels are missing or duplicated.
+Create `config.ts` with typed readers for active Admins, doctors, services, optional channels, and rules. The adapter must map the ten required Thai Form labels plus optional `เพจคลินิก/ช่องทาง` to `BookingIntake` and must fail closed when required labels are missing or duplicated.
 
 Add these script-property names as constants, never values:
 
@@ -691,7 +694,7 @@ export const SCRIPT_PROPERTY_KEYS = {
 
 - [ ] **Step 4: Implement minimal canonical persistence**
 
-`submitBookingIntake` must lock, enforce idempotency, validate Admin/email, phone, doctor, service duration, appointment timestamp, deposit, and evidence IDs, allocate the sequence, derive automatic dates, insert `FORM_SUBMITTED`, and append the initial audit event.
+`submitBookingIntake` must lock, enforce idempotency, validate selected Admin, optional channel, phone, doctor, service duration, appointment timestamp, deposit, and evidence IDs, allocate the sequence, derive automatic dates, insert `FORM_SUBMITTED`, and append the initial audit event. Shared submitter email is stored for technical audit only.
 
 Do not call Drive, Calendar, or LINE in this task. Return a canonical case ready for external orchestration.
 
@@ -1511,7 +1514,7 @@ Alias imported workflow functions as shown so wrapper names never recursively ca
 - Google Calendar advanced-service and Cloud-project API enablement;
 - build and `clasp push` commands;
 - setup-function authorization and trigger verification;
-- how to create Admin prefilled Form URLs;
+- how to publish one shared Form link with a required Admin Dropdown;
 - how to upload JERA files; and
 - rollback steps that disable triggers and the LINE Web App deployment without deleting data.
 
@@ -1578,7 +1581,7 @@ git commit -m "feat: complete PMC Google booking operations"
 | Spec area | Implementation task |
 |---|---|
 | Product boundary, roles, status authority | Tasks 2, 4, 9, 11 |
-| Quick Form, prefilled Admin, automatic values | Tasks 4 and 11 |
+| Quick Form, shared account, selected Admin, optional channel, automatic values | Tasks 4 and 11 |
 | Sheet topology, canonical record, protection, audit | Tasks 3 and 10 |
 | Form idempotency and validation | Task 4 |
 | Drive folder/evidence and permissions | Tasks 5 and 10 |

@@ -20,6 +20,7 @@ export const BOOKING_FORM_LABELS = {
   appointmentDate: 'วันที่นัด',
   appointmentTime: 'เวลานัด',
   depositAmount: 'จำนวนเงินจอง',
+  channelId: 'เพจคลินิก/ช่องทาง',
   paymentEvidence: 'สลิปเงินจอง',
   chatEvidence: 'หลักฐานแชท',
 } as const

@@ -31,15 +31,23 @@ export interface ServiceConfig {
   active: boolean
 }
 
+export interface ChannelConfig {
+  id: string
+  name: string
+  active: boolean
+}
+
 export interface ConfigPort {
   findAdminByName(name: string): AdminConfig | null
   findAdminById(id: string): AdminConfig | null
   findDoctor(id: string): DoctorConfig | null
   findService(id: string): ServiceConfig | null
+  findChannel(id: string): ChannelConfig | null
   adminLineGroupId(): string
   listAdmins(): AdminConfig[]
   listDoctors(): DoctorConfig[]
   listServices(): ServiceConfig[]
+  listChannels(): ChannelConfig[]
 }
 
 export interface BookingRepository {
@@ -168,7 +176,7 @@ export interface LinePort {
   push(message: LineMessage): void
 }
 export interface FormsPort {
-  syncBookingChoices(adminNames: string[], doctorIds: string[], serviceIds: string[]): void
+  syncBookingChoices(adminNames: string[], doctorIds: string[], serviceIds: string[], channelIds: string[]): void
   syncCallResultChoices(results: string[]): void
 }
 export interface FilePort {

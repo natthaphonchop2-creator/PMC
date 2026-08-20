@@ -32,6 +32,10 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   if (!service?.active || !Number.isInteger(service.durationMinutes) || service.durationMinutes <= 0) {
     throw new Error('selected service has no valid duration')
   }
+  if (intake.channelId) {
+    const channel = ports.config.findChannel(intake.channelId)
+    if (!channel?.active) throw new Error('selected channel is not active')
+  }
 
   const phoneNormalized = normalizeThaiPhone(intake.phone)
   const customerNameNormalized = normalizeCustomerName(intake.customerName)
@@ -40,23 +44,23 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   const callWindow = deriveCallWindow(appointmentStart)
   const sequence = ports.repositories.bookings.allocateMonthlySequence(intake.submittedAt.slice(0, 7))
   const caseId = formatCaseId(intake.submittedAt, sequence)
-  const identityMatches = admin.email.toLowerCase() === intake.submitterEmail.toLowerCase()
 
   const booking: BookingCase = {
     caseId,
     version: 1,
-    status: identityMatches ? 'FORM_SUBMITTED' : 'ADMIN_MISMATCH',
+    status: 'FORM_SUBMITTED',
     formResponseId: intake.formResponseId,
     adminId: admin.id,
     adminName: admin.name,
     submitterEmail: intake.submitterEmail,
-    adminIdentityStatus: identityMatches ? 'MATCHED' : 'MISMATCH',
+    adminIdentityStatus: 'SHARED_ACCOUNT',
     customerName: intake.customerName.trim(),
     customerNameNormalized,
     phoneNormalized,
     phoneMasked: maskThaiPhone(phoneNormalized),
     doctorId: doctor.id,
     serviceId: service.id,
+    channelId: intake.channelId,
     appointmentStart,
     appointmentEnd,
     depositAmount: intake.depositAmount,
@@ -109,8 +113,6 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     timestamp: ports.clock.nowIso(),
     correlationId: intake.formResponseId,
   })
-  if (!identityMatches) return inserted
-
   let current: BookingCase
   try {
     const evidence = ensureCaseEvidenceFolder(inserted, intake, ports.drive)

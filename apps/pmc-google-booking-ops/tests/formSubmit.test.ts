@@ -18,6 +18,7 @@ describe('booking Form workflow', () => {
         วันที่นัด: ['2026-08-20'],
         เวลานัด: ['13:00'],
         จำนวนเงินจอง: ['1000'],
+        'เพจคลินิก/ช่องทาง': ['เพจหลัก'],
         สลิปเงินจอง: ['https://drive.google.com/open?id=payment-file-id-123456789012345'],
         หลักฐานแชท: [
           'https://drive.google.com/open?id=chat-file-id-123456789012345, https://drive.google.com/open?id=chat-file-id-223456789012345',
@@ -26,11 +27,33 @@ describe('booking Form workflow', () => {
     })
 
     expect(intake.adminName).toBe('Admin A')
+    expect(intake.channelId).toBe('เพจหลัก')
     expect(intake.paymentEvidenceFileIds).toEqual(['payment-file-id-123456789012345'])
     expect(intake.chatEvidenceFileIds).toEqual([
       'chat-file-id-123456789012345',
       'chat-file-id-223456789012345',
     ])
+  })
+
+  it('keeps the optional channel empty when Admin does not select one', () => {
+    const intake = parseBookingFormEvent({
+      responseKey: 'sheet-1:3',
+      submittedAt: '2026-08-20T09:00:00+07:00',
+      submitterEmail: 'shared@example.com',
+      namedValues: {
+        'Admin ผู้รับจอง': ['Admin A'],
+        ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        เบอร์มือถือ: ['0812345678'],
+        หมอ: ['doctor-1'],
+        'บริการ/โปรแกรม': ['service-1'],
+        วันที่นัด: ['2026-08-20'],
+        เวลานัด: ['13:00'],
+        จำนวนเงินจอง: ['1000'],
+        สลิปเงินจอง: ['payment-file-id-123456789012345'],
+        หลักฐานแชท: ['chat-file-id-123456789012345'],
+      },
+    })
+    expect(intake.channelId).toBeNull()
   })
 
   it('creates one canonical case with automatic values', () => {
@@ -50,11 +73,12 @@ describe('booking Form workflow', () => {
     expect(ports.bookings.list()).toHaveLength(1)
   })
 
-  it('flags selected Admin and submitter email mismatch', () => {
+  it('attributes the booking to selected Admin when all staff share one Google email', () => {
     const ports = createTestPorts()
-    const result = submitBookingIntake(validBookingIntake({ submitterEmail: 'other@example.com' }), ports)
-    expect(result.status).toBe('ADMIN_MISMATCH')
-    expect(result.adminIdentityStatus).toBe('MISMATCH')
+    const result = submitBookingIntake(validBookingIntake({ submitterEmail: 'shared@example.com' }), ports)
+    expect(result.status).toBe('BOOKING_CONFIRMED')
+    expect(result.adminId).toBe('admin-1')
+    expect(result.adminIdentityStatus).toBe('SHARED_ACCOUNT')
   })
 
   it('rejects missing slip or chat evidence before reserving a Case ID', () => {

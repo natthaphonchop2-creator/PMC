@@ -10,7 +10,7 @@ import { createGoogleDashboardPort, createGoogleSheetStore, ensureSheetTopology 
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
-import type { AdminConfig, BookingPorts, ConfigPort, DoctorConfig, ServiceConfig } from './ports'
+import type { AdminConfig, BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig } from './ports'
 import { createBookingRepositories, type SheetStore } from './repositories'
 import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminders } from './workflows/callQueue'
 import { writeDashboard } from './workflows/dashboard'
@@ -62,15 +62,23 @@ function createConfigPort(store: SheetStore, adminLineGroupId: string): ConfigPo
       durationMinutes: Number(row.durationMinutes),
       active: isActive(row.active),
     }))
+  const channels = (): ChannelConfig[] =>
+    store.read('CONFIG_CHANNELS').map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      active: isActive(row.active),
+    }))
   return {
     findAdminByName: (name) => admins().find((admin) => admin.name === name) ?? null,
     findAdminById: (id) => admins().find((admin) => admin.id === id) ?? null,
     findDoctor: (id) => doctors().find((doctor) => doctor.id === id) ?? null,
     findService: (id) => services().find((service) => service.id === id) ?? null,
+    findChannel: (id) => channels().find((channel) => channel.id === id) ?? null,
     adminLineGroupId: () => adminLineGroupId,
     listAdmins: admins,
     listDoctors: doctors,
     listServices: services,
+    listChannels: channels,
   }
 }
 
@@ -187,6 +195,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           phone: booking.phoneNormalized,
           doctorId: booking.doctorId,
           serviceId: booking.serviceId,
+          channelId: booking.channelId,
           appointmentDate: booking.appointmentStart.slice(0, 10),
           appointmentTime: booking.appointmentStart.slice(11, 16),
           depositAmount: booking.depositAmount,
@@ -234,7 +243,13 @@ function ensureClockTrigger(handler: string, create: (builder: GoogleAppsScript.
   return true
 }
 
-export function setupSystem(): { createdTriggers: number; syncedAdmins: number; syncedDoctors: number; syncedServices: number } {
+export function setupSystem(): {
+  createdTriggers: number
+  syncedAdmins: number
+  syncedDoctors: number
+  syncedServices: number
+  syncedChannels: number
+} {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
@@ -243,18 +258,21 @@ export function setupSystem(): { createdTriggers: number; syncedAdmins: number; 
   const admins = runtime.config.listAdmins().filter((admin) => admin.active)
   const doctors = runtime.config.listDoctors().filter((doctor) => doctor.active)
   const services = runtime.config.listServices().filter((service) => service.active)
+  const channels = runtime.config.listChannels().filter((channel) => channel.active)
   if (!isConfigurationReady({ admins: admins.length, doctors: doctors.length, services: services.length })) {
     return {
       createdTriggers: 0,
       syncedAdmins: admins.length,
       syncedDoctors: doctors.length,
       syncedServices: services.length,
+      syncedChannels: channels.length,
     }
   }
   runtime.forms.syncBookingChoices(
     admins.map((admin) => admin.name),
     doctors.map((doctor) => doctor.id),
     services.map((service) => service.id),
+    channels.map((channel) => channel.id),
   )
   const callResults: CallResult[] = [
     'REBOOKED',
@@ -277,5 +295,6 @@ export function setupSystem(): { createdTriggers: number; syncedAdmins: number; 
     syncedAdmins: admins.length,
     syncedDoctors: doctors.length,
     syncedServices: services.length,
+    syncedChannels: channels.length,
   }
 }

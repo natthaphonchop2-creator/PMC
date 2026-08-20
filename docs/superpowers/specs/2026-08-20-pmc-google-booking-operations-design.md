@@ -3,7 +3,7 @@
 ## Status
 
 - Design sections approved in chat on 2026-08-20.
-- Written specification awaiting final owner review.
+- Written specification approved by the owner and revised with current Microsoft Form evidence on 2026-08-20.
 - This document defines architecture and behavior only. It does not authorize implementation or production setup.
 
 ## 1. Purpose
@@ -37,6 +37,7 @@ The system must:
 - Manual JERA CSV export followed by automated Drive-folder ingestion.
 - JERA reconciliation using the `ชำระแล้ว` status only.
 - Audit, retry, exception, and retention workflows.
+- Optional booking-source/channel attribution for monthly reporting.
 
 ### 2.2 Explicitly out of scope for Phase 1
 
@@ -132,7 +133,7 @@ The Admin submits the Form only after verifying that the booking payment was rec
 
 ### 5.3 One-page Quick Form
 
-The Form contains only these ten required inputs:
+The Form contains ten required inputs:
 
 1. `Admin ผู้รับจอง`
 2. `ชื่อลูกค้า`
@@ -144,6 +145,10 @@ The Form contains only these ten required inputs:
 8. `จำนวนเงินจอง`
 9. `สลิปเงินจอง`
 10. `หลักฐานแชท`
+
+It also contains one optional Dropdown:
+
+11. `เพจคลินิก/ช่องทาง`
 
 The chat-evidence question allows multiple files.
 
@@ -169,11 +174,11 @@ The Admin does not enter:
 
 The default deposit receipt timestamp is the Form submission timestamp because the Form is submitted only after payment confirmation.
 
-### 5.5 Admin prefilled links and audit
+### 5.5 Shared Google account and Admin attribution
 
-Each Admin receives a prefilled Form URL that preselects the Admin name. The selected name remains visible.
+All Admins use one company Google account and one shared Form link. The `Admin ผู้รับจอง` Dropdown remains required and is the authority for booking ownership, performance attribution, and later commission eligibility.
 
-The system stores both `admin_name` and `submitter_email`. If they do not match `CONFIG_ADMINS`, the case is set to `ADMIN_MISMATCH` and is not counted in Admin performance until resolved.
+The system stores both `admin_name` and `submitter_email`. The shared email is technical audit context only and is not compared with individual Admin names. The system sets `admin_identity_status = SHARED_ACCOUNT` and never blocks a valid booking because several Admins submit through that shared account.
 
 ## 6. Google Sheet Topology
 
@@ -191,6 +196,7 @@ The system stores both `admin_name` and `submitter_email`. If they do not match 
 | `CONFIG_ADMINS` | Admin identity and LINE routing | Manager only |
 | `CONFIG_DOCTORS` | Doctor, Calendar ID, and LINE group ID | Manager only |
 | `CONFIG_SERVICES` | Service duration and active state | Manager only |
+| `CONFIG_CHANNELS` | Optional page/source choices and active state | Manager only |
 | `CONFIG_RULES` | Reminder, expiry, and retention settings | Manager only |
 | `AUDIT_LOG` | Append-only before/after events | Prohibited |
 | `DASHBOARD` | Operational and management views | Prohibited except filters/slicers |
@@ -219,6 +225,7 @@ The national ID number is not a field.
 
 - `doctor_id`
 - `service_id`
+- `channel_id` (nullable)
 - `appointment_start`
 - `appointment_end`
 - `booking_status`
@@ -297,9 +304,10 @@ Sequence allocation is atomic and scoped by calendar month.
 Required checks:
 
 - selected Admin exists and is active;
-- submitter email matches the selected Admin;
+- selected Admin exists and is active;
 - phone normalizes to an accepted Thai phone form;
 - selected doctor and service are active;
+- selected channel is blank or exists and is active;
 - service duration exists;
 - appointment start is valid in `Asia/Bangkok`;
 - deposit is positive;
@@ -566,7 +574,6 @@ Manual resolution requires manager identity, selected Case ID, reason, timestamp
 | Status | Meaning |
 |---|---|
 | `FORM_SUBMITTED` | Raw intake received |
-| `ADMIN_MISMATCH` | Selected Admin and submitter email disagree |
 | `VALIDATION_ERROR` | Required data or evidence failed validation |
 | `TIME_CONFLICT` | Doctor Calendar overlap; no doctor notification sent |
 | `BOOKING_CONFIRMED` | Evidence, Calendar, and routing are established |
@@ -732,9 +739,9 @@ The daily check reports:
 
 ### 20.1 Form and identity
 
-- A valid prefilled Admin submission creates one Case ID.
+- A valid shared-link submission with a selected Admin creates one Case ID.
 - Duplicate trigger delivery does not create a second case.
-- Admin/email mismatch is visible and excluded from Admin performance.
+- The selected Admin receives performance attribution while the shared email remains technical audit context.
 - Missing slip or chat evidence cannot become `BOOKING_CONFIRMED`.
 
 ### 20.2 Calendar and routing
@@ -780,7 +787,7 @@ The daily check reports:
 
 1. Create company-owned Google assets and access groups.
 2. Create configuration tabs and protected operational topology.
-3. Create Quick Form and Admin prefilled links.
+3. Create the shared Quick Form link and required Admin Dropdown.
 4. Implement Form-to-Master validation and idempotency.
 5. Add Drive evidence workflow.
 6. Add doctor Calendar conflict checks and events.

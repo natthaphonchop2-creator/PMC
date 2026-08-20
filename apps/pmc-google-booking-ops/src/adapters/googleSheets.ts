@@ -65,11 +65,19 @@ export function createGoogleDashboardPort(
   return {
     write(snapshot) {
       const sheet = requireSheet(spreadsheet, 'DASHBOARD')
-      sheet.getRange('A1:F1000').clearContent()
+      sheet.getRange('A1:G1000').clearContent()
       const kpis = Object.entries(snapshot.kpis)
       sheet.getRange(1, 1, 1, 2).setValues([['KPI', 'Value']])
       if (kpis.length) sheet.getRange(2, 1, kpis.length, 2).setValues(kpis)
-      const operationHeaders = ['caseId', 'status', 'adminId', 'doctorId', 'appointmentStart', 'phoneMasked']
+      const operationHeaders = [
+        'caseId',
+        'status',
+        'adminId',
+        'doctorId',
+        'channelId',
+        'appointmentStart',
+        'phoneMasked',
+      ]
       const startRow = kpis.length + 4
       sheet.getRange(startRow, 1, 1, operationHeaders.length).setValues([operationHeaders])
       if (snapshot.operations.length) {

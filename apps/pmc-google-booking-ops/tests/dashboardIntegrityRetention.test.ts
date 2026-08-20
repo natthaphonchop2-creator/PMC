@@ -14,6 +14,7 @@ describe('dashboard and controls', () => {
       [],
     )
     expect(snapshot.kpis).toMatchObject({ bookings: 2, deposits: 3000, closedJera: 1 })
+    expect(snapshot.operations[0].channelId).toBeNull()
     expect(JSON.stringify(snapshot)).not.toContain('0812345678')
   })
 

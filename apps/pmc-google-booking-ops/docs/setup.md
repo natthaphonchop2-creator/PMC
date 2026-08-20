@@ -38,7 +38,11 @@ Create one page with these exact required titles:
 9. `สลิปเงินจอง` — File upload, required
 10. `หลักฐานแชท` — File upload, required, multiple files allowed
 
-Enable email collection and restrict submission to authorized staff Google accounts.
+Optional:
+
+11. `เพจคลินิก/ช่องทาง` — Dropdown, not required
+
+All Admins use one company Google account. Enable email collection for technical audit, restrict submission to that authorized company account, and keep `Admin ผู้รับจอง` required because the selected Admin is the authority for performance attribution.
 
 ### PMC Call Result
 
@@ -105,6 +109,20 @@ Populate these tabs with non-secret business configuration:
 id | name | email | lineUserId | active
 ```
 
+Initial Admin names from the current operating Form are:
+
+```text
+เอม
+มัส
+หมวย
+มิ้น
+แวว
+แคท
+อาย
+```
+
+Use the same company Google email for each row. LINE user IDs remain individual where direct reminders are required.
+
 ### CONFIG_DOCTORS
 
 ```text
@@ -117,6 +135,53 @@ Share every doctor Calendar with the company Admin/manager account so the aggreg
 
 ```text
 id | name | durationMinutes | active
+```
+
+Initial service choices from the current operating Form are:
+
+```text
+เติมไขมัน
+เสริมจมูก
+โบท็อกซ์
+เมโสแฟต
+เมโสหน้าใส
+รักษาสิว
+PRP
+มาเด้
+เลเซอร์
+HIFU
+ฟิลเลอร์ปาก
+ดูดไขมัน
+อื่นๆ
+```
+
+### CONFIG_CHANNELS
+
+```text
+id | name | active
+```
+
+Initial optional channel choices are:
+
+```text
+เพจหลัก
+เพจขาว
+เพจดำ
+เพจทอง
+Line official
+เพจFIF
+เพจTAB
+เพจเขียว
+เพจเทา
+เพจน้ำตาล
+เพจม่วง
+เพจขาว-สกิน
+เพจฟ้า
+หน้าคลินิก
+line VIP
+เพจส้ม
+Tiktok
+ไลน์เครื่องคลินิก
 ```
 
 After entering configuration, run `setupPmcBookingSystem` again to synchronize Form choices. Re-running setup must not duplicate triggers.
@@ -154,11 +219,9 @@ For controlled directory capture:
 
 The PMC Web bridge verifies LINE's raw-body signature. Apps Script accepts only the second timestamped HMAC payload and rejects replays.
 
-## Admin prefilled links
+## Shared Admin link
 
-In Google Forms, choose “Get pre-filled link,” select one Admin name, and create one link per Admin. Store links in the internal operations handbook, not in public documents.
-
-The selected Admin remains visible. The system still compares the selection with the submitter Google email.
+Publish one internal Form link for all Admins. Each submission requires the Admin to choose their own name. Do not use email/name mismatch rules because every Admin submits through the same company account.
 
 ## JERA operation
 

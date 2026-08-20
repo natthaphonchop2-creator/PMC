@@ -38,6 +38,7 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     appointmentDate: requiredValue(event.namedValues, BOOKING_FORM_LABELS.appointmentDate),
     appointmentTime: requiredValue(event.namedValues, BOOKING_FORM_LABELS.appointmentTime),
     depositAmount: Number(requiredValue(event.namedValues, BOOKING_FORM_LABELS.depositAmount).replace(/,/g, '')),
+    channelId: event.namedValues[BOOKING_FORM_LABELS.channelId]?.[0]?.trim() || null,
     paymentEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.paymentEvidence)),
     chatEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.chatEvidence)),
   }
@@ -118,11 +119,12 @@ function listItem(form: GoogleAppsScript.Forms.Form, title: string): GoogleAppsS
 
 export function createGoogleFormsPort(bookingFormId: string, callResultFormId: string): FormsPort {
   return {
-    syncBookingChoices(adminNames, doctorIds, serviceIds) {
+    syncBookingChoices(adminNames, doctorIds, serviceIds, channelIds) {
       const form = FormApp.openById(bookingFormId)
       listItem(form, BOOKING_FORM_LABELS.adminName).setChoiceValues(adminNames)
       listItem(form, BOOKING_FORM_LABELS.doctorId).setChoiceValues(doctorIds)
       listItem(form, BOOKING_FORM_LABELS.serviceId).setChoiceValues(serviceIds)
+      if (channelIds.length) listItem(form, BOOKING_FORM_LABELS.channelId).setChoiceValues(channelIds)
     },
     syncCallResultChoices(results) {
       const form = FormApp.openById(callResultFormId)

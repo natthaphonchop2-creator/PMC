@@ -41,13 +41,14 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
     adminId: 'admin-1',
     adminName: 'Admin A',
     submitterEmail: 'admin@example.com',
-    adminIdentityStatus: 'MATCHED',
+    adminIdentityStatus: 'SHARED_ACCOUNT',
     customerName: 'ลูกค้าทดสอบ',
     customerNameNormalized: 'ลูกค้าทดสอบ',
     phoneNormalized: '0812345678',
     phoneMasked: '081-xxx-5678',
     doctorId: 'doctor-1',
     serviceId: 'service-1',
+    channelId: null,
     appointmentStart: '2026-08-20T13:00:00+07:00',
     appointmentEnd: '2026-08-20T14:00:00+07:00',
     depositAmount: 1000,
@@ -142,6 +143,8 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
             : null,
       findService: (id) =>
         id === 'service-1' ? { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true } : null,
+      findChannel: (id) =>
+        id === 'เพจหลัก' ? { id: 'เพจหลัก', name: 'เพจหลัก', active: true } : null,
       adminLineGroupId: () => 'admin-group',
       listAdmins: () => [
         { id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId: 'admin-user-1', active: true },
@@ -153,6 +156,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       listServices: () => [
         { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true },
       ],
+      listChannels: () => [{ id: 'เพจหลัก', name: 'เพจหลัก', active: true }],
     },
     repositories,
     bookings: repositories.bookings,
@@ -374,6 +378,7 @@ export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingI
     appointmentDate: '2026-08-20',
     appointmentTime: '13:00',
     depositAmount: 1000,
+    channelId: null,
     paymentEvidenceFileIds: ['payment-file-1'],
     chatEvidenceFileIds: ['chat-file-1'],
     ...patch,
