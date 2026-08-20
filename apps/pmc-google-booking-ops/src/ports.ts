@@ -43,8 +43,19 @@ export interface BookingRepository {
   rememberFormResponse(formResponseId: string, caseId: string): void
   insert(booking: BookingCase): BookingCase
   getByCaseId(caseId: string): BookingCase | null
-  update(caseId: string, expectedVersion: number, patch: Partial<BookingCase>): BookingCase
+  update(
+    caseId: string,
+    expectedVersion: number,
+    patch: Partial<BookingCase>,
+    context: MutationContext,
+  ): BookingCase
   list(): BookingCase[]
+}
+
+export interface MutationContext {
+  actor: string
+  reason: string
+  correlationId: string
 }
 
 export interface CallTaskRepository {

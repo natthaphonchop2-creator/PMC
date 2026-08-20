@@ -1,0 +1,59 @@
+import { SHEET_SCHEMAS } from '../sheetSchema'
+import type { SheetRow, SheetStore } from '../repositories'
+
+function requireSheet(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet, tab: string) {
+  const sheet = spreadsheet.getSheetByName(tab)
+  if (!sheet) throw new Error(`missing required sheet: ${tab}`)
+  return sheet
+}
+
+export function encodeSheetCell(value: unknown): string | number | boolean {
+  if (value === null || value === undefined) return ''
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'object') return JSON.stringify(value)
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+  return String(value)
+}
+
+export function ensureSheetTopology(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet): void {
+  for (const [tab, columns] of Object.entries(SHEET_SCHEMAS)) {
+    let sheet = spreadsheet.getSheetByName(tab)
+    if (!sheet) sheet = spreadsheet.insertSheet(tab)
+    if (!columns.length) continue
+    const existing = sheet.getLastColumn() ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : []
+    const populated = existing.some((value) => String(value).trim())
+    if (populated && columns.some((column, index) => existing[index] !== column)) {
+      throw new Error(`sheet header mismatch: ${tab}`)
+    }
+    if (!populated) {
+      sheet.getRange(1, 1, 1, columns.length).setValues([[...columns]])
+      sheet.setFrozenRows(1)
+    }
+  }
+}
+
+export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet): SheetStore {
+  return {
+    read(tab: string): SheetRow[] {
+      const sheet = requireSheet(spreadsheet, tab)
+      if (sheet.getLastRow() < 2 || sheet.getLastColumn() < 1) return []
+      const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
+      return sheet
+        .getRange(2, 1, sheet.getLastRow() - 1, headers.length)
+        .getValues()
+        .map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? null])))
+    },
+    replace(tab: string, rows: SheetRow[]): void {
+      const sheet = requireSheet(spreadsheet, tab)
+      const headers = SHEET_SCHEMAS[tab]
+      if (!headers?.length) throw new Error(`sheet is not repository-managed: ${tab}`)
+      const existingRows = Math.max(sheet.getLastRow() - 1, 0)
+      if (existingRows) sheet.getRange(2, 1, existingRows, headers.length).clearContent()
+      if (rows.length) {
+        sheet
+          .getRange(2, 1, rows.length, headers.length)
+          .setValues(rows.map((row) => headers.map((header) => encodeSheetCell(row[header]))))
+      }
+    },
+  }
+}
