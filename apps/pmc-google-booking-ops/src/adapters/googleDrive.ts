@@ -1,5 +1,5 @@
 import type { BookingCase, BookingIntake } from '../domain/types'
-import type { DrivePort } from '../ports'
+import type { BackupPort, DrivePort } from '../ports'
 
 export interface DriveEvidenceResult {
   folderId: string
@@ -111,5 +111,21 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
       return file.getId()
     },
     folderUrl: (folderId) => folder(folderId).getUrl(),
+    trashFolder(folderId) {
+      folder(folderId).setTrashed(true)
+    },
+  }
+}
+
+export function createGoogleBackupPort(spreadsheetId: string, backupFolderId: string): BackupPort {
+  const folder = DriveApp.getFolderById(backupFolderId)
+  const backupName = (bangkokDate: string) => `PMC Booking Backup ${bangkokDate} ${spreadsheetId}`
+  return {
+    hasBackup(bangkokDate) {
+      return folder.getFilesByName(backupName(bangkokDate)).hasNext()
+    },
+    createBackup(bangkokDate) {
+      DriveApp.getFileById(spreadsheetId).makeCopy(backupName(bangkokDate), folder)
+    },
   }
 }

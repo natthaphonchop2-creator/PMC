@@ -206,7 +206,34 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
         append(store, 'LINE_INGRESS_NONCES', { nonce, capturedAt })
       },
     },
-    retention: { queue: (input) => append(store, 'RETENTION_QUEUE', input) },
+    retention: {
+      queue(input) {
+        append(store, 'RETENTION_QUEUE', input)
+      },
+      pending() {
+        return store.read('RETENTION_QUEUE').filter((row) => row.status === 'PENDING')
+      },
+      hasCase(caseId) {
+        return store.read('RETENTION_QUEUE').some((row) => row.caseId === caseId && row.status === 'PENDING')
+      },
+      approve(id, approver, reason) {
+        const rows = store.read('RETENTION_QUEUE')
+        const index = rows.findIndex((row) => row.id === id && row.status === 'PENDING')
+        if (index === -1) throw new Error('retention item not found')
+        const updated = {
+          ...rows[index],
+          status: 'APPROVED',
+          approvedBy: approver,
+          approvedAt: clock.nowIso(),
+          reason,
+          version: Number(rows[index].version) + 1,
+        }
+        const next = [...rows]
+        next[index] = updated
+        store.replace('RETENTION_QUEUE', next)
+        return structuredClone(updated)
+      },
+    },
     audit,
   }
 }

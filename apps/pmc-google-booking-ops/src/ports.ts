@@ -105,6 +105,9 @@ export interface LineDirectoryRepository {
 
 export interface RetentionRepository {
   queue(input: Record<string, unknown>): void
+  pending(): Record<string, unknown>[]
+  hasCase(caseId: string): boolean
+  approve(id: string, approver: string, reason: string): Record<string, unknown>
 }
 
 export interface AuditRepository {
@@ -130,6 +133,7 @@ export interface DrivePort {
   findFileByName(folderId: string, name: string): string | null
   moveAndRenameFile(fileId: string, folderId: string, name: string): string
   folderUrl(folderId: string): string
+  trashFolder(folderId: string): void
 }
 export interface CalendarEventInput {
   calendarId: string
@@ -176,6 +180,18 @@ export interface CryptoPort {
   sha256Hex(value: string): string
 }
 
+export interface DashboardPort {
+  write(snapshot: {
+    kpis: Record<string, number>
+    operations: Array<Record<string, string | number | null>>
+  }): void
+}
+
+export interface BackupPort {
+  hasBackup(bangkokDate: string): boolean
+  createBackup(bangkokDate: string): void
+}
+
 export interface BookingPorts {
   clock: Clock
   locks: LockPort
@@ -188,4 +204,6 @@ export interface BookingPorts {
   files: FilePort
   secrets: SecretsPort
   crypto: CryptoPort
+  dashboard: DashboardPort
+  backups: BackupPort
 }

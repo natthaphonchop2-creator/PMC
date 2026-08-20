@@ -90,6 +90,7 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
 
 export interface TestPorts extends BookingPorts {
   bookings: ReturnType<typeof createMemoryRepositories>['bookings']
+  drive: FakeDrivePort
   calendar: FakeCalendarPort
   line: FakeLinePort
   lineDirectory: ReturnType<typeof createMemoryRepositories>['lineDirectory']
@@ -98,7 +99,11 @@ export interface TestPorts extends BookingPorts {
   }
   imports: ReturnType<typeof createMemoryRepositories>['imports']
   reconciliation: ReturnType<typeof createMemoryRepositories>['reconciliation']
+  retention: ReturnType<typeof createMemoryRepositories>['retention']
   bookingFixture(patch?: Partial<BookingCase>): BookingCase
+  seedIntegrityFailures(): void
+  dashboard: FakeDashboardPort
+  backups: FakeBackupPort
   signedBookingIngressFixture(sourceType: 'user' | 'group', sourceId: string): BookingIngressPayload
   files: FakeFilePort
 }
@@ -146,6 +151,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     }),
     imports: repositories.imports,
     reconciliation: repositories.reconciliation,
+    retention: repositories.retention,
     lineDirectory: repositories.lineDirectory,
     drive: createFakeDrive(),
     calendar: createFakeCalendar(options),
@@ -161,6 +167,8 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       hmacSha256Hex: (value, secret) => createHmac('sha256', secret).update(value).digest('hex'),
       sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
     },
+    dashboard: createFakeDashboard(),
+    backups: createFakeBackups(),
     signedBookingIngressFixture(sourceType, sourceId) {
       const timestamp = Math.floor(Date.parse(now) / 1000)
       const nonce = 'nonce-1'
@@ -174,6 +182,52 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       }
     },
     bookingFixture,
+    seedIntegrityFailures() {
+      repositories.bookings.insert(
+        bookingFixture({ status: 'CLOSED_JERA', jeraPaymentId: 'PAY-DUP', callStatus: 'ACTIVE' }),
+      )
+      repositories.bookings.insert(
+        bookingFixture({
+          caseId: 'PMC-202608-0002',
+          formResponseId: 'response-2',
+          status: 'CLOSED_JERA',
+          jeraPaymentId: 'PAY-DUP',
+        }),
+      )
+      repositories.calls.insert(callTaskFixture())
+    },
+  }
+}
+
+export interface FakeDashboardPort {
+  write(snapshot: { kpis: Record<string, number>; operations: Array<Record<string, string | number | null>> }): void
+  lastSnapshot(): { kpis: Record<string, number>; operations: Array<Record<string, string | number | null>> } | null
+}
+
+function createFakeDashboard(): FakeDashboardPort {
+  let snapshot: ReturnType<FakeDashboardPort['lastSnapshot']> = null
+  return {
+    write(value) {
+      snapshot = structuredClone(value)
+    },
+    lastSnapshot: () => structuredClone(snapshot),
+  }
+}
+
+export interface FakeBackupPort {
+  hasBackup(date: string): boolean
+  createBackup(date: string): void
+  createdDates(): string[]
+}
+
+function createFakeBackups(): FakeBackupPort {
+  const dates: string[] = []
+  return {
+    hasBackup: (date) => dates.includes(date),
+    createBackup(date) {
+      if (!dates.includes(date)) dates.push(date)
+    },
+    createdDates: () => [...dates],
   }
 }
 
@@ -308,6 +362,7 @@ export interface FakeDrivePort extends DrivePort {
   createdFolderCount(): number
   movedFileCount(): number
   publicLinks(): string[]
+  trashedFolderIds(): string[]
 }
 
 export function createFakeDrive(): FakeDrivePort {
@@ -318,6 +373,7 @@ export function createFakeDrive(): FakeDrivePort {
     ['chat-file-2', { name: 'chat.png', folderId: null }],
   ])
   let moved = 0
+  const trashed: string[] = []
 
   return {
     rootFolderId: () => 'drive-root',
@@ -347,8 +403,12 @@ export function createFakeDrive(): FakeDrivePort {
       return fileId
     },
     folderUrl: (folderId) => `https://drive.google.com/drive/folders/${folderId}`,
+    trashFolder(folderId) {
+      if (!trashed.includes(folderId)) trashed.push(folderId)
+    },
     createdFolderCount: () => folders.size,
     movedFileCount: () => moved,
     publicLinks: () => [],
+    trashedFolderIds: () => [...trashed],
   }
 }

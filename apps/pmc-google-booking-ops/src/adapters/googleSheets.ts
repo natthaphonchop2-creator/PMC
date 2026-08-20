@@ -1,5 +1,6 @@
 import { SHEET_SCHEMAS } from '../sheetSchema'
 import type { SheetRow, SheetStore } from '../repositories'
+import type { DashboardPort } from '../ports'
 
 function requireSheet(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet, tab: string) {
   const sheet = spreadsheet.getSheetByName(tab)
@@ -53,6 +54,28 @@ export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet
         sheet
           .getRange(2, 1, rows.length, headers.length)
           .setValues(rows.map((row) => headers.map((header) => encodeSheetCell(row[header]))))
+      }
+    },
+  }
+}
+
+export function createGoogleDashboardPort(
+  spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
+): DashboardPort {
+  return {
+    write(snapshot) {
+      const sheet = requireSheet(spreadsheet, 'DASHBOARD')
+      sheet.getRange('A1:F1000').clearContent()
+      const kpis = Object.entries(snapshot.kpis)
+      sheet.getRange(1, 1, 1, 2).setValues([['KPI', 'Value']])
+      if (kpis.length) sheet.getRange(2, 1, kpis.length, 2).setValues(kpis)
+      const operationHeaders = ['caseId', 'status', 'adminId', 'doctorId', 'appointmentStart', 'phoneMasked']
+      const startRow = kpis.length + 4
+      sheet.getRange(startRow, 1, 1, operationHeaders.length).setValues([operationHeaders])
+      if (snapshot.operations.length) {
+        sheet
+          .getRange(startRow + 1, 1, snapshot.operations.length, operationHeaders.length)
+          .setValues(snapshot.operations.map((row) => operationHeaders.map((header) => row[header] ?? '')))
       }
     },
   }
