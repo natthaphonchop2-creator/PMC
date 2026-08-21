@@ -57,6 +57,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added a validation-only Apps Script operator function that sends synthetic Flex objects only to LINE `/validate/push`; it never pushes to a LINE user or group and returns no credentials or destination identifiers.
 - Deployed Cloud Run profile revision `pmc-booking-evidence-proxy-avatar-1f89bc3` and Apps Script version `7` through the existing production deployment. Final LINE validation returned `200`; the Form remained accepting with its existing questions and all five installable triggers remained present.
 - Preserved rollback to Apps Script version `5` and Cloud Run revision `pmc-booking-evidence-proxy-00005-w8x`.
+- Normalized the safe LINE validator property-path regex to satisfy the repository lint gate without changing validation behavior.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
