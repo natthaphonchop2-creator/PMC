@@ -2,6 +2,7 @@ import type { BookingCase } from '../domain/types'
 import type {
   BookingEvidenceImages,
   BookingPorts,
+  ConfigPort,
   CryptoPort,
   LineMessage,
   LinePort,
@@ -10,6 +11,7 @@ import {
   buildAdminMinimalReceipt,
   buildAdminTimeConflictReceipt,
   buildDoctorMinimalReceipt,
+  type TeamProfileImages,
 } from './minimalReceiptFlex'
 
 export interface BookingIngressPayload {
@@ -69,14 +71,36 @@ export function handleLineDirectoryIngress(payload: BookingIngressPayload, ports
   })
 }
 
+function safeProfileUrl(value: string | null | undefined): string | null {
+  const normalized = value?.trim() ?? ''
+  if (!normalized.startsWith('https://')) return null
+  if (/^https:\/\/(?:drive|docs)\.google\.com(?:\/|$)/i.test(normalized)) return null
+  return normalized
+}
+
+export function bookingTeamProfiles(
+  booking: BookingCase,
+  config: ConfigPort,
+): TeamProfileImages {
+  return {
+    closer: booking.adminId
+      ? safeProfileUrl(config.findStaffById(booking.adminId)?.profileImageUrl)
+      : null,
+    ae: booking.aeId
+      ? safeProfileUrl(config.findStaffById(booking.aeId)?.profileImageUrl)
+      : null,
+  }
+}
+
 export function doctorBookingMessage(
   booking: BookingCase,
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED',
   brandLogoUrl: string,
   messageVersion = booking.version,
+  profiles?: TeamProfileImages,
 ): LineMessage {
   if (!booking.doctorLineGroupId) throw new Error('doctor LINE group is not configured')
-  const apiMessage = buildDoctorMinimalReceipt(booking, eventType, brandLogoUrl)
+  const apiMessage = buildDoctorMinimalReceipt(booking, eventType, brandLogoUrl, profiles)
   return {
     to: booking.doctorLineGroupId,
     audience: 'doctor',
@@ -94,8 +118,9 @@ export function adminBookingMessage(
   evidence: BookingEvidenceImages,
   brandLogoUrl: string,
   messageVersion = booking.version,
+  profiles?: TeamProfileImages,
 ): LineMessage {
-  const apiMessage = buildAdminMinimalReceipt(booking, evidence, brandLogoUrl)
+  const apiMessage = buildAdminMinimalReceipt(booking, evidence, brandLogoUrl, profiles)
   return {
     to: adminLineGroupId,
     audience: 'admin',
@@ -112,8 +137,9 @@ export function adminTimeConflictMessage(
   adminLineGroupId: string,
   brandLogoUrl: string,
   messageVersion = booking.version,
+  profiles?: TeamProfileImages,
 ): LineMessage {
-  const apiMessage = buildAdminTimeConflictReceipt(booking, brandLogoUrl)
+  const apiMessage = buildAdminTimeConflictReceipt(booking, brandLogoUrl, profiles)
   return {
     to: adminLineGroupId,
     audience: 'admin',
@@ -130,8 +156,9 @@ export function sendDoctorBookingMessage(
   line: LinePort,
   brandLogoUrl: string,
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' = 'BOOKING_CONFIRMED',
+  profiles?: TeamProfileImages,
 ): void {
-  line.push(doctorBookingMessage(booking, eventType, brandLogoUrl))
+  line.push(doctorBookingMessage(booking, eventType, brandLogoUrl, booking.version, profiles))
 }
 
 export function sendBookingConfirmationMessages(
@@ -141,9 +168,23 @@ export function sendBookingConfirmationMessages(
   evidence: BookingEvidenceImages,
   brandLogoUrl: string,
   messageVersion = booking.version,
+  profiles?: TeamProfileImages,
 ): void {
-  line.push(adminBookingMessage(booking, adminLineGroupId, evidence, brandLogoUrl, messageVersion))
-  line.push(doctorBookingMessage(booking, 'BOOKING_CONFIRMED', brandLogoUrl, messageVersion))
+  line.push(adminBookingMessage(
+    booking,
+    adminLineGroupId,
+    evidence,
+    brandLogoUrl,
+    messageVersion,
+    profiles,
+  ))
+  line.push(doctorBookingMessage(
+    booking,
+    'BOOKING_CONFIRMED',
+    brandLogoUrl,
+    messageVersion,
+    profiles,
+  ))
 }
 
 export function createAppsScriptCryptoPort(): CryptoPort {

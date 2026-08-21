@@ -23,6 +23,13 @@ const THAI_MONTHS = [
 
 type FlexComponent = Record<string, unknown>
 
+export interface TeamProfileImages {
+  closer: string | null
+  ae: string | null
+}
+
+const EMPTY_TEAM_PROFILES: TeamProfileImages = { closer: null, ae: null }
+
 export function formatThaiAppointment(value: string): { date: string; time: string } {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value)
   if (!match) throw new Error('invalid appointment date or time')
@@ -214,12 +221,73 @@ function customerSection(booking: BookingCase): FlexComponent[] {
   ]
 }
 
-function teamSection(booking: BookingCase): FlexComponent[] {
+function profileAvatar(profileImageUrl: string | null): FlexComponent {
+  const contents: FlexComponent[] = profileImageUrl?.startsWith('https://')
+    ? [
+        {
+          type: 'image',
+          url: profileImageUrl,
+          size: 'full',
+          aspectRatio: '1:1',
+          aspectMode: 'cover',
+          cornerRadius: '16px',
+        },
+      ]
+    : [{ type: 'text', text: ' ', size: 'xxs', color: '#F4F1EC' }]
+  return {
+    type: 'box',
+    layout: 'vertical',
+    width: '32px',
+    height: '32px',
+    flex: 0,
+    cornerRadius: '16px',
+    backgroundColor: '#F4F1EC',
+    contents,
+  }
+}
+
+function teamMemberRow(label: string, name: string, profileImageUrl: string | null): FlexComponent {
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    margin: 'md',
+    alignItems: 'center',
+    contents: [
+      { type: 'text', text: label, color: SECONDARY, size: 'sm', flex: 5 },
+      {
+        type: 'box',
+        layout: 'horizontal',
+        flex: 7,
+        spacing: 'sm',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        contents: [
+          profileAvatar(profileImageUrl),
+          {
+            type: 'text',
+            text: name,
+            color: TEXT,
+            size: 'sm',
+            weight: 'bold',
+            align: 'end',
+            wrap: true,
+            flex: 0,
+          },
+        ],
+      },
+    ],
+  }
+}
+
+function teamSection(
+  booking: BookingCase,
+  profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
+): FlexComponent[] {
   return [
     separator(),
     sectionTitle('ทีมผู้ดูแล'),
-    keyValueRow('ปิดการจอง', booking.adminName),
-    keyValueRow('AE เปิดแชท', booking.aeName ?? 'ไม่ระบุ (เคสเดิม)'),
+    teamMemberRow('ปิดการจอง', booking.adminName, profiles.closer),
+    teamMemberRow('AE เปิดแชท', booking.aeName ?? 'ไม่ระบุ (เคสเดิม)', profiles.ae),
   ]
 }
 
@@ -227,6 +295,7 @@ export function buildAdminMinimalReceipt(
   booking: BookingCase,
   evidence: BookingEvidenceImages,
   brandLogoUrl: string,
+  profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent {
   const hasEvidence = Boolean(evidence.payment || evidence.chats.length)
   return bubble('จองเคสใหม่', booking, brandLogoUrl, [
@@ -237,7 +306,7 @@ export function buildAdminMinimalReceipt(
     keyValueRow('โปรแกรม', booking.serviceId),
     keyValueRow('ช่องทาง', booking.channelId || 'ไม่ระบุ'),
     keyValueRow('ยอดจอง', moneyDisplay(booking.depositAmount), true),
-    ...teamSection(booking),
+    ...teamSection(booking, profiles),
     separator(),
     sectionTitle('หลักฐาน'),
     ...(hasEvidence
@@ -268,6 +337,7 @@ export function buildDoctorMinimalReceipt(
   booking: BookingCase,
   eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED',
   brandLogoUrl: string,
+  profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent {
   const title = eventType === 'BOOKING_CONFIRMED'
     ? 'จองเคสใหม่'
@@ -280,13 +350,14 @@ export function buildDoctorMinimalReceipt(
     sectionTitle('รายละเอียดการจอง'),
     keyValueRow('แพทย์', booking.doctorId),
     keyValueRow('โปรแกรม', booking.serviceId),
-    ...teamSection(booking),
+    ...teamSection(booking, profiles),
   ])
 }
 
 export function buildAdminTimeConflictReceipt(
   booking: BookingCase,
   brandLogoUrl: string,
+  profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent {
   return bubble('นัดซ้อน — ยังไม่ยืนยัน', booking, brandLogoUrl, [
     separator(),
@@ -328,6 +399,6 @@ export function buildAdminTimeConflictReceipt(
     sectionTitle('รายละเอียดการจอง'),
     keyValueRow('แพทย์', booking.doctorId),
     keyValueRow('โปรแกรม', booking.serviceId),
-    ...teamSection(booking),
+    ...teamSection(booking, profiles),
   ], WARNING)
 }

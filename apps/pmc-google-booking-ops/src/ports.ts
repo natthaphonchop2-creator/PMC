@@ -16,6 +16,7 @@ export interface StaffConfig {
   canCloseBooking: boolean
   canBeAe: boolean
   active: boolean
+  profileImageUrl?: string
 }
 
 export interface DoctorConfig {

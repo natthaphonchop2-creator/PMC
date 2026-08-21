@@ -134,6 +134,67 @@ describe('LINE routing', () => {
     expect(ports.line.doctorMessages()[0].to).toBe('doctor-group-1')
   })
 
+  it('routes configured closer and AE profile images into both LINE audiences', () => {
+    const ports = createTestPorts()
+    const originalFindStaffById = ports.config.findStaffById
+    ports.config.findStaffById = (id) => {
+      const staff = originalFindStaffById(id)
+      if (!staff) return null
+      return {
+        ...staff,
+        profileImageUrl: id === 'admin-1'
+          ? 'https://media.example/assets/staff-profiles/admin-a.jpg'
+          : 'https://media.example/assets/staff-profiles/aim.jpg',
+      }
+    }
+
+    submitBookingIntake(validBookingIntake({ aeName: 'เอม' }), ports)
+
+    for (const payload of [
+      JSON.stringify(ports.line.adminMessages()[0]),
+      JSON.stringify(ports.line.doctorMessages()[0]),
+    ]) {
+      expect(payload).toContain('https://media.example/assets/staff-profiles/admin-a.jpg')
+      expect(payload).toContain('https://media.example/assets/staff-profiles/aim.jpg')
+      expect(payload).not.toContain('drive.google.com')
+    }
+  })
+
+  it('reuses the same profile when the closer and AE are the same person', () => {
+    const ports = createTestPorts()
+    const originalFindStaffById = ports.config.findStaffById
+    ports.config.findStaffById = (id) => {
+      const staff = originalFindStaffById(id)
+      return staff
+        ? { ...staff, profileImageUrl: 'https://media.example/assets/staff-profiles/admin-a.jpg' }
+        : null
+    }
+
+    submitBookingIntake(validBookingIntake({ aeName: 'Admin A' }), ports)
+
+    for (const message of [ports.line.adminMessages()[0], ports.line.doctorMessages()[0]]) {
+      const json = JSON.stringify(message)
+      expect((json.match(/admin-a\.jpg/g) ?? [])).toHaveLength(2)
+    }
+  })
+
+  it('falls back to a blank avatar instead of sending a private Drive profile URL', () => {
+    const ports = createTestPorts()
+    const originalFindStaffById = ports.config.findStaffById
+    ports.config.findStaffById = (id) => {
+      const staff = originalFindStaffById(id)
+      return staff
+        ? { ...staff, profileImageUrl: 'https://drive.google.com/file/d/private/view' }
+        : null
+    }
+
+    submitBookingIntake(validBookingIntake({ aeName: 'Admin A' }), ports)
+
+    for (const message of [ports.line.adminMessages()[0], ports.line.doctorMessages()[0]]) {
+      expect(JSON.stringify(message)).not.toContain('drive.google.com')
+    }
+  })
+
   it('uses white Flex Messages with full operational data for each audience', () => {
     const ports = createTestPorts()
     submitBookingIntake(validBookingIntake({ aeName: 'เอม' }), ports)

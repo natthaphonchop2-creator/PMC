@@ -7,6 +7,7 @@ import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
 import {
   adminTimeConflictMessage,
+  bookingTeamProfiles,
   sendBookingConfirmationMessages,
 } from '../adapters/lineMessaging'
 import { createInitialCallTask } from './callQueue'
@@ -181,6 +182,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
           ports.config.adminLineGroupId(),
           ports.config.brandLogoUrl(),
           conflict.version,
+          bookingTeamProfiles(conflict, ports.config),
         ),
       )
       return ports.repositories.bookings.update(
@@ -267,6 +269,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       evidence,
       ports.config.brandLogoUrl(),
       current.version,
+      bookingTeamProfiles(current, ports.config),
     )
     if (mediaSafeError) {
       ports.repositories.retries.enqueue({

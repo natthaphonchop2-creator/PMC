@@ -1,5 +1,5 @@
 import { calendarEventInput } from '../adapters/googleCalendar'
-import { sendDoctorBookingMessage } from '../adapters/lineMessaging'
+import { bookingTeamProfiles, sendDoctorBookingMessage } from '../adapters/lineMessaging'
 import { addMinutesInBangkok, deriveCallWindow } from '../domain/callSchedule'
 import type { BookingCase } from '../domain/types'
 import type { BookingPorts } from '../ports'
@@ -62,7 +62,13 @@ export function rescheduleBooking(caseId: string, input: RescheduleInput, ports:
     },
   )
   try {
-    sendDoctorBookingMessage(updated, ports.line, ports.config.brandLogoUrl(), 'RESCHEDULED')
+    sendDoctorBookingMessage(
+      updated,
+      ports.line,
+      ports.config.brandLogoUrl(),
+      'RESCHEDULED',
+      bookingTeamProfiles(updated, ports.config),
+    )
     updated = ports.repositories.bookings.update(
       caseId,
       updated.version,

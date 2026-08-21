@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { configDefaults } from 'vitest/config'
 import { createMetaApiPlugin } from './server/metaApiPlugin'
 import { createOpenAiPlugin } from './server/openAiPlugin'
 import { createPageAutomationPlugin } from './server/pageAutomationPlugin'
@@ -10,5 +11,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), createMetaApiPlugin(env), createOpenAiPlugin(env), createPageAutomationPlugin(env)],
+    test: {
+      exclude: [...configDefaults.exclude, '**/.worktrees/**'],
+    },
   }
 })

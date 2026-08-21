@@ -189,7 +189,17 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               canBeAe: true,
               active: true,
             }
-          : null,
+          : id === 'staff-ae'
+            ? {
+                id: 'staff-ae',
+                name: 'เอม',
+                email: '',
+                lineUserId: '',
+                canCloseBooking: false,
+                canBeAe: true,
+                active: true,
+              }
+            : null,
       listStaff: () => [
         {
           id: 'admin-1',

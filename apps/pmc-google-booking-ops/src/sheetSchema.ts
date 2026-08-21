@@ -56,6 +56,17 @@ export const BOOKING_MASTER_COLUMNS = [
   'updatedBy',
 ] as const satisfies readonly (keyof BookingCase)[]
 
+export const STAFF_CONFIG_COLUMNS = [
+  'id',
+  'name',
+  'email',
+  'lineUserId',
+  'canCloseBooking',
+  'canBeAe',
+  'active',
+  'profileImageUrl',
+] as const
+
 export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
   FORM_RESPONSES: [],
   BOOKING_MASTER: BOOKING_MASTER_COLUMNS,
@@ -65,7 +76,7 @@ export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
   RECONCILIATION: ['id', 'source', 'sourceId', 'reasonCode', 'candidateCaseIds', 'status', 'resolvedCaseId', 'resolvedBy', 'resolvedAt', 'version'],
   RETRY_QUEUE: ['id', 'caseId', 'operation', 'idempotencyKey', 'attempts', 'nextAttemptAt', 'status', 'safeError', 'payload'],
   CONFIG_ADMINS: ['id', 'name', 'email', 'lineUserId', 'active'],
-  CONFIG_STAFF: ['id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active'],
+  CONFIG_STAFF: STAFF_CONFIG_COLUMNS,
   CONFIG_DOCTORS: ['id', 'name', 'calendarId', 'lineGroupId', 'active'],
   CONFIG_SERVICES: ['id', 'name', 'durationMinutes', 'active'],
   CONFIG_CHANNELS: ['id', 'name', 'active'],

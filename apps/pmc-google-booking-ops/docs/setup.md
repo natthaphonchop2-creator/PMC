@@ -269,6 +269,24 @@ Run these Apps Script functions in order:
 
 If cutover fails after the Form is paused, leave it paused. Redeploy Apps Script version 5, restore the label `Admin ผู้รับจอง`, restore the legacy choices, and then re-enable responses. Never delete `CONFIG_STAFF`, AE columns, or audit rows during rollback.
 
+## Staff profile images in LINE Flex
+
+The booking Flex reads the optional `profileImageUrl` column from `CONFIG_STAFF`. Running `setupPmcBookingSystem()` or `preparePmcStaffAeMigration()` appends this column after `active` when the legacy seven-column header is present. It does not change Form questions, booking rows, Calendar events, or staff identity rules.
+
+Use only the public HTTPS Cloud Run routes below. LINE fetches these images from outside Google Drive, so private Drive URLs must not be stored in the Sheet.
+
+| Staff | Asset route |
+| --- | --- |
+| แคท | `/assets/staff-profiles/cat.jpg` |
+| มัส | `/assets/staff-profiles/mus.jpg` |
+| มิ้น | `/assets/staff-profiles/mint.jpg` |
+| แวว | `/assets/staff-profiles/waew.jpg` |
+| หมวย | `/assets/staff-profiles/muay.jpg` |
+| อาย | `/assets/staff-profiles/eye.jpg` |
+| ฝ้าย | leave `profileImageUrl` blank |
+
+Each deployed asset is a metadata-stripped 256×256 JPEG. Both Admin and doctor Flex messages render a 32×32 circular avatar before the closer and AE names. A missing or non-HTTPS URL falls back to an empty light-gray circle so LINE delivery does not fail. The Cloud Run server serves only the six allowlisted profile filenames with `GET` and `HEAD`.
+
 ## JERA operation
 
 Export the JERA payment-detail report and place the unchanged file in `JERA/INCOMING`. The 15-minute trigger:

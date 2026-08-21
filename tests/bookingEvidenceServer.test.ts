@@ -63,4 +63,28 @@ describe('dedicated booking evidence server', () => {
     expect(head.status).toBe(200)
     expect(head.bodyBuffer).toHaveLength(0)
   })
+
+  it('serves only allowlisted circular staff profile assets', async () => {
+    const mus = Buffer.from([0xff, 0xd8, 0xff, 0xdb])
+    const handler = createBookingEvidenceRequestHandler(
+      async () => undefined,
+      Buffer.alloc(0),
+      {
+        '/assets/staff-profiles/mus.jpg': { bytes: mus, contentType: 'image/jpeg' },
+      },
+    )
+
+    const response = await invoke(handler, '/assets/staff-profiles/mus.jpg')
+    expect(response.status).toBe(200)
+    expect(response.headers['content-type']).toBe('image/jpeg')
+    expect(response.headers['cache-control']).toContain('immutable')
+    expect(response.bodyBuffer).toEqual(mus)
+
+    const head = await invoke(handler, '/assets/staff-profiles/mus.jpg', 'HEAD')
+    expect(head.status).toBe(200)
+    expect(head.bodyBuffer).toHaveLength(0)
+
+    expect((await invoke(handler, '/assets/staff-profiles/unknown.jpg')).status).toBe(404)
+    expect((await invoke(handler, '/assets/staff-profiles/../pmc-flex-logo-v1.png')).status).toBe(404)
+  })
 })

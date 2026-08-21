@@ -1,5 +1,5 @@
 import { SHEET_SCHEMAS } from '../sheetSchema'
-import { bookingMasterMigrationPlan } from '../domain/sheetMigration'
+import { bookingMasterMigrationPlan, staffProfileMigrationPlan } from '../domain/sheetMigration'
 import type { SheetRow, SheetStore } from '../repositories'
 import type { DashboardPort } from '../ports'
 
@@ -49,6 +49,21 @@ export function migrateBookingMasterStaffColumns(
   sheet
     .getRange(1, plan.afterColumn + 1, 1, plan.headers.length)
     .setValues([[...plan.headers]])
+}
+
+export function migrateConfigStaffProfileColumn(
+  spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
+): void {
+  const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  if (!sheet || sheet.getLastColumn() < 1) return
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(String)
+  const plan = staffProfileMigrationPlan(headers)
+  if (plan.kind === 'NONE') return
+  sheet.insertColumnsAfter(plan.afterColumn, 1)
+  sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
 }
 
 export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet): SheetStore {

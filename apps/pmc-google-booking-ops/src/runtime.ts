@@ -8,6 +8,7 @@ import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import {
   adminBookingMessage,
   adminTimeConflictMessage,
+  bookingTeamProfiles,
   createAppsScriptCryptoPort,
   createGoogleLinePort,
   sendBookingConfirmationMessages,
@@ -18,6 +19,7 @@ import {
   createGoogleSheetStore,
   ensureSheetTopology,
   migrateBookingMasterStaffColumns,
+  migrateConfigStaffProfileColumn,
 } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import {
@@ -75,6 +77,7 @@ function createConfigPort(
       canCloseBooking: isActive(row.canCloseBooking),
       canBeAe: isActive(row.canBeAe),
       active: isActive(row.active),
+      profileImageUrl: String(row.profileImageUrl ?? '').trim(),
     }))
   const doctors = (): DoctorConfig[] =>
     store.read('CONFIG_DOCTORS').map((row) => ({
@@ -225,6 +228,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           evidence,
           ports.config.brandLogoUrl(),
           messageVersion,
+          bookingTeamProfiles(booking, ports.config),
         )
         ports.repositories.bookings.update(
           caseId,
@@ -241,6 +245,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
             ports.config.adminLineGroupId(),
             ports.config.brandLogoUrl(),
             messageVersion,
+            bookingTeamProfiles(booking, ports.config),
           ),
         )
         ports.repositories.bookings.update(
@@ -265,6 +270,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           evidence,
           ports.config.brandLogoUrl(),
           messageVersion,
+          bookingTeamProfiles(booking, ports.config),
         )
         message.retryKey = `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`
         ports.line.push(message)
@@ -280,6 +286,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           ports.line,
           ports.config.brandLogoUrl(),
           operation === 'DOCTOR_LINE_RESCHEDULE' ? 'RESCHEDULED' : 'BOOKING_CONFIRMED',
+          bookingTeamProfiles(booking, ports.config),
         )
         ports.repositories.bookings.update(
           caseId,
@@ -375,6 +382,7 @@ export function setupSystem(): {
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
   migrateBookingMasterStaffColumns(spreadsheet)
+  migrateConfigStaffProfileColumn(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const runtime = createRuntime()
   const staff = runtime.config.listStaff().filter((item) => item.active)
@@ -441,6 +449,7 @@ export function prepareStaffAeMigrationWorkflow(): {
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
   migrateBookingMasterStaffColumns(spreadsheet)
+  migrateConfigStaffProfileColumn(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const store = createGoogleSheetStore(spreadsheet)
   let staffRows = store.read('CONFIG_STAFF')

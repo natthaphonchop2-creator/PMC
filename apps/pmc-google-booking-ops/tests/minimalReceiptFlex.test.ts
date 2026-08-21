@@ -63,6 +63,56 @@ describe('Minimal Receipt Flex', () => {
     }
   })
 
+  it('shows circular profile images before closer and AE names in both audiences', () => {
+    const booking = bookingFixture({ adminName: 'มัส', aeName: 'แวว' })
+    const profiles = {
+      closer: 'https://media.example/assets/staff-profiles/mus.jpg',
+      ae: 'https://media.example/assets/staff-profiles/waew.jpg',
+    }
+    for (const message of [
+      buildAdminMinimalReceipt(booking, evidence, logoUrl, profiles),
+      buildDoctorMinimalReceipt(booking, 'BOOKING_CONFIRMED', logoUrl, profiles),
+    ]) {
+      const json = JSON.stringify(message)
+      expect(json).toContain(profiles.closer)
+      expect(json).toContain(profiles.ae)
+
+      const avatars: Array<Record<string, unknown>> = []
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) return value.forEach(visit)
+        if (!value || typeof value !== 'object') return
+        const component = value as Record<string, unknown>
+        if (
+          component.type === 'box' &&
+          component.width === '32px' &&
+          component.height === '32px' &&
+          component.cornerRadius === '16px'
+        ) avatars.push(component)
+        Object.values(component).forEach(visit)
+      }
+      visit(message)
+      expect(avatars).toHaveLength(2)
+      for (const avatar of avatars) {
+        expect(JSON.stringify(avatar)).toContain('"aspectRatio":"1:1"')
+        expect(JSON.stringify(avatar)).toContain('"aspectMode":"cover"')
+      }
+    }
+  })
+
+  it('keeps an empty circular avatar when a staff profile is missing', () => {
+    const json = JSON.stringify(
+      buildDoctorMinimalReceipt(
+        bookingFixture({ adminName: 'ฝ้าย', aeName: 'ฝ้าย' }),
+        'BOOKING_CONFIRMED',
+        logoUrl,
+        { closer: null, ae: null },
+      ),
+    )
+    expect((json.match(/"width":"32px"/g) ?? [])).toHaveLength(2)
+    expect(json).toContain('"backgroundColor":"#F4F1EC"')
+    expect(json).not.toContain('staff-profiles')
+  })
+
   it('uses fixed square evidence slots with payment fit and chat cover', () => {
     const payload = buildAdminMinimalReceipt(bookingFixture(), evidence, logoUrl)
     const json = JSON.stringify(payload)
