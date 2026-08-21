@@ -273,6 +273,8 @@ If cutover fails after the Form is paused, leave it paused. Redeploy Apps Script
 
 The booking Flex reads the optional `profileImageUrl` column from `CONFIG_STAFF`. Running `setupPmcBookingSystem()` or `preparePmcStaffAeMigration()` appends this column after `active` when the legacy seven-column header is present. It does not change Form questions, booking rows, Calendar events, or staff identity rules.
 
+For the approved seven-person roster, run `configurePmcStaffProfileImages()` once after the Cloud Run profile routes are verified. The function creates a timestamped Spreadsheet backup in the configured backup folder, verifies the exact roster before writing, migrates the column when needed, writes only `profileImageUrl`, and verifies the written values. A roster mismatch fails before the profile column write.
+
 Use only the public HTTPS Cloud Run routes below. LINE fetches these images from outside Google Drive, so private Drive URLs must not be stored in the Sheet.
 
 | Staff | Asset route |

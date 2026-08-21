@@ -11,6 +11,7 @@ import {
 } from './adapters/lineMessaging'
 import {
   createRuntime,
+  configureStaffProfileImagesWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
@@ -53,6 +54,10 @@ export function setupPmcBookingSystem() {
 
 export function preparePmcStaffAeMigration() {
   return prepareStaffAeMigrationWorkflow()
+}
+
+export function configurePmcStaffProfileImages() {
+  return configureStaffProfileImagesWorkflow()
 }
 
 export function pauseAndCutoverPmcBookingForm() {

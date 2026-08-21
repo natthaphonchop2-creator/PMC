@@ -20,6 +20,7 @@ describe('Apps Script bundle', () => {
       'runIntegrityChecks',
       'setupPmcBookingSystem',
       'preparePmcStaffAeMigration',
+      'configurePmcStaffProfileImages',
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',
     ]) {

@@ -28,6 +28,8 @@ import {
   resolveEligibleAeByName,
   validateStaffDirectory,
 } from './domain/staffDirectory'
+import { staffProfileUrlPlan } from './domain/staffProfileConfig'
+import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
@@ -462,6 +464,68 @@ export function prepareStaffAeMigrationWorkflow(): {
     missingPersonalEmailNames: staffRows
       .filter((row) => isActive(row.active) && isActive(row.canCloseBooking) && !String(row.email).trim())
       .map((row) => String(row.name)),
+  }
+}
+
+export function configureStaffProfileImagesWorkflow(): {
+  backupCreated: true
+  updatedProfiles: number
+  blankProfiles: number
+} {
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  validateRuntimeProperties(properties)
+  const spreadsheetId = properties[SCRIPT_PROPERTY_KEYS.spreadsheetId]
+  const backupFolder = DriveApp.getFolderById(properties[SCRIPT_PROPERTY_KEYS.backupFolderId])
+  const backupTimestamp = Utilities.formatDate(
+    new Date(),
+    'Asia/Bangkok',
+    'yyyy-MM-dd_HH-mm-ss',
+  )
+  DriveApp.getFileById(spreadsheetId).makeCopy(
+    `PMC Booking Pre-Profile-Avatar Cutover ${backupTimestamp}`,
+    backupFolder,
+  )
+
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  migrateConfigStaffProfileColumn(spreadsheet)
+  const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(String)
+  if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
+    throw new Error('sheet header mismatch: CONFIG_STAFF')
+  }
+  if (sheet.getLastRow() < 2) throw new Error('CONFIG_STAFF has no staff rows')
+
+  const logoSuffix = '/assets/pmc-flex-logo-v1.png'
+  const logoUrl = properties[SCRIPT_PROPERTY_KEYS.brandLogoUrl].trim()
+  if (!logoUrl.endsWith(logoSuffix)) throw new Error('brand logo URL has an unexpected path')
+  const baseUrl = logoUrl.slice(0, -logoSuffix.length)
+  const rowCount = sheet.getLastRow() - 1
+  const nameColumn = STAFF_CONFIG_COLUMNS.indexOf('name') + 1
+  const profileColumn = STAFF_CONFIG_COLUMNS.indexOf('profileImageUrl') + 1
+  const names = sheet
+    .getRange(2, nameColumn, rowCount, 1)
+    .getDisplayValues()
+    .map(([name]) => name)
+  const plan = staffProfileUrlPlan(names, baseUrl)
+  sheet
+    .getRange(2, profileColumn, rowCount, 1)
+    .setValues(plan.map((item) => [item.profileImageUrl]))
+
+  const readback = sheet
+    .getRange(2, profileColumn, rowCount, 1)
+    .getDisplayValues()
+    .map(([value]) => value)
+  if (readback.some((value, index) => value !== plan[index].profileImageUrl)) {
+    throw new Error('staff profile URL readback mismatch')
+  }
+  return {
+    backupCreated: true,
+    updatedProfiles: plan.filter((item) => item.profileImageUrl).length,
+    blankProfiles: plan.filter((item) => !item.profileImageUrl).length,
   }
 }
 
