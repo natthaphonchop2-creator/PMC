@@ -68,15 +68,17 @@ describe('doctor Calendar', () => {
     expect(ports.calendar.createdEvents()).toHaveLength(0)
   })
 
-  it('creates one event with Case ID and safe customer fields', () => {
+  it('creates one gold event with full customer name and phone', () => {
     const ports = createTestPorts()
     const result = submitBookingIntake(validBookingIntake(), ports)
     expect(result.calendarEventId).toBe('event-PMC-202608-0001')
     expect(ports.calendar.createdEvents()[0]).toMatchObject({
       calendarId: 'doctor-calendar-1',
       externalId: 'PMC-202608-0001',
+      summary: 'ลูกค้าทดสอบ · 0812345678',
+      description: 'บริการ service-1\nอ้างอิง PMC-202608-0001',
+      colorId: '5',
     })
-    expect(JSON.stringify(ports.calendar.createdEvents()[0])).not.toContain('0812345678')
   })
 
   it('patches the same event on reschedule', () => {

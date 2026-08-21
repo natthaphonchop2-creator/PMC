@@ -1,17 +1,13 @@
 import type { BookingCase } from '../domain/types'
 import type { CalendarEventInput, CalendarPort } from '../ports'
 
-function maskedCustomerName(value: string): string {
-  const characters = [...value.trim()]
-  return characters.length ? `${characters[0]}***` : 'ลูกค้า'
-}
-
 export function calendarEventInput(booking: BookingCase): CalendarEventInput {
   if (!booking.calendarId) throw new Error('doctor calendar is not configured')
   return {
     calendarId: booking.calendarId,
     externalId: booking.caseId,
-    summary: `${booking.caseId} · ${maskedCustomerName(booking.customerName)}`,
+    colorId: '5',
+    summary: `${booking.customerName} · ${booking.phoneNormalized}`,
     description: `บริการ ${booking.serviceId}\nอ้างอิง ${booking.caseId}`,
     start: booking.appointmentStart,
     end: booking.appointmentEnd,
@@ -44,6 +40,7 @@ function service(): AdvancedCalendarService {
 function resource(input: CalendarEventInput): Record<string, unknown> {
   return {
     id: input.externalId.toLowerCase().replace(/[^a-v0-9]/g, ''),
+    colorId: input.colorId,
     summary: input.summary,
     description: input.description,
     start: { dateTime: input.start, timeZone: 'Asia/Bangkok' },

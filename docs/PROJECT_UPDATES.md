@@ -48,6 +48,8 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Live Cloud Run/Apps Script/Form cutover remains gated on preparing `CONFIG_STAFF` and entering the seven personal closer emails directly in Sheet.
 - Deployed the keyless Cloud Run logo revision and prepared the live Sheet safely: logo/health checks passed, evidence token boundaries remained intact, `CONFIG_STAFF` contains seven blank-email staff rows, AE columns are present, and historical sample data remained aligned.
 - The owner deferred personal-email entry and the Form/Apps Script cutover. Production booking triggers and Form labeling therefore remain on the previous live behavior until the deferred checkpoint resumes.
+- Approved and implemented the Calendar event contract with full customer name, full phone, and Google Calendar color ID `5` (`Banana`). A future synthetic event was created/read back as active for 60 minutes in `Asia/Bangkok`, contained the full synthetic identity, and had exactly one matching active event with no duplicate.
+- The Calendar code change is committed for the next deferred Apps Script cutover; production version 5 continues using the previous Calendar title until that deployment.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

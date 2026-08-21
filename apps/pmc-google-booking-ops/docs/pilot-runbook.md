@@ -205,3 +205,19 @@ Completed safely before the owner deferred personal-email entry:
 - left the production Apps Script deployment and Booking Form label/accepting state unchanged.
 
 The owner explicitly deferred email mapping and Form/Apps Script cutover. Resume only after all seven personal emails are entered directly in `CONFIG_STAFF`; then validate uniqueness, pause the Form, push/deploy the new Apps Script version, rename/sync the AE field, and resume responses.
+
+## Full-identity Calendar pilot — 2026-08-21
+
+The owner approved full customer name and full phone visibility on the doctor Calendar plus Google Calendar event color `5` (`Banana`).
+
+Verified with a synthetic customer only:
+
+- created one active event on the mapped doctor Calendar for `22 August 2026 10:00–11:00 Asia/Bangkok`;
+- readback duration was `60` minutes;
+- event color ID was `5`;
+- the event title contained the complete synthetic customer name and phone;
+- the description contained the synthetic service and internal Case ID reference;
+- exactly one active event matched the private Case ID in the appointment window; and
+- the event remains on the Calendar for owner review.
+
+The repository Calendar builder now produces this full-identity/color contract. Automatic Form-created events will adopt it when the deferred Apps Script/AE cutover is deployed; production Apps Script version 5 remains unchanged until then.

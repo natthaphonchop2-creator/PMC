@@ -157,6 +157,7 @@ export interface DrivePort {
 export interface CalendarEventInput {
   calendarId: string
   externalId: string
+  colorId: string
   summary: string
   description: string
   start: string
