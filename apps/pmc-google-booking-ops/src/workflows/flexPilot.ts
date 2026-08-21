@@ -1,7 +1,7 @@
 import type { ConfigPort, LineMessage, LinePort } from '../ports'
 import { buildProductionFlexValidationMessages } from './flexValidation'
 
-const PILOT_CASE_ID = 'PMC-FLEX-PILOT-V1'
+const PILOT_CASE_ID = 'PMC-FLEX-PILOT-V2'
 
 export function sendProductionFlexPilot(
   config: ConfigPort,

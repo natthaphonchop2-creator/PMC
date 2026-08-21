@@ -33,8 +33,8 @@ describe('production Flex pilot sender', () => {
     const doctorMessage = ports.line.doctorMessages()[0]
     expect(adminMessage.to).toBe('admin-group')
     expect(doctorMessage.to).toBe('benz-group')
-    expect(adminMessage.retryKey).toBe('PMC-FLEX-PILOT-V1:ADMIN')
-    expect(doctorMessage.retryKey).toBe('PMC-FLEX-PILOT-V1:DOCTOR-BENZ')
+    expect(adminMessage.retryKey).toBe('PMC-FLEX-PILOT-V2:ADMIN')
+    expect(doctorMessage.retryKey).toBe('PMC-FLEX-PILOT-V2:DOCTOR-BENZ')
     expect(JSON.stringify(adminMessage.apiMessage)).toContain('PMC Validation')
     expect(JSON.stringify(doctorMessage.apiMessage)).toContain('PMC Validation')
     expect(ports.bookings.list()).toEqual([])

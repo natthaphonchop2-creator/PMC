@@ -259,7 +259,7 @@ function teamMemberRow(label: string, name: string, profileImageUrl: string | nu
         flex: 7,
         spacing: 'sm',
         alignItems: 'center',
-        justifyContent: 'flex-end',
+        justifyContent: 'flex-start',
         contents: [
           profileAvatar(profileImageUrl),
           {
@@ -268,9 +268,9 @@ function teamMemberRow(label: string, name: string, profileImageUrl: string | nu
             color: TEXT,
             size: 'sm',
             weight: 'bold',
-            align: 'end',
+            align: 'start',
             wrap: true,
-            flex: 0,
+            flex: 1,
           },
         ],
       },
@@ -285,8 +285,8 @@ function teamSection(
   return [
     separator(),
     sectionTitle('ทีมผู้ดูแล'),
-    teamMemberRow('ปิดการจอง', booking.adminName, profiles.closer),
-    teamMemberRow('AE เปิดแชท', booking.aeName ?? 'ไม่ระบุ (เคสเดิม)', profiles.ae),
+    teamMemberRow('Admin', booking.adminName, profiles.closer),
+    teamMemberRow('AE', booking.aeName ?? 'ไม่ระบุ (เคสเดิม)', profiles.ae),
   ]
 }
 

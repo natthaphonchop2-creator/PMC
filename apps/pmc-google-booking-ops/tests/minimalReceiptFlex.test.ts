@@ -63,6 +63,49 @@ describe('Minimal Receipt Flex', () => {
     }
   })
 
+  it('uses short team labels and locks avatar/name columns across both rows', () => {
+    const booking = bookingFixture({ adminName: 'มัส', aeName: 'แวว' })
+    const profiles = {
+      closer: 'https://media.example/assets/staff-profiles/mus.jpg',
+      ae: 'https://media.example/assets/staff-profiles/waew.jpg',
+    }
+    for (const message of [
+      buildAdminMinimalReceipt(booking, evidence, logoUrl, profiles),
+      buildDoctorMinimalReceipt(booking, 'BOOKING_CONFIRMED', logoUrl, profiles),
+    ]) {
+      const rows: Array<Record<string, unknown>> = []
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) return value.forEach(visit)
+        if (!value || typeof value !== 'object') return
+        const component = value as Record<string, unknown>
+        const contents = component.contents as Array<Record<string, unknown>> | undefined
+        const firstText = contents?.[0]?.text
+        if (
+          component.type === 'box' &&
+          component.layout === 'horizontal' &&
+          ['Admin', 'AE', 'ปิดการจอง', 'AE เปิดแชท'].includes(String(firstText))
+        ) rows.push(component)
+        Object.values(component).forEach(visit)
+      }
+      visit(message)
+
+      expect(rows.map((row) => (row.contents as Array<Record<string, unknown>>)[0].text))
+        .toEqual(['Admin', 'AE'])
+      for (const row of rows) {
+        const valueBox = (row.contents as Array<Record<string, unknown>>)[1]
+        expect(valueBox).toMatchObject({
+          type: 'box',
+          layout: 'horizontal',
+          flex: 7,
+          justifyContent: 'flex-start',
+        })
+        const [avatar, name] = valueBox.contents as Array<Record<string, unknown>>
+        expect(avatar).toMatchObject({ width: '32px', height: '32px', flex: 0 })
+        expect(name).toMatchObject({ flex: 1, align: 'start' })
+      }
+    }
+  })
+
   it('shows circular profile images before closer and AE names in both audiences', () => {
     const booking = bookingFixture({ adminName: 'มัส', aeName: 'แวว' })
     const profiles = {
