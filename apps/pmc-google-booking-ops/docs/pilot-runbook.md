@@ -256,3 +256,11 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - Deployed Apps Script version `10` through the existing deployment ID and advanced the explicit pilot retry key to V2 so the revised card would be delivered as a new smoke-test message.
 - The official LINE validator accepted the revised Admin and doctor Flex objects before delivery.
 - The approved V2 pilot then completed successfully in four seconds, delivering one revised synthetic Flex to the Admin group and one to the active `หมอ Benz` group with no booking-data side effect.
+
+## Compact Admin / AE Form label cutover — 2026-08-21
+
+- Deployed backward-compatible Apps Script version `11` through the existing deployment ID before editing the live Form. The submission parser accepts both legacy and compact identity field titles during rollout.
+- Ran the idempotent `configurePmcCompactFormIdentityFields()` operator function successfully without pausing responses.
+- Responder readback confirmed the Form remained accepting, contained exactly one required `Admin` Dropdown and one required `AE` Dropdown, and contained neither legacy title.
+- The AE Dropdown readback order was `เลือก`, `ไม่ระบุ`, then the seven active eligible staff names. A later setup sync preserves `ไม่ระบุ` as the first real choice.
+- No Form response was submitted and no Booking, Drive, Calendar, LINE, call-task, JERA, or Dashboard side effect was created during the cutover.

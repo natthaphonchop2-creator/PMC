@@ -63,6 +63,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Refined the team section after live review: shortened row labels to `Admin` and `AE`, fixed the avatar/name columns to a shared left edge across both rows, and advanced the approved pilot retry key to V2 for one new visual smoke-test delivery.
 - Deployed Apps Script version `10`, passed the official LINE validator, and completed the approved V2 live smoke test to the Admin and `หมอ Benz` groups without creating operational booking records.
 - Added a backward-compatible compact Form identity rollout: parser aliases for old/new titles, `Admin` and `AE` canonical labels, a required `ไม่ระบุ` AE choice stored without a fabricated Staff ID, and an idempotent operator entrypoint that changes only the two existing Dropdown questions.
+- Deployed Apps Script version `11` and completed the live compact Form cutover. Readback confirmed `Admin`/`AE`, the first AE choice `ไม่ระบุ`, continued response acceptance, removal of both legacy titles, and no test submission or operational side effect.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
