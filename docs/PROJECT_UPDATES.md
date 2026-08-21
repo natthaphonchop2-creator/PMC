@@ -55,7 +55,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added circular closer/AE profile avatars to both Admin and doctor booking Flex messages, backed by six metadata-stripped `256x256` Cloud Run assets and blank fallbacks for `ฝ้าย` and the system `Admin` row.
 - Added guarded `CONFIG_STAFF.profileImageUrl` migration/configuration with exact roster validation, timestamped Spreadsheet backup, HTTPS/private-Drive rejection, and readback verification.
 - Added a validation-only Apps Script operator function that sends synthetic Flex objects only to LINE `/validate/push`; it never pushes to a LINE user or group and returns no credentials or destination identifiers.
-- Deployed Cloud Run profile revision `pmc-booking-evidence-proxy-avatar-1f89bc3` and Apps Script version `7` through the existing production deployment. Final LINE validation returned `200`; the Form remained accepting with its existing questions and all five installable triggers remained present.
+- Deployed Cloud Run profile revision `pmc-booking-evidence-proxy-avatar-1f89bc3` and Apps Script version `8` through the existing production deployment. Final LINE validation returned `200`; the Form remained accepting with its existing questions and all five installable triggers remained present.
 - Preserved rollback to Apps Script version `5` and Cloud Run revision `pmc-booking-evidence-proxy-00005-w8x`.
 - Normalized the safe LINE validator property-path regex to satisfy the repository lint gate without changing validation behavior.
 
