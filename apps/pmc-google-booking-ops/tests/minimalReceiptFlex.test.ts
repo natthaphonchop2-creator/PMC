@@ -95,6 +95,9 @@ describe('Minimal Receipt Flex', () => {
       for (const avatar of avatars) {
         expect(JSON.stringify(avatar)).toContain('"aspectRatio":"1:1"')
         expect(JSON.stringify(avatar)).toContain('"aspectMode":"cover"')
+        const image = (avatar.contents as Array<Record<string, unknown>>)[0]
+        expect(image.type).toBe('image')
+        expect(image).not.toHaveProperty('cornerRadius')
       }
     }
   })

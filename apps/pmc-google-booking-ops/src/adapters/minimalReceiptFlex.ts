@@ -230,7 +230,6 @@ function profileAvatar(profileImageUrl: string | null): FlexComponent {
           size: 'full',
           aspectRatio: '1:1',
           aspectMode: 'cover',
-          cornerRadius: '16px',
         },
       ]
     : [{ type: 'text', text: ' ', size: 'xxs', color: '#F4F1EC' }]
