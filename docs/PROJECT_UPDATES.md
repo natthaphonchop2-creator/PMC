@@ -59,6 +59,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Preserved rollback to Apps Script version `5` and Cloud Run revision `pmc-booking-evidence-proxy-00005-w8x`.
 - Normalized the safe LINE validator property-path regex to satisfy the repository lint gate without changing validation behavior.
 - Added an approval-only production Flex pilot sender that routes one validated synthetic message to the Admin group and one to the active `หมอ Benz` group with fixed LINE retry keys and no booking-data side effects.
+- After explicit owner approval, deployed Apps Script version `9` and completed the live group smoke test: one synthetic Flex reached the Admin group and one reached the `หมอ Benz` group, with successful execution and no booking/Drive/Calendar/call-task mutation.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

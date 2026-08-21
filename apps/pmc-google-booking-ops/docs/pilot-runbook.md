@@ -241,3 +241,11 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - The official LINE push validator initially identified unsupported `cornerRadius` on the nested image component. Removed that one image property while retaining the circular parent box, reran local regression, and received final LINE validator `200` through a synthetic validation-only workflow.
 - No validator payload was pushed to an Admin or doctor group, and no synthetic Form response, Drive case folder, Calendar event, booking row, or call task was created during this cutover.
 - Rollback points remain Apps Script version `5` and Cloud Run revision `pmc-booking-evidence-proxy-00005-w8x`.
+
+## Approved live group Flex smoke test — 2026-08-21
+
+- The owner explicitly approved sending the validated synthetic Flex to live LINE groups.
+- Deployed Apps Script version `9` through the existing deployment ID with an approval-only `sendPmcBookingFlexPilot()` operator entrypoint.
+- Sent exactly two messages: the synthetic Admin card to the configured Admin group and the synthetic doctor card to the active `หมอ Benz` group.
+- Apps Script execution completed successfully in five seconds. Both LINE pushes were accepted; fixed retry keys protect an accidental rerun from duplicating either pilot message.
+- The pilot used only `PMC Validation` and the reserved synthetic phone `0800000000`. It did not create or modify a Form response, booking row, Drive case folder, Calendar event, call task, JERA record, or Dashboard value.
