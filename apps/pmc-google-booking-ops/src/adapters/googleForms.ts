@@ -1,6 +1,19 @@
 import type { BookingIntake, CallResult } from '../domain/types'
 import type { FormsPort } from '../ports'
-import { BOOKING_FORM_LABELS } from '../config'
+import {
+  BOOKING_FORM_LABELS,
+  BOOKING_FORM_LEGACY_LABELS,
+} from '../config'
+import { compactAeChoices, compactIdentityFormPlan } from '../domain/formIdentity'
+
+const CLOSER_FORM_TITLES: string[] = [
+  BOOKING_FORM_LABELS.closerName,
+  BOOKING_FORM_LEGACY_LABELS.closerName,
+]
+const AE_FORM_TITLES: string[] = [
+  BOOKING_FORM_LABELS.aeName,
+  BOOKING_FORM_LEGACY_LABELS.aeName,
+]
 
 export interface BookingFormEventInput {
   responseKey: string
@@ -21,6 +34,18 @@ function requiredValue(namedValues: Record<string, string[]>, label: string): st
   return value
 }
 
+function requiredValueFromAliases(
+  namedValues: Record<string, string[]>,
+  canonicalLabel: string,
+  aliases: string[],
+): string {
+  for (const label of [canonicalLabel, ...aliases]) {
+    const value = namedValues[label]?.[0]?.trim()
+    if (value) return value
+  }
+  throw new Error(`missing Form field: ${canonicalLabel}`)
+}
+
 function driveFileIds(value: string): string[] {
   return [...new Set(value.match(/[\w-]{20,}/g) ?? [])]
 }
@@ -30,8 +55,16 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     formResponseId: event.responseKey,
     submittedAt: event.submittedAt,
     submitterEmail: event.submitterEmail.trim().toLowerCase(),
-    closerName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.closerName),
-    aeName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.aeName),
+    closerName: requiredValueFromAliases(
+      event.namedValues,
+      BOOKING_FORM_LABELS.closerName,
+      [BOOKING_FORM_LEGACY_LABELS.closerName],
+    ),
+    aeName: requiredValueFromAliases(
+      event.namedValues,
+      BOOKING_FORM_LABELS.aeName,
+      [BOOKING_FORM_LEGACY_LABELS.aeName],
+    ),
     customerName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.customerName),
     phone: requiredValue(event.namedValues, BOOKING_FORM_LABELS.phone),
     doctorId: requiredValue(event.namedValues, BOOKING_FORM_LABELS.doctorId),
@@ -123,7 +156,7 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
     syncBookingChoices(closerNames, aeNames, doctorIds, serviceIds, channelIds) {
       const form = FormApp.openById(bookingFormId)
       listItem(form, BOOKING_FORM_LABELS.closerName).setChoiceValues(closerNames)
-      listItem(form, BOOKING_FORM_LABELS.aeName).setChoiceValues(aeNames)
+      listItem(form, BOOKING_FORM_LABELS.aeName).setChoiceValues(compactAeChoices(aeNames))
       listItem(form, BOOKING_FORM_LABELS.doctorId).setChoiceValues(doctorIds)
       listItem(form, BOOKING_FORM_LABELS.serviceId).setChoiceValues(serviceIds)
       if (channelIds.length) listItem(form, BOOKING_FORM_LABELS.channelId).setChoiceValues(channelIds)
@@ -139,14 +172,14 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
       const form = FormApp.openById(bookingFormId)
       return form
         .getItems(FormApp.ItemType.LIST)
-        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.closerName)
+        .filter((item) => CLOSER_FORM_TITLES.includes(item.getTitle()))
         .length === 1
     },
     bookingHasAeField() {
       const form = FormApp.openById(bookingFormId)
       return form
         .getItems(FormApp.ItemType.LIST)
-        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.aeName)
+        .filter((item) => AE_FORM_TITLES.includes(item.getTitle()))
         .length === 1
     },
     pauseBookingResponses() {
@@ -156,10 +189,13 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
       const form = FormApp.openById(bookingFormId)
       const candidates = form
         .getItems(FormApp.ItemType.LIST)
-        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.closerName)
+        .filter((item) => CLOSER_FORM_TITLES.includes(item.getTitle()))
       if (candidates.length > 1) throw new Error('expected at most one closer Form field')
       if (candidates.length) {
-        candidates[0].asListItem().setRequired(true)
+        candidates[0]
+          .asListItem()
+          .setTitle(BOOKING_FORM_LABELS.closerName)
+          .setRequired(true)
         form.moveItem(candidates[0], 0)
       } else {
         form.addListItem().setTitle(BOOKING_FORM_LABELS.closerName).setRequired(true)
@@ -170,9 +206,26 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
       const form = FormApp.openById(bookingFormId)
       const candidates = form
         .getItems(FormApp.ItemType.LIST)
-        .filter((item) => ['Admin ผู้รับจอง', BOOKING_FORM_LABELS.aeName].includes(item.getTitle()))
+        .filter((item) => [
+          'Admin ผู้รับจอง',
+          BOOKING_FORM_LABELS.aeName,
+          BOOKING_FORM_LEGACY_LABELS.aeName,
+        ].includes(item.getTitle()))
       if (candidates.length !== 1) throw new Error('expected one Admin/AE Form field')
       candidates[0].asListItem().setTitle(BOOKING_FORM_LABELS.aeName).setRequired(true)
+    },
+    configureCompactIdentityFields(aeNames) {
+      const form = FormApp.openById(bookingFormId)
+      const items = form.getItems(FormApp.ItemType.LIST).map((item) => item.asListItem())
+      const plan = compactIdentityFormPlan(items.map((item) => item.getTitle()), aeNames)
+      const closer = items.find((item) => item.getTitle() === plan.closerSourceTitle)
+      const ae = items.find((item) => item.getTitle() === plan.aeSourceTitle)
+      if (!closer || !ae) throw new Error('booking identity Form fields mismatch')
+      closer.setTitle(plan.closerTargetTitle).setRequired(true)
+      ae
+        .setTitle(plan.aeTargetTitle)
+        .setChoiceValues(plan.aeChoices)
+        .setRequired(true)
     },
     resumeBookingResponses() {
       FormApp.openById(bookingFormId).setAcceptingResponses(true)

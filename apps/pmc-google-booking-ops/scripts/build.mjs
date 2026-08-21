@@ -24,6 +24,7 @@ function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigra
 function configurePmcStaffProfileImages() { return PmcBooking.configurePmcStaffProfileImages(); }
 function validatePmcBookingFlexMessages() { return PmcBooking.validatePmcBookingFlexMessages(); }
 function sendPmcBookingFlexPilot() { return PmcBooking.sendPmcBookingFlexPilot(); }
+function configurePmcCompactFormIdentityFields() { return PmcBooking.configurePmcCompactFormIdentityFields(); }
 function pauseAndCutoverPmcBookingForm() { return PmcBooking.pauseAndCutoverPmcBookingForm(); }
 function resumePmcBookingFormAfterAeCutover() { return PmcBooking.resumePmcBookingFormAfterAeCutover(); }
 `,

@@ -1,6 +1,7 @@
 import { addCalendarMonths, addMinutesInBangkok, deriveCallWindow } from '../domain/callSchedule'
 import { formatCaseId } from '../domain/caseId'
 import { maskThaiPhone, normalizeCustomerName, normalizeThaiPhone } from '../domain/normalize'
+import { NO_AE_OPTION } from '../config'
 import type { BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
@@ -39,8 +40,9 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   if (!sharedAccount && closer.name !== intake.closerName.trim()) {
     throw new Error('selected closer does not match submitter email')
   }
-  const ae = ports.config.findEligibleAeByName(intake.aeName)
-  if (!ae) throw new Error('selected AE is not active or eligible')
+  const aeNotSpecified = intake.aeName === NO_AE_OPTION
+  const ae = aeNotSpecified ? null : ports.config.findEligibleAeByName(intake.aeName)
+  if (!aeNotSpecified && !ae) throw new Error('selected AE is not active or eligible')
   const doctor = ports.config.findDoctor(intake.doctorId)
   if (!doctor?.active) throw new Error('selected doctor is not active')
   const service = ports.config.findService(intake.serviceId)
@@ -69,8 +71,8 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     adminName: closer.name,
     submitterEmail: intake.submitterEmail.trim().toLowerCase(),
     adminIdentityStatus: sharedAccount ? 'SHARED_ACCOUNT' : 'VERIFIED_EMAIL',
-    aeId: ae.id,
-    aeName: ae.name,
+    aeId: ae?.id ?? null,
+    aeName: ae?.name ?? NO_AE_OPTION,
     customerName: intake.customerName.trim(),
     customerNameNormalized,
     phoneNormalized,
@@ -125,7 +127,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     action: 'BOOKING_CREATED',
     target: 'BOOKING_MASTER',
     before: null,
-    after: { status: booking.status, adminId: closer.id, aeId: ae.id },
+    after: { status: booking.status, adminId: closer.id, aeId: ae?.id ?? null },
     reason: 'Google Form submission',
     timestamp: ports.clock.nowIso(),
     correlationId: intake.formResponseId,

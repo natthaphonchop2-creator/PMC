@@ -12,6 +12,7 @@ import {
 import {
   createRuntime,
   configureStaffProfileImagesWorkflow,
+  configureCompactBookingIdentityFieldsWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
@@ -68,6 +69,10 @@ export function validatePmcBookingFlexMessages() {
 
 export function sendPmcBookingFlexPilot() {
   return sendProductionFlexPilotWorkflow()
+}
+
+export function configurePmcCompactFormIdentityFields() {
+  return configureCompactBookingIdentityFieldsWorkflow()
 }
 
 export function pauseAndCutoverPmcBookingForm() {

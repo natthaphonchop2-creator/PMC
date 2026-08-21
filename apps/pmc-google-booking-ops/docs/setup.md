@@ -254,6 +254,12 @@ The deployed signed proxy is the production read-only verification path. Test it
 
 Publish one internal Form link for all staff. Before the verified-email cutover, version 5 uses the selected Admin name with the shared company account. After the cutover, each closer signs in with their mapped personal Google account and selects only the AE who opened the chat.
 
+## Compact Admin / AE Form labels
+
+The production parser accepts both the legacy identity titles (`ผู้ปิดการจอง`, `AE ผู้เปิดแชท`) and the compact titles (`Admin`, `AE`) so the rollout has no trigger-breaking gap. Deploy the compatible Apps Script code first, then run `configurePmcCompactFormIdentityFields()` once.
+
+The operator function renames only those two existing Dropdown questions, keeps both required, and sets the AE choices to `ไม่ระบุ` followed by the active eligible AE names. Selecting `ไม่ระบุ` stores `aeId` as blank and `aeName` as `ไม่ระบุ`; it does not invent a Staff identity. Later `setupPmcBookingSystem()` runs preserve this option.
+
 ## Staff / AE verified-email cutover
 
 The new runtime uses personal verified Google-account email for the Admin who closes the booking and a required `AE ผู้เปิดแชท` dropdown. Do not paste personal emails into source, commands, docs, audit summaries, or chat.

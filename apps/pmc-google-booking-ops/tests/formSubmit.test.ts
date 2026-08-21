@@ -38,6 +38,29 @@ describe('booking Form workflow', () => {
     ])
   })
 
+  it('parses the compact Admin and AE field titles', () => {
+    const intake = parseBookingFormEvent({
+      responseKey: 'sheet-compact:2',
+      submittedAt: '2026-08-20T09:00:00+07:00',
+      submitterEmail: 'admin@example.com',
+      namedValues: {
+        Admin: ['มัส'],
+        AE: ['ไม่ระบุ'],
+        ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        เบอร์มือถือ: ['0812345678'],
+        หมอ: ['doctor-1'],
+        'บริการ/โปรแกรม': ['service-1'],
+        วันที่นัด: ['2026-08-20'],
+        เวลานัด: ['13:00'],
+        จำนวนเงินจอง: ['1000'],
+        สลิปเงินจอง: ['payment-file-id-123456789012345'],
+        หลักฐานแชท: ['chat-file-id-123456789012345'],
+      },
+    })
+    expect(intake.closerName).toBe('มัส')
+    expect(intake.aeName).toBe('ไม่ระบุ')
+  })
+
   it('keeps the optional channel empty when Admin does not select one', () => {
     const intake = parseBookingFormEvent({
       responseKey: 'sheet-1:3',
@@ -80,7 +103,7 @@ describe('booking Form workflow', () => {
           หลักฐานแชท: ['chat-file-id-123456789012345'],
         },
       }),
-    ).toThrow('missing Form field: AE ผู้เปิดแชท')
+    ).toThrow('missing Form field: AE')
   })
 
   it('rejects the Form when the required closer field is absent', () => {
@@ -102,7 +125,7 @@ describe('booking Form workflow', () => {
           หลักฐานแชท: ['chat-file-id-123456789012345'],
         },
       }),
-    ).toThrow('missing Form field: ผู้ปิดการจอง')
+    ).toThrow('missing Form field: Admin')
   })
 
   it('creates one canonical case with automatic values', () => {
@@ -168,6 +191,15 @@ describe('booking Form workflow', () => {
       createTestPorts(),
     )
     expect(result.aeId).toBe(result.adminId)
+  })
+
+  it('records an explicit no-AE selection without inventing a Staff identity', () => {
+    const result = submitBookingIntake(
+      validBookingIntake({ aeName: 'ไม่ระบุ' }),
+      createTestPorts(),
+    )
+    expect(result.aeId).toBeNull()
+    expect(result.aeName).toBe('ไม่ระบุ')
   })
 
   it('rejects an unknown closer selected by a shared account before any side effect', () => {

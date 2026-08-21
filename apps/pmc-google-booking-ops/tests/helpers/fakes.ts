@@ -285,6 +285,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       pauseBookingResponses: () => undefined,
       ensureCloserField: () => undefined,
       renameAdminFieldToAe: () => undefined,
+      configureCompactIdentityFields: () => undefined,
       resumeBookingResponses: () => undefined,
     },
     files: createFakeFiles(options.jeraPhone ?? '0812345678'),

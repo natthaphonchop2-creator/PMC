@@ -23,6 +23,7 @@ describe('Apps Script bundle', () => {
       'configurePmcStaffProfileImages',
       'validatePmcBookingFlexMessages',
       'sendPmcBookingFlexPilot',
+      'configurePmcCompactFormIdentityFields',
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',
     ]) {

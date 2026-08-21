@@ -16,8 +16,8 @@ export const SCRIPT_PROPERTY_KEYS = {
 } as const
 
 export const BOOKING_FORM_LABELS = {
-  closerName: 'ผู้ปิดการจอง',
-  aeName: 'AE ผู้เปิดแชท',
+  closerName: 'Admin',
+  aeName: 'AE',
   customerName: 'ชื่อลูกค้า',
   phone: 'เบอร์มือถือ',
   doctorId: 'หมอ',
@@ -29,3 +29,10 @@ export const BOOKING_FORM_LABELS = {
   paymentEvidence: 'สลิปเงินจอง',
   chatEvidence: 'หลักฐานแชท',
 } as const
+
+export const BOOKING_FORM_LEGACY_LABELS = {
+  closerName: 'ผู้ปิดการจอง',
+  aeName: 'AE ผู้เปิดแชท',
+} as const
+
+export const NO_AE_OPTION = 'ไม่ระบุ'

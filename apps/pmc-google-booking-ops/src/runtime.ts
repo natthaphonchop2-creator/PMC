@@ -22,6 +22,7 @@ import {
   migrateConfigStaffProfileColumn,
 } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
+import { BOOKING_FORM_LABELS, NO_AE_OPTION } from './config'
 import {
   resolveCloserByEmail,
   resolveCloserByName,
@@ -587,6 +588,26 @@ export function sendProductionFlexPilotWorkflow(): {
 } {
   const runtime = createRuntime()
   return sendProductionFlexPilot(runtime.config, runtime.line)
+}
+
+export function configureCompactBookingIdentityFieldsWorkflow(): {
+  closerTitle: typeof BOOKING_FORM_LABELS.closerName
+  aeTitle: typeof BOOKING_FORM_LABELS.aeName
+  noAeOption: typeof NO_AE_OPTION
+  aeChoiceCount: number
+} {
+  const runtime = createRuntime()
+  const activeAes = runtime.config.listEligibleAes()
+  if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
+  runtime.forms.configureCompactIdentityFields(activeAes.map((ae) => ae.name))
+  if (!runtime.forms.bookingHasCloserField()) throw new Error('booking Form closer field is missing')
+  if (!runtime.forms.bookingHasAeField()) throw new Error('booking Form AE field is missing')
+  return {
+    closerTitle: BOOKING_FORM_LABELS.closerName,
+    aeTitle: BOOKING_FORM_LABELS.aeName,
+    noAeOption: NO_AE_OPTION,
+    aeChoiceCount: activeAes.length + 1,
+  }
 }
 
 export function pauseAndCutoverBookingFormWorkflow(): {

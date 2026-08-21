@@ -216,6 +216,7 @@ export interface FormsPort {
   pauseBookingResponses(): void
   ensureCloserField(): void
   renameAdminFieldToAe(): void
+  configureCompactIdentityFields(aeNames: string[]): void
   resumeBookingResponses(): void
 }
 export interface FilePort {
