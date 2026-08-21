@@ -476,28 +476,9 @@ export function configureStaffProfileImagesWorkflow(): {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheetId = properties[SCRIPT_PROPERTY_KEYS.spreadsheetId]
-  const backupFolder = DriveApp.getFolderById(properties[SCRIPT_PROPERTY_KEYS.backupFolderId])
-  const backupTimestamp = Utilities.formatDate(
-    new Date(),
-    'Asia/Bangkok',
-    'yyyy-MM-dd_HH-mm-ss',
-  )
-  DriveApp.getFileById(spreadsheetId).makeCopy(
-    `PMC Booking Pre-Profile-Avatar Cutover ${backupTimestamp}`,
-    backupFolder,
-  )
-
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
-  migrateConfigStaffProfileColumn(spreadsheet)
-  const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  let sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
   if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
-  const headers = sheet
-    .getRange(1, 1, 1, sheet.getLastColumn())
-    .getValues()[0]
-    .map(String)
-  if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
-    throw new Error('sheet header mismatch: CONFIG_STAFF')
-  }
   if (sheet.getLastRow() < 2) throw new Error('CONFIG_STAFF has no staff rows')
 
   const logoSuffix = '/assets/pmc-flex-logo-v1.png'
@@ -512,6 +493,28 @@ export function configureStaffProfileImagesWorkflow(): {
     .getDisplayValues()
     .map(([name]) => name)
   const plan = staffProfileUrlPlan(names, baseUrl)
+
+  const backupFolder = DriveApp.getFolderById(properties[SCRIPT_PROPERTY_KEYS.backupFolderId])
+  const backupTimestamp = Utilities.formatDate(
+    new Date(),
+    'Asia/Bangkok',
+    'yyyy-MM-dd_HH-mm-ss',
+  )
+  DriveApp.getFileById(spreadsheetId).makeCopy(
+    `PMC Booking Pre-Profile-Avatar Cutover ${backupTimestamp}`,
+    backupFolder,
+  )
+
+  migrateConfigStaffProfileColumn(spreadsheet)
+  sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(String)
+  if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
+    throw new Error('sheet header mismatch: CONFIG_STAFF')
+  }
   sheet
     .getRange(2, profileColumn, rowCount, 1)
     .setValues(plan.map((item) => [item.profileImageUrl]))

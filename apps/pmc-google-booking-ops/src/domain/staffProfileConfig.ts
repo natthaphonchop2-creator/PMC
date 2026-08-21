@@ -6,6 +6,7 @@ const PROFILE_PATH_BY_NAME: Record<string, string> = {
   หมวย: '/assets/staff-profiles/muay.jpg',
   อาย: '/assets/staff-profiles/eye.jpg',
   ฝ้าย: '',
+  Admin: '',
 }
 
 export interface StaffProfileUrlPlanItem {

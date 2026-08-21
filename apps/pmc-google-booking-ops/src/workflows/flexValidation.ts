@@ -7,7 +7,7 @@ export function buildProductionFlexValidationMessages(
   baseUrl: string,
 ): Record<string, unknown>[] {
   const profiles = staffProfileUrlPlan(
-    ['แคท', 'มัส', 'มิ้น', 'แวว', 'หมวย', 'อาย', 'ฝ้าย'],
+    ['แคท', 'มัส', 'มิ้น', 'แวว', 'หมวย', 'อาย', 'ฝ้าย', 'Admin'],
     baseUrl,
   )
   const profileUrl = (name: string) =>
