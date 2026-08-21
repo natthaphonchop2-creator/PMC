@@ -230,3 +230,14 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - Added Google Form response validation `^0[0-9]{9}$` to `เบอร์มือถือ` with the help/error message `กรุณากรอกเบอร์มือถือ 10 หลัก ขึ้นต้นด้วย 0 เช่น 0800000000`.
 - Browser readback showed an eight-digit synthetic value was rejected and the ten-digit value `0800000000` had no phone-format alert. The Form was not submitted during validation QA.
 - Removed the temporary setup helper after success. Remote Apps Script files returned to `Code` and `appsscript`, and the production v5 Code hash remained unchanged.
+
+## Staff profile avatar production cutover — 2026-08-21
+
+- Deployed Cloud Run revision `pmc-booking-evidence-proxy-avatar-1f89bc3` with 100% traffic, the existing keyless Service Identity, and the existing Secret Manager binding.
+- Verified health/logo, evidence guard `400/403`, and all six allowlisted `256x256` JPEG profile routes. Production SHA-256 values matched the reviewed local assets; unknown profile names and non-GET/HEAD requests returned `404`.
+- Added the canonical `profileImageUrl` column to live `CONFIG_STAFF`. The first guarded configuration run detected the eighth system row `Admin` and stopped before any profile URL write; readback confirmed the new column was still blank.
+- Updated the exact live roster mapping and reran successfully after a timestamped Spreadsheet backup. Readback showed eight staff rows, six Cloud Run profile URLs, and two intentional blanks (`ฝ้าย` and `Admin`).
+- Deployed Apps Script version `7` through the existing deployment ID. Form URL/questions, Calendar state, and the five installable triggers were not changed.
+- The official LINE push validator initially identified unsupported `cornerRadius` on the nested image component. Removed that one image property while retaining the circular parent box, reran local regression, and received final LINE validator `200` through a synthetic validation-only workflow.
+- No validator payload was pushed to an Admin or doctor group, and no synthetic Form response, Drive case folder, Calendar event, booking row, or call task was created during this cutover.
+- Rollback points remain Apps Script version `5` and Cloud Run revision `pmc-booking-evidence-proxy-00005-w8x`.
