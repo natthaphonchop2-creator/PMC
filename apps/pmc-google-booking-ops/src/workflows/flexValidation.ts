@@ -2,6 +2,20 @@ import { buildAdminMinimalReceipt, buildDoctorMinimalReceipt } from '../adapters
 import { staffProfileUrlPlan } from '../domain/staffProfileConfig'
 import type { BookingCase } from '../domain/types'
 
+export function lineValidationPropertyPaths(responseBody: string): string[] {
+  try {
+    const parsed = JSON.parse(responseBody) as { details?: Array<{ property?: unknown }> }
+    const paths = (parsed.details ?? [])
+      .map((detail) => detail.property)
+      .filter((property): property is string =>
+        typeof property === 'string' && /^[A-Za-z0-9_./\[\]-]{1,240}$/.test(property),
+      )
+    return [...new Set(paths)].slice(0, 10)
+  } catch {
+    return []
+  }
+}
+
 export function buildProductionFlexValidationMessages(
   brandLogoUrl: string,
   baseUrl: string,

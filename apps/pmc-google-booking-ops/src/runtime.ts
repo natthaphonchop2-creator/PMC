@@ -36,7 +36,10 @@ import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConf
 import { createBookingRepositories, type SheetStore } from './repositories'
 import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminders } from './workflows/callQueue'
 import { writeDashboard } from './workflows/dashboard'
-import { buildProductionFlexValidationMessages } from './workflows/flexValidation'
+import {
+  buildProductionFlexValidationMessages,
+  lineValidationPropertyPaths,
+} from './workflows/flexValidation'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention } from './workflows/retention'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
@@ -558,7 +561,13 @@ export function validateProductionFlexMessagesWorkflow(): {
     muteHttpExceptions: true,
   })
   const status = response.getResponseCode()
-  if (status !== 200) throw new Error(`LINE Flex validation failed with status ${status}`)
+  if (status !== 200) {
+    const propertyPaths = lineValidationPropertyPaths(response.getContentText())
+    throw new Error(
+      `LINE Flex validation failed with status ${status}` +
+      (propertyPaths.length ? ` at ${propertyPaths.join(',')}` : ''),
+    )
+  }
   return {
     validatorStatus: 200,
     accepted: true,

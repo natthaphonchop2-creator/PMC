@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildProductionFlexValidationMessages } from '../src/workflows/flexValidation'
+import {
+  buildProductionFlexValidationMessages,
+  lineValidationPropertyPaths,
+} from '../src/workflows/flexValidation'
 
 describe('production Flex validation payload', () => {
   it('uses synthetic identity, staff profiles in both messages, and evidence only for Admin', () => {
@@ -21,5 +24,20 @@ describe('production Flex validation payload', () => {
     expect(adminJson).toContain('หลักฐาน')
     expect(doctorJson).not.toContain('หลักฐาน')
     expect(doctorJson).not.toContain('/api/booking-evidence/')
+  })
+
+  it('extracts only safe LINE detail property paths from a validation error', () => {
+    expect(lineValidationPropertyPaths(JSON.stringify({
+      message: 'invalid request',
+      details: [
+        { property: '/messages/0/contents/body/contents/2', message: 'invalid property' },
+        { property: '/messages/1/contents/header', message: 'invalid property' },
+        { message: 'no property' },
+      ],
+    }))).toEqual([
+      '/messages/0/contents/body/contents/2',
+      '/messages/1/contents/header',
+    ])
+    expect(lineValidationPropertyPaths('not-json')).toEqual([])
   })
 })
