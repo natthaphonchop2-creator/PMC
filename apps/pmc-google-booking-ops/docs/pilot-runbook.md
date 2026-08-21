@@ -221,3 +221,12 @@ Verified with a synthetic customer only:
 - the event remains on the Calendar for owner review.
 
 The repository Calendar builder now produces this full-identity/color contract. Automatic Form-created events will adopt it when the deferred Apps Script/AE cutover is deployed; production Apps Script version 5 remains unchanged until then.
+
+## Live phone validation and v5 schema recovery — 2026-08-21
+
+- A Form submission was received with all required answers, but `onBookingFormSubmit` failed before Case ID allocation because the test phone contained only eight digits.
+- No Booking row, response map, Audit, Retry, Drive, Calendar, or LINE side effect was created by that failed response.
+- Removed the two empty pre-cutover `aeId`/`aeName` columns from live `BOOKING_MASTER`, restoring the 51-column schema expected by production Apps Script version 5; the historical sample remained aligned.
+- Added Google Form response validation `^0[0-9]{9}$` to `เบอร์มือถือ` with the help/error message `กรุณากรอกเบอร์มือถือ 10 หลัก ขึ้นต้นด้วย 0 เช่น 0800000000`.
+- Browser readback showed an eight-digit synthetic value was rejected and the ten-digit value `0800000000` had no phone-format alert. The Form was not submitted during validation QA.
+- Removed the temporary setup helper after success. Remote Apps Script files returned to `Code` and `appsscript`, and the production v5 Code hash remained unchanged.

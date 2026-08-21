@@ -50,6 +50,8 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - The owner deferred personal-email entry and the Form/Apps Script cutover. Production booking triggers and Form labeling therefore remain on the previous live behavior until the deferred checkpoint resumes.
 - Approved and implemented the Calendar event contract with full customer name, full phone, and Google Calendar color ID `5` (`Banana`). A future synthetic event was created/read back as active for 60 minutes in `Asia/Bangkok`, contained the full synthetic identity, and had exactly one matching active event with no duplicate.
 - The Calendar code change is committed for the next deferred Apps Script cutover; production version 5 continues using the previous Calendar title until that deployment.
+- Diagnosed a live Form trigger failure as an eight-digit phone rejected before Case ID allocation. Restored the 51-column v5 `BOOKING_MASTER` schema by removing only the two empty pre-cutover AE columns; historical data remained aligned.
+- Added live Google Form validation requiring exactly ten digits starting with `0`, verified invalid/valid synthetic values in the responder UI without submission, and removed the temporary setup helper while preserving the production Apps Script v5 Code unchanged.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 
