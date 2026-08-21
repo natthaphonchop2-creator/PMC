@@ -61,6 +61,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added an approval-only production Flex pilot sender that routes one validated synthetic message to the Admin group and one to the active `หมอ Benz` group with fixed LINE retry keys and no booking-data side effects.
 - After explicit owner approval, deployed Apps Script version `9` and completed the live group smoke test: one synthetic Flex reached the Admin group and one reached the `หมอ Benz` group, with successful execution and no booking/Drive/Calendar/call-task mutation.
 - Refined the team section after live review: shortened row labels to `Admin` and `AE`, fixed the avatar/name columns to a shared left edge across both rows, and advanced the approved pilot retry key to V2 for one new visual smoke-test delivery.
+- Deployed Apps Script version `10`, passed the official LINE validator, and completed the approved V2 live smoke test to the Admin and `หมอ Benz` groups without creating operational booking records.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

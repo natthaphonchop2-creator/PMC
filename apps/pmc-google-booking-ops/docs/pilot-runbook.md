@@ -249,3 +249,10 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - Sent exactly two messages: the synthetic Admin card to the configured Admin group and the synthetic doctor card to the active `หมอ Benz` group.
 - Apps Script execution completed successfully in five seconds. Both LINE pushes were accepted; fixed retry keys protect an accidental rerun from duplicating either pilot message.
 - The pilot used only `PMC Validation` and the reserved synthetic phone `0800000000`. It did not create or modify a Form response, booking row, Drive case folder, Calendar event, call task, JERA record, or Dashboard value.
+
+## Aligned team-row Flex V2 smoke test — 2026-08-21
+
+- After live visual review, shortened the two team labels to `Admin` and `AE` and fixed both avatar/name groups to the same left-aligned columns.
+- Deployed Apps Script version `10` through the existing deployment ID and advanced the explicit pilot retry key to V2 so the revised card would be delivered as a new smoke-test message.
+- The official LINE validator accepted the revised Admin and doctor Flex objects before delivery.
+- The approved V2 pilot then completed successfully in four seconds, delivering one revised synthetic Flex to the Admin group and one to the active `หมอ Benz` group with no booking-data side effect.
