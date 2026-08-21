@@ -40,6 +40,7 @@ import {
   buildProductionFlexValidationMessages,
   lineValidationPropertyPaths,
 } from './workflows/flexValidation'
+import { sendProductionFlexPilot } from './workflows/flexPilot'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention } from './workflows/retention'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
@@ -576,6 +577,16 @@ export function validateProductionFlexMessagesWorkflow(): {
     adminHasEvidence: true,
     doctorHasEvidence: false,
   }
+}
+
+export function sendProductionFlexPilotWorkflow(): {
+  sentMessages: 2
+  adminSent: true
+  doctorSent: true
+  doctorName: string
+} {
+  const runtime = createRuntime()
+  return sendProductionFlexPilot(runtime.config, runtime.line)
 }
 
 export function pauseAndCutoverBookingFormWorkflow(): {

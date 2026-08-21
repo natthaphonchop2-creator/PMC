@@ -58,6 +58,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Deployed Cloud Run profile revision `pmc-booking-evidence-proxy-avatar-1f89bc3` and Apps Script version `8` through the existing production deployment. Final LINE validation returned `200`; the Form remained accepting with its existing questions and all five installable triggers remained present.
 - Preserved rollback to Apps Script version `5` and Cloud Run revision `pmc-booking-evidence-proxy-00005-w8x`.
 - Normalized the safe LINE validator property-path regex to satisfy the repository lint gate without changing validation behavior.
+- Added an approval-only production Flex pilot sender that routes one validated synthetic message to the Admin group and one to the active `หมอ Benz` group with fixed LINE retry keys and no booking-data side effects.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

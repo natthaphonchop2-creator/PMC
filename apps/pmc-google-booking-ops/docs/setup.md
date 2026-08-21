@@ -277,6 +277,8 @@ For the approved seven-person roster, run `configurePmcStaffProfileImages()` onc
 
 Run `validatePmcBookingFlexMessages()` after the Apps Script deployment. It submits two synthetic Flex objects to LINE's push-message validator and does not send either object to a LINE user or group. The function returns only the validation status and safe content-presence booleans; it never returns credentials, destination IDs, customer data, or media URLs.
 
+`sendPmcBookingFlexPilot()` is an explicit, operator-run production smoke test. It sends the already validated synthetic Admin Flex to the configured Admin group and the synthetic doctor Flex to the active `หมอ Benz` group. It does not create a Booking row, Form response, Drive folder, Calendar event, or call task. Fixed retry keys make an accidental rerun idempotent at LINE.
+
 Use only the public HTTPS Cloud Run routes below. LINE fetches these images from outside Google Drive, so private Drive URLs must not be stored in the Sheet.
 
 | Staff | Asset route |

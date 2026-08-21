@@ -17,6 +17,7 @@ import {
   resumeBookingFormAfterAeCutoverWorkflow,
   runDailyOperationsWorkflow,
   runIntegrityAndBackupWorkflow,
+  sendProductionFlexPilotWorkflow,
   setupSystem,
   validateProductionFlexMessagesWorkflow,
 } from './runtime'
@@ -63,6 +64,10 @@ export function configurePmcStaffProfileImages() {
 
 export function validatePmcBookingFlexMessages() {
   return validateProductionFlexMessagesWorkflow()
+}
+
+export function sendPmcBookingFlexPilot() {
+  return sendProductionFlexPilotWorkflow()
 }
 
 export function pauseAndCutoverPmcBookingForm() {
