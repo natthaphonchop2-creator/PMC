@@ -38,6 +38,15 @@ export function resolveCloserByEmail(staff: StaffConfig[], email: string): Staff
   return matches.length === 1 ? matches[0] : null
 }
 
+export function resolveCloserByName(staff: StaffConfig[], name: string): StaffConfig | null {
+  const normalized = name.trim()
+  if (!normalized) return null
+  const matches = staff.filter(
+    (item) => item.active && item.canCloseBooking && item.name === normalized,
+  )
+  return matches.length === 1 ? matches[0] : null
+}
+
 export function resolveEligibleAeByName(staff: StaffConfig[], name: string): StaffConfig | null {
   const normalized = name.trim()
   if (!normalized) return null

@@ -6,7 +6,11 @@ import type {
   LineMessage,
   LinePort,
 } from '../ports'
-import { buildAdminMinimalReceipt, buildDoctorMinimalReceipt } from './minimalReceiptFlex'
+import {
+  buildAdminMinimalReceipt,
+  buildAdminTimeConflictReceipt,
+  buildDoctorMinimalReceipt,
+} from './minimalReceiptFlex'
 
 export interface BookingIngressPayload {
   timestamp: number
@@ -103,6 +107,24 @@ export function adminBookingMessage(
   }
 }
 
+export function adminTimeConflictMessage(
+  booking: BookingCase,
+  adminLineGroupId: string,
+  brandLogoUrl: string,
+  messageVersion = booking.version,
+): LineMessage {
+  const apiMessage = buildAdminTimeConflictReceipt(booking, brandLogoUrl)
+  return {
+    to: adminLineGroupId,
+    audience: 'admin',
+    eventType: 'TIME_CONFLICT',
+    caseIds: [booking.caseId],
+    text: String(apiMessage.altText),
+    apiMessage,
+    retryKey: `${booking.caseId}:ADMIN_TIME_CONFLICT:${messageVersion}`,
+  }
+}
+
 export function sendDoctorBookingMessage(
   booking: BookingCase,
   line: LinePort,
@@ -138,6 +160,11 @@ export function isLinePushAcceptedStatus(status: number): boolean {
   return (status >= 200 && status < 300) || status === 409
 }
 
+export function formatLinePushError(status: number, responseBody: unknown): string {
+  const detail = String(responseBody ?? '').replace(/\s+/g, ' ').trim().slice(0, 800)
+  return `LINE push failed with status ${status}${detail ? `: ${detail}` : ''}`
+}
+
 export function createGoogleLinePort(accessToken: string): LinePort {
   const properties = PropertiesService.getScriptProperties()
   return {
@@ -159,7 +186,9 @@ export function createGoogleLinePort(accessToken: string): LinePort {
         muteHttpExceptions: true,
       })
       const status = response.getResponseCode()
-      if (!isLinePushAcceptedStatus(status)) throw new Error(`LINE push failed with status ${status}`)
+      if (!isLinePushAcceptedStatus(status)) {
+        throw new Error(formatLinePushError(status, response.getContentText()))
+      }
     },
   }
 }

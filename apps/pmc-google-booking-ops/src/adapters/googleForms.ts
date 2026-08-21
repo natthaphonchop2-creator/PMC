@@ -30,6 +30,7 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     formResponseId: event.responseKey,
     submittedAt: event.submittedAt,
     submitterEmail: event.submitterEmail.trim().toLowerCase(),
+    closerName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.closerName),
     aeName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.aeName),
     customerName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.customerName),
     phone: requiredValue(event.namedValues, BOOKING_FORM_LABELS.phone),
@@ -119,8 +120,9 @@ function listItem(form: GoogleAppsScript.Forms.Form, title: string): GoogleAppsS
 
 export function createGoogleFormsPort(bookingFormId: string, callResultFormId: string): FormsPort {
   return {
-    syncBookingChoices(aeNames, doctorIds, serviceIds, channelIds) {
+    syncBookingChoices(closerNames, aeNames, doctorIds, serviceIds, channelIds) {
       const form = FormApp.openById(bookingFormId)
+      listItem(form, BOOKING_FORM_LABELS.closerName).setChoiceValues(closerNames)
       listItem(form, BOOKING_FORM_LABELS.aeName).setChoiceValues(aeNames)
       listItem(form, BOOKING_FORM_LABELS.doctorId).setChoiceValues(doctorIds)
       listItem(form, BOOKING_FORM_LABELS.serviceId).setChoiceValues(serviceIds)
@@ -133,6 +135,13 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
     bookingCollectsEmail() {
       return FormApp.openById(bookingFormId).collectsEmail()
     },
+    bookingHasCloserField() {
+      const form = FormApp.openById(bookingFormId)
+      return form
+        .getItems(FormApp.ItemType.LIST)
+        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.closerName)
+        .length === 1
+    },
     bookingHasAeField() {
       const form = FormApp.openById(bookingFormId)
       return form
@@ -142,6 +151,20 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
     },
     pauseBookingResponses() {
       FormApp.openById(bookingFormId).setAcceptingResponses(false)
+    },
+    ensureCloserField() {
+      const form = FormApp.openById(bookingFormId)
+      const candidates = form
+        .getItems(FormApp.ItemType.LIST)
+        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.closerName)
+      if (candidates.length > 1) throw new Error('expected at most one closer Form field')
+      if (candidates.length) {
+        candidates[0].asListItem().setRequired(true)
+        form.moveItem(candidates[0], 0)
+      } else {
+        form.addListItem().setTitle(BOOKING_FORM_LABELS.closerName).setRequired(true)
+        form.moveItem(form.getItems().length - 1, 0)
+      }
     },
     renameAdminFieldToAe() {
       const form = FormApp.openById(bookingFormId)

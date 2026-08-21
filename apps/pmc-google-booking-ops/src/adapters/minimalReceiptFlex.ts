@@ -4,6 +4,7 @@ import type { BookingEvidenceImages, EvidenceImageRef } from '../ports'
 const TEXT = '#282624'
 const SECONDARY = '#77716D'
 const GOLD = '#B78220'
+const WARNING = '#D97706'
 const SEPARATOR = '#E6E3DF'
 const THAI_MONTHS = [
   'มกราคม',
@@ -75,7 +76,12 @@ function keyValueRow(label: string, value: string, emphasized = false): FlexComp
   }
 }
 
-function header(title: string, booking: BookingCase, brandLogoUrl: string): FlexComponent {
+function header(
+  title: string,
+  booking: BookingCase,
+  brandLogoUrl: string,
+  titleColor = GOLD,
+): FlexComponent {
   if (!brandLogoUrl.startsWith('https://')) throw new Error('brand logo URL must use HTTPS')
   const appointment = formatThaiAppointment(booking.appointmentStart)
   return {
@@ -105,7 +111,7 @@ function header(title: string, booking: BookingCase, brandLogoUrl: string): Flex
         text: title,
         size: 'xl',
         weight: 'bold',
-        color: GOLD,
+        color: titleColor,
         align: 'center',
         margin: 'sm',
       },
@@ -141,13 +147,21 @@ function evidenceTile(
     flex: 1,
     contents: [
       {
-        type: 'image',
-        url: image.previewUrl,
-        size: 'full',
-        aspectRatio: '1:1',
-        aspectMode,
+        type: 'box',
+        layout: 'vertical',
+        cornerRadius: 'md',
         backgroundColor: '#F6F5F3',
-        action: { type: 'uri', label: 'เปิดรูปขนาดเต็ม', uri: image.fullUrl },
+        contents: [
+          {
+            type: 'image',
+            url: image.previewUrl,
+            size: 'full',
+            aspectRatio: '1:1',
+            aspectMode,
+            backgroundColor: '#F6F5F3',
+            action: { type: 'uri', label: 'เปิดรูปขนาดเต็ม', uri: image.fullUrl },
+          },
+        ],
       },
       { type: 'text', text: label, size: 'xxs', color: SECONDARY, align: 'center', margin: 'xs' },
     ],
@@ -169,6 +183,7 @@ function bubble(
   booking: BookingCase,
   brandLogoUrl: string,
   bodyContents: FlexComponent[],
+  titleColor = GOLD,
 ): FlexComponent {
   const appointment = formatThaiAppointment(booking.appointmentStart)
   return {
@@ -177,7 +192,7 @@ function bubble(
     contents: {
       type: 'bubble',
       size: 'mega',
-      header: header(title, booking, brandLogoUrl),
+      header: header(title, booking, brandLogoUrl, titleColor),
       body: {
         type: 'box',
         layout: 'vertical',
@@ -267,4 +282,52 @@ export function buildDoctorMinimalReceipt(
     keyValueRow('โปรแกรม', booking.serviceId),
     ...teamSection(booking),
   ])
+}
+
+export function buildAdminTimeConflictReceipt(
+  booking: BookingCase,
+  brandLogoUrl: string,
+): FlexComponent {
+  return bubble('นัดซ้อน — ยังไม่ยืนยัน', booking, brandLogoUrl, [
+    separator(),
+    {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#FFF7E6',
+      cornerRadius: 'md',
+      paddingAll: '12px',
+      contents: [
+        {
+          type: 'text',
+          text: 'ตรวจพบเวลานัดซ้อน',
+          color: WARNING,
+          weight: 'bold',
+          size: 'md',
+          wrap: true,
+        },
+        {
+          type: 'text',
+          text: 'ยังไม่สร้าง Calendar',
+          color: TEXT,
+          size: 'sm',
+          margin: 'sm',
+          wrap: true,
+        },
+        {
+          type: 'text',
+          text: 'ยังไม่แจ้งกลุ่มหมอ กรุณาตรวจสอบและเลือกเวลาใหม่',
+          color: SECONDARY,
+          size: 'sm',
+          margin: 'xs',
+          wrap: true,
+        },
+      ],
+    },
+    ...customerSection(booking),
+    separator(),
+    sectionTitle('รายละเอียดการจอง'),
+    keyValueRow('แพทย์', booking.doctorId),
+    keyValueRow('โปรแกรม', booking.serviceId),
+    ...teamSection(booking),
+  ], WARNING)
 }

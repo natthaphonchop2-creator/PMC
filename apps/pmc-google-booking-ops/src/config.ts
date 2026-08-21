@@ -12,9 +12,11 @@ export const SCRIPT_PROPERTY_KEYS = {
   mediaBaseUrl: 'BOOKING_MEDIA_BASE_URL',
   mediaSigningSecret: 'BOOKING_MEDIA_SIGNING_SECRET',
   brandLogoUrl: 'BOOKING_BRAND_LOGO_URL',
+  sharedAccountEmail: 'PMC_SHARED_ACCOUNT_EMAIL',
 } as const
 
 export const BOOKING_FORM_LABELS = {
+  closerName: 'ผู้ปิดการจอง',
   aeName: 'AE ผู้เปิดแชท',
   customerName: 'ชื่อลูกค้า',
   phone: 'เบอร์มือถือ',

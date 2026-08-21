@@ -41,6 +41,8 @@ export interface ChannelConfig {
 
 export interface ConfigPort {
   findCloserByEmail(email: string): StaffConfig | null
+  findCloserByName(name: string): StaffConfig | null
+  isSharedCloserEmail(email: string): boolean
   findEligibleAeByName(name: string): StaffConfig | null
   findStaffById(id: string): StaffConfig | null
   listStaff(): StaffConfig[]
@@ -172,7 +174,7 @@ export interface CalendarPort {
 export interface LineMessage {
   to: string
   audience: 'doctor' | 'admin'
-  eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' | 'DAILY_SCHEDULE' | 'CALL_REMINDER' | 'EXPIRY_REMINDER'
+  eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' | 'TIME_CONFLICT' | 'DAILY_SCHEDULE' | 'CALL_REMINDER' | 'EXPIRY_REMINDER'
   caseIds: string[]
   text: string
   apiMessage?: Record<string, unknown>
@@ -199,11 +201,19 @@ export interface EvidenceMediaPort {
 }
 
 export interface FormsPort {
-  syncBookingChoices(aeNames: string[], doctorIds: string[], serviceIds: string[], channelIds: string[]): void
+  syncBookingChoices(
+    closerNames: string[],
+    aeNames: string[],
+    doctorIds: string[],
+    serviceIds: string[],
+    channelIds: string[],
+  ): void
   syncCallResultChoices(results: string[]): void
   bookingCollectsEmail(): boolean
+  bookingHasCloserField(): boolean
   bookingHasAeField(): boolean
   pauseBookingResponses(): void
+  ensureCloserField(): void
   renameAdminFieldToAe(): void
   resumeBookingResponses(): void
 }

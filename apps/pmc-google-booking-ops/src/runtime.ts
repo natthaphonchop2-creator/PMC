@@ -7,6 +7,7 @@ import { createGoogleFormsPort } from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import {
   adminBookingMessage,
+  adminTimeConflictMessage,
   createAppsScriptCryptoPort,
   createGoogleLinePort,
   sendBookingConfirmationMessages,
@@ -21,6 +22,7 @@ import {
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import {
   resolveCloserByEmail,
+  resolveCloserByName,
   resolveEligibleAeByName,
   validateStaffDirectory,
 } from './domain/staffDirectory'
@@ -62,6 +64,7 @@ function createConfigPort(
   store: SheetStore,
   adminLineGroupId: string,
   brandLogoUrl: string,
+  sharedAccountEmail: string,
 ): ConfigPort {
   const staff = (): StaffConfig[] =>
     store.read('CONFIG_STAFF').map((row) => ({
@@ -96,6 +99,10 @@ function createConfigPort(
     }))
   return {
     findCloserByEmail: (email) => resolveCloserByEmail(staff(), email),
+    findCloserByName: (name) => resolveCloserByName(staff(), name),
+    isSharedCloserEmail: (email) =>
+      Boolean(sharedAccountEmail.trim()) &&
+      email.trim().toLowerCase() === sharedAccountEmail.trim().toLowerCase(),
     findEligibleAeByName: (name) => resolveEligibleAeByName(staff(), name),
     findStaffById: (id) => staff().find((item) => item.id === id) ?? null,
     listStaff: staff,
@@ -140,6 +147,7 @@ export function createRuntime(): BookingPorts {
       store,
       properties[SCRIPT_PROPERTY_KEYS.adminLineGroupId],
       properties[SCRIPT_PROPERTY_KEYS.brandLogoUrl],
+      properties[SCRIPT_PROPERTY_KEYS.sharedAccountEmail] ?? '',
     ),
     repositories: createBookingRepositories(store, locks, clock),
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
@@ -224,6 +232,23 @@ export function runEligibleRetries(ports: BookingPorts): void {
           { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
           { actor: 'system', reason: 'LINE retry succeeded', correlationId: id },
         )
+      } else if (operation === 'ADMIN_TIME_CONFLICT_LINE') {
+        const payload = retryPayload(retry.payload)
+        const messageVersion = Number(payload.messageVersion) || booking.version
+        ports.line.push(
+          adminTimeConflictMessage(
+            booking,
+            ports.config.adminLineGroupId(),
+            ports.config.brandLogoUrl(),
+            messageVersion,
+          ),
+        )
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { lineState: 'OK' },
+          { actor: 'system', reason: 'Admin time-conflict LINE retry succeeded', correlationId: id },
+        )
       } else if (operation === 'ADMIN_EVIDENCE_LINE') {
         const payload = retryPayload(retry.payload)
         const paymentEvidenceFileIds = (payload.paymentEvidenceFileIds as string[]) ?? []
@@ -279,6 +304,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           formResponseId: booking.formResponseId,
           submittedAt: booking.depositReceivedAt,
           submitterEmail: booking.submitterEmail,
+          closerName: booking.adminName,
           aeName: booking.aeName ?? booking.adminName,
           customerName: booking.customerName,
           phone: booking.phoneNormalized,
@@ -353,7 +379,7 @@ export function setupSystem(): {
   const runtime = createRuntime()
   const staff = runtime.config.listStaff().filter((item) => item.active)
   const aes = runtime.config.listEligibleAes()
-  validateStaffDirectory(staff)
+  const { activeClosers } = validateStaffDirectory(staff)
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   const doctors = runtime.config.listDoctors().filter((doctor) => doctor.active)
   const services = runtime.config.listServices().filter((service) => service.active)
@@ -373,7 +399,9 @@ export function setupSystem(): {
       syncedChannels: channels.length,
     }
   }
+  runtime.forms.ensureCloserField()
   runtime.forms.syncBookingChoices(
+    activeClosers.map((closer) => closer.name),
     aes.map((ae) => ae.name),
     doctors.map((doctor) => doctor.id),
     services.map((service) => service.id),
@@ -430,26 +458,30 @@ export function prepareStaffAeMigrationWorkflow(): {
 
 export function pauseAndCutoverBookingFormWorkflow(): {
   paused: true
+  syncedClosers: number
   syncedAes: number
 } {
   const runtime = createRuntime()
-  const { activeAes } = validateStaffDirectory(runtime.config.listStaff())
+  const { activeClosers, activeAes } = validateStaffDirectory(runtime.config.listStaff())
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   runtime.forms.pauseBookingResponses()
   runtime.forms.renameAdminFieldToAe()
+  runtime.forms.ensureCloserField()
   runtime.forms.syncBookingChoices(
+    activeClosers.map((closer) => closer.name),
     activeAes.map((ae) => ae.name),
     runtime.config.listDoctors().filter((doctor) => doctor.active).map((doctor) => doctor.id),
     runtime.config.listServices().filter((service) => service.active).map((service) => service.id),
     runtime.config.listChannels().filter((channel) => channel.active).map((channel) => channel.id),
   )
-  return { paused: true, syncedAes: activeAes.length }
+  return { paused: true, syncedClosers: activeClosers.length, syncedAes: activeAes.length }
 }
 
 export function resumeBookingFormAfterAeCutoverWorkflow(): { acceptingResponses: true } {
   const runtime = createRuntime()
   validateStaffDirectory(runtime.config.listStaff())
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
+  if (!runtime.forms.bookingHasCloserField()) throw new Error('booking Form closer field is missing')
   if (!runtime.forms.bookingHasAeField()) throw new Error('booking Form AE field is missing')
   runtime.forms.resumeBookingResponses()
   return { acceptingResponses: true }

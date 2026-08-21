@@ -3,6 +3,7 @@ import { ensureCaseEvidenceFolder } from '../src/adapters/googleDrive'
 import {
   adminBookingMessage,
   doctorBookingMessage,
+  formatLinePushError,
   handleLineDirectoryIngress,
   isLinePushAcceptedStatus,
 } from '../src/adapters/lineMessaging'
@@ -65,7 +66,12 @@ describe('doctor Calendar', () => {
     const result = submitBookingIntake(validBookingIntake(), ports)
     expect(result.status).toBe('TIME_CONFLICT')
     expect(result.calendarState).toBe('CONFLICT')
+    expect(result.lineState).toBe('OK')
     expect(ports.calendar.createdEvents()).toHaveLength(0)
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.adminMessages()[0].eventType).toBe('TIME_CONFLICT')
+    expect(ports.line.doctorMessages()).toEqual([])
+    expect(ports.calls.list()).toEqual([])
   })
 
   it('creates one gold event with full customer name and phone', () => {
@@ -201,6 +207,18 @@ describe('LINE routing', () => {
     expect(isLinePushAcceptedStatus(409)).toBe(true)
     expect(isLinePushAcceptedStatus(400)).toBe(false)
     expect(isLinePushAcceptedStatus(500)).toBe(false)
+  })
+
+  it('keeps bounded LINE validation details in a failed push error', () => {
+    expect(
+      formatLinePushError(
+        400,
+        '{"message":"A message in the request body is invalid","details":[{"property":"/body/contents/0"}]}',
+      ),
+    ).toBe(
+      'LINE push failed with status 400: {"message":"A message in the request body is invalid","details":[{"property":"/body/contents/0"}]}',
+    )
+    expect(formatLinePushError(400, 'x'.repeat(900))).toHaveLength(834)
   })
 
   it('sends a reschedule message to the same doctor group', () => {

@@ -17,11 +17,38 @@ function nullableString(value: unknown): string | null {
   return normalized || null
 }
 
+function bangkokMonthKey(value: unknown): string {
+  const text = String(value ?? '').trim()
+  if (/^\d{4}-\d{2}$/.test(text)) return text
+
+  const date = value instanceof Date ? value : new Date(text)
+  if (Number.isNaN(date.getTime())) return text
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(date)
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  return year && month ? `${year}-${month}` : text
+}
+
+function caseSequence(caseId: unknown, month: string): number {
+  const match = String(caseId ?? '').match(new RegExp(`^PMC-${month.replace('-', '')}-(\\d{4})$`))
+  return match ? Number(match[1]) : 0
+}
+
+function storedThaiPhone(value: unknown): string {
+  const text = String(value ?? '').trim()
+  return /^\d{9}$/.test(text) ? `0${text}` : text
+}
+
 function asBooking(row: SheetRow): BookingCase {
   return {
     ...row,
     aeId: nullableString(row.aeId),
     aeName: nullableString(row.aeName),
+    phoneNormalized: storedThaiPhone(row.phoneNormalized),
   } as unknown as BookingCase
 }
 
@@ -43,11 +70,15 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
     allocateMonthlySequence(month: string): number {
       return locks.withLock(() => {
         const rows = store.read('SYSTEM_SEQUENCES')
-        const index = rows.findIndex((row) => row.month === month)
-        const next = index === -1 ? 1 : Number(rows[index].sequence) + 1
-        const updated = [...rows]
-        if (index === -1) updated.push({ month, sequence: next })
-        else updated[index] = { month, sequence: next }
+        const storedMaximum = rows
+          .filter((row) => bangkokMonthKey(row.month) === month)
+          .reduce((maximum, row) => Math.max(maximum, Number(row.sequence) || 0), 0)
+        const bookingMaximum = store
+          .read('BOOKING_MASTER')
+          .reduce((maximum, row) => Math.max(maximum, caseSequence(row.caseId, month)), 0)
+        const next = Math.max(storedMaximum, bookingMaximum) + 1
+        const updated = rows.filter((row) => bangkokMonthKey(row.month) !== month)
+        updated.push({ month, sequence: next })
         store.replace('SYSTEM_SEQUENCES', updated)
         return next
       })

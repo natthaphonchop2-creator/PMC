@@ -94,6 +94,36 @@ describe('PMC booking end to end', () => {
     expect(ports.retries.listPending()).toHaveLength(0)
   })
 
+  it('retries only the Admin alert when a time-conflict notification fails', () => {
+    const ports = createTestPorts({ calendarConflicts: true, linePushFails: true })
+    const booking = submitBookingIntake(validBookingIntake(), ports)
+
+    expect(booking).toMatchObject({
+      status: 'TIME_CONFLICT',
+      calendarState: 'CONFLICT',
+      lineState: 'RETRY',
+    })
+    expect(ports.retries.listPending()).toHaveLength(1)
+    expect(ports.retries.listPending()[0]).toMatchObject({
+      operation: 'ADMIN_TIME_CONFLICT_LINE',
+    })
+    expect(ports.line.doctorMessages()).toEqual([])
+    expect(ports.calls.list()).toEqual([])
+
+    ports.line.allowPushes()
+    runEligibleRetries(ports)
+
+    expect(ports.bookings.getByCaseId(booking.caseId)).toMatchObject({
+      status: 'TIME_CONFLICT',
+      calendarState: 'CONFLICT',
+      lineState: 'OK',
+    })
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.adminMessages()[0].eventType).toBe('TIME_CONFLICT')
+    expect(ports.line.doctorMessages()).toEqual([])
+    expect(ports.retries.listPending()).toEqual([])
+  })
+
   it('deduplicates Admin when doctor delivery fails after Admin succeeds', () => {
     const ports = createTestPorts({ lineFailsAtPush: 2 })
     const booking = submitBookingIntake(validBookingIntake(), ports)

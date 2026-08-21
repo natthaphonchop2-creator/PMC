@@ -35,6 +35,7 @@ export interface BookingIntake {
   formResponseId: string
   submittedAt: string
   submitterEmail: string
+  closerName: string
   aeName: string
   customerName: string
   phone: string

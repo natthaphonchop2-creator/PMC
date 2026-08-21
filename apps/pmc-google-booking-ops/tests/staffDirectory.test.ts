@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   resolveCloserByEmail,
+  resolveCloserByName,
   resolveEligibleAeByName,
   validateStaffDirectory,
 } from '../src/domain/staffDirectory'
@@ -30,6 +31,11 @@ const staff: StaffConfig[] = [
 describe('staff directory', () => {
   it('resolves closer by normalized verified email', () => {
     expect(resolveCloserByEmail(staff, ' MUS@EXAMPLE.COM ')).toMatchObject({ id: 'staff-mus' })
+  })
+
+  it('resolves only active closer-eligible staff by selected name', () => {
+    expect(resolveCloserByName(staff, ' มัส ')).toMatchObject({ id: 'staff-mus' })
+    expect(resolveCloserByName(staff, 'เอม')).toBeNull()
   })
 
   it('resolves only active AE-eligible staff by name', () => {

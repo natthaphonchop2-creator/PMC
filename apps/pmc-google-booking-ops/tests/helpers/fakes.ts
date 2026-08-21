@@ -143,6 +143,19 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               active: true,
             }
           : null,
+      findCloserByName: (name) =>
+        name === 'Admin A'
+          ? {
+              id: 'admin-1',
+              name: 'Admin A',
+              email: 'admin@example.com',
+              lineUserId: 'admin-user-1',
+              canCloseBooking: true,
+              canBeAe: true,
+              active: true,
+            }
+          : null,
+      isSharedCloserEmail: () => false,
       findEligibleAeByName: (name) =>
         name === 'Admin A'
           ? {
@@ -257,8 +270,10 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       syncBookingChoices: () => undefined,
       syncCallResultChoices: () => undefined,
       bookingCollectsEmail: () => true,
+      bookingHasCloserField: () => true,
       bookingHasAeField: () => true,
       pauseBookingResponses: () => undefined,
+      ensureCloserField: () => undefined,
       renameAdminFieldToAe: () => undefined,
       resumeBookingResponses: () => undefined,
     },
@@ -493,6 +508,7 @@ export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingI
     formResponseId: 'response-1',
     submittedAt: '2026-08-20T09:00:00+07:00',
     submitterEmail: 'admin@example.com',
+    closerName: 'Admin A',
     aeName: 'Admin A',
     customerName: 'ลูกค้าทดสอบ',
     phone: '0812345678',

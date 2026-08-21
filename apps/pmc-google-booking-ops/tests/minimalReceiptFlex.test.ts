@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildAdminTimeConflictReceipt,
   buildAdminMinimalReceipt,
   buildDoctorMinimalReceipt,
   formatThaiAppointment,
@@ -63,13 +64,37 @@ describe('Minimal Receipt Flex', () => {
   })
 
   it('uses fixed square evidence slots with payment fit and chat cover', () => {
-    const json = JSON.stringify(
-      buildAdminMinimalReceipt(bookingFixture(), evidence, logoUrl),
-    )
+    const payload = buildAdminMinimalReceipt(bookingFixture(), evidence, logoUrl)
+    const json = JSON.stringify(payload)
     expect(json).toContain('"aspectRatio":"1:1"')
     expect(json).toContain('"aspectMode":"fit"')
     expect(json).toContain('"aspectMode":"cover"')
     expect((json.match(/"type":"filler"/g) ?? [])).toHaveLength(2)
+
+    const roundedFrames: Array<Record<string, unknown>> = []
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit)
+        return
+      }
+      if (!value || typeof value !== 'object') return
+      const component = value as Record<string, unknown>
+      if (component.type === 'box' && component.cornerRadius === 'md') roundedFrames.push(component)
+      Object.values(component).forEach(visit)
+    }
+    visit(payload)
+
+    expect(roundedFrames).toHaveLength(2)
+    for (const frame of roundedFrames) {
+      expect(frame).toMatchObject({
+        type: 'box',
+        layout: 'vertical',
+        cornerRadius: 'md',
+        backgroundColor: '#F6F5F3',
+      })
+      expect(JSON.stringify(frame)).toContain('"type":"image"')
+      expect(JSON.stringify(frame)).toContain('"label":"เปิดรูปขนาดเต็ม"')
+    }
   })
 
   it('keeps doctor payload evidence, deposit, and channel free', () => {
@@ -91,5 +116,28 @@ describe('Minimal Receipt Flex', () => {
       ),
     )
     expect(json).toContain('ไม่ระบุ (เคสเดิม)')
+  })
+
+  it('builds an Admin-only warning receipt for an unconfirmed time conflict', () => {
+    const json = JSON.stringify(
+      buildAdminTimeConflictReceipt(
+        bookingFixture({
+          status: 'TIME_CONFLICT',
+          calendarState: 'CONFLICT',
+          adminName: 'ทดสอบ',
+          aeName: 'มัส',
+        }),
+        logoUrl,
+      ),
+    )
+
+    expect(json).toContain('นัดซ้อน — ยังไม่ยืนยัน')
+    expect(json).toContain('ยังไม่สร้าง Calendar')
+    expect(json).toContain('ยังไม่แจ้งกลุ่มหมอ')
+    expect(json).toContain('ลูกค้าทดสอบ')
+    expect(json).toContain('0812345678')
+    expect(json).toContain('ทดสอบ')
+    expect(json).toContain('มัส')
+    expect(json).not.toContain('หลักฐาน')
   })
 })

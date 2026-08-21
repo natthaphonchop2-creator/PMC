@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { encodeSheetCell } from '../src/adapters/googleSheets'
+import { createBookingRepositories, type SheetRow, type SheetStore } from '../src/repositories'
 import { createMemoryRepositories, bookingFixture } from './helpers/fakes'
 
 describe('booking repositories', () => {
@@ -13,6 +14,43 @@ describe('booking repositories', () => {
     expect(repos.bookings.allocateMonthlySequence('2026-08')).toBe(1)
     expect(repos.bookings.allocateMonthlySequence('2026-08')).toBe(2)
     expect(repos.bookings.allocateMonthlySequence('2026-09')).toBe(1)
+  })
+
+  it('continues after a month coerced to a Sheet date and an existing case ID', () => {
+    const tabs = new Map<string, SheetRow[]>([
+      ['SYSTEM_SEQUENCES', [{ month: new Date('2026-07-31T17:00:00.000Z'), sequence: 1 }]],
+      ['BOOKING_MASTER', [{ caseId: 'PMC-202608-0001' }]],
+    ])
+    const store: SheetStore = {
+      read: (tab) => structuredClone(tabs.get(tab) ?? []),
+      replace: (tab, rows) => tabs.set(tab, structuredClone(rows)),
+    }
+    const repos = createBookingRepositories(
+      store,
+      { withLock: (operation) => operation() },
+      { nowIso: () => '2026-08-21T12:00:00+07:00' },
+    )
+
+    expect(repos.bookings.allocateMonthlySequence('2026-08')).toBe(2)
+    expect(store.read('SYSTEM_SEQUENCES')).toEqual([{ month: '2026-08', sequence: 2 }])
+  })
+
+  it('restores the leading zero when Sheets coerces a Thai phone to a number', () => {
+    const fixture = bookingFixture()
+    const tabs = new Map<string, SheetRow[]>([
+      ['BOOKING_MASTER', [{ ...fixture, phoneNormalized: 812345678 }]],
+    ])
+    const store: SheetStore = {
+      read: (tab) => structuredClone(tabs.get(tab) ?? []),
+      replace: (tab, rows) => tabs.set(tab, structuredClone(rows)),
+    }
+    const repos = createBookingRepositories(
+      store,
+      { withLock: (operation) => operation() },
+      { nowIso: () => '2026-08-21T12:00:00+07:00' },
+    )
+
+    expect(repos.bookings.getByCaseId(fixture.caseId)?.phoneNormalized).toBe('0812345678')
   })
 
   it('prevents duplicate Form response processing', () => {

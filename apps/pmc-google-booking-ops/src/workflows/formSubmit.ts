@@ -5,7 +5,10 @@ import type { BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
-import { sendBookingConfirmationMessages } from '../adapters/lineMessaging'
+import {
+  adminTimeConflictMessage,
+  sendBookingConfirmationMessages,
+} from '../adapters/lineMessaging'
 import { createInitialCallTask } from './callQueue'
 
 function validateEvidence(intake: BookingIntake): void {
@@ -24,8 +27,17 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     throw new Error('form response already processed')
   }
 
-  const closer = ports.config.findCloserByEmail(intake.submitterEmail)
-  if (!closer) throw new Error('submitter is not an active booking closer')
+  const sharedAccount = ports.config.isSharedCloserEmail(intake.submitterEmail)
+  const closer = sharedAccount
+    ? ports.config.findCloserByName(intake.closerName)
+    : ports.config.findCloserByEmail(intake.submitterEmail)
+  if (!closer) {
+    if (sharedAccount) throw new Error('selected closer is not active or eligible')
+    throw new Error('submitter is not an active booking closer')
+  }
+  if (!sharedAccount && closer.name !== intake.closerName.trim()) {
+    throw new Error('selected closer does not match submitter email')
+  }
   const ae = ports.config.findEligibleAeByName(intake.aeName)
   if (!ae) throw new Error('selected AE is not active or eligible')
   const doctor = ports.config.findDoctor(intake.doctorId)
@@ -55,7 +67,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     adminId: closer.id,
     adminName: closer.name,
     submitterEmail: intake.submitterEmail.trim().toLowerCase(),
-    adminIdentityStatus: 'VERIFIED_EMAIL',
+    adminIdentityStatus: sharedAccount ? 'SHARED_ACCOUNT' : 'VERIFIED_EMAIL',
     aeId: ae.id,
     aeName: ae.name,
     customerName: intake.customerName.trim(),
@@ -156,12 +168,50 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   }
 
   if (ports.calendar.hasConflict(current.calendarId ?? '', current.appointmentStart, current.appointmentEnd)) {
-    return ports.repositories.bookings.update(
+    const conflict = ports.repositories.bookings.update(
       caseId,
       current.version,
       { status: 'TIME_CONFLICT', calendarState: 'CONFLICT' },
       { actor: 'system', reason: 'Doctor Calendar overlap', correlationId: intake.formResponseId },
     )
+    try {
+      ports.line.push(
+        adminTimeConflictMessage(
+          conflict,
+          ports.config.adminLineGroupId(),
+          ports.config.brandLogoUrl(),
+          conflict.version,
+        ),
+      )
+      return ports.repositories.bookings.update(
+        caseId,
+        conflict.version,
+        { lineState: 'OK' },
+        {
+          actor: 'system',
+          reason: 'Admin time-conflict LINE notification sent',
+          correlationId: intake.formResponseId,
+        },
+      )
+    } catch (error) {
+      const safeError = error instanceof Error ? error.message : 'Time-conflict LINE notification failed'
+      ports.repositories.retries.enqueue({
+        id: `RETRY-${caseId}-ADMIN-TIME-CONFLICT`,
+        caseId,
+        operation: 'ADMIN_TIME_CONFLICT_LINE',
+        idempotencyKey: `${caseId}:ADMIN_TIME_CONFLICT`,
+        attempts: 0,
+        status: 'PENDING',
+        safeError,
+        payload: { messageVersion: conflict.version },
+      })
+      return ports.repositories.bookings.update(
+        caseId,
+        conflict.version,
+        { lineState: 'RETRY' },
+        { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
+      )
+    }
   }
 
   try {
