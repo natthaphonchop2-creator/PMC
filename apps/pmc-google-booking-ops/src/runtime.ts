@@ -36,6 +36,7 @@ import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConf
 import { createBookingRepositories, type SheetStore } from './repositories'
 import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminders } from './workflows/callQueue'
 import { writeDashboard } from './workflows/dashboard'
+import { buildProductionFlexValidationMessages } from './workflows/flexValidation'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention } from './workflows/retention'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
@@ -526,6 +527,42 @@ export function configureStaffProfileImagesWorkflow(): {
     backupCreated: true,
     updatedProfiles: plan.filter((item) => item.profileImageUrl).length,
     blankProfiles: plan.filter((item) => !item.profileImageUrl).length,
+  }
+}
+
+export function validateProductionFlexMessagesWorkflow(): {
+  validatorStatus: 200
+  accepted: true
+  adminHasProfiles: true
+  doctorHasProfiles: true
+  adminHasEvidence: true
+  doctorHasEvidence: false
+} {
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  validateRuntimeProperties(properties)
+  const logoSuffix = '/assets/pmc-flex-logo-v1.png'
+  const logoUrl = properties[SCRIPT_PROPERTY_KEYS.brandLogoUrl].trim()
+  if (!logoUrl.endsWith(logoSuffix)) throw new Error('brand logo URL has an unexpected path')
+  const baseUrl = logoUrl.slice(0, -logoSuffix.length)
+  const messages = buildProductionFlexValidationMessages(logoUrl, baseUrl)
+  const response = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/validate/push', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: {
+      Authorization: `Bearer ${properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]}`,
+    },
+    payload: JSON.stringify({ messages }),
+    muteHttpExceptions: true,
+  })
+  const status = response.getResponseCode()
+  if (status !== 200) throw new Error(`LINE Flex validation failed with status ${status}`)
+  return {
+    validatorStatus: 200,
+    accepted: true,
+    adminHasProfiles: true,
+    doctorHasProfiles: true,
+    adminHasEvidence: true,
+    doctorHasEvidence: false,
   }
 }
 

@@ -275,6 +275,8 @@ The booking Flex reads the optional `profileImageUrl` column from `CONFIG_STAFF`
 
 For the approved seven-person roster, run `configurePmcStaffProfileImages()` once after the Cloud Run profile routes are verified. The function creates a timestamped Spreadsheet backup in the configured backup folder, verifies the exact roster before writing, migrates the column when needed, writes only `profileImageUrl`, and verifies the written values. A roster mismatch fails before the profile column write.
 
+Run `validatePmcBookingFlexMessages()` after the Apps Script deployment. It submits two synthetic Flex objects to LINE's push-message validator and does not send either object to a LINE user or group. The function returns only the validation status and safe content-presence booleans; it never returns credentials, destination IDs, customer data, or media URLs.
+
 Use only the public HTTPS Cloud Run routes below. LINE fetches these images from outside Google Drive, so private Drive URLs must not be stored in the Sheet.
 
 | Staff | Asset route |

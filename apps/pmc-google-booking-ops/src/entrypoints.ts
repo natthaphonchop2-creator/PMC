@@ -18,6 +18,7 @@ import {
   runDailyOperationsWorkflow,
   runIntegrityAndBackupWorkflow,
   setupSystem,
+  validateProductionFlexMessagesWorkflow,
 } from './runtime'
 import { recordCallResult } from './workflows/callQueue'
 import { submitBookingIntake } from './workflows/formSubmit'
@@ -58,6 +59,10 @@ export function preparePmcStaffAeMigration() {
 
 export function configurePmcStaffProfileImages() {
   return configureStaffProfileImagesWorkflow()
+}
+
+export function validatePmcBookingFlexMessages() {
+  return validateProductionFlexMessagesWorkflow()
 }
 
 export function pauseAndCutoverPmcBookingForm() {
