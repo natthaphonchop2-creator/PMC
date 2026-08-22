@@ -1,4 +1,4 @@
-import type { OcrDocumentState, OcrExtraction, OcrWarning } from '../../src/apps/ocr-ledger/contracts'
+import type { OcrDocumentState, OcrExtraction, OcrWarning } from '../../src/apps/ocr-ledger/contracts.js'
 
 export type OcrDomainEvent = 'STORE' | 'START_OCR' | 'OCR_SUCCEEDED' | 'RETRY' | 'FAIL' | 'CONFIRM' | 'CANCEL'
 

@@ -1,5 +1,5 @@
-import type { OcrDraft } from '../../src/apps/ocr-ledger/contracts'
-import { signReviewToken, type ReviewTokenAction } from './security'
+import type { OcrDraft } from '../../src/apps/ocr-ledger/contracts.js'
+import { signReviewToken, type ReviewTokenAction } from './security.js'
 
 type FlexAction = { type: 'postback'; label: string; data: string } | { type: 'uri'; label: string; uri: string }
 type FlexText = { type: 'text'; text: string; [key: string]: unknown }

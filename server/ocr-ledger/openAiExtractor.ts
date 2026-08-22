@@ -1,6 +1,6 @@
-import type { OcrExtraction, OcrLineItem, OcrWarning } from '../../src/apps/ocr-ledger/contracts'
-import { validateExtraction } from './domain'
-import type { PreparedOcrImage } from './imageProcessing'
+import type { OcrExtraction, OcrLineItem, OcrWarning } from '../../src/apps/ocr-ledger/contracts.js'
+import { validateExtraction } from './domain.js'
+import type { PreparedOcrImage } from './imageProcessing.js'
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
 

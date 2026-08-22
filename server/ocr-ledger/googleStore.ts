@@ -1,4 +1,4 @@
-import type { OcrAction, OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts'
+import type { OcrAction, OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrDrivePort, OcrSheetsPort } from './googleClient.js'
 
 export const MASTER_TABS = [
