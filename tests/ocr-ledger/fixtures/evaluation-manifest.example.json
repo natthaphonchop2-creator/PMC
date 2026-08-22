@@ -1,0 +1,23 @@
+{
+  "fixtures": [
+    {
+      "fixtureId": "receipt-001",
+      "imagePath": "receipt-001.png",
+      "expected": {
+        "documentType": "RECEIPT",
+        "grandTotal": 214,
+        "lineItems": [
+          { "description": "ITEM A", "quantity": 2, "unitPrice": 100, "lineTotal": 200 }
+        ]
+      },
+      "actual": {
+        "documentType": "RECEIPT",
+        "grandTotal": 214,
+        "lineItems": [
+          { "description": "ITEM A", "quantity": 2, "unitPrice": 100, "lineTotal": 200 }
+        ]
+      },
+      "autoConfirmed": false
+    }
+  ]
+}

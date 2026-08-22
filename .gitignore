@@ -17,6 +17,8 @@ lerna-debug.log*
 .openai-api.local.json
 .mcp.local.json
 /API/
+/ocr-eval-fixtures/
+/output/ocr-ledger-evaluation/
 knowledge-base/runtime/
 .superpowers/
 .worktrees/
