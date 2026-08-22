@@ -12,8 +12,12 @@ export async function runOcrLedgerJob(env: NodeJS.ProcessEnv): Promise<OcrLedger
   const ports = createGoogleOcrPorts({
     googleClientId: config.googleClientId, googleClientSecret: config.googleClientSecret,
     googleRefreshToken: config.googleRefreshToken, driveRootId: config.driveRootId,
+    monthlyLedgersFolderId: config.monthlyLedgersFolderId,
   })
-  const store = createGoogleOcrStore({ masterSpreadsheetId: config.masterSpreadsheetId, sheets: ports.sheets, drive: ports.drive })
+  const store = createGoogleOcrStore({
+    masterSpreadsheetId: config.masterSpreadsheetId, monthlyLedgersFolderId: config.monthlyLedgersFolderId,
+    sheets: ports.sheets, drive: ports.drive,
+  })
   const line = createOcrLineClient({
     channelAccessToken: config.lineChannelAccessToken, liffChannelId: config.liffChannelId,
     maxImageBytes: config.maxImageBytes,

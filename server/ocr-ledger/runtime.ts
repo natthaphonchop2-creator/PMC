@@ -26,9 +26,11 @@ function constructOcrLedgerRuntime(config: OcrLedgerConfig): OcrLedgerRuntimeMid
     googleClientSecret: config.googleClientSecret,
     googleRefreshToken: config.googleRefreshToken,
     driveRootId: config.driveRootId,
+    monthlyLedgersFolderId: config.monthlyLedgersFolderId,
   })
   const store = createGoogleOcrStore({
     masterSpreadsheetId: config.masterSpreadsheetId,
+    monthlyLedgersFolderId: config.monthlyLedgersFolderId,
     sheets: google.sheets,
     drive: google.drive,
   })

@@ -41,6 +41,7 @@ describe('createOcrLedgerMiddleware', () => {
     expect(order).toEqual(['append-job', 'reply-ack', 'respond-200'])
     expect(store.appendJob).toHaveBeenCalledWith(expect.objectContaining({
       jobType: 'INTAKE', idempotencyKey: 'line:image:m-image-1', state: 'QUEUED', attempts: 0,
+      documentId: expect.stringMatching(/^OCR-20260822-[0-9a-f]{12}$/),
     }))
     expect(line.downloadImage).not.toHaveBeenCalled()
   })
@@ -186,7 +187,8 @@ function dependencies(order: string[] = []) {
     push: vi.fn(), verifyLiffIdToken: vi.fn(), assertGroupMember: vi.fn(async () => ({ displayName: 'Editor' })), validatePush: vi.fn(),
   } satisfies OcrLinePort
   const drive = {
-    createFolder: vi.fn(), findFolder: vi.fn(), moveFile: vi.fn(), uploadImage: vi.fn(), downloadImage: vi.fn(),
+    createFolder: vi.fn(), findFolder: vi.fn(), moveFile: vi.fn(), moveSpreadsheet: vi.fn(),
+    findImageByDocumentId: vi.fn(), uploadImage: vi.fn(), downloadImage: vi.fn(),
   } satisfies OcrDrivePort
   return { store, line, drive }
 }
@@ -264,7 +266,7 @@ function lineItem(lineNumber: number): Record<string, unknown> {
 
 const CONFIG: OcrLedgerConfig = {
   lineChannelSecret: 'line-secret', lineChannelAccessToken: 'line-token', allowedGroupId: 'Cgroup1',
-  masterSpreadsheetId: 'master', driveRootId: 'drive-root', liffId: 'liff-id', liffChannelId: 'liff-channel',
+  masterSpreadsheetId: 'master', driveRootId: 'drive-root', monthlyLedgersFolderId: 'monthly-folder', liffId: 'liff-id', liffChannelId: 'liff-channel',
   reviewSigningSecret: 'review-secret', openAiApiKey: 'openai-key', openAiOcrModel: 'gpt-5-mini',
   googleClientId: 'google-client', googleClientSecret: 'google-secret', googleRefreshToken: 'google-refresh',
   dailyReportEnabled: false, dailyReportTime: '20:00', timezone: 'Asia/Bangkok', workerBatchSize: 10,

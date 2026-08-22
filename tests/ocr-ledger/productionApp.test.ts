@@ -240,7 +240,7 @@ function basicAuth(user: string, password: string): string {
 function validOcrEnvironment(): NodeJS.ProcessEnv {
   return {
     OCR_LINE_CHANNEL_SECRET: 'test-secret', OCR_LINE_CHANNEL_ACCESS_TOKEN: 'test-token', OCR_ALLOWED_GROUP_ID: 'Ctest',
-    OCR_MASTER_SPREADSHEET_ID: 'test-sheet', OCR_DRIVE_ROOT_ID: 'test-drive', OCR_LIFF_ID: 'test-liff', OCR_LIFF_CHANNEL_ID: 'test-channel',
+    OCR_MASTER_SPREADSHEET_ID: 'test-sheet', OCR_DRIVE_ROOT_ID: 'test-drive', OCR_MONTHLY_LEDGERS_FOLDER_ID: 'test-monthly-folder', OCR_LIFF_ID: 'test-liff', OCR_LIFF_CHANNEL_ID: 'test-channel',
     OCR_REVIEW_SIGNING_SECRET: 'test-signing', OPENAI_API_KEY: 'test-openai', OPENAI_OCR_MODEL: 'test-model',
     OCR_GOOGLE_CLIENT_ID: 'test-client', OCR_GOOGLE_CLIENT_SECRET: 'test-client-secret', OCR_GOOGLE_REFRESH_TOKEN: 'test-refresh',
     OCR_DAILY_REPORT_ENABLED: 'false', OCR_DAILY_REPORT_TIME: '20:00', OCR_TIMEZONE: 'Asia/Bangkok',

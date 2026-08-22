@@ -24,7 +24,7 @@ describe('createOcrLedgerWorker', () => {
 
     expect(result).toEqual({ processed: 1, succeeded: 1, failed: 0, reportSent: false })
     expect(order).toEqual([
-      'lease', 'line-download', 'drive-upload', 'duplicate-check', 'extract',
+      'lease', 'find-drive-image', 'line-download', 'drive-upload', 'checkpoint-job', 'duplicate-check', 'extract',
       'find-folder:drive-root:2026', 'create-folder:drive-root:2026',
       'find-folder:folder-2026:08', 'create-folder:folder-2026:08',
       'find-folder:folder-08:RECEIPT', 'create-folder:folder-08:RECEIPT',
@@ -35,6 +35,33 @@ describe('createOcrLedgerWorker', () => {
     expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
     expect(drive.uploadImage).toHaveBeenCalledTimes(1)
     expect(extractor.extract).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(store.jobs[0].payloadJson)).toMatchObject({
+      sourceImageFileId: 'drive-file-1', sourceImageSha256: PNG_HASH,
+      sourceImageName: 'OCR-20260822-abc123.png', sourceImageMimeType: 'image/png',
+    })
+  })
+
+  it('finds a document-keyed staged image after a hard stop and avoids another LINE download or Drive upload', async () => {
+    let current = START
+    const intake = job('INTAKE', intakePayload(), 'OCR-20260822-abc123')
+    const store = new FakeStore([intake])
+    store.updateFailures = 2
+    const { worker, line, drive, extractor } = harness(store, [], () => current)
+
+    await expect(worker.runOnce()).rejects.toThrow('SHEET_WRITE_FAILED')
+    expect(line.downloadImage).toHaveBeenCalledTimes(1)
+    expect(drive.uploadImage).toHaveBeenCalledTimes(1)
+    expect(extractor.extract).not.toHaveBeenCalled()
+
+    current = new Date('2026-08-22T03:05:01.000Z')
+    await worker.runOnce()
+
+    expect(drive.findImageByDocumentId).toHaveBeenLastCalledWith('OCR-20260822-abc123', 'drive-root')
+    expect(line.downloadImage).toHaveBeenCalledTimes(1)
+    expect(drive.uploadImage).toHaveBeenCalledTimes(1)
+    expect(drive.downloadImage).toHaveBeenCalledWith('drive-file-1')
+    expect(extractor.extract).toHaveBeenCalledTimes(1)
+    expect(store.jobs[0].state).toBe('DONE')
   })
 
   it('shows the existing status for an exact-image duplicate without creating a second draft', async () => {
@@ -286,6 +313,16 @@ describe('createOcrLedgerWorker', () => {
     expect(retry.state).toBe('DONE')
   })
 
+  it('classifies a RETRY with no authoritative original intake as a Sheet integrity failure', async () => {
+    const retry = job('RETRY', actionPayload(), 'OCR-20260822-missing1')
+    const store = new FakeStore([retry])
+    const { worker } = harness(store)
+
+    await worker.runOnce()
+
+    expect(store.jobs[0]).toMatchObject({ state: 'QUEUED', lastErrorCode: 'SHEET_WRITE_FAILED' })
+  })
+
   it('signs terminal RETRY with the current saved draft version', async () => {
     const existing = draft({ state: 'FAILED', draftVersion: 3 })
     const retry = job('RETRY', { ...actionPayload(), expectedVersion: 3 }, existing.documentId)
@@ -519,6 +556,7 @@ class FakeStore implements OcrLedgerStore {
   }>()
   saveFailures = 0
   appendFailures = 0
+  updateFailures = 0
   getDraftCalls = 0
   failGetDraftOnCall: number | null = null
 
@@ -534,7 +572,11 @@ class FakeStore implements OcrLedgerStore {
     }
     return leased.map((entry) => structuredClone(entry))
   }
-  async updateJob(next: OcrQueueJob) { this.order.push('update-job'); Object.assign(this.jobs.find((entry) => entry.jobId === next.jobId)!, structuredClone(next)) }
+  async updateJob(next: OcrQueueJob) {
+    this.order.push(next.state === 'LEASED' ? 'checkpoint-job' : 'update-job')
+    if (this.updateFailures > 0) { this.updateFailures -= 1; throw new Error('sheet unavailable') }
+    Object.assign(this.jobs.find((entry) => entry.jobId === next.jobId)!, structuredClone(next))
+  }
   async saveDraft(next: OcrDraft) { this.order.push('save-draft'); if (this.saveFailures > 0) { this.saveFailures -= 1; throw new Error('sheet unavailable') }; const index = this.drafts.findIndex((entry) => entry.documentId === next.documentId); if (index < 0) this.drafts.push(structuredClone(next)); else this.drafts[index] = structuredClone(next) }
   async getDraft(documentId: string) { this.getDraftCalls += 1; if (this.failGetDraftOnCall === this.getDraftCalls) throw new Error('sheet unavailable'); return structuredClone(this.drafts.find((entry) => entry.documentId === documentId) ?? null) }
   async findDraftByImageSha256(hash: string) { this.order.push('duplicate-check'); return structuredClone(this.drafts.find((entry) => entry.sourceImageSha256 === hash) ?? null) }
@@ -565,6 +607,7 @@ class FakeStore implements OcrLedgerStore {
 }
 
 function harness(store: FakeStore, order: string[] = [], now: () => Date = () => START, config: Partial<OcrLedgerConfig> = {}) {
+  const staged = new Map<string, { fileId: string; name: string; mimeType: 'image/jpeg' | 'image/png' }>()
   const line = {
     downloadImage: vi.fn(async () => { order.push('line-download'); return { bytes: PNG, mimeType: 'image/png' as const } }),
     reply: vi.fn(), push: vi.fn(async () => { order.push('line-push') }), verifyLiffIdToken: vi.fn(),
@@ -574,7 +617,13 @@ function harness(store: FakeStore, order: string[] = [], now: () => Date = () =>
     createFolder: vi.fn(async (name: string, parentId?: string) => { order.push(`create-folder:${parentId}:${name}`); return `folder-${name}` }),
     findFolder: vi.fn(async (name: string, parentId: string) => { order.push(`find-folder:${parentId}:${name}`); return null }),
     moveFile: vi.fn(async (fileId: string, parentId: string) => { order.push(`move-file:${fileId}:${parentId}`) }),
-    uploadImage: vi.fn(async () => { order.push('drive-upload'); return 'drive-file-1' }),
+    moveSpreadsheet: vi.fn(),
+    findImageByDocumentId: vi.fn(async (documentId: string) => { order.push('find-drive-image'); return staged.get(documentId) ?? null }),
+    uploadImage: vi.fn(async (input: { documentId: string; name: string; mimeType: 'image/jpeg' | 'image/png' }) => {
+      order.push('drive-upload')
+      staged.set(input.documentId, { fileId: 'drive-file-1', name: input.name, mimeType: input.mimeType })
+      return 'drive-file-1'
+    }),
     downloadImage: vi.fn(async () => ({ bytes: PNG, mimeType: 'image/png' as const })),
   } satisfies OcrDrivePort
   const extractor = {
@@ -596,7 +645,8 @@ function harness(store: FakeStore, order: string[] = [], now: () => Date = () =>
 
 function job(jobType: OcrQueueJob['jobType'], payload: unknown, documentId: string | null = null, jobId = 'job-1'): OcrQueueJob {
   return {
-    jobId, jobType, documentId, idempotencyKey: `${jobType}:${jobId}`, payloadJson: JSON.stringify(payload), state: 'QUEUED', attempts: 0,
+    jobId, jobType, documentId: documentId ?? (jobType === 'INTAKE' ? 'OCR-20260822-abc123' : null),
+    idempotencyKey: `${jobType}:${jobId}`, payloadJson: JSON.stringify(payload), state: 'QUEUED', attempts: 0,
     availableAt: START.toISOString(), leaseUntil: null, lastErrorCode: null, createdAt: START.toISOString(), updatedAt: START.toISOString(),
   }
 }
@@ -659,7 +709,7 @@ function draft(patch: Partial<OcrDraft> = {}): OcrDraft {
 
 const CONFIG: OcrLedgerConfig = {
   lineChannelSecret: 'line-secret', lineChannelAccessToken: 'line-token', allowedGroupId: 'Cgroup1', masterSpreadsheetId: 'master',
-  driveRootId: 'drive-root', liffId: 'liff-id', liffChannelId: 'liff-channel', reviewSigningSecret: 'review-secret', openAiApiKey: 'openai-key',
+  driveRootId: 'drive-root', monthlyLedgersFolderId: 'monthly-folder', liffId: 'liff-id', liffChannelId: 'liff-channel', reviewSigningSecret: 'review-secret', openAiApiKey: 'openai-key',
   openAiOcrModel: 'gpt-5-mini', googleClientId: 'google-client', googleClientSecret: 'google-secret', googleRefreshToken: 'google-refresh',
   dailyReportEnabled: false, dailyReportTime: '20:00', timezone: 'Asia/Bangkok', workerBatchSize: 10, maxImageBytes: 2_000_000,
   openAiMaxOutputTokens: 2000,

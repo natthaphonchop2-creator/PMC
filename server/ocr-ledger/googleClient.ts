@@ -17,7 +17,9 @@ export interface OcrDrivePort {
   createFolder(name: string, parentId?: string): Promise<string>
   findFolder(name: string, parentId: string): Promise<string | null>
   moveFile(fileId: string, parentId: string): Promise<void>
-  uploadImage(input: { name: string; parentId: string; mimeType: 'image/jpeg' | 'image/png'; bytes: Buffer }): Promise<string>
+  moveSpreadsheet(fileId: string, parentId: string): Promise<void>
+  findImageByDocumentId(documentId: string, parentId: string): Promise<{ fileId: string; name: string; mimeType: 'image/jpeg' | 'image/png' } | null>
+  uploadImage(input: { documentId: string; name: string; parentId: string; mimeType: 'image/jpeg' | 'image/png'; bytes: Buffer }): Promise<string>
   downloadImage(fileId: string): Promise<{ bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }>
 }
 
@@ -26,6 +28,7 @@ export interface GoogleOcrClientConfig {
   googleClientSecret: string
   googleRefreshToken: string
   driveRootId?: string
+  monthlyLedgersFolderId?: string
 }
 
 export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: OcrSheetsPort; drive: OcrDrivePort } {
@@ -33,7 +36,7 @@ export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: O
   auth.setCredentials({ refresh_token: config.googleRefreshToken })
   const sheetsApi = google.sheets({ version: 'v4', auth })
   const driveApi = google.drive({ version: 'v3', auth })
-  const appOwnedFolders = new Set(config.driveRootId ? [config.driveRootId] : [])
+  const appOwnedFolders = new Set([config.driveRootId, config.monthlyLedgersFolderId].filter((value): value is string => Boolean(value)))
 
   async function isInAppOwnedHierarchy(parentIds: string[], visited = new Set<string>()): Promise<boolean> {
     for (const parentId of parentIds) {
@@ -107,10 +110,38 @@ export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: O
           fileId, addParents: parentId, removeParents: (metadata.data.parents ?? []).join(','), fields: 'id,parents',
         })
       },
+      async moveSpreadsheet(fileId, parentId) {
+        if (!appOwnedFolders.has(parentId)) throw new Error('Spreadsheet destination is outside the app-owned OCR hierarchy')
+        const metadata = await driveApi.files.get({ fileId, fields: 'mimeType,parents,trashed' })
+        if (metadata.data.trashed || metadata.data.mimeType !== 'application/vnd.google-apps.spreadsheet') {
+          throw new Error('Unsupported OCR spreadsheet')
+        }
+        if ((metadata.data.parents ?? []).includes(parentId)) return
+        await driveApi.files.update({
+          fileId, addParents: parentId, removeParents: (metadata.data.parents ?? []).join(','), fields: 'id,parents',
+        })
+      },
+      async findImageByDocumentId(documentId, parentId) {
+        if (!/^OCR-\d{8}-[0-9a-f]{12}$/.test(documentId)) throw new Error('Invalid OCR document ID')
+        if (!appOwnedFolders.has(parentId)) throw new Error('Image parent is outside the app-owned OCR hierarchy')
+        const response = await driveApi.files.list({
+          q: `'${escapeDriveQuery(parentId)}' in parents and appProperties has { key='ocrDocumentId' and value='${escapeDriveQuery(documentId)}' } and trashed = false`,
+          fields: 'files(id,name,mimeType)', pageSize: 10,
+        })
+        const matches: Array<{ fileId: string; name: string; mimeType: 'image/jpeg' | 'image/png' }> = []
+        for (const file of response.data.files ?? []) {
+          const mimeType = file.mimeType
+          if (!file.id || !file.name || (mimeType !== 'image/jpeg' && mimeType !== 'image/png')) continue
+          matches.push({ fileId: file.id, name: file.name, mimeType })
+        }
+        matches.sort((left, right) => left.fileId.localeCompare(right.fileId))
+        return matches[0] ?? null
+      },
       async uploadImage(input) {
+        if (!/^OCR-\d{8}-[0-9a-f]{12}$/.test(input.documentId)) throw new Error('Invalid OCR document ID')
         if (!appOwnedFolders.has(input.parentId)) throw new Error('Image parent is outside the app-owned OCR hierarchy')
         const response = await driveApi.files.create({
-          requestBody: { name: input.name, parents: [input.parentId] },
+          requestBody: { name: input.name, parents: [input.parentId], appProperties: { ocrDocumentId: input.documentId } },
           media: { mimeType: input.mimeType, body: input.bytes },
           fields: 'id',
         })

@@ -53,7 +53,7 @@ npm run ocr:setup
 npm run ocr:setup -- --confirm-create
 ```
 
-คำสั่งยืนยันจะสร้าง private Drive hierarchy และ master workbook เท่านั้น นำ resource IDs ที่ได้ไปวางตรงใน Render environment settings เป็น `OCR_DRIVE_ROOT_ID` และ `OCR_MASTER_SPREADSHEET_ID`; ห้ามส่งผ่านแชตหรือ commit ลง source
+คำสั่งยืนยันจะสร้าง private Drive hierarchy, โฟลเดอร์ `Monthly Ledgers` และ master workbook เท่านั้น นำ resource IDs ที่ได้ไปวางตรงใน Render environment settings เป็น `OCR_DRIVE_ROOT_ID`, `OCR_MONTHLY_LEDGERS_FOLDER_ID` และ `OCR_MASTER_SPREADSHEET_ID`; ห้ามส่งผ่านแชตหรือ commit ลง source
 
 ## 5. ตั้งค่า LIFF
 

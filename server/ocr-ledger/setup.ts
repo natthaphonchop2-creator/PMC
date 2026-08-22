@@ -2,7 +2,7 @@ import { createGoogleOcrPorts, type OcrDrivePort, type OcrSheetsPort } from './g
 import { MASTER_HEADERS, MASTER_TABS } from './googleStore.js'
 
 export interface SetupCheck {
-  name: 'OAuth scopes' | 'private Drive hierarchy' | 'master OCR workbook'
+  name: 'OAuth scopes' | 'private Drive hierarchy' | 'monthly ledgers folder' | 'master OCR workbook'
   status: 'READY' | 'CREATED'
   resourceId?: string
 }
@@ -16,15 +16,17 @@ export async function runOcrSetup(input: {
   const checks: SetupCheck[] = [
     { name: 'OAuth scopes', status: 'READY' },
     { name: 'private Drive hierarchy', status: input.confirmCreate ? 'CREATED' : 'READY' },
+    { name: 'monthly ledgers folder', status: input.confirmCreate ? 'CREATED' : 'READY' },
     { name: 'master OCR workbook', status: input.confirmCreate ? 'CREATED' : 'READY' },
   ]
   if (!input.confirmCreate) return { mode: 'DRY_RUN', checks }
 
   const rootId = await input.drive.createFolder(input.titlePrefix)
   checks[1].resourceId = rootId
-  await input.drive.createFolder('Monthly Ledgers', rootId)
+  const monthlyLedgersFolderId = await input.drive.createFolder('Monthly Ledgers', rootId)
+  checks[2].resourceId = monthlyLedgersFolderId
   const masterId = await input.sheets.create(`${input.titlePrefix} Master OCR Ledger`, [...MASTER_TABS])
-  checks[2].resourceId = masterId
+  checks[3].resourceId = masterId
   for (const tab of MASTER_TABS) {
     const header = MASTER_HEADERS[tab]
     if (header.length) await input.sheets.append(masterId, `${tab}!A:ZZ`, [[...header]])
@@ -35,7 +37,7 @@ export async function runOcrSetup(input: {
 async function main(): Promise<void> {
   const confirmCreate = process.argv.includes('--confirm-create')
   if (!confirmCreate) {
-    process.stdout.write('DRY_RUN: OAuth scopes, private Drive hierarchy, master OCR workbook\n')
+    process.stdout.write('DRY_RUN: OAuth scopes, private Drive hierarchy, monthly ledgers folder, master OCR workbook\n')
     return
   }
   const clientId = process.env.OCR_GOOGLE_CLIENT_ID?.trim()

@@ -59,9 +59,12 @@ class MemorySheets implements OcrSheetsPort {
 }
 
 class MemoryDrive implements OcrDrivePort {
+  readonly spreadsheetMoves: Array<{ fileId: string; parentId: string }> = []
   async createFolder(name: string, parentId?: string): Promise<string> { return `${parentId ?? 'root'}:${name}` }
   async findFolder(): Promise<string | null> { return null }
   async moveFile(): Promise<void> {}
+  async moveSpreadsheet(fileId: string, parentId: string): Promise<void> { this.spreadsheetMoves.push({ fileId, parentId }) }
+  async findImageByDocumentId(): Promise<null> { return null }
   async uploadImage(): Promise<string> { return 'image-1' }
   async downloadImage(): Promise<{ bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }> {
     return { bytes: Buffer.from('image'), mimeType: 'image/jpeg' }
@@ -163,7 +166,8 @@ describe('Google OCR ledger store', () => {
 
   it('persists queue outcomes, sanitized errors, audits, duplicate lookup, and monthly allocation', async () => {
     const sheets = new MemorySheets()
-    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    const drive = new MemoryDrive()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', monthlyLedgersFolderId: 'monthly-folder', sheets, drive })
     await store.appendJob(queueJob())
     const completed = queueJob({ state: 'DONE', attempts: 1, leaseUntil: null, updatedAt: '2026-08-22T10:01:00.000Z' })
     await store.updateJob(completed)
@@ -190,6 +194,10 @@ describe('Google OCR ledger store', () => {
     expect(first).toEqual({ month: '2026-08', monthlySpreadsheetId: 'sheet-1' })
     expect(repeated).toEqual(first)
     expect(sheets.creates).toEqual([{ title: '2026-08 PMC OCR Ledger', tabs: ['TRANSACTIONS', 'LINE_ITEMS', 'DAILY_SUMMARY', 'CATEGORY_SUMMARY'] }])
+    expect(drive.spreadsheetMoves).toEqual([
+      { fileId: 'sheet-1', parentId: 'monthly-folder' },
+      { fileId: 'sheet-1', parentId: 'monthly-folder' },
+    ])
   })
 
   it('replaces the current draft version without writing confirmed ledger tabs', async () => {

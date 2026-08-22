@@ -52,8 +52,8 @@ export interface OcrLedgerStore {
   listConfirmedDocuments(monthlySpreadsheetId: string): Promise<OcrDocument[]>
 }
 
-export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheets: OcrSheetsPort; drive: OcrDrivePort }): OcrLedgerStore {
-  const { masterSpreadsheetId, sheets } = input
+export function createGoogleOcrStore(input: { masterSpreadsheetId: string; monthlyLedgersFolderId?: string; sheets: OcrSheetsPort; drive: OcrDrivePort }): OcrLedgerStore {
+  const { masterSpreadsheetId, sheets, drive } = input
   const mutationKey = `ocr-ledger:${masterSpreadsheetId}`
 
   async function queueRows(): Promise<RowWithPosition<OcrQueueJob>[]> {
@@ -160,8 +160,13 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
       if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('Invalid monthly ledger key')
       const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'MONTHLY_INDEX', MASTER_HEADERS.MONTHLY_INDEX)
       const existing = rows.find(({ value }) => value.month === month)?.value
-      if (existing) return { month, monthlySpreadsheetId: String(existing.monthlySpreadsheetId) }
+      if (existing) {
+        const monthlySpreadsheetId = String(existing.monthlySpreadsheetId)
+        if (input.monthlyLedgersFolderId) await drive.moveSpreadsheet(monthlySpreadsheetId, input.monthlyLedgersFolderId)
+        return { month, monthlySpreadsheetId }
+      }
       const monthlySpreadsheetId = await sheets.create(`${month} PMC OCR Ledger`, [...MONTHLY_TABS])
+      if (input.monthlyLedgersFolderId) await drive.moveSpreadsheet(monthlySpreadsheetId, input.monthlyLedgersFolderId)
       for (const tab of MONTHLY_TABS) await sheets.append(monthlySpreadsheetId, `${tab}!A:ZZ`, [[...MONTHLY_HEADERS[tab]]])
       await ensureMonthlyIndex(month, monthlySpreadsheetId)
       return { month, monthlySpreadsheetId }

@@ -4,6 +4,7 @@ export interface OcrLedgerConfig {
   allowedGroupId: string
   masterSpreadsheetId: string
   driveRootId: string
+  monthlyLedgersFolderId: string
   liffId: string
   liffChannelId: string
   reviewSigningSecret: string
@@ -26,7 +27,7 @@ export type OcrLedgerConfigResult =
 
 const REQUIRED = [
   'OCR_LINE_CHANNEL_SECRET', 'OCR_LINE_CHANNEL_ACCESS_TOKEN', 'OCR_ALLOWED_GROUP_ID',
-  'OCR_MASTER_SPREADSHEET_ID', 'OCR_DRIVE_ROOT_ID', 'OCR_LIFF_ID', 'OCR_LIFF_CHANNEL_ID',
+  'OCR_MASTER_SPREADSHEET_ID', 'OCR_DRIVE_ROOT_ID', 'OCR_MONTHLY_LEDGERS_FOLDER_ID', 'OCR_LIFF_ID', 'OCR_LIFF_CHANNEL_ID',
   'OCR_REVIEW_SIGNING_SECRET', 'OPENAI_API_KEY', 'OPENAI_OCR_MODEL', 'OCR_GOOGLE_CLIENT_ID',
   'OCR_GOOGLE_CLIENT_SECRET', 'OCR_GOOGLE_REFRESH_TOKEN', 'OCR_DAILY_REPORT_ENABLED',
   'OCR_DAILY_REPORT_TIME', 'OCR_TIMEZONE', 'OCR_WORKER_BATCH_SIZE', 'OCR_MAX_IMAGE_BYTES',
@@ -51,7 +52,8 @@ export function readOcrLedgerConfig(env: NodeJS.ProcessEnv): OcrLedgerConfigResu
     config: {
       lineChannelSecret: env.OCR_LINE_CHANNEL_SECRET!, lineChannelAccessToken: env.OCR_LINE_CHANNEL_ACCESS_TOKEN!,
       allowedGroupId: env.OCR_ALLOWED_GROUP_ID!, masterSpreadsheetId: env.OCR_MASTER_SPREADSHEET_ID!,
-      driveRootId: env.OCR_DRIVE_ROOT_ID!, liffId: env.OCR_LIFF_ID!, liffChannelId: env.OCR_LIFF_CHANNEL_ID!,
+      driveRootId: env.OCR_DRIVE_ROOT_ID!, monthlyLedgersFolderId: env.OCR_MONTHLY_LEDGERS_FOLDER_ID!,
+      liffId: env.OCR_LIFF_ID!, liffChannelId: env.OCR_LIFF_CHANNEL_ID!,
       reviewSigningSecret: env.OCR_REVIEW_SIGNING_SECRET!, openAiApiKey: env.OPENAI_API_KEY!, openAiOcrModel: env.OPENAI_OCR_MODEL!,
       googleClientId: env.OCR_GOOGLE_CLIENT_ID!, googleClientSecret: env.OCR_GOOGLE_CLIENT_SECRET!, googleRefreshToken: env.OCR_GOOGLE_REFRESH_TOKEN!,
       dailyReportEnabled: env.OCR_DAILY_REPORT_ENABLED === 'true', dailyReportTime: env.OCR_DAILY_REPORT_TIME!, timezone: 'Asia/Bangkok',

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { OcrDocument, OcrDraft, OcrExtraction, OcrQueueJob, OcrTerminalDecisionRecord } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
 import { assertConfirmableDraft, bangkokMonthKey } from './domain.js'
@@ -86,34 +86,54 @@ async function processIntake(
   const messageId = requiredString(payload.messageId, 'LINE_DOWNLOAD_FAILED')
   const groupId = requiredString(payload.groupId, 'LINE_DOWNLOAD_FAILED')
   const userId = requiredString(payload.userId, 'LINE_DOWNLOAD_FAILED')
-  job.documentId ??= createDocumentId(deps.now())
+  const documentId = requiredString(job.documentId, 'SHEET_WRITE_FAILED')
 
   let source: { bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }
   if (typeof payload.sourceImageFileId === 'string') {
     try { source = await deps.drive.downloadImage(payload.sourceImageFileId) } catch { throw workerError('DRIVE_UPLOAD_FAILED') }
   } else {
-    try { source = await deps.line.downloadImage(messageId) } catch { throw workerError('LINE_DOWNLOAD_FAILED') }
-    try {
-      payload.sourceImageFileId = await deps.drive.uploadImage({
-        name: `${job.documentId}.${source.mimeType === 'image/png' ? 'png' : 'jpg'}`,
-        parentId: deps.config.driveRootId, mimeType: source.mimeType, bytes: source.bytes,
-      })
-      job.payloadJson = JSON.stringify(payload)
-    } catch {
-      throw workerError('DRIVE_UPLOAD_FAILED')
+    let staged: Awaited<ReturnType<OcrDrivePort['findImageByDocumentId']>>
+    try { staged = await deps.drive.findImageByDocumentId(documentId, deps.config.driveRootId) } catch { throw workerError('DRIVE_UPLOAD_FAILED') }
+    if (staged) {
+      payload.sourceImageFileId = staged.fileId
+      payload.sourceImageName = staged.name
+      payload.sourceImageMimeType = staged.mimeType
+      try { source = await deps.drive.downloadImage(staged.fileId) } catch { throw workerError('DRIVE_UPLOAD_FAILED') }
+      if (source.mimeType !== staged.mimeType) throw workerError('DRIVE_UPLOAD_FAILED')
+    } else {
+      try { source = await deps.line.downloadImage(messageId) } catch { throw workerError('LINE_DOWNLOAD_FAILED') }
+      const sourceImageName = `${documentId}.${source.mimeType === 'image/png' ? 'png' : 'jpg'}`
+      try {
+        payload.sourceImageFileId = await deps.drive.uploadImage({
+          documentId, name: sourceImageName, parentId: deps.config.driveRootId, mimeType: source.mimeType, bytes: source.bytes,
+        })
+        payload.sourceImageName = sourceImageName
+        payload.sourceImageMimeType = source.mimeType
+      } catch {
+        throw workerError('DRIVE_UPLOAD_FAILED')
+      }
     }
   }
 
+  const sourceImageSha256 = createHash('sha256').update(source.bytes).digest('hex')
+  if (typeof payload.sourceImageSha256 === 'string' && payload.sourceImageSha256 !== sourceImageSha256) throw workerError('SHEET_WRITE_FAILED')
+  payload.sourceImageSha256 = sourceImageSha256
+  payload.sourceImageName ??= `${documentId}.${source.mimeType === 'image/png' ? 'png' : 'jpg'}`
+  payload.sourceImageMimeType = source.mimeType
+  await checkpointJob(deps.store, job, payload)
+
   let prepared
   try { prepared = await prepareOcrImage(source.bytes, deps.config.maxImageBytes) } catch { throw workerError('UNSUPPORTED_IMAGE') }
+  if (prepared.originalSha256 !== sourceImageSha256) throw workerError('SHEET_WRITE_FAILED')
   payload.sourceImageSha256 = prepared.originalSha256
   job.payloadJson = JSON.stringify(payload)
   const duplicate = await findDuplicate(deps.store, prepared.originalSha256)
   if (duplicate) {
     await organizeSourceImage(deps.drive, deps.config.driveRootId, String(payload.sourceImageFileId), receivedAt(job, payload), duplicate.documentType)
-    job.documentId = duplicate.documentId
+    payload.duplicateOfDocumentId = duplicate.documentId
     payload.deliveryDocumentId = duplicate.documentId
     job.payloadJson = JSON.stringify(payload)
+    await checkpointJob(deps.store, job, payload)
     await pushDraft(deps.line, groupId, duplicate, deps.config, deps.now())
     return
   }
@@ -124,7 +144,7 @@ async function processIntake(
     payload.sourceOrganized = true
     job.payloadJson = JSON.stringify(payload)
   }
-  const saved = draftFromExtraction(job.documentId, extraction, {
+  const saved = draftFromExtraction(documentId, extraction, {
     sourceImageFileId: String(payload.sourceImageFileId), sourceImageSha256: prepared.originalSha256,
     sourceLineMessageId: messageId, sourceLineUserId: userId,
   })
@@ -246,7 +266,7 @@ async function processRetry(
   const current = await getDraft(deps.store, documentId)
   if (!current) {
     const original = await findOriginalIntake(deps.store, documentId)
-    if (!original) throw workerError('DRIVE_UPLOAD_FAILED')
+    if (!original) throw workerError('SHEET_WRITE_FAILED')
     const originalPayload = parsePayload(original.payloadJson)
     originalPayload.receivedAt = original.createdAt
     await processIntake(job, originalPayload, deps)
@@ -620,6 +640,11 @@ async function updateJob(store: OcrLedgerStore, job: OcrQueueJob): Promise<void>
   try { await store.updateJob(job) } catch { throw workerError('SHEET_WRITE_FAILED') }
 }
 
+async function checkpointJob(store: OcrLedgerStore, job: OcrQueueJob, payload: Record<string, unknown>): Promise<void> {
+  job.payloadJson = JSON.stringify(payload)
+  await updateJob(store, job)
+}
+
 async function organizeSourceImage(
   drive: OcrDrivePort,
   rootId: string,
@@ -647,11 +672,6 @@ async function resolveDriveFolder(drive: OcrDrivePort, name: string, parentId: s
 
 function receivedAt(job: OcrQueueJob, payload: Record<string, unknown>): string {
   return typeof payload.receivedAt === 'string' ? payload.receivedAt : job.createdAt
-}
-
-function createDocumentId(now: Date): string {
-  const date = bangkokDate(now).replaceAll('-', '')
-  return `OCR-${date}-${randomUUID().replaceAll('-', '').slice(0, 12)}`
 }
 
 function bangkokDate(now: Date): string {

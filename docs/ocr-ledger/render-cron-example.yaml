@@ -19,6 +19,8 @@ services:
         sync: false
       - key: OCR_DRIVE_ROOT_ID
         sync: false
+      - key: OCR_MONTHLY_LEDGERS_FOLDER_ID
+        sync: false
       - key: OCR_LIFF_ID
         sync: false
       - key: OCR_LIFF_CHANNEL_ID

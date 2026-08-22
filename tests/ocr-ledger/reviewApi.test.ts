@@ -192,7 +192,8 @@ function dependencies(input: { draft?: OcrDraft; persistedJobId?: string } = {})
     assertGroupMember: vi.fn(async () => ({ displayName: 'Editor' })), validatePush: vi.fn(),
   } as OcrLinePort & { verifyLiffIdToken: ReturnType<typeof vi.fn>; assertGroupMember: ReturnType<typeof vi.fn> }
   const drive = {
-    createFolder: vi.fn(), findFolder: vi.fn(), moveFile: vi.fn(), uploadImage: vi.fn(),
+    createFolder: vi.fn(), findFolder: vi.fn(), moveFile: vi.fn(), moveSpreadsheet: vi.fn(),
+    findImageByDocumentId: vi.fn(), uploadImage: vi.fn(),
     downloadImage: vi.fn(async () => ({ bytes: Buffer.from('private-png'), mimeType: 'image/png' as const })),
   } as OcrDrivePort & { downloadImage: ReturnType<typeof vi.fn> }
   return { store, line, drive }
@@ -264,7 +265,7 @@ function draft(overrides: Partial<OcrDraft> = {}): OcrDraft {
 
 const CONFIG: OcrLedgerConfig = {
   lineChannelSecret: 'line-secret', lineChannelAccessToken: 'line-token', allowedGroupId: 'Cgroup1',
-  masterSpreadsheetId: 'master', driveRootId: 'drive-root', liffId: 'liff-id', liffChannelId: 'liff-channel',
+  masterSpreadsheetId: 'master', driveRootId: 'drive-root', monthlyLedgersFolderId: 'monthly-folder', liffId: 'liff-id', liffChannelId: 'liff-channel',
   reviewSigningSecret: 'review-secret', openAiApiKey: 'openai-key', openAiOcrModel: 'gpt-5-mini',
   googleClientId: 'google-client', googleClientSecret: 'google-secret', googleRefreshToken: 'google-refresh',
   dailyReportEnabled: false, dailyReportTime: '20:00', timezone: 'Asia/Bangkok', workerBatchSize: 10,

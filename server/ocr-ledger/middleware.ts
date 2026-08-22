@@ -66,7 +66,7 @@ export function createOcrLedgerMiddleware(deps: {
 
 function queueJobFromLineEvent(event: OcrLineEvent, config: OcrLedgerConfig, now: Date): OcrQueueJob | null {
   if (event.type === 'IMAGE') {
-    return queueJob('INTAKE', `line:image:${event.messageId}`, null, {
+    return queueJob('INTAKE', `line:image:${event.messageId}`, createDocumentId(now), {
       messageId: event.messageId, groupId: event.groupId, userId: event.userId, receivedAt: now.toISOString(),
     }, now)
   }
@@ -84,6 +84,16 @@ function queueJobFromLineEvent(event: OcrLineEvent, config: OcrLedgerConfig, now
   } catch {
     return null
   }
+}
+
+function createDocumentId(now: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now).reduce((result, part) => {
+    if (part.type === 'year' || part.type === 'month' || part.type === 'day') result[part.type] = part.value
+    return result
+  }, {} as Record<string, string>)
+  return `OCR-${parts.year}${parts.month}${parts.day}-${randomUUID().replaceAll('-', '').slice(0, 12)}`
 }
 
 async function handleReviewPost(
