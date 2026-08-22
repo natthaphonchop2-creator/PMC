@@ -145,7 +145,7 @@ describe('booking Form workflow', () => {
     expect(ports.bookings.list()).toHaveLength(1)
   })
 
-  it('attributes closer from verified email and AE from the required choice', () => {
+  it('attributes the selected Admin while retaining the submitter email for audit', () => {
     const ports = createTestPorts()
     const result = submitBookingIntake(
       validBookingIntake({ submitterEmail: 'admin@example.com', aeName: 'เอม' }),
@@ -154,14 +154,14 @@ describe('booking Form workflow', () => {
     expect(result).toMatchObject({
       adminId: 'admin-1',
       adminName: 'Admin A',
-      adminIdentityStatus: 'VERIFIED_EMAIL',
+      adminIdentityStatus: 'SELECTED_ADMIN',
       aeId: 'staff-ae',
       aeName: 'เอม',
       callOwnerAdminId: 'admin-1',
     })
   })
 
-  it('attributes the approved shared email to the closer selected in the Form', () => {
+  it('uses the selected Admin even when the submitter uses the former shared email', () => {
     const ports = createTestPorts()
     ports.config.isSharedCloserEmail = (email) =>
       email.trim().toLowerCase() === 'shared@example.com'
@@ -178,7 +178,7 @@ describe('booking Form workflow', () => {
     expect(result).toMatchObject({
       adminId: 'admin-1',
       adminName: 'Admin A',
-      adminIdentityStatus: 'SHARED_ACCOUNT',
+      adminIdentityStatus: 'SELECTED_ADMIN',
       aeId: 'staff-ae',
       aeName: 'เอม',
       commissionEligibility: 'NOT_ELIGIBLE',
@@ -202,7 +202,7 @@ describe('booking Form workflow', () => {
     expect(result.aeName).toBe('ไม่ระบุ')
   })
 
-  it('rejects an unknown closer selected by a shared account before any side effect', () => {
+  it('rejects an unknown Admin selection before any side effect', () => {
     const ports = createTestPorts()
     ports.config.isSharedCloserEmail = (email) =>
       email.trim().toLowerCase() === 'shared@example.com'
@@ -221,7 +221,7 @@ describe('booking Form workflow', () => {
     expect(ports.line.adminMessages()).toEqual([])
   })
 
-  it('rejects a closer choice that does not match a verified personal email', () => {
+  it('accepts a selected Admin that differs from the submitter email mapping', () => {
     const ports = createTestPorts()
     ports.config.findCloserByName = () => ({
       id: 'admin-2',
@@ -233,32 +233,37 @@ describe('booking Form workflow', () => {
       active: true,
     })
 
-    expect(() =>
-      submitBookingIntake(
-        validBookingIntake({ submitterEmail: 'admin@example.com', closerName: 'Admin B' }),
-        ports,
-      ),
-    ).toThrow('selected closer does not match submitter email')
-    expect(ports.bookings.list()).toEqual([])
-  })
-
-  it('rejects unknown closer email before sequence allocation or side effects', () => {
-    const ports = createTestPorts()
-    expect(() =>
-      submitBookingIntake(
-        validBookingIntake({ submitterEmail: 'unknown@example.com' }),
-        ports,
-      ),
-    ).toThrow('submitter is not an active booking closer')
-    expect(ports.bookings.list()).toEqual([])
-    expect(ports.calendar.createdEvents()).toEqual([])
-    expect(ports.line.adminMessages()).toEqual([])
-
-    const firstValid = submitBookingIntake(
-      validBookingIntake({ formResponseId: 'response-2' }),
+    const result = submitBookingIntake(
+      validBookingIntake({ submitterEmail: 'admin@example.com', closerName: 'Admin B' }),
       ports,
     )
-    expect(firstValid.caseId).toBe('PMC-202608-0001')
+    expect(result).toMatchObject({
+      adminId: 'admin-2',
+      adminName: 'Admin B',
+      submitterEmail: 'admin@example.com',
+      adminIdentityStatus: 'SELECTED_ADMIN',
+    })
+  })
+
+  it('accepts an unmapped personal email without consulting email identity mappings', () => {
+    const ports = createTestPorts()
+    ports.config.isSharedCloserEmail = () => {
+      throw new Error('shared-email lookup must not run')
+    }
+    ports.config.findCloserByEmail = () => {
+      throw new Error('closer-email lookup must not run')
+    }
+    const result = submitBookingIntake(
+      validBookingIntake({ submitterEmail: 'unknown@example.com' }),
+      ports,
+    )
+    expect(result).toMatchObject({
+      caseId: 'PMC-202608-0001',
+      adminId: 'admin-1',
+      adminName: 'Admin A',
+      submitterEmail: 'unknown@example.com',
+      adminIdentityStatus: 'SELECTED_ADMIN',
+    })
   })
 
   it('rejects an ineligible AE before any booking side effect', () => {

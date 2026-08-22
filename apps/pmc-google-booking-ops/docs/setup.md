@@ -252,7 +252,7 @@ The deployed signed proxy is the production read-only verification path. Test it
 
 ## Shared Admin link
 
-Publish one internal Form link for all staff. Before the verified-email cutover, version 5 uses the selected Admin name with the shared company account. After the cutover, each closer signs in with their mapped personal Google account and selects only the AE who opened the chat.
+Publish one internal Form link for all staff. Any signed-in Google Account that can open the Form may submit it. The required `Admin` Dropdown is the canonical closer attribution; the collected submitter email is retained for audit only and does not have to match `CONFIG_STAFF.email`.
 
 ## Compact Admin / AE Form labels
 
@@ -260,9 +260,11 @@ The production parser accepts both the legacy identity titles (`ผู้ปิ�
 
 The operator function renames only those two existing Dropdown questions, keeps both required, and sets the AE choices to `ไม่ระบุ` followed by the active eligible AE names. Selecting `ไม่ระบุ` stores `aeId` as blank and `aeName` as `ไม่ระบุ`; it does not invent a Staff identity. Later `setupPmcBookingSystem()` runs preserve this option.
 
-## Staff / AE verified-email cutover
+Every accepted booking stores `adminIdentityStatus=SELECTED_ADMIN`. The selected Admin must still be active and eligible to close bookings. Admin ID, call ownership, reporting, and future commission attribution follow the Dropdown choice; submitter email remains an independent audit field.
 
-The new runtime uses personal verified Google-account email for the Admin who closes the booking and a required `AE ผู้เปิดแชท` dropdown. Do not paste personal emails into source, commands, docs, audit summaries, or chat.
+## Historical verified-email cutover (deprecated)
+
+The current production policy no longer uses email-to-Admin verification and the procedure below must not be run for normal operation. It is retained only as historical rollback context for older Apps Script versions.
 
 Run these Apps Script functions in order:
 

@@ -29,17 +29,8 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     throw new Error('form response already processed')
   }
 
-  const sharedAccount = ports.config.isSharedCloserEmail(intake.submitterEmail)
-  const closer = sharedAccount
-    ? ports.config.findCloserByName(intake.closerName)
-    : ports.config.findCloserByEmail(intake.submitterEmail)
-  if (!closer) {
-    if (sharedAccount) throw new Error('selected closer is not active or eligible')
-    throw new Error('submitter is not an active booking closer')
-  }
-  if (!sharedAccount && closer.name !== intake.closerName.trim()) {
-    throw new Error('selected closer does not match submitter email')
-  }
+  const closer = ports.config.findCloserByName(intake.closerName)
+  if (!closer) throw new Error('selected closer is not active or eligible')
   const aeNotSpecified = intake.aeName === NO_AE_OPTION
   const ae = aeNotSpecified ? null : ports.config.findEligibleAeByName(intake.aeName)
   if (!aeNotSpecified && !ae) throw new Error('selected AE is not active or eligible')
@@ -70,7 +61,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     adminId: closer.id,
     adminName: closer.name,
     submitterEmail: intake.submitterEmail.trim().toLowerCase(),
-    adminIdentityStatus: sharedAccount ? 'SHARED_ACCOUNT' : 'VERIFIED_EMAIL',
+    adminIdentityStatus: 'SELECTED_ADMIN',
     aeId: ae?.id ?? null,
     aeName: ae?.name ?? NO_AE_OPTION,
     customerName: intake.customerName.trim(),

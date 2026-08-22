@@ -15,7 +15,7 @@ export type CallStatus = 'PENDING' | 'ACTIVE' | 'DONE' | 'OVERDUE' | 'CANCELLED'
 export type CommissionEligibility = 'NOT_ELIGIBLE' | 'PENDING_RULE' | 'ELIGIBLE'
 export type StepState = 'PENDING' | 'OK' | 'RETRY' | 'FAILED'
 export type CallResult = 'REBOOKED' | 'NO_ANSWER' | 'CALL_BACK_REQUESTED' | 'NOT_READY' | 'DECLINED' | 'WRONG_NUMBER'
-export type AdminIdentityStatus = 'SHARED_ACCOUNT' | 'VERIFIED_EMAIL'
+export type AdminIdentityStatus = 'SHARED_ACCOUNT' | 'VERIFIED_EMAIL' | 'SELECTED_ADMIN'
 
 export interface CallTask {
   taskId: string
