@@ -22,7 +22,9 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Defined Lead Ads and Messenger attribution using exact IDs or unique normalized phone + Page matches inside a 30-day window; ambiguous cases enter an audited Owner queue and names alone never auto-match.
 - Selected Google OAuth email allowlisting with Owner/Staff roles, full customer identity for authorized users, 30-second active-view freshness, and a separate Apps Script bridge so dashboard failure cannot block booking operations.
 - Defined Actual ROAS, Cost per Booking, Attribution Coverage, source-specific funnel metrics, CAPI prepared-but-disabled behavior, phased rollout, security gates, and rollback boundaries.
-- Added the written design specification at `docs/superpowers/specs/2026-08-22-pmc-gentelella-booking-attribution-dashboard-design.md`; implementation and production deployment remain unapproved until spec review and a separate plan approval.
+- Approved the written design and centered/spacing-refined Gentelella mockup; preserved reviewed Desktop/Mobile evidence under `docs/superpowers/specs/assets/2026-08-22-pmc-gentelella-dashboard-mockup-*.jpg`.
+- Added the 16-task TDD implementation plan at `docs/superpowers/plans/2026-08-22-pmc-gentelella-booking-attribution-dashboard-implementation.md`, covering the vendored UI, route isolation, OAuth, signed Apps Script bridge, Meta shadow webhooks, deterministic attribution, owner audit controls, security, invalidation, and staged rollout.
+- Implementation, credential changes, webhook subscription, Apps Script deployment, Meta writes, and Render production deployment remain unapproved until plan review and an explicit execution choice.
 
 ## 2026-08-20 - Google Booking Operations implementation
 

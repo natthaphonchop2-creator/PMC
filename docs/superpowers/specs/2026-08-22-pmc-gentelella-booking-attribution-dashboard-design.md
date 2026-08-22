@@ -3,11 +3,11 @@
 ## Status
 
 - **Date:** 2026-08-22
-- **Status:** Architecture approved in chat; pending written-spec review before implementation planning
+- **Status:** Written design and approved mockup reviewed; implementation planning authorized on 2026-08-22
 - **Project:** PMC Web / PMC Google Booking Operations
 - **Upstream UI:** `ColorlibHQ/gentelella` master pinned at commit `d0064ca25fc916981556e2b2439e569000f61da9`
 - **License:** MIT; the upstream copyright and license text must remain in the vendored application
-- This specification authorizes design only. It does not authorize implementation, credential changes, webhook subscription, Meta writes, or production deployment.
+- The current approval authorizes implementation planning only. It does not authorize implementation, credential changes, webhook subscription, Meta writes, or production deployment.
 
 ## 1. Purpose
 
