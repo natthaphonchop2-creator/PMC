@@ -133,11 +133,56 @@ describe('createOcrLedgerWorker', () => {
     await worker.runOnce()
 
     expect(store.finalized).toHaveLength(1)
-    expect(store.finalized[0].draft).toEqual(expect.objectContaining({ state: 'CONFIRMED', verificationStatus: 'STAFF_CONFIRMED', confirmedBy: 'Staff' }))
+    expect(store.finalized[0].draft).toEqual(expect.objectContaining({ state: 'CONFIRMED', verificationStatus: 'STAFF_CONFIRMED', confirmedBy: 'Resolved Staff' }))
     expect(store.drafts[0].state).toBe('CONFIRMED')
     expect(store.audits.map((entry) => entry.action)).toEqual(['CONFIRM'])
     expect(store.drafts[0].note).toBeNull()
-    expect(store.jobs.every((entry) => entry.state === 'DONE')).toBe(true)
+    expect(store.jobs.map((entry) => [entry.jobId, entry.state, entry.lastErrorCode])).toEqual([
+      ['job-1', 'DONE', null], ['job-2', 'DONE', null], ['job-3', 'DONE', null], ['job-4', 'DONE', null],
+    ])
+  })
+
+  it.each([
+    ['missing document type', { documentType: null }],
+    ['invalid document type', { documentType: 'INVOICE' as never }],
+    ['missing direction', { direction: null }],
+    ['invalid direction', { direction: 'TRANSFER' as never }],
+    ['missing document date', { documentDate: null }],
+    ['invalid calendar date', { documentDate: '2026-02-30' }],
+    ['blank category', { categoryId: '   ' }],
+    ['missing grand total', { grandTotal: null }],
+    ['non-finite grand total', { grandTotal: Number.POSITIVE_INFINITY }],
+    ['invalid receipt line numbering', { lineItems: [{ ...draft().lineItems[0], lineNumber: 2 }] }],
+    ['invalid receipt line amount', { lineItems: [{ ...draft().lineItems[0], lineTotal: Number.NaN }] }],
+  ])('keeps the draft pending and returns review-required for a direct Flex confirm with %s', async (_name, patch) => {
+    const existing = draft({ lineItems: [lineItemDraft()], ...patch })
+    const store = new FakeStore([job('CONFIRM', actionPayload(), existing.documentId)])
+    store.drafts.push(existing)
+    const { worker, line } = harness(store)
+
+    const result = await worker.runOnce()
+
+    expect(result).toMatchObject({ processed: 1, succeeded: 1, failed: 0 })
+    expect(store.drafts[0].state).toBe('PENDING_REVIEW')
+    expect(store.terminalDecisions.size).toBe(0)
+    expect(store.finalized).toEqual([])
+    expect(JSON.stringify(line.push.mock.calls)).toContain('กรุณาตรวจสอบข้อมูลที่จำเป็น')
+  })
+
+  it('resolves the current LINE group profile before the first terminal claim and persists immutable attribution', async () => {
+    const existing = draft({ lineItems: [lineItemDraft()] })
+    const store = new FakeStore([job('CONFIRM', { ...actionPayload(), actorDisplayName: 'Untrusted Client Name' }, existing.documentId)])
+    store.drafts.push(existing)
+    const { worker, line } = harness(store)
+
+    await worker.runOnce()
+
+    expect(line.assertGroupMember).toHaveBeenCalledWith('Cgroup1', 'Ustaff1')
+    expect(store.terminalDecisions.get(existing.documentId)).toEqual({
+      documentId: existing.documentId, decision: 'CONFIRM', actorLineUserId: 'Ustaff1', actorDisplayName: 'Resolved Staff',
+      decidedAt: START.toISOString(), sourceJobId: 'job-1', expectedVersion: 1,
+    })
+    expect(store.drafts[0]).toMatchObject({ confirmedBy: 'Resolved Staff', confirmedAt: START.toISOString() })
   })
 
   it('cancels without writing the ledger while retaining the source image and audit', async () => {
@@ -160,7 +205,6 @@ describe('createOcrLedgerWorker', () => {
       job('CONFIRM', actionPayload(), existing.documentId),
       job('CANCEL', actionPayload(), existing.documentId, 'job-2'),
       job('EDIT', { ...actionPayload(), patch: validEditPatch({ note: 'must-not-apply' }) }, existing.documentId, 'job-3'),
-      job('RETRY', actionPayload(), existing.documentId, 'job-4'),
     ])
     store.drafts.push(existing)
     store.saveFailures = 1
@@ -168,7 +212,7 @@ describe('createOcrLedgerWorker', () => {
 
     await worker.runOnce()
 
-    expect(store.terminalDecisions.get(existing.documentId)).toBe('CONFIRM')
+    expect(store.terminalDecisions.get(existing.documentId)).toMatchObject({ decision: 'CONFIRM', actorDisplayName: 'Resolved Staff' })
     expect(store.finalized).toHaveLength(1)
     expect(store.drafts[0].state).toBe('PENDING_REVIEW')
     expect(store.drafts[0].note).toBeNull()
@@ -182,6 +226,48 @@ describe('createOcrLedgerWorker', () => {
     expect(store.drafts[0]).toMatchObject({ state: 'CONFIRMED', verificationStatus: 'STAFF_CONFIRMED' })
     expect(store.audits.filter((entry) => entry.action === 'CONFIRM')).toHaveLength(1)
     expect(store.audits.some((entry) => entry.action === 'CANCEL')).toBe(false)
+  })
+
+  it('uses the durable terminal record when a same-decision competing job repairs pending master state', async () => {
+    const existing = draft({ lineItems: [lineItemDraft()] })
+    const store = new FakeStore([
+      job('CONFIRM', actionPayload(), existing.documentId),
+      job('CONFIRM', { ...actionPayload(), actorLineUserId: 'Ucompetitor' }, existing.documentId, 'job-2'),
+    ])
+    store.drafts.push(existing)
+    store.saveFailures = 1
+    const { worker, line } = harness(store)
+
+    await worker.runOnce()
+
+    expect(line.assertGroupMember).toHaveBeenCalledTimes(1)
+    expect(store.drafts[0]).toMatchObject({ state: 'CONFIRMED', confirmedBy: 'Resolved Staff', confirmedAt: START.toISOString() })
+    expect(store.terminalDecisions.get(existing.documentId)).toMatchObject({ sourceJobId: 'job-1', actorLineUserId: 'Ustaff1' })
+  })
+
+  it('repairs a terminal decision by manual RETRY after ledger success and master-save retry exhaustion', async () => {
+    let current = START
+    const existing = draft({ lineItems: [lineItemDraft()] })
+    const confirm = job('CONFIRM', actionPayload(), existing.documentId)
+    const store = new FakeStore([confirm])
+    store.drafts.push(existing)
+    store.saveFailures = 4
+    const { worker, line } = harness(store, [], () => current)
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await worker.runOnce()
+      if (store.jobs[0].state === 'QUEUED') current = new Date(store.jobs[0].availableAt)
+    }
+    expect(store.jobs[0]).toMatchObject({ state: 'FAILED', attempts: 4 })
+    expect(store.drafts[0].state).toBe('PENDING_REVIEW')
+    expect(store.terminalDecisions.get(existing.documentId)).toMatchObject({ sourceJobId: 'job-1', actorDisplayName: 'Resolved Staff' })
+
+    store.jobs.push(job('RETRY', { ...actionPayload(), actorLineUserId: 'Urepair' }, existing.documentId, 'job-repair'))
+    await worker.runOnce()
+
+    expect(store.drafts[0]).toMatchObject({ state: 'CONFIRMED', confirmedBy: 'Resolved Staff', confirmedAt: START.toISOString() })
+    expect(line.assertGroupMember).toHaveBeenCalledTimes(1)
+    expect(store.audits.filter((entry) => entry.action === 'CONFIRM')).toHaveLength(1)
   })
 
   it('replays the original failed intake when RETRY has no saved draft or file', async () => {
@@ -422,7 +508,15 @@ class FakeStore implements OcrLedgerStore {
   audits: Array<Record<string, unknown>> = []
   finalized: Array<{ draft: OcrDraft; ledger: { month: string; monthlySpreadsheetId: string } }> = []
   confirmedDocuments = new Map<string, OcrDraft[]>()
-  terminalDecisions = new Map<string, 'CONFIRM' | 'CANCEL'>()
+  terminalDecisions = new Map<string, {
+    documentId: string
+    decision: 'CONFIRM' | 'CANCEL'
+    actorLineUserId: string
+    actorDisplayName: string
+    decidedAt: string
+    sourceJobId: string
+    expectedVersion: number
+  }>()
   saveFailures = 0
   appendFailures = 0
   getDraftCalls = 0
@@ -449,12 +543,21 @@ class FakeStore implements OcrLedgerStore {
   async getTerminalDecision(documentId: string) { return this.terminalDecisions.get(documentId) ?? null }
   async claimTerminalDecision(action: Record<string, unknown>) {
     const documentId = String(action.documentId)
-    const requested = action.action as 'CONFIRM' | 'CANCEL'
+    const requested = action.decision as 'CONFIRM' | 'CANCEL'
     const existing = this.terminalDecisions.get(documentId)
-    if (existing) return { decision: existing, claimed: false }
-    this.terminalDecisions.set(documentId, requested)
-    this.audits.push(structuredClone(action))
-    return { decision: requested, claimed: true }
+    if (existing) return { record: structuredClone(existing), claimed: false }
+    const record = {
+      documentId,
+      decision: requested,
+      actorLineUserId: String(action.actorLineUserId),
+      actorDisplayName: String(action.actorDisplayName),
+      decidedAt: String(action.decidedAt),
+      sourceJobId: String(action.sourceJobId),
+      expectedVersion: Number(action.expectedVersion),
+    }
+    this.terminalDecisions.set(documentId, record)
+    this.audits.push({ documentId, action: requested, ...structuredClone(record) })
+    return { record: structuredClone(record), claimed: true }
   }
   async ensureMonthlyLedger(month: string) { return { month, monthlySpreadsheetId: `monthly-${month}` } }
   async finalizeDocument(next: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }) { this.finalized.push({ draft: structuredClone(next), ledger }) }
@@ -464,7 +567,8 @@ class FakeStore implements OcrLedgerStore {
 function harness(store: FakeStore, order: string[] = [], now: () => Date = () => START, config: Partial<OcrLedgerConfig> = {}) {
   const line = {
     downloadImage: vi.fn(async () => { order.push('line-download'); return { bytes: PNG, mimeType: 'image/png' as const } }),
-    reply: vi.fn(), push: vi.fn(async () => { order.push('line-push') }), verifyLiffIdToken: vi.fn(), assertGroupMember: vi.fn(), validatePush: vi.fn(),
+    reply: vi.fn(), push: vi.fn(async () => { order.push('line-push') }), verifyLiffIdToken: vi.fn(),
+    assertGroupMember: vi.fn(async () => ({ displayName: 'Resolved Staff' })), validatePush: vi.fn(),
   } satisfies OcrLinePort
   const drive = {
     createFolder: vi.fn(async (name: string, parentId?: string) => { order.push(`create-folder:${parentId}:${name}`); return `folder-${name}` }),
@@ -514,6 +618,10 @@ function lineItem(lineNumber: number): Record<string, unknown> {
     lineNumber, description: 'Paper', quantity: 1, unit: 'pack', unitPrice: 100,
     discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office', confidence: 0.99,
   }
+}
+
+function lineItemDraft(): OcrDraft['lineItems'][number] {
+  return lineItem(1) as unknown as OcrDraft['lineItems'][number]
 }
 
 function findPostbackData(messages: unknown): string {

@@ -1,4 +1,4 @@
-import type { OcrAction, OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
+import type { OcrAction, OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob, OcrTerminalDecisionRecord } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrDrivePort, OcrSheetsPort } from './googleClient.js'
 
 export const MASTER_TABS = [
@@ -45,8 +45,8 @@ export interface OcrLedgerStore {
   findDraftByImageSha256(hash: string): Promise<OcrDraft | null>
   appendError(error: { jobId: string; documentId: string | null; code: string; createdAt: string }): Promise<void>
   appendAudit(action: OcrAction & { payloadJson: string }): Promise<void>
-  getTerminalDecision(documentId: string): Promise<'CONFIRM' | 'CANCEL' | null>
-  claimTerminalDecision(action: OcrAction & { action: 'CONFIRM' | 'CANCEL'; payloadJson: string }): Promise<{ decision: 'CONFIRM' | 'CANCEL'; claimed: boolean }>
+  getTerminalDecision(documentId: string): Promise<OcrTerminalDecisionRecord | null>
+  claimTerminalDecision(record: OcrTerminalDecisionRecord): Promise<{ record: OcrTerminalDecisionRecord; claimed: boolean }>
   ensureMonthlyLedger(month: string): Promise<{ month: string; monthlySpreadsheetId: string }>
   finalizeDocument(draft: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }): Promise<void>
   listConfirmedDocuments(monthlySpreadsheetId: string): Promise<OcrDocument[]>
@@ -133,16 +133,27 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
     },
     async getTerminalDecision(documentId) {
       const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG)
-      const action = rows.find(({ value }) => value.documentId === documentId && (value.action === 'CONFIRM' || value.action === 'CANCEL'))?.value.action
-      return action === 'CONFIRM' || action === 'CANCEL' ? action : null
+      const value = rows.find(({ value }) => value.documentId === documentId && (value.action === 'CONFIRM' || value.action === 'CANCEL'))?.value
+      return value ? terminalRecordFromAudit(value) : null
     },
-    async claimTerminalDecision(action) {
+    async claimTerminalDecision(record) {
       return withProcessMutex(mutationKey, async () => {
         const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG)
-        const existing = rows.find(({ value }) => value.documentId === action.documentId && (value.action === 'CONFIRM' || value.action === 'CANCEL'))?.value
-        if (existing) return { decision: existing.action as 'CONFIRM' | 'CANCEL', claimed: false }
-        await appendRow(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG, action)
-        return { decision: action.action, claimed: true }
+        const existing = rows.find(({ value }) => value.documentId === record.documentId && (value.action === 'CONFIRM' || value.action === 'CANCEL'))?.value
+        if (existing) return { record: terminalRecordFromAudit(existing), claimed: false }
+        await appendRow(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG, {
+          documentId: record.documentId,
+          action: record.decision,
+          actorLineUserId: record.actorLineUserId,
+          actorDisplayName: record.actorDisplayName,
+          createdAt: record.decidedAt,
+          payloadJson: JSON.stringify({
+            terminalDecision: true,
+            sourceJobId: record.sourceJobId,
+            expectedVersion: record.expectedVersion,
+          }),
+        })
+        return { record: structuredClone(record), claimed: true }
       })
     },
     async ensureMonthlyLedger(month) {
@@ -296,5 +307,31 @@ function assertUniqueLineNumbers(lineItems: OcrLineItem[]): void {
   for (const line of lineItems) {
     if (seen.has(line.lineNumber)) throw new Error('Duplicate line number')
     seen.add(line.lineNumber)
+  }
+}
+
+function terminalRecordFromAudit(value: Record<string, unknown>): OcrTerminalDecisionRecord {
+  const payload = parseJson(value.payloadJson, null)
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Invalid terminal decision record')
+  const fields = payload as Record<string, unknown>
+  const decision = value.action
+  if ((decision !== 'CONFIRM' && decision !== 'CANCEL')
+    || typeof value.documentId !== 'string' || !value.documentId
+    || typeof value.actorLineUserId !== 'string' || !value.actorLineUserId
+    || typeof value.actorDisplayName !== 'string' || !value.actorDisplayName.trim()
+    || typeof value.createdAt !== 'string' || Number.isNaN(new Date(value.createdAt).getTime())
+    || fields.terminalDecision !== true
+    || typeof fields.sourceJobId !== 'string' || !fields.sourceJobId
+    || !Number.isSafeInteger(fields.expectedVersion) || Number(fields.expectedVersion) <= 0) {
+    throw new Error('Invalid terminal decision record')
+  }
+  return {
+    documentId: value.documentId,
+    decision,
+    actorLineUserId: value.actorLineUserId,
+    actorDisplayName: value.actorDisplayName,
+    decidedAt: value.createdAt,
+    sourceJobId: fields.sourceJobId,
+    expectedVersion: Number(fields.expectedVersion),
   }
 }

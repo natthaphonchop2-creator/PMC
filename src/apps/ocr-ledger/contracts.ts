@@ -104,6 +104,16 @@ export interface OcrAction {
   createdAt: string
 }
 
+export interface OcrTerminalDecisionRecord {
+  documentId: string
+  decision: 'CONFIRM' | 'CANCEL'
+  actorLineUserId: string
+  actorDisplayName: string
+  decidedAt: string
+  sourceJobId: string
+  expectedVersion: number
+}
+
 export interface OcrExtraction {
   documentType: OcrDocumentType | null
   direction: OcrDirection | null

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import type { OcrDocument, OcrDraft, OcrExtraction, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
+import type { OcrDocument, OcrDraft, OcrExtraction, OcrQueueJob, OcrTerminalDecisionRecord } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
-import { bangkokMonthKey } from './domain.js'
+import { assertConfirmableDraft, bangkokMonthKey } from './domain.js'
 import { parseOcrEditablePatch } from './editValidation.js'
 import { buildDraftFlex, buildFinalFlex, buildPendingReportMessage, buildReportMessage } from './flexMessages.js'
 import type { OcrDrivePort } from './googleClient.js'
@@ -172,41 +172,68 @@ async function processTerminalAction(
     return
   }
   const actor = requiredString(payload.actorLineUserId, 'VERSION_CONFLICT')
-  const displayName = typeof payload.actorDisplayName === 'string' && payload.actorDisplayName ? payload.actorDisplayName : actor
-  const timestamp = deps.now().toISOString()
   const requestedDecision = job.jobType === 'CONFIRM' ? 'CONFIRM' : 'CANCEL'
   const existingDecision = await getTerminalDecision(deps.store, documentId)
-  if (existingDecision && existingDecision !== requestedDecision) {
+  if (existingDecision && existingDecision.decision !== requestedDecision) {
     await pushDraft(deps.line, groupId, current, deps.config, deps.now())
     return
   }
-  if (!existingDecision) assertExpectedVersion(current, payload.expectedVersion)
-  let marker
-  try {
-    marker = await deps.store.claimTerminalDecision({
-      documentId, action: requestedDecision, actorLineUserId: actor,
-      actorDisplayName: typeof payload.actorDisplayName === 'string' ? payload.actorDisplayName : null,
-      createdAt: timestamp, payloadJson: JSON.stringify({ jobId: job.jobId, draftVersion: current.draftVersion, terminalDecision: true }),
-    })
-  } catch {
-    throw workerError('SHEET_WRITE_FAILED')
+  let record = existingDecision
+  if (!record) {
+    assertExpectedVersion(current, payload.expectedVersion)
+    if (requestedDecision === 'CONFIRM') {
+      try {
+        assertConfirmableDraft(current)
+      } catch {
+        await pushReviewRequired(deps.line, groupId)
+        return
+      }
+    }
+    let displayName: string
+    try {
+      displayName = (await deps.line.assertGroupMember(groupId, actor)).displayName
+    } catch {
+      throw workerError('LINE_SEND_FAILED')
+    }
+    const requestedRecord: OcrTerminalDecisionRecord = {
+      documentId,
+      decision: requestedDecision,
+      actorLineUserId: actor,
+      actorDisplayName: displayName,
+      decidedAt: deps.now().toISOString(),
+      sourceJobId: job.jobId,
+      expectedVersion: current.draftVersion,
+    }
+    try {
+      record = (await deps.store.claimTerminalDecision(requestedRecord)).record
+    } catch {
+      throw workerError('SHEET_WRITE_FAILED')
+    }
   }
-  if (marker.decision !== requestedDecision) {
+  if (record.decision !== requestedDecision) {
     await pushDraft(deps.line, groupId, current, deps.config, deps.now())
     return
   }
-  const next: OcrDraft = marker.decision === 'CONFIRM'
-    ? { ...current, state: 'CONFIRMED', confirmedBy: displayName, confirmedAt: timestamp, verificationStatus: 'STAFF_CONFIRMED' }
+  await repairTerminalDecision(record, current, groupId, deps)
+}
+
+async function repairTerminalDecision(
+  record: OcrTerminalDecisionRecord,
+  current: OcrDraft,
+  groupId: string,
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; now: () => Date },
+): Promise<void> {
+  if (current.draftVersion !== record.expectedVersion) throw workerError('SHEET_WRITE_FAILED')
+  const next: OcrDraft = record.decision === 'CONFIRM'
+    ? { ...current, state: 'CONFIRMED', confirmedBy: record.actorDisplayName, confirmedAt: record.decidedAt, verificationStatus: 'STAFF_CONFIRMED' }
     : { ...current, state: 'CANCELLED' }
-  if (marker.decision === 'CONFIRM') {
-    const month = bangkokMonthKey(next.documentDate ?? timestamp)
+  if (record.decision === 'CONFIRM') {
+    const month = bangkokMonthKey(next.documentDate ?? record.decidedAt)
     let ledger
     try { ledger = await deps.store.ensureMonthlyLedger(month) } catch { throw workerError('SHEET_WRITE_FAILED') }
     try { await deps.store.finalizeDocument(next, ledger) } catch { throw workerError('SHEET_WRITE_FAILED') }
   }
   await saveDraft(deps.store, next)
-  payload.deliveryDocumentId = next.documentId
-  job.payloadJson = JSON.stringify(payload)
   await pushDraft(deps.line, groupId, next, deps.config, deps.now())
 }
 
@@ -229,8 +256,9 @@ async function processRetry(
     await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
     return
   }
-  if (await getTerminalDecision(deps.store, current.documentId)) {
-    await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
+  const terminalDecision = await getTerminalDecision(deps.store, current.documentId)
+  if (terminalDecision) {
+    await repairTerminalDecision(terminalDecision, current, requiredString(payload.groupId, 'LINE_SEND_FAILED'), deps)
     return
   }
   if (current.state !== 'FAILED' && current.state !== 'PENDING_REVIEW' && current.state !== 'RETRY_PENDING') throw workerError('VERSION_CONFLICT')
@@ -568,8 +596,16 @@ async function findDuplicate(store: OcrLedgerStore, hash: string): Promise<OcrDr
   try { return await store.findDraftByImageSha256(hash) } catch { throw workerError('SHEET_WRITE_FAILED') }
 }
 
-async function getTerminalDecision(store: OcrLedgerStore, documentId: string): Promise<'CONFIRM' | 'CANCEL' | null> {
+async function getTerminalDecision(store: OcrLedgerStore, documentId: string): Promise<OcrTerminalDecisionRecord | null> {
   try { return await store.getTerminalDecision(documentId) } catch { throw workerError('SHEET_WRITE_FAILED') }
+}
+
+async function pushReviewRequired(line: OcrLinePort, groupId: string): Promise<void> {
+  try {
+    await line.push(groupId, [{ type: 'text', text: 'ยังบันทึกไม่ได้ กรุณาตรวจสอบข้อมูลที่จำเป็นแล้วลองอีกครั้ง' }])
+  } catch {
+    throw workerError('LINE_SEND_FAILED')
+  }
 }
 
 async function findOriginalIntake(store: OcrLedgerStore, documentId: string): Promise<OcrQueueJob | null> {

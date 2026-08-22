@@ -150,14 +150,14 @@ describe('Google OCR ledger store', () => {
     const sheets = new MemorySheets()
     const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
     const base = {
-      documentId: 'OCR-20260822-abc123', actorLineUserId: 'U1', actorDisplayName: 'Staff',
-      createdAt: '2026-08-22T10:01:00.000Z', payloadJson: '{"jobId":"confirm"}',
+      documentId: 'OCR-20260822-abc123', decision: 'CONFIRM' as const, actorLineUserId: 'U1', actorDisplayName: 'Resolved Staff',
+      decidedAt: '2026-08-22T10:01:00.000Z', sourceJobId: 'confirm', expectedVersion: 3,
     }
 
-    expect(await store.claimTerminalDecision({ ...base, action: 'CONFIRM' })).toEqual({ decision: 'CONFIRM', claimed: true })
-    expect(await store.getTerminalDecision(base.documentId)).toBe('CONFIRM')
-    expect(await store.claimTerminalDecision({ ...base, action: 'CONFIRM' })).toEqual({ decision: 'CONFIRM', claimed: false })
-    expect(await store.claimTerminalDecision({ ...base, action: 'CANCEL', payloadJson: '{"jobId":"cancel"}' })).toEqual({ decision: 'CONFIRM', claimed: false })
+    expect(await store.claimTerminalDecision(base)).toEqual({ record: base, claimed: true })
+    expect(await store.getTerminalDecision(base.documentId)).toEqual(base)
+    expect(await store.claimTerminalDecision(base)).toEqual({ record: base, claimed: false })
+    expect(await store.claimTerminalDecision({ ...base, decision: 'CANCEL', sourceJobId: 'cancel' })).toEqual({ record: base, claimed: false })
     expect(sheets.rows('master', 'AUDIT_LOG')).toHaveLength(2)
   })
 

@@ -1,4 +1,4 @@
-import type { OcrDocumentState, OcrExtraction, OcrWarning } from '../../src/apps/ocr-ledger/contracts.js'
+import type { OcrDocumentState, OcrDraft, OcrExtraction, OcrLineItem, OcrWarning } from '../../src/apps/ocr-ledger/contracts.js'
 
 export type OcrDomainEvent = 'STORE' | 'START_OCR' | 'OCR_SUCCEEDED' | 'RETRY' | 'FAIL' | 'CONFIRM' | 'CANCEL'
 
@@ -79,6 +79,18 @@ export function exactImageDuplicate(hash: string, confirmedHashes: ReadonlySet<s
   return confirmedHashes.has(hash)
 }
 
+export function assertConfirmableDraft(draft: OcrDraft): void {
+  if (draft.documentType !== 'TRANSFER_SLIP' && draft.documentType !== 'RECEIPT') throw new Error('Draft requires review')
+  if (draft.direction !== 'INCOME' && draft.direction !== 'EXPENSE') throw new Error('Draft requires review')
+  if (typeof draft.documentDate !== 'string' || !isIsoCalendarDate(draft.documentDate)) throw new Error('Draft requires review')
+  if (typeof draft.categoryId !== 'string' || draft.categoryId.trim().length === 0) throw new Error('Draft requires review')
+  if (typeof draft.grandTotal !== 'number' || !Number.isFinite(draft.grandTotal)) throw new Error('Draft requires review')
+  if (!Array.isArray(draft.lineItems)) throw new Error('Draft requires review')
+  if (draft.documentType === 'RECEIPT' && !draft.lineItems.every((line, index) => isConfirmableReceiptLine(line, index + 1, draft.documentId))) {
+    throw new Error('Draft requires review')
+  }
+}
+
 export function bangkokMonthKey(isoDate: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
     if (!isIsoCalendarDate(isoDate)) throw new Error('Invalid ISO date')
@@ -131,4 +143,28 @@ function isIsoCalendarDate(value: string): boolean {
   const [year, month, day] = match.slice(1).map(Number)
   const date = new Date(Date.UTC(year, month - 1, day))
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function isConfirmableReceiptLine(line: OcrLineItem, expectedLineNumber: number, documentId: string): boolean {
+  return Boolean(line) && typeof line === 'object'
+    && line.lineNumber === expectedLineNumber
+    && Number.isSafeInteger(line.lineNumber)
+    && (line.documentId === undefined || line.documentId === null || line.documentId === documentId)
+    && isNullableString(line.description)
+    && isNullableFiniteNumber(line.quantity)
+    && isNullableString(line.unit)
+    && isNullableFiniteNumber(line.unitPrice)
+    && isNullableFiniteNumber(line.discountAmount)
+    && isNullableFiniteNumber(line.taxAmount)
+    && isNullableFiniteNumber(line.lineTotal)
+    && isNullableString(line.categoryId)
+    && (line.confidence === null || (typeof line.confidence === 'number' && Number.isFinite(line.confidence) && line.confidence >= 0 && line.confidence <= 1))
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string'
+}
+
+function isNullableFiniteNumber(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isFinite(value))
 }
