@@ -47,6 +47,14 @@ Stop หาก test/build/lint ไม่ผ่าน หรือพบ secret/P
 - Runtime correction (2026-08-22): ทุก relative import ใน `server/ocr-ledger` runtime graph ใช้ explicit `.js` แล้ว; fresh build + missing-config job regression ยืนยันว่า `npm run ocr:job` ออก nonzero ด้วย `OCR ledger job failed` โดยไม่รั่ว `ERR_MODULE_NOT_FOUND` หรือ filesystem path และก่อนสร้าง provider client. ยังเป็น NO-GO สำหรับ worker counts เพราะไม่มี synthetic configuration/approved test context
 - Synthetic Drive/Sheet, real LINE validation endpoint, production OAuth refresh credentials, และ live data ไม่ได้ใช้หรือสร้างในขั้นนี้
 
+### Final fix verification — 2026-08-23: NO-GO
+
+- Final fix wave จาก base `ddeacce5a2bf60603d067b8f820d780ba39fb230`: `npm run ocr:test` ผ่าน 18 files / 223 tests และ `npm test` ผ่าน 56 files / 551 tests; lint, full build และ `git diff --check` ผ่าน โดยมีเพียง Vite chunk-size warning เดิม
+- Credential-cleared setup smoke แสดง `DRY_RUN` และไม่สร้าง Google asset; credential-cleared runtime smoke fail-closed ด้วย `OCR ledger job failed` ก่อนสร้าง provider clients
+- Evaluator no-config ให้ aggregate-only `NO_GO`, `scoredFixtures=0`, `uniqueFixtureIds=0`, `uniqueImageContents=0`, code `EVAL_FIXTURE_DIR_REQUIRED` และไม่เรียก OpenAI
+- ยังไม่ได้อนุมัติหรือทำ live Google/LINE/OpenAI/Render call, webhook change, bot invitation, production credential placement, real asset creation, real message หรือ real financial-document processing
+- สถานะยังเป็น NO-GO จนกว่าจะผ่าน approved 100-unique-image evaluation, mocked browser QA, no-send LINE validation, dedicated-channel/group and Google identity/asset verification, Render one-web-instance/single-run Cron gate และ explicit owner approval ตาม rollout gates
+
 ## Stage 3 — No-send Flex validation
 
 1. สร้าง Flex payload จาก synthetic drafts/reports เท่านั้น
