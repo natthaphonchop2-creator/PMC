@@ -10,6 +10,7 @@
     "build:ocr-review": "vite build --config vite.ocr-review.config.ts",
     "build:server": "tsc -p tsconfig.server.json",
     "booking:test": "vitest run apps/pmc-google-booking-ops/tests",
+    "ocr:job": "node dist-server/server/ocr-ledger/job.js",
     "ocr:test": "vitest run tests/ocr-ledger",
     "ocr:setup": "node dist-server/server/ocr-ledger/setup.js",
     "booking:typecheck": "tsc -p apps/pmc-google-booking-ops/tsconfig.json --noEmit",

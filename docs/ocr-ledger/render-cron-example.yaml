@@ -1,0 +1,49 @@
+# EXAMPLE ONLY — DO NOT copy this into render.yaml without explicit owner approval.
+# Doing so creates a live, billable Render Cron service. It must not be deployed
+# until the live-use gates in pilot-runbook.md are approved.
+services:
+  - type: cron
+    name: pmc-ocr-ledger-worker-example
+    runtime: node
+    schedule: "* * * * *"
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run ocr:job
+    envVars:
+      - key: OCR_LINE_CHANNEL_SECRET
+        sync: false
+      - key: OCR_LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: OCR_ALLOWED_GROUP_ID
+        sync: false
+      - key: OCR_MASTER_SPREADSHEET_ID
+        sync: false
+      - key: OCR_DRIVE_ROOT_ID
+        sync: false
+      - key: OCR_LIFF_ID
+        sync: false
+      - key: OCR_LIFF_CHANNEL_ID
+        sync: false
+      - key: OCR_REVIEW_SIGNING_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_OCR_MODEL
+        sync: false
+      - key: OCR_GOOGLE_CLIENT_ID
+        sync: false
+      - key: OCR_GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: OCR_GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: OCR_DAILY_REPORT_ENABLED
+        sync: false
+      - key: OCR_DAILY_REPORT_TIME
+        sync: false
+      - key: OCR_TIMEZONE
+        sync: false
+      - key: OCR_WORKER_BATCH_SIZE
+        sync: false
+      - key: OCR_MAX_IMAGE_BYTES
+        sync: false
+      - key: OCR_OPENAI_MAX_OUTPUT_TOKENS
+        sync: false

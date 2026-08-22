@@ -1,182 +1,59 @@
-import { createReadStream } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { timingSafeEqual } from 'node:crypto'
-import { extname, join, resolve } from 'node:path'
+import { resolve } from 'node:path'
+import { createProductionRequestHandler } from './productionApp.js'
 import { createMetaApiMiddleware } from './metaApiPlugin.js'
 import { createOpenAiMiddleware } from './openAiPlugin.js'
 import { createPageAutomationMiddleware } from './pageAutomationPlugin.js'
 import { createBookingLineWebhookMiddleware } from './bookingLineWebhook.js'
+import { readOcrLedgerConfig } from './ocr-ledger/config.js'
+import { createGoogleOcrPorts } from './ocr-ledger/googleClient.js'
+import { createGoogleOcrStore } from './ocr-ledger/googleStore.js'
+import { createOcrLineClient } from './ocr-ledger/lineClient.js'
+import { createOcrLedgerMiddleware } from './ocr-ledger/middleware.js'
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
-const basicAuthUser = process.env.APP_BASIC_AUTH_USER || 'pmc'
-const basicAuthPassword = process.env.APP_BASIC_AUTH_PASSWORD || ''
-const allowUnauthenticated = process.env.APP_ALLOW_UNAUTHENTICATED === 'true'
 const distDir = resolve(process.cwd(), 'dist')
-const indexHtml = join(distDir, 'index.html')
 const metaApi = createMetaApiMiddleware(process.env)
 const openAiApi = createOpenAiMiddleware(process.env)
 const pageAutomationApi = createPageAutomationMiddleware(process.env)
 const bookingLineWebhook = createBookingLineWebhookMiddleware(process.env)
-
-const contentTypes: Record<string, string> = {
-  '.css': 'text/css; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.ico': 'image/x-icon',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.map': 'application/json; charset=utf-8',
-  '.png': 'image/png',
-  '.svg': 'image/svg+xml',
-  '.txt': 'text/plain; charset=utf-8',
-  '.webp': 'image/webp',
-}
-
-const server = createServer(async (req, res) => {
-  if (req.url === '/healthz') {
-    res.statusCode = 200
-    res.setHeader('content-type', 'application/json; charset=utf-8')
-    res.setHeader('cache-control', 'no-cache')
-    res.end(JSON.stringify({ ok: true }))
-    return
-  }
-
-  if (req.method === 'POST' && req.url === '/api/booking-line/webhook') {
-    try {
-      await bookingLineWebhook(req, res)
-    } catch {
-      res.statusCode = 500
-      res.setHeader('content-type', 'application/json; charset=utf-8')
-      res.end(JSON.stringify({ error: 'Booking LINE webhook failed' }))
-    }
-    return
-  }
-
-  if (!isBasicAuthAllowed(req.headers.authorization)) {
-    res.statusCode = 401
-    res.setHeader('www-authenticate', 'Basic realm="PMC Ads Agent", charset="UTF-8"')
-    res.setHeader('content-type', 'text/plain; charset=utf-8')
-    res.end(basicAuthPassword ? 'Authentication required' : 'APP_BASIC_AUTH_PASSWORD required')
-    return
-  }
-
-  if (req.url?.startsWith('/api/meta/')) {
-    await metaApi(req, res)
-    return
-  }
-
-  if (req.url?.startsWith('/api/ai/')) {
-    await openAiApi(req, res)
-    return
-  }
-
-  if (req.url?.startsWith('/api/page-automation/')) {
-    await pageAutomationApi(req, res)
-    return
-  }
-
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.statusCode = 405
-    res.setHeader('content-type', 'application/json; charset=utf-8')
-    res.end(JSON.stringify({ error: 'Method not allowed' }))
-    return
-  }
-
-  try {
-    const requestUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
-    const pathname = decodeURIComponent(requestUrl.pathname)
-    const staticPath = pathname === '/' ? indexHtml : resolve(distDir, `.${pathname}`)
-
-    if (!staticPath.startsWith(distDir)) {
-      res.statusCode = 403
-      res.end('Forbidden')
-      return
-    }
-
-    const filePath = await resolveStaticFile(staticPath)
-    const extension = extname(filePath)
-    res.statusCode = 200
-    res.setHeader('content-type', contentTypes[extension] || 'application/octet-stream')
-    if (isCacheableAsset(filePath)) {
-      res.setHeader('cache-control', 'public, max-age=31536000, immutable')
-    } else {
-      res.setHeader('cache-control', 'no-cache')
-    }
-
-    if (req.method === 'HEAD') {
-      res.end('')
-      return
-    }
-
-    createReadStream(filePath)
-      .on('error', () => {
-        if (!res.headersSent) res.statusCode = 500
-        res.end('Static file read failed')
+const ocrConfig = readOcrLedgerConfig(process.env)
+const ocrLedger = ocrConfig.configured
+  ? (() => {
+      const config = ocrConfig.config
+      const google = createGoogleOcrPorts({
+        googleClientId: config.googleClientId,
+        googleClientSecret: config.googleClientSecret,
+        googleRefreshToken: config.googleRefreshToken,
+        driveRootId: config.driveRootId,
       })
-      .pipe(res)
-  } catch (error) {
-    if (isAssetRequest(req.url || '')) {
-      res.statusCode = 404
-      res.end('Not found')
-      return
-    }
+      const store = createGoogleOcrStore({
+        masterSpreadsheetId: config.masterSpreadsheetId,
+        sheets: google.sheets,
+        drive: google.drive,
+      })
+      const line = createOcrLineClient({
+        channelAccessToken: config.lineChannelAccessToken,
+        liffChannelId: config.liffChannelId,
+        maxImageBytes: config.maxImageBytes,
+      })
+      return createOcrLedgerMiddleware({ config, store, line, drive: google.drive, now: () => new Date() })
+    })()
+  : undefined
 
-    try {
-      const html = await readFile(indexHtml, 'utf-8')
-      res.statusCode = 200
-      res.setHeader('content-type', 'text/html; charset=utf-8')
-      res.setHeader('cache-control', 'no-cache')
-      res.end(html)
-    } catch {
-      res.statusCode = 500
-      res.setHeader('content-type', 'application/json; charset=utf-8')
-      res.end(
-        JSON.stringify({
-          error: error instanceof Error ? error.message : 'Production server failed',
-        }),
-      )
-    }
-  }
-})
+const server = createServer(createProductionRequestHandler({
+  distDir,
+  basicAuthUser: process.env.APP_BASIC_AUTH_USER || 'pmc',
+  basicAuthPassword: process.env.APP_BASIC_AUTH_PASSWORD || '',
+  allowUnauthenticated: process.env.APP_ALLOW_UNAUTHENTICATED === 'true',
+  metaApi,
+  openAiApi,
+  pageAutomationApi,
+  bookingLineWebhook,
+  ocrLedger,
+}))
 
 server.listen(port, host, () => {
   console.log(`PMC Ads Agent running on http://${host}:${port}`)
 })
-
-async function resolveStaticFile(pathname: string) {
-  const fileStat = await stat(pathname)
-  if (fileStat.isDirectory()) return join(pathname, 'index.html')
-  return pathname
-}
-
-function isAssetRequest(url: string) {
-  return extname(new URL(url, 'http://localhost').pathname) !== ''
-}
-
-function isCacheableAsset(pathname: string) {
-  return pathname.includes(`${distDir}/assets/`)
-}
-
-function isBasicAuthAllowed(authorization: string | undefined) {
-  if (!basicAuthPassword) return allowUnauthenticated
-  if (!authorization?.startsWith('Basic ')) return false
-
-  try {
-    const decoded = Buffer.from(authorization.slice('Basic '.length), 'base64').toString('utf-8')
-    const separatorIndex = decoded.indexOf(':')
-    if (separatorIndex === -1) return false
-
-    const user = decoded.slice(0, separatorIndex)
-    const password = decoded.slice(separatorIndex + 1)
-    return safeEqual(user, basicAuthUser) && safeEqual(password, basicAuthPassword)
-  } catch {
-    return false
-  }
-}
-
-function safeEqual(a: string, b: string) {
-  const left = Buffer.from(a)
-  const right = Buffer.from(b)
-  return left.length === right.length && timingSafeEqual(left, right)
-}
