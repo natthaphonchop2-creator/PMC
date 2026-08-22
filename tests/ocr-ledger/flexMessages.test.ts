@@ -43,6 +43,43 @@ describe('OCR LINE Flex messages', () => {
     expect(actionValues(report)).toEqual([])
     expect(report.altText).not.toContain('https://')
   })
+
+  it('includes present review fields and the final document number', () => {
+    const review = buildDraftFlex(draft({
+      documentType: 'RECEIPT', direction: 'EXPENSE', categoryId: 'office', discountAmount: 25, taxAmount: 49,
+    }), reviewOptions())
+    const final = buildFinalFlex(draft({ state: 'CONFIRMED', receiptNumber: 'REC-2026-001' }))
+
+    expect(visibleFlexText(review)).toContain('ประเภทเอกสาร: ใบเสร็จ')
+    expect(visibleFlexText(review)).toContain('ทิศทาง: รายจ่าย')
+    expect(visibleFlexText(review)).toContain('หมวดหมู่: office')
+    expect(visibleFlexText(review)).toContain('ส่วนลด: ฿25')
+    expect(visibleFlexText(review)).toContain('ภาษี: ฿49')
+    expect(visibleFlexText(final)).toContain('เลขที่เอกสาร: REC-2026-001')
+  })
+
+  it('rejects a non-final document and gives reports a fixed safe alt text', () => {
+    expect(() => buildFinalFlex(draft({ state: 'PENDING_REVIEW' }))).toThrow('Final Flex requires final document state')
+
+    const report = buildReportMessage({ title: 'https://private.example/secret-token '.repeat(20), entries: [] })
+    expect(report.altText).toBe('รายงานบัญชี')
+    expect(report.altText).not.toContain('https://')
+  })
+
+  it('omits null item descriptions and truncates OCR-derived visible strings deterministically', () => {
+    const longDescription = 'ก'.repeat(161)
+    const message = buildDraftFlex(draft({
+      counterpartyName: 'ข'.repeat(161),
+      lineItems: [{ ...line(1), description: null }, { ...line(2), description: longDescription }],
+    }), reviewOptions())
+    const text = visibleFlexText(message)
+
+    expect(text).not.toContain('ไม่ระบุรายการ')
+    expect(text).toContain(`• ×1 ฿100`)
+    expect(text).toContain('ข'.repeat(159) + '…')
+    expect(text).toContain(`• ${'ก'.repeat(159)}…`)
+    expect(text).not.toContain(longDescription)
+  })
 })
 
 function draft(overrides: Partial<OcrDraft> = {}): OcrDraft {
@@ -61,6 +98,10 @@ function draft(overrides: Partial<OcrDraft> = {}): OcrDraft {
 
 function line(lineNumber: number) {
   return { lineNumber, description: `สินค้า ${lineNumber}`, quantity: 1, unit: 'ชิ้น', unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: null, confidence: 0.99 }
+}
+
+function reviewOptions() {
+  return { groupId: 'Cgroup1', reviewSigningSecret: 'review-secret', liffUrl: 'https://liff.line.me/2001234567-review', now: 1_800_000_000 }
 }
 
 function visibleFlexText(message: unknown): string {
