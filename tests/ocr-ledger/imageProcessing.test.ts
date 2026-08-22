@@ -52,4 +52,11 @@ describe('prepareOcrImage', () => {
     await expect(prepareOcrImage(original, original.byteLength - 1))
       .rejects.toThrow('OCR_MAX_IMAGE_BYTES')
   })
+
+  it('rejects decoded WebP input outside the Phase 1 JPEG/PNG allowlist', async () => {
+    const webp = await sharp({ create: { width: 100, height: 100, channels: 3, background: '#ffffff' } }).webp().toBuffer()
+
+    await expect(prepareOcrImage(webp, webp.byteLength + 1))
+      .rejects.toThrow('Unsupported OCR image format')
+  })
 })

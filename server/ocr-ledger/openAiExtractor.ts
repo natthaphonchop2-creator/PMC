@@ -33,9 +33,11 @@ export type OcrFetch = (input: string, init: { method: 'POST'; headers: Record<s
 export function createOpenAiOcrExtractor(input: {
   apiKey: string
   model: string
+  maxOutputTokens: number
   referenceDate: string
   fetch?: OcrFetch
 }): OcrExtractorPort {
+  if (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens <= 0) throw new RangeError('maxOutputTokens must be a positive integer')
   const fetchImpl = input.fetch ?? fetch
 
   return {
@@ -49,6 +51,7 @@ export function createOpenAiOcrExtractor(input: {
       if (!response.ok) {
         throw new OcrExtractorError(response.status === 429 ? 'OCR_RATE_LIMIT' : 'OCR_PROVIDER_ERROR')
       }
+      if (!isRecord(body) || body.status !== 'completed') throw new OcrExtractorError('OCR_INVALID_OUTPUT')
       if (hasRefusal(body)) throw new OcrExtractorError('OCR_REFUSAL')
 
       const outputText = outputTextFrom(body)
@@ -74,7 +77,7 @@ export function createOpenAiOcrExtractor(input: {
 
 async function callResponsesApi(
   fetchImpl: OcrFetch,
-  input: { apiKey: string; model: string },
+  input: { apiKey: string; model: string; maxOutputTokens: number },
   image: PreparedOcrImage,
 ) {
   return fetchImpl(OPENAI_RESPONSES_URL, {
@@ -82,6 +85,7 @@ async function callResponsesApi(
     headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       model: input.model,
+      max_output_tokens: input.maxOutputTokens,
       instructions: SYSTEM_PROMPT,
       input: [{
         role: 'user',
@@ -116,7 +120,8 @@ function parseExtraction(value: unknown, sourceImageSha256: string): OcrExtracti
     || !isNullableFiniteNumber(value.grandTotal)) {
     throw new OcrExtractorError('OCR_INVALID_OUTPUT')
   }
-  if (!isConfidenceMap(value.confidenceByField) || !Array.isArray(value.lineItems) || !value.lineItems.every(isLineItem)) {
+  if (!isConfidenceMap(value.confidenceByField) || !Array.isArray(value.lineItems) || !value.lineItems.every(isLineItem)
+    || !hasSequentialLineNumbers(value.lineItems)) {
     throw new OcrExtractorError('OCR_INVALID_OUTPUT')
   }
 
@@ -143,14 +148,19 @@ function parseExtraction(value: unknown, sourceImageSha256: string): OcrExtracti
 
 function isLineItem(value: unknown): value is OcrLineItem {
   if (!isRecord(value) || !hasOnlyKeys(value, LINE_ITEM_KEYS) || !hasKeys(value, LINE_ITEM_KEYS)) return false
-  return Number.isFinite(value.lineNumber)
+  return typeof value.lineNumber === 'number' && Number.isSafeInteger(value.lineNumber) && value.lineNumber > 0
     && [value.description, value.unit, value.categoryId].every(isNullableString)
-    && [value.quantity, value.unitPrice, value.discountAmount, value.taxAmount, value.lineTotal, value.confidence].every(isNullableFiniteNumber)
+    && [value.quantity, value.unitPrice, value.discountAmount, value.taxAmount, value.lineTotal].every(isNullableFiniteNumber)
+    && isNullableConfidence(value.confidence)
 }
 
 function isConfidenceMap(value: unknown): value is Record<string, number | null> {
   if (!isRecord(value) || !hasOnlyKeys(value, CONFIDENCE_KEYS) || !hasKeys(value, CONFIDENCE_KEYS)) return false
-  return Object.values(value).every(isNullableFiniteNumber)
+  return Object.values(value).every(isNullableConfidence)
+}
+
+function hasSequentialLineNumbers(items: readonly OcrLineItem[]): boolean {
+  return items.every((item, index) => item.lineNumber === index + 1)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -175,6 +185,10 @@ function isNullableString(value: unknown): value is string | null {
 
 function isNullableFiniteNumber(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value))
+}
+
+function isNullableConfidence(value: unknown): value is number | null {
+  return isNullableFiniteNumber(value) && (value === null || (value >= 0 && value <= 1))
 }
 
 function outputTextFrom(value: unknown): string | null {
@@ -216,6 +230,7 @@ const LINE_ITEM_KEYS = [
 
 const nullableString = { type: ['string', 'null'] }
 const nullableNumber = { type: ['number', 'null'] }
+const nullableConfidence = { type: ['number', 'null'], minimum: 0, maximum: 1 }
 
 const OCR_DOCUMENT_SCHEMA = {
   type: 'object',
@@ -240,7 +255,7 @@ const OCR_DOCUMENT_SCHEMA = {
       type: 'object',
       additionalProperties: false,
       required: CONFIDENCE_KEYS,
-      properties: Object.fromEntries(CONFIDENCE_KEYS.map((key) => [key, nullableNumber])),
+      properties: Object.fromEntries(CONFIDENCE_KEYS.map((key) => [key, nullableConfidence])),
     },
     lineItems: {
       type: 'array',
@@ -249,7 +264,7 @@ const OCR_DOCUMENT_SCHEMA = {
         additionalProperties: false,
         required: LINE_ITEM_KEYS,
         properties: {
-          lineNumber: { type: 'number' },
+          lineNumber: { type: 'number', minimum: 1, multipleOf: 1 },
           description: nullableString,
           quantity: nullableNumber,
           unit: nullableString,
@@ -258,7 +273,7 @@ const OCR_DOCUMENT_SCHEMA = {
           taxAmount: nullableNumber,
           lineTotal: nullableNumber,
           categoryId: nullableString,
-          confidence: nullableNumber,
+          confidence: nullableConfidence,
         },
       },
     },

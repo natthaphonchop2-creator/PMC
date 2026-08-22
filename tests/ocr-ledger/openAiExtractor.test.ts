@@ -10,8 +10,8 @@ const preparedImage = {
 
 describe('OpenAI OCR extractor', () => {
   it('sends one strict Responses image request and returns a draft with deterministic warnings', async () => {
-    const fetch = vi.fn(async () => fakeResponse(200, { output_text: JSON.stringify(validExtraction()) }))
-    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', fetch, referenceDate: '2026-08-22' })
+    const fetch = vi.fn(async () => completedResponse(validExtraction()))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
 
     const extraction = await extractor.extract(preparedImage)
 
@@ -28,7 +28,10 @@ describe('OpenAI OCR extractor', () => {
     })
     expect(body.text.format.schema.properties.documentType).toMatchObject({ type: ['string', 'null'], enum: ['TRANSFER_SLIP', 'RECEIPT', null] })
     expect(body.text.format.schema.properties.direction).toMatchObject({ type: ['string', 'null'], enum: ['INCOME', 'EXPENSE', null] })
+    expect(body.text.format.schema.properties.confidenceByField.properties.currency).toMatchObject({ minimum: 0, maximum: 1 })
+    expect(body.text.format.schema.properties.lineItems.items.properties.lineNumber).toMatchObject({ minimum: 1, multipleOf: 1 })
     expect(body.text.format.schema.required).toEqual(expect.arrayContaining(['confidenceByField', 'lineItems']))
+    expect(body.max_output_tokens).toBe(512)
     expect(body.instructions).toContain('Do not invent')
     expect(body.instructions).toContain('bank verification')
     expect(extraction.sourceImageSha256).toBe(preparedImage.originalSha256)
@@ -36,8 +39,8 @@ describe('OpenAI OCR extractor', () => {
   })
 
   it('preserves an unreadable currency as null', async () => {
-    const fetch = vi.fn(async () => fakeResponse(200, { output_text: JSON.stringify(validExtraction({ currency: null, confidenceByField: { ...validExtraction().confidenceByField, currency: null } })) }))
-    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', fetch, referenceDate: '2026-08-22' })
+    const fetch = vi.fn(async () => completedResponse(validExtraction({ currency: null, confidenceByField: { ...validExtraction().confidenceByField, currency: null } })))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
 
     const extraction = await extractor.extract(preparedImage)
 
@@ -45,15 +48,47 @@ describe('OpenAI OCR extractor', () => {
   })
 
   it.each([
-    ['refusal', fakeResponse(200, { output: [{ content: [{ type: 'refusal', refusal: 'no' }] }] }), 'OCR_REFUSAL'],
-    ['malformed JSON', fakeResponse(200, { output_text: 'not-json' }), 'OCR_INVALID_OUTPUT'],
-    ['unsupported enum', fakeResponse(200, { output_text: JSON.stringify(validExtraction({ documentType: 'OTHER' })) }), 'OCR_INVALID_OUTPUT'],
-    ['missing required key', fakeResponse(200, { output_text: JSON.stringify(withoutKey(validExtraction(), 'currency')) }), 'OCR_INVALID_OUTPUT'],
+    ['negative header confidence', validExtraction({ confidenceByField: { ...validExtraction().confidenceByField, grandTotal: -0.01 } })],
+    ['header confidence over one', validExtraction({ confidenceByField: { ...validExtraction().confidenceByField, grandTotal: 1.01 } })],
+    ['negative line confidence', validExtraction({ lineItems: [{ ...validExtraction().lineItems[0], confidence: -0.01 }] })],
+    ['line confidence over one', validExtraction({ lineItems: [{ ...validExtraction().lineItems[0], confidence: 1.01 }] })],
+  ])('rejects %s', async (_caseName, extraction) => {
+    const fetch = vi.fn(async () => completedResponse(extraction))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
+
+    await expect(extractor.extract(preparedImage)).rejects.toMatchObject({ code: 'OCR_INVALID_OUTPUT' })
+  })
+
+  it.each([
+    ['zero', [{ ...validExtraction().lineItems[0], lineNumber: 0 }]],
+    ['fractional', [{ ...validExtraction().lineItems[0], lineNumber: 1.5 }]],
+    ['duplicate', [{ ...validExtraction().lineItems[0], lineNumber: 1 }, { ...validExtraction().lineItems[0], lineNumber: 1 }]],
+    ['gap', [{ ...validExtraction().lineItems[0], lineNumber: 1 }, { ...validExtraction().lineItems[0], lineNumber: 3 }]],
+    ['out of order', [{ ...validExtraction().lineItems[0], lineNumber: 2 }, { ...validExtraction().lineItems[0], lineNumber: 1 }]],
+  ])('rejects %s receipt line numbers', async (_caseName, lineItems) => {
+    const fetch = vi.fn(async () => completedResponse(validExtraction({ lineItems })))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
+
+    await expect(extractor.extract(preparedImage)).rejects.toMatchObject({ code: 'OCR_INVALID_OUTPUT' })
+  })
+
+  it.each(['incomplete', 'failed'])('rejects an HTTP-200 response with provider status %s', async (status) => {
+    const fetch = vi.fn(async () => fakeResponse(200, { status, output_text: JSON.stringify(validExtraction()) }))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
+
+    await expect(extractor.extract(preparedImage)).rejects.toMatchObject({ code: 'OCR_INVALID_OUTPUT' })
+  })
+
+  it.each([
+    ['refusal', fakeResponse(200, { status: 'completed', output: [{ content: [{ type: 'refusal', refusal: 'no' }] }] }), 'OCR_REFUSAL'],
+    ['malformed JSON', fakeResponse(200, { status: 'completed', output_text: 'not-json' }), 'OCR_INVALID_OUTPUT'],
+    ['unsupported enum', fakeResponse(200, { status: 'completed', output_text: JSON.stringify(validExtraction({ documentType: 'OTHER' })) }), 'OCR_INVALID_OUTPUT'],
+    ['missing required key', fakeResponse(200, { status: 'completed', output_text: JSON.stringify(withoutKey(validExtraction(), 'currency')) }), 'OCR_INVALID_OUTPUT'],
     ['rate limit', fakeResponse(429, { error: { message: 'provider body must not escape' } }), 'OCR_RATE_LIMIT'],
     ['provider error', fakeResponse(500, { error: { message: 'provider body must not escape' } }), 'OCR_PROVIDER_ERROR'],
   ])('returns a typed safe error for %s', async (_caseName, response, code) => {
     const fetch = vi.fn(async () => response)
-    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', fetch, referenceDate: '2026-08-22' })
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
 
     const result = extractor.extract(preparedImage)
     await expect(result).rejects.toBeInstanceOf(OcrExtractorError)
@@ -63,6 +98,10 @@ describe('OpenAI OCR extractor', () => {
 
 function fakeResponse(status: number, json: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => json }
+}
+
+function completedResponse(extraction: Record<string, unknown>) {
+  return fakeResponse(200, { status: 'completed', output_text: JSON.stringify(extraction) })
 }
 
 function validExtraction(overrides: Record<string, unknown> = {}) {
