@@ -109,12 +109,58 @@ describe('createOcrLedgerMiddleware', () => {
 
     const response = await request({
       store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
-      body: JSON.stringify({ token, patch: { note: 'edited' } }),
+      body: JSON.stringify({ token, patch: validEditPatch({ note: 'edited' }) }),
     })
 
     expect(response.statusCode).toBe(202)
     expect(line.verifyLiffIdToken).toHaveBeenCalledWith('verified-id-token')
     expect(store.appendJob).toHaveBeenCalledWith(expect.objectContaining({ jobType: 'EDIT', documentId: 'OCR-20260822-abc123' }))
+  })
+
+  it.each([
+    ['missing required direction', validEditPatch({ direction: undefined })],
+    ['numeric string', validEditPatch({ grandTotal: '120.00' })],
+    ['unknown document type', validEditPatch({ documentType: 'INVOICE' })],
+    ['non-sequential line items', validEditPatch({ lineItems: [lineItem(2)] })],
+  ])('rejects invalid LIFF edit payload: %s', async (_name, patch) => {
+    const { store, line } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    const token = reviewToken()
+
+    const response = await request({
+      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ token, patch }),
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(store.appendJob).not.toHaveBeenCalled()
+  })
+
+  it('returns the persisted idempotent job id rather than a discarded generated id', async () => {
+    const { store, line } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    store.appendJob.mockImplementation(async (queued) => ({ ...queued, jobId: 'job-existing' }))
+
+    const response = await request({
+      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ token: reviewToken(), patch: validEditPatch() }),
+    })
+
+    expect(response.statusCode).toBe(202)
+    expect(response.body).toEqual({ accepted: true, jobId: 'job-existing' })
+  })
+
+  it('returns retryable 503 when authenticated LIFF enqueue storage fails', async () => {
+    const { store, line } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    store.appendJob.mockRejectedValue(new Error('sheet unavailable'))
+
+    const response = await request({
+      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ token: reviewToken(), patch: validEditPatch() }),
+    })
+
+    expect(response.statusCode).toBe(503)
   })
 
   it('rejects request bodies above one megabyte before enqueueing', async () => {
@@ -157,13 +203,14 @@ async function request(input: {
   }
   req.end(input.body)
   const headers: Record<string, string> = {}
+  let responseBody = ''
   const response = {
     statusCode: 200,
     setHeader(name: string, value: string) { headers[name.toLowerCase()] = value },
-    end() { input.order?.push('respond-200') },
+    end(body?: string) { responseBody = body ?? ''; input.order?.push('respond-200') },
   } as unknown as ServerResponse
   await createOcrLedgerMiddleware({ config: CONFIG, store: input.store, line: input.line, now: () => NOW })(req, response)
-  return { statusCode: response.statusCode, headers }
+  return { statusCode: response.statusCode, headers, body: responseBody ? JSON.parse(responseBody) : null }
 }
 
 function webhook(events: unknown[]): string {
@@ -182,6 +229,29 @@ function postbackEvent(data: string) {
   return {
     type: 'postback', webhookEventId: 'evt-postback', replyToken: 'reply-token',
     source: { type: 'group', groupId: 'Cgroup1', userId: 'Ustaff1' }, postback: { data },
+  }
+}
+
+function reviewToken(): string {
+  return signReviewToken({
+    v: 1, documentId: 'OCR-20260822-abc123', groupId: 'Cgroup1', draftVersion: 2,
+    action: 'REVIEW', exp: Math.floor(NOW.getTime() / 1000) + 3600,
+  }, CONFIG.reviewSigningSecret)
+}
+
+function validEditPatch(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: '2026-08-22', documentTime: null,
+    counterpartyName: 'Merchant', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
+    serviceCharge: 0, grandTotal: 100, referenceNumber: null, categoryId: 'office', note: null,
+    lineItems: [lineItem(1)], ...overrides,
+  }
+}
+
+function lineItem(lineNumber: number): Record<string, unknown> {
+  return {
+    lineNumber, description: 'Paper', quantity: 1, unit: 'pack', unitPrice: 100,
+    discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office', confidence: 0.99,
   }
 }
 

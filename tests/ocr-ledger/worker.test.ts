@@ -7,6 +7,7 @@ import type { OcrDrivePort } from '../../server/ocr-ledger/googleClient'
 import type { OcrLedgerStore } from '../../server/ocr-ledger/googleStore'
 import type { OcrLinePort } from '../../server/ocr-ledger/lineClient'
 import type { OcrExtractorPort } from '../../server/ocr-ledger/openAiExtractor'
+import { verifyReviewToken } from '../../server/ocr-ledger/security'
 import { createOcrLedgerWorker } from '../../server/ocr-ledger/worker'
 
 const START = new Date('2026-08-22T03:00:00.000Z')
@@ -22,7 +23,13 @@ describe('createOcrLedgerWorker', () => {
     const result = await worker.runOnce()
 
     expect(result).toEqual({ processed: 1, succeeded: 1, failed: 0, reportSent: false })
-    expect(order).toEqual(['lease', 'line-download', 'drive-upload', 'duplicate-check', 'extract', 'save-draft', 'line-push', 'update-job'])
+    expect(order).toEqual([
+      'lease', 'line-download', 'drive-upload', 'duplicate-check', 'extract',
+      'find-folder:drive-root:2026', 'create-folder:drive-root:2026',
+      'find-folder:folder-2026:08', 'create-folder:folder-2026:08',
+      'find-folder:folder-08:RECEIPT', 'create-folder:folder-08:RECEIPT',
+      'move-file:drive-file-1:folder-RECEIPT', 'save-draft', 'line-push', 'update-job',
+    ])
     expect(store.drafts).toHaveLength(1)
     expect(store.drafts[0]).toEqual(expect.objectContaining({ state: 'PENDING_REVIEW', draftVersion: 1, sourceImageFileId: 'drive-file-1' }))
     expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
@@ -85,7 +92,7 @@ describe('createOcrLedgerWorker', () => {
     const existing = draft()
     const store = new FakeStore([job('EDIT', {
       expectedVersion: 1, actorLineUserId: 'Ueditor', actorDisplayName: 'Editor', groupId: 'Cgroup1',
-      patch: { note: 'edited', grandTotal: 120 },
+      patch: validEditPatch({ note: 'edited', grandTotal: 120 }),
     }, existing.documentId)])
     store.drafts.push(existing)
     const { worker, line } = harness(store)
@@ -95,6 +102,22 @@ describe('createOcrLedgerWorker', () => {
     expect(store.drafts[0]).toEqual(expect.objectContaining({ draftVersion: 2, note: 'edited', grandTotal: 120 }))
     expect(store.audits).toEqual([expect.objectContaining({ documentId: existing.documentId, action: 'EDIT', actorLineUserId: 'Ueditor' })])
     expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
+  })
+
+  it('rejects malformed edit types and line numbering before audit or draft mutation', async () => {
+    const existing = draft()
+    const store = new FakeStore([job('EDIT', {
+      expectedVersion: 1, actorLineUserId: 'Ueditor', actorDisplayName: 'Editor', groupId: 'Cgroup1',
+      patch: validEditPatch({ grandTotal: '120', lineItems: [lineItem(2)] }),
+    }, existing.documentId)])
+    store.drafts.push(existing)
+    const { worker } = harness(store)
+
+    await worker.runOnce()
+
+    expect(store.drafts).toEqual([existing])
+    expect(store.audits).toEqual([])
+    expect(store.jobs[0]).toMatchObject({ state: 'QUEUED', lastErrorCode: 'OCR_INVALID_OUTPUT' })
   })
 
   it('lets the first terminal action win, confirms to the monthly ledger, and makes later actions no-ops', async () => {
@@ -130,6 +153,87 @@ describe('createOcrLedgerWorker', () => {
     expect(store.audits).toEqual([expect.objectContaining({ action: 'CANCEL' })])
   })
 
+  it('persists CONFIRM as the decision before mutations so a competing CANCEL cannot win during repair', async () => {
+    let current = START
+    const existing = draft()
+    const store = new FakeStore([
+      job('CONFIRM', actionPayload(), existing.documentId),
+      job('CANCEL', actionPayload(), existing.documentId, 'job-2'),
+      job('EDIT', { ...actionPayload(), patch: validEditPatch({ note: 'must-not-apply' }) }, existing.documentId, 'job-3'),
+      job('RETRY', actionPayload(), existing.documentId, 'job-4'),
+    ])
+    store.drafts.push(existing)
+    store.saveFailures = 1
+    const { worker } = harness(store, [], () => current)
+
+    await worker.runOnce()
+
+    expect(store.terminalDecisions.get(existing.documentId)).toBe('CONFIRM')
+    expect(store.finalized).toHaveLength(1)
+    expect(store.drafts[0].state).toBe('PENDING_REVIEW')
+    expect(store.drafts[0].note).toBeNull()
+    expect(store.drafts[0].draftVersion).toBe(1)
+    expect(store.jobs.find((entry) => entry.jobId === 'job-2')?.state).toBe('DONE')
+
+    current = new Date(store.jobs[0].availableAt)
+    await worker.runOnce()
+
+    expect(store.finalized).toHaveLength(2)
+    expect(store.drafts[0]).toMatchObject({ state: 'CONFIRMED', verificationStatus: 'STAFF_CONFIRMED' })
+    expect(store.audits.filter((entry) => entry.action === 'CONFIRM')).toHaveLength(1)
+    expect(store.audits.some((entry) => entry.action === 'CANCEL')).toBe(false)
+  })
+
+  it('replays the original failed intake when RETRY has no saved draft or file', async () => {
+    const original = job('INTAKE', intakePayload(), 'OCR-20260822-abc123', 'job-intake')
+    original.state = 'FAILED'
+    original.attempts = 4
+    const retry = job('RETRY', actionPayload(), original.documentId, 'job-retry')
+    const store = new FakeStore([original, retry])
+    const { worker, line, extractor } = harness(store)
+
+    await worker.runOnce()
+
+    expect(line.downloadImage).toHaveBeenCalledWith('m-image-1')
+    expect(extractor.extract).toHaveBeenCalledTimes(1)
+    expect(store.drafts).toEqual([expect.objectContaining({ documentId: original.documentId, state: 'PENDING_REVIEW' })])
+    expect(retry.state).toBe('DONE')
+  })
+
+  it('signs terminal RETRY with the current saved draft version', async () => {
+    const existing = draft({ state: 'FAILED', draftVersion: 3 })
+    const retry = job('RETRY', { ...actionPayload(), expectedVersion: 3 }, existing.documentId)
+    retry.attempts = 3
+    const store = new FakeStore([retry])
+    store.drafts.push(existing)
+    const { worker, extractor, line } = harness(store)
+    extractor.extract.mockRejectedValue(Object.assign(new Error('rate limited'), { code: 'OCR_RATE_LIMIT' }))
+
+    await worker.runOnce()
+
+    const data = findPostbackData(line.push.mock.calls.at(-1)?.[1])
+    expect(verifyReviewToken(data, CONFIG.reviewSigningSecret, Math.floor(START.getTime() / 1000))).toMatchObject({
+      documentId: existing.documentId, draftVersion: 3, action: 'RETRY',
+    })
+  })
+
+  it('uses received-at Bangkok month folders even when OCR returns an invalid document date', async () => {
+    const store = new FakeStore([job('INTAKE', intakePayload())])
+    const { worker, extractor, drive } = harness(store)
+    extractor.extract.mockResolvedValueOnce({
+      documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: 'not-a-date', documentTime: null,
+      counterpartyName: 'Merchant', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
+      serviceCharge: 0, grandTotal: 100, referenceNumber: null, categoryId: 'office', note: null,
+      sourceImageSha256: PNG_HASH, confidenceByField: {}, lineItems: [], warnings: [],
+    })
+
+    await worker.runOnce()
+
+    expect(drive.findFolder.mock.calls).toEqual([
+      ['2026', 'drive-root'], ['08', 'folder-2026'], ['RECEIPT', 'folder-08'],
+    ])
+  })
+
   it('leases expired abandoned work in queue order and processes no more than the configured batch size', async () => {
     const expired = job('REPORT_COMMAND', { command: 'TODAY', groupId: 'Cgroup1' })
     expired.state = 'LEASED'
@@ -153,6 +257,8 @@ class FakeStore implements OcrLedgerStore {
   errors: Array<{ jobId: string; documentId: string | null; code: string; createdAt: string }> = []
   audits: Array<Record<string, unknown>> = []
   finalized: Array<{ draft: OcrDraft; ledger: { month: string; monthlySpreadsheetId: string } }> = []
+  terminalDecisions = new Map<string, 'CONFIRM' | 'CANCEL'>()
+  saveFailures = 0
 
   constructor(public jobs: OcrQueueJob[], private readonly order: string[] = []) {}
 
@@ -167,11 +273,21 @@ class FakeStore implements OcrLedgerStore {
     return leased.map((entry) => structuredClone(entry))
   }
   async updateJob(next: OcrQueueJob) { this.order.push('update-job'); Object.assign(this.jobs.find((entry) => entry.jobId === next.jobId)!, structuredClone(next)) }
-  async saveDraft(next: OcrDraft) { this.order.push('save-draft'); const index = this.drafts.findIndex((entry) => entry.documentId === next.documentId); if (index < 0) this.drafts.push(structuredClone(next)); else this.drafts[index] = structuredClone(next) }
+  async saveDraft(next: OcrDraft) { this.order.push('save-draft'); if (this.saveFailures > 0) { this.saveFailures -= 1; throw new Error('sheet unavailable') }; const index = this.drafts.findIndex((entry) => entry.documentId === next.documentId); if (index < 0) this.drafts.push(structuredClone(next)); else this.drafts[index] = structuredClone(next) }
   async getDraft(documentId: string) { return structuredClone(this.drafts.find((entry) => entry.documentId === documentId) ?? null) }
   async findDraftByImageSha256(hash: string) { this.order.push('duplicate-check'); return structuredClone(this.drafts.find((entry) => entry.sourceImageSha256 === hash) ?? null) }
   async appendError(error: { jobId: string; documentId: string | null; code: string; createdAt: string }) { this.errors.push(error) }
   async appendAudit(action: Record<string, unknown>) { this.audits.push(structuredClone(action)) }
+  async getTerminalDecision(documentId: string) { return this.terminalDecisions.get(documentId) ?? null }
+  async claimTerminalDecision(action: Record<string, unknown>) {
+    const documentId = String(action.documentId)
+    const requested = action.action as 'CONFIRM' | 'CANCEL'
+    const existing = this.terminalDecisions.get(documentId)
+    if (existing) return { decision: existing, claimed: false }
+    this.terminalDecisions.set(documentId, requested)
+    this.audits.push(structuredClone(action))
+    return { decision: requested, claimed: true }
+  }
   async ensureMonthlyLedger(month: string) { return { month, monthlySpreadsheetId: `monthly-${month}` } }
   async finalizeDocument(next: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }) { this.finalized.push({ draft: structuredClone(next), ledger }) }
   async listConfirmedDocuments() { return [] }
@@ -183,7 +299,9 @@ function harness(store: FakeStore, order: string[] = [], now: () => Date = () =>
     reply: vi.fn(), push: vi.fn(async () => { order.push('line-push') }), verifyLiffIdToken: vi.fn(), assertGroupMember: vi.fn(), validatePush: vi.fn(),
   } satisfies OcrLinePort
   const drive = {
-    createFolder: vi.fn(),
+    createFolder: vi.fn(async (name: string, parentId?: string) => { order.push(`create-folder:${parentId}:${name}`); return `folder-${name}` }),
+    findFolder: vi.fn(async (name: string, parentId: string) => { order.push(`find-folder:${parentId}:${name}`); return null }),
+    moveFile: vi.fn(async (fileId: string, parentId: string) => { order.push(`move-file:${fileId}:${parentId}`) }),
     uploadImage: vi.fn(async () => { order.push('drive-upload'); return 'drive-file-1' }),
     downloadImage: vi.fn(async () => ({ bytes: PNG, mimeType: 'image/png' as const })),
   } satisfies OcrDrivePort
@@ -213,6 +331,29 @@ function job(jobType: OcrQueueJob['jobType'], payload: unknown, documentId: stri
 
 function intakePayload() { return { messageId: 'm-image-1', groupId: 'Cgroup1', userId: 'Ustaff1' } }
 function actionPayload() { return { expectedVersion: 1, actorLineUserId: 'Ustaff1', actorDisplayName: 'Staff', groupId: 'Cgroup1' } }
+
+function validEditPatch(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: '2026-08-22', documentTime: null,
+    counterpartyName: 'Merchant', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
+    serviceCharge: 0, grandTotal: 100, referenceNumber: null, categoryId: 'office', note: null,
+    lineItems: [lineItem(1)], ...overrides,
+  }
+}
+
+function lineItem(lineNumber: number): Record<string, unknown> {
+  return {
+    lineNumber, description: 'Paper', quantity: 1, unit: 'pack', unitPrice: 100,
+    discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office', confidence: 0.99,
+  }
+}
+
+function findPostbackData(messages: unknown): string {
+  const serialized = JSON.stringify(messages)
+  const match = /"data":"([^"]+)"/.exec(serialized)
+  if (!match) throw new Error('postback data not found')
+  return match[1]
+}
 
 function draft(patch: Partial<OcrDraft> = {}): OcrDraft {
   return {

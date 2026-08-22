@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { OcrDraft, OcrExtraction, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
 import { bangkokMonthKey } from './domain.js'
+import { parseOcrEditablePatch } from './editValidation.js'
 import { buildDraftFlex, buildFinalFlex } from './flexMessages.js'
 import type { OcrDrivePort } from './googleClient.js'
 import type { OcrLedgerStore } from './googleStore.js'
@@ -102,6 +103,7 @@ async function processIntake(
   job.payloadJson = JSON.stringify(payload)
   const duplicate = await findDuplicate(deps.store, prepared.originalSha256)
   if (duplicate) {
+    await organizeSourceImage(deps.drive, deps.config.driveRootId, String(payload.sourceImageFileId), receivedAt(job, payload), duplicate.documentType)
     job.documentId = duplicate.documentId
     payload.deliveryDocumentId = duplicate.documentId
     job.payloadJson = JSON.stringify(payload)
@@ -110,6 +112,11 @@ async function processIntake(
   }
 
   const extraction = await deps.extractor.extract(prepared)
+  if (payload.sourceOrganized !== true) {
+    await organizeSourceImage(deps.drive, deps.config.driveRootId, String(payload.sourceImageFileId), receivedAt(job, payload), extraction.documentType)
+    payload.sourceOrganized = true
+    job.payloadJson = JSON.stringify(payload)
+  }
   const saved = draftFromExtraction(job.documentId, extraction, {
     sourceImageFileId: String(payload.sourceImageFileId), sourceImageSha256: prepared.originalSha256,
     sourceLineMessageId: messageId, sourceLineUserId: userId,
@@ -130,7 +137,11 @@ async function processEdit(
     await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
     return
   }
-  const patch = isRecord(payload.patch) ? editablePatch(payload.patch) : null
+  if (await getTerminalDecision(deps.store, current.documentId)) {
+    await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
+    return
+  }
+  const patch = parseOcrEditablePatch(payload.patch)
   if (!patch) throw workerError('OCR_INVALID_OUTPUT')
   const revised: OcrDraft = { ...current, ...patch, draftVersion: current.draftVersion + 1 }
   await appendAudit(deps.store, job, payload, 'EDIT', revised.draftVersion, deps.now())
@@ -153,20 +164,39 @@ async function processTerminalAction(
     await pushDraft(deps.line, groupId, current, deps.config, deps.now())
     return
   }
-  assertExpectedVersion(current, payload.expectedVersion)
   const actor = requiredString(payload.actorLineUserId, 'VERSION_CONFLICT')
   const displayName = typeof payload.actorDisplayName === 'string' && payload.actorDisplayName ? payload.actorDisplayName : actor
   const timestamp = deps.now().toISOString()
-  const next: OcrDraft = job.jobType === 'CONFIRM'
+  const requestedDecision = job.jobType === 'CONFIRM' ? 'CONFIRM' : 'CANCEL'
+  const existingDecision = await getTerminalDecision(deps.store, documentId)
+  if (existingDecision && existingDecision !== requestedDecision) {
+    await pushDraft(deps.line, groupId, current, deps.config, deps.now())
+    return
+  }
+  if (!existingDecision) assertExpectedVersion(current, payload.expectedVersion)
+  let marker
+  try {
+    marker = await deps.store.claimTerminalDecision({
+      documentId, action: requestedDecision, actorLineUserId: actor,
+      actorDisplayName: typeof payload.actorDisplayName === 'string' ? payload.actorDisplayName : null,
+      createdAt: timestamp, payloadJson: JSON.stringify({ jobId: job.jobId, draftVersion: current.draftVersion, terminalDecision: true }),
+    })
+  } catch {
+    throw workerError('SHEET_WRITE_FAILED')
+  }
+  if (marker.decision !== requestedDecision) {
+    await pushDraft(deps.line, groupId, current, deps.config, deps.now())
+    return
+  }
+  const next: OcrDraft = marker.decision === 'CONFIRM'
     ? { ...current, state: 'CONFIRMED', confirmedBy: displayName, confirmedAt: timestamp, verificationStatus: 'STAFF_CONFIRMED' }
     : { ...current, state: 'CANCELLED' }
-  if (job.jobType === 'CONFIRM') {
+  if (marker.decision === 'CONFIRM') {
     const month = bangkokMonthKey(next.documentDate ?? timestamp)
     let ledger
     try { ledger = await deps.store.ensureMonthlyLedger(month) } catch { throw workerError('SHEET_WRITE_FAILED') }
     try { await deps.store.finalizeDocument(next, ledger) } catch { throw workerError('SHEET_WRITE_FAILED') }
   }
-  await appendAudit(deps.store, job, payload, job.jobType === 'CONFIRM' ? 'CONFIRM' : 'CANCEL', next.draftVersion, deps.now())
   await saveDraft(deps.store, next)
   payload.deliveryDocumentId = next.documentId
   job.payloadJson = JSON.stringify(payload)
@@ -178,11 +208,31 @@ async function processRetry(
   payload: Record<string, unknown>,
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
 ): Promise<void> {
-  const current = await requiredPendingDraft(job, payload, deps.store, true)
+  const documentId = requiredString(job.documentId, 'SHEET_WRITE_FAILED')
+  const current = await getDraft(deps.store, documentId)
+  if (!current) {
+    let original
+    try {
+      original = (await deps.store.listJobs()).find((candidate) => candidate.jobType === 'INTAKE' && candidate.documentId === documentId)
+    } catch {
+      throw workerError('SHEET_WRITE_FAILED')
+    }
+    if (!original) throw workerError('DRIVE_UPLOAD_FAILED')
+    const originalPayload = parsePayload(original.payloadJson)
+    originalPayload.receivedAt = original.createdAt
+    await processIntake(job, originalPayload, deps)
+    return
+  }
   if (current.state === 'CONFIRMED' || current.state === 'CANCELLED') {
     await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
     return
   }
+  if (await getTerminalDecision(deps.store, current.documentId)) {
+    await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
+    return
+  }
+  if (current.state !== 'FAILED' && current.state !== 'PENDING_REVIEW' && current.state !== 'RETRY_PENDING') throw workerError('VERSION_CONFLICT')
+  assertExpectedVersion(current, payload.expectedVersion)
   if (!current.sourceImageFileId) throw workerError('DRIVE_UPLOAD_FAILED')
   let source
   try { source = await deps.drive.downloadImage(current.sourceImageFileId) } catch { throw workerError('DRIVE_UPLOAD_FAILED') }
@@ -239,12 +289,13 @@ async function persistFailedIntakeDraft(job: OcrQueueJob, store: OcrLedgerStore)
 
 async function pushTerminalRetry(
   job: OcrQueueJob,
-  deps: { config: OcrLedgerConfig; line: OcrLinePort; now: () => Date },
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; now: () => Date },
 ): Promise<void> {
   const payload = parsePayload(job.payloadJson)
   if (!job.documentId || typeof payload.groupId !== 'string') return
+  const current = await deps.store.getDraft(job.documentId).catch(() => null)
   const data = signReviewToken({
-    v: 1, documentId: job.documentId, groupId: payload.groupId, draftVersion: 1, action: 'RETRY',
+    v: 1, documentId: job.documentId, groupId: payload.groupId, draftVersion: current?.draftVersion ?? 1, action: 'RETRY',
     exp: Math.floor(deps.now().getTime() / 1000) + 24 * 60 * 60,
   }, deps.config.reviewSigningSecret)
   await deps.line.push(payload.groupId, [{
@@ -298,15 +349,6 @@ function assertExpectedVersion(draft: OcrDraft, expected: unknown): void {
   if (!Number.isSafeInteger(expected) || expected !== draft.draftVersion) throw workerError('VERSION_CONFLICT')
 }
 
-function editablePatch(value: Record<string, unknown>): Partial<OcrDraft> | null {
-  const allowed = new Set([
-    'documentType', 'direction', 'documentDate', 'documentTime', 'counterpartyName', 'currency', 'subtotal',
-    'discountAmount', 'taxAmount', 'serviceCharge', 'grandTotal', 'referenceNumber', 'categoryId', 'note', 'lineItems',
-  ])
-  if (Object.keys(value).some((key) => !allowed.has(key))) return null
-  return structuredClone(value) as Partial<OcrDraft>
-}
-
 async function pushDraft(line: OcrLinePort, groupId: string, draft: OcrDraft, config: OcrLedgerConfig, now: Date): Promise<void> {
   const message = draft.state === 'CONFIRMED' || draft.state === 'CANCELLED'
     ? buildFinalFlex(draft)
@@ -350,8 +392,41 @@ async function findDuplicate(store: OcrLedgerStore, hash: string): Promise<OcrDr
   try { return await store.findDraftByImageSha256(hash) } catch { throw workerError('SHEET_WRITE_FAILED') }
 }
 
+async function getTerminalDecision(store: OcrLedgerStore, documentId: string): Promise<'CONFIRM' | 'CANCEL' | null> {
+  try { return await store.getTerminalDecision(documentId) } catch { throw workerError('SHEET_WRITE_FAILED') }
+}
+
 async function updateJob(store: OcrLedgerStore, job: OcrQueueJob): Promise<void> {
   try { await store.updateJob(job) } catch { throw workerError('SHEET_WRITE_FAILED') }
+}
+
+async function organizeSourceImage(
+  drive: OcrDrivePort,
+  rootId: string,
+  fileId: string,
+  receivedAtIso: string,
+  documentType: OcrDraft['documentType'],
+): Promise<void> {
+  const receivedAt = new Date(receivedAtIso)
+  if (Number.isNaN(receivedAt.getTime())) throw workerError('DRIVE_UPLOAD_FAILED')
+  const [year, month] = bangkokDate(receivedAt).split('-')
+  try {
+    const yearFolder = await resolveDriveFolder(drive, year, rootId)
+    const monthFolder = await resolveDriveFolder(drive, month, yearFolder)
+    const typeFolder = await resolveDriveFolder(drive, documentType ?? 'UNCLASSIFIED', monthFolder)
+    await drive.moveFile(fileId, typeFolder)
+  } catch (error) {
+    if (isWorkerError(error)) throw error
+    throw workerError('DRIVE_UPLOAD_FAILED')
+  }
+}
+
+async function resolveDriveFolder(drive: OcrDrivePort, name: string, parentId: string): Promise<string> {
+  return await drive.findFolder(name, parentId) ?? await drive.createFolder(name, parentId)
+}
+
+function receivedAt(job: OcrQueueJob, payload: Record<string, unknown>): string {
+  return typeof payload.receivedAt === 'string' ? payload.receivedAt : job.createdAt
 }
 
 function createDocumentId(now: Date): string {

@@ -7,6 +7,8 @@ describe('OCR ledger setup', () => {
     const mutations: string[] = []
     const drive: OcrDrivePort = {
       createFolder: async () => { mutations.push('folder'); return 'folder-1' },
+      findFolder: async () => null,
+      moveFile: async () => { mutations.push('move') },
       uploadImage: async () => { mutations.push('upload'); return 'image-1' },
       downloadImage: async () => ({ bytes: Buffer.alloc(0), mimeType: 'image/jpeg' }),
     }

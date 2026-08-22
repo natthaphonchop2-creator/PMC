@@ -60,6 +60,8 @@ class MemorySheets implements OcrSheetsPort {
 
 class MemoryDrive implements OcrDrivePort {
   async createFolder(name: string, parentId?: string): Promise<string> { return `${parentId ?? 'root'}:${name}` }
+  async findFolder(): Promise<string | null> { return null }
+  async moveFile(): Promise<void> {}
   async uploadImage(): Promise<string> { return 'image-1' }
   async downloadImage(): Promise<{ bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }> {
     return { bytes: Buffer.from('image'), mimeType: 'image/jpeg' }
@@ -103,6 +105,21 @@ describe('Google OCR ledger store', () => {
     expect(first).toEqual(repeated)
   })
 
+  it('serializes concurrent idempotent appends across store instances in one process', async () => {
+    const sheets = new MemorySheets()
+    const left = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    const right = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+
+    const [first, second] = await Promise.all([
+      left.appendJob(queueJob({ jobId: 'job-left' })),
+      right.appendJob(queueJob({ jobId: 'job-right' })),
+    ])
+
+    expect(first.jobId).toBe('job-left')
+    expect(second.jobId).toBe('job-left')
+    expect(await left.listJobs()).toHaveLength(1)
+  })
+
   it('leases only available work and increments attempts exactly once', async () => {
     const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets: new MemorySheets(), drive: new MemoryDrive() })
     await store.appendJob(queueJob({ jobId: 'available', idempotencyKey: 'available' }))
@@ -112,6 +129,36 @@ describe('Google OCR ledger store', () => {
 
     expect(leased).toEqual([expect.objectContaining({ jobId: 'available', state: 'LEASED', attempts: 1, leaseUntil: '2026-08-22T10:01:00.000Z' })])
     expect((await store.listJobs()).find((job) => job.jobId === 'leased')).toMatchObject({ attempts: 0, state: 'QUEUED' })
+  })
+
+  it('serializes concurrent leases so one queue row is never claimed twice in one process', async () => {
+    const sheets = new MemorySheets()
+    const left = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    const right = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    await left.appendJob(queueJob())
+
+    const [first, second] = await Promise.all([
+      left.leaseJobs({ now: '2026-08-22T10:00:00.000Z', leaseSeconds: 60, limit: 1 }),
+      right.leaseJobs({ now: '2026-08-22T10:00:00.000Z', leaseSeconds: 60, limit: 1 }),
+    ])
+
+    expect([...first, ...second]).toHaveLength(1)
+    expect([...first, ...second][0]).toMatchObject({ jobId: 'job-1', attempts: 1 })
+  })
+
+  it('persists one first-wins terminal decision marker and returns it to competing actions', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    const base = {
+      documentId: 'OCR-20260822-abc123', actorLineUserId: 'U1', actorDisplayName: 'Staff',
+      createdAt: '2026-08-22T10:01:00.000Z', payloadJson: '{"jobId":"confirm"}',
+    }
+
+    expect(await store.claimTerminalDecision({ ...base, action: 'CONFIRM' })).toEqual({ decision: 'CONFIRM', claimed: true })
+    expect(await store.getTerminalDecision(base.documentId)).toBe('CONFIRM')
+    expect(await store.claimTerminalDecision({ ...base, action: 'CONFIRM' })).toEqual({ decision: 'CONFIRM', claimed: false })
+    expect(await store.claimTerminalDecision({ ...base, action: 'CANCEL', payloadJson: '{"jobId":"cancel"}' })).toEqual({ decision: 'CONFIRM', claimed: false })
+    expect(sheets.rows('master', 'AUDIT_LOG')).toHaveLength(2)
   })
 
   it('persists queue outcomes, sanitized errors, audits, duplicate lookup, and monthly allocation', async () => {

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
+import { parseOcrEditablePatch } from './editValidation.js'
 import type { OcrLedgerStore } from './googleStore.js'
 import type { OcrLinePort } from './lineClient.js'
 import { parseOcrLineEvents, type OcrLineEvent } from './lineEvents.js'
@@ -35,7 +36,10 @@ export function createOcrLedgerMiddleware(deps: {
         const queued = queueJobFromLineEvent(event, deps.config, deps.now())
         if (!queued || accepted.has(queued.idempotencyKey)) continue
         accepted.add(queued.idempotencyKey)
-        await deps.store.appendJob(queued)
+        try { await deps.store.appendJob(queued) } catch {
+          respond(res, 503, { error: 'storage_unavailable' })
+          return
+        }
         await deps.line.reply(event.replyToken, [{ type: 'text', text: acknowledgement(event) }])
       }
       respond(res, 200, { accepted: true })
@@ -52,7 +56,7 @@ export function createOcrLedgerMiddleware(deps: {
 function queueJobFromLineEvent(event: OcrLineEvent, config: OcrLedgerConfig, now: Date): OcrQueueJob | null {
   if (event.type === 'IMAGE') {
     return queueJob('INTAKE', `line:image:${event.messageId}`, null, {
-      messageId: event.messageId, groupId: event.groupId, userId: event.userId,
+      messageId: event.messageId, groupId: event.groupId, userId: event.userId, receivedAt: now.toISOString(),
     }, now)
   }
   if (event.type === 'REPORT_COMMAND') {
@@ -83,25 +87,37 @@ async function handleReviewPost(
   }
   const idToken = bearerToken(header(req, 'authorization'))
   const body = parseRecord(rawBody)
-  if (!idToken || !body || typeof body.token !== 'string' || !isRecord(body.patch)) {
+  if (!idToken || !body || typeof body.token !== 'string') {
     respond(res, 401, { error: 'unauthorized' })
     return
   }
+  let review
+  let actor
   try {
-    const review = verifyReviewToken(body.token, deps.config.reviewSigningSecret, Math.floor(deps.now().getTime() / 1000))
-    const actor = await deps.line.verifyLiffIdToken(idToken)
+    review = verifyReviewToken(body.token, deps.config.reviewSigningSecret, Math.floor(deps.now().getTime() / 1000))
+    actor = await deps.line.verifyLiffIdToken(idToken)
     if (review.action !== 'REVIEW' || review.groupId !== deps.config.allowedGroupId) throw new Error('Invalid review request')
-    const editDigest = createHash('sha256')
-      .update(JSON.stringify({ documentId: review.documentId, draftVersion: review.draftVersion, userId: actor.userId, patch: body.patch }))
-      .digest('hex')
-    const job = queueJob('EDIT', `liff:edit:${editDigest}`, review.documentId, {
-      expectedVersion: review.draftVersion, actorLineUserId: actor.userId, actorDisplayName: actor.displayName,
-      groupId: review.groupId, patch: body.patch,
-    }, deps.now())
-    await deps.store.appendJob(job)
-    respond(res, 202, { accepted: true, jobId: job.jobId })
   } catch {
     respond(res, 401, { error: 'unauthorized' })
+    return
+  }
+  const patch = parseOcrEditablePatch(body.patch)
+  if (!patch) {
+    respond(res, 400, { error: 'invalid_edit' })
+    return
+  }
+  const editDigest = createHash('sha256')
+    .update(JSON.stringify({ documentId: review.documentId, draftVersion: review.draftVersion, userId: actor.userId, patch }))
+    .digest('hex')
+  const job = queueJob('EDIT', `liff:edit:${editDigest}`, review.documentId, {
+    expectedVersion: review.draftVersion, actorLineUserId: actor.userId, actorDisplayName: actor.displayName,
+    groupId: review.groupId, patch,
+  }, deps.now())
+  try {
+    const persisted = await deps.store.appendJob(job)
+    respond(res, 202, { accepted: true, jobId: persisted.jobId })
+  } catch {
+    respond(res, 503, { error: 'storage_unavailable' })
   }
 }
 

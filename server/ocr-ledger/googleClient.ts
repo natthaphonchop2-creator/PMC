@@ -15,6 +15,8 @@ export interface OcrSheetsPort {
 
 export interface OcrDrivePort {
   createFolder(name: string, parentId?: string): Promise<string>
+  findFolder(name: string, parentId: string): Promise<string | null>
+  moveFile(fileId: string, parentId: string): Promise<void>
   uploadImage(input: { name: string; parentId: string; mimeType: 'image/jpeg' | 'image/png'; bytes: Buffer }): Promise<string>
   downloadImage(fileId: string): Promise<{ bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }>
 }
@@ -75,6 +77,7 @@ export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: O
     },
     drive: {
       async createFolder(name, parentId) {
+        if (parentId && !appOwnedFolders.has(parentId)) throw new Error('Folder parent is outside the app-owned OCR hierarchy')
         const response = await driveApi.files.create({
           requestBody: { name, mimeType: 'application/vnd.google-apps.folder', ...(parentId ? { parents: [parentId] } : {}) },
           fields: 'id',
@@ -82,6 +85,27 @@ export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: O
         if (!response.data.id) throw new Error('Google Drive did not return a folder ID')
         appOwnedFolders.add(response.data.id)
         return response.data.id
+      },
+      async findFolder(name, parentId) {
+        if (!appOwnedFolders.has(parentId)) throw new Error('Folder parent is outside the app-owned OCR hierarchy')
+        const response = await driveApi.files.list({
+          q: `'${escapeDriveQuery(parentId)}' in parents and name = '${escapeDriveQuery(name)}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+          fields: 'files(id)', pageSize: 10,
+        })
+        const id = (response.data.files ?? []).flatMap((file) => file.id ? [file.id] : []).sort()[0] ?? null
+        if (id) appOwnedFolders.add(id)
+        return id
+      },
+      async moveFile(fileId, parentId) {
+        if (!appOwnedFolders.has(parentId)) throw new Error('File destination is outside the app-owned OCR hierarchy')
+        const metadata = await driveApi.files.get({ fileId, fields: 'parents,trashed' })
+        if (metadata.data.trashed || !await isInAppOwnedHierarchy(metadata.data.parents ?? [])) {
+          throw new Error('Image is outside the app-owned OCR hierarchy')
+        }
+        if ((metadata.data.parents ?? []).includes(parentId)) return
+        await driveApi.files.update({
+          fileId, addParents: parentId, removeParents: (metadata.data.parents ?? []).join(','), fields: 'id,parents',
+        })
       },
       async uploadImage(input) {
         if (!appOwnedFolders.has(input.parentId)) throw new Error('Image parent is outside the app-owned OCR hierarchy')
@@ -111,4 +135,8 @@ export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: O
 
 function sheetName(range: string): string {
   return range.replace(/^'/, '').replace(/'.*$/, '').split('!')[0]
+}
+
+function escapeDriveQuery(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'")
 }

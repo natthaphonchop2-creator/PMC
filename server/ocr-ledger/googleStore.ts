@@ -45,6 +45,8 @@ export interface OcrLedgerStore {
   findDraftByImageSha256(hash: string): Promise<OcrDraft | null>
   appendError(error: { jobId: string; documentId: string | null; code: string; createdAt: string }): Promise<void>
   appendAudit(action: OcrAction & { payloadJson: string }): Promise<void>
+  getTerminalDecision(documentId: string): Promise<'CONFIRM' | 'CANCEL' | null>
+  claimTerminalDecision(action: OcrAction & { action: 'CONFIRM' | 'CANCEL'; payloadJson: string }): Promise<{ decision: 'CONFIRM' | 'CANCEL'; claimed: boolean }>
   ensureMonthlyLedger(month: string): Promise<{ month: string; monthlySpreadsheetId: string }>
   finalizeDocument(draft: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }): Promise<void>
   listConfirmedDocuments(monthlySpreadsheetId: string): Promise<OcrDocument[]>
@@ -52,6 +54,7 @@ export interface OcrLedgerStore {
 
 export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheets: OcrSheetsPort; drive: OcrDrivePort }): OcrLedgerStore {
   const { masterSpreadsheetId, sheets } = input
+  const mutationKey = `ocr-ledger:${masterSpreadsheetId}`
 
   async function queueRows(): Promise<RowWithPosition<OcrQueueJob>[]> {
     return readRows<OcrQueueJob>(masterSpreadsheetId, 'OCR_QUEUE', QUEUE_COLUMNS)
@@ -59,23 +62,27 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
 
   return {
     async appendJob(job) {
-      const rows = await queueRows()
-      const existing = rows.find((row) => row.value.idempotencyKey === job.idempotencyKey)
-      if (existing) return existing.value
-      await appendRow(masterSpreadsheetId, 'OCR_QUEUE', QUEUE_COLUMNS, job)
-      return job
+      return withProcessMutex(mutationKey, async () => {
+        const rows = await queueRows()
+        const existing = rows.find((row) => row.value.idempotencyKey === job.idempotencyKey)
+        if (existing) return existing.value
+        await appendRow(masterSpreadsheetId, 'OCR_QUEUE', QUEUE_COLUMNS, job)
+        return job
+      })
     },
     async listJobs() {
       return (await queueRows()).map((row) => row.value)
     },
     async leaseJobs({ now, leaseSeconds, limit }) {
-      const candidates = (await queueRows())
-        .filter(({ value }) => value.availableAt <= now && (value.state === 'QUEUED' || value.state === 'LEASED') && (!value.leaseUntil || value.leaseUntil <= now))
-        .slice(0, limit)
-      const leaseUntil = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString()
-      const leased = candidates.map(({ value }) => ({ ...value, state: 'LEASED' as const, attempts: value.attempts + 1, leaseUntil, updatedAt: now }))
-      await Promise.all(candidates.map(({ rowNumber }, index) => updateRow(masterSpreadsheetId, 'OCR_QUEUE', rowNumber, QUEUE_COLUMNS, leased[index])))
-      return leased
+      return withProcessMutex(mutationKey, async () => {
+        const candidates = (await queueRows())
+          .filter(({ value }) => value.availableAt <= now && (value.state === 'QUEUED' || value.state === 'LEASED') && (!value.leaseUntil || value.leaseUntil <= now))
+          .slice(0, limit)
+        const leaseUntil = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString()
+        const leased = candidates.map(({ value }) => ({ ...value, state: 'LEASED' as const, attempts: value.attempts + 1, leaseUntil, updatedAt: now }))
+        await Promise.all(candidates.map(({ rowNumber }, index) => updateRow(masterSpreadsheetId, 'OCR_QUEUE', rowNumber, QUEUE_COLUMNS, leased[index])))
+        return leased
+      })
     },
     async updateJob(job) {
       const existing = (await queueRows()).find(({ value }) => value.jobId === job.jobId)
@@ -123,6 +130,20 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
       const existing = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG)
       if (existing.some(({ value }) => value.documentId === action.documentId && value.action === action.action && value.payloadJson === action.payloadJson)) return
       await appendRow(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG, action)
+    },
+    async getTerminalDecision(documentId) {
+      const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG)
+      const action = rows.find(({ value }) => value.documentId === documentId && (value.action === 'CONFIRM' || value.action === 'CANCEL'))?.value.action
+      return action === 'CONFIRM' || action === 'CANCEL' ? action : null
+    },
+    async claimTerminalDecision(action) {
+      return withProcessMutex(mutationKey, async () => {
+        const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG)
+        const existing = rows.find(({ value }) => value.documentId === action.documentId && (value.action === 'CONFIRM' || value.action === 'CANCEL'))?.value
+        if (existing) return { decision: existing.action as 'CONFIRM' | 'CANCEL', claimed: false }
+        await appendRow(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG, action)
+        return { decision: action.action, claimed: true }
+      })
     },
     async ensureMonthlyLedger(month) {
       if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('Invalid monthly ledger key')
@@ -205,6 +226,23 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
 
   async function updateRow(spreadsheetId: string, tab: string, rowNumber: number, columns: readonly string[], value: object): Promise<void> {
     await sheets.update(spreadsheetId, `${tab}!A${rowNumber}`, [encodeRow(columns, value)])
+  }
+}
+
+const PROCESS_MUTEX_TAILS = new Map<string, Promise<void>>()
+
+async function withProcessMutex<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = PROCESS_MUTEX_TAILS.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  const tail = previous.then(() => current)
+  PROCESS_MUTEX_TAILS.set(key, tail)
+  await previous
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (PROCESS_MUTEX_TAILS.get(key) === tail) PROCESS_MUTEX_TAILS.delete(key)
   }
 }
 
