@@ -9,6 +9,8 @@
     "build:client": "tsc -b && vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "booking:test": "vitest run apps/pmc-google-booking-ops/tests",
+    "ocr:test": "vitest run tests/ocr-ledger",
+    "ocr:setup": "node dist-server/server/ocr-ledger/setup.js",
     "booking:typecheck": "tsc -p apps/pmc-google-booking-ops/tsconfig.json --noEmit",
     "booking:build": "node apps/pmc-google-booking-ops/scripts/build.mjs",
     "booking:push": "cd apps/pmc-google-booking-ops && clasp push",
