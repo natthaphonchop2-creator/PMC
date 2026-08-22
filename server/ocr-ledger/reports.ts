@@ -24,20 +24,30 @@ export interface OcrReport {
   }
 }
 
-export function aggregateOcrReport(documents: readonly OcrDocument[]): OcrReport {
+export interface OcrOperationalEvidence {
+  documentId: string
+  receivedAt: string
+  state: 'PENDING_REVIEW' | 'RETRY_PENDING' | 'FAILED' | 'CANCELLED' | null
+  duplicateWarning: boolean
+}
+
+export function aggregateOcrReport(documents: readonly OcrDocument[], evidence: readonly OcrOperationalEvidence[] = []): OcrReport {
   let income = 0
   let expense = 0
   let tax = 0
   const operational = { confirmed: 0, pending: 0, failed: 0, cancelled: 0, duplicateWarnings: 0 }
   const categories = new Map<string, { categoryId: string; amount: number; income: number; expense: number }>()
+  const operationalDocumentIds = new Set<string>()
+  const duplicateDocumentIds = new Set<string>()
 
   for (const document of documents) {
     if (document.warnings.some((warning) => warning.code === 'EXACT_IMAGE_DUPLICATE' || warning.code === 'REPEATED_REFERENCE_NUMBER')) {
       operational.duplicateWarnings += 1
+      duplicateDocumentIds.add(document.documentId)
     }
-    if (document.state === 'PENDING_REVIEW' || document.state === 'RETRY_PENDING') operational.pending += 1
-    else if (document.state === 'FAILED') operational.failed += 1
-    else if (document.state === 'CANCELLED') operational.cancelled += 1
+    if (document.state === 'PENDING_REVIEW' || document.state === 'RETRY_PENDING') { operational.pending += 1; operationalDocumentIds.add(document.documentId) }
+    else if (document.state === 'FAILED') { operational.failed += 1; operationalDocumentIds.add(document.documentId) }
+    else if (document.state === 'CANCELLED') { operational.cancelled += 1; operationalDocumentIds.add(document.documentId) }
     else if (document.state === 'CONFIRMED') operational.confirmed += 1
 
     if (document.state !== 'CONFIRMED' || !document.direction) continue
@@ -55,6 +65,15 @@ export function aggregateOcrReport(documents: readonly OcrDocument[]): OcrReport
     }
     tax += document.taxAmount ?? 0
     categories.set(categoryId, category)
+  }
+
+  for (const item of evidence) {
+    if (!operationalDocumentIds.has(item.documentId)) {
+      if (item.state === 'PENDING_REVIEW' || item.state === 'RETRY_PENDING') operational.pending += 1
+      else if (item.state === 'FAILED') operational.failed += 1
+      else if (item.state === 'CANCELLED') operational.cancelled += 1
+    }
+    if (item.duplicateWarning && !duplicateDocumentIds.has(item.documentId)) operational.duplicateWarnings += 1
   }
 
   return {
@@ -77,10 +96,15 @@ export function shouldSendDailyReport(input: {
   groupId: string
   now: Date
   sentKeys: ReadonlySet<string>
+  hour?: number
+  minute?: number
 }): boolean {
   if (!input.enabled) return false
   const local = bangkokDateTime(input.now)
-  if (local.hour < 20) return false
+  const hour = input.hour ?? 20
+  const minute = input.minute ?? 0
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return false
+  if (local.hour < hour || (local.hour === hour && local.minute < minute)) return false
   return !input.sentKeys.has(dailyReportIdempotencyKey(input.groupId, local.date))
 }
 
@@ -104,6 +128,12 @@ export function documentIsInWindow(document: OcrDocument, window: ReportWindow):
   return typeof date === 'string' && date >= window.start && date < window.endExclusive
 }
 
+export function operationalEvidenceIsInWindow(evidence: OcrOperationalEvidence, window: ReportWindow): boolean {
+  if (!window.start || !window.endExclusive) return true
+  const date = bangkokDate(new Date(evidence.receivedAt))
+  return date >= window.start && date < window.endExclusive
+}
+
 function calendarWindow(command: OcrReportCommand, start: string): ReportWindow {
   return { command, start, endExclusive: shiftCalendarDate(start, 1) }
 }
@@ -125,12 +155,12 @@ function bangkokDate(now: Date): string {
   return bangkokDateTime(now).date
 }
 
-function bangkokDateTime(now: Date): { date: string; hour: number } {
+function bangkokDateTime(now: Date): { date: string; hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).formatToParts(now).reduce((result, part) => {
-    if (part.type === 'year' || part.type === 'month' || part.type === 'day' || part.type === 'hour') result[part.type] = part.value
+    if (part.type === 'year' || part.type === 'month' || part.type === 'day' || part.type === 'hour' || part.type === 'minute') result[part.type] = part.value
     return result
   }, {} as Record<string, string>)
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) }
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour), minute: Number(parts.minute) }
 }

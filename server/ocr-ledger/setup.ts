@@ -12,6 +12,7 @@ export async function runOcrSetup(input: {
   drive: OcrDrivePort
   sheets: OcrSheetsPort
   titlePrefix: string
+  reportDefaults?: { dailyReportEnabled: boolean; dailyReportTime: string }
 }): Promise<{ mode: 'DRY_RUN' | 'CREATED'; checks: SetupCheck[] }> {
   const checks: SetupCheck[] = [
     { name: 'OAuth scopes', status: 'READY' },
@@ -31,6 +32,14 @@ export async function runOcrSetup(input: {
     const header = MASTER_HEADERS[tab]
     if (header.length) await input.sheets.append(masterId, `${tab}!A:ZZ`, [[...header]])
   }
+  const reportDefaults = input.reportDefaults ?? { dailyReportEnabled: false, dailyReportTime: '20:00' }
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(reportDefaults.dailyReportTime)) throw new Error('Invalid setup report time')
+  const updatedAt = new Date().toISOString()
+  await input.sheets.append(masterId, 'CONFIG!A:ZZ', [
+    ['dailyReportEnabled', String(reportDefaults.dailyReportEnabled), updatedAt],
+    ['dailyReportTime', reportDefaults.dailyReportTime, updatedAt],
+    ['dashboardUrl', `https://docs.google.com/spreadsheets/d/${encodeURIComponent(masterId)}/edit#gid=0`, updatedAt],
+  ])
   return { mode: 'CREATED', checks }
 }
 
@@ -51,6 +60,10 @@ async function main(): Promise<void> {
   const ports = createGoogleOcrPorts({ googleClientId: clientId, googleClientSecret: clientSecret, googleRefreshToken: refreshToken })
   const result = await runOcrSetup({
     confirmCreate, drive: ports.drive, sheets: ports.sheets, titlePrefix: 'PMC OCR',
+    reportDefaults: {
+      dailyReportEnabled: process.env.OCR_DAILY_REPORT_ENABLED === 'true',
+      dailyReportTime: process.env.OCR_DAILY_REPORT_TIME?.trim() || '20:00',
+    },
   })
   process.stdout.write(`${result.mode}: ${result.checks.map((check) => check.resourceId ? `${check.name}=${check.resourceId}` : check.name).join(', ')}\n`)
 }

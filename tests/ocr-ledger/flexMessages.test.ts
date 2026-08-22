@@ -87,6 +87,16 @@ describe('OCR LINE Flex messages', () => {
     expect(report.altText).not.toContain('https://')
   })
 
+  it('adds the authorized master Dashboard URL to report messages without source Drive IDs', () => {
+    const dashboardUrl = 'https://docs.google.com/spreadsheets/d/master-sheet/edit#gid=0'
+    const report = buildReportMessage({ title: 'สรุปวันนี้', entries: [{ label: 'รายรับ', value: '฿100' }], dashboardUrl })
+    const pending = buildPendingReportMessage({ title: 'รายการรอตรวจสอบ', totalPending: 0, entries: [], dashboardUrl })
+
+    expect(actionValues(report)).toContainEqual(expect.objectContaining({ type: 'uri', label: 'เปิด Dashboard', uri: dashboardUrl }))
+    expect(actionValues(pending)).toContainEqual(expect.objectContaining({ type: 'uri', label: 'เปิด Dashboard', uri: dashboardUrl }))
+    expect(JSON.stringify([report, pending])).not.toContain('drive-file')
+  })
+
   it('omits null item descriptions and truncates OCR-derived visible strings deterministically', () => {
     const longDescription = 'ก'.repeat(161)
     const message = buildDraftFlex(draft({

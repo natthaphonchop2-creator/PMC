@@ -40,6 +40,14 @@ describe('OCR ledger reports', () => {
     expect(shouldSendDailyReport({ enabled: true, groupId, now: catchUp, sentKeys: new Set([key]) })).toBe(false)
   })
 
+  it('uses the validated configured hour and minute instead of a hardcoded 20:00', () => {
+    const common = { enabled: true, groupId: 'Cgroup1', sentKeys: new Set<string>(), hour: 9, minute: 30 }
+
+    expect(shouldSendDailyReport({ ...common, now: new Date('2026-08-22T02:29:00.000Z') })).toBe(false)
+    expect(shouldSendDailyReport({ ...common, now: new Date('2026-08-22T02:30:00.000Z') })).toBe(true)
+    expect(shouldSendDailyReport({ ...common, enabled: false, now: new Date('2026-08-22T02:30:00.000Z') })).toBe(false)
+  })
+
   it('ranks categories by absolute amount then category ID for deterministic ties', () => {
     const report = aggregateOcrReport([
       document({ documentId: 'a', state: 'CONFIRMED', direction: 'EXPENSE', grandTotal: 500, categoryId: 'zebra' }),

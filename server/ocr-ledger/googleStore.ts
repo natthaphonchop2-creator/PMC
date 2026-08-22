@@ -1,11 +1,25 @@
 import type { OcrAction, OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob, OcrTerminalDecisionRecord } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrDrivePort, OcrSheetsPort } from './googleClient.js'
+import { aggregateOcrReport, type OcrOperationalEvidence } from './reports.js'
 
 export const MASTER_TABS = [
   'DASHBOARD', 'RECENT_TRANSACTIONS', 'PENDING_REVIEW', 'CATEGORIES', 'CONFIG', 'OCR_QUEUE', 'DRAFTS',
   'DRAFT_LINE_ITEMS', 'ERRORS', 'AUDIT_LOG', 'MONTHLY_INDEX',
 ] as const
 export const MONTHLY_TABS = ['TRANSACTIONS', 'LINE_ITEMS', 'DAILY_SUMMARY', 'CATEGORY_SUMMARY'] as const
+
+export interface OcrReportSettings {
+  dailyReportEnabled: boolean
+  dailyReportTime: string
+  dashboardUrl: string
+}
+
+export interface OcrDerivedRefreshResult {
+  dashboard: boolean
+  recentTransactions: boolean
+  pendingReview: boolean
+  monthlySummaries: Record<string, boolean>
+}
 
 const DOCUMENT_COLUMNS = [
   'documentId', 'documentType', 'direction', 'state', 'documentDate', 'documentTime', 'counterpartyName', 'currency',
@@ -22,7 +36,7 @@ const TRANSACTION_COLUMNS = [...DOCUMENT_COLUMNS, 'writeState', 'schemaVersion']
 const LINE_ITEM_COLUMNS = ['itemWriteKey', ...DRAFT_LINE_COLUMNS.filter((column) => column !== 'draftVersion'), 'schemaVersion'] as const
 
 export const MASTER_HEADERS: Record<(typeof MASTER_TABS)[number], readonly string[]> = {
-  DASHBOARD: [], RECENT_TRANSACTIONS: [...TRANSACTION_COLUMNS], PENDING_REVIEW: [...DOCUMENT_COLUMNS],
+  DASHBOARD: ['metric', 'value', 'updatedAt'], RECENT_TRANSACTIONS: [...TRANSACTION_COLUMNS], PENDING_REVIEW: [...DOCUMENT_COLUMNS],
   CATEGORIES: ['categoryId', 'name', 'direction', 'active', 'updatedAt'], CONFIG: ['key', 'value', 'updatedAt'],
   OCR_QUEUE: [...QUEUE_COLUMNS], DRAFTS: [...DOCUMENT_COLUMNS], DRAFT_LINE_ITEMS: [...DRAFT_LINE_COLUMNS],
   ERRORS: ['jobId', 'documentId', 'code', 'createdAt'], AUDIT_LOG: ['documentId', 'action', 'actorLineUserId', 'actorDisplayName', 'createdAt', 'payloadJson'],
@@ -50,6 +64,9 @@ export interface OcrLedgerStore {
   ensureMonthlyLedger(month: string): Promise<{ month: string; monthlySpreadsheetId: string }>
   finalizeDocument(draft: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }): Promise<void>
   listConfirmedDocuments(monthlySpreadsheetId: string): Promise<OcrDocument[]>
+  listOperationalEvidence(): Promise<OcrOperationalEvidence[]>
+  readReportSettings(defaults: OcrReportSettings): Promise<OcrReportSettings>
+  refreshDerivedSurfaces(now: string): Promise<OcrDerivedRefreshResult>
 }
 
 export function createGoogleOcrStore(input: { masterSpreadsheetId: string; monthlyLedgersFolderId?: string; sheets: OcrSheetsPort; drive: OcrDrivePort }): OcrLedgerStore {
@@ -205,6 +222,137 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; month
         .filter(({ value }) => value.writeState === 'CONFIRMED' && value.state === 'CONFIRMED')
         .map(({ value }) => toDocument(value))
     },
+    async listOperationalEvidence() {
+      return readOperationalEvidence()
+    },
+    async readReportSettings(defaults) {
+      if (!isReportTime(defaults.dailyReportTime) || !isDashboardUrl(defaults.dashboardUrl)) throw new Error('Invalid default report settings')
+      const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'CONFIG', MASTER_HEADERS.CONFIG)
+      const values = new Map(rows.map(({ value }) => [String(value.key), value.value]))
+      const configuredEnabled = parseBooleanSetting(values.get('dailyReportEnabled'))
+      const configuredTime = values.get('dailyReportTime')
+      const configuredDashboardUrl = values.get('dashboardUrl')
+      return {
+        dailyReportEnabled: configuredEnabled ?? defaults.dailyReportEnabled,
+        dailyReportTime: typeof configuredTime === 'string' && isReportTime(configuredTime) ? configuredTime : defaults.dailyReportTime,
+        dashboardUrl: typeof configuredDashboardUrl === 'string' && isDashboardUrl(configuredDashboardUrl) ? configuredDashboardUrl : defaults.dashboardUrl,
+      }
+    },
+    async refreshDerivedSurfaces(now) {
+      if (Number.isNaN(new Date(now).getTime())) throw new Error('Invalid refresh time')
+      const result: OcrDerivedRefreshResult = { dashboard: false, recentTransactions: false, pendingReview: false, monthlySummaries: {} }
+
+      try {
+        const confirmed = await allConfirmedDocuments()
+        const recent = [...confirmed]
+          .sort((left, right) => (right.confirmedAt ?? '').localeCompare(left.confirmedAt ?? '') || left.documentId.localeCompare(right.documentId))
+          .slice(0, 100)
+          .map((document) => ({ ...documentRow(document), writeState: 'CONFIRMED', schemaVersion: 1 }))
+        await replaceTab(masterSpreadsheetId, 'RECENT_TRANSACTIONS', MASTER_HEADERS.RECENT_TRANSACTIONS, recent)
+        result.recentTransactions = true
+      } catch { /* independently repaired on a later worker run */ }
+
+      try {
+        const headers = await readRows<OcrDocument>(masterSpreadsheetId, 'DRAFTS', DOCUMENT_COLUMNS)
+        const pending = headers.map(({ value }) => value)
+          .filter((document) => document.state === 'PENDING_REVIEW' || document.state === 'RETRY_PENDING')
+          .sort((left, right) => left.documentId.localeCompare(right.documentId))
+          .map(documentRow)
+        await replaceTab(masterSpreadsheetId, 'PENDING_REVIEW', MASTER_HEADERS.PENDING_REVIEW, pending)
+        result.pendingReview = true
+      } catch { /* independently repaired on a later worker run */ }
+
+      try {
+        const confirmed = await allConfirmedDocuments()
+        const evidence = await readOperationalEvidence()
+        const report = aggregateOcrReport(confirmed, evidence)
+        const dashboardRows = [
+          { metric: 'confirmedDocuments', value: report.operational.confirmed, updatedAt: now },
+          { metric: 'confirmedIncome', value: report.income, updatedAt: now },
+          { metric: 'confirmedExpense', value: report.expense, updatedAt: now },
+          { metric: 'confirmedNet', value: report.net, updatedAt: now },
+          { metric: 'pendingReview', value: report.operational.pending, updatedAt: now },
+          { metric: 'failedWork', value: report.operational.failed, updatedAt: now },
+          { metric: 'duplicateWarnings', value: report.operational.duplicateWarnings, updatedAt: now },
+        ]
+        await replaceTab(masterSpreadsheetId, 'DASHBOARD', MASTER_HEADERS.DASHBOARD, dashboardRows)
+        result.dashboard = true
+      } catch { /* independently repaired on a later worker run */ }
+
+      let ledgers: Array<RowWithPosition<Record<string, unknown>>>
+      try { ledgers = await monthlyIndexRows() } catch { return result }
+      for (const entry of ledgers) {
+        const month = String(entry.value.month)
+        const monthlySpreadsheetId = String(entry.value.monthlySpreadsheetId)
+        try {
+          const confirmed = await listConfirmed(monthlySpreadsheetId)
+          await replaceTab(monthlySpreadsheetId, 'DAILY_SUMMARY', MONTHLY_HEADERS.DAILY_SUMMARY, dailySummaryRows(confirmed, now))
+          await replaceTab(monthlySpreadsheetId, 'CATEGORY_SUMMARY', MONTHLY_HEADERS.CATEGORY_SUMMARY, categorySummaryRows(confirmed, now))
+          await updateRow(masterSpreadsheetId, 'MONTHLY_INDEX', entry.rowNumber, MASTER_HEADERS.MONTHLY_INDEX, {
+            ...entry.value, status: 'READY', aggregateFreshAt: now, updatedAt: now,
+          })
+          result.monthlySummaries[month] = true
+        } catch {
+          result.monthlySummaries[month] = false
+        }
+      }
+      return result
+    },
+  }
+
+  async function monthlyIndexRows(): Promise<Array<RowWithPosition<Record<string, unknown>>>> {
+    return readRows<Record<string, unknown>>(masterSpreadsheetId, 'MONTHLY_INDEX', MASTER_HEADERS.MONTHLY_INDEX)
+  }
+
+  async function listConfirmed(monthlySpreadsheetId: string): Promise<OcrDocument[]> {
+    return (await readRows<Record<string, unknown>>(monthlySpreadsheetId, 'TRANSACTIONS', TRANSACTION_COLUMNS))
+      .filter(({ value }) => value.writeState === 'CONFIRMED' && value.state === 'CONFIRMED')
+      .map(({ value }) => toDocument(value))
+  }
+
+  async function allConfirmedDocuments(): Promise<OcrDocument[]> {
+    const ledgers = await monthlyIndexRows()
+    const documents: OcrDocument[] = []
+    for (const { value } of ledgers) documents.push(...await listConfirmed(String(value.monthlySpreadsheetId)))
+    return documents
+  }
+
+  async function readOperationalEvidence(): Promise<OcrOperationalEvidence[]> {
+    const [jobs, drafts, errors, audits] = await Promise.all([
+      queueRows(),
+      readRows<OcrDocument>(masterSpreadsheetId, 'DRAFTS', DOCUMENT_COLUMNS),
+      readRows<Record<string, unknown>>(masterSpreadsheetId, 'ERRORS', MASTER_HEADERS.ERRORS),
+      readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG),
+    ])
+    const draftById = new Map(drafts.map(({ value }) => [value.documentId, value]))
+    const failedIds = new Set(errors.flatMap(({ value }) => typeof value.documentId === 'string' ? [value.documentId] : []))
+    const terminalById = new Map(audits.flatMap(({ value }) => {
+      if (typeof value.documentId !== 'string' || (value.action !== 'CONFIRM' && value.action !== 'CANCEL')) return []
+      return [[value.documentId, value.action] as const]
+    }))
+    const seen = new Set<string>()
+    const evidence: OcrOperationalEvidence[] = []
+    for (const { value: job } of jobs) {
+      if (job.jobType !== 'INTAKE' || !job.documentId || seen.has(job.documentId)) continue
+      seen.add(job.documentId)
+      const payload = parseJson(job.payloadJson, {}) as Record<string, unknown>
+      const draft = draftById.get(job.documentId)
+      const terminal = terminalById.get(job.documentId)
+      let state: OcrOperationalEvidence['state'] = null
+      if (terminal === 'CANCEL') state = 'CANCELLED'
+      else if (draft && (draft.state === 'PENDING_REVIEW' || draft.state === 'RETRY_PENDING' || draft.state === 'FAILED' || draft.state === 'CANCELLED')) state = draft.state
+      else if (job.state === 'FAILED' || failedIds.has(job.documentId)) state = 'FAILED'
+      const receivedAt = typeof payload.receivedAt === 'string' && !Number.isNaN(new Date(payload.receivedAt).getTime()) ? payload.receivedAt : job.createdAt
+      const duplicateWarning = typeof payload.duplicateOfDocumentId === 'string'
+        || Boolean(draft?.warnings.some((warning) => warning.code === 'EXACT_IMAGE_DUPLICATE' || warning.code === 'REPEATED_REFERENCE_NUMBER'))
+      evidence.push({ documentId: job.documentId, receivedAt, state, duplicateWarning })
+    }
+    return evidence.sort((left, right) => left.receivedAt.localeCompare(right.receivedAt) || left.documentId.localeCompare(right.documentId))
+  }
+
+  async function replaceTab(spreadsheetId: string, tab: string, columns: readonly string[], rows: readonly object[]): Promise<void> {
+    await sheets.clear(spreadsheetId, `${tab}!A:ZZ`)
+    await sheets.update(spreadsheetId, `${tab}!A1`, [[...columns], ...rows.map((row) => encodeRow(columns, row))])
   }
 
   async function ensureMonthlyIndex(month: string, monthlySpreadsheetId: string): Promise<void> {
@@ -231,7 +379,8 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; month
     return data.slice(1).flatMap((row, index) => {
       const record = Object.fromEntries(columns.map((column, columnIndex) => [column, decodeCell(column, row[columnIndex])]))
       const value = record as T
-      return record.documentId || record.jobId || record.month || record.itemWriteKey ? [{ rowNumber: index + 2, value }] : []
+      const hasValue = columns.some((column) => record[column] !== null && record[column] !== '')
+      return hasValue ? [{ rowNumber: index + 2, value }] : []
     })
   }
 
@@ -305,6 +454,56 @@ function toLineItem(value: Record<string, unknown>): OcrLineItem {
 
 function toDocument(value: Record<string, unknown>): OcrDocument {
   return Object.fromEntries(DOCUMENT_COLUMNS.map((column) => [column, value[column] ?? null])) as unknown as OcrDocument
+}
+
+function dailySummaryRows(documents: readonly OcrDocument[], now: string): object[] {
+  const rows = new Map<string, { documentDate: string; direction: 'INCOME' | 'EXPENSE'; documentCount: number; grandTotal: number; updatedAt: string }>()
+  for (const document of documents) {
+    if (document.state !== 'CONFIRMED' || !document.documentDate || !document.direction) continue
+    const total = document.grandTotal ?? document.amount
+    if (total === null || !Number.isFinite(total)) continue
+    const key = `${document.documentDate}:${document.direction}`
+    const row = rows.get(key) ?? { documentDate: document.documentDate, direction: document.direction, documentCount: 0, grandTotal: 0, updatedAt: now }
+    row.documentCount += 1
+    row.grandTotal += total
+    rows.set(key, row)
+  }
+  return [...rows.values()].sort((left, right) => left.documentDate.localeCompare(right.documentDate) || left.direction.localeCompare(right.direction))
+}
+
+function categorySummaryRows(documents: readonly OcrDocument[], now: string): object[] {
+  const rows = new Map<string, { categoryId: string; direction: 'INCOME' | 'EXPENSE'; documentCount: number; grandTotal: number; updatedAt: string }>()
+  for (const document of documents) {
+    if (document.state !== 'CONFIRMED' || !document.direction) continue
+    const total = document.grandTotal ?? document.amount
+    if (total === null || !Number.isFinite(total)) continue
+    const categoryId = document.categoryId ?? 'uncategorized'
+    const key = `${categoryId}:${document.direction}`
+    const row = rows.get(key) ?? { categoryId, direction: document.direction, documentCount: 0, grandTotal: 0, updatedAt: now }
+    row.documentCount += 1
+    row.grandTotal += total
+    rows.set(key, row)
+  }
+  return [...rows.values()].sort((left, right) => left.categoryId.localeCompare(right.categoryId) || left.direction.localeCompare(right.direction))
+}
+
+function parseBooleanSetting(value: unknown): boolean | null {
+  if (value === true || value === 'true') return true
+  if (value === false || value === 'false') return false
+  return null
+}
+
+function isReportTime(value: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
+}
+
+function isDashboardUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.hostname === 'docs.google.com' && url.pathname.startsWith('/spreadsheets/d/')
+  } catch {
+    return false
+  }
 }
 
 function assertUniqueLineNumbers(lineItems: OcrLineItem[]): void {

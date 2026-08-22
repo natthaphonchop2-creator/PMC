@@ -6,6 +6,7 @@ import { createGoogleOcrStore } from '../../server/ocr-ledger/googleStore'
 class MemorySheets implements OcrSheetsPort {
   readonly books = new Map<string, Map<string, unknown[][]>>()
   readonly creates: Array<{ title: string; tabs: string[] }> = []
+  failNextClearTab: string | null = null
 
   async batchGet(spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
     const book = this.books.get(spreadsheetId) ?? new Map<string, unknown[][]>()
@@ -34,6 +35,15 @@ class MemorySheets implements OcrSheetsPort {
 
   async batchUpdate(spreadsheetId: string, data: Array<{ range: string; values: unknown[][] }>): Promise<void> {
     await Promise.all(data.map((entry) => this.update(spreadsheetId, entry.range, entry.values)))
+  }
+
+  async clear(spreadsheetId: string, range: string): Promise<void> {
+    const tab = tabName(range)
+    if (this.failNextClearTab === tab) {
+      this.failNextClearTab = null
+      throw new Error('synthetic clear failure')
+    }
+    this.book(spreadsheetId).set(tab, [])
   }
 
   async create(title: string, tabs: string[]): Promise<string> {
@@ -281,5 +291,83 @@ describe('Google OCR ledger store', () => {
     expect(await store.listConfirmedDocuments('monthly-2026-08')).toEqual([
       expect.objectContaining({ documentId: 'OCR-20260822-abc123', state: 'CONFIRMED' }),
     ])
+  })
+
+  it('reads validated CONFIG report settings with runtime defaults for missing or invalid values', async () => {
+    const sheets = new MemorySheets()
+    await sheets.append('master', 'CONFIG!A:ZZ', [
+      ['key', 'value', 'updatedAt'],
+      ['dailyReportEnabled', 'true', '2026-08-22T00:00:00.000Z'],
+      ['dailyReportTime', '09:30', '2026-08-22T00:00:00.000Z'],
+      ['dashboardUrl', 'https://docs.google.com/spreadsheets/d/master/edit#gid=0', '2026-08-22T00:00:00.000Z'],
+    ])
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+
+    await expect(store.readReportSettings({
+      dailyReportEnabled: false, dailyReportTime: '20:00', dashboardUrl: 'https://docs.google.com/spreadsheets/d/default/edit#gid=0',
+    })).resolves.toEqual({
+      dailyReportEnabled: true, dailyReportTime: '09:30', dashboardUrl: 'https://docs.google.com/spreadsheets/d/master/edit#gid=0',
+    })
+
+    await sheets.update('master', 'CONFIG!A3', [['dailyReportTime', '99:99', '2026-08-22T00:00:00.000Z']])
+    expect((await store.readReportSettings({
+      dailyReportEnabled: false, dailyReportTime: '20:00', dashboardUrl: 'https://docs.google.com/spreadsheets/d/default/edit#gid=0',
+    })).dailyReportTime).toBe('20:00')
+  })
+
+  it('derives failed-before-draft and duplicate evidence from durable queue, error, and draft rows using received time', async () => {
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets: new MemorySheets(), drive: new MemoryDrive() })
+    const failed = queueJob({
+      jobId: 'failed', documentId: 'OCR-20260822-failed1', idempotencyKey: 'failed', state: 'FAILED',
+      payloadJson: JSON.stringify({ receivedAt: '2026-08-22T01:00:00.000Z' }),
+    })
+    const duplicate = queueJob({
+      jobId: 'duplicate', documentId: 'OCR-20260822-duplicate1', idempotencyKey: 'duplicate', state: 'DONE',
+      payloadJson: JSON.stringify({ receivedAt: '2026-08-22T02:00:00.000Z', duplicateOfDocumentId: 'OCR-20260821-existing1' }),
+    })
+    await store.appendJob(failed)
+    await store.appendJob(duplicate)
+    await store.appendError({ jobId: failed.jobId, documentId: failed.documentId, code: 'LINE_DOWNLOAD_FAILED', createdAt: failed.updatedAt })
+
+    expect(await store.listOperationalEvidence()).toEqual(expect.arrayContaining([
+      { documentId: failed.documentId, receivedAt: '2026-08-22T01:00:00.000Z', state: 'FAILED', duplicateWarning: false },
+      { documentId: duplicate.documentId, receivedAt: '2026-08-22T02:00:00.000Z', state: null, duplicateWarning: true },
+    ]))
+  })
+
+  it('refreshes all derived Sheet surfaces from confirmed-only money and records aggregate freshness', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    const confirmed = draft({ state: 'CONFIRMED', confirmedBy: 'Staff', confirmedAt: '2026-08-22T10:00:00.000Z', verificationStatus: 'STAFF_CONFIRMED', direction: 'INCOME', grandTotal: 107 })
+    await store.finalizeDocument(confirmed, { month: '2026-08', monthlySpreadsheetId: 'monthly-2026-08' })
+    await store.saveDraft(draft({ documentId: 'OCR-20260822-pending1', grandTotal: 9999, state: 'PENDING_REVIEW' }))
+
+    const result = await store.refreshDerivedSurfaces('2026-08-22T11:00:00.000Z')
+
+    expect(result).toMatchObject({ dashboard: true, recentTransactions: true, pendingReview: true, monthlySummaries: { '2026-08': true } })
+    expect(JSON.stringify(sheets.rows('master', 'DASHBOARD'))).toContain('confirmedIncome')
+    expect(JSON.stringify(sheets.rows('master', 'DASHBOARD'))).toContain('107')
+    expect(JSON.stringify(sheets.rows('master', 'DASHBOARD'))).not.toContain('9999')
+    expect(JSON.stringify(sheets.rows('master', 'RECENT_TRANSACTIONS'))).toContain('OCR-20260822-abc123')
+    expect(JSON.stringify(sheets.rows('master', 'RECENT_TRANSACTIONS'))).not.toContain('OCR-20260822-pending1')
+    expect(JSON.stringify(sheets.rows('master', 'PENDING_REVIEW'))).toContain('OCR-20260822-pending1')
+    expect(JSON.stringify(sheets.rows('monthly-2026-08', 'DAILY_SUMMARY'))).not.toContain('9999')
+    expect(JSON.stringify(sheets.rows('monthly-2026-08', 'CATEGORY_SUMMARY'))).not.toContain('9999')
+    expect(JSON.stringify(sheets.rows('master', 'MONTHLY_INDEX'))).toContain('2026-08-22T11:00:00.000Z')
+  })
+
+  it('repairs an independently failed derived surface later without duplicating confirmed ledger data', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    await store.finalizeDocument(draft({ state: 'CONFIRMED' }), { month: '2026-08', monthlySpreadsheetId: 'monthly-2026-08' })
+    sheets.failNextClearTab = 'DASHBOARD'
+
+    const failed = await store.refreshDerivedSurfaces('2026-08-22T11:00:00.000Z')
+    const repaired = await store.refreshDerivedSurfaces('2026-08-22T11:01:00.000Z')
+
+    expect(failed).toMatchObject({ dashboard: false, recentTransactions: true, pendingReview: true })
+    expect(repaired.dashboard).toBe(true)
+    expect(sheets.rows('monthly-2026-08', 'TRANSACTIONS')).toHaveLength(2)
+    expect(sheets.rows('master', 'RECENT_TRANSACTIONS')).toHaveLength(2)
   })
 })

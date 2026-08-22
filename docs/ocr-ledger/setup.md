@@ -55,6 +55,8 @@ npm run ocr:setup -- --confirm-create
 
 คำสั่งยืนยันจะสร้าง private Drive hierarchy, โฟลเดอร์ `Monthly Ledgers` และ master workbook เท่านั้น นำ resource IDs ที่ได้ไปวางตรงใน Render environment settings เป็น `OCR_DRIVE_ROOT_ID`, `OCR_MONTHLY_LEDGERS_FOLDER_ID` และ `OCR_MASTER_SPREADSHEET_ID`; ห้ามส่งผ่านแชตหรือ commit ลง source
 
+Bootstrap จะเติม `CONFIG` ด้วย `dailyReportEnabled`, `dailyReportTime` และ authorized master Dashboard URL แบบไม่เก็บ secret ผู้ดูแลแก้ค่าเวลา/เปิดปิดรายงานใน Sheet ได้ภายหลัง ระบบจะ validate ค่าและ fallback ไป runtime configuration เมื่อแถวหายหรือไม่ถูกต้อง ส่วน `DASHBOARD`, `RECENT_TRANSACTIONS`, `PENDING_REVIEW`, `DAILY_SUMMARY` และ `CATEGORY_SUMMARY` เป็น derived surfaces ที่ worker refresh แบบ idempotent และซ่อมใหม่ได้โดยไม่ย้อนหรือทำซ้ำ confirmed ledger
+
 ## 5. ตั้งค่า LIFF
 
 1. สร้าง LIFF app ภายใต้ LINE Login channel ที่ตรวจแล้ว

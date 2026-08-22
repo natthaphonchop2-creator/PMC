@@ -10,6 +10,7 @@ export interface OcrSheetsPort {
   append(spreadsheetId: string, range: string, rows: unknown[][]): Promise<void>
   update(spreadsheetId: string, range: string, rows: unknown[][]): Promise<void>
   batchUpdate(spreadsheetId: string, data: Array<{ range: string; values: unknown[][] }>): Promise<void>
+  clear(spreadsheetId: string, range: string): Promise<void>
   create(title: string, tabs: string[]): Promise<string>
 }
 
@@ -69,6 +70,9 @@ export function createGoogleOcrPorts(config: GoogleOcrClientConfig): { sheets: O
       },
       async batchUpdate(spreadsheetId, data) {
         await sheetsApi.spreadsheets.values.batchUpdate({ spreadsheetId, requestBody: { valueInputOption: 'RAW', data } })
+      },
+      async clear(spreadsheetId, range) {
+        await sheetsApi.spreadsheets.values.clear({ spreadsheetId, range })
       },
       async create(title, tabs) {
         const response = await sheetsApi.spreadsheets.create({

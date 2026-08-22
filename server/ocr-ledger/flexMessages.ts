@@ -14,12 +14,14 @@ export interface DraftFlexOptions {
 export interface ReportMessageOptions {
   title: string
   entries: Array<{ label: string; value?: string | null }>
+  dashboardUrl?: string
 }
 
 export interface PendingReportMessageOptions {
   title: string
   totalPending: number
   entries: Array<{ label: string; value?: string | null; reviewUri: string }>
+  dashboardUrl?: string
 }
 
 export interface FlexMessage {
@@ -59,11 +61,16 @@ export function buildFinalFlex(draft: OcrDraft): FlexMessage {
 }
 
 export function buildReportMessage(options: ReportMessageOptions): FlexMessage {
-  return flex(truncate(options.title), options.entries.flatMap(({ label, value }) => value ? [text(truncate(label), { weight: 'bold' }), text(truncate(value), { color: '#374151', size: 'sm' })] : [text(truncate(label))]), [], 'รายงานบัญชี')
+  const actions = options.dashboardUrl ? [{ type: 'uri' as const, label: 'เปิด Dashboard', uri: options.dashboardUrl }] : []
+  return flex(truncate(options.title), options.entries.flatMap(({ label, value }) => value ? [text(truncate(label), { weight: 'bold' }), text(truncate(value), { color: '#374151', size: 'sm' })] : [text(truncate(label))]), actions, 'รายงานบัญชี')
 }
 
 export function buildPendingReportMessage(options: PendingReportMessageOptions): FlexMessage {
-  const summary = bubble(options.title, [text(`รอตรวจสอบทั้งหมด ${options.totalPending} รายการ`, { color: '#374151', size: 'sm' })])
+  const summary = bubble(
+    options.title,
+    [text(`รอตรวจสอบทั้งหมด ${options.totalPending} รายการ`, { color: '#374151', size: 'sm' })],
+    options.dashboardUrl ? [{ type: 'uri', label: 'เปิด Dashboard', uri: options.dashboardUrl }] : [],
+  )
   const entries = options.entries.slice(0, 10).map(({ label, value, reviewUri }) => {
     const rows = value ? [text(label, { weight: 'bold' }), text(value, { color: '#374151', size: 'sm' })] : [text(label, { weight: 'bold' })]
     return bubble('รายการรอตรวจสอบ', rows, [{ type: 'uri', label: 'เปิดตรวจสอบ', uri: reviewUri }])

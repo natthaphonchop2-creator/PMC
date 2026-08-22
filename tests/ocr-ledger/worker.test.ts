@@ -480,8 +480,53 @@ describe('createOcrLedgerWorker', () => {
 
     await worker.runOnce()
 
-    expect(line.push).toHaveBeenCalledWith('Cgroup1', [{ type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }], expect.any(String))
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({
+      type: 'text', text: expect.stringContaining('ยังไม่มีรายการยืนยันในช่วงนี้'),
+    })], expect.any(String))
     expect(line.push.mock.calls[0]?.[2]).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('includes failed-before-draft, pending, and duplicate evidence by received time in a no-activity report', async () => {
+    const store = new FakeStore([job('REPORT_COMMAND', { command: 'TODAY', groupId: 'Cgroup1' })])
+    store.operationalEvidence = [
+      { documentId: 'OCR-20260822-failed1', receivedAt: '2026-08-22T01:00:00.000Z', state: 'FAILED', duplicateWarning: false },
+      { documentId: 'OCR-20260822-pending1', receivedAt: '2026-08-22T02:00:00.000Z', state: 'PENDING_REVIEW', duplicateWarning: false },
+      { documentId: 'OCR-20260822-duplicate1', receivedAt: '2026-08-22T02:30:00.000Z', state: null, duplicateWarning: true },
+    ]
+    const { worker, line } = harness(store)
+
+    await worker.runOnce()
+
+    const text = JSON.stringify(line.push.mock.calls[0]?.[1])
+    expect(text).toContain('รอตรวจสอบ 1')
+    expect(text).toContain('ผิดพลาด 1')
+    expect(text).toContain('รายการซ้ำ 1')
+    expect(text).toContain('https://docs.google.com/spreadsheets/d/master/edit#gid=0')
+  })
+
+  it('uses validated CONFIG-backed report enablement and 09:30 time over runtime defaults', async () => {
+    const current = new Date('2026-08-22T02:30:00.000Z')
+    const store = new FakeStore([])
+    store.reportSettings = {
+      dailyReportEnabled: true, dailyReportTime: '09:30', dashboardUrl: 'https://docs.google.com/spreadsheets/d/master/edit#gid=0',
+    }
+    const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: false, dailyReportTime: '20:00' })
+
+    const result = await worker.runOnce()
+
+    expect(result.reportSent).toBe(true)
+    expect(line.push).toHaveBeenCalledOnce()
+  })
+
+  it('retries derived Sheet refresh on a later run without failing document work', async () => {
+    const store = new FakeStore([])
+    store.refreshFailures = 1
+    const { worker } = harness(store)
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ failed: 0 })
+    await expect(worker.runOnce()).resolves.toMatchObject({ failed: 0 })
+
+    expect(store.refreshCalls).toBe(2)
   })
 
   it('catches up the 20:00 Bangkok report and records its idempotency row only after the LINE push', async () => {
@@ -515,8 +560,10 @@ describe('createOcrLedgerWorker', () => {
 
     await worker.runOnce()
 
-    const uris = findUriActions(line.push.mock.calls[0][1])
+    const allUris = findUriActions(line.push.mock.calls[0][1])
+    const uris = allUris.filter((uri) => new URL(uri).hostname === 'liff.line.me')
     expect(uris).toHaveLength(2)
+    expect(allUris).toContain('https://docs.google.com/spreadsheets/d/master/edit#gid=0')
     expect(uris.map((uri) => JSON.parse(Buffer.from(new URL(uri).searchParams.get('token')!.split('.')[0], 'base64url').toString('utf8')).documentId)).toEqual([oldest.documentId, newest.documentId])
     expect(verifyReviewToken(new URL(uris[0]).searchParams.get('token')!, CONFIG.reviewSigningSecret, Math.floor(START.getTime() / 1000))).toMatchObject({
       action: 'REVIEW', draftVersion: 3, exp: Math.floor(START.getTime() / 1000) + 24 * 60 * 60,
@@ -574,6 +621,10 @@ class FakeStore implements OcrLedgerStore {
   updateFailures = 0
   updateCalls = 0
   failUpdateOnCall: number | null = null
+  operationalEvidence: Array<{ documentId: string; receivedAt: string; state: 'PENDING_REVIEW' | 'RETRY_PENDING' | 'FAILED' | 'CANCELLED' | null; duplicateWarning: boolean }> = []
+  reportSettings: { dailyReportEnabled: boolean; dailyReportTime: string; dashboardUrl: string } | null = null
+  refreshCalls = 0
+  refreshFailures = 0
   getDraftCalls = 0
   failGetDraftOnCall: number | null = null
 
@@ -623,6 +674,15 @@ class FakeStore implements OcrLedgerStore {
   async ensureMonthlyLedger(month: string) { return { month, monthlySpreadsheetId: `monthly-${month}` } }
   async finalizeDocument(next: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }) { this.finalized.push({ draft: structuredClone(next), ledger }) }
   async listConfirmedDocuments(monthlySpreadsheetId: string) { return structuredClone(this.confirmedDocuments.get(monthlySpreadsheetId) ?? []) }
+  async listOperationalEvidence() { return structuredClone(this.operationalEvidence) }
+  async readReportSettings(defaults: { dailyReportEnabled: boolean; dailyReportTime: string; dashboardUrl: string }) {
+    return structuredClone(this.reportSettings ?? defaults)
+  }
+  async refreshDerivedSurfaces() {
+    this.refreshCalls += 1
+    if (this.refreshFailures > 0) { this.refreshFailures -= 1; throw new Error('refresh unavailable') }
+    return { dashboard: true, recentTransactions: true, pendingReview: true, monthlySummaries: {} }
+  }
 }
 
 function harness(store: FakeStore, order: string[] = [], now: () => Date = () => START, config: Partial<OcrLedgerConfig> = {}) {

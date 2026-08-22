@@ -16,7 +16,8 @@ describe('OCR ledger setup', () => {
     }
     const sheets: OcrSheetsPort = {
       batchGet: async () => ({}), append: async () => { mutations.push('append') }, update: async () => { mutations.push('update') },
-      batchUpdate: async () => { mutations.push('batchUpdate') }, create: async () => { mutations.push('sheet'); return 'sheet-1' },
+      batchUpdate: async () => { mutations.push('batchUpdate') }, clear: async () => { mutations.push('clear') },
+      create: async () => { mutations.push('sheet'); return 'sheet-1' },
     }
 
     const result = await runOcrSetup({ confirmCreate: false, drive, sheets, titlePrefix: 'PMC OCR' })
@@ -27,6 +28,7 @@ describe('OCR ledger setup', () => {
   })
 
   it('returns the setup-created Monthly Ledgers folder ID in approved setup output', async () => {
+    const appended: unknown[][][] = []
     const drive: OcrDrivePort = {
       createFolder: async (name, parentId) => name === 'Monthly Ledgers' ? `${parentId}:monthly-ledgers` : 'drive-root',
       findFolder: async () => null, moveFile: async () => undefined, moveSpreadsheet: async () => undefined,
@@ -34,12 +36,15 @@ describe('OCR ledger setup', () => {
       downloadImage: async () => ({ bytes: Buffer.alloc(0), mimeType: 'image/jpeg' }),
     }
     const sheets: OcrSheetsPort = {
-      batchGet: async () => ({}), append: async () => undefined, update: async () => undefined,
-      batchUpdate: async () => undefined, create: async () => 'master-sheet',
+      batchGet: async () => ({}), append: async (_spreadsheetId, _range, rows) => { appended.push(rows) }, update: async () => undefined,
+      batchUpdate: async () => undefined, clear: async () => undefined, create: async () => 'master-sheet',
     }
 
     const result = await runOcrSetup({ confirmCreate: true, drive, sheets, titlePrefix: 'PMC OCR' })
 
     expect(result.checks).toContainEqual({ name: 'monthly ledgers folder', status: 'CREATED', resourceId: 'drive-root:monthly-ledgers' })
+    expect(JSON.stringify(appended)).toContain('dailyReportEnabled')
+    expect(JSON.stringify(appended)).toContain('dailyReportTime')
+    expect(JSON.stringify(appended)).toContain('https://docs.google.com/spreadsheets/d/master-sheet/edit#gid=0')
   })
 })
