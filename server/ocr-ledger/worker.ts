@@ -211,12 +211,7 @@ async function processRetry(
   const documentId = requiredString(job.documentId, 'SHEET_WRITE_FAILED')
   const current = await getDraft(deps.store, documentId)
   if (!current) {
-    let original
-    try {
-      original = (await deps.store.listJobs()).find((candidate) => candidate.jobType === 'INTAKE' && candidate.documentId === documentId)
-    } catch {
-      throw workerError('SHEET_WRITE_FAILED')
-    }
+    const original = await findOriginalIntake(deps.store, documentId)
     if (!original) throw workerError('DRIVE_UPLOAD_FAILED')
     const originalPayload = parsePayload(original.payloadJson)
     originalPayload.receivedAt = original.createdAt
@@ -239,6 +234,11 @@ async function processRetry(
   let prepared
   try { prepared = await prepareOcrImage(source.bytes, deps.config.maxImageBytes) } catch { throw workerError('UNSUPPORTED_IMAGE') }
   const extraction = await deps.extractor.extract(prepared)
+  const original = await findOriginalIntake(deps.store, current.documentId)
+  if (!original) throw workerError('SHEET_WRITE_FAILED')
+  await organizeSourceImage(
+    deps.drive, deps.config.driveRootId, current.sourceImageFileId, original.createdAt, extraction.documentType,
+  )
   const revised = {
     ...draftFromExtraction(current.documentId, extraction, {
       sourceImageFileId: current.sourceImageFileId, sourceImageSha256: prepared.originalSha256,
@@ -293,7 +293,7 @@ async function pushTerminalRetry(
 ): Promise<void> {
   const payload = parsePayload(job.payloadJson)
   if (!job.documentId || typeof payload.groupId !== 'string') return
-  const current = await deps.store.getDraft(job.documentId).catch(() => null)
+  const current = await deps.store.getDraft(job.documentId)
   const data = signReviewToken({
     v: 1, documentId: job.documentId, groupId: payload.groupId, draftVersion: current?.draftVersion ?? 1, action: 'RETRY',
     exp: Math.floor(deps.now().getTime() / 1000) + 24 * 60 * 60,
@@ -394,6 +394,14 @@ async function findDuplicate(store: OcrLedgerStore, hash: string): Promise<OcrDr
 
 async function getTerminalDecision(store: OcrLedgerStore, documentId: string): Promise<'CONFIRM' | 'CANCEL' | null> {
   try { return await store.getTerminalDecision(documentId) } catch { throw workerError('SHEET_WRITE_FAILED') }
+}
+
+async function findOriginalIntake(store: OcrLedgerStore, documentId: string): Promise<OcrQueueJob | null> {
+  try {
+    return (await store.listJobs()).find((candidate) => candidate.jobType === 'INTAKE' && candidate.documentId === documentId) ?? null
+  } catch {
+    throw workerError('SHEET_WRITE_FAILED')
+  }
 }
 
 async function updateJob(store: OcrLedgerStore, job: OcrQueueJob): Promise<void> {

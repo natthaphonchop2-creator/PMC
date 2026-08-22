@@ -217,6 +217,56 @@ describe('createOcrLedgerWorker', () => {
     })
   })
 
+  it('skips terminal retry delivery when the versioned draft read fails instead of signing version 1', async () => {
+    const existing = draft({ state: 'FAILED', draftVersion: 3 })
+    const retry = job('RETRY', { ...actionPayload(), expectedVersion: 3 }, existing.documentId)
+    retry.attempts = 3
+    const store = new FakeStore([retry])
+    store.drafts.push(existing)
+    store.failGetDraftOnCall = 2
+    const { worker, extractor, line } = harness(store)
+    extractor.extract.mockRejectedValue(Object.assign(new Error('rate limited'), { code: 'OCR_RATE_LIMIT' }))
+
+    await worker.runOnce()
+
+    expect(store.jobs[0]).toMatchObject({ state: 'FAILED', lastErrorCode: 'OCR_RATE_LIMIT' })
+    expect(line.push).not.toHaveBeenCalled()
+  })
+
+  it('uses initial version 1 only after a successful draft lookup confirms no draft exists', async () => {
+    const intake = job('INTAKE', intakePayload())
+    intake.attempts = 3
+    const store = new FakeStore([intake])
+    const { worker, line } = harness(store)
+    line.downloadImage.mockRejectedValue(new Error('LINE unavailable'))
+
+    await worker.runOnce()
+
+    const data = findPostbackData(line.push.mock.calls.at(-1)?.[1])
+    expect(verifyReviewToken(data, CONFIG.reviewSigningSecret, Math.floor(START.getTime() / 1000))).toMatchObject({
+      documentId: store.jobs[0].documentId, draftVersion: 1, action: 'RETRY',
+    })
+  })
+
+  it('organizes a saved-draft RETRY source by the original intake Bangkok time', async () => {
+    const existing = draft({ state: 'FAILED', sourceImageFileId: 'root-staged-file' })
+    const original = job('INTAKE', intakePayload(), existing.documentId, 'job-intake')
+    original.state = 'FAILED'
+    original.createdAt = '2025-12-31T18:30:00.000Z'
+    const retry = job('RETRY', actionPayload(), existing.documentId, 'job-retry')
+    const store = new FakeStore([original, retry])
+    store.drafts.push(existing)
+    const { worker, drive } = harness(store)
+
+    await worker.runOnce()
+
+    expect(drive.findFolder.mock.calls).toEqual([
+      ['2026', 'drive-root'], ['01', 'folder-2026'], ['RECEIPT', 'folder-01'],
+    ])
+    expect(drive.moveFile).toHaveBeenCalledWith('root-staged-file', 'folder-RECEIPT')
+    expect(store.drafts[0]).toMatchObject({ state: 'PENDING_REVIEW', draftVersion: 2 })
+  })
+
   it('uses received-at Bangkok month folders even when OCR returns an invalid document date', async () => {
     const store = new FakeStore([job('INTAKE', intakePayload())])
     const { worker, extractor, drive } = harness(store)
@@ -259,6 +309,8 @@ class FakeStore implements OcrLedgerStore {
   finalized: Array<{ draft: OcrDraft; ledger: { month: string; monthlySpreadsheetId: string } }> = []
   terminalDecisions = new Map<string, 'CONFIRM' | 'CANCEL'>()
   saveFailures = 0
+  getDraftCalls = 0
+  failGetDraftOnCall: number | null = null
 
   constructor(public jobs: OcrQueueJob[], private readonly order: string[] = []) {}
 
@@ -274,7 +326,7 @@ class FakeStore implements OcrLedgerStore {
   }
   async updateJob(next: OcrQueueJob) { this.order.push('update-job'); Object.assign(this.jobs.find((entry) => entry.jobId === next.jobId)!, structuredClone(next)) }
   async saveDraft(next: OcrDraft) { this.order.push('save-draft'); if (this.saveFailures > 0) { this.saveFailures -= 1; throw new Error('sheet unavailable') }; const index = this.drafts.findIndex((entry) => entry.documentId === next.documentId); if (index < 0) this.drafts.push(structuredClone(next)); else this.drafts[index] = structuredClone(next) }
-  async getDraft(documentId: string) { return structuredClone(this.drafts.find((entry) => entry.documentId === documentId) ?? null) }
+  async getDraft(documentId: string) { this.getDraftCalls += 1; if (this.failGetDraftOnCall === this.getDraftCalls) throw new Error('sheet unavailable'); return structuredClone(this.drafts.find((entry) => entry.documentId === documentId) ?? null) }
   async findDraftByImageSha256(hash: string) { this.order.push('duplicate-check'); return structuredClone(this.drafts.find((entry) => entry.sourceImageSha256 === hash) ?? null) }
   async appendError(error: { jobId: string; documentId: string | null; code: string; createdAt: string }) { this.errors.push(error) }
   async appendAudit(action: Record<string, unknown>) { this.audits.push(structuredClone(action)) }
