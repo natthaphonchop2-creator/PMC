@@ -35,6 +35,15 @@ describe('OpenAI OCR extractor', () => {
     expect(extraction.warnings).toEqual([])
   })
 
+  it('preserves an unreadable currency as null', async () => {
+    const fetch = vi.fn(async () => fakeResponse(200, { output_text: JSON.stringify(validExtraction({ currency: null, confidenceByField: { ...validExtraction().confidenceByField, currency: null } })) }))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', fetch, referenceDate: '2026-08-22' })
+
+    const extraction = await extractor.extract(preparedImage)
+
+    expect(extraction.currency).toBeNull()
+  })
+
   it.each([
     ['refusal', fakeResponse(200, { output: [{ content: [{ type: 'refusal', refusal: 'no' }] }] }), 'OCR_REFUSAL'],
     ['malformed JSON', fakeResponse(200, { output_text: 'not-json' }), 'OCR_INVALID_OUTPUT'],

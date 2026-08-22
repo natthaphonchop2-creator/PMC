@@ -126,7 +126,7 @@ function parseExtraction(value: unknown, sourceImageSha256: string): OcrExtracti
     documentDate: value.documentDate,
     documentTime: value.documentTime,
     counterpartyName: value.counterpartyName,
-    currency: value.currency as string,
+    currency: value.currency,
     subtotal: value.subtotal,
     discountAmount: value.discountAmount,
     taxAmount: value.taxAmount,
@@ -166,7 +166,7 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[])
 }
 
 function isNullableEnum<T extends string>(value: unknown, allowed: readonly T[]): value is T | null {
-  return value === null || (typeof value === 'string' && allowed.includes(value))
+  return value === null || allowed.some((candidate) => candidate === value)
 }
 
 function isNullableString(value: unknown): value is string | null {
