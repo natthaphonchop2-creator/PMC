@@ -37,11 +37,12 @@ Stop หาก test/build/lint ไม่ผ่าน หรือพบ secret/P
 
 ### Pre-live record — 2026-08-22: NO-GO
 
-- Automated evidence: `npm run ocr:test` 18 files / 165 tests, `npm test` 56 files / 493 tests, `npm run lint`, และ `npm run build` ผ่าน; Vite แจ้ง chunk-size warning เดิมเท่านั้น
-- Evaluation harness unit tests: 5 cases passed; ใช้ภาพ synthetic ชั่วคราวเท่านั้น และ summary ไม่เก็บ fixture ID, image path, expected/actual OCR values หรือภาพ
+- Automated evidence: `npm run ocr:test` 18 files / 179 tests, `npm test` 56 files / 507 tests, `npm run lint`, และ `npm run build` ผ่าน; Vite แจ้ง chunk-size warning เดิมเท่านั้น
+- Evaluation harness unit tests: 19 cases passed; ใช้ภาพ synthetic ชั่วคราวเท่านั้น และ summary ไม่เก็บ fixture ID, image path, expected/actual OCR values หรือภาพ
 - ยังไม่มี approved, de-identified evaluation dataset ที่ `OCR_EVAL_FIXTURE_DIR`; จึงยัง score ได้ 0/100 ภาพจริงสำหรับ acceptance gate และห้ามประกาศ accuracy หรือ GO
-- `scripts/evaluate-ocr-ledger.mjs` จะอ่าน manifest และภาพจาก `OCR_EVAL_FIXTURE_DIR` เท่านั้น, ปฏิเสธทุก path ที่อยู่ใน `API/`, ไม่ copy ภาพ, และเขียน aggregate counts/percentages/error codes ไปที่ ignored `output/ocr-ledger-evaluation/summary.json`
-- GO ของ evaluator ต้องมีอย่างน้อย 100 fixtures, document type >= 98%, grand total >= 98%, exact line-item fields >= 95%, ไม่มี auto-confirm และไม่มี output นอก aggregate schema
+- `evaluation-manifest.json` เก็บได้เฉพาะ expected labels; ห้ามใส่ actual OCR, auto-confirm หรือ result data. Evaluator รับ actual จาก extractor ที่ inject ด้วย image bytes เท่านั้น, ปฏิเสธ path ใน `API/`, traversal และ symlink escape, ตรวจ JPEG/PNG magic + Sharp decoder metadata, ไม่ copy ภาพ, และเขียน aggregate counts/percentages/error codes ไปที่ ignored `output/ocr-ledger-evaluation/summary.json`
+- CLI จะไม่ wire production OpenAI extractor จนกว่าจะมี `OCR_EVAL_LIVE_CONFIRM=YES` และ OCR provider configuration ครบ; หากขาดข้อใดให้ NO-GO แบบไม่เรียก API. ห้ามรัน live extraction ในขั้น pre-live นี้
+- GO ของ evaluator ต้องมีอย่างน้อย 100 fixtures, document type >= 98%, grand total >= 98%, exact canonical line-item fields >= 95%, ไม่มี auto-confirm, มี line-item denominator มากกว่า 0, และไม่มี output นอก aggregate schema. Gate เปรียบเทียบ integer counts โดยไม่ใช้ percentage ที่ปัดเศษ
 - Local LIFF visual QA ยังไม่ได้ทำ: loading, valid draft, warnings, seven line items, invalid totals, expired token, queued edit, keyboard focus, และ console errors ที่ 390x844/desktop ยังไม่มี mocked/test API browser harness ที่ยืนยันได้ จึงเป็น NO-GO ไม่ใช่ pass
 - Runtime correction (2026-08-22): ทุก relative import ใน `server/ocr-ledger` runtime graph ใช้ explicit `.js` แล้ว; fresh build + missing-config job regression ยืนยันว่า `npm run ocr:job` ออก nonzero ด้วย `OCR ledger job failed` โดยไม่รั่ว `ERR_MODULE_NOT_FOUND` หรือ filesystem path และก่อนสร้าง provider client. ยังเป็น NO-GO สำหรับ worker counts เพราะไม่มี synthetic configuration/approved test context
 - Synthetic Drive/Sheet, real LINE validation endpoint, production OAuth refresh credentials, และ live data ไม่ได้ใช้หรือสร้างในขั้นนี้

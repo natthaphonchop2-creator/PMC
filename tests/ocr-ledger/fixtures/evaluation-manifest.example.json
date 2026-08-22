@@ -7,17 +7,19 @@
         "documentType": "RECEIPT",
         "grandTotal": 214,
         "lineItems": [
-          { "description": "ITEM A", "quantity": 2, "unitPrice": 100, "lineTotal": 200 }
+          {
+            "lineNumber": 1,
+            "description": "ITEM A",
+            "quantity": 2,
+            "unit": null,
+            "unitPrice": 100,
+            "discountAmount": 0,
+            "taxAmount": 0,
+            "lineTotal": 200,
+            "categoryId": null
+          }
         ]
-      },
-      "actual": {
-        "documentType": "RECEIPT",
-        "grandTotal": 214,
-        "lineItems": [
-          { "description": "ITEM A", "quantity": 2, "unitPrice": 100, "lineTotal": 200 }
-        ]
-      },
-      "autoConfirmed": false
+      }
     }
   ]
 }

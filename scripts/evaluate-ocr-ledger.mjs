@@ -1,10 +1,12 @@
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import sharp from 'sharp'
 
-const LINE_ITEM_FIELDS = ['description', 'quantity', 'unitPrice', 'lineTotal']
+const CANONICAL_LINE_FIELDS = ['lineNumber', 'description', 'quantity', 'unit', 'unitPrice', 'discountAmount', 'taxAmount', 'lineTotal', 'categoryId']
 const OUTPUT_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), '../output/ocr-ledger-evaluation')
 const SUMMARY_FILE = 'summary.json'
+const MAX_INPUT_PIXELS = 40_000_000
 
 export class EvaluationError extends Error {
   constructor(code) {
@@ -14,16 +16,23 @@ export class EvaluationError extends Error {
   }
 }
 
-export async function evaluateManifest({ fixtureDir, manifest }) {
+export async function evaluateManifest({ fixtureDir, manifest, extractor }) {
+  if (typeof extractor !== 'function') throw new EvaluationError('EVAL_EXTRACTOR_REQUIRED')
   const root = await resolveFixtureDirectory(fixtureDir)
   const fixtures = validatedFixtures(manifest)
   const scores = { documentType: { correct: 0, total: 0 }, grandTotal: { correct: 0, total: 0 }, lineItemFields: { correct: 0, total: 0 } }
-  let autoConfirmed = 0
+  const errors = new Map()
 
   for (const fixture of fixtures) {
-    await readFixtureImage(root, fixture.imagePath)
-    scoreFixture(scores, fixture)
-    if (fixture.autoConfirmed === true) autoConfirmed += 1
+    const imageBytes = await readFixtureImage(root, fixture.imagePath)
+    let extracted
+    try {
+      extracted = await extractor(imageBytes, { fixtureId: fixture.fixtureId })
+    } catch {
+      addError(errors, 'EVAL_EXTRACTION_FAILED')
+      extracted = null
+    }
+    scoreFixture(scores, fixture.expected, extracted, errors)
   }
 
   const accuracy = {
@@ -31,18 +40,37 @@ export async function evaluateManifest({ fixtureDir, manifest }) {
     grandTotal: percentageScore(scores.grandTotal),
     lineItemFields: percentageScore(scores.lineItemFields),
   }
-  const errorCodes = autoConfirmed === 0 ? [] : [{ code: 'EVAL_AUTO_CONFIRM_PRESENT', count: autoConfirmed }]
-  const result = shouldGo({ fixtureCount: fixtures.length, accuracy, errorCodes }) ? 'GO' : 'NO_GO'
+  const errorCodes = [...errors.entries()].map(([code, count]) => ({ code, count })).sort((left, right) => left.code.localeCompare(right.code))
+  const result = shouldGo({ fixtureCount: fixtures.length, scores, errorCodes }) ? 'GO' : 'NO_GO'
   const summary = { result, scoredFixtures: fixtures.length, accuracy, errorCodes }
 
   if (!isAggregateOnly(summary)) throw new EvaluationError('EVAL_UNSAFE_OUTPUT')
   return summary
 }
 
-export async function runEvaluation({ fixtureDir, manifest, outputDir = OUTPUT_DIRECTORY }) {
-  const summary = await evaluateManifest({ fixtureDir, manifest })
+export async function runEvaluation({ fixtureDir, manifest, extractor, outputDir = OUTPUT_DIRECTORY }) {
+  const summary = await evaluateManifest({ fixtureDir, manifest, extractor })
   await writeSummary(outputDir, summary)
   return summary
+}
+
+export async function createProductionExtractor(env) {
+  if (env.OCR_EVAL_LIVE_CONFIRM !== 'YES') throw new EvaluationError('EVAL_LIVE_CONFIRM_REQUIRED')
+  const { readOcrLedgerConfig } = await import('../dist-server/server/ocr-ledger/config.js')
+  const configured = readOcrLedgerConfig(env)
+  if (!configured.configured) throw new EvaluationError('EVAL_PROVIDER_CONFIG_REQUIRED')
+
+  const { prepareOcrImage } = await import('../dist-server/server/ocr-ledger/imageProcessing.js')
+  const { createOpenAiOcrExtractor } = await import('../dist-server/server/ocr-ledger/openAiExtractor.js')
+  const now = () => new Date().toISOString()
+  const extractor = createOpenAiOcrExtractor({
+    apiKey: configured.config.openAiApiKey,
+    model: configured.config.openAiOcrModel,
+    maxOutputTokens: configured.config.openAiMaxOutputTokens,
+    referenceDate: now(),
+  })
+
+  return async (imageBytes) => extractor.extract(await prepareOcrImage(imageBytes, configured.config.maxImageBytes))
 }
 
 async function resolveFixtureDirectory(fixtureDir) {
@@ -62,68 +90,140 @@ async function resolveFixtureDirectory(fixtureDir) {
 }
 
 function validatedFixtures(manifest) {
-  if (!isRecord(manifest) || !Array.isArray(manifest.fixtures)) throw new EvaluationError('EVAL_INVALID_MANIFEST')
+  if (!isRecord(manifest) || !hasOnlyKeys(manifest, ['fixtures']) || !Array.isArray(manifest.fixtures)) throw new EvaluationError('EVAL_INVALID_MANIFEST')
   return manifest.fixtures.map((fixture) => {
-    if (!isRecord(fixture) || typeof fixture.fixtureId !== 'string' || fixture.fixtureId.length === 0
+    if (!isRecord(fixture) || !hasOnlyKeys(fixture, ['fixtureId', 'imagePath', 'expected'])
+      || typeof fixture.fixtureId !== 'string' || fixture.fixtureId.length === 0
       || typeof fixture.imagePath !== 'string' || fixture.imagePath.length === 0
-      || !isExpected(fixture.expected) || !isExpected(fixture.actual) || typeof fixture.autoConfirmed !== 'boolean') {
-      throw new EvaluationError('EVAL_INVALID_MANIFEST')
-    }
+      || !isExpected(fixture.expected)) throw new EvaluationError('EVAL_INVALID_MANIFEST')
     return fixture
   })
+}
+
+function isExpected(value) {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['documentType', 'grandTotal', 'lineItems'])
+    && isDocumentType(value.documentType)
+    && isFiniteNumber(value.grandTotal)
+    && Array.isArray(value.lineItems)
+    && hasSequentialCanonicalLines(value.lineItems)
 }
 
 async function readFixtureImage(root, imagePath) {
   if (isAbsolute(imagePath)) throw new EvaluationError('EVAL_PROHIBITED_PATH')
   const candidate = resolve(root, imagePath)
   if (!isWithin(root, candidate)) throw new EvaluationError('EVAL_PROHIBITED_PATH')
+
   let imageFile
   try {
     imageFile = await realpath(candidate)
     if (!isWithin(root, imageFile)) throw new EvaluationError('EVAL_PROHIBITED_PATH')
     if (!(await stat(imageFile)).isFile()) throw new EvaluationError('EVAL_MISSING_IMAGE')
-    await readFile(imageFile)
   } catch (error) {
     if (error instanceof EvaluationError) throw error
     throw new EvaluationError('EVAL_MISSING_IMAGE')
   }
+
+  let bytes
+  try {
+    bytes = await readFile(imageFile)
+    if (!hasAllowedImageMagic(bytes)) throw new EvaluationError('EVAL_INVALID_IMAGE')
+    const metadata = await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS }).metadata()
+    if ((metadata.format !== 'jpeg' && metadata.format !== 'png') || !metadata.width || !metadata.height) throw new EvaluationError('EVAL_INVALID_IMAGE')
+  } catch (error) {
+    if (error instanceof EvaluationError) throw error
+    throw new EvaluationError('EVAL_INVALID_IMAGE')
+  }
+  return bytes
 }
 
-function scoreFixture(scores, fixture) {
+function scoreFixture(scores, expected, extraction, errors) {
   scores.documentType.total += 1
   scores.grandTotal.total += 1
-  if (fixture.expected.documentType === fixture.actual.documentType) scores.documentType.correct += 1
-  if (fixture.expected.grandTotal === fixture.actual.grandTotal) scores.grandTotal.correct += 1
+  const actual = normalizeExtraction(extraction)
+  if (actual.invalid) addError(errors, 'EVAL_INVALID_EXTRACTION')
+  if (actual.autoConfirmed) addError(errors, 'EVAL_AUTO_CONFIRM_PRESENT')
+  if (actual.documentType === expected.documentType) scores.documentType.correct += 1
+  if (actual.grandTotal === expected.grandTotal) scores.grandTotal.correct += 1
 
-  for (const [index, expectedLine] of fixture.expected.lineItems.entries()) {
-    const actualLine = fixture.actual.lineItems[index]
-    for (const field of LINE_ITEM_FIELDS) {
+  const lineCount = Math.max(expected.lineItems.length, actual.lineItems.length)
+  for (let index = 0; index < lineCount; index += 1) {
+    const expectedLine = expected.lineItems[index]
+    const actualLine = actual.linesSequential ? actual.lineItems[index] : null
+    for (const field of CANONICAL_LINE_FIELDS) {
       scores.lineItemFields.total += 1
-      if (isRecord(actualLine) && expectedLine[field] === actualLine[field]) scores.lineItemFields.correct += 1
+      if (expectedLine && actualLine && expectedLine[field] === actualLine[field]) scores.lineItemFields.correct += 1
     }
   }
 }
 
-function percentageScore({ correct, total }) {
-  return { correct, total, percentage: total === 0 ? 0 : Number(((correct / total) * 100).toFixed(2)) }
+function normalizeExtraction(value) {
+  if (!isRecord(value)) return { documentType: undefined, grandTotal: undefined, lineItems: [], linesSequential: false, autoConfirmed: false, invalid: true }
+  const documentType = isNullableDocumentType(value.documentType) ? value.documentType : undefined
+  const grandTotal = isNullableFiniteNumber(value.grandTotal) ? value.grandTotal : undefined
+  const rawLines = Array.isArray(value.lineItems) ? value.lineItems : []
+  const lineItems = rawLines.map(canonicalActualLine)
+  const linesSequential = rawLines.length === lineItems.length && lineItems.every((line, index) => line !== null && line.lineNumber === index + 1)
+  const invalid = documentType === undefined || grandTotal === undefined || !Array.isArray(value.lineItems) || !linesSequential
+  return {
+    documentType,
+    grandTotal,
+    lineItems,
+    linesSequential,
+    invalid,
+    autoConfirmed: value.autoConfirmed === true || value.state === 'CONFIRMED' || value.confirmedAt !== undefined || value.confirmedBy !== undefined,
+  }
 }
 
-function shouldGo({ fixtureCount, accuracy, errorCodes }) {
+function canonicalActualLine(value) {
+  if (!isRecord(value)) return null
+  if (!CANONICAL_LINE_FIELDS.every((field) => Object.hasOwn(value, field))) return null
+  const line = Object.fromEntries(CANONICAL_LINE_FIELDS.map((field) => [field, value[field]]))
+  return isCanonicalLine(line) ? line : null
+}
+
+function hasSequentialCanonicalLines(lines) {
+  return lines.every((line, index) => isCanonicalLine(line) && line.lineNumber === index + 1)
+}
+
+function isCanonicalLine(value) {
+  return isRecord(value)
+    && hasOnlyKeys(value, CANONICAL_LINE_FIELDS)
+    && Number.isSafeInteger(value.lineNumber) && value.lineNumber >= 1
+    && isNullableString(value.description)
+    && isNullableFiniteNumber(value.quantity)
+    && isNullableString(value.unit)
+    && isNullableFiniteNumber(value.unitPrice)
+    && isNullableFiniteNumber(value.discountAmount)
+    && isNullableFiniteNumber(value.taxAmount)
+    && isNullableFiniteNumber(value.lineTotal)
+    && isNullableString(value.categoryId)
+}
+
+function shouldGo({ fixtureCount, scores, errorCodes }) {
   return fixtureCount >= 100
-    && accuracy.documentType.percentage >= 98
-    && accuracy.grandTotal.percentage >= 98
-    && accuracy.lineItemFields.total > 0
-    && accuracy.lineItemFields.percentage >= 95
+    && meetsThreshold(scores.documentType, 98)
+    && meetsThreshold(scores.grandTotal, 98)
+    && meetsThreshold(scores.lineItemFields, 95)
     && errorCodes.length === 0
 }
 
-function isExpected(value) {
-  return isRecord(value)
-    && typeof value.documentType === 'string'
-    && typeof value.grandTotal === 'number'
-    && Number.isFinite(value.grandTotal)
-    && Array.isArray(value.lineItems)
-    && value.lineItems.every((line) => isRecord(line))
+function meetsThreshold(score, threshold) {
+  return score.total > 0 && score.correct * 100 >= threshold * score.total
+}
+
+function percentageScore({ correct, total }) {
+  return { correct, total, percentage: total === 0 ? 0 : Number(((correct * 100) / total).toFixed(2)) }
+}
+
+function addError(errors, code) {
+  errors.set(code, (errors.get(code) ?? 0) + 1)
+}
+
+function hasAllowedImageMagic(bytes) {
+  const jpeg = bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  const png = bytes.byteLength >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  return jpeg || png
 }
 
 function rejectApiPath(path) {
@@ -135,19 +235,44 @@ function isWithin(root, candidate) {
   return pathDifference === '' || (!pathDifference.startsWith(`..${sep}`) && pathDifference !== '..' && !isAbsolute(pathDifference))
 }
 
+function hasOnlyKeys(value, keys) {
+  return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key))
+}
+
+function isDocumentType(value) {
+  return value === 'TRANSFER_SLIP' || value === 'RECEIPT'
+}
+
+function isNullableDocumentType(value) {
+  return value === null || isDocumentType(value)
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isNullableFiniteNumber(value) {
+  return value === null || isFiniteNumber(value)
+}
+
+function isNullableString(value) {
+  return value === null || typeof value === 'string'
+}
+
 function isAggregateOnly(summary) {
   return isRecord(summary)
     && (summary.result === 'GO' || summary.result === 'NO_GO')
-    && Number.isSafeInteger(summary.scoredFixtures)
+    && Number.isSafeInteger(summary.scoredFixtures) && summary.scoredFixtures >= 0
     && isAccuracy(summary.accuracy)
     && Array.isArray(summary.errorCodes)
-    && summary.errorCodes.every((error) => isRecord(error) && /^EVAL_[A-Z_]+$/.test(error.code) && Number.isSafeInteger(error.count))
+    && summary.errorCodes.every((error) => isRecord(error) && /^EVAL_[A-Z_]+$/.test(error.code) && Number.isSafeInteger(error.count) && error.count > 0)
 }
 
 function isAccuracy(value) {
   return isRecord(value) && ['documentType', 'grandTotal', 'lineItemFields'].every((key) => {
     const score = value[key]
-    return isRecord(score) && Number.isSafeInteger(score.correct) && Number.isSafeInteger(score.total)
+    return isRecord(score) && Number.isSafeInteger(score.correct) && score.correct >= 0
+      && Number.isSafeInteger(score.total) && score.total >= score.correct
       && typeof score.percentage === 'number' && Number.isFinite(score.percentage)
   })
 }
@@ -167,7 +292,8 @@ async function main() {
     const fixtureDir = process.env.OCR_EVAL_FIXTURE_DIR
     const root = await resolveFixtureDirectory(fixtureDir)
     const manifest = JSON.parse(await readFile(resolve(root, 'evaluation-manifest.json'), 'utf8'))
-    const summary = await runEvaluation({ fixtureDir: root, manifest })
+    const extractor = await createProductionExtractor(process.env)
+    const summary = await runEvaluation({ fixtureDir: root, manifest, extractor })
     process.stdout.write(`${JSON.stringify(summary)}\n`)
     if (summary.result !== 'GO') process.exitCode = 1
   } catch (error) {
