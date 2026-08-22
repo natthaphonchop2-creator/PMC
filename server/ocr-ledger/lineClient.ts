@@ -2,7 +2,7 @@ export interface OcrLinePort {
   downloadImage(messageId: string): Promise<{ bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }>
   reply(replyToken: string, messages: unknown[]): Promise<void>
   push(to: string, messages: unknown[]): Promise<void>
-  verifyLiffIdToken(idToken: string): Promise<{ userId: string; displayName: string }>
+  verifyLiffIdToken(idToken: string): Promise<{ userId: string }>
   assertGroupMember(groupId: string, userId: string): Promise<{ displayName: string }>
   validatePush(messages: unknown[]): Promise<void>
 }
@@ -20,7 +20,6 @@ type LineFetch = (url: string, init?: { method?: string; headers?: Record<string
 export interface OcrLineClientOptions {
   channelAccessToken: string
   liffChannelId: string
-  allowedGroupId: string
   maxImageBytes: number
   now?: () => number
   fetch?: LineFetch
@@ -43,7 +42,7 @@ const LIFF_VERIFY_API = 'https://api.line.me/oauth2/v2.1/verify'
 export function createOcrLineClient(options: OcrLineClientOptions): OcrLinePort {
   const fetch = options.fetch ?? (globalThis.fetch as unknown as LineFetch)
   const now = options.now ?? (() => Math.floor(Date.now() / 1000))
-  if (!fetch || !options.channelAccessToken || !options.liffChannelId || !options.allowedGroupId || !Number.isSafeInteger(options.maxImageBytes) || options.maxImageBytes <= 0) {
+  if (!fetch || !options.channelAccessToken || !options.liffChannelId || !Number.isSafeInteger(options.maxImageBytes) || options.maxImageBytes <= 0) {
     throw new Error('Invalid OCR LINE client configuration')
   }
   const bearerHeaders = { authorization: `Bearer ${options.channelAccessToken}` }
@@ -94,9 +93,7 @@ export function createOcrLineClient(options: OcrLineClientOptions): OcrLinePort 
         throw new OcrLineClientError('LINE_LIFF_ID_TOKEN_INVALID')
       }
       if (verified.exp <= now()) throw new OcrLineClientError('LINE_LIFF_ID_TOKEN_EXPIRED')
-      // The profile is fetched only after LINE verifies the raw ID token.
-      const member = await assertGroupMember(options.allowedGroupId, verified.sub)
-      return { userId: verified.sub, displayName: member.displayName }
+      return { userId: verified.sub }
     },
 
     assertGroupMember,

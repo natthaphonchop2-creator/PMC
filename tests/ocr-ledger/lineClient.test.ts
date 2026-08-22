@@ -10,14 +10,14 @@ describe('OCR LINE client', () => {
       return response(200, {})
     })
     const client = createOcrLineClient({
-      channelAccessToken: 'channel-token', liffChannelId: '2001234567', allowedGroupId: 'Cgroup1', maxImageBytes: 1024,
+      channelAccessToken: 'channel-token', liffChannelId: '2001234567', maxImageBytes: 1024,
       now: () => 1_800_000_000, fetch,
     })
 
     await expect(client.downloadImage('message-1')).resolves.toEqual({ bytes: Buffer.from('jpeg-bytes'), mimeType: 'image/jpeg' })
     await client.reply('reply-token', [{ type: 'text', text: 'รับแล้ว' }])
     await client.push('Cgroup1', [{ type: 'text', text: 'รายงาน' }])
-    await expect(client.verifyLiffIdToken('raw-id-token')).resolves.toEqual({ userId: 'Ustaff', displayName: 'Staff' })
+    await expect(client.verifyLiffIdToken('raw-id-token')).resolves.toEqual({ userId: 'Ustaff' })
     await expect(client.assertGroupMember('Cgroup1', 'Ustaff')).resolves.toEqual({ displayName: 'Staff' })
     await client.validatePush([{ type: 'text', text: 'ตรวจสอบ' }])
 
@@ -26,7 +26,6 @@ describe('OCR LINE client', () => {
       'https://api.line.me/v2/bot/message/reply',
       'https://api.line.me/v2/bot/message/push',
       'https://api.line.me/oauth2/v2.1/verify',
-      'https://api.line.me/v2/bot/group/Cgroup1/member/Ustaff',
       'https://api.line.me/v2/bot/group/Cgroup1/member/Ustaff',
       'https://api.line.me/v2/bot/message/validate/push',
     ])
@@ -50,7 +49,7 @@ describe('OCR LINE client', () => {
     const fetch = vi.fn(async (url: string) => usesImage
       ? verifiedTokenResponse
       : url.includes('/oauth2/') ? verifiedTokenResponse : response(200, { displayName: 'Staff' }))
-    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', allowedGroupId: 'Cgroup1', maxImageBytes: 5, now: () => 1_800_000_000, fetch })
+    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', maxImageBytes: 5, now: () => 1_800_000_000, fetch })
 
     const operation = usesImage
       ? client.downloadImage('message-1')
@@ -63,7 +62,7 @@ describe('OCR LINE client', () => {
     const fetch = vi.fn(async (url: string) => url.includes('/member/')
       ? response(403, { message: 'provider secret response body' })
       : response(500, { message: 'provider secret response body' }))
-    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', allowedGroupId: 'Cgroup1', maxImageBytes: 1024, now: () => 1_800_000_000, fetch })
+    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', maxImageBytes: 1024, now: () => 1_800_000_000, fetch })
 
     await expect(client.push('Cgroup1', [])).rejects.toBeInstanceOf(OcrLineClientError)
     await expect(client.push('Cgroup1', [])).rejects.toMatchObject({ message: expect.not.stringContaining('provider secret response body') })

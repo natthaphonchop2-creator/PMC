@@ -24,16 +24,35 @@ describe('OCR ledger LIFF review API', () => {
 
   it.each([
     ['missing review token', '/api/ocr-ledger/review', undefined],
-    ['altered review token', `/api/ocr-ledger/review?t=${encodeURIComponent(`${reviewToken()}x`)}`, undefined],
-    ['expired review token', `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken({ exp: Math.floor(NOW.getTime() / 1000) - 1 }))}`, undefined],
+    ['altered review token', `/api/ocr-ledger/review?t=${encodeURIComponent(`${reviewToken()}x`)}`, 'Bearer raw-line-id-token'],
+    ['expired review token', `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken({ exp: Math.floor(NOW.getTime() / 1000) - 1 }))}`, 'Bearer raw-line-id-token'],
     ['missing bearer ID token', `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`, undefined],
   ])('rejects %s before reading draft data', async (_name, url, authorization) => {
     const deps = dependencies()
     const response = await request(deps, { method: 'GET', url, headers: authorization ? { authorization } : {} })
 
     expect(response.statusCode).toBe(401)
+    expect(deps.line.verifyLiffIdToken).not.toHaveBeenCalled()
     expect(deps.store.getDraft).not.toHaveBeenCalled()
     expect(deps.drive.downloadImage).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no query token', '/api/ocr-ledger/review', JSON.stringify({ patch: editablePatch() })],
+    ['body token', '/api/ocr-ledger/review', JSON.stringify({ token: reviewToken(), patch: editablePatch() })],
+    ['query and body token', `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`, JSON.stringify({ token: reviewToken(), patch: editablePatch() })],
+    ['empty query token', '/api/ocr-ledger/review?t=', JSON.stringify({ patch: editablePatch() })],
+    ['repeated query token', `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}&t=${encodeURIComponent(reviewToken())}`, JSON.stringify({ patch: editablePatch() })],
+  ])('requires exactly one non-empty query token and a patch-only POST body: %s', async (_name, url, body) => {
+    const deps = dependencies()
+    const response = await request(deps, {
+      method: 'POST', url, headers: { authorization: 'Bearer raw-line-id-token' }, body,
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(deps.line.verifyLiffIdToken).not.toHaveBeenCalled()
+    expect(deps.store.getDraft).not.toHaveBeenCalled()
+    expect(deps.store.appendJob).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -98,6 +117,9 @@ describe('OCR ledger LIFF review API', () => {
     expect(JSON.stringify(response.body)).not.toContain('sourceLineMessageId')
     expect(JSON.stringify(response.body)).not.toContain('confidenceByField')
     expect(JSON.stringify(response.body)).not.toContain('confirmedBy')
+    expect(deps.line.verifyLiffIdToken).toHaveBeenCalledOnce()
+    expect(deps.line.assertGroupMember).toHaveBeenCalledOnce()
+    expect(deps.line.assertGroupMember).toHaveBeenCalledWith('Cgroup1', 'Ueditor')
   })
 
   it('downloads authenticated image bytes from the server-side draft without Drive identifiers in the URL', async () => {
@@ -166,7 +188,7 @@ function dependencies(input: { draft?: OcrDraft; persistedJobId?: string } = {})
   } as unknown as OcrLedgerStore & { appendJob: ReturnType<typeof vi.fn>; getDraft: ReturnType<typeof vi.fn>; saveDraft: ReturnType<typeof vi.fn> }
   const line = {
     downloadImage: vi.fn(), reply: vi.fn(), push: vi.fn(),
-    verifyLiffIdToken: vi.fn(async () => ({ userId: 'Ueditor', displayName: 'Editor from verify' })),
+    verifyLiffIdToken: vi.fn(async () => ({ userId: 'Ueditor' })),
     assertGroupMember: vi.fn(async () => ({ displayName: 'Editor' })), validatePush: vi.fn(),
   } as OcrLinePort & { verifyLiffIdToken: ReturnType<typeof vi.fn>; assertGroupMember: ReturnType<typeof vi.fn> }
   const drive = {

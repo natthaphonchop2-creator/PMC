@@ -3,6 +3,7 @@ import { PassThrough } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
 import type { OcrLedgerConfig } from '../../server/ocr-ledger/config'
+import type { OcrDrivePort } from '../../server/ocr-ledger/googleClient'
 import type { OcrLedgerStore } from '../../server/ocr-ledger/googleStore'
 import type { OcrLinePort } from '../../server/ocr-ledger/lineClient'
 import { signReviewToken } from '../../server/ocr-ledger/security'
@@ -12,8 +13,8 @@ const NOW = new Date('2026-08-22T03:00:00.000Z')
 
 describe('createOcrLedgerMiddleware', () => {
   it('rejects an invalid signature before any Sheet or LINE operation', async () => {
-    const { store, line } = dependencies()
-    const response = await request({ store, line, signature: 'invalid', body: webhook([imageEvent()]) })
+    const { store, line, drive } = dependencies()
+    const response = await request({ store, line, drive, signature: 'invalid', body: webhook([imageEvent()]) })
 
     expect(response.statusCode).toBe(401)
     expect(store.appendJob).not.toHaveBeenCalled()
@@ -22,9 +23,9 @@ describe('createOcrLedgerMiddleware', () => {
   })
 
   it('ignores events outside the configured group with a successful response and no job', async () => {
-    const { store, line } = dependencies()
+    const { store, line, drive } = dependencies()
     const body = webhook([imageEvent({ groupId: 'Cother' })])
-    const response = await request({ store, line, body })
+    const response = await request({ store, line, drive, body })
 
     expect(response.statusCode).toBe(200)
     expect(store.appendJob).not.toHaveBeenCalled()
@@ -33,8 +34,8 @@ describe('createOcrLedgerMiddleware', () => {
 
   it('durably appends image intake before acknowledging and never downloads or extracts in the webhook', async () => {
     const order: string[] = []
-    const { store, line } = dependencies(order)
-    const response = await request({ store, line, body: webhook([imageEvent()]), order })
+    const { store, line, drive } = dependencies(order)
+    const response = await request({ store, line, drive, body: webhook([imageEvent()]), order })
 
     expect(response.statusCode).toBe(200)
     expect(order).toEqual(['append-job', 'reply-ack', 'respond-200'])
@@ -45,7 +46,7 @@ describe('createOcrLedgerMiddleware', () => {
   })
 
   it('uses stable event/message idempotency keys so duplicate deliveries append only once', async () => {
-    const { store, line } = dependencies()
+    const { store, line, drive } = dependencies()
     const seen = new Set<string>()
     store.appendJob.mockImplementation(async (job) => {
       if (!seen.has(job.idempotencyKey)) seen.add(job.idempotencyKey)
@@ -53,20 +54,20 @@ describe('createOcrLedgerMiddleware', () => {
     })
     const body = webhook([imageEvent(), imageEvent({ eventId: 'evt-duplicate' })])
 
-    await request({ store, line, body })
+    await request({ store, line, drive, body })
 
     expect(seen).toEqual(new Set(['line:image:m-image-1']))
   })
 
   it('verifies the signed postback action and binds it to the configured group before enqueueing', async () => {
-    const { store, line } = dependencies()
+    const { store, line, drive } = dependencies()
     const token = signReviewToken({
       v: 1, documentId: 'OCR-20260822-abc123', groupId: 'Cgroup1', draftVersion: 2,
       action: 'CONFIRM', exp: Math.floor(NOW.getTime() / 1000) + 3600,
     }, CONFIG.reviewSigningSecret)
     const body = webhook([postbackEvent(token)])
 
-    await request({ store, line, body })
+    await request({ store, line, drive, body })
 
     expect(store.appendJob).toHaveBeenCalledWith(expect.objectContaining({
       jobType: 'CONFIRM', documentId: 'OCR-20260822-abc123',
@@ -77,22 +78,22 @@ describe('createOcrLedgerMiddleware', () => {
   })
 
   it('rejects a forged postback without enqueueing it', async () => {
-    const { store, line } = dependencies()
-    const response = await request({ store, line, body: webhook([postbackEvent('forged')]) })
+    const { store, line, drive } = dependencies()
+    const response = await request({ store, line, drive, body: webhook([postbackEvent('forged')]) })
 
     expect(response.statusCode).toBe(200)
     expect(store.appendJob).not.toHaveBeenCalled()
   })
 
   it('enqueues only the supported report command from signed LINE text', async () => {
-    const { store, line } = dependencies()
+    const { store, line, drive } = dependencies()
     const event = {
       type: 'message', webhookEventId: 'evt-report', replyToken: 'reply-report',
       source: { type: 'group', groupId: 'Cgroup1', userId: 'Ustaff1' },
       message: { id: 'm-report', type: 'text', text: 'สรุปวันนี้' },
     }
 
-    await request({ store, line, body: webhook([event]) })
+    await request({ store, line, drive, body: webhook([event]) })
 
     expect(store.appendJob).toHaveBeenCalledWith(expect.objectContaining({
       jobType: 'REPORT_COMMAND', idempotencyKey: 'line:report:evt-report', payloadJson: expect.stringContaining('TODAY'),
@@ -100,16 +101,16 @@ describe('createOcrLedgerMiddleware', () => {
   })
 
   it('authenticates a LIFF review save and appends EDIT without mutating the draft directly', async () => {
-    const { store, line } = dependencies()
-    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    const { store, line, drive } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor' })
     const token = signReviewToken({
       v: 1, documentId: 'OCR-20260822-abc123', groupId: 'Cgroup1', draftVersion: 2,
       action: 'REVIEW', exp: Math.floor(NOW.getTime() / 1000) + 3600,
     }, CONFIG.reviewSigningSecret)
 
     const response = await request({
-      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
-      body: JSON.stringify({ token, patch: validEditPatch({ note: 'edited' }) }),
+      store, line, drive, url: `/api/ocr-ledger/review?t=${encodeURIComponent(token)}`, headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ patch: validEditPatch({ note: 'edited' }) }),
     })
 
     expect(response.statusCode).toBe(202)
@@ -123,13 +124,13 @@ describe('createOcrLedgerMiddleware', () => {
     ['unknown document type', validEditPatch({ documentType: 'INVOICE' })],
     ['non-sequential line items', validEditPatch({ lineItems: [lineItem(2)] })],
   ])('rejects invalid LIFF edit payload: %s', async (_name, patch) => {
-    const { store, line } = dependencies()
-    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    const { store, line, drive } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor' })
     const token = reviewToken()
 
     const response = await request({
-      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
-      body: JSON.stringify({ token, patch }),
+      store, line, drive, url: `/api/ocr-ledger/review?t=${encodeURIComponent(token)}`, headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ patch }),
     })
 
     expect(response.statusCode).toBe(400)
@@ -137,13 +138,13 @@ describe('createOcrLedgerMiddleware', () => {
   })
 
   it('returns the persisted idempotent job id rather than a discarded generated id', async () => {
-    const { store, line } = dependencies()
-    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    const { store, line, drive } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor' })
     store.appendJob.mockImplementation(async (queued) => ({ ...queued, jobId: 'job-existing' }))
 
     const response = await request({
-      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
-      body: JSON.stringify({ token: reviewToken(), patch: validEditPatch() }),
+      store, line, drive, url: `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`, headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ patch: validEditPatch() }),
     })
 
     expect(response.statusCode).toBe(202)
@@ -151,22 +152,22 @@ describe('createOcrLedgerMiddleware', () => {
   })
 
   it('returns retryable 503 when authenticated LIFF enqueue storage fails', async () => {
-    const { store, line } = dependencies()
-    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor', displayName: 'Editor' })
+    const { store, line, drive } = dependencies()
+    line.verifyLiffIdToken.mockResolvedValue({ userId: 'Ueditor' })
     store.appendJob.mockRejectedValue(new Error('sheet unavailable'))
 
     const response = await request({
-      store, line, url: '/api/ocr-ledger/review', headers: { authorization: 'Bearer verified-id-token' },
-      body: JSON.stringify({ token: reviewToken(), patch: validEditPatch() }),
+      store, line, drive, url: `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`, headers: { authorization: 'Bearer verified-id-token' },
+      body: JSON.stringify({ patch: validEditPatch() }),
     })
 
     expect(response.statusCode).toBe(503)
   })
 
   it('rejects request bodies above one megabyte before enqueueing', async () => {
-    const { store, line } = dependencies()
+    const { store, line, drive } = dependencies()
     const body = 'x'.repeat(1024 * 1024 + 1)
-    const response = await request({ store, line, body })
+    const response = await request({ store, line, drive, body })
 
     expect(response.statusCode).toBe(413)
     expect(store.appendJob).not.toHaveBeenCalled()
@@ -184,12 +185,16 @@ function dependencies(order: string[] = []) {
     reply: vi.fn(async () => { order.push('reply-ack') }),
     push: vi.fn(), verifyLiffIdToken: vi.fn(), assertGroupMember: vi.fn(async () => ({ displayName: 'Editor' })), validatePush: vi.fn(),
   } satisfies OcrLinePort
-  return { store, line }
+  const drive = {
+    createFolder: vi.fn(), findFolder: vi.fn(), moveFile: vi.fn(), uploadImage: vi.fn(), downloadImage: vi.fn(),
+  } satisfies OcrDrivePort
+  return { store, line, drive }
 }
 
 async function request(input: {
   store: OcrLedgerStore
   line: OcrLinePort
+  drive: OcrDrivePort
   body: string
   signature?: string
   order?: string[]
@@ -211,7 +216,7 @@ async function request(input: {
     setHeader(name: string, value: string) { headers[name.toLowerCase()] = value },
     end(body?: string) { responseBody = body ?? ''; input.order?.push('respond-200') },
   } as unknown as ServerResponse
-  await createOcrLedgerMiddleware({ config: CONFIG, store: input.store, line: input.line, now: () => NOW })(req, response)
+  await createOcrLedgerMiddleware({ config: CONFIG, store: input.store, line: input.line, drive: input.drive, now: () => NOW })(req, response)
   return { statusCode: response.statusCode, headers, body: responseBody ? JSON.parse(responseBody) : null }
 }
 

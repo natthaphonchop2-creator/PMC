@@ -89,6 +89,7 @@ function queueJobFromLineEvent(event: OcrLineEvent, config: OcrLedgerConfig, now
 async function handleReviewPost(
   req: IncomingMessage,
   res: ServerResponse,
+  url: URL,
   rawBody: string,
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; now: () => Date },
 ): Promise<void> {
@@ -97,12 +98,12 @@ async function handleReviewPost(
     return
   }
   const body = parseRecord(rawBody)
-  if (!body || !hasOnlyKeys(body, ['token', 'patch']) || !Object.hasOwn(body, 'patch')) {
+  const token = singleQueryToken(url)
+  if (!body || !hasOnlyKeys(body, ['patch']) || !Object.hasOwn(body, 'patch') || !token) {
     respond(res, 400, { error: 'invalid_edit' })
     return
   }
-  const url = new URL(req.url ?? '/', 'http://localhost')
-  const authenticated = await authenticateReviewRequest(req, res, url, typeof body.token === 'string' ? body.token : null, deps)
+  const authenticated = await authenticateReviewRequest(req, res, token, deps)
   if (!authenticated) {
     return
   }
@@ -144,14 +145,14 @@ async function handleReview(
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; now: () => Date },
 ): Promise<void> {
   if (req.method === 'POST') {
-    await handleReviewPost(req, res, rawBody, deps)
+    await handleReviewPost(req, res, url, rawBody, deps)
     return
   }
   if (req.method !== 'GET') {
     respond(res, 405, { error: 'method_not_allowed' })
     return
   }
-  const authenticated = await authenticateReviewRequest(req, res, url, null, deps)
+  const authenticated = await authenticateReviewRequest(req, res, singleQueryToken(url), deps)
   if (!authenticated) return
   const current = await readAuthenticatedDraft(res, authenticated.review.documentId, authenticated.review.draftVersion, deps.store)
   if (!current) return
@@ -168,7 +169,7 @@ async function handleImage(
     respond(res, 405, { error: 'method_not_allowed' })
     return
   }
-  const authenticated = await authenticateReviewRequest(req, res, url, null, deps)
+  const authenticated = await authenticateReviewRequest(req, res, singleQueryToken(url), deps)
   if (!authenticated) return
   const current = await readAuthenticatedDraft(res, authenticated.review.documentId, authenticated.review.draftVersion, deps.store)
   if (!current) return
@@ -191,11 +192,9 @@ async function handleImage(
 async function authenticateReviewRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  url: URL,
-  legacyBodyToken: string | null,
+  token: string | null,
   deps: { config: OcrLedgerConfig; line: OcrLinePort; now: () => Date },
 ): Promise<{ review: ReturnType<typeof verifyReviewToken>; actor: { userId: string; displayName: string } } | null> {
-  const token = url.searchParams.get('t') ?? legacyBodyToken
   const idToken = bearerToken(header(req, 'authorization'))
   if (!token || !idToken) {
     respond(res, 401, { error: 'unauthorized' })
@@ -211,6 +210,11 @@ async function authenticateReviewRequest(
     respond(res, 401, { error: 'unauthorized' })
     return null
   }
+}
+
+function singleQueryToken(url: URL): string | null {
+  const tokens = url.searchParams.getAll('t')
+  return tokens.length === 1 && tokens[0]!.trim().length > 0 ? tokens[0]! : null
 }
 
 async function readAuthenticatedDraft(

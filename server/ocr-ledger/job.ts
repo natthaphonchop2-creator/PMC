@@ -16,7 +16,7 @@ export async function runOcrLedgerJob(env: NodeJS.ProcessEnv): Promise<OcrLedger
   const store = createGoogleOcrStore({ masterSpreadsheetId: config.masterSpreadsheetId, sheets: ports.sheets, drive: ports.drive })
   const line = createOcrLineClient({
     channelAccessToken: config.lineChannelAccessToken, liffChannelId: config.liffChannelId,
-    allowedGroupId: config.allowedGroupId, maxImageBytes: config.maxImageBytes,
+    maxImageBytes: config.maxImageBytes,
   })
   const now = () => new Date()
   const extractor = createOpenAiOcrExtractor({
