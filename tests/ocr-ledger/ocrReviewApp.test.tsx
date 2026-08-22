@@ -1,13 +1,18 @@
+// @vitest-environment jsdom
 import { readFileSync } from 'node:fs'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { resolve } from 'node:path'
+import '@testing-library/jest-dom/vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OcrReviewApp, type OcrReviewAdapter, type OcrReviewDraft } from '../../src/apps/ocr-ledger/OcrReviewApp'
+import { submitOcrEdit } from '../../src/apps/ocr-ledger/api'
 
 const draft: OcrReviewDraft = {
   documentId: 'OCR-20260822-abc123', state: 'PENDING_REVIEW', draftVersion: 2,
   imageUrl: '/api/ocr-ledger/image?t=signed-review-token', documentType: 'RECEIPT', direction: 'EXPENSE',
   documentDate: '2026-08-22', documentTime: '10:15', counterpartyName: 'ร้านทดสอบ', currency: 'THB',
-  subtotal: 100, discountAmount: 0, taxAmount: 7, serviceCharge: 0, grandTotal: 107,
+  subtotal: 100, discountAmount: 0, taxAmount: 7, serviceCharge: 3, grandTotal: 110,
   referenceNumber: 'REF-001', categoryId: 'office', note: 'เอกสารทดสอบ',
   warnings: [{ code: 'HEADER_TOTAL_MISMATCH', field: 'grandTotal', message: 'ยอดรวมในภาพไม่ตรงกับรายการ' }],
   lineItems: [{ lineNumber: 1, description: 'กระดาษ A4', quantity: 1, unit: 'รีม', unitPrice: 100, discountAmount: 0, taxAmount: 7, lineTotal: 107, categoryId: 'office' }],
@@ -24,69 +29,137 @@ function adapter(overrides: Partial<OcrReviewAdapter> = {}): OcrReviewAdapter {
   }
 }
 
-afterEach(() => vi.restoreAllMocks())
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
+  return { promise, resolve, reject }
+}
+
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('OCR LIFF review page', () => {
-  it('renders a Thai loading state before LIFF is initialized', () => {
-    const html = renderToStaticMarkup(<OcrReviewApp adapter={adapter()} />)
-    expect(html).toContain('กำลังเปิดเอกสารเพื่อตรวจสอบ')
-    expect(html).toContain('aria-live="polite"')
-  })
+  it('renders every review API header and line field with values editable', async () => {
+    render(<OcrReviewApp adapter={adapter()} />)
+    await screen.findByRole('heading', { name: /ใบเสร็จ/ })
 
-  it.each([
-    ['expired', 'EXPIRED', 'ลิงก์ตรวจสอบหมดอายุแล้ว'],
-    ['unauthorized', 'UNAUTHORIZED', 'ไม่มีสิทธิ์เปิดเอกสารนี้'],
-    ['failed', 'default', 'เปิดเอกสารไม่สำเร็จ'],
-  ])('defines Thai %s failure copy', (_state, code, copy) => {
-    const source = readFileSync(new URL('../../src/apps/ocr-ledger/OcrReviewApp.tsx', import.meta.url), 'utf8')
-    if (code !== 'default') expect(source).toContain(`code === '${code}'`)
-    expect(source).toContain(copy)
-  })
-
-  it('renders all editable draft values, source preview, warnings, and line items after loading', async () => {
-    const app = adapter()
-    const { renderToString } = await import('react-dom/server')
-    const html = renderToString(<OcrReviewApp adapter={app} initialDraft={draft} initialImageUrl="blob:review-image" />)
-
-    for (const copy of ['ใบเสร็จ', 'รายจ่าย', '2026-08-22', 'office', '107.00', 'ยอดรวมในภาพไม่ตรงกับรายการ', 'กระดาษ A4']) {
-      expect(html).toContain(copy)
+    for (const label of ['เวลาเอกสาร', 'สกุลเงิน', 'ยอดก่อนลด', 'ส่วนลด', 'ภาษี', 'ค่าบริการ', 'หน่วย', 'ราคาต่อหน่วย', 'หมวดหมู่รายการ']) {
+      expect(screen.getByLabelText(label)).toBeVisible()
     }
-    expect(html).toContain('src="blob:review-image"')
-    expect(html).toContain('aria-label="เพิ่มรายการ"')
-    expect(html).toContain('aria-label="ลบรายการ 1"')
+    expect(screen.getByLabelText('เวลาเอกสาร')).toHaveValue('10:15')
+    expect(screen.getByLabelText('สกุลเงิน')).toHaveValue('THB')
+    expect(screen.getByLabelText('ราคาต่อหน่วย')).toHaveAttribute('inputmode', 'decimal')
   })
 
-  it('keeps submit enabled when fields are invalid so native validation can focus the first invalid control', () => {
-    const html = renderToStaticMarkup(<OcrReviewApp adapter={adapter()} initialDraft={{ ...draft, documentDate: null, grandTotal: null }} />)
-    expect(html).toMatch(/<button(?=[^>]*type="submit")[^>]*>บันทึกการแก้ไขเข้าคิว<\/button>/)
-    expect(html).not.toMatch(/<button(?=[^>]*type="submit")(?=[^>]*disabled)/)
-    expect(html).toContain('required=""')
-    expect(html).toContain('inputMode="decimal"')
+  it('starts draft and image reads in parallel with the raw LINE ID token', async () => {
+    const nextDraft = deferred<OcrReviewDraft>()
+    const nextImage = deferred<string>()
+    const app = adapter({ loadDraft: vi.fn(() => nextDraft.promise), loadImage: vi.fn(() => nextImage.promise) })
+    render(<OcrReviewApp adapter={app} />)
+
+    await waitFor(() => expect(app.loadDraft).toHaveBeenCalledWith('raw-line-id-token'))
+    expect(app.loadImage).toHaveBeenCalledWith('raw-line-id-token')
+    nextDraft.resolve(draft)
+    nextImage.resolve('blob:review-image')
+    await screen.findByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' })
+  })
+
+  it('revokes an image URL when draft loading fails after image success', async () => {
+    const nextDraft = deferred<OcrReviewDraft>()
+    const nextImage = deferred<string>()
+    const app = adapter({ loadDraft: vi.fn(() => nextDraft.promise), loadImage: vi.fn(() => nextImage.promise) })
+    render(<OcrReviewApp adapter={app} />)
+
+    nextImage.resolve('blob:orphaned')
+    nextDraft.reject(new Error('draft unavailable'))
+    await screen.findByText('เปิดเอกสารไม่สำเร็จ กรุณาลองใหม่อีกครั้ง')
+    expect(app.revokeImage).toHaveBeenCalledWith('blob:orphaned')
+  })
+
+  it('revokes an image URL that resolves after unmount', async () => {
+    const nextDraft = deferred<OcrReviewDraft>()
+    const nextImage = deferred<string>()
+    const app = adapter({ loadDraft: vi.fn(() => nextDraft.promise), loadImage: vi.fn(() => nextImage.promise) })
+    const view = render(<OcrReviewApp adapter={app} />)
+    await waitFor(() => expect(app.loadImage).toHaveBeenCalledOnce())
+    view.unmount()
+    nextImage.resolve('blob:late')
+    nextDraft.resolve(draft)
+    await waitFor(() => expect(app.revokeImage).toHaveBeenCalledWith('blob:late'))
+  })
+
+  it('keeps invalid submit enabled, surfaces native validation, and preserves a partial decimal while editing', async () => {
+    const user = userEvent.setup()
+    render(<OcrReviewApp adapter={adapter()} />)
+    const total = await screen.findByLabelText(/^ยอดรวม/)
+    await user.clear(total)
+    await user.type(total, '10.')
+    expect(total).toHaveValue('10.')
+    expect(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' })).toBeEnabled()
+    await user.clear(screen.getByLabelText(/^วันที่เอกสาร/))
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+    expect(screen.getByLabelText(/^วันที่เอกสาร/)).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('submits edited headers and full line items through the mounted form using the raw token', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    render(<OcrReviewApp adapter={app} />)
+    await screen.findByLabelText(/^ยอดรวม/)
+    await user.clear(screen.getByLabelText('สกุลเงิน'))
+    await user.type(screen.getByLabelText('สกุลเงิน'), 'USD')
+    await user.clear(screen.getByLabelText('หน่วย'))
+    await user.type(screen.getByLabelText('หน่วย'), 'box')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
+    expect(app.submitEdit).toHaveBeenCalledWith('raw-line-id-token', expect.objectContaining({ currency: 'USD', lineItems: [expect.objectContaining({ unit: 'box' })] }))
+    expect(await screen.findByText('รับการแก้ไขเข้าคิวแล้ว ระบบจะตรวจเอกสารต่อ ไม่ได้ยืนยันเอกสารทันที')).toBeVisible()
+  })
+
+  it('preserves add/remove controls and sends sequential line numbers', async () => {
+    const user = userEvent.setup()
+    const app = adapter({ loadDraft: vi.fn().mockResolvedValue({ ...draft, lineItems: [...draft.lineItems, { ...draft.lineItems[0], lineNumber: 2, description: 'ปากกา' }] }) })
+    render(<OcrReviewApp adapter={app} />)
+    await screen.findByRole('button', { name: 'ลบรายการ 1' })
+    await user.click(screen.getByRole('button', { name: 'ลบรายการ 1' }))
+    await user.click(screen.getByRole('button', { name: 'เพิ่มรายการ' }))
+    expect(screen.getByRole('button', { name: 'ลบรายการ 2' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
+    const patch = (app.submitEdit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]
+    expect(patch.lineItems.map((line: { lineNumber: number }) => line.lineNumber)).toEqual([1, 2])
+  })
+
+  it('keeps the editor visible and offers an in-place retry after a queued-edit failure', async () => {
+    const user = userEvent.setup()
+    const app = adapter({ submitEdit: vi.fn().mockRejectedValue(new Error('offline')) })
+    render(<OcrReviewApp adapter={app} />)
+    const currency = await screen.findByLabelText('สกุลเงิน')
+    await user.clear(currency)
+    await user.type(currency, 'USD')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    expect(await screen.findByText('บันทึกการแก้ไขไม่สำเร็จ กรุณาลองส่งอีกครั้ง')).toBeVisible()
+    expect(screen.getByLabelText('สกุลเงิน')).toHaveValue('USD')
+    expect(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' })).toBeEnabled()
+  })
+
+  it('sends an actual POST edit request with the raw ID token', async () => {
+    window.history.replaceState({}, '', '/ocr-review/?t=signed-review-token')
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: true, jobId: 'job-1' }), { status: 202 }))
+    vi.stubGlobal('fetch', fetch)
+
+    await submitOcrEdit('raw-line-id-token', { ...draft, lineItems: draft.lineItems } as OcrReviewDraft)
+
+    expect(fetch).toHaveBeenCalledWith('/api/ocr-ledger/review?t=signed-review-token', expect.objectContaining({ method: 'POST' }))
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBe('Bearer raw-line-id-token')
   })
 
   it('keeps the LIFF entry point isolated from the main application shell', () => {
-    const source = readFileSync(new URL('../../src/apps/ocr-ledger/main.tsx', import.meta.url), 'utf8')
+    const source = readFileSync(resolve(process.cwd(), 'src/apps/ocr-ledger/main.tsx'), 'utf8')
     expect(source).toContain('OcrReviewApp')
     expect(source).not.toMatch(/HomeApp|PageAutomationApp|App\.tsx|Ads/)
-  })
-
-  it('uses the raw LIFF ID token for parallel draft/image reads and the queued edit', () => {
-    const appSource = readFileSync(new URL('../../src/apps/ocr-ledger/OcrReviewApp.tsx', import.meta.url), 'utf8')
-    const apiSource = readFileSync(new URL('../../src/apps/ocr-ledger/api.ts', import.meta.url), 'utf8')
-
-    expect(appSource).toContain('Promise.all([adapter.loadDraft(rawIdToken), adapter.loadImage(rawIdToken)])')
-    expect(appSource).toContain('adapter.submitEdit(rawIdToken, editablePatch(draft))')
-    expect(apiSource).toContain('liff.getIDToken()')
-    expect(apiSource).toContain("fetchPublicJson<{ liffId: string }>('/api/ocr-ledger/client-config')")
-    expect(apiSource).toContain("headers.set('authorization', `Bearer ${rawIdToken}`)")
-    expect(apiSource).toContain('URL.revokeObjectURL')
-    expect(apiSource).not.toContain('getProfile')
-    expect(apiSource).not.toContain('localStorage')
-  })
-
-  it('states that a successful edit is queued instead of confirmed', () => {
-    const source = readFileSync(new URL('../../src/apps/ocr-ledger/OcrReviewApp.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('รับการแก้ไขเข้าคิวแล้ว')
-    expect(source).toContain('ไม่ได้ยืนยันเอกสารทันที')
   })
 })
