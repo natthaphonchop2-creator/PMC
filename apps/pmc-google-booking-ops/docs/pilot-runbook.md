@@ -273,3 +273,12 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - Deployed Apps Script version `12` through the existing deployment ID. New bookings store `adminIdentityStatus=SELECTED_ADMIN`; the submitter email is retained independently for audit and never blocks or overrides the selected Admin.
 - Responder readback confirmed the Form remained accepting with exactly one `Admin`, one `AE`, and the `ไม่ระบุ` AE option.
 - The failed response was not replayed automatically. A fresh Form submission is required to exercise the new policy and prevents accidental duplicate operational side effects.
+
+## Any-email live Form and Calendar retry recovery — 2026-08-22
+
+- With explicit owner confirmation, submitted one new synthetic Form response from an unmapped signed-in Google Account using Admin `มัส`, AE `ฝ้าย`, reserved phone `0800000000`, and non-customer logo evidence.
+- The Form and `onBookingFormSubmit` execution completed successfully under Apps Script version `12`. Readback confirmed `adminIdentityStatus=SELECTED_ADMIN`, the selected Admin/AE attribution, and private Drive evidence storage.
+- Initial Calendar creation exposed a deterministic identifier collision with a previously deleted test event after the monthly Case ID sequence had been reset. The workflow correctly stopped before LINE and queued one `CALENDAR_EVENT` retry.
+- Deployed Apps Script version `13`: Calendar event keys now combine Case ID with the immutable Form response ID; new Calendar retries retain evidence file IDs and continue through call-task creation plus Admin/doctor LINE delivery.
+- Ran the explicit retry-only operator once. Readback confirmed `BOOKING_CONFIRMED`, `driveState=OK`, `calendarState=OK`, `lineState=OK`, a Calendar event ID, doctor notification time, one pending call task, and zero pending retries.
+- The recovered legacy retry row predated the new evidence payload, so its Admin recovery card may use the approved no-image fallback. Future Calendar retries created by version `13` retain evidence IDs and can render the evidence thumbnails.
