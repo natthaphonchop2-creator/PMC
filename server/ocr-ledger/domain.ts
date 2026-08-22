@@ -25,7 +25,7 @@ export function transitionDocument(state: OcrDocumentState, event: OcrDomainEven
   return next
 }
 
-export function validateExtraction(input: OcrExtraction): { normalized: OcrExtraction; warnings: OcrWarning[] } {
+export function validateExtraction(input: OcrExtraction, referenceDate: string): { normalized: OcrExtraction; warnings: OcrWarning[] } {
   assertFiniteNumbers(input)
   const warnings: OcrWarning[] = []
   const { subtotal, discountAmount, taxAmount, serviceCharge, grandTotal } = input
@@ -45,13 +45,25 @@ export function validateExtraction(input: OcrExtraction): { normalized: OcrExtra
     }
   }
 
-  if (input.documentDate !== null && isFutureBangkokDate(input.documentDate)) {
-    warnings.push(warning('FUTURE_DATE', 'documentDate', 'Document date is in the future'))
+  if (input.documentDate !== null) {
+    if (!isIsoCalendarDate(input.documentDate)) {
+      warnings.push(warning('INVALID_DATE', 'documentDate', 'Document date is invalid'))
+    } else if (isFutureBangkokDate(input.documentDate, referenceDate)) {
+      warnings.push(warning('FUTURE_DATE', 'documentDate', 'Document date is in the future'))
+    }
   }
   for (const field of ['documentType', 'direction', 'documentDate', 'categoryId', 'grandTotal']) {
     const confidence = input.confidenceByField?.[field]
-    if (confidence !== undefined && confidence !== null && confidence < LOW_CONFIDENCE_THRESHOLD) {
+    const value = input[field as keyof OcrExtraction]
+    if (value === null || confidence === null) {
+      warnings.push(warning('UNREADABLE_FIELD', field, `Required field ${field} is unreadable`))
+    } else if (confidence !== undefined && confidence < LOW_CONFIDENCE_THRESHOLD) {
       warnings.push(warning('LOW_CONFIDENCE_REQUIRED_FIELD', field, `Required field ${field} has low confidence`))
+    }
+  }
+  for (const [index, line] of input.lineItems.entries()) {
+    for (const field of ['quantity', 'unitPrice', 'discountAmount', 'taxAmount', 'lineTotal', 'confidence'] as const) {
+      if (line[field] === null) warnings.push(warning('UNREADABLE_FIELD', `lineItems.${index + 1}.${field}`, `Line-item field ${field} is unreadable`))
     }
   }
   if (input.sourceImageSha256 && input.confirmedHashes && exactImageDuplicate(input.sourceImageSha256, input.confirmedHashes)) {
@@ -68,7 +80,10 @@ export function exactImageDuplicate(hash: string, confirmedHashes: ReadonlySet<s
 }
 
 export function bangkokMonthKey(isoDate: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate.slice(0, 7)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    if (!isIsoCalendarDate(isoDate)) throw new Error('Invalid ISO date')
+    return isoDate.slice(0, 7)
+  }
   const date = new Date(isoDate)
   if (Number.isNaN(date.getTime())) throw new Error('Invalid ISO date')
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' })
@@ -79,7 +94,8 @@ export function bangkokMonthKey(isoDate: string): string {
 
 function assertFiniteNumbers(input: OcrExtraction): void {
   const fields = [input.subtotal, input.discountAmount, input.taxAmount, input.serviceCharge, input.grandTotal]
-  for (const value of [...fields, ...input.lineItems.flatMap((line) => [line.quantity, line.unitPrice, line.discountAmount, line.taxAmount, line.lineTotal, line.confidence])]) {
+  const fieldConfidences = input.confidenceByField ? Object.values(input.confidenceByField) : []
+  for (const value of [...fields, ...fieldConfidences, ...input.lineItems.flatMap((line) => [line.lineNumber, line.quantity, line.unitPrice, line.discountAmount, line.taxAmount, line.lineTotal, line.confidence])]) {
     if (value !== null && !Number.isFinite(value)) throw new TypeError('Extraction contains a non-finite number')
   }
 }
@@ -92,12 +108,27 @@ function warning(code: OcrWarning['code'], field: string, message: string): OcrW
   return { code, field, message }
 }
 
-function isFutureBangkokDate(date: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' })
-    .formatToParts(new Date())
-    .filter((part) => part.type !== 'literal')
-    .map((part) => part.value)
-    .join('-')
-  return date > today
+function isFutureBangkokDate(date: string, referenceDate: string): boolean {
+  return date > bangkokDateKey(referenceDate)
+}
+
+function bangkokDateKey(isoDate: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    if (!isIsoCalendarDate(isoDate)) throw new Error('Invalid ISO date')
+    return isoDate
+  }
+  const date = new Date(isoDate)
+  if (Number.isNaN(date.getTime())) throw new Error('Invalid ISO date')
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(date)
+    .reduce((result, part) => (part.type === 'year' || part.type === 'month' || part.type === 'day' ? { ...result, [part.type]: part.value } : result), {} as Record<string, string>)
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+function isIsoCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+  const [year, month, day] = match.slice(1).map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }

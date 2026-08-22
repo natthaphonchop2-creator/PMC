@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { transitionDocument, validateExtraction } from '../../server/ocr-ledger/domain'
+import { bangkokMonthKey, transitionDocument, validateExtraction } from '../../server/ocr-ledger/domain'
 
 describe('OCR ledger domain', () => {
   it('requires review before confirmation and makes final states immutable', () => {
@@ -17,8 +17,46 @@ describe('OCR ledger domain', () => {
         { lineNumber: 1, description: 'A', quantity: 1, unit: null, unitPrice: 80, discountAmount: 0, taxAmount: 0, lineTotal: 80, categoryId: null, confidence: 0.99 },
         { lineNumber: 2, description: 'B', quantity: 1, unit: null, unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: null, confidence: 0.99 },
       ],
-    })
+    }, '2026-08-22')
     expect(result.normalized.grandTotal).toBe(200)
     expect(result.warnings.map((item) => item.code)).toContain('HEADER_TOTAL_MISMATCH')
   })
+
+  it('uses the supplied Bangkok date rather than ambient time when checking future dates', () => {
+    const input = receiptExtraction({ documentDate: '2026-08-22' })
+    expect(validateExtraction(input, '2026-08-22').warnings.map((item) => item.code)).not.toContain('FUTURE_DATE')
+    expect(validateExtraction(input, '2026-08-21').warnings.map((item) => item.code)).toContain('FUTURE_DATE')
+  })
+
+  it('retains unreadable receipt values as null and creates review warnings', () => {
+    const input = receiptExtraction({
+      categoryId: null,
+      confidenceByField: { grandTotal: null },
+      lineItems: [{ lineNumber: 1, description: 'Unreadable', quantity: 1, unit: null, unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: null, categoryId: null, confidence: null }],
+    })
+    const result = validateExtraction(input, '2026-08-22')
+    expect(result.normalized.lineItems[0].lineTotal).toBeNull()
+    expect(result.warnings.filter((item) => item.code === 'UNREADABLE_FIELD').map((item) => item.field))
+      .toEqual(expect.arrayContaining(['categoryId', 'grandTotal', 'lineItems.1.lineTotal', 'lineItems.1.confidence']))
+  })
+
+  it('rejects non-finite line numbers and field confidences', () => {
+    expect(() => validateExtraction(receiptExtraction({ lineItems: [{ lineNumber: Number.NaN, description: 'A', quantity: 1, unit: null, unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: null, confidence: 0.9 }] }), '2026-08-22'))
+      .toThrow('non-finite')
+    expect(() => validateExtraction(receiptExtraction({ confidenceByField: { grandTotal: Number.POSITIVE_INFINITY } }), '2026-08-22'))
+      .toThrow('non-finite')
+  })
+
+  it('rejects invalid calendar dates instead of deriving invalid ledger keys', () => {
+    expect(() => bangkokMonthKey('2026-99-22')).toThrow('Invalid ISO date')
+  })
 })
+
+function receiptExtraction(overrides: Record<string, unknown> = {}) {
+  return {
+    documentType: 'RECEIPT' as const, direction: 'EXPENSE' as const, documentDate: '2026-08-22',
+    currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0, serviceCharge: 0, grandTotal: 100,
+    lineItems: [],
+    ...overrides,
+  }
+}

@@ -10,7 +10,8 @@ export type OcrJobState = 'QUEUED' | 'LEASED' | 'DONE' | 'FAILED'
 
 export type OcrWarningCode =
   | 'FUTURE_DATE' | 'HEADER_TOTAL_MISMATCH' | 'LINE_SUM_MISMATCH'
-  | 'LOW_CONFIDENCE_REQUIRED_FIELD' | 'EXACT_IMAGE_DUPLICATE' | 'REPEATED_REFERENCE_NUMBER'
+  | 'LOW_CONFIDENCE_REQUIRED_FIELD' | 'UNREADABLE_FIELD' | 'INVALID_DATE'
+  | 'EXACT_IMAGE_DUPLICATE' | 'REPEATED_REFERENCE_NUMBER'
 
 export interface OcrWarning {
   code: OcrWarningCode
@@ -19,7 +20,7 @@ export interface OcrWarning {
 }
 
 export interface OcrLineItem {
-  documentId: string | null
+  documentId?: string | null
   lineNumber: number
   description: string | null
   quantity: number | null
