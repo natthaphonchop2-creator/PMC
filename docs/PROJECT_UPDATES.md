@@ -65,6 +65,7 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added a backward-compatible compact Form identity rollout: parser aliases for old/new titles, `Admin` and `AE` canonical labels, a required `ไม่ระบุ` AE choice stored without a fabricated Staff ID, and an idempotent operator entrypoint that changes only the two existing Dropdown questions.
 - Deployed Apps Script version `11` and completed the live compact Form cutover. Readback confirmed `Admin`/`AE`, the first AE choice `ไม่ระบุ`, continued response acceptance, removal of both legacy titles, and no test submission or operational side effect.
 - Replaced email-verified closer attribution with the owner-approved open-email policy: any signed-in account may submit, the active `Admin` Dropdown choice controls adminId/call/reporting attribution, submitter email is audit-only, and new bookings record `adminIdentityStatus=SELECTED_ADMIN`.
+- Deployed Apps Script version `12` for the any-email policy after confirming the prior personal-email test failed before side effects; Form readback remained accepting with `Admin`, `AE`, and `ไม่ระบุ`, and the failed response was intentionally not replayed.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

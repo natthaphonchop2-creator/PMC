@@ -264,3 +264,12 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - Responder readback confirmed the Form remained accepting, contained exactly one required `Admin` Dropdown and one required `AE` Dropdown, and contained neither legacy title.
 - The AE Dropdown readback order was `เลือก`, `ไม่ระบุ`, then the seven active eligible staff names. A later setup sync preserves `ไม่ระบุ` as the first real choice.
 - No Form response was submitted and no Booking, Drive, Calendar, LINE, call-task, JERA, or Dashboard side effect was created during the cutover.
+
+## Any-email selected Admin attribution — 2026-08-22
+
+- Diagnosed the owner's personal-email test from the authoritative Apps Script execution: `onBookingFormSubmit` received the response but failed at the former email-to-closer gate before Case ID allocation or any Drive, Calendar, LINE, call-task, JERA, or Dashboard side effect.
+- Live `CONFIG_STAFF` inspection showed seven active closer rows with nonblank unique emails; the failed test account was not one of the mapped closer identities.
+- The owner selected the flexible policy: any signed-in Google Account that can access the Form may submit, and the required active `Admin` Dropdown choice is the canonical closer attribution.
+- Deployed Apps Script version `12` through the existing deployment ID. New bookings store `adminIdentityStatus=SELECTED_ADMIN`; the submitter email is retained independently for audit and never blocks or overrides the selected Admin.
+- Responder readback confirmed the Form remained accepting with exactly one `Admin`, one `AE`, and the `ไม่ระบุ` AE option.
+- The failed response was not replayed automatically. A fresh Form submission is required to exercise the new policy and prevents accidental duplicate operational side effects.
