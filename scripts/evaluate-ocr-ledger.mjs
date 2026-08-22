@@ -1,4 +1,5 @@
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
@@ -23,17 +24,29 @@ export async function evaluateManifest({ fixtureDir, manifest, extractor }) {
   const fixtures = validatedFixtures(manifest)
   const scores = { documentType: { correct: 0, total: 0 }, grandTotal: { correct: 0, total: 0 }, lineItemFields: { correct: 0, total: 0 } }
   const errors = new Map()
+  const fixtureIds = new Set()
+  const imageContents = new Set()
+  let scoredFixtures = 0
 
   for (const fixture of fixtures) {
-    const imageBytes = await readFixtureImage(root, fixture.imagePath)
+    const image = await readFixtureImage(root, fixture.imagePath)
+    const duplicateFixtureId = fixtureIds.has(fixture.fixtureId)
+    const duplicateImageContent = imageContents.has(image.contentHash)
+    fixtureIds.add(fixture.fixtureId)
+    imageContents.add(image.contentHash)
+    if (duplicateFixtureId) addError(errors, 'EVAL_DUPLICATE_FIXTURE_ID')
+    if (duplicateImageContent) addError(errors, 'EVAL_DUPLICATE_IMAGE_CONTENT')
+    if (duplicateFixtureId || duplicateImageContent) continue
+
     let extracted
     try {
-      extracted = await extractor(imageBytes, { fixtureId: fixture.fixtureId })
+      extracted = await extractor(image.bytes, { fixtureId: fixture.fixtureId })
     } catch {
       addError(errors, 'EVAL_EXTRACTION_FAILED')
       extracted = null
     }
     scoreFixture(scores, fixture.expected, extracted, errors)
+    scoredFixtures += 1
   }
 
   const accuracy = {
@@ -42,8 +55,10 @@ export async function evaluateManifest({ fixtureDir, manifest, extractor }) {
     lineItemFields: percentageScore(scores.lineItemFields),
   }
   const errorCodes = [...errors.entries()].map(([code, count]) => ({ code, count })).sort((left, right) => left.code.localeCompare(right.code))
-  const result = shouldGo({ fixtureCount: fixtures.length, scores, errorCodes }) ? 'GO' : 'NO_GO'
-  const summary = { result, scoredFixtures: fixtures.length, accuracy, errorCodes }
+  const uniqueFixtureIds = fixtureIds.size
+  const uniqueImageContents = imageContents.size
+  const result = shouldGo({ scoredFixtures, uniqueFixtureIds, uniqueImageContents, scores, errorCodes }) ? 'GO' : 'NO_GO'
+  const summary = { result, scoredFixtures, uniqueFixtureIds, uniqueImageContents, accuracy, errorCodes }
 
   if (!isAggregateOnly(summary)) throw new EvaluationError('EVAL_UNSAFE_OUTPUT')
   return summary
@@ -138,12 +153,19 @@ async function readFixtureImage(root, imagePath) {
     if (!hasAllowedImageMagic(bytes)) throw new EvaluationError('EVAL_INVALID_IMAGE')
     const metadata = await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS }).metadata()
     if ((metadata.format !== 'jpeg' && metadata.format !== 'png') || !metadata.width || !metadata.height) throw new EvaluationError('EVAL_INVALID_IMAGE')
-    await sharp(bytes, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS }).raw().toBuffer()
+    const decoded = await sharp(bytes, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS })
+      .rotate().ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+    const dimensions = Buffer.allocUnsafe(12)
+    dimensions.writeUInt32BE(decoded.info.width, 0)
+    dimensions.writeUInt32BE(decoded.info.height, 4)
+    dimensions.writeUInt32BE(decoded.info.channels, 8)
+    const contentHash = createHash('sha256').update(dimensions).update(decoded.data).digest('hex')
+    return { bytes, contentHash }
   } catch (error) {
     if (error instanceof EvaluationError) throw error
     throw new EvaluationError('EVAL_INVALID_IMAGE')
   }
-  return bytes
+  throw new EvaluationError('EVAL_INVALID_IMAGE')
 }
 
 function scoreFixture(scores, expected, extraction, errors) {
@@ -210,8 +232,10 @@ function isCanonicalLine(value) {
     && isNullableString(value.categoryId)
 }
 
-function shouldGo({ fixtureCount, scores, errorCodes }) {
-  return fixtureCount >= 100
+function shouldGo({ scoredFixtures, uniqueFixtureIds, uniqueImageContents, scores, errorCodes }) {
+  return scoredFixtures >= 100
+    && uniqueFixtureIds >= 100
+    && uniqueImageContents >= 100
     && meetsThreshold(scores.documentType, 98)
     && meetsThreshold(scores.grandTotal, 98)
     && meetsThreshold(scores.lineItemFields, 95)
@@ -283,6 +307,8 @@ function isAggregateOnly(summary) {
   return isRecord(summary)
     && (summary.result === 'GO' || summary.result === 'NO_GO')
     && Number.isSafeInteger(summary.scoredFixtures) && summary.scoredFixtures >= 0
+    && Number.isSafeInteger(summary.uniqueFixtureIds) && summary.uniqueFixtureIds >= summary.scoredFixtures
+    && Number.isSafeInteger(summary.uniqueImageContents) && summary.uniqueImageContents >= summary.scoredFixtures
     && isAccuracy(summary.accuracy)
     && Array.isArray(summary.errorCodes)
     && summary.errorCodes.every((error) => isRecord(error) && /^EVAL_[A-Z_]+$/.test(error.code) && Number.isSafeInteger(error.count) && error.count > 0)
@@ -318,7 +344,7 @@ async function main() {
     if (summary.result !== 'GO') process.exitCode = 1
   } catch (error) {
     const code = error instanceof EvaluationError ? error.code : 'EVAL_RUN_FAILED'
-    const summary = { result: 'NO_GO', scoredFixtures: 0, accuracy: emptyAccuracy(), errorCodes: [{ code, count: 1 }] }
+    const summary = { result: 'NO_GO', scoredFixtures: 0, uniqueFixtureIds: 0, uniqueImageContents: 0, accuracy: emptyAccuracy(), errorCodes: [{ code, count: 1 }] }
     await writeSummary(OUTPUT_DIRECTORY, summary)
     process.stdout.write(`${JSON.stringify(summary)}\n`)
     process.exitCode = 1

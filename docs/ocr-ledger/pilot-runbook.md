@@ -27,8 +27,8 @@ Stop หาก test/build/lint ไม่ผ่าน หรือพบ secret/P
 
 ## Stage 2 — Privacy-safe 100-image evaluation
 
-1. ใช้ชุดประเมิน 100 ภาพที่ได้รับอนุมัติและ de-identify แล้ว เก็บนอก repository และนอก `API/`
-2. ตรวจว่าเครื่องมือประเมินอ่านได้เฉพาะ fixture directory ที่กำหนดและเขียนเฉพาะ counts, percentages และ error codes
+1. ใช้ชุดประเมินอย่างน้อย 100 ภาพที่ได้รับอนุมัติและ de-identify แล้ว โดย fixture ID ต้องไม่ซ้ำและเนื้อหาภาพหลัง decode ต้องไม่ซ้ำ เก็บนอก repository และนอก `API/`
+2. ตรวจว่าเครื่องมือประเมินอ่านได้เฉพาะ fixture directory ที่กำหนดและเขียนเฉพาะ aggregate unique counts, percentages และ error codes
 3. เกณฑ์ผ่านขั้นต่ำ:
    - document type accuracy ≥ 98%
    - grand total accuracy ≥ 98%
@@ -38,11 +38,11 @@ Stop หาก test/build/lint ไม่ผ่าน หรือพบ secret/P
 ### Pre-live record — 2026-08-22: NO-GO
 
 - Automated evidence: `npm run ocr:test` 18 files / 187 tests, `npm test` 56 files / 515 tests, `npm run lint`, และ `npm run build` ผ่าน; Vite แจ้ง chunk-size warning เดิมเท่านั้น
-- Evaluation harness unit tests: 27 cases passed; ใช้ภาพ synthetic ชั่วคราวเท่านั้น และ summary ไม่เก็บ fixture ID, image path, expected/actual OCR values หรือภาพ
+- Evaluation harness unit tests: 30 cases passed; ใช้ภาพ synthetic ชั่วคราวเท่านั้น และ summary ไม่เก็บ fixture ID, image path, image hash, expected/actual OCR values หรือภาพ
 - ยังไม่มี approved, de-identified evaluation dataset ที่ `OCR_EVAL_FIXTURE_DIR`; จึงยัง score ได้ 0/100 ภาพจริงสำหรับ acceptance gate และห้ามประกาศ accuracy หรือ GO
-- `evaluation-manifest.json` เก็บได้เฉพาะ expected labels; ห้ามใส่ actual OCR, auto-confirm หรือ result data. Evaluator รับ actual จาก extractor ที่ inject ด้วย image bytes เท่านั้น, ปฏิเสธ path ใน `API/`, traversal และ symlink escape, ตรวจ JPEG/PNG magic, Sharp metadata และ full pixel decode แบบ fail-on-error ก่อน extractor, ไม่ copy ภาพ, และเขียน aggregate counts/percentages/error codes ไปที่ ignored `output/ocr-ledger-evaluation/summary.json`
+- `evaluation-manifest.json` เก็บได้เฉพาะ expected labels; ห้ามใส่ actual OCR, auto-confirm หรือ result data. Evaluator รับ actual จาก extractor ที่ inject ด้วย image bytes เท่านั้น, ปฏิเสธ path ใน `API/`, traversal และ symlink escape, ตรวจ JPEG/PNG magic, Sharp metadata และ full pixel decode แบบ fail-on-error, คำนวณ SHA-256 ภายในจาก decoded pixels เพื่อนับเนื้อหาที่ไม่ซ้ำก่อน extractor, ไม่ copy ภาพ, และเขียนเฉพาะ aggregate counts/percentages/error codes ไปที่ ignored `output/ocr-ledger-evaluation/summary.json`
 - CLI จะไม่ wire production OpenAI extractor จนกว่าจะมี `OCR_EVAL_LIVE_CONFIRM=YES` และเฉพาะ `OPENAI_API_KEY`, `OPENAI_OCR_MODEL`, `OCR_OPENAI_MAX_OUTPUT_TOKENS`, `OCR_MAX_IMAGE_BYTES` ที่ valid; ไม่ต้องใช้ LINE/Google/group/Sheet/Drive config. หากขาดข้อใดให้ NO-GO แบบไม่เรียก API. ห้ามรัน live extraction ในขั้น pre-live นี้
-- GO ของ evaluator ต้องมีอย่างน้อย 100 fixtures, document type >= 98%, grand total >= 98%, exact canonical line-item fields >= 95%, ไม่มี auto-confirm, มี line-item denominator มากกว่า 0, และไม่มี output นอก aggregate schema. Gate เปรียบเทียบ integer counts โดยไม่ใช้ percentage ที่ปัดเศษ
+- GO ของ evaluator ต้องมีอย่างน้อย 100 fixture IDs ที่ไม่ซ้ำและ 100 decoded image contents ที่ไม่ซ้ำ, document type >= 98%, grand total >= 98%, exact canonical line-item fields >= 95%, ไม่มี duplicate/auto-confirm error, มี line-item denominator มากกว่า 0, และไม่มี output นอก aggregate schema. Gate เปรียบเทียบ integer counts โดยไม่ใช้ percentage ที่ปัดเศษ
 - Local LIFF visual QA ยังไม่ได้ทำ: loading, valid draft, warnings, seven line items, invalid totals, expired token, queued edit, keyboard focus, และ console errors ที่ 390x844/desktop ยังไม่มี mocked/test API browser harness ที่ยืนยันได้ จึงเป็น NO-GO ไม่ใช่ pass
 - Runtime correction (2026-08-22): ทุก relative import ใน `server/ocr-ledger` runtime graph ใช้ explicit `.js` แล้ว; fresh build + missing-config job regression ยืนยันว่า `npm run ocr:job` ออก nonzero ด้วย `OCR ledger job failed` โดยไม่รั่ว `ERR_MODULE_NOT_FOUND` หรือ filesystem path และก่อนสร้าง provider client. ยังเป็น NO-GO สำหรับ worker counts เพราะไม่มี synthetic configuration/approved test context
 - Synthetic Drive/Sheet, real LINE validation endpoint, production OAuth refresh credentials, และ live data ไม่ได้ใช้หรือสร้างในขั้นนี้

@@ -15,7 +15,7 @@ afterEach(async () => {
 
 describe('OCR ledger evaluation harness', () => {
   it('obtains actual values from the injected extractor with the validated image bytes and writes aggregate-only output', async () => {
-    const { fixtureDir, images } = await createFixtureDir(['receipt-001.png', 'slip-001.png'])
+    const { fixtureDir, imagePaths, images } = await createUniqueFixtureDir(2)
     const outputDir = await createTemporaryDir('ocr-evaluation-output-')
     const extractor = vi.fn(async (_imageBytes: Buffer, context: { fixtureId: string }) => context.fixtureId === 'receipt-001'
       ? receiptActual()
@@ -25,22 +25,61 @@ describe('OCR ledger evaluation harness', () => {
       fixtureDir,
       outputDir,
       extractor,
-      manifest: { fixtures: [fixture('receipt-001', 'receipt-001.png', receiptExpected()), fixture('slip-001', 'slip-001.png', slipExpected())] },
+      manifest: { fixtures: [fixture('receipt-001', imagePaths[0]!, receiptExpected()), fixture('slip-001', imagePaths[1]!, slipExpected())] },
     })
 
     expect(extractor).toHaveBeenCalledTimes(2)
-    expect(extractor).toHaveBeenCalledWith(images['receipt-001.png'], { fixtureId: 'receipt-001' })
+    expect(extractor).toHaveBeenCalledWith(images[imagePaths[0]!], { fixtureId: 'receipt-001' })
     expect(summary.accuracy).toEqual({
       documentType: { correct: 1, total: 2, percentage: 50 },
       grandTotal: { correct: 2, total: 2, percentage: 100 },
       lineItemFields: { correct: 9, total: 9, percentage: 100 },
     })
+    expect(summary).toMatchObject({ scoredFixtures: 2, uniqueFixtureIds: 2, uniqueImageContents: 2 })
     const written = await readFile(join(outputDir, 'summary.json'), 'utf8')
     expect(written).not.toContain('receipt-001')
     expect(written).not.toContain('ITEM A')
     expect(written).not.toContain('imagePath')
     expect(written).not.toContain('expected')
     expect(written).not.toContain('actual')
+  })
+
+  it('reports duplicate fixture IDs only as aggregate errors and does not score the duplicate row', async () => {
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(2)
+    const extractor = vi.fn(async () => receiptActual())
+
+    const summary = await evaluateManifest({
+      fixtureDir,
+      manifest: { fixtures: [
+        fixture('duplicate-id', imagePaths[0]!, receiptExpected()),
+        fixture('duplicate-id', imagePaths[1]!, receiptExpected()),
+      ] },
+      extractor,
+    })
+
+    expect(summary).toMatchObject({ result: 'NO_GO', scoredFixtures: 1, uniqueFixtureIds: 1, uniqueImageContents: 2 })
+    expect(summary.errorCodes).toContainEqual({ code: 'EVAL_DUPLICATE_FIXTURE_ID', count: 1 })
+    expect(extractor).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(summary)).not.toContain('duplicate-id')
+    expect(JSON.stringify(summary)).not.toContain(imagePaths[0])
+  })
+
+  it('reports repeated decoded image content only as an aggregate error and counts it once', async () => {
+    const { fixtureDir } = await createFixtureDir(['copy-a.png', 'copy-b.png'])
+    const extractor = vi.fn(async () => receiptActual())
+
+    const summary = await evaluateManifest({
+      fixtureDir,
+      manifest: { fixtures: [
+        fixture('copy-a', 'copy-a.png', receiptExpected()),
+        fixture('copy-b', 'copy-b.png', receiptExpected()),
+      ] },
+      extractor,
+    })
+
+    expect(summary).toMatchObject({ result: 'NO_GO', scoredFixtures: 1, uniqueFixtureIds: 2, uniqueImageContents: 1 })
+    expect(summary.errorCodes).toContainEqual({ code: 'EVAL_DUPLICATE_IMAGE_CONTENT', count: 1 })
+    expect(extractor).toHaveBeenCalledTimes(1)
   })
 
   it.each(['actual', 'autoConfirmed', 'result'])('rejects %s data in an expected-label manifest', async (prohibitedKey) => {
@@ -163,8 +202,8 @@ describe('OCR ledger evaluation harness', () => {
   })
 
   it('does not pass a ratio that only rounds up to the line-item threshold', async () => {
-    const { fixtureDir } = await createFixtureDir(['receipt.png'])
-    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', index === 0 ? receiptExpected({ lineItems: manyExpectedLines(1111) }) : slipExpected()))
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(100)
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, imagePaths[index]!, index === 0 ? receiptExpected({ lineItems: manyExpectedLines(1111) }) : slipExpected()))
     const summary = await evaluateManifest({
       fixtureDir,
       manifest: { fixtures },
@@ -182,8 +221,8 @@ describe('OCR ledger evaluation harness', () => {
   })
 
   it('returns GO at the exact count thresholds when every score is genuinely at least the required ratio', async () => {
-    const { fixtureDir } = await createFixtureDir(['receipt.png'])
-    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(100)
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, imagePaths[index]!, receiptExpected()))
     const summary = await evaluateManifest({
       fixtureDir,
       manifest: { fixtures },
@@ -191,20 +230,35 @@ describe('OCR ledger evaluation harness', () => {
     })
 
     expect(summary.accuracy.lineItemFields).toEqual({ correct: 855, total: 900, percentage: 95 })
+    expect(summary).toMatchObject({ scoredFixtures: 100, uniqueFixtureIds: 100, uniqueImageContents: 100 })
     expect(summary.result).toBe('GO')
   })
 
-  it('requires at least 100 fixtures even when every extracted value matches', async () => {
-    const { fixtureDir } = await createFixtureDir(['receipt.png'])
-    const fixtures = Array.from({ length: 99 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+  it('requires at least 100 unique fixture IDs and 100 unique decoded image contents', async () => {
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(99)
+    const fixtures = Array.from({ length: 99 }, (_, index) => fixture(`fixture-${index + 1}`, imagePaths[index]!, receiptExpected()))
     const summary = await evaluateManifest({ fixtureDir, manifest: { fixtures }, extractor: async () => receiptActual() })
 
+    expect(summary).toMatchObject({ scoredFixtures: 99, uniqueFixtureIds: 99, uniqueImageContents: 99 })
     expect(summary.result).toBe('NO_GO')
   })
 
+  it('stays NO_GO when 100 rows contain only 99 unique decoded images', async () => {
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(99)
+    await writeFile(join(fixtureDir, 'copy-of-first.png'), await readFile(join(fixtureDir, imagePaths[0]!)))
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(
+      `fixture-${index + 1}`, index === 99 ? 'copy-of-first.png' : imagePaths[index]!, receiptExpected(),
+    ))
+
+    const summary = await evaluateManifest({ fixtureDir, manifest: { fixtures }, extractor: async () => receiptActual() })
+
+    expect(summary).toMatchObject({ result: 'NO_GO', scoredFixtures: 99, uniqueFixtureIds: 100, uniqueImageContents: 99 })
+    expect(summary.errorCodes).toContainEqual({ code: 'EVAL_DUPLICATE_IMAGE_CONTENT', count: 1 })
+  })
+
   it('passes document type at 98% and fails immediately below it', async () => {
-    const { fixtureDir } = await createFixtureDir(['receipt.png'])
-    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(100)
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, imagePaths[index]!, receiptExpected()))
     const atThreshold = await evaluateManifest({
       fixtureDir, manifest: { fixtures },
       extractor: async (_bytes, context) => ({ ...receiptActual(), documentType: Number(context.fixtureId.slice(8)) <= 2 ? 'TRANSFER_SLIP' : 'RECEIPT' }),
@@ -221,8 +275,8 @@ describe('OCR ledger evaluation harness', () => {
   })
 
   it('passes grand total at 98% and fails immediately below it', async () => {
-    const { fixtureDir } = await createFixtureDir(['receipt.png'])
-    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(100)
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, imagePaths[index]!, receiptExpected()))
     const atThreshold = await evaluateManifest({
       fixtureDir, manifest: { fixtures },
       extractor: async (_bytes, context) => ({ ...receiptActual(), grandTotal: Number(context.fixtureId.slice(8)) <= 2 ? 0 : 214 }),
@@ -239,8 +293,8 @@ describe('OCR ledger evaluation harness', () => {
   })
 
   it('does not pass an evaluation with no scored line-item fields', async () => {
-    const { fixtureDir } = await createFixtureDir(['slip.png'])
-    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'slip.png', slipExpected()))
+    const { fixtureDir, imagePaths } = await createUniqueFixtureDir(100)
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, imagePaths[index]!, slipExpected()))
     const summary = await evaluateManifest({ fixtureDir, manifest: { fixtures }, extractor: async () => slipActual() })
 
     expect(summary.accuracy.lineItemFields).toEqual({ correct: 0, total: 0, percentage: 0 })
@@ -330,6 +384,20 @@ async function createFixtureDir(imageNames: string[]) {
     await writeFile(join(fixtureDir, imageName), bytes)
   }
   return { fixtureDir, images }
+}
+
+async function createUniqueFixtureDir(count: number) {
+  const fixtureDir = await createTemporaryDir('ocr-evaluation-unique-fixtures-')
+  const imagePaths = Array.from({ length: count }, (_, index) => `unique-${index + 1}.png`)
+  const images: Record<string, Buffer> = {}
+  await Promise.all(imagePaths.map(async (imagePath, index) => {
+    const red = index % 256
+    const green = Math.floor(index / 256) % 256
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: { r: red, g: green, b: 255 - red } } }).png().toBuffer()
+    images[imagePath] = bytes
+    await writeFile(join(fixtureDir, imagePath), bytes)
+  }))
+  return { fixtureDir, imagePaths, images }
 }
 
 function pngBytes() {
