@@ -89,7 +89,11 @@ export function dailyReportIdempotencyKey(groupId: string, date: string): string
 }
 
 export function dailyReportRetryKey(idempotencyKey: string): string {
-  const hex = createHash('sha256').update(idempotencyKey).digest('hex')
+  return logicalLineRetryKey(idempotencyKey)
+}
+
+export function logicalLineRetryKey(logicalMessageKey: string): string {
+  const hex = createHash('sha256').update(logicalMessageKey).digest('hex')
   const variant = ['8', '9', 'a', 'b'][Number.parseInt(hex[16], 16) % 4]
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }

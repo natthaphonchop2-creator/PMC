@@ -46,6 +46,17 @@ describe('createOcrLedgerMiddleware', () => {
     expect(line.downloadImage).not.toHaveBeenCalled()
   })
 
+  it('returns HTTP 200 after durable enqueue even when the best-effort acknowledgement fails', async () => {
+    const { store, line, drive } = dependencies()
+    line.reply.mockRejectedValue(new Error('reply timeout after acceptance'))
+
+    const response = await request({ store, line, drive, body: webhook([imageEvent()]) })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.body).toEqual({ accepted: true })
+    expect(store.appendJob).toHaveBeenCalledOnce()
+  })
+
   it('uses stable event/message idempotency keys so duplicate deliveries append only once', async () => {
     const { store, line, drive } = dependencies()
     const seen = new Set<string>()

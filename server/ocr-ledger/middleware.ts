@@ -52,7 +52,11 @@ export function createOcrLedgerMiddleware(deps: {
           respond(res, 503, { error: 'storage_unavailable' })
           return
         }
-        await deps.line.reply(event.replyToken, [{ type: 'text', text: acknowledgement(event) }])
+        try {
+          await deps.line.reply(event.replyToken, [{ type: 'text', text: acknowledgement(event) }])
+        } catch {
+          // The durable queue row is authoritative; LINE redelivery must not create pressure after it exists.
+        }
       }
       respond(res, 200, { accepted: true })
     } catch (error) {

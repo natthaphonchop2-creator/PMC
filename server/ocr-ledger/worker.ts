@@ -9,7 +9,7 @@ import type { OcrLedgerStore } from './googleStore.js'
 import { prepareOcrImage } from './imageProcessing.js'
 import type { OcrLinePort } from './lineClient.js'
 import { OcrExtractorError, type OcrExtractorPort } from './openAiExtractor.js'
-import { aggregateOcrReport, dailyReportIdempotencyKey, dailyReportRetryKey, documentIsInWindow, reportWindow, shouldSendDailyReport, type OcrReportCommand } from './reports.js'
+import { aggregateOcrReport, dailyReportIdempotencyKey, documentIsInWindow, logicalLineRetryKey, reportWindow, shouldSendDailyReport, type OcrReportCommand } from './reports.js'
 import { signReviewToken } from './security.js'
 
 type WorkerErrorCode =
@@ -61,10 +61,15 @@ async function processJob(
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
 ): Promise<boolean> {
   const payload = parsePayload(job.payloadJson)
+  const delivery = parseDeliveryCheckpoint(payload.delivery, deps.config.allowedGroupId)
+  if (delivery) {
+    await pushLineDelivery(deps.line, delivery)
+    return delivery.report
+  }
   if (typeof payload.deliveryDocumentId === 'string' && typeof payload.groupId === 'string') {
     const saved = await getDraft(deps.store, payload.deliveryDocumentId)
     if (!saved) throw workerError('SHEET_WRITE_FAILED')
-    await pushDraft(deps.line, payload.groupId, saved, deps.config, deps.now())
+    await pushDraft(job, payload, payload.groupId, saved, deps)
     return false
   }
   if (job.jobType === 'INTAKE') { await processIntake(job, payload, deps); return false }
@@ -72,7 +77,7 @@ async function processJob(
   if (job.jobType === 'CONFIRM' || job.jobType === 'CANCEL') { await processTerminalAction(job, payload, deps); return false }
   if (job.jobType === 'RETRY') { await processRetry(job, payload, deps); return false }
   if (job.jobType === 'REPORT_COMMAND') {
-    await sendReport(requiredReportCommand(payload.command), requiredString(payload.groupId, 'LINE_SEND_FAILED'), deps)
+    await sendReport(job, payload, requiredReportCommand(payload.command), requiredString(payload.groupId, 'LINE_SEND_FAILED'), deps)
     return true
   }
   throw workerError('OCR_INVALID_OUTPUT')
@@ -134,7 +139,7 @@ async function processIntake(
     payload.deliveryDocumentId = duplicate.documentId
     job.payloadJson = JSON.stringify(payload)
     await checkpointJob(deps.store, job, payload)
-    await pushDraft(deps.line, groupId, duplicate, deps.config, deps.now())
+    await pushDraft(job, payload, groupId, duplicate, deps)
     return
   }
 
@@ -151,7 +156,7 @@ async function processIntake(
   await saveDraft(deps.store, saved)
   payload.deliveryDocumentId = saved.documentId
   job.payloadJson = JSON.stringify(payload)
-  await pushDraft(deps.line, groupId, saved, deps.config, deps.now())
+  await pushDraft(job, payload, groupId, saved, deps)
 }
 
 async function processEdit(
@@ -161,11 +166,11 @@ async function processEdit(
 ): Promise<void> {
   const current = await requiredPendingDraft(job, payload, deps.store)
   if (current.state === 'CONFIRMED' || current.state === 'CANCELLED') {
-    await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
+    await pushDraft(job, payload, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps)
     return
   }
   if (await getTerminalDecision(deps.store, current.documentId)) {
-    await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
+    await pushDraft(job, payload, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps)
     return
   }
   const patch = parseOcrEditablePatch(payload.patch)
@@ -175,7 +180,7 @@ async function processEdit(
   await saveDraft(deps.store, revised)
   payload.deliveryDocumentId = revised.documentId
   job.payloadJson = JSON.stringify(payload)
-  await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), revised, deps.config, deps.now())
+  await pushDraft(job, payload, requiredString(payload.groupId, 'LINE_SEND_FAILED'), revised, deps)
 }
 
 async function processTerminalAction(
@@ -188,14 +193,14 @@ async function processTerminalAction(
   if (!current) throw workerError('SHEET_WRITE_FAILED')
   const groupId = requiredString(payload.groupId, 'LINE_SEND_FAILED')
   if (current.state === 'CONFIRMED' || current.state === 'CANCELLED') {
-    await pushDraft(deps.line, groupId, current, deps.config, deps.now())
+    await pushDraft(job, payload, groupId, current, deps)
     return
   }
   const actor = requiredString(payload.actorLineUserId, 'VERSION_CONFLICT')
   const requestedDecision = job.jobType === 'CONFIRM' ? 'CONFIRM' : 'CANCEL'
   const existingDecision = await getTerminalDecision(deps.store, documentId)
   if (existingDecision && existingDecision.decision !== requestedDecision) {
-    await pushDraft(deps.line, groupId, current, deps.config, deps.now())
+    await pushDraft(job, payload, groupId, current, deps)
     return
   }
   let record = existingDecision
@@ -205,7 +210,7 @@ async function processTerminalAction(
       try {
         assertConfirmableDraft(current)
       } catch {
-        await pushReviewRequired(deps.line, groupId)
+        await pushReviewRequired(job, payload, groupId, deps)
         return
       }
     }
@@ -231,13 +236,15 @@ async function processTerminalAction(
     }
   }
   if (record.decision !== requestedDecision) {
-    await pushDraft(deps.line, groupId, current, deps.config, deps.now())
+    await pushDraft(job, payload, groupId, current, deps)
     return
   }
-  await repairTerminalDecision(record, current, groupId, deps)
+  await repairTerminalDecision(job, payload, record, current, groupId, deps)
 }
 
 async function repairTerminalDecision(
+  job: OcrQueueJob,
+  payload: Record<string, unknown>,
   record: OcrTerminalDecisionRecord,
   current: OcrDraft,
   groupId: string,
@@ -254,7 +261,7 @@ async function repairTerminalDecision(
     try { await deps.store.finalizeDocument(next, ledger) } catch { throw workerError('SHEET_WRITE_FAILED') }
   }
   await saveDraft(deps.store, next)
-  await pushDraft(deps.line, groupId, next, deps.config, deps.now())
+  await pushDraft(job, payload, groupId, next, deps)
 }
 
 async function processRetry(
@@ -273,12 +280,12 @@ async function processRetry(
     return
   }
   if (current.state === 'CONFIRMED' || current.state === 'CANCELLED') {
-    await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps.config, deps.now())
+    await pushDraft(job, payload, requiredString(payload.groupId, 'LINE_SEND_FAILED'), current, deps)
     return
   }
   const terminalDecision = await getTerminalDecision(deps.store, current.documentId)
   if (terminalDecision) {
-    await repairTerminalDecision(terminalDecision, current, requiredString(payload.groupId, 'LINE_SEND_FAILED'), deps)
+    await repairTerminalDecision(job, payload, terminalDecision, current, requiredString(payload.groupId, 'LINE_SEND_FAILED'), deps)
     return
   }
   if (current.state !== 'FAILED' && current.state !== 'PENDING_REVIEW' && current.state !== 'RETRY_PENDING') throw workerError('VERSION_CONFLICT')
@@ -305,7 +312,7 @@ async function processRetry(
   await saveDraft(deps.store, revised)
   payload.deliveryDocumentId = revised.documentId
   job.payloadJson = JSON.stringify(payload)
-  await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), revised, deps.config, deps.now())
+  await pushDraft(job, payload, requiredString(payload.groupId, 'LINE_SEND_FAILED'), revised, deps)
 }
 
 async function sendScheduledDailyReport(
@@ -314,39 +321,45 @@ async function sendScheduledDailyReport(
   const now = deps.now()
   let jobs: OcrQueueJob[]
   try { jobs = await deps.store.listJobs() } catch { throw workerError('SHEET_WRITE_FAILED') }
-  const sentKeys = new Set(jobs.map((job) => job.idempotencyKey))
+  const sentKeys = new Set(jobs.filter((job) => job.state === 'DONE').map((job) => job.idempotencyKey))
   if (!shouldSendDailyReport({ enabled: deps.config.dailyReportEnabled, groupId: deps.config.allowedGroupId, now, sentKeys })) return false
   const date = reportWindow('TODAY', now).start!
   const idempotencyKey = dailyReportIdempotencyKey(deps.config.allowedGroupId, date)
 
+  const pendingMarker: OcrQueueJob = {
+    jobId: `report-${randomUUID()}`, jobType: 'REPORT_COMMAND', documentId: null,
+    idempotencyKey,
+    payloadJson: JSON.stringify({ command: 'TODAY', groupId: deps.config.allowedGroupId, scheduled: true }),
+    state: 'QUEUED', attempts: 0, availableAt: now.toISOString(), leaseUntil: null, lastErrorCode: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  }
+  let marker: OcrQueueJob
+  try { marker = await deps.store.appendJob(pendingMarker) } catch { throw workerError('SHEET_WRITE_FAILED') }
+  const payload = parsePayload(marker.payloadJson)
   try {
-    await sendReport('TODAY', deps.config.allowedGroupId, deps, dailyReportRetryKey(idempotencyKey))
+    await sendReport(marker, payload, 'TODAY', deps.config.allowedGroupId, deps)
   } catch (error) {
     if (isWorkerError(error)) return false
     throw error
   }
-
-  const marker: OcrQueueJob = {
-    jobId: `report-${randomUUID()}`, jobType: 'REPORT_COMMAND', documentId: null,
-    idempotencyKey,
-    payloadJson: JSON.stringify({ command: 'TODAY', groupId: deps.config.allowedGroupId, scheduled: true }),
-    state: 'DONE', attempts: 0, availableAt: now.toISOString(), leaseUntil: null, lastErrorCode: null,
-    createdAt: now.toISOString(), updatedAt: now.toISOString(),
-  }
-  try { await deps.store.appendJob(marker) } catch { throw workerError('SHEET_WRITE_FAILED') }
+  await updateJob(deps.store, {
+    ...marker, payloadJson: JSON.stringify(payload), state: 'DONE', leaseUntil: null, lastErrorCode: null, updatedAt: deps.now().toISOString(),
+  })
   return true
 }
 
 async function sendReport(
+  job: OcrQueueJob,
+  payload: Record<string, unknown>,
   command: OcrReportCommand,
   groupId: string,
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
-  retryKey?: string,
 ): Promise<void> {
-  const now = deps.now()
+  const now = new Date(job.createdAt)
+  let message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage> | { type: 'text'; text: string }
   if (command === 'PENDING') {
     const pending = await pendingDrafts(deps.store)
-    const message = buildPendingReportMessage({
+    message = buildPendingReportMessage({
       title: 'รายการรอตรวจสอบ', totalPending: pending.length,
       entries: pending.slice(0, 10).map(({ draft }) => ({
         label: draft.documentId,
@@ -354,27 +367,24 @@ async function sendReport(
         reviewUri: reviewUrl(draft, groupId, deps.config, now),
       })),
     })
-    return pushReport(deps.line, groupId, message, retryKey)
-  }
-  if (command === 'ERRORS') {
+  } else if (command === 'ERRORS') {
     const errors = await failedJobs(deps.store)
-    return pushReport(deps.line, groupId, buildReportMessage({
+    message = buildReportMessage({
       title: 'รายการที่ต้องตรวจสอบข้อผิดพลาด',
       entries: errors.length === 0
         ? [{ label: 'ไม่พบรายการผิดพลาด' }]
         : errors.slice(0, 10).map((job) => ({ label: job.documentId ?? job.jobId, value: job.lastErrorCode ?? 'UNKNOWN' })),
-    }), retryKey)
+    })
+  } else {
+    const window = reportWindow(command, now)
+    const confirmed = await confirmedDocumentsForWindow(deps.store, window)
+    const operational = await operationalDocuments(deps.store)
+    const report = aggregateOcrReport([...confirmed, ...operational.filter((document) => documentIsInWindow(document, window))])
+    message = report.operational.confirmed === 0
+      ? { type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }
+      : buildReportMessage({ title: reportTitle(command), entries: reportEntries(report) })
   }
-
-  const window = reportWindow(command, now)
-  const confirmed = await confirmedDocumentsForWindow(deps.store, window)
-  const operational = await operationalDocuments(deps.store)
-  const report = aggregateOcrReport([...confirmed, ...operational.filter((document) => documentIsInWindow(document, window))])
-  if (report.operational.confirmed === 0) return pushReport(deps.line, groupId, { type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }, retryKey)
-  return pushReport(deps.line, groupId, buildReportMessage({
-    title: reportTitle(command),
-    entries: reportEntries(report),
-  }), retryKey)
+  await deliverMessages(job, payload, groupId, [message], `report:${job.idempotencyKey}:${command}`, true, deps.store, deps.line)
 }
 
 async function confirmedDocumentsForWindow(store: OcrLedgerStore, window: ReturnType<typeof reportWindow>): Promise<OcrDocument[]> {
@@ -466,13 +476,6 @@ function reviewUrl(draft: OcrDraft, groupId: string, config: OcrLedgerConfig, no
   return url.toString()
 }
 
-async function pushReport(line: OcrLinePort, groupId: string, message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage> | { type: 'text'; text: string }, retryKey?: string): Promise<void> {
-  try {
-    if (retryKey) await line.push(groupId, [message], retryKey)
-    else await line.push(groupId, [message])
-  } catch { throw workerError('LINE_SEND_FAILED') }
-}
-
 function money(value: number): string {
   return `฿${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 }
@@ -520,14 +523,14 @@ async function pushTerminalRetry(
   const current = await deps.store.getDraft(job.documentId)
   const data = signReviewToken({
     v: 1, documentId: job.documentId, groupId: payload.groupId, draftVersion: current?.draftVersion ?? 1, action: 'RETRY',
-    exp: Math.floor(deps.now().getTime() / 1000) + 24 * 60 * 60,
+    exp: Math.floor(new Date(job.createdAt).getTime() / 1000) + 24 * 60 * 60,
   }, deps.config.reviewSigningSecret)
-  await deps.line.push(payload.groupId, [{
+  await deliverMessages(job, payload, payload.groupId, [{
     type: 'flex', altText: 'อ่านเอกสารไม่สำเร็จ', contents: {
       type: 'bubble', body: { type: 'box', layout: 'vertical', contents: [{ type: 'text', text: 'อ่านเอกสารไม่สำเร็จ กรุณาลองใหม่', wrap: true }] },
       footer: { type: 'box', layout: 'vertical', contents: [{ type: 'button', action: { type: 'postback', label: 'ลองอ่านใหม่', data } }] },
     },
-  }])
+  }], `${job.documentId}:error:${job.jobId}:${job.lastErrorCode ?? 'UNKNOWN'}`, false, deps.store, deps.line)
 }
 
 function draftFromExtraction(
@@ -578,14 +581,23 @@ function assertExpectedVersion(draft: OcrDraft, expected: unknown): void {
   if (!Number.isSafeInteger(expected) || expected !== draft.draftVersion) throw workerError('VERSION_CONFLICT')
 }
 
-async function pushDraft(line: OcrLinePort, groupId: string, draft: OcrDraft, config: OcrLedgerConfig, now: Date): Promise<void> {
+async function pushDraft(
+  job: OcrQueueJob,
+  payload: Record<string, unknown>,
+  groupId: string,
+  draft: OcrDraft,
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort },
+): Promise<void> {
   const message = draft.state === 'CONFIRMED' || draft.state === 'CANCELLED'
     ? buildFinalFlex(draft)
     : buildDraftFlex(draft, {
-      groupId, reviewSigningSecret: config.reviewSigningSecret, liffUrl: `https://liff.line.me/${config.liffId}`,
-      now: Math.floor(now.getTime() / 1000),
+      groupId, reviewSigningSecret: deps.config.reviewSigningSecret, liffUrl: `https://liff.line.me/${deps.config.liffId}`,
+      now: Math.floor(new Date(job.createdAt).getTime() / 1000),
     })
-  try { await line.push(groupId, [message]) } catch { throw workerError('LINE_SEND_FAILED') }
+  const logicalKey = draft.state === 'CONFIRMED' || draft.state === 'CANCELLED'
+    ? `${draft.documentId}:final:${draft.state}`
+    : `${draft.documentId}:flex:${draft.draftVersion}`
+  await deliverMessages(job, payload, groupId, [message], logicalKey, false, deps.store, deps.line)
 }
 
 async function appendAudit(
@@ -625,12 +637,17 @@ async function getTerminalDecision(store: OcrLedgerStore, documentId: string): P
   try { return await store.getTerminalDecision(documentId) } catch { throw workerError('SHEET_WRITE_FAILED') }
 }
 
-async function pushReviewRequired(line: OcrLinePort, groupId: string): Promise<void> {
-  try {
-    await line.push(groupId, [{ type: 'text', text: 'ยังบันทึกไม่ได้ กรุณาตรวจสอบข้อมูลที่จำเป็นแล้วลองอีกครั้ง' }])
-  } catch {
-    throw workerError('LINE_SEND_FAILED')
-  }
+async function pushReviewRequired(
+  job: OcrQueueJob,
+  payload: Record<string, unknown>,
+  groupId: string,
+  deps: { store: OcrLedgerStore; line: OcrLinePort },
+): Promise<void> {
+  await deliverMessages(
+    job, payload, groupId,
+    [{ type: 'text', text: 'ยังบันทึกไม่ได้ กรุณาตรวจสอบข้อมูลที่จำเป็นแล้วลองอีกครั้ง' }],
+    `${job.documentId}:review-required:${payload.expectedVersion ?? 'unknown'}`, false, deps.store, deps.line,
+  )
 }
 
 async function findOriginalIntake(store: OcrLedgerStore, documentId: string): Promise<OcrQueueJob | null> {
@@ -648,6 +665,55 @@ async function updateJob(store: OcrLedgerStore, job: OcrQueueJob): Promise<void>
 async function checkpointJob(store: OcrLedgerStore, job: OcrQueueJob, payload: Record<string, unknown>): Promise<void> {
   job.payloadJson = JSON.stringify(payload)
   await updateJob(store, job)
+}
+
+interface LineDeliveryCheckpoint {
+  to: string
+  messages: unknown[]
+  retryKey: string
+  report: boolean
+}
+
+async function deliverMessages(
+  job: OcrQueueJob,
+  payload: Record<string, unknown>,
+  to: string,
+  messages: unknown[],
+  logicalKey: string,
+  report: boolean,
+  store: OcrLedgerStore,
+  line: OcrLinePort,
+): Promise<void> {
+  const delivery: LineDeliveryCheckpoint = {
+    to,
+    messages: structuredClone(messages),
+    retryKey: logicalLineRetryKey(logicalKey),
+    report,
+  }
+  payload.delivery = delivery
+  await checkpointJob(store, job, payload)
+  await pushLineDelivery(line, delivery)
+}
+
+function parseDeliveryCheckpoint(value: unknown, allowedGroupId: string): LineDeliveryCheckpoint | null {
+  if (value === undefined || value === null) return null
+  if (!isRecord(value)
+    || value.to !== allowedGroupId
+    || !Array.isArray(value.messages) || value.messages.length === 0 || value.messages.length > 5
+    || typeof value.retryKey !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.retryKey)
+    || typeof value.report !== 'boolean'
+    || JSON.stringify(value.messages).length > 50_000) {
+    throw workerError('OCR_INVALID_OUTPUT')
+  }
+  return { to: value.to, messages: structuredClone(value.messages), retryKey: value.retryKey, report: value.report }
+}
+
+async function pushLineDelivery(line: OcrLinePort, delivery: LineDeliveryCheckpoint): Promise<void> {
+  try {
+    await line.push(delivery.to, delivery.messages, delivery.retryKey)
+  } catch {
+    throw workerError('LINE_SEND_FAILED')
+  }
 }
 
 async function organizeSourceImage(

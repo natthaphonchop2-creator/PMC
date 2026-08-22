@@ -28,7 +28,7 @@ describe('createOcrLedgerWorker', () => {
       'find-folder:drive-root:2026', 'create-folder:drive-root:2026',
       'find-folder:folder-2026:08', 'create-folder:folder-2026:08',
       'find-folder:folder-08:RECEIPT', 'create-folder:folder-08:RECEIPT',
-      'move-file:drive-file-1:folder-RECEIPT', 'save-draft', 'line-push', 'update-job',
+      'move-file:drive-file-1:folder-RECEIPT', 'save-draft', 'checkpoint-job', 'line-push', 'update-job',
     ])
     expect(store.drafts).toHaveLength(1)
     expect(store.drafts[0]).toEqual(expect.objectContaining({ state: 'PENDING_REVIEW', draftVersion: 1, sourceImageFileId: 'drive-file-1' }))
@@ -36,7 +36,7 @@ describe('createOcrLedgerWorker', () => {
       merchantName: 'Merchant Co.', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่',
       receiptNumber: 'RCPT-1', receiptDate: '2026-08-22', paymentMethod: 'CASH',
     })
-    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })], expect.any(String))
     expect(drive.uploadImage).toHaveBeenCalledTimes(1)
     expect(extractor.extract).toHaveBeenCalledTimes(1)
     expect(JSON.parse(store.jobs[0].payloadJson)).toMatchObject({
@@ -78,7 +78,7 @@ describe('createOcrLedgerWorker', () => {
 
     expect(extractor.extract).not.toHaveBeenCalled()
     expect(store.drafts).toEqual([existing])
-    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })], expect.any(String))
   })
 
   it('reschedules provider failures after 1, 5, and 15 minutes, then records a terminal sanitized error', async () => {
@@ -100,6 +100,7 @@ describe('createOcrLedgerWorker', () => {
     expect(store.jobs[0]).toEqual(expect.objectContaining({ state: 'FAILED', attempts: 4, lastErrorCode: 'OCR_RATE_LIMIT' }))
     expect(store.errors).toEqual([{ jobId: 'job-1', documentId: store.jobs[0].documentId, code: 'OCR_RATE_LIMIT', createdAt: current.toISOString() }])
     expect(JSON.stringify(line.push.mock.calls.at(-1))).not.toContain('provider body')
+    expect(line.push.mock.calls.at(-1)?.[2]).toMatch(/^[0-9a-f-]{36}$/)
     expect(extractor.extract).toHaveBeenCalledTimes(4)
   })
 
@@ -116,6 +117,10 @@ describe('createOcrLedgerWorker', () => {
     expect(extractor.extract).toHaveBeenCalledTimes(1)
     expect(store.drafts).toHaveLength(1)
     expect(line.push).toHaveBeenCalledTimes(2)
+    expect(line.push.mock.calls[1]?.[0]).toBe(line.push.mock.calls[0]?.[0])
+    expect(line.push.mock.calls[1]?.[1]).toEqual(line.push.mock.calls[0]?.[1])
+    expect(line.push.mock.calls[0]?.[2]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(line.push.mock.calls[1]?.[2]).toBe(line.push.mock.calls[0]?.[2])
     expect(store.jobs[0].state).toBe('DONE')
   })
 
@@ -132,7 +137,7 @@ describe('createOcrLedgerWorker', () => {
 
     expect(store.drafts[0]).toEqual(expect.objectContaining({ draftVersion: 2, note: 'edited', grandTotal: 120 }))
     expect(store.audits).toEqual([expect.objectContaining({ documentId: existing.documentId, action: 'EDIT', actorLineUserId: 'Ueditor' })])
-    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })], expect.any(String))
   })
 
   it('rejects malformed edit types and line numbering before audit or draft mutation', async () => {
@@ -159,7 +164,7 @@ describe('createOcrLedgerWorker', () => {
     const retry = job('RETRY', actionPayload(), existing.documentId, 'job-4')
     const store = new FakeStore([confirm, cancel, edit, retry])
     store.drafts.push(existing)
-    const { worker } = harness(store)
+    const { worker, line } = harness(store)
 
     await worker.runOnce()
 
@@ -171,6 +176,7 @@ describe('createOcrLedgerWorker', () => {
     expect(store.jobs.map((entry) => [entry.jobId, entry.state, entry.lastErrorCode])).toEqual([
       ['job-1', 'DONE', null], ['job-2', 'DONE', null], ['job-3', 'DONE', null], ['job-4', 'DONE', null],
     ])
+    expect(line.push.mock.calls.every((call) => /^[0-9a-f-]{36}$/.test(String(call[2])))).toBe(true)
   })
 
   it.each([
@@ -342,6 +348,7 @@ describe('createOcrLedgerWorker', () => {
     expect(verifyReviewToken(data, CONFIG.reviewSigningSecret, Math.floor(START.getTime() / 1000))).toMatchObject({
       documentId: existing.documentId, draftVersion: 3, action: 'RETRY',
     })
+    expect(line.push.mock.calls.at(-1)?.[2]).toMatch(/^[0-9a-f-]{36}$/)
   })
 
   it('skips terminal retry delivery when the versioned draft read fails instead of signing version 1', async () => {
@@ -441,10 +448,11 @@ describe('createOcrLedgerWorker', () => {
 
     expect(result).toMatchObject({ processed: 1, succeeded: 1, failed: 0, reportSent: true })
     expect(extractor.extract).not.toHaveBeenCalled()
-    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })], expect.any(String))
     expect(JSON.stringify(line.push.mock.calls[0][1])).toContain('1,000')
     expect(JSON.stringify(line.push.mock.calls[0][1])).toContain('300')
     expect(JSON.stringify(line.push.mock.calls[0][1])).not.toContain('9,999')
+    expect(line.push.mock.calls[0]?.[2]).toMatch(/^[0-9a-f-]{36}$/)
   })
 
   it('processes every leased job and the scheduled daily check after a report command succeeds', async () => {
@@ -472,7 +480,8 @@ describe('createOcrLedgerWorker', () => {
 
     await worker.runOnce()
 
-    expect(line.push).toHaveBeenCalledWith('Cgroup1', [{ type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }])
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [{ type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }], expect.any(String))
+    expect(line.push.mock.calls[0]?.[2]).toMatch(/^[0-9a-f-]{36}$/)
   })
 
   it('catches up the 20:00 Bangkok report and records its idempotency row only after the LINE push', async () => {
@@ -514,7 +523,7 @@ describe('createOcrLedgerWorker', () => {
     })
   })
 
-  it('does not record the daily idempotency key when LINE rejects the scheduled report', async () => {
+  it('keeps a durable queued daily delivery without marking it sent when LINE rejects it', async () => {
     const current = new Date('2026-08-22T16:00:00.000Z')
     const store = new FakeStore([])
     const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
@@ -523,13 +532,15 @@ describe('createOcrLedgerWorker', () => {
     const result = await worker.runOnce()
 
     expect(result.reportSent).toBe(false)
-    expect(store.jobs).toEqual([])
+    expect(store.jobs).toEqual([expect.objectContaining({
+      state: 'QUEUED', idempotencyKey: 'report:Cgroup1:2026-08-22:daily', payloadJson: expect.stringContaining('retryKey'),
+    })])
   })
 
   it('reuses the same daily retry key after push success but idempotency persistence fails', async () => {
     const current = new Date('2026-08-22T16:00:00.000Z')
     const store = new FakeStore([])
-    store.appendFailures = 1
+    store.failUpdateOnCall = 2
     const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
 
     await expect(worker.runOnce()).rejects.toMatchObject({ code: 'SHEET_WRITE_FAILED' })
@@ -561,6 +572,8 @@ class FakeStore implements OcrLedgerStore {
   saveFailures = 0
   appendFailures = 0
   updateFailures = 0
+  updateCalls = 0
+  failUpdateOnCall: number | null = null
   getDraftCalls = 0
   failGetDraftOnCall: number | null = null
 
@@ -577,7 +590,9 @@ class FakeStore implements OcrLedgerStore {
     return leased.map((entry) => structuredClone(entry))
   }
   async updateJob(next: OcrQueueJob) {
+    this.updateCalls += 1
     this.order.push(next.state === 'LEASED' ? 'checkpoint-job' : 'update-job')
+    if (this.failUpdateOnCall === this.updateCalls) throw new Error('sheet unavailable')
     if (this.updateFailures > 0) { this.updateFailures -= 1; throw new Error('sheet unavailable') }
     Object.assign(this.jobs.find((entry) => entry.jobId === next.jobId)!, structuredClone(next))
   }
