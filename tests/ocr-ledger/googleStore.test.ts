@@ -114,6 +114,37 @@ describe('Google OCR ledger store', () => {
     expect((await store.listJobs()).find((job) => job.jobId === 'leased')).toMatchObject({ attempts: 0, state: 'QUEUED' })
   })
 
+  it('persists queue outcomes, sanitized errors, audits, duplicate lookup, and monthly allocation', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    await store.appendJob(queueJob())
+    const completed = queueJob({ state: 'DONE', attempts: 1, leaseUntil: null, updatedAt: '2026-08-22T10:01:00.000Z' })
+    await store.updateJob(completed)
+    await store.saveDraft(draft())
+    await store.appendError({ jobId: 'job-1', documentId: completed.documentId, code: 'OCR_RATE_LIMIT', createdAt: completed.updatedAt })
+    await store.appendAudit({
+      documentId: completed.documentId!, action: 'EDIT', actorLineUserId: 'U1', actorDisplayName: 'Staff',
+      createdAt: completed.updatedAt, payloadJson: '{"draftVersion":2}',
+    })
+    await store.appendError({ jobId: 'job-1', documentId: completed.documentId, code: 'OCR_RATE_LIMIT', createdAt: completed.updatedAt })
+    await store.appendAudit({
+      documentId: completed.documentId!, action: 'EDIT', actorLineUserId: 'U1', actorDisplayName: 'Staff',
+      createdAt: completed.updatedAt, payloadJson: '{"draftVersion":2}',
+    })
+
+    expect(await store.listJobs()).toEqual([completed])
+    expect(await store.findDraftByImageSha256('hash-1')).toMatchObject({ documentId: completed.documentId })
+    expect(await store.findDraftByImageSha256('missing')).toBeNull()
+    expect(sheets.rows('master', 'ERRORS')).toHaveLength(2)
+    expect(sheets.rows('master', 'AUDIT_LOG')).toHaveLength(2)
+
+    const first = await store.ensureMonthlyLedger('2026-08')
+    const repeated = await store.ensureMonthlyLedger('2026-08')
+    expect(first).toEqual({ month: '2026-08', monthlySpreadsheetId: 'sheet-1' })
+    expect(repeated).toEqual(first)
+    expect(sheets.creates).toEqual([{ title: '2026-08 PMC OCR Ledger', tabs: ['TRANSACTIONS', 'LINE_ITEMS', 'DAILY_SUMMARY', 'CATEGORY_SUMMARY'] }])
+  })
+
   it('replaces the current draft version without writing confirmed ledger tabs', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })

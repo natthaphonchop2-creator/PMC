@@ -1,4 +1,4 @@
-import type { OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts'
+import type { OcrAction, OcrDocument, OcrDraft, OcrLineItem, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts'
 import type { OcrDrivePort, OcrSheetsPort } from './googleClient.js'
 
 export const MASTER_TABS = [
@@ -39,8 +39,13 @@ export interface OcrLedgerStore {
   appendJob(job: OcrQueueJob): Promise<OcrQueueJob>
   listJobs(): Promise<OcrQueueJob[]>
   leaseJobs(input: { now: string; leaseSeconds: number; limit: number }): Promise<OcrQueueJob[]>
+  updateJob(job: OcrQueueJob): Promise<void>
   saveDraft(draft: OcrDraft): Promise<void>
   getDraft(documentId: string): Promise<OcrDraft | null>
+  findDraftByImageSha256(hash: string): Promise<OcrDraft | null>
+  appendError(error: { jobId: string; documentId: string | null; code: string; createdAt: string }): Promise<void>
+  appendAudit(action: OcrAction & { payloadJson: string }): Promise<void>
+  ensureMonthlyLedger(month: string): Promise<{ month: string; monthlySpreadsheetId: string }>
   finalizeDocument(draft: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }): Promise<void>
   listConfirmedDocuments(monthlySpreadsheetId: string): Promise<OcrDocument[]>
 }
@@ -72,6 +77,11 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
       await Promise.all(candidates.map(({ rowNumber }, index) => updateRow(masterSpreadsheetId, 'OCR_QUEUE', rowNumber, QUEUE_COLUMNS, leased[index])))
       return leased
     },
+    async updateJob(job) {
+      const existing = (await queueRows()).find(({ value }) => value.jobId === job.jobId)
+      if (!existing) throw new Error('OCR queue job not found')
+      await updateRow(masterSpreadsheetId, 'OCR_QUEUE', existing.rowNumber, QUEUE_COLUMNS, job)
+    },
     async saveDraft(draft) {
       const draftRows = await readRows<OcrDocument>(masterSpreadsheetId, 'DRAFTS', DOCUMENT_COLUMNS)
       const existing = draftRows.find((row) => row.value.documentId === draft.documentId)
@@ -98,6 +108,31 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
         .map(({ value }) => toLineItem(value))
         .sort((left, right) => left.lineNumber - right.lineNumber)
       return { ...header, lineItems }
+    },
+    async findDraftByImageSha256(hash) {
+      const headers = await readRows<OcrDocument>(masterSpreadsheetId, 'DRAFTS', DOCUMENT_COLUMNS)
+      const found = headers.find(({ value }) => value.sourceImageSha256 === hash)?.value
+      return found ? this.getDraft(found.documentId) : null
+    },
+    async appendError(error) {
+      const existing = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'ERRORS', MASTER_HEADERS.ERRORS)
+      if (existing.some(({ value }) => value.jobId === error.jobId)) return
+      await appendRow(masterSpreadsheetId, 'ERRORS', MASTER_HEADERS.ERRORS, error)
+    },
+    async appendAudit(action) {
+      const existing = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG)
+      if (existing.some(({ value }) => value.documentId === action.documentId && value.action === action.action && value.payloadJson === action.payloadJson)) return
+      await appendRow(masterSpreadsheetId, 'AUDIT_LOG', MASTER_HEADERS.AUDIT_LOG, action)
+    },
+    async ensureMonthlyLedger(month) {
+      if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('Invalid monthly ledger key')
+      const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'MONTHLY_INDEX', MASTER_HEADERS.MONTHLY_INDEX)
+      const existing = rows.find(({ value }) => value.month === month)?.value
+      if (existing) return { month, monthlySpreadsheetId: String(existing.monthlySpreadsheetId) }
+      const monthlySpreadsheetId = await sheets.create(`${month} PMC OCR Ledger`, [...MONTHLY_TABS])
+      for (const tab of MONTHLY_TABS) await sheets.append(monthlySpreadsheetId, `${tab}!A:ZZ`, [[...MONTHLY_HEADERS[tab]]])
+      await ensureMonthlyIndex(month, monthlySpreadsheetId)
+      return { month, monthlySpreadsheetId }
     },
     async finalizeDocument(draft, ledger) {
       assertUniqueLineNumbers(draft.lineItems)
