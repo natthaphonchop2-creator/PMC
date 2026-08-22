@@ -24,7 +24,11 @@ class MemorySheets implements OcrSheetsPort {
     const book = this.book(spreadsheetId)
     const current = book.get(tab) ?? []
     const next = [...current]
-    next.splice(Math.max(rowNumber - 1, 0), rows.length, ...structuredClone(rows))
+    for (const [offset, input] of rows.entries()) {
+      const currentRow = next[Math.max(rowNumber - 1, 0) + offset] ?? []
+      // Sheets Values API skips null input values; only an empty string clears a cell.
+      next[Math.max(rowNumber - 1, 0) + offset] = input.map((value, index) => value === null ? currentRow[index] : value)
+    }
     book.set(tab, next)
   }
 
@@ -122,6 +126,15 @@ describe('Google OCR ledger store', () => {
     expect(sheets.rows('master', 'LINE_ITEMS')).toEqual([])
   })
 
+  it('clears removed draft fields and line rows with Google Sheets empty-string semantics', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    await store.saveDraft(draft({ note: 'remove this note' }))
+    await store.saveDraft(draft({ draftVersion: 2, note: null, lineItems: [] }))
+
+    expect(await store.getDraft('OCR-20260822-abc123')).toMatchObject({ draftVersion: 2, note: null, lineItems: [] })
+  })
+
   it('repairs a partial monthly write by document and line write keys without duplicates', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
@@ -141,6 +154,31 @@ describe('Google OCR ledger store', () => {
     expect(repairedTransactions[1][header.indexOf('writeState')]).toBe('CONFIRMED')
     expect(lineItems).toHaveLength(2)
     expect((lineItems[1] as unknown[])[(lineItems[0] as string[]).indexOf('itemWriteKey')]).toBe('OCR-20260822-abc123:1')
+  })
+
+  it('rejects a monthly finalization that disagrees with the authoritative month index', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    await store.finalizeDocument(draft(), { month: '2026-08', monthlySpreadsheetId: 'monthly-a' })
+
+    await expect(store.finalizeDocument(draft({ documentId: 'OCR-20260822-def456' }), { month: '2026-08', monthlySpreadsheetId: 'monthly-b' }))
+      .rejects.toThrow('Monthly ledger ID mismatch')
+    expect(sheets.rows('monthly-b', 'TRANSACTIONS')).toEqual([])
+  })
+
+  it('rejects duplicate draft line numbers before writing a monthly transaction', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    const duplicated = draft({
+      lineItems: [
+        draft().lineItems[0],
+        { ...draft().lineItems[0], description: 'Duplicated visible line number' },
+      ],
+    })
+
+    await expect(store.finalizeDocument(duplicated, { month: '2026-08', monthlySpreadsheetId: 'monthly-2026-08' }))
+      .rejects.toThrow('Duplicate line number')
+    expect(sheets.rows('monthly-2026-08', 'TRANSACTIONS')).toEqual([])
   })
 
   it('returns only confirmed monthly headers for reporting reads', async () => {

@@ -100,6 +100,7 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
       return { ...header, lineItems }
     },
     async finalizeDocument(draft, ledger) {
+      assertUniqueLineNumbers(draft.lineItems)
       if (!/^\d{4}-\d{2}$/.test(ledger.month)) throw new Error('Invalid monthly ledger key')
       await ensureMonthlyIndex(ledger.month, ledger.monthlySpreadsheetId)
       const transactions = await readRows<Record<string, unknown>>(ledger.monthlySpreadsheetId, 'TRANSACTIONS', TRANSACTION_COLUMNS)
@@ -114,12 +115,17 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
       if (!transactionRow) throw new Error('Unable to locate monthly transaction row')
 
       const lineRows = await readRows<Record<string, unknown>>(ledger.monthlySpreadsheetId, 'LINE_ITEMS', LINE_ITEM_COLUMNS)
+      const persistedKeys = new Set(lineRows.map(({ value }) => String(value.itemWriteKey)))
+      const expectedKeys = new Set(draft.lineItems.map((line) => `${draft.documentId}:${line.lineNumber}`))
       for (const line of draft.lineItems) {
         const itemWriteKey = `${draft.documentId}:${line.lineNumber}`
-        if (!lineRows.some(({ value }) => value.itemWriteKey === itemWriteKey)) {
+        if (!persistedKeys.has(itemWriteKey)) {
           await appendRow(ledger.monthlySpreadsheetId, 'LINE_ITEMS', LINE_ITEM_COLUMNS, { itemWriteKey, ...lineItemRow(draft.documentId, draft.draftVersion, line), schemaVersion: 1 })
+          persistedKeys.add(itemWriteKey)
         }
       }
+      const verifiedKeys = new Set((await readRows<Record<string, unknown>>(ledger.monthlySpreadsheetId, 'LINE_ITEMS', LINE_ITEM_COLUMNS)).map(({ value }) => String(value.itemWriteKey)))
+      if ([...expectedKeys].some((key) => !verifiedKeys.has(key))) throw new Error('Missing monthly line item write key')
       await updateRow(ledger.monthlySpreadsheetId, 'TRANSACTIONS', transactionRow, TRANSACTION_COLUMNS, { ...confirmed, writeState: 'CONFIRMED', schemaVersion: 1 })
     },
     async listConfirmedDocuments(monthlySpreadsheetId) {
@@ -131,7 +137,11 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; sheet
 
   async function ensureMonthlyIndex(month: string, monthlySpreadsheetId: string): Promise<void> {
     const rows = await readRows<Record<string, unknown>>(masterSpreadsheetId, 'MONTHLY_INDEX', MASTER_HEADERS.MONTHLY_INDEX)
-    if (rows.some(({ value }) => value.month === month)) return
+    const existing = rows.find(({ value }) => value.month === month)
+    if (existing) {
+      if (existing.value.monthlySpreadsheetId !== monthlySpreadsheetId) throw new Error('Monthly ledger ID mismatch')
+      return
+    }
     await appendRow(masterSpreadsheetId, 'MONTHLY_INDEX', MASTER_HEADERS.MONTHLY_INDEX, {
       month, monthlySpreadsheetId, status: 'READY', aggregateFreshAt: null, updatedAt: null,
     })
@@ -175,12 +185,13 @@ function blankRow(columns: readonly string[]): Record<string, unknown> {
 }
 
 function encodeCell(column: string, value: unknown): unknown {
-  if (value === undefined || value === null) return null
+  if (value === undefined || value === null) return ''
   if (column === 'confidenceByField' || column === 'warnings') return JSON.stringify(value)
   return value
 }
 
 function decodeCell(column: string, value: unknown): unknown {
+  if (value === '') return column === 'confidenceByField' ? {} : column === 'warnings' ? [] : null
   if (column === 'confidenceByField') return parseJson(value, {})
   if (column === 'warnings') return parseJson(value, [])
   return value ?? null
@@ -205,4 +216,12 @@ function toLineItem(value: Record<string, unknown>): OcrLineItem {
 
 function toDocument(value: Record<string, unknown>): OcrDocument {
   return Object.fromEntries(DOCUMENT_COLUMNS.map((column) => [column, value[column] ?? null])) as unknown as OcrDocument
+}
+
+function assertUniqueLineNumbers(lineItems: OcrLineItem[]): void {
+  const seen = new Set<number>()
+  for (const line of lineItems) {
+    if (seen.has(line.lineNumber)) throw new Error('Duplicate line number')
+    seen.add(line.lineNumber)
+  }
 }
