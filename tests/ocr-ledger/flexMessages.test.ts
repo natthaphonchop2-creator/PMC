@@ -76,9 +76,30 @@ describe('OCR LINE Flex messages', () => {
 
     expect(text).not.toContain('ไม่ระบุรายการ')
     expect(text).toContain(`• ×1 ฿100`)
-    expect(text).toContain('ข'.repeat(159) + '…')
-    expect(text).toContain(`• ${'ก'.repeat(159)}…`)
+    expect(text).toContain('…')
     expect(text).not.toContain(longDescription)
+  })
+
+  it('bounds each rendered text node after labels and line-item metadata are added', () => {
+    const message = buildDraftFlex(draft({
+      counterpartyName: 'x'.repeat(500),
+      lineItems: [{ ...line(1), description: 'y'.repeat(500) }],
+    }), reviewOptions())
+
+    expect(textNodes(message).every((value) => [...value].length <= 160)).toBe(true)
+    expect(textNodes(message).find((value) => value.startsWith('คู่ค้า: '))).toMatch(/…$/)
+    expect(textNodes(message).find((value) => value.startsWith('• '))).toMatch(/…$/)
+  })
+
+  it('truncates emoji by Unicode code point without leaving unpaired surrogates', () => {
+    const message = buildDraftFlex(draft({
+      lineItems: [{ ...line(1), description: '🙂'.repeat(500) }],
+    }), reviewOptions())
+    const item = textNodes(message).find((value) => value.startsWith('• '))!
+
+    expect([...item]).toHaveLength(160)
+    expect(hasUnpairedSurrogate(item)).toBe(false)
+    expect(item).toMatch(/…$/)
   })
 })
 
@@ -105,6 +126,10 @@ function reviewOptions() {
 }
 
 function visibleFlexText(message: unknown): string {
+  return textNodes(message).join('\n')
+}
+
+function textNodes(message: unknown): string[] {
   const values: string[] = []
   const visit = (value: unknown) => {
     if (Array.isArray(value)) return value.forEach(visit)
@@ -113,7 +138,18 @@ function visibleFlexText(message: unknown): string {
     }
   }
   visit(message)
-  return values.join('\n')
+  return values
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0xd800 && code <= 0xdbff) {
+      if (index + 1 >= value.length || value.charCodeAt(index + 1) < 0xdc00 || value.charCodeAt(index + 1) > 0xdfff) return true
+      index += 1
+    } else if (code >= 0xdc00 && code <= 0xdfff) return true
+  }
+  return false
 }
 
 function actionValues(message: unknown): Array<Record<string, string>> {

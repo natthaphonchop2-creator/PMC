@@ -87,7 +87,7 @@ function detail(label: string, value: string | number | null | undefined, curren
 }
 
 function text(value: string, style: Record<string, unknown> = {}): FlexText {
-  return { type: 'text', text: value, wrap: true, ...style }
+  return { type: 'text', text: truncate(value), wrap: true, ...style }
 }
 
 function money(value: number, currency?: string | null): string {
@@ -114,7 +114,8 @@ function directionLabel(value: OcrDraft['direction']): string | null {
 }
 
 function truncate(value: string): string {
-  return value.length <= MAX_VISIBLE_VALUE_LENGTH ? value : `${value.slice(0, MAX_VISIBLE_VALUE_LENGTH - 1)}…`
+  const codePoints = Array.from(value)
+  return codePoints.length <= MAX_VISIBLE_VALUE_LENGTH ? value : `${codePoints.slice(0, MAX_VISIBLE_VALUE_LENGTH - 1).join('')}…`
 }
 
 function maskAccount(account: string | null): string | null {
