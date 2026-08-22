@@ -1,0 +1,37 @@
+:root { font-family: 'Noto Sans Thai', 'Sukhumvit Set', 'Thonburi', system-ui, sans-serif; color: #172033; background: #f4f7fb; line-height: 1.7; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; line-height: 1.7; }
+button, input, select, textarea { font: inherit; }
+button, input, select, textarea { min-height: 48px; font-size: 16px; }
+button { cursor: pointer; }
+.ocr-review-page, .ocr-review-notice { width: min(100%, 720px); margin: 0 auto; padding: 20px 16px 104px; }
+.ocr-review-header { margin-bottom: 16px; }
+.ocr-review-header p, .ocr-review-header span { margin: 0; color: #526075; font-size: .9rem; }
+.ocr-review-header h1, .ocr-review-warnings h2, .ocr-review-line h2 { margin: 2px 0; line-height: 1.3; }
+.ocr-review-preview, .ocr-review-warnings, .ocr-review-form fieldset { background: #fff; border: 1px solid #dce3ed; border-radius: 14px; margin: 0 0 16px; padding: 16px; }
+.ocr-review-preview img { display: block; width: 100%; max-height: 480px; object-fit: contain; border-radius: 8px; background: #eef2f7; }
+.ocr-review-warnings { background: #fff8e7; border-color: #f1d58c; }
+.ocr-review-warnings ul { margin: 8px 0 0; padding-left: 22px; }
+.ocr-review-form fieldset { min-inline-size: 0; }
+.ocr-review-form legend { padding: 0 6px; font-weight: 700; line-height: 1.3; }
+.ocr-review-fields { display: grid; gap: 14px; grid-template-columns: 1fr; }
+.ocr-review-field { min-width: 0; }
+.ocr-review-field label, .ocr-review-hint, .ocr-review-error { display: block; }
+.ocr-review-field label { font-weight: 650; }
+.ocr-review-hint { color: #64748b; font-size: .82rem; }
+.ocr-review-field input, .ocr-review-field select, .ocr-review-field textarea { width: 100%; border: 1px solid #aeb9c9; border-radius: 9px; background: #fff; padding: 8px 11px; }
+.ocr-review-field textarea { min-height: 92px; resize: vertical; }
+.ocr-review-field input:user-invalid, .ocr-review-field select:user-invalid, .ocr-review-field textarea:user-invalid, .ocr-review-field [aria-invalid='true'] { border: 2px solid #b42318; background: #fff1f0; }
+.ocr-review-error { min-height: 1.7em; color: #b42318; font-size: .9rem; }
+.ocr-review-line { border-top: 1px solid #dce3ed; margin-top: 14px; padding-top: 14px; }
+.ocr-review-line-head { align-items: center; display: flex; justify-content: space-between; gap: 12px; }
+.ocr-review-line-head button, .ocr-review-add-line { border: 1px solid #9aa8bc; border-radius: 9px; background: #fff; padding: 8px 14px; }
+.ocr-review-submit { position: sticky; bottom: 0; background: #f4f7fb; border-top: 1px solid #dce3ed; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); }
+.ocr-review-submit p { margin: 0 0 8px; color: #526075; font-size: .85rem; }
+.ocr-review-submit button { width: 100%; border: 0; border-radius: 10px; background: #2457d6; color: #fff; font-weight: 700; padding: 10px 16px; }
+.ocr-review-submit button:disabled { cursor: wait; opacity: .7; }
+.ocr-review-notice { display: grid; min-height: 100dvh; place-items: center; text-align: center; }
+.ocr-review-notice p { background: #fff; border: 1px solid #dce3ed; border-radius: 12px; margin: 0; padding: 18px; }
+.ocr-review-notice.error p { border-color: #e4a29d; color: #9d1c14; }
+.ocr-review-notice.success p { border-color: #90c6a4; color: #146c3a; }
+@media (min-width: 560px) { .ocr-review-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ocr-review-field:has(textarea) { grid-column: 1 / -1; } }

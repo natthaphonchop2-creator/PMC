@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:client && npm run build:server",
+    "build": "npm run build:client && npm run build:ocr-review && npm run build:server",
     "build:client": "tsc -b && vite build",
+    "build:ocr-review": "vite build --config vite.ocr-review.config.ts",
     "build:server": "tsc -p tsconfig.server.json",
     "booking:test": "vitest run apps/pmc-google-booking-ops/tests",
     "ocr:test": "vitest run tests/ocr-ledger",
@@ -21,6 +22,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@line/liff": "^2.30.0",
     "echarts": "^6.1.0",
     "googleapis": "^176.0.0",
     "gsap": "^3.15.0",
