@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import type { OcrDraft, OcrExtraction, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
+import type { OcrDocument, OcrDraft, OcrExtraction, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
 import { bangkokMonthKey } from './domain.js'
 import { parseOcrEditablePatch } from './editValidation.js'
-import { buildDraftFlex, buildFinalFlex } from './flexMessages.js'
+import { buildDraftFlex, buildFinalFlex, buildPendingReportMessage, buildReportMessage } from './flexMessages.js'
 import type { OcrDrivePort } from './googleClient.js'
 import type { OcrLedgerStore } from './googleStore.js'
 import { prepareOcrImage } from './imageProcessing.js'
 import type { OcrLinePort } from './lineClient.js'
 import { OcrExtractorError, type OcrExtractorPort } from './openAiExtractor.js'
+import { aggregateOcrReport, dailyReportIdempotencyKey, documentIsInWindow, reportWindow, shouldSendDailyReport, type OcrReportCommand } from './reports.js'
 import { signReviewToken } from './security.js'
 
 type WorkerErrorCode =
@@ -39,7 +40,7 @@ export function createOcrLedgerWorker(deps: {
       for (const job of leased) {
         result.processed += 1
         try {
-          await processJob(job, deps)
+          result.reportSent ||= await processJob(job, deps)
           await updateJob(deps.store, { ...job, state: 'DONE', leaseUntil: null, lastErrorCode: null, updatedAt: deps.now().toISOString() })
           result.succeeded += 1
         } catch (error) {
@@ -47,6 +48,7 @@ export function createOcrLedgerWorker(deps: {
           await handleFailure(job, classifyError(error), deps)
         }
       }
+      result.reportSent ||= await sendScheduledDailyReport(deps)
       return result
     },
   }
@@ -55,19 +57,22 @@ export function createOcrLedgerWorker(deps: {
 async function processJob(
   job: OcrQueueJob,
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
-): Promise<void> {
+): Promise<boolean> {
   const payload = parsePayload(job.payloadJson)
   if (typeof payload.deliveryDocumentId === 'string' && typeof payload.groupId === 'string') {
     const saved = await getDraft(deps.store, payload.deliveryDocumentId)
     if (!saved) throw workerError('SHEET_WRITE_FAILED')
     await pushDraft(deps.line, payload.groupId, saved, deps.config, deps.now())
-    return
+    return false
   }
-  if (job.jobType === 'INTAKE') return processIntake(job, payload, deps)
-  if (job.jobType === 'EDIT') return processEdit(job, payload, deps)
-  if (job.jobType === 'CONFIRM' || job.jobType === 'CANCEL') return processTerminalAction(job, payload, deps)
-  if (job.jobType === 'RETRY') return processRetry(job, payload, deps)
-  if (job.jobType === 'REPORT_COMMAND') return
+  if (job.jobType === 'INTAKE') { await processIntake(job, payload, deps); return false }
+  if (job.jobType === 'EDIT') { await processEdit(job, payload, deps); return false }
+  if (job.jobType === 'CONFIRM' || job.jobType === 'CANCEL') { await processTerminalAction(job, payload, deps); return false }
+  if (job.jobType === 'RETRY') { await processRetry(job, payload, deps); return false }
+  if (job.jobType === 'REPORT_COMMAND') {
+    await sendReport(requiredReportCommand(payload.command), requiredString(payload.groupId, 'LINE_SEND_FAILED'), deps)
+    return true
+  }
   throw workerError('OCR_INVALID_OUTPUT')
 }
 
@@ -251,6 +256,169 @@ async function processRetry(
   payload.deliveryDocumentId = revised.documentId
   job.payloadJson = JSON.stringify(payload)
   await pushDraft(deps.line, requiredString(payload.groupId, 'LINE_SEND_FAILED'), revised, deps.config, deps.now())
+}
+
+async function sendScheduledDailyReport(
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
+): Promise<boolean> {
+  const now = deps.now()
+  let jobs: OcrQueueJob[]
+  try { jobs = await deps.store.listJobs() } catch { throw workerError('SHEET_WRITE_FAILED') }
+  const sentKeys = new Set(jobs.map((job) => job.idempotencyKey))
+  if (!shouldSendDailyReport({ enabled: deps.config.dailyReportEnabled, groupId: deps.config.allowedGroupId, now, sentKeys })) return false
+
+  try {
+    await sendReport('TODAY', deps.config.allowedGroupId, deps)
+  } catch (error) {
+    if (isWorkerError(error)) return false
+    throw error
+  }
+
+  const date = reportWindow('TODAY', now).start!
+  const marker: OcrQueueJob = {
+    jobId: `report-${randomUUID()}`, jobType: 'REPORT_COMMAND', documentId: null,
+    idempotencyKey: dailyReportIdempotencyKey(deps.config.allowedGroupId, date),
+    payloadJson: JSON.stringify({ command: 'TODAY', groupId: deps.config.allowedGroupId, scheduled: true }),
+    state: 'DONE', attempts: 0, availableAt: now.toISOString(), leaseUntil: null, lastErrorCode: null,
+    createdAt: now.toISOString(), updatedAt: now.toISOString(),
+  }
+  try { await deps.store.appendJob(marker) } catch { throw workerError('SHEET_WRITE_FAILED') }
+  return true
+}
+
+async function sendReport(
+  command: OcrReportCommand,
+  groupId: string,
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
+): Promise<void> {
+  const now = deps.now()
+  if (command === 'PENDING') {
+    const pending = await pendingDrafts(deps.store)
+    const message = buildPendingReportMessage({
+      title: 'รายการรอตรวจสอบ', totalPending: pending.length,
+      entries: pending.slice(0, 10).map(({ draft }) => ({
+        label: draft.documentId,
+        value: pendingDescription(draft),
+        reviewUri: reviewUrl(draft, groupId, deps.config, now),
+      })),
+    })
+    return pushReport(deps.line, groupId, message)
+  }
+  if (command === 'ERRORS') {
+    const errors = await failedJobs(deps.store)
+    return pushReport(deps.line, groupId, buildReportMessage({
+      title: 'รายการที่ต้องตรวจสอบข้อผิดพลาด',
+      entries: errors.length === 0
+        ? [{ label: 'ไม่พบรายการผิดพลาด' }]
+        : errors.slice(0, 10).map((job) => ({ label: job.documentId ?? job.jobId, value: job.lastErrorCode ?? 'UNKNOWN' })),
+    }))
+  }
+
+  const window = reportWindow(command, now)
+  const confirmed = await confirmedDocumentsForWindow(deps.store, window)
+  const operational = await operationalDocuments(deps.store)
+  const report = aggregateOcrReport([...confirmed, ...operational.filter((document) => documentIsInWindow(document, window))])
+  return pushReport(deps.line, groupId, buildReportMessage({
+    title: reportTitle(command),
+    entries: reportEntries(report),
+  }))
+}
+
+async function confirmedDocumentsForWindow(store: OcrLedgerStore, window: ReturnType<typeof reportWindow>): Promise<OcrDocument[]> {
+  if (!window.start || !window.endExclusive) return []
+  const months = calendarMonths(window.start, window.endExclusive)
+  const documents: OcrDocument[] = []
+  try {
+    for (const month of months) {
+      const ledger = await store.ensureMonthlyLedger(month)
+      documents.push(...await store.listConfirmedDocuments(ledger.monthlySpreadsheetId))
+    }
+  } catch { throw workerError('SHEET_WRITE_FAILED') }
+  return documents.filter((document) => documentIsInWindow(document, window))
+}
+
+async function operationalDocuments(store: OcrLedgerStore): Promise<OcrDocument[]> {
+  let jobs: OcrQueueJob[]
+  try { jobs = await store.listJobs() } catch { throw workerError('SHEET_WRITE_FAILED') }
+  const ids = [...new Set(jobs.map((job) => job.documentId).filter((id): id is string => Boolean(id)))]
+  const drafts = await Promise.all(ids.map((id) => getDraft(store, id)))
+  return drafts.filter((draft): draft is OcrDraft => draft !== null && draft.state !== 'CONFIRMED')
+}
+
+async function pendingDrafts(store: OcrLedgerStore): Promise<Array<{ draft: OcrDraft; createdAt: string }>> {
+  let jobs: OcrQueueJob[]
+  try { jobs = await store.listJobs() } catch { throw workerError('SHEET_WRITE_FAILED') }
+  const intakeCreatedAt = new Map<string, string>()
+  for (const job of jobs) if (job.documentId && !intakeCreatedAt.has(job.documentId)) intakeCreatedAt.set(job.documentId, job.createdAt)
+  const drafts = await Promise.all([...intakeCreatedAt.keys()].map(async (documentId) => ({ draft: await getDraft(store, documentId), createdAt: intakeCreatedAt.get(documentId)! })))
+  return drafts
+    .filter((entry): entry is { draft: OcrDraft; createdAt: string } => entry.draft !== null && (entry.draft.state === 'PENDING_REVIEW' || entry.draft.state === 'RETRY_PENDING'))
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.draft.documentId.localeCompare(right.draft.documentId))
+}
+
+async function failedJobs(store: OcrLedgerStore): Promise<OcrQueueJob[]> {
+  try {
+    return (await store.listJobs())
+      .filter((job) => job.state === 'FAILED')
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.jobId.localeCompare(right.jobId))
+  } catch { throw workerError('SHEET_WRITE_FAILED') }
+}
+
+function requiredReportCommand(value: unknown): OcrReportCommand {
+  if (value === 'TODAY' || value === 'YESTERDAY' || value === 'MONTH' || value === 'PENDING' || value === 'ERRORS') return value
+  throw workerError('OCR_INVALID_OUTPUT')
+}
+
+function calendarMonths(start: string, endExclusive: string): string[] {
+  const months: string[] = []
+  let cursor = `${start.slice(0, 7)}-01`
+  while (cursor < endExclusive) {
+    months.push(cursor.slice(0, 7))
+    const [year, month] = cursor.slice(0, 7).split('-').map(Number)
+    cursor = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10)
+  }
+  return months
+}
+
+function reportTitle(command: Extract<OcrReportCommand, 'TODAY' | 'YESTERDAY' | 'MONTH'>): string {
+  if (command === 'TODAY') return 'สรุปวันนี้'
+  if (command === 'YESTERDAY') return 'สรุปเมื่อวาน'
+  return 'สรุปเดือนนี้'
+}
+
+function reportEntries(report: ReturnType<typeof aggregateOcrReport>): Array<{ label: string; value?: string }> {
+  const financial = report.operational.confirmed === 0
+    ? [{ label: 'ยังไม่มีรายการยืนยันในช่วงนี้' }]
+    : [
+      { label: 'รายรับ', value: money(report.income) }, { label: 'รายจ่าย', value: money(report.expense) },
+      { label: 'คงเหลือสุทธิ', value: money(report.net) }, { label: 'ภาษี', value: money(report.tax) },
+      ...report.categories.slice(0, 5).map((category) => ({ label: `หมวด ${category.categoryId}`, value: money(category.amount) })),
+    ]
+  return [...financial, { label: 'รอตรวจสอบ', value: String(report.operational.pending) }, { label: 'ผิดพลาด', value: String(report.operational.failed) }, { label: 'ยกเลิก', value: String(report.operational.cancelled) }]
+}
+
+function pendingDescription(draft: OcrDraft): string {
+  const date = draft.documentDate ?? draft.transferDate ?? draft.receiptDate ?? 'ไม่ระบุวันที่'
+  const amount = draft.grandTotal ?? draft.amount
+  return amount === null ? date : `${date} · ${money(amount)}`
+}
+
+function reviewUrl(draft: OcrDraft, groupId: string, config: OcrLedgerConfig, now: Date): string {
+  const token = signReviewToken({
+    v: 1, documentId: draft.documentId, groupId, draftVersion: draft.draftVersion,
+    action: 'REVIEW', exp: Math.floor(now.getTime() / 1000) + 24 * 60 * 60,
+  }, config.reviewSigningSecret)
+  const url = new URL(`https://liff.line.me/${config.liffId}`)
+  url.searchParams.set('token', token)
+  return url.toString()
+}
+
+async function pushReport(line: OcrLinePort, groupId: string, message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage>): Promise<void> {
+  try { await line.push(groupId, [message]) } catch { throw workerError('LINE_SEND_FAILED') }
+}
+
+function money(value: number): string {
+  return `฿${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
 }
 
 async function handleFailure(

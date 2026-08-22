@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { OcrDraft } from '../../src/apps/ocr-ledger/contracts'
 import { verifyReviewToken } from '../../server/ocr-ledger/security'
-import { buildDraftFlex, buildFinalFlex, buildReportMessage } from '../../server/ocr-ledger/flexMessages'
+import { buildDraftFlex, buildFinalFlex, buildPendingReportMessage, buildReportMessage } from '../../server/ocr-ledger/flexMessages'
 
 describe('OCR LINE Flex messages', () => {
   it('makes a compact privacy-safe draft card with five items, warnings, and signed review actions', () => {
@@ -100,6 +100,18 @@ describe('OCR LINE Flex messages', () => {
     expect([...item]).toHaveLength(160)
     expect(hasUnpairedSurrogate(item)).toBe(false)
     expect(item).toMatch(/…$/)
+  })
+
+  it('keeps pending report review links actionable while bounding each visible value', () => {
+    const message = buildPendingReportMessage({
+      title: 'รายการรอตรวจสอบ', totalPending: 11,
+      entries: [{ label: 'OCR-20260822-abc123', value: 'ร้านค้าที่มีชื่อยาวมาก'.repeat(20), reviewUri: 'https://liff.line.me/2001234567-review?token=fresh-review-token' }],
+    })
+
+    expect(message.altText).toBe('รายงานบัญชี')
+    expect(actionValues(message)).toContainEqual(expect.objectContaining({ type: 'uri', label: 'เปิดตรวจสอบ' }))
+    expect(JSON.stringify(message)).toContain('fresh-review-token')
+    expect(textNodes(message).every((value) => [...value].length <= 160)).toBe(true)
   })
 })
 

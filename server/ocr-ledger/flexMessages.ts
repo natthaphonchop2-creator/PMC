@@ -16,6 +16,12 @@ export interface ReportMessageOptions {
   entries: Array<{ label: string; value?: string | null }>
 }
 
+export interface PendingReportMessageOptions {
+  title: string
+  totalPending: number
+  entries: Array<{ label: string; value?: string | null; reviewUri: string }>
+}
+
 export interface FlexMessage {
   type: 'flex'
   altText: string
@@ -56,11 +62,24 @@ export function buildReportMessage(options: ReportMessageOptions): FlexMessage {
   return flex(truncate(options.title), options.entries.flatMap(({ label, value }) => value ? [text(truncate(label), { weight: 'bold' }), text(truncate(value), { color: '#374151', size: 'sm' })] : [text(truncate(label))]), [], 'รายงานบัญชี')
 }
 
+export function buildPendingReportMessage(options: PendingReportMessageOptions): FlexMessage {
+  const summary = bubble(options.title, [text(`รอตรวจสอบทั้งหมด ${options.totalPending} รายการ`, { color: '#374151', size: 'sm' })])
+  const entries = options.entries.slice(0, 10).map(({ label, value, reviewUri }) => {
+    const rows = value ? [text(label, { weight: 'bold' }), text(value, { color: '#374151', size: 'sm' })] : [text(label, { weight: 'bold' })]
+    return bubble('รายการรอตรวจสอบ', rows, [{ type: 'uri', label: 'เปิดตรวจสอบ', uri: reviewUri }])
+  })
+  return { type: 'flex', altText: 'รายงานบัญชี', contents: { type: 'carousel', contents: [summary, ...entries] } }
+}
+
 function flex(title: string, contents: FlexText[], actions: FlexAction[] = [], altText = title): FlexMessage {
+  return { type: 'flex', altText, contents: bubble(title, contents, actions) }
+}
+
+function bubble(title: string, contents: FlexText[], actions: FlexAction[] = []): Record<string, unknown> {
   const body: Record<string, unknown> = { type: 'box', layout: 'vertical', contents: [text(title, { weight: 'bold', size: 'lg' }), ...contents] }
   const bubble: Record<string, unknown> = { type: 'bubble', body }
   if (actions.length > 0) bubble.footer = { type: 'box', layout: 'vertical', spacing: 'sm', contents: actions.map((action) => ({ type: 'button', style: action.label === 'ยืนยัน' ? 'primary' : 'secondary', action })) }
-  return { type: 'flex', altText, contents: bubble }
+  return bubble
 }
 
 function draftDetails(draft: OcrDraft): FlexText[] {

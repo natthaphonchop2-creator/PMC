@@ -300,6 +300,76 @@ describe('createOcrLedgerWorker', () => {
     expect(result.processed).toBe(2)
     expect(store.jobs.map((entry) => entry.state)).toEqual(['DONE', 'DONE', 'QUEUED'])
   })
+
+  it('delivers a confirmed-only TODAY command report through the single writer', async () => {
+    const store = new FakeStore([job('REPORT_COMMAND', { command: 'TODAY', groupId: 'Cgroup1' })])
+    store.confirmedDocuments.set('monthly-2026-08', [
+      draft({ state: 'CONFIRMED', direction: 'INCOME', grandTotal: 1000, taxAmount: 70, categoryId: 'sales' }),
+      draft({ documentId: 'OCR-20260822-def456', state: 'CONFIRMED', direction: 'EXPENSE', grandTotal: 300, taxAmount: 21, categoryId: 'office' }),
+      draft({ documentId: 'OCR-20260822-ghi789', state: 'PENDING_REVIEW', direction: 'EXPENSE', grandTotal: 9999 }),
+    ])
+    const { worker, line, extractor } = harness(store)
+
+    const result = await worker.runOnce()
+
+    expect(result).toMatchObject({ processed: 1, succeeded: 1, failed: 0, reportSent: true })
+    expect(extractor.extract).not.toHaveBeenCalled()
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
+    expect(JSON.stringify(line.push.mock.calls[0][1])).toContain('1,000')
+    expect(JSON.stringify(line.push.mock.calls[0][1])).toContain('300')
+    expect(JSON.stringify(line.push.mock.calls[0][1])).not.toContain('9,999')
+  })
+
+  it('catches up the 20:00 Bangkok report and records its idempotency row only after the LINE push', async () => {
+    const current = new Date('2026-08-22T13:00:00.000Z')
+    const store = new FakeStore([])
+    const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
+
+    const result = await worker.runOnce()
+
+    expect(result).toMatchObject({ processed: 0, reportSent: true })
+    expect(line.push).toHaveBeenCalledTimes(1)
+    expect(store.jobs).toEqual([expect.objectContaining({
+      jobType: 'REPORT_COMMAND', state: 'DONE', idempotencyKey: 'report:Cgroup1:2026-08-22:daily',
+    })])
+  })
+
+  it('lists the ten oldest pending drafts and refreshes each REVIEW token for 24 hours', async () => {
+    const oldest = draft({ documentId: 'OCR-20260822-oldest1', draftVersion: 3, state: 'PENDING_REVIEW' })
+    const newest = draft({ documentId: 'OCR-20260822-newest1', draftVersion: 2, state: 'PENDING_REVIEW' })
+    const store = new FakeStore([
+      job('INTAKE', intakePayload(), newest.documentId, 'newest'),
+      job('INTAKE', intakePayload(), oldest.documentId, 'oldest'),
+      job('REPORT_COMMAND', { command: 'PENDING', groupId: 'Cgroup1' }, null, 'report'),
+    ])
+    store.jobs[0].createdAt = '2026-08-22T03:10:00.000Z'
+    store.jobs[1].createdAt = '2026-08-22T03:00:00.000Z'
+    store.jobs[0].state = 'DONE'
+    store.jobs[1].state = 'DONE'
+    store.drafts.push(oldest, newest)
+    const { worker, line } = harness(store)
+
+    await worker.runOnce()
+
+    const uris = findUriActions(line.push.mock.calls[0][1])
+    expect(uris).toHaveLength(2)
+    expect(uris.map((uri) => JSON.parse(Buffer.from(new URL(uri).searchParams.get('token')!.split('.')[0], 'base64url').toString('utf8')).documentId)).toEqual([oldest.documentId, newest.documentId])
+    expect(verifyReviewToken(new URL(uris[0]).searchParams.get('token')!, CONFIG.reviewSigningSecret, Math.floor(START.getTime() / 1000))).toMatchObject({
+      action: 'REVIEW', draftVersion: 3, exp: Math.floor(START.getTime() / 1000) + 24 * 60 * 60,
+    })
+  })
+
+  it('does not record the daily idempotency key when LINE rejects the scheduled report', async () => {
+    const current = new Date('2026-08-22T16:00:00.000Z')
+    const store = new FakeStore([])
+    const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
+    line.push.mockRejectedValueOnce(new Error('LINE unavailable'))
+
+    const result = await worker.runOnce()
+
+    expect(result.reportSent).toBe(false)
+    expect(store.jobs).toEqual([])
+  })
 })
 
 class FakeStore implements OcrLedgerStore {
@@ -307,6 +377,7 @@ class FakeStore implements OcrLedgerStore {
   errors: Array<{ jobId: string; documentId: string | null; code: string; createdAt: string }> = []
   audits: Array<Record<string, unknown>> = []
   finalized: Array<{ draft: OcrDraft; ledger: { month: string; monthlySpreadsheetId: string } }> = []
+  confirmedDocuments = new Map<string, OcrDraft[]>()
   terminalDecisions = new Map<string, 'CONFIRM' | 'CANCEL'>()
   saveFailures = 0
   getDraftCalls = 0
@@ -342,7 +413,7 @@ class FakeStore implements OcrLedgerStore {
   }
   async ensureMonthlyLedger(month: string) { return { month, monthlySpreadsheetId: `monthly-${month}` } }
   async finalizeDocument(next: OcrDraft, ledger: { month: string; monthlySpreadsheetId: string }) { this.finalized.push({ draft: structuredClone(next), ledger }) }
-  async listConfirmedDocuments() { return [] }
+  async listConfirmedDocuments(monthlySpreadsheetId: string) { return structuredClone(this.confirmedDocuments.get(monthlySpreadsheetId) ?? []) }
 }
 
 function harness(store: FakeStore, order: string[] = [], now: () => Date = () => START, config: Partial<OcrLedgerConfig> = {}) {
@@ -405,6 +476,19 @@ function findPostbackData(messages: unknown): string {
   const match = /"data":"([^"]+)"/.exec(serialized)
   if (!match) throw new Error('postback data not found')
   return match[1]
+}
+
+function findUriActions(messages: unknown): string[] {
+  const uris: string[] = []
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) return value.forEach(visit)
+    if (!value || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    if (record.type === 'uri' && typeof record.uri === 'string') uris.push(record.uri)
+    Object.values(record).forEach(visit)
+  }
+  visit(messages)
+  return uris
 }
 
 function draft(patch: Partial<OcrDraft> = {}): OcrDraft {
