@@ -171,7 +171,7 @@ describe('OCR ledger LIFF review API', () => {
       headers: { authorization: 'Bearer raw-line-id-token' }, body: JSON.stringify({ patch: editablePatch({
         documentType: 'TRANSFER_SLIP', senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '1234567890',
         receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '987-*-***0',
-        transferDate: '2026-08-22', transferTime: '10:15', amount: 100,
+        transferDate: '2026-08-22', transferTime: '10:15', amount: 100, lineItems: [],
       }) }),
     })
 

@@ -41,6 +41,7 @@ export function parseOcrEditablePatch(value: unknown): OcrEditablePatch | null {
   if (Object.hasOwn(value, 'receiptDate') && !isNullableIsoCalendarDate(value.receiptDate)) return null
   if (Object.hasOwn(value, 'transferTime') && !isNullableTime(value.transferTime)) return null
   if (!Array.isArray(value.lineItems) || !value.lineItems.every((line, index) => isEditableLine(line, index + 1))) return null
+  if (value.documentType === 'TRANSFER_SLIP' && value.lineItems.length > 0) return null
   const patch = structuredClone(value) as OcrEditablePatch
   if (Object.hasOwn(patch, 'senderAccountMasked')) patch.senderAccountMasked = maskAccountIdentifier(patch.senderAccountMasked)
   if (Object.hasOwn(patch, 'receiverAccountMasked')) patch.receiverAccountMasked = maskAccountIdentifier(patch.receiverAccountMasked)

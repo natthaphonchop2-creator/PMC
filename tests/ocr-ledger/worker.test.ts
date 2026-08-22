@@ -191,6 +191,7 @@ describe('createOcrLedgerWorker', () => {
     ['non-finite grand total', { grandTotal: Number.POSITIVE_INFINITY }],
     ['invalid receipt line numbering', { lineItems: [{ ...draft().lineItems[0], lineNumber: 2 }] }],
     ['invalid receipt line amount', { lineItems: [{ ...draft().lineItems[0], lineTotal: Number.NaN }] }],
+    ['receipt lines attached to a transfer slip', { documentType: 'TRANSFER_SLIP' }],
   ])('keeps the draft pending and returns review-required for a direct Flex confirm with %s', async (_name, patch) => {
     const existing = draft({ lineItems: [lineItemDraft()], ...patch })
     const store = new FakeStore([job('CONFIRM', actionPayload(), existing.documentId)])

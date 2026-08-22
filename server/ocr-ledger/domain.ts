@@ -96,6 +96,7 @@ export function assertConfirmableDraft(draft: OcrDraft): void {
   if (typeof draft.categoryId !== 'string' || draft.categoryId.trim().length === 0) throw new Error('Draft requires review')
   if (typeof draft.grandTotal !== 'number' || !Number.isFinite(draft.grandTotal)) throw new Error('Draft requires review')
   if (!Array.isArray(draft.lineItems)) throw new Error('Draft requires review')
+  if (draft.documentType === 'TRANSFER_SLIP' && draft.lineItems.length > 0) throw new Error('Draft requires review')
   if (draft.documentType === 'RECEIPT' && !draft.lineItems.every((line, index) => isConfirmableReceiptLine(line, index + 1, draft.documentId))) {
     throw new Error('Draft requires review')
   }

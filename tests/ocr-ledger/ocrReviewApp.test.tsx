@@ -80,6 +80,19 @@ describe('OCR LIFF review page', () => {
     }))
   })
 
+  it('clears receipt line items when the reviewer changes the document type to a transfer slip', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    render(<OcrReviewApp adapter={app} />)
+    await screen.findByRole('button', { name: 'ลบรายการ 1' })
+
+    await user.selectOptions(screen.getByLabelText(/^ประเภทเอกสาร/), 'TRANSFER_SLIP')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
+    expect((app.submitEdit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1].lineItems).toEqual([])
+  })
+
   it('starts draft and image reads in parallel with the raw LINE ID token', async () => {
     const nextDraft = deferred<OcrReviewDraft>()
     const nextImage = deferred<string>()

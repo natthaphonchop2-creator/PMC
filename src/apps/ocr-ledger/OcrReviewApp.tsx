@@ -140,6 +140,18 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
     setSaveError(null)
     setDraft((current) => current ? { ...current, [key]: value } : current)
   }
+  const updateDocumentType = (documentType: OcrDocumentType) => {
+    setSaveError(null)
+    setDraft((current) => current ? {
+      ...current,
+      documentType,
+      lineItems: documentType === 'TRANSFER_SLIP' ? [] : current.lineItems,
+    } : current)
+    if (documentType === 'TRANSFER_SLIP') {
+      setRowIds([])
+      setNumericTexts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith('line:'))))
+    }
+  }
   const updateLineText = (index: number, key: 'description' | 'unit' | 'categoryId', value: string) => {
     setSaveError(null)
     setDraft((current) => {
@@ -207,7 +219,7 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
     {draft.warnings.length > 0 && <section className="ocr-review-warnings" aria-labelledby="ocr-review-warnings-title"><h2 id="ocr-review-warnings-title">จุดที่ควรตรวจ</h2><ul>{draft.warnings.map((warning) => <li key={`${warning.code}-${warning.field}`}>{warning.message}</li>)}</ul></section>}
     <form className="ocr-review-form" onSubmit={submit} onInvalid={onInvalid} onBlur={onBlur} onInput={onInput}>
       <fieldset><legend>ข้อมูลเอกสาร <span aria-hidden="true">*</span></legend><div className="ocr-review-fields">
-        <Field name="documentType" label="ประเภทเอกสาร" error={fieldError('documentType')} required><select id="documentType" name="documentType" required value={draft.documentType ?? ''} onChange={(event) => update('documentType', event.target.value as OcrDocumentType)} {...inputProps('documentType')}><option value="">เลือกประเภท</option><option value="RECEIPT">ใบเสร็จ</option><option value="TRANSFER_SLIP">สลิปโอนเงิน</option></select></Field>
+        <Field name="documentType" label="ประเภทเอกสาร" error={fieldError('documentType')} required><select id="documentType" name="documentType" required value={draft.documentType ?? ''} onChange={(event) => updateDocumentType(event.target.value as OcrDocumentType)} {...inputProps('documentType')}><option value="">เลือกประเภท</option><option value="RECEIPT">ใบเสร็จ</option><option value="TRANSFER_SLIP">สลิปโอนเงิน</option></select></Field>
         <Field name="direction" label="ทิศทางรายการ" error={fieldError('direction')} required><select id="direction" name="direction" required value={draft.direction ?? ''} onChange={(event) => update('direction', event.target.value as OcrDirection)} {...inputProps('direction')}><option value="">เลือกทิศทาง</option><option value="EXPENSE">รายจ่าย</option><option value="INCOME">รายรับ</option></select></Field>
         <Field name="documentDate" label="วันที่เอกสาร" error={fieldError('documentDate')} required><input id="documentDate" name="documentDate" type="date" required value={draft.documentDate ?? ''} onChange={(event) => update('documentDate', event.target.value)} {...inputProps('documentDate')} /></Field>
         <Field name="documentTime" label="เวลาเอกสาร"><input id="documentTime" name="documentTime" type="time" value={draft.documentTime ?? ''} onChange={(event) => update('documentTime', nullableString(event.target.value))} /></Field>
