@@ -35,7 +35,12 @@ import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
 import { createBookingRepositories, type SheetStore } from './repositories'
-import { runDailyCallReminders, runDailyDoctorSchedules, runDepositExpiryReminders } from './workflows/callQueue'
+import {
+  createInitialCallTask,
+  runDailyCallReminders,
+  runDailyDoctorSchedules,
+  runDepositExpiryReminders,
+} from './workflows/callQueue'
 import { writeDashboard } from './workflows/dashboard'
 import {
   buildProductionFlexValidationMessages,
@@ -197,6 +202,19 @@ export function runDailyOperationsWorkflow(ports: BookingPorts): void {
   writeDashboard(ports)
 }
 
+export function runBookingRetriesWorkflow(): {
+  pendingBefore: number
+  pendingAfter: number
+} {
+  const runtime = createRuntime()
+  const pendingBefore = runtime.repositories.retries.listPending().length
+  runEligibleRetries(runtime)
+  return {
+    pendingBefore,
+    pendingAfter: runtime.repositories.retries.listPending().length,
+  }
+}
+
 function retryPayload(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') {
     try {
@@ -307,11 +325,71 @@ export function runEligibleRetries(ports: BookingPorts): void {
           throw new Error('Doctor Calendar overlap')
         }
         const calendarEventId = ensureDoctorCalendarEvent(booking, ports.calendar)
-        ports.repositories.bookings.update(
+        const confirmed = ports.repositories.bookings.update(
           caseId,
           booking.version,
           { calendarEventId, calendarState: 'OK', status: 'BOOKING_CONFIRMED' },
           { actor: 'system', reason: 'Calendar retry succeeded', correlationId: id },
+        )
+        createInitialCallTask(confirmed, ports)
+        const payload = retryPayload(retry.payload)
+        const paymentEvidenceFileIds = (payload.paymentEvidenceFileIds as string[]) ?? []
+        const chatEvidenceFileIds = (payload.chatEvidenceFileIds as string[]) ?? []
+        let mediaSafeError: string | null = null
+        let evidence
+        try {
+          evidence = ports.media.images(
+            confirmed.caseId,
+            paymentEvidenceFileIds,
+            chatEvidenceFileIds,
+          )
+        } catch (error) {
+          mediaSafeError = error instanceof Error ? error.message : 'Evidence media signing failed'
+          evidence = {
+            payment: null,
+            chats: [],
+            totalChatCount: chatEvidenceFileIds.length,
+          }
+        }
+        sendBookingConfirmationMessages(
+          confirmed,
+          ports.line,
+          ports.config.adminLineGroupId(),
+          evidence,
+          ports.config.brandLogoUrl(),
+          confirmed.version,
+          bookingTeamProfiles(confirmed, ports.config),
+        )
+        if (mediaSafeError) {
+          ports.repositories.retries.enqueue({
+            id: `RETRY-${caseId}-ADMIN-EVIDENCE`,
+            caseId,
+            operation: 'ADMIN_EVIDENCE_LINE',
+            idempotencyKey: `${caseId}:ADMIN_EVIDENCE_READY:${confirmed.version}`,
+            attempts: 0,
+            status: 'PENDING',
+            safeError: mediaSafeError,
+            payload: {
+              paymentEvidenceFileIds,
+              chatEvidenceFileIds,
+              messageVersion: confirmed.version,
+            },
+          })
+        }
+        ports.repositories.bookings.update(
+          caseId,
+          confirmed.version,
+          {
+            lineState: mediaSafeError ? 'RETRY' : 'OK',
+            doctorLineNotifiedAt: ports.clock.nowIso(),
+          },
+          {
+            actor: 'system',
+            reason: mediaSafeError
+              ? mediaSafeError
+              : 'Calendar retry completed Admin and doctor LINE notifications',
+            correlationId: id,
+          },
         )
       } else if (operation === 'DRIVE_EVIDENCE') {
         const payload = retryPayload(retry.payload)

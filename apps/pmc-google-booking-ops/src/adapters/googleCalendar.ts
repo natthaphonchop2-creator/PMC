@@ -5,7 +5,7 @@ export function calendarEventInput(booking: BookingCase): CalendarEventInput {
   if (!booking.calendarId) throw new Error('doctor calendar is not configured')
   return {
     calendarId: booking.calendarId,
-    externalId: booking.caseId,
+    externalId: `${booking.caseId}:${booking.formResponseId}`,
     colorId: '5',
     summary: `${booking.customerName} · ${booking.phoneNormalized}`,
     description: `บริการ ${booking.serviceId}\nอ้างอิง ${booking.caseId}`,

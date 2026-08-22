@@ -17,6 +17,7 @@ function onBookingFormSubmit(e) { return PmcBooking.onBookingFormSubmit(e); }
 function onCallResultSubmit(e) { return PmcBooking.onCallResultSubmit(e); }
 function doPost(e) { return PmcBooking.doPost(e); }
 function runDailyOperations() { return PmcBooking.runDailyOperations(); }
+function runPmcBookingRetries() { return PmcBooking.runPmcBookingRetries(); }
 function pollJeraIncoming() { return PmcBooking.pollJeraIncoming(); }
 function runIntegrityChecks() { return PmcBooking.runIntegrityChecks(); }
 function setupPmcBookingSystem() { return PmcBooking.setupPmcBookingSystem(); }

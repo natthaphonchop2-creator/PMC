@@ -67,6 +67,12 @@ Edit the ignored `.clasp.json` locally and replace the example Script ID with th
 
 Enable the Google Calendar advanced service in Apps Script and enable the Google Calendar API in the linked Google Cloud project.
 
+## Calendar idempotency and retry continuation
+
+Calendar event IDs are derived from both `caseId` and the immutable Google Form response ID. This prevents an old deleted Calendar identifier from colliding when a test cleanup intentionally resets the monthly Case ID sequence.
+
+When initial Calendar creation fails, the `CALENDAR_EVENT` retry carries the payment/chat evidence file IDs. A successful retry creates or reuses the call task, sends the Admin and doctor booking Flex messages, and advances `calendarState`, `lineState`, and `doctorLineNotifiedAt`. Run `runPmcBookingRetries()` only when an operator explicitly wants to process pending retry rows without also running daily schedules or reminders.
+
 Build and push:
 
 ```bash

@@ -94,6 +94,49 @@ describe('PMC booking end to end', () => {
     expect(ports.retries.listPending()).toHaveLength(0)
   })
 
+  it('continues a recovered Calendar retry through call-task and both LINE deliveries', () => {
+    const ports = createTestPorts({ calendarCreateFails: true })
+    const booking = submitBookingIntake(
+      validBookingIntake({
+        paymentEvidenceFileIds: ['payment-file-1'],
+        chatEvidenceFileIds: ['chat-file-1'],
+      }),
+      ports,
+    )
+    expect(booking).toMatchObject({
+      status: 'FORM_SUBMITTED',
+      calendarState: 'RETRY',
+      lineState: 'PENDING',
+    })
+    expect(ports.calls.list()).toEqual([])
+    expect(ports.line.adminMessages()).toEqual([])
+    expect(ports.line.doctorMessages()).toEqual([])
+    expect(ports.retries.listPending()[0]).toMatchObject({
+      operation: 'CALENDAR_EVENT',
+      payload: {
+        paymentEvidenceFileIds: ['payment-file-1'],
+        chatEvidenceFileIds: ['chat-file-1'],
+      },
+    })
+
+    ports.calendar.allowCreates()
+    runEligibleRetries(ports)
+
+    expect(ports.retries.listPending()).toEqual([])
+    expect(ports.bookings.getByCaseId(booking.caseId)).toMatchObject({
+      status: 'BOOKING_CONFIRMED',
+      calendarState: 'OK',
+      lineState: 'OK',
+    })
+    expect(ports.calendar.createdEvents()).toHaveLength(1)
+    expect(ports.calls.getOpenByCase(booking.caseId)).not.toBeNull()
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain(
+      'payment-file-1',
+    )
+  })
+
   it('retries only the Admin alert when a time-conflict notification fails', () => {
     const ports = createTestPorts({ calendarConflicts: true, linePushFails: true })
     const booking = submitBookingIntake(validBookingIntake(), ports)

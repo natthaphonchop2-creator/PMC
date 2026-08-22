@@ -24,6 +24,7 @@ describe('Apps Script bundle', () => {
       'validatePmcBookingFlexMessages',
       'sendPmcBookingFlexPilot',
       'configurePmcCompactFormIdentityFields',
+      'runPmcBookingRetries',
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',
     ]) {

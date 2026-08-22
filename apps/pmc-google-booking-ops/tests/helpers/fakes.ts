@@ -494,15 +494,17 @@ export function createFakeLine(initiallyFailing = false, initialFailAtPush?: num
 export interface FakeCalendarPort extends CalendarPort {
   createdEvents(): CalendarEventInput[]
   updatedEvents(): Array<{ eventId: string; input: CalendarEventInput }>
+  allowCreates(): void
 }
 
 export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarPort {
   const created: CalendarEventInput[] = []
   const updated: Array<{ eventId: string; input: CalendarEventInput }> = []
+  let createFails = options.calendarCreateFails ?? false
   return {
     hasConflict: () => options.calendarConflicts ?? false,
     createEvent(input) {
-      if (options.calendarCreateFails) throw new Error('Calendar create failed')
+      if (createFails) throw new Error('Calendar create failed')
       created.push(structuredClone(input))
       return `event-${input.externalId}`
     },
@@ -511,6 +513,9 @@ export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarP
     },
     createdEvents: () => structuredClone(created),
     updatedEvents: () => structuredClone(updated),
+    allowCreates() {
+      createFails = false
+    },
   }
 }
 

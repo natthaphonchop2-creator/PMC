@@ -17,6 +17,7 @@ import {
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
   runDailyOperationsWorkflow,
+  runBookingRetriesWorkflow,
   runIntegrityAndBackupWorkflow,
   sendProductionFlexPilotWorkflow,
   setupSystem,
@@ -41,6 +42,10 @@ export function doPost(event: AppsScriptDoPostEvent) {
 
 export function runDailyOperations() {
   return runDailyOperationsWorkflow(createRuntime())
+}
+
+export function runPmcBookingRetries() {
+  return runBookingRetriesWorkflow()
 }
 
 export function pollJeraIncoming() {

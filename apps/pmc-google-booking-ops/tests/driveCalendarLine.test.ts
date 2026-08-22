@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ensureCaseEvidenceFolder } from '../src/adapters/googleDrive'
+import { calendarEventInput } from '../src/adapters/googleCalendar'
 import {
   adminBookingMessage,
   doctorBookingMessage,
@@ -61,6 +62,20 @@ describe('Drive evidence', () => {
 })
 
 describe('doctor Calendar', () => {
+  it('uses the Form response identity so a reset Case ID cannot collide with an old event', () => {
+    const first = calendarEventInput(bookingFixture({
+      calendarId: 'doctor-calendar-1',
+      formResponseId: 'response-a',
+    }))
+    const second = calendarEventInput(bookingFixture({
+      calendarId: 'doctor-calendar-1',
+      formResponseId: 'response-b',
+    }))
+    expect(first.externalId).toBe('PMC-202608-0001:response-a')
+    expect(second.externalId).toBe('PMC-202608-0001:response-b')
+    expect(first.externalId).not.toBe(second.externalId)
+  })
+
   it('sets TIME_CONFLICT and creates no event when the interval overlaps', () => {
     const ports = createTestPorts({ calendarConflicts: true })
     const result = submitBookingIntake(validBookingIntake(), ports)
@@ -77,10 +92,10 @@ describe('doctor Calendar', () => {
   it('creates one gold event with full customer name and phone', () => {
     const ports = createTestPorts()
     const result = submitBookingIntake(validBookingIntake(), ports)
-    expect(result.calendarEventId).toBe('event-PMC-202608-0001')
+    expect(result.calendarEventId).toBe('event-PMC-202608-0001:response-1')
     expect(ports.calendar.createdEvents()[0]).toMatchObject({
       calendarId: 'doctor-calendar-1',
-      externalId: 'PMC-202608-0001',
+      externalId: 'PMC-202608-0001:response-1',
       summary: 'ลูกค้าทดสอบ · 0812345678',
       description: 'บริการ service-1\nอ้างอิง PMC-202608-0001',
       colorId: '5',
