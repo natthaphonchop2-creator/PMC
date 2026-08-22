@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 
 const CANONICAL_LINE_FIELDS = ['lineNumber', 'description', 'quantity', 'unit', 'unitPrice', 'discountAmount', 'taxAmount', 'lineTotal', 'categoryId']
+const ACTUAL_LINE_FIELDS = [...CANONICAL_LINE_FIELDS, 'confidence']
 const OUTPUT_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), '../output/ocr-ledger-evaluation')
 const SUMMARY_FILE = 'summary.json'
 const MAX_INPUT_PIXELS = 40_000_000
@@ -56,21 +57,28 @@ export async function runEvaluation({ fixtureDir, manifest, extractor, outputDir
 
 export async function createProductionExtractor(env) {
   if (env.OCR_EVAL_LIVE_CONFIRM !== 'YES') throw new EvaluationError('EVAL_LIVE_CONFIRM_REQUIRED')
-  const { readOcrLedgerConfig } = await import('../dist-server/server/ocr-ledger/config.js')
-  const configured = readOcrLedgerConfig(env)
-  if (!configured.configured) throw new EvaluationError('EVAL_PROVIDER_CONFIG_REQUIRED')
+  const config = readEvaluationProviderConfig(env)
 
   const { prepareOcrImage } = await import('../dist-server/server/ocr-ledger/imageProcessing.js')
   const { createOpenAiOcrExtractor } = await import('../dist-server/server/ocr-ledger/openAiExtractor.js')
   const now = () => new Date().toISOString()
   const extractor = createOpenAiOcrExtractor({
-    apiKey: configured.config.openAiApiKey,
-    model: configured.config.openAiOcrModel,
-    maxOutputTokens: configured.config.openAiMaxOutputTokens,
+    apiKey: config.apiKey,
+    model: config.model,
+    maxOutputTokens: config.maxOutputTokens,
     referenceDate: now(),
   })
 
-  return async (imageBytes) => extractor.extract(await prepareOcrImage(imageBytes, configured.config.maxImageBytes))
+  return async (imageBytes) => extractor.extract(await prepareOcrImage(imageBytes, config.maxImageBytes))
+}
+
+export function readEvaluationProviderConfig(env) {
+  const apiKey = env.OPENAI_API_KEY?.trim()
+  const model = env.OPENAI_OCR_MODEL?.trim()
+  const maxOutputTokens = parsePositiveInteger(env.OCR_OPENAI_MAX_OUTPUT_TOKENS)
+  const maxImageBytes = parsePositiveInteger(env.OCR_MAX_IMAGE_BYTES)
+  if (!apiKey || !model || maxOutputTokens === null || maxImageBytes === null) throw new EvaluationError('EVAL_PROVIDER_CONFIG_REQUIRED')
+  return { apiKey, model, maxOutputTokens, maxImageBytes }
 }
 
 async function resolveFixtureDirectory(fixtureDir) {
@@ -130,6 +138,7 @@ async function readFixtureImage(root, imagePath) {
     if (!hasAllowedImageMagic(bytes)) throw new EvaluationError('EVAL_INVALID_IMAGE')
     const metadata = await sharp(bytes, { limitInputPixels: MAX_INPUT_PIXELS }).metadata()
     if ((metadata.format !== 'jpeg' && metadata.format !== 'png') || !metadata.width || !metadata.height) throw new EvaluationError('EVAL_INVALID_IMAGE')
+    await sharp(bytes, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS }).raw().toBuffer()
   } catch (error) {
     if (error instanceof EvaluationError) throw error
     throw new EvaluationError('EVAL_INVALID_IMAGE')
@@ -177,7 +186,8 @@ function normalizeExtraction(value) {
 
 function canonicalActualLine(value) {
   if (!isRecord(value)) return null
-  if (!CANONICAL_LINE_FIELDS.every((field) => Object.hasOwn(value, field))) return null
+  if (!CANONICAL_LINE_FIELDS.every((field) => Object.hasOwn(value, field)) || !Object.keys(value).every((field) => ACTUAL_LINE_FIELDS.includes(field))) return null
+  if (Object.hasOwn(value, 'confidence') && !isNullableConfidence(value.confidence)) return null
   const line = Object.fromEntries(CANONICAL_LINE_FIELDS.map((field) => [field, value[field]]))
   return isCanonicalLine(line) ? line : null
 }
@@ -257,6 +267,16 @@ function isNullableFiniteNumber(value) {
 
 function isNullableString(value) {
   return value === null || typeof value === 'string'
+}
+
+function isNullableConfidence(value) {
+  return value === null || (isFiniteNumber(value) && value >= 0 && value <= 1)
+}
+
+function parsePositiveInteger(value) {
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 function isAggregateOnly(summary) {

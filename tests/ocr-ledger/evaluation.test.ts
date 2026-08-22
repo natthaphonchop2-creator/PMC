@@ -1,9 +1,11 @@
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createProductionExtractor, evaluateManifest, runEvaluation } from '../../scripts/evaluate-ocr-ledger.mjs'
+import { createProductionExtractor, evaluateManifest, readEvaluationProviderConfig, runEvaluation } from '../../scripts/evaluate-ocr-ledger.mjs'
 
 const temporaryPaths: string[] = []
 
@@ -89,6 +91,21 @@ describe('OCR ledger evaluation harness', () => {
     expect(extractor).not.toHaveBeenCalled()
   })
 
+  it('rejects header-valid truncated JPEG and PNG fixtures before extraction completes', async () => {
+    const { fixtureDir } = await createFixtureDir([])
+    const jpeg = await headerValidTruncation(await jpegBytes())
+    const png = await headerValidTruncation(await pngBytes())
+    await writeFile(join(fixtureDir, 'truncated.jpg'), jpeg)
+    await writeFile(join(fixtureDir, 'truncated.png'), png)
+    const extractor = vi.fn(async () => receiptActual())
+
+    for (const imagePath of ['truncated.jpg', 'truncated.png']) {
+      await expect(evaluateManifest({ fixtureDir, manifest: { fixtures: [fixture('receipt-001', imagePath, receiptExpected())] }, extractor }))
+        .rejects.toMatchObject({ code: 'EVAL_INVALID_IMAGE' })
+    }
+    expect(extractor).not.toHaveBeenCalled()
+  })
+
   it('penalizes a wrong grand total', async () => {
     const { fixtureDir } = await createFixtureDir(['receipt-001.png'])
     const summary = await evaluateManifest({
@@ -130,6 +147,21 @@ describe('OCR ledger evaluation harness', () => {
     expect(summary.accuracy.lineItemFields).toEqual({ correct: 8, total: 9, percentage: 88.89 })
   })
 
+  it.each([
+    ['an unknown key', { ...lineActual(), untrusted: 'value' }],
+    ['invalid confidence metadata', { ...lineActual(), confidence: 1.01 }],
+  ])('rejects an actual line with %s', async (_caseName, actualLine) => {
+    const { fixtureDir } = await createFixtureDir(['receipt-001.png'])
+    const summary = await evaluateManifest({
+      fixtureDir,
+      manifest: { fixtures: [fixture('receipt-001', 'receipt-001.png', receiptExpected())] },
+      extractor: async () => ({ ...receiptActual(), lineItems: [actualLine] }),
+    })
+
+    expect(summary.accuracy.lineItemFields).toEqual({ correct: 0, total: 9, percentage: 0 })
+    expect(summary.errorCodes).toEqual([{ code: 'EVAL_INVALID_EXTRACTION', count: 1 }])
+  })
+
   it('does not pass a ratio that only rounds up to the line-item threshold', async () => {
     const { fixtureDir } = await createFixtureDir(['receipt.png'])
     const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', index === 0 ? receiptExpected({ lineItems: manyExpectedLines(1111) }) : slipExpected()))
@@ -162,6 +194,50 @@ describe('OCR ledger evaluation harness', () => {
     expect(summary.result).toBe('GO')
   })
 
+  it('requires at least 100 fixtures even when every extracted value matches', async () => {
+    const { fixtureDir } = await createFixtureDir(['receipt.png'])
+    const fixtures = Array.from({ length: 99 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+    const summary = await evaluateManifest({ fixtureDir, manifest: { fixtures }, extractor: async () => receiptActual() })
+
+    expect(summary.result).toBe('NO_GO')
+  })
+
+  it('passes document type at 98% and fails immediately below it', async () => {
+    const { fixtureDir } = await createFixtureDir(['receipt.png'])
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+    const atThreshold = await evaluateManifest({
+      fixtureDir, manifest: { fixtures },
+      extractor: async (_bytes, context) => ({ ...receiptActual(), documentType: Number(context.fixtureId.slice(8)) <= 2 ? 'TRANSFER_SLIP' : 'RECEIPT' }),
+    })
+    const belowThreshold = await evaluateManifest({
+      fixtureDir, manifest: { fixtures },
+      extractor: async (_bytes, context) => ({ ...receiptActual(), documentType: Number(context.fixtureId.slice(8)) <= 3 ? 'TRANSFER_SLIP' : 'RECEIPT' }),
+    })
+
+    expect(atThreshold.accuracy.documentType).toEqual({ correct: 98, total: 100, percentage: 98 })
+    expect(atThreshold.result).toBe('GO')
+    expect(belowThreshold.accuracy.documentType).toEqual({ correct: 97, total: 100, percentage: 97 })
+    expect(belowThreshold.result).toBe('NO_GO')
+  })
+
+  it('passes grand total at 98% and fails immediately below it', async () => {
+    const { fixtureDir } = await createFixtureDir(['receipt.png'])
+    const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'receipt.png', receiptExpected()))
+    const atThreshold = await evaluateManifest({
+      fixtureDir, manifest: { fixtures },
+      extractor: async (_bytes, context) => ({ ...receiptActual(), grandTotal: Number(context.fixtureId.slice(8)) <= 2 ? 0 : 214 }),
+    })
+    const belowThreshold = await evaluateManifest({
+      fixtureDir, manifest: { fixtures },
+      extractor: async (_bytes, context) => ({ ...receiptActual(), grandTotal: Number(context.fixtureId.slice(8)) <= 3 ? 0 : 214 }),
+    })
+
+    expect(atThreshold.accuracy.grandTotal).toEqual({ correct: 98, total: 100, percentage: 98 })
+    expect(atThreshold.result).toBe('GO')
+    expect(belowThreshold.accuracy.grandTotal).toEqual({ correct: 97, total: 100, percentage: 97 })
+    expect(belowThreshold.result).toBe('NO_GO')
+  })
+
   it('does not pass an evaluation with no scored line-item fields', async () => {
     const { fixtureDir } = await createFixtureDir(['slip.png'])
     const fixtures = Array.from({ length: 100 }, (_, index) => fixture(`fixture-${index + 1}`, 'slip.png', slipExpected()))
@@ -185,6 +261,27 @@ describe('OCR ledger evaluation harness', () => {
 
   it('requires an explicit live confirmation before a CLI production extractor can be constructed', async () => {
     await expect(createProductionExtractor({})).rejects.toMatchObject({ code: 'EVAL_LIVE_CONFIRM_REQUIRED' })
+  })
+
+  it('accepts only the evaluation OpenAI and image limits needed to construct the production extractor', () => {
+    expect(readEvaluationProviderConfig(providerEnv())).toEqual({ apiKey: 'test-key', model: 'test-model', maxOutputTokens: 512, maxImageBytes: 1024 })
+    expect(() => readEvaluationProviderConfig({ ...providerEnv(), OCR_MAX_IMAGE_BYTES: '0' })).toThrow('EVAL_PROVIDER_CONFIG_REQUIRED')
+  })
+
+  it('keeps CLI confirmation and provider-config failures aggregate-only without calling an extractor', async () => {
+    const { fixtureDir } = await createFixtureDir(['receipt.png'])
+    await writeFile(join(fixtureDir, 'evaluation-manifest.json'), JSON.stringify({ fixtures: [fixture('receipt-001', 'receipt.png', receiptExpected())] }))
+
+    const confirmation = runEvaluatorCli(fixtureDir, {})
+    const providerConfig = runEvaluatorCli(fixtureDir, { OCR_EVAL_LIVE_CONFIRM: 'YES' })
+
+    expect(confirmation.status).toBe(1)
+    expect(providerConfig.status).toBe(1)
+    expect(confirmation.summary).toMatchObject({ result: 'NO_GO', errorCodes: [{ code: 'EVAL_LIVE_CONFIRM_REQUIRED', count: 1 }] })
+    expect(providerConfig.summary).toMatchObject({ result: 'NO_GO', errorCodes: [{ code: 'EVAL_PROVIDER_CONFIG_REQUIRED', count: 1 }] })
+    expect(confirmation.stdout).not.toContain('receipt-001')
+    expect(confirmation.stdout).not.toContain('ITEM A')
+    expect(confirmation.stdout).not.toContain(fixtureDir)
   })
 })
 
@@ -237,6 +334,40 @@ async function createFixtureDir(imageNames: string[]) {
 
 function pngBytes() {
   return sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).png().toBuffer()
+}
+
+function jpegBytes() {
+  return sharp({ create: { width: 20, height: 20, channels: 3, background: 'white' } }).jpeg().toBuffer()
+}
+
+async function headerValidTruncation(bytes: Buffer) {
+  for (let length = 9; length < bytes.byteLength; length += 1) {
+    const truncated = bytes.subarray(0, length)
+    try {
+      const metadata = await sharp(truncated).metadata()
+      if ((metadata.format === 'jpeg' || metadata.format === 'png') && metadata.width && metadata.height) {
+        await expect(sharp(truncated, { failOn: 'error' }).raw().toBuffer()).rejects.toThrow()
+        return truncated
+      }
+    } catch {
+      // Keep searching for a header-valid but pixel-incomplete image.
+    }
+  }
+  throw new Error('No header-valid truncation found')
+}
+
+function providerEnv() {
+  return { OCR_EVAL_LIVE_CONFIRM: 'YES', OPENAI_API_KEY: 'test-key', OPENAI_OCR_MODEL: 'test-model', OCR_OPENAI_MAX_OUTPUT_TOKENS: '512', OCR_MAX_IMAGE_BYTES: '1024' }
+}
+
+function runEvaluatorCli(fixtureDir: string, env: Record<string, string>) {
+  const projectRoot = fileURLToPath(new URL('../..', import.meta.url))
+  const result = spawnSync(process.execPath, ['scripts/evaluate-ocr-ledger.mjs'], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH ?? '', OCR_EVAL_FIXTURE_DIR: fixtureDir, ...env },
+  })
+  return { status: result.status, stdout: result.stdout, summary: JSON.parse(result.stdout) }
 }
 
 async function createTemporaryDir(prefix: string) {
