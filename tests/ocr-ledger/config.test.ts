@@ -22,6 +22,15 @@ describe('OCR ledger configuration', () => {
     expect(readOcrLedgerConfig({ ...base, OCR_TIMEZONE: 'UTC' }).configured).toBe(false)
     expect(readOcrLedgerConfig({ ...base, OCR_DAILY_REPORT_TIME: '8pm' }).configured).toBe(false)
   })
+
+  it('rejects positive digit strings outside the JavaScript safe integer range', () => {
+    for (const name of ['OCR_WORKER_BATCH_SIZE', 'OCR_MAX_IMAGE_BYTES', 'OCR_OPENAI_MAX_OUTPUT_TOKENS'] as const) {
+      expect(readOcrLedgerConfig({
+        ...validEnvironment(),
+        [name]: '9007199254740992',
+      })).toEqual({ configured: false, missing: [name] })
+    }
+  })
 })
 
 function validEnvironment(): NodeJS.ProcessEnv {

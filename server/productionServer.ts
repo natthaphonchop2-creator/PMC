@@ -5,11 +5,7 @@ import { createMetaApiMiddleware } from './metaApiPlugin.js'
 import { createOpenAiMiddleware } from './openAiPlugin.js'
 import { createPageAutomationMiddleware } from './pageAutomationPlugin.js'
 import { createBookingLineWebhookMiddleware } from './bookingLineWebhook.js'
-import { readOcrLedgerConfig } from './ocr-ledger/config.js'
-import { createGoogleOcrPorts } from './ocr-ledger/googleClient.js'
-import { createGoogleOcrStore } from './ocr-ledger/googleStore.js'
-import { createOcrLineClient } from './ocr-ledger/lineClient.js'
-import { createOcrLedgerMiddleware } from './ocr-ledger/middleware.js'
+import { createOcrLedgerRuntime } from './ocr-ledger/runtime.js'
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
@@ -18,29 +14,7 @@ const metaApi = createMetaApiMiddleware(process.env)
 const openAiApi = createOpenAiMiddleware(process.env)
 const pageAutomationApi = createPageAutomationMiddleware(process.env)
 const bookingLineWebhook = createBookingLineWebhookMiddleware(process.env)
-const ocrConfig = readOcrLedgerConfig(process.env)
-const ocrLedger = ocrConfig.configured
-  ? (() => {
-      const config = ocrConfig.config
-      const google = createGoogleOcrPorts({
-        googleClientId: config.googleClientId,
-        googleClientSecret: config.googleClientSecret,
-        googleRefreshToken: config.googleRefreshToken,
-        driveRootId: config.driveRootId,
-      })
-      const store = createGoogleOcrStore({
-        masterSpreadsheetId: config.masterSpreadsheetId,
-        sheets: google.sheets,
-        drive: google.drive,
-      })
-      const line = createOcrLineClient({
-        channelAccessToken: config.lineChannelAccessToken,
-        liffChannelId: config.liffChannelId,
-        maxImageBytes: config.maxImageBytes,
-      })
-      return createOcrLedgerMiddleware({ config, store, line, drive: google.drive, now: () => new Date() })
-    })()
-  : undefined
+const ocrLedger = createOcrLedgerRuntime(process.env)
 
 const server = createServer(createProductionRequestHandler({
   distDir,

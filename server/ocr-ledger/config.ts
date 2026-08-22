@@ -39,7 +39,9 @@ export function readOcrLedgerConfig(env: NodeJS.ProcessEnv): OcrLedgerConfigResu
   if (env.OCR_TIMEZONE && env.OCR_TIMEZONE !== 'Asia/Bangkok') missing.push('OCR_TIMEZONE')
   if (env.OCR_DAILY_REPORT_TIME && !/^([01]\d|2[0-3]):[0-5]\d$/.test(env.OCR_DAILY_REPORT_TIME)) missing.push('OCR_DAILY_REPORT_TIME')
   for (const name of ['OCR_WORKER_BATCH_SIZE', 'OCR_MAX_IMAGE_BYTES', 'OCR_OPENAI_MAX_OUTPUT_TOKENS'] as const) {
-    if (env[name] && (!/^\d+$/.test(env[name]) || Number(env[name]) <= 0)) missing.push(name)
+    const value = env[name]
+    const parsed = Number(value)
+    if (value && (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0)) missing.push(name)
   }
   if (env.OCR_DAILY_REPORT_ENABLED && !['true', 'false'].includes(env.OCR_DAILY_REPORT_ENABLED)) missing.push('OCR_DAILY_REPORT_ENABLED')
   if (missing.length > 0) return { configured: false, missing: [...new Set(missing)] }

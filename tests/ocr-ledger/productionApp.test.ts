@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createProductionRequestHandler, type ProductionAppDependencies } from '../../server/productionApp'
+import { createOcrLedgerRuntime } from '../../server/ocr-ledger/runtime'
 
 type Middleware = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
@@ -155,6 +156,48 @@ describe('production OCR ledger route isolation', () => {
     expect(encodedTraversal.status).toBe(404)
     expect(await encodedTraversal.text()).toBe('Not found')
   })
+
+  it('keeps health, Booking, and legacy routes available when OCR numeric config is unsafe', async () => {
+    const ocrLedger = createOcrLedgerRuntime({
+      ...validOcrEnvironment(),
+      OCR_MAX_IMAGE_BYTES: '9007199254740992',
+    })
+    const booking: Middleware = async (_req, res) => { res.statusCode = 202; res.end('booking available') }
+    const metaApi: Middleware = async (_req, res) => { res.end('meta available') }
+    const requestHandler = handler({ ocrLedger, bookingLineWebhook: booking, metaApi })
+
+    const health = await invoke(requestHandler)
+    const bookingResponse = await invoke(requestHandler, '/api/booking-line/webhook', { method: 'POST' })
+    const ocrResponse = await invoke(requestHandler, '/api/ocr-ledger/webhook', { method: 'POST' })
+    const main = await invoke(requestHandler, '/', {
+      headers: { authorization: basicAuth('pmc', 'legacy-secret') },
+    })
+    const unrelated = await invoke(requestHandler, '/api/meta/status', {
+      headers: { authorization: basicAuth('pmc', 'legacy-secret') },
+    })
+
+    expect({ status: health.status, body: await health.json() }).toEqual({ status: 200, body: { ok: true } })
+    expect({ status: bookingResponse.status, body: await bookingResponse.text() }).toEqual({
+      status: 202, body: 'booking available',
+    })
+    expect({ status: ocrResponse.status, body: await ocrResponse.json() }).toEqual({
+      status: 503, body: { error: 'OCR ledger is not configured' },
+    })
+    expect({ status: main.status, body: await main.text() }).toEqual({
+      status: 200, body: '<main>private main app</main>',
+    })
+    expect({ status: unrelated.status, body: await unrelated.text() }).toEqual({
+      status: 200, body: 'meta available',
+    })
+  })
+
+  it('fails closed when an OCR dependency constructor throws', () => {
+    const ocrLedger = createOcrLedgerRuntime(validOcrEnvironment(), () => {
+      throw new Error('constructor failed')
+    })
+
+    expect(ocrLedger).toBeUndefined()
+  })
 })
 
 function handler(overrides: Partial<ProductionAppDependencies> = {}) {
@@ -192,4 +235,15 @@ async function invoke(
 
 function basicAuth(user: string, password: string): string {
   return `Basic ${Buffer.from(`${user}:${password}`).toString('base64')}`
+}
+
+function validOcrEnvironment(): NodeJS.ProcessEnv {
+  return {
+    OCR_LINE_CHANNEL_SECRET: 'test-secret', OCR_LINE_CHANNEL_ACCESS_TOKEN: 'test-token', OCR_ALLOWED_GROUP_ID: 'Ctest',
+    OCR_MASTER_SPREADSHEET_ID: 'test-sheet', OCR_DRIVE_ROOT_ID: 'test-drive', OCR_LIFF_ID: 'test-liff', OCR_LIFF_CHANNEL_ID: 'test-channel',
+    OCR_REVIEW_SIGNING_SECRET: 'test-signing', OPENAI_API_KEY: 'test-openai', OPENAI_OCR_MODEL: 'test-model',
+    OCR_GOOGLE_CLIENT_ID: 'test-client', OCR_GOOGLE_CLIENT_SECRET: 'test-client-secret', OCR_GOOGLE_REFRESH_TOKEN: 'test-refresh',
+    OCR_DAILY_REPORT_ENABLED: 'false', OCR_DAILY_REPORT_TIME: '20:00', OCR_TIMEZONE: 'Asia/Bangkok',
+    OCR_WORKER_BATCH_SIZE: '1', OCR_MAX_IMAGE_BYTES: '1000', OCR_OPENAI_MAX_OUTPUT_TOKENS: '1000',
+  }
 }
