@@ -15,6 +15,15 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Branch: `main`
 - Release folder: `docs/releases/2026-05-29-v0.1.0/`
 
+## 2026-08-22 - Gentelella Booking Attribution Dashboard design
+
+- Approved a new authenticated `/booking-dashboard` route built from the real Gentelella v4 source pinned to upstream commit `d0064ca25fc916981556e2b2439e569000f61da9` rather than a visual imitation.
+- Kept the Google Booking Sheet and JERA as operational authorities while reusing the existing Render Meta proxy for multiple Facebook Pages under one Ad Account.
+- Defined Lead Ads and Messenger attribution using exact IDs or unique normalized phone + Page matches inside a 30-day window; ambiguous cases enter an audited Owner queue and names alone never auto-match.
+- Selected Google OAuth email allowlisting with Owner/Staff roles, full customer identity for authorized users, 30-second active-view freshness, and a separate Apps Script bridge so dashboard failure cannot block booking operations.
+- Defined Actual ROAS, Cost per Booking, Attribution Coverage, source-specific funnel metrics, CAPI prepared-but-disabled behavior, phased rollout, security gates, and rollback boundaries.
+- Added the written design specification at `docs/superpowers/specs/2026-08-22-pmc-gentelella-booking-attribution-dashboard-design.md`; implementation and production deployment remain unapproved until spec review and a separate plan approval.
+
 ## 2026-08-20 - Google Booking Operations implementation
 
 - Added a separate TypeScript Google Apps Script package under `apps/pmc-google-booking-ops/`.
