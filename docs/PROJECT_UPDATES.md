@@ -26,6 +26,14 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Added the 16-task TDD implementation plan at `docs/superpowers/plans/2026-08-22-pmc-gentelella-booking-attribution-dashboard-implementation.md`, covering the vendored UI, route isolation, OAuth, signed Apps Script bridge, Meta shadow webhooks, deterministic attribution, owner audit controls, security, invalidation, and staged rollout.
 - Implementation, credential changes, webhook subscription, Apps Script deployment, Meta writes, and Render production deployment remain unapproved until plan review and an explicit execution choice.
 
+## 2026-08-22 - Flex-style booking PDF report
+
+- Added a reusable ReportLab generator at `scripts/build_pmc_booking_flex_pdf.py` that turns canonical Booking Sheet rows into one A4 Flex-style card per case.
+- Generated `output/pdf/PMC_Booking_Report_Flex_2026-08.pdf` from the three current `BOOKING_MASTER` rows in chronological order with customer details, Admin/AE avatars, booking values, deposit amount, and private Drive evidence images.
+- Matched the production LINE Flex direction with a centered PMC logo, white minimal card, gold/gray palette, thin separators, aligned team rows, square evidence tiles, Case ID, and page numbering.
+- Replaced the initial Thonburi TTC rendering after visual QA exposed broken Thai combining marks; the final Tahoma OpenType render preserves Thai shaping correctly.
+- Verified all three rendered A4 pages visually and with PDF parsing: required sections and Case IDs were present, page dimensions were consistent, and no text or evidence tile was clipped.
+
 ## 2026-08-20 - Google Booking Operations implementation
 
 - Added a separate TypeScript Google Apps Script package under `apps/pmc-google-booking-ops/`.
