@@ -176,11 +176,13 @@ describe('createOcrLedgerMiddleware', () => {
 function dependencies(order: string[] = []) {
   const store = {
     appendJob: vi.fn(async (job) => { order.push('append-job'); return job }),
+    getDraft: vi.fn(async () => ({ draftVersion: 2, lineItems: [{ lineNumber: 1, confidence: 0.99 }] })),
+    saveDraft: vi.fn(),
   } as unknown as OcrLedgerStore & { appendJob: ReturnType<typeof vi.fn> }
   const line = {
     downloadImage: vi.fn(async () => { throw new Error('must not download in webhook') }),
     reply: vi.fn(async () => { order.push('reply-ack') }),
-    push: vi.fn(), verifyLiffIdToken: vi.fn(), assertGroupMember: vi.fn(), validatePush: vi.fn(),
+    push: vi.fn(), verifyLiffIdToken: vi.fn(), assertGroupMember: vi.fn(async () => ({ displayName: 'Editor' })), validatePush: vi.fn(),
   } satisfies OcrLinePort
   return { store, line }
 }
@@ -251,7 +253,7 @@ function validEditPatch(overrides: Record<string, unknown> = {}): Record<string,
 function lineItem(lineNumber: number): Record<string, unknown> {
   return {
     lineNumber, description: 'Paper', quantity: 1, unit: 'pack', unitPrice: 100,
-    discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office', confidence: 0.99,
+    discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office',
   }
 }
 

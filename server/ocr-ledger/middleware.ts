@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
+import type { OcrDraft, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
 import { parseOcrEditablePatch } from './editValidation.js'
+import type { OcrDrivePort } from './googleClient.js'
 import type { OcrLedgerStore } from './googleStore.js'
 import type { OcrLinePort } from './lineClient.js'
 import { parseOcrLineEvents, type OcrLineEvent } from './lineEvents.js'
@@ -14,13 +15,23 @@ export function createOcrLedgerMiddleware(deps: {
   config: OcrLedgerConfig
   store: OcrLedgerStore
   line: OcrLinePort
+  drive: OcrDrivePort
   now: () => Date
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     try {
       const rawBody = await readRawBody(req, MAX_BODY_BYTES)
-      if (req.url?.split('?', 1)[0] === '/api/ocr-ledger/review') {
-        await handleReviewPost(req, res, rawBody, deps)
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (url.pathname === '/api/ocr-ledger/client-config') {
+        handleClientConfig(req, res, deps.config)
+        return
+      }
+      if (url.pathname === '/api/ocr-ledger/review') {
+        await handleReview(req, res, url, rawBody, deps)
+        return
+      }
+      if (url.pathname === '/api/ocr-ledger/image') {
+        await handleImage(req, res, url, deps)
         return
       }
 
@@ -79,39 +90,35 @@ async function handleReviewPost(
   req: IncomingMessage,
   res: ServerResponse,
   rawBody: string,
-  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; now: () => Date },
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; now: () => Date },
 ): Promise<void> {
   if (req.method !== 'POST') {
     respond(res, 405, { error: 'method_not_allowed' })
     return
   }
-  const idToken = bearerToken(header(req, 'authorization'))
   const body = parseRecord(rawBody)
-  if (!idToken || !body || typeof body.token !== 'string') {
-    respond(res, 401, { error: 'unauthorized' })
+  if (!body || !hasOnlyKeys(body, ['token', 'patch']) || !Object.hasOwn(body, 'patch')) {
+    respond(res, 400, { error: 'invalid_edit' })
     return
   }
-  let review
-  let actor
-  try {
-    review = verifyReviewToken(body.token, deps.config.reviewSigningSecret, Math.floor(deps.now().getTime() / 1000))
-    actor = await deps.line.verifyLiffIdToken(idToken)
-    if (review.action !== 'REVIEW' || review.groupId !== deps.config.allowedGroupId) throw new Error('Invalid review request')
-  } catch {
-    respond(res, 401, { error: 'unauthorized' })
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  const authenticated = await authenticateReviewRequest(req, res, url, typeof body.token === 'string' ? body.token : null, deps)
+  if (!authenticated) {
     return
   }
-  const patch = parseOcrEditablePatch(body.patch)
+  const current = await readAuthenticatedDraft(res, authenticated.review.documentId, authenticated.review.draftVersion, deps.store)
+  if (!current) return
+  const patch = parseClientEditPatch(body.patch, current)
   if (!patch) {
     respond(res, 400, { error: 'invalid_edit' })
     return
   }
   const editDigest = createHash('sha256')
-    .update(JSON.stringify({ documentId: review.documentId, draftVersion: review.draftVersion, userId: actor.userId, patch }))
+    .update(JSON.stringify({ documentId: authenticated.review.documentId, draftVersion: authenticated.review.draftVersion, userId: authenticated.actor.userId, patch }))
     .digest('hex')
-  const job = queueJob('EDIT', `liff:edit:${editDigest}`, review.documentId, {
-    expectedVersion: review.draftVersion, actorLineUserId: actor.userId, actorDisplayName: actor.displayName,
-    groupId: review.groupId, patch,
+  const job = queueJob('EDIT', `liff:edit:${editDigest}`, authenticated.review.documentId, {
+    expectedVersion: authenticated.review.draftVersion, actorLineUserId: authenticated.actor.userId, actorDisplayName: authenticated.actor.displayName,
+    groupId: authenticated.review.groupId, patch,
   }, deps.now())
   try {
     const persisted = await deps.store.appendJob(job)
@@ -119,6 +126,146 @@ async function handleReviewPost(
   } catch {
     respond(res, 503, { error: 'storage_unavailable' })
   }
+}
+
+function handleClientConfig(req: IncomingMessage, res: ServerResponse, config: OcrLedgerConfig): void {
+  if (req.method !== 'GET') {
+    respond(res, 405, { error: 'method_not_allowed' })
+    return
+  }
+  respond(res, 200, { liffId: config.liffId })
+}
+
+async function handleReview(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  rawBody: string,
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; now: () => Date },
+): Promise<void> {
+  if (req.method === 'POST') {
+    await handleReviewPost(req, res, rawBody, deps)
+    return
+  }
+  if (req.method !== 'GET') {
+    respond(res, 405, { error: 'method_not_allowed' })
+    return
+  }
+  const authenticated = await authenticateReviewRequest(req, res, url, null, deps)
+  if (!authenticated) return
+  const current = await readAuthenticatedDraft(res, authenticated.review.documentId, authenticated.review.draftVersion, deps.store)
+  if (!current) return
+  respond(res, 200, reviewProjection(current, url.searchParams.get('t')!))
+}
+
+async function handleImage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; now: () => Date },
+): Promise<void> {
+  if (req.method !== 'GET') {
+    respond(res, 405, { error: 'method_not_allowed' })
+    return
+  }
+  const authenticated = await authenticateReviewRequest(req, res, url, null, deps)
+  if (!authenticated) return
+  const current = await readAuthenticatedDraft(res, authenticated.review.documentId, authenticated.review.draftVersion, deps.store)
+  if (!current) return
+  if (!current.sourceImageFileId) {
+    respond(res, 404, { error: 'image_not_found' })
+    return
+  }
+  try {
+    const image = await deps.drive.downloadImage(current.sourceImageFileId)
+    res.statusCode = 200
+    res.setHeader('content-type', image.mimeType)
+    res.setHeader('cache-control', 'no-store')
+    res.setHeader('x-content-type-options', 'nosniff')
+    res.end(image.bytes)
+  } catch {
+    respond(res, 503, { error: 'image_unavailable' })
+  }
+}
+
+async function authenticateReviewRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  legacyBodyToken: string | null,
+  deps: { config: OcrLedgerConfig; line: OcrLinePort; now: () => Date },
+): Promise<{ review: ReturnType<typeof verifyReviewToken>; actor: { userId: string; displayName: string } } | null> {
+  const token = url.searchParams.get('t') ?? legacyBodyToken
+  const idToken = bearerToken(header(req, 'authorization'))
+  if (!token || !idToken) {
+    respond(res, 401, { error: 'unauthorized' })
+    return null
+  }
+  try {
+    const review = verifyReviewToken(token, deps.config.reviewSigningSecret, Math.floor(deps.now().getTime() / 1000))
+    if (review.action !== 'REVIEW' || review.groupId !== deps.config.allowedGroupId) throw new Error('Invalid review request')
+    const verified = await deps.line.verifyLiffIdToken(idToken)
+    const member = await deps.line.assertGroupMember(review.groupId, verified.userId)
+    return { review, actor: { userId: verified.userId, displayName: member.displayName } }
+  } catch {
+    respond(res, 401, { error: 'unauthorized' })
+    return null
+  }
+}
+
+async function readAuthenticatedDraft(
+  res: ServerResponse,
+  documentId: string,
+  expectedVersion: number,
+  store: OcrLedgerStore,
+) {
+  try {
+    const current = await store.getDraft(documentId)
+    if (!current) {
+      respond(res, 404, { error: 'draft_not_found' })
+      return null
+    }
+    if (current.draftVersion !== expectedVersion) {
+      respond(res, 409, { error: 'stale_draft' })
+      return null
+    }
+    return current
+  } catch {
+    respond(res, 503, { error: 'storage_unavailable' })
+    return null
+  }
+}
+
+function reviewProjection(draft: OcrDraft, token: string) {
+  return {
+    documentId: draft.documentId, state: draft.state, draftVersion: draft.draftVersion,
+    imageUrl: `/api/ocr-ledger/image?t=${encodeURIComponent(token)}`,
+    documentType: draft.documentType, direction: draft.direction, documentDate: draft.documentDate, documentTime: draft.documentTime,
+    counterpartyName: draft.counterpartyName, currency: draft.currency, subtotal: draft.subtotal, discountAmount: draft.discountAmount,
+    taxAmount: draft.taxAmount, serviceCharge: draft.serviceCharge, grandTotal: draft.grandTotal, referenceNumber: draft.referenceNumber,
+    categoryId: draft.categoryId, note: draft.note,
+    lineItems: draft.lineItems.map(({ lineNumber, description, quantity, unit, unitPrice, discountAmount, taxAmount, lineTotal, categoryId }) => ({
+      lineNumber, description, quantity, unit, unitPrice, discountAmount, taxAmount, lineTotal, categoryId,
+    })),
+    warnings: draft.warnings,
+  }
+}
+
+function parseClientEditPatch(value: unknown, current: OcrDraft) {
+  if (!isRecord(value) || Object.hasOwn(value, 'confidence') || !Array.isArray(value.lineItems)
+    || value.lineItems.some((line) => isRecord(line) && Object.hasOwn(line, 'confidence'))) return null
+  const confidenceByLine = new Map(current.lineItems.map((line) => [line.lineNumber, line.confidence]))
+  const hydrated = {
+    ...value,
+    lineItems: value.lineItems.map((line) => isRecord(line)
+      ? { ...line, confidence: typeof line.lineNumber === 'number' ? confidenceByLine.get(line.lineNumber) ?? null : null }
+      : line),
+  }
+  return parseOcrEditablePatch(hydrated)
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key))
 }
 
 function queueJob(jobType: OcrQueueJob['jobType'], idempotencyKey: string, documentId: string | null, payload: unknown, now: Date): OcrQueueJob {
