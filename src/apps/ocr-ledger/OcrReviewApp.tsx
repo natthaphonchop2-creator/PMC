@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type InvalidEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type InvalidEvent, type ReactNode } from 'react'
 import type { OcrDirection, OcrDocumentType, OcrLineItem, OcrWarning } from './contracts'
 import { initializeOcrLiff, loadOcrDraft, loadOcrImage, revokeOcrImage, submitOcrEdit } from './api'
 
@@ -58,6 +58,9 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [numericTexts, setNumericTexts] = useState<Record<string, string>>({})
   const [rawIdToken, setRawIdToken] = useState('')
+  const [rowIds, setRowIds] = useState<string[]>(() => initialDraft?.lineItems.map((_, index) => `initial-${index}`) ?? [])
+  const nextRowId = useRef(0)
+  const createRowId = () => `row-${++nextRowId.current}`
 
   useEffect(() => {
     if (initialDraft) return
@@ -88,6 +91,7 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
         if (draftResult.status === 'fulfilled' && imageResult.status === 'fulfilled') {
           ownedImageUrl = null
           setRawIdToken(token)
+          setRowIds(draftResult.value.lineItems.map(() => createRowId()))
           setDraft(draftResult.value)
           setImageUrl(imageResult.value)
           return
@@ -139,6 +143,18 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
     setNumericTexts((current) => ({ ...current, [name]: value }))
   }
   const numberValue = (name: string, value: number | null) => numericTexts[name] ?? numberText(value)
+  const removeLine = (index: number) => {
+    const rowId = rowIds[index]
+    setSaveError(null)
+    setDraft((current) => current ? { ...current, lineItems: current.lineItems.filter((_, lineIndex) => lineIndex !== index) } : current)
+    setRowIds((current) => current.filter((_, lineIndex) => lineIndex !== index))
+    if (rowId) setNumericTexts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith(`line:${rowId}:`))))
+  }
+  const addLine = () => {
+    setSaveError(null)
+    setDraft((current) => current ? { ...current, lineItems: [...current.lineItems, emptyLine()] } : current)
+    setRowIds((current) => [...current, createRowId()])
+  }
   const onInvalid = (event: InvalidEvent<HTMLFormElement>) => {
     const element = event.target as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
     if (!element.name) return
@@ -160,7 +176,7 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
     setSaveError(null)
     try {
       if (!rawIdToken) throw Object.assign(new Error('No LINE ID token'), { code: 'UNAUTHORIZED' })
-      const response = await adapter.submitEdit(rawIdToken, editablePatch(draft, numericTexts))
+      const response = await adapter.submitEdit(rawIdToken, editablePatch(draft, numericTexts, rowIds))
       if (!response.accepted) throw new Error('queue failed')
       setSubmitted(true)
     } catch {
@@ -192,17 +208,20 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
         <Field name="note" label="หมายเหตุ"><textarea id="note" name="note" value={draft.note ?? ''} onChange={(event) => update('note', nullableString(event.target.value))} /></Field>
       </div></fieldset>
       <fieldset><legend>รายการย่อย</legend>
-        {draft.lineItems.map((line, index) => <section className="ocr-review-line" key={line.lineNumber} aria-label={`รายการ ${index + 1}`}><div className="ocr-review-line-head"><h2>รายการ {index + 1}</h2><button type="button" aria-label={`ลบรายการ ${index + 1}`} onClick={() => update('lineItems', draft.lineItems.filter((_, lineIndex) => lineIndex !== index).map((item, lineIndex) => ({ ...item, lineNumber: lineIndex + 1 })))}>ลบ</button></div><div className="ocr-review-fields">
+        {draft.lineItems.map((line, index) => {
+          const rowId = rowIds[index] ?? `initial-${index}`
+          return <section className="ocr-review-line" key={rowId} aria-label={`รายการ ${index + 1}`}><div className="ocr-review-line-head"><h2>รายการ {index + 1}</h2><button type="button" aria-label={`ลบรายการ ${index + 1}`} onClick={() => removeLine(index)}>ลบ</button></div><div className="ocr-review-fields">
           <Field name={`line-${index}-description`} label="รายละเอียด"><input id={`line-${index}-description`} name={`line-${index}-description`} value={line.description ?? ''} onChange={(event) => updateLineText(index, 'description', event.target.value)} /></Field>
-          <NumberField name={`line-${index}-quantity`} label="จำนวน" value={numberValue(`line-${index}-quantity`, line.quantity)} onChange={updateNumeric} />
+          <NumberField name={`line-${index}-quantity`} stateName={lineNumericKey(rowId, 'quantity')} label="จำนวน" value={numberValue(lineNumericKey(rowId, 'quantity'), line.quantity)} onChange={updateNumeric} />
           <Field name={`line-${index}-unit`} label="หน่วย"><input id={`line-${index}-unit`} name={`line-${index}-unit`} value={line.unit ?? ''} onChange={(event) => updateLineText(index, 'unit', event.target.value)} /></Field>
-          <NumberField name={`line-${index}-unitPrice`} label="ราคาต่อหน่วย" value={numberValue(`line-${index}-unitPrice`, line.unitPrice)} onChange={updateNumeric} />
-          <NumberField name={`line-${index}-discountAmount`} label="ส่วนลดรายการ" value={numberValue(`line-${index}-discountAmount`, line.discountAmount)} onChange={updateNumeric} />
-          <NumberField name={`line-${index}-taxAmount`} label="ภาษีรายการ" value={numberValue(`line-${index}-taxAmount`, line.taxAmount)} onChange={updateNumeric} />
-          <NumberField name={`line-${index}-lineTotal`} label="ยอดรายการ" value={numberValue(`line-${index}-lineTotal`, line.lineTotal)} onChange={updateNumeric} />
+          <NumberField name={`line-${index}-unitPrice`} stateName={lineNumericKey(rowId, 'unitPrice')} label="ราคาต่อหน่วย" value={numberValue(lineNumericKey(rowId, 'unitPrice'), line.unitPrice)} onChange={updateNumeric} />
+          <NumberField name={`line-${index}-discountAmount`} stateName={lineNumericKey(rowId, 'discountAmount')} label="ส่วนลดรายการ" value={numberValue(lineNumericKey(rowId, 'discountAmount'), line.discountAmount)} onChange={updateNumeric} />
+          <NumberField name={`line-${index}-taxAmount`} stateName={lineNumericKey(rowId, 'taxAmount')} label="ภาษีรายการ" value={numberValue(lineNumericKey(rowId, 'taxAmount'), line.taxAmount)} onChange={updateNumeric} />
+          <NumberField name={`line-${index}-lineTotal`} stateName={lineNumericKey(rowId, 'lineTotal')} label="ยอดรายการ" value={numberValue(lineNumericKey(rowId, 'lineTotal'), line.lineTotal)} onChange={updateNumeric} />
           <Field name={`line-${index}-categoryId`} label="หมวดหมู่รายการ"><input id={`line-${index}-categoryId`} name={`line-${index}-categoryId`} value={line.categoryId ?? ''} onChange={(event) => updateLineText(index, 'categoryId', event.target.value)} /></Field>
-        </div></section>)}
-        <button className="ocr-review-add-line" type="button" aria-label="เพิ่มรายการ" onClick={() => update('lineItems', [...draft.lineItems, emptyLine(draft.lineItems.length + 1)])}>เพิ่มรายการ</button>
+        </div></section>
+        })}
+        <button className="ocr-review-add-line" type="button" aria-label="เพิ่มรายการ" onClick={addLine}>เพิ่มรายการ</button>
       </fieldset>
       <div className="ocr-review-submit">{saveError && <p className="ocr-review-save-error" role="alert">{saveError}</p>}<p aria-live="polite">การส่งครั้งนี้จะเข้าคิวให้ตรวจต่อ ยังไม่ใช่การยืนยันเอกสาร</p><button type="submit" disabled={submitting}>{submitting ? 'กำลังส่งเข้าคิว…' : 'บันทึกการแก้ไขเข้าคิว'}</button></div>
     </form>
@@ -213,21 +232,25 @@ function Field({ name, label, error, required, children }: { name: string; label
   return <div className="ocr-review-field"><label htmlFor={name}>{label}{required && <span aria-hidden="true"> *</span>}</label><span id={`${name}-hint`} className="ocr-review-hint">ตรวจจากภาพต้นฉบับก่อนบันทึก</span>{children}<span id={`${name}-error`} className="ocr-review-error" aria-live="polite">{error}</span></div>
 }
 
-function NumberField({ name, label, value, onChange, error, required, inputProps }: { name: string; label: string; value: string; onChange: (name: string, value: string) => void; error?: string; required?: boolean; inputProps?: Record<string, string | boolean | undefined> }) {
-  return <Field name={name} label={label} error={error} required={required}><input id={name} name={name} type="text" inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" required={required} value={value} onChange={(event) => onChange(name, event.target.value)} {...inputProps} /></Field>
+function NumberField({ name, stateName, label, value, onChange, error, required, inputProps }: { name: string; stateName?: string; label: string; value: string; onChange: (name: string, value: string) => void; error?: string; required?: boolean; inputProps?: Record<string, string | boolean | undefined> }) {
+  return <Field name={name} label={label} error={error} required={required}><input id={name} name={name} type="text" inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" required={required} value={value} onChange={(event) => onChange(stateName ?? name, event.target.value)} {...inputProps} /></Field>
 }
 
 function ReviewNotice({ children, tone }: { children: ReactNode; tone?: 'error' | 'success' }) { return <main className={`ocr-review-notice ${tone ?? ''}`} aria-live="polite"><p>{children}</p></main> }
 function reviewFailureMessage(error: unknown): string { const code = typeof error === 'object' && error && 'code' in error ? (error as { code?: string }).code : undefined; if (code === 'EXPIRED') return 'ลิงก์ตรวจสอบหมดอายุแล้ว กรุณาเปิดจากข้อความล่าสุดใน LINE'; if (code === 'UNAUTHORIZED') return 'ไม่มีสิทธิ์เปิดเอกสารนี้ กรุณาเปิดจากกลุ่ม LINE ที่ได้รับอนุญาต'; return 'เปิดเอกสารไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' }
 
-function editablePatch(draft: OcrReviewDraft, numericTexts: Record<string, string>): OcrEditablePatch {
-  return { documentType: draft.documentType, direction: draft.direction, documentDate: draft.documentDate, documentTime: draft.documentTime, counterpartyName: draft.counterpartyName, currency: draft.currency, subtotal: parseNumeric('subtotal', draft.subtotal, numericTexts), discountAmount: parseNumeric('discountAmount', draft.discountAmount, numericTexts), taxAmount: parseNumeric('taxAmount', draft.taxAmount, numericTexts), serviceCharge: parseNumeric('serviceCharge', draft.serviceCharge, numericTexts), grandTotal: parseNumeric('grandTotal', draft.grandTotal, numericTexts), referenceNumber: draft.referenceNumber, categoryId: draft.categoryId, note: draft.note, lineItems: draft.lineItems.map((line, index) => ({ ...line, quantity: parseNumeric(`line-${index}-quantity`, line.quantity, numericTexts), unitPrice: parseNumeric(`line-${index}-unitPrice`, line.unitPrice, numericTexts), discountAmount: parseNumeric(`line-${index}-discountAmount`, line.discountAmount, numericTexts), taxAmount: parseNumeric(`line-${index}-taxAmount`, line.taxAmount, numericTexts), lineTotal: parseNumeric(`line-${index}-lineTotal`, line.lineTotal, numericTexts) })) }
+function editablePatch(draft: OcrReviewDraft, numericTexts: Record<string, string>, rowIds: string[]): OcrEditablePatch {
+  return { documentType: draft.documentType, direction: draft.direction, documentDate: draft.documentDate, documentTime: draft.documentTime, counterpartyName: draft.counterpartyName, currency: draft.currency, subtotal: parseNumeric('subtotal', draft.subtotal, numericTexts), discountAmount: parseNumeric('discountAmount', draft.discountAmount, numericTexts), taxAmount: parseNumeric('taxAmount', draft.taxAmount, numericTexts), serviceCharge: parseNumeric('serviceCharge', draft.serviceCharge, numericTexts), grandTotal: parseNumeric('grandTotal', draft.grandTotal, numericTexts), referenceNumber: draft.referenceNumber, categoryId: draft.categoryId, note: draft.note, lineItems: draft.lineItems.map((line, index) => {
+    const rowId = rowIds[index] ?? `initial-${index}`
+    return { ...line, lineNumber: index + 1, quantity: parseNumeric(lineNumericKey(rowId, 'quantity'), line.quantity, numericTexts), unitPrice: parseNumeric(lineNumericKey(rowId, 'unitPrice'), line.unitPrice, numericTexts), discountAmount: parseNumeric(lineNumericKey(rowId, 'discountAmount'), line.discountAmount, numericTexts), taxAmount: parseNumeric(lineNumericKey(rowId, 'taxAmount'), line.taxAmount, numericTexts), lineTotal: parseNumeric(lineNumericKey(rowId, 'lineTotal'), line.lineTotal, numericTexts) }
+  }) }
 }
 
 function parseNumeric(name: string, fallback: number | null, values: Record<string, string>): number | null { const value = values[name]; if (value === undefined) return fallback; return value.trim() ? Number(value) : null }
+function lineNumericKey(rowId: string, field: 'quantity' | 'unitPrice' | 'discountAmount' | 'taxAmount' | 'lineTotal'): string { return `line:${rowId}:${field}` }
 function nullableString(value: string): string | null { return value.trim() ? value : null }
 function numberText(value: number | null): string { return value === null || !Number.isFinite(value) ? '' : String(value) }
 function errorFor(element: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement): string { return element.validity.valueMissing ? 'กรุณากรอกข้อมูลนี้' : 'กรุณาตรวจรูปแบบข้อมูล' }
 function documentTypeLabel(value: OcrDocumentType | null): string { return value === 'RECEIPT' ? 'ใบเสร็จ' : value === 'TRANSFER_SLIP' ? 'สลิปโอนเงิน' : 'เอกสาร' }
 function directionLabel(value: OcrDirection | null): string { return value === 'EXPENSE' ? 'รายจ่าย' : value === 'INCOME' ? 'รายรับ' : 'ยังไม่ระบุ' }
-function emptyLine(lineNumber: number): Line { return { lineNumber, description: null, quantity: null, unit: null, unitPrice: null, discountAmount: null, taxAmount: null, lineTotal: null, categoryId: null } }
+function emptyLine(): Line { return { lineNumber: 0, description: null, quantity: null, unit: null, unitPrice: null, discountAmount: null, taxAmount: null, lineTotal: null, categoryId: null } }

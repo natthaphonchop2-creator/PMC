@@ -132,6 +132,31 @@ describe('OCR LIFF review page', () => {
     expect(patch.lineItems.map((line: { lineNumber: number }) => line.lineNumber)).toEqual([1, 2])
   })
 
+  it('keeps numeric edits with their row while pruning removed-row state before adding a new row', async () => {
+    const user = userEvent.setup()
+    const app = adapter({ loadDraft: vi.fn().mockResolvedValue({ ...draft, lineItems: [
+      { ...draft.lineItems[0], lineNumber: 1, description: 'รายการที่ลบ', unitPrice: 100 },
+      { ...draft.lineItems[0], lineNumber: 2, description: 'รายการที่เก็บ', unitPrice: 200 },
+    ] }) })
+    render(<OcrReviewApp adapter={app} />)
+    await screen.findByRole('button', { name: 'ลบรายการ 1' })
+    const unitPrices = screen.getAllByLabelText('ราคาต่อหน่วย')
+    await user.clear(unitPrices[0]!)
+    await user.type(unitPrices[0]!, '999')
+    await user.clear(unitPrices[1]!)
+    await user.type(unitPrices[1]!, '222')
+    await user.click(screen.getByRole('button', { name: 'ลบรายการ 1' }))
+    await user.click(screen.getByRole('button', { name: 'เพิ่มรายการ' }))
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
+    const patch = (app.submitEdit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]
+    expect(patch.lineItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ description: 'รายการที่เก็บ', lineNumber: 1, unitPrice: 222 }),
+      expect.objectContaining({ lineNumber: 2, unitPrice: null }),
+    ]))
+  })
+
   it('keeps the editor visible and offers an in-place retry after a queued-edit failure', async () => {
     const user = userEvent.setup()
     const app = adapter({ submitEdit: vi.fn().mockRejectedValue(new Error('offline')) })
