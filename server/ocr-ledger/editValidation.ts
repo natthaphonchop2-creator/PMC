@@ -1,18 +1,28 @@
 import type { OcrDraft, OcrLineItem } from '../../src/apps/ocr-ledger/contracts.js'
+import { maskAccountIdentifier } from './domain.js'
 
 export type OcrEditablePatch = Pick<OcrDraft,
   | 'documentType' | 'direction' | 'documentDate' | 'documentTime' | 'counterpartyName' | 'currency'
   | 'subtotal' | 'discountAmount' | 'taxAmount' | 'serviceCharge' | 'grandTotal' | 'referenceNumber'
-  | 'categoryId' | 'note' | 'lineItems'
+  | 'categoryId' | 'note' | 'senderName' | 'senderBank' | 'senderAccountMasked' | 'receiverName'
+  | 'receiverBank' | 'receiverAccountMasked' | 'transferDate' | 'transferTime' | 'amount' | 'merchantName'
+  | 'merchantTaxId' | 'branch' | 'receiptNumber' | 'receiptDate' | 'paymentMethod' | 'lineItems'
 >
 
 const PATCH_KEYS = [
   'documentType', 'direction', 'documentDate', 'documentTime', 'counterpartyName', 'currency', 'subtotal',
   'discountAmount', 'taxAmount', 'serviceCharge', 'grandTotal', 'referenceNumber', 'categoryId', 'note', 'lineItems',
+  'senderName', 'senderBank', 'senderAccountMasked', 'receiverName', 'receiverBank', 'receiverAccountMasked',
+  'transferDate', 'transferTime', 'amount', 'merchantName', 'merchantTaxId', 'branch', 'receiptNumber',
+  'receiptDate', 'paymentMethod',
 ] as const
 const REQUIRED_KEYS = ['documentType', 'direction', 'documentDate', 'categoryId', 'grandTotal', 'lineItems'] as const
-const NULLABLE_STRING_KEYS = ['documentTime', 'counterpartyName', 'currency', 'referenceNumber', 'note'] as const
-const NULLABLE_NUMBER_KEYS = ['subtotal', 'discountAmount', 'taxAmount', 'serviceCharge'] as const
+const NULLABLE_STRING_KEYS = [
+  'documentTime', 'counterpartyName', 'currency', 'referenceNumber', 'note', 'senderName', 'senderBank',
+  'senderAccountMasked', 'receiverName', 'receiverBank', 'receiverAccountMasked', 'merchantName', 'merchantTaxId',
+  'branch', 'receiptNumber', 'paymentMethod',
+] as const
+const NULLABLE_NUMBER_KEYS = ['subtotal', 'discountAmount', 'taxAmount', 'serviceCharge', 'amount'] as const
 const LINE_KEYS = [
   'lineNumber', 'description', 'quantity', 'unit', 'unitPrice', 'discountAmount', 'taxAmount',
   'lineTotal', 'categoryId', 'confidence',
@@ -27,8 +37,14 @@ export function parseOcrEditablePatch(value: unknown): OcrEditablePatch | null {
   if (!isFiniteNumber(value.grandTotal)) return null
   if (NULLABLE_STRING_KEYS.some((key) => Object.hasOwn(value, key) && !isNullableString(value[key]))) return null
   if (NULLABLE_NUMBER_KEYS.some((key) => Object.hasOwn(value, key) && !isNullableFiniteNumber(value[key]))) return null
+  if (Object.hasOwn(value, 'transferDate') && !isNullableIsoCalendarDate(value.transferDate)) return null
+  if (Object.hasOwn(value, 'receiptDate') && !isNullableIsoCalendarDate(value.receiptDate)) return null
+  if (Object.hasOwn(value, 'transferTime') && !isNullableTime(value.transferTime)) return null
   if (!Array.isArray(value.lineItems) || !value.lineItems.every((line, index) => isEditableLine(line, index + 1))) return null
-  return structuredClone(value) as OcrEditablePatch
+  const patch = structuredClone(value) as OcrEditablePatch
+  if (Object.hasOwn(patch, 'senderAccountMasked')) patch.senderAccountMasked = maskAccountIdentifier(patch.senderAccountMasked)
+  if (Object.hasOwn(patch, 'receiverAccountMasked')) patch.receiverAccountMasked = maskAccountIdentifier(patch.receiverAccountMasked)
+  return patch
 }
 
 function isEditableLine(value: unknown, expectedLineNumber: number): value is OcrLineItem {
@@ -76,4 +92,12 @@ function isIsoCalendarDate(value: string): boolean {
   const [year, month, day] = match.slice(1).map(Number)
   const date = new Date(Date.UTC(year, month - 1, day))
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function isNullableIsoCalendarDate(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && isIsoCalendarDate(value))
+}
+
+function isNullableTime(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(value))
 }

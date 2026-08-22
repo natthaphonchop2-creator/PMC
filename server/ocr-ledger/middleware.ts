@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OcrDraft, OcrQueueJob } from '../../src/apps/ocr-ledger/contracts.js'
 import type { OcrLedgerConfig } from './config.js'
+import { maskAccountIdentifier } from './domain.js'
 import { parseOcrEditablePatch } from './editValidation.js'
 import type { OcrDrivePort } from './googleClient.js'
 import type { OcrLedgerStore } from './googleStore.js'
@@ -258,6 +259,11 @@ function reviewProjection(draft: OcrDraft, token: string) {
     counterpartyName: draft.counterpartyName, currency: draft.currency, subtotal: draft.subtotal, discountAmount: draft.discountAmount,
     taxAmount: draft.taxAmount, serviceCharge: draft.serviceCharge, grandTotal: draft.grandTotal, referenceNumber: draft.referenceNumber,
     categoryId: draft.categoryId, note: draft.note,
+    senderName: draft.senderName, senderBank: draft.senderBank, senderAccountMasked: maskAccountIdentifier(draft.senderAccountMasked),
+    receiverName: draft.receiverName, receiverBank: draft.receiverBank, receiverAccountMasked: maskAccountIdentifier(draft.receiverAccountMasked),
+    transferDate: draft.transferDate, transferTime: draft.transferTime, amount: draft.amount,
+    merchantName: draft.merchantName, merchantTaxId: draft.merchantTaxId, branch: draft.branch,
+    receiptNumber: draft.receiptNumber, receiptDate: draft.receiptDate, paymentMethod: draft.paymentMethod,
     lineItems: draft.lineItems.map(({ lineNumber, description, quantity, unit, unitPrice, discountAmount, taxAmount, lineTotal, categoryId }) => ({
       lineNumber, description, quantity, unit, unitPrice, discountAmount, taxAmount, lineTotal, categoryId,
     })),

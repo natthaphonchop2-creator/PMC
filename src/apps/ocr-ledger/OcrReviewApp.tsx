@@ -21,6 +21,21 @@ export interface OcrReviewDraft {
   referenceNumber: string | null
   categoryId: string | null
   note: string | null
+  senderName: string | null
+  senderBank: string | null
+  senderAccountMasked: string | null
+  receiverName: string | null
+  receiverBank: string | null
+  receiverAccountMasked: string | null
+  transferDate: string | null
+  transferTime: string | null
+  amount: number | null
+  merchantName: string | null
+  merchantTaxId: string | null
+  branch: string | null
+  receiptNumber: string | null
+  receiptDate: string | null
+  paymentMethod: string | null
   warnings: OcrWarning[]
   lineItems: Array<Pick<OcrLineItem, 'lineNumber' | 'description' | 'quantity' | 'unit' | 'unitPrice' | 'discountAmount' | 'taxAmount' | 'lineTotal' | 'categoryId'>>
 }
@@ -207,7 +222,26 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
         <Field name="referenceNumber" label="เลขอ้างอิง"><input id="referenceNumber" name="referenceNumber" type="text" value={draft.referenceNumber ?? ''} onChange={(event) => update('referenceNumber', nullableString(event.target.value))} /></Field>
         <Field name="note" label="หมายเหตุ"><textarea id="note" name="note" value={draft.note ?? ''} onChange={(event) => update('note', nullableString(event.target.value))} /></Field>
       </div></fieldset>
-      <fieldset><legend>รายการย่อย</legend>
+      {draft.documentType === 'TRANSFER_SLIP' && <fieldset><legend>ข้อมูลการโอน</legend><div className="ocr-review-fields">
+        <Field name="senderName" label="ชื่อผู้โอน"><input id="senderName" name="senderName" type="text" value={draft.senderName ?? ''} onChange={(event) => update('senderName', nullableString(event.target.value))} /></Field>
+        <Field name="senderBank" label="ธนาคารผู้โอน"><input id="senderBank" name="senderBank" type="text" value={draft.senderBank ?? ''} onChange={(event) => update('senderBank', nullableString(event.target.value))} /></Field>
+        <Field name="senderAccountMasked" label="บัญชีผู้โอน"><input id="senderAccountMasked" name="senderAccountMasked" type="text" value={draft.senderAccountMasked ?? ''} onChange={(event) => update('senderAccountMasked', nullableString(event.target.value))} /></Field>
+        <Field name="receiverName" label="ชื่อผู้รับ"><input id="receiverName" name="receiverName" type="text" value={draft.receiverName ?? ''} onChange={(event) => update('receiverName', nullableString(event.target.value))} /></Field>
+        <Field name="receiverBank" label="ธนาคารผู้รับ"><input id="receiverBank" name="receiverBank" type="text" value={draft.receiverBank ?? ''} onChange={(event) => update('receiverBank', nullableString(event.target.value))} /></Field>
+        <Field name="receiverAccountMasked" label="บัญชีผู้รับ"><input id="receiverAccountMasked" name="receiverAccountMasked" type="text" value={draft.receiverAccountMasked ?? ''} onChange={(event) => update('receiverAccountMasked', nullableString(event.target.value))} /></Field>
+        <Field name="transferDate" label="วันที่โอน"><input id="transferDate" name="transferDate" type="date" value={draft.transferDate ?? ''} onChange={(event) => update('transferDate', nullableString(event.target.value))} /></Field>
+        <Field name="transferTime" label="เวลาโอน"><input id="transferTime" name="transferTime" type="time" value={draft.transferTime ?? ''} onChange={(event) => update('transferTime', nullableString(event.target.value))} /></Field>
+        <NumberField name="amount" label="ยอดโอน" value={numberValue('amount', draft.amount)} onChange={updateNumeric} />
+      </div></fieldset>}
+      {draft.documentType === 'RECEIPT' && <fieldset><legend>ข้อมูลใบเสร็จ</legend><div className="ocr-review-fields">
+        <Field name="merchantName" label="ชื่อร้านค้า"><input id="merchantName" name="merchantName" type="text" value={draft.merchantName ?? ''} onChange={(event) => update('merchantName', nullableString(event.target.value))} /></Field>
+        <Field name="merchantTaxId" label="เลขประจำตัวผู้เสียภาษี"><input id="merchantTaxId" name="merchantTaxId" type="text" inputMode="numeric" value={draft.merchantTaxId ?? ''} onChange={(event) => update('merchantTaxId', nullableString(event.target.value))} /></Field>
+        <Field name="branch" label="สาขา"><input id="branch" name="branch" type="text" value={draft.branch ?? ''} onChange={(event) => update('branch', nullableString(event.target.value))} /></Field>
+        <Field name="receiptNumber" label="เลขที่ใบเสร็จ"><input id="receiptNumber" name="receiptNumber" type="text" value={draft.receiptNumber ?? ''} onChange={(event) => update('receiptNumber', nullableString(event.target.value))} /></Field>
+        <Field name="receiptDate" label="วันที่ใบเสร็จ"><input id="receiptDate" name="receiptDate" type="date" value={draft.receiptDate ?? ''} onChange={(event) => update('receiptDate', nullableString(event.target.value))} /></Field>
+        <Field name="paymentMethod" label="วิธีชำระเงิน"><input id="paymentMethod" name="paymentMethod" type="text" value={draft.paymentMethod ?? ''} onChange={(event) => update('paymentMethod', nullableString(event.target.value))} /></Field>
+      </div></fieldset>}
+      {draft.documentType === 'RECEIPT' && <fieldset><legend>รายการย่อย</legend>
         {draft.lineItems.map((line, index) => {
           const rowId = rowIds[index] ?? `initial-${index}`
           return <section className="ocr-review-line" key={rowId} aria-label={`รายการ ${index + 1}`}><div className="ocr-review-line-head"><h2>รายการ {index + 1}</h2><button type="button" aria-label={`ลบรายการ ${index + 1}`} onClick={() => removeLine(index)}>ลบ</button></div><div className="ocr-review-fields">
@@ -222,7 +256,7 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
         </div></section>
         })}
         <button className="ocr-review-add-line" type="button" aria-label="เพิ่มรายการ" onClick={addLine}>เพิ่มรายการ</button>
-      </fieldset>
+      </fieldset>}
       <div className="ocr-review-submit">{saveError && <p className="ocr-review-save-error" role="alert">{saveError}</p>}<p aria-live="polite">การส่งครั้งนี้จะเข้าคิวให้ตรวจต่อ ยังไม่ใช่การยืนยันเอกสาร</p><button type="submit" disabled={submitting}>{submitting ? 'กำลังส่งเข้าคิว…' : 'บันทึกการแก้ไขเข้าคิว'}</button></div>
     </form>
   </main>
@@ -240,7 +274,7 @@ function ReviewNotice({ children, tone }: { children: ReactNode; tone?: 'error' 
 function reviewFailureMessage(error: unknown): string { const code = typeof error === 'object' && error && 'code' in error ? (error as { code?: string }).code : undefined; if (code === 'EXPIRED') return 'ลิงก์ตรวจสอบหมดอายุแล้ว กรุณาเปิดจากข้อความล่าสุดใน LINE'; if (code === 'UNAUTHORIZED') return 'ไม่มีสิทธิ์เปิดเอกสารนี้ กรุณาเปิดจากกลุ่ม LINE ที่ได้รับอนุญาต'; return 'เปิดเอกสารไม่สำเร็จ กรุณาลองใหม่อีกครั้ง' }
 
 function editablePatch(draft: OcrReviewDraft, numericTexts: Record<string, string>, rowIds: string[]): OcrEditablePatch {
-  return { documentType: draft.documentType, direction: draft.direction, documentDate: draft.documentDate, documentTime: draft.documentTime, counterpartyName: draft.counterpartyName, currency: draft.currency, subtotal: parseNumeric('subtotal', draft.subtotal, numericTexts), discountAmount: parseNumeric('discountAmount', draft.discountAmount, numericTexts), taxAmount: parseNumeric('taxAmount', draft.taxAmount, numericTexts), serviceCharge: parseNumeric('serviceCharge', draft.serviceCharge, numericTexts), grandTotal: parseNumeric('grandTotal', draft.grandTotal, numericTexts), referenceNumber: draft.referenceNumber, categoryId: draft.categoryId, note: draft.note, lineItems: draft.lineItems.map((line, index) => {
+  return { documentType: draft.documentType, direction: draft.direction, documentDate: draft.documentDate, documentTime: draft.documentTime, counterpartyName: draft.counterpartyName, currency: draft.currency, subtotal: parseNumeric('subtotal', draft.subtotal, numericTexts), discountAmount: parseNumeric('discountAmount', draft.discountAmount, numericTexts), taxAmount: parseNumeric('taxAmount', draft.taxAmount, numericTexts), serviceCharge: parseNumeric('serviceCharge', draft.serviceCharge, numericTexts), grandTotal: parseNumeric('grandTotal', draft.grandTotal, numericTexts), referenceNumber: draft.referenceNumber, categoryId: draft.categoryId, note: draft.note, senderName: draft.senderName, senderBank: draft.senderBank, senderAccountMasked: draft.senderAccountMasked, receiverName: draft.receiverName, receiverBank: draft.receiverBank, receiverAccountMasked: draft.receiverAccountMasked, transferDate: draft.transferDate, transferTime: draft.transferTime, amount: parseNumeric('amount', draft.amount, numericTexts), merchantName: draft.merchantName, merchantTaxId: draft.merchantTaxId, branch: draft.branch, receiptNumber: draft.receiptNumber, receiptDate: draft.receiptDate, paymentMethod: draft.paymentMethod, lineItems: draft.lineItems.map((line, index) => {
     const rowId = rowIds[index] ?? `initial-${index}`
     return { ...line, lineNumber: index + 1, quantity: parseNumeric(lineNumericKey(rowId, 'quantity'), line.quantity, numericTexts), unitPrice: parseNumeric(lineNumericKey(rowId, 'unitPrice'), line.unitPrice, numericTexts), discountAmount: parseNumeric(lineNumericKey(rowId, 'discountAmount'), line.discountAmount, numericTexts), taxAmount: parseNumeric(lineNumericKey(rowId, 'taxAmount'), line.taxAmount, numericTexts), lineTotal: parseNumeric(lineNumericKey(rowId, 'lineTotal'), line.lineTotal, numericTexts) }
   }) }

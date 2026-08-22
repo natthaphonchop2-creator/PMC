@@ -110,6 +110,10 @@ describe('OCR ledger LIFF review API', () => {
       documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: '2026-08-22', documentTime: null,
       counterpartyName: 'Merchant', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
       serviceCharge: 0, grandTotal: 100, referenceNumber: null, categoryId: 'office', note: 'office supplies',
+      senderName: 'Sender', senderBank: 'Bank', senderAccountMasked: '123-****-**0',
+      receiverName: 'Receiver', receiverBank: 'Bank', receiverAccountMasked: '987-****-**0',
+      transferDate: null, transferTime: null, amount: null, merchantName: 'Merchant', merchantTaxId: '0105555000001',
+      branch: 'สำนักงานใหญ่', receiptNumber: 'RCPT-1', receiptDate: '2026-08-22', paymentMethod: 'CASH',
       lineItems: [{ lineNumber: 1, description: 'Paper', quantity: 1, unit: 'pack', unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office' }],
       warnings: [{ code: 'LOW_CONFIDENCE_REQUIRED_FIELD', field: 'grandTotal', message: 'verify total' }],
     })
@@ -157,6 +161,25 @@ describe('OCR ledger LIFF review API', () => {
     const payload = JSON.parse(deps.store.appendJob.mock.calls[0]?.[0].payloadJson ?? '{}')
     expect(payload).toEqual(expect.objectContaining({ expectedVersion: 2, actorLineUserId: 'Ueditor', groupId: 'Cgroup1' }))
     expect(payload.patch.lineItems[0].confidence).toBe(0.82)
+    expect(payload.patch).toMatchObject({ merchantName: 'Merchant', merchantTaxId: '0105555000001', paymentMethod: 'CASH' })
+  })
+
+  it('accepts transfer-specific edits while masking an entered full account number server-side', async () => {
+    const deps = dependencies()
+    const response = await request(deps, {
+      method: 'POST', url: `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`,
+      headers: { authorization: 'Bearer raw-line-id-token' }, body: JSON.stringify({ patch: editablePatch({
+        documentType: 'TRANSFER_SLIP', senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '1234567890',
+        receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '987-*-***0',
+        transferDate: '2026-08-22', transferTime: '10:15', amount: 100,
+      }) }),
+    })
+
+    expect(response.statusCode).toBe(202)
+    const payload = JSON.parse(deps.store.appendJob.mock.calls[0]?.[0].payloadJson ?? '{}')
+    expect(payload.patch.senderAccountMasked).toContain('****')
+    expect(payload.patch.senderAccountMasked).not.toContain('1234567890')
+    expect(payload.patch.receiverAccountMasked).toBe('987-*-***0')
   })
 
   it.each([
@@ -236,6 +259,10 @@ function editablePatch(overrides: Record<string, unknown> = {}): Record<string, 
     documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: '2026-08-22', documentTime: null,
     counterpartyName: 'Merchant', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
     serviceCharge: 0, grandTotal: 100, referenceNumber: null, categoryId: 'office', note: 'office supplies',
+    senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+    receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+    merchantName: 'Merchant', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่', receiptNumber: 'RCPT-1',
+    receiptDate: '2026-08-22', paymentMethod: 'CASH',
     lineItems: [editableLine()], ...overrides,
   }
 }
@@ -255,7 +282,7 @@ function draft(overrides: Partial<OcrDraft> = {}): OcrDraft {
     sourceImageFileId: 'drive-file-private', sourceImageSha256: 'source-sha', sourceLineMessageId: 'line-message', sourceLineUserId: 'Usource',
     confidenceByField: { grandTotal: 0.82 }, senderName: 'Sender', senderBank: 'Bank', senderAccountMasked: '123-4-56789-0',
     receiverName: 'Receiver', receiverBank: 'Bank', receiverAccountMasked: '987-6-54321-0', transferDate: null, transferTime: null,
-    amount: null, merchantName: null, merchantTaxId: null, branch: null, receiptNumber: null, receiptDate: null, paymentMethod: null,
+    amount: null, merchantName: 'Merchant', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่', receiptNumber: 'RCPT-1', receiptDate: '2026-08-22', paymentMethod: 'CASH',
     draftVersion: 2, confirmedBy: null, confirmedAt: null, verificationStatus: null,
     warnings: [{ code: 'LOW_CONFIDENCE_REQUIRED_FIELD', field: 'grandTotal', message: 'verify total' }],
     lineItems: [{ ...editableLine(), documentId: 'OCR-20260822-abc123', confidence: 0.82 } as OcrDraft['lineItems'][number]],

@@ -13,6 +13,9 @@ describe('OCR ledger domain', () => {
       documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: '2026-08-22',
       currency: 'THB', subtotal: 180, discountAmount: 0, taxAmount: 0,
       serviceCharge: 0, grandTotal: 200,
+      senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+      receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+      merchantName: null, merchantTaxId: null, branch: null, receiptNumber: null, receiptDate: null, paymentMethod: null,
       lineItems: [
         { lineNumber: 1, description: 'A', quantity: 1, unit: null, unitPrice: 80, discountAmount: 0, taxAmount: 0, lineTotal: 80, categoryId: null, confidence: 0.99 },
         { lineNumber: 2, description: 'B', quantity: 1, unit: null, unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: null, confidence: 0.99 },
@@ -56,6 +59,9 @@ function receiptExtraction(overrides: Record<string, unknown> = {}) {
   return {
     documentType: 'RECEIPT' as const, direction: 'EXPENSE' as const, documentDate: '2026-08-22',
     currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0, serviceCharge: 0, grandTotal: 100,
+    senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+    receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+    merchantName: null, merchantTaxId: null, branch: null, receiptNumber: null, receiptDate: null, paymentMethod: null,
     lineItems: [],
     ...overrides,
   }

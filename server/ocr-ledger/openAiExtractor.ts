@@ -1,5 +1,5 @@
 import type { OcrExtraction, OcrLineItem, OcrWarning } from '../../src/apps/ocr-ledger/contracts.js'
-import { validateExtraction } from './domain.js'
+import { maskAccountIdentifier, validateExtraction } from './domain.js'
 import type { PreparedOcrImage } from './imageProcessing.js'
 
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
@@ -112,12 +112,17 @@ function parseExtraction(value: unknown, sourceImageSha256: string): OcrExtracti
     throw new OcrExtractorError('OCR_INVALID_OUTPUT')
   }
   if (!isNullableString(value.documentDate) || !isNullableString(value.documentTime) || !isNullableString(value.counterpartyName)
-    || !isNullableString(value.currency) || !isNullableString(value.referenceNumber) || !isNullableString(value.categoryId) || !isNullableString(value.note)) {
+    || !isNullableString(value.currency) || !isNullableString(value.referenceNumber) || !isNullableString(value.categoryId) || !isNullableString(value.note)
+    || !isNullableString(value.senderName) || !isNullableString(value.senderBank) || !isNullableString(value.senderAccountMasked)
+    || !isNullableString(value.receiverName) || !isNullableString(value.receiverBank) || !isNullableString(value.receiverAccountMasked)
+    || !isNullableString(value.merchantName) || !isNullableString(value.merchantTaxId) || !isNullableString(value.branch)
+    || !isNullableString(value.receiptNumber) || !isNullableString(value.paymentMethod)
+    || !isNullableCalendarDate(value.transferDate) || !isNullableTime(value.transferTime) || !isNullableCalendarDate(value.receiptDate)) {
     throw new OcrExtractorError('OCR_INVALID_OUTPUT')
   }
   if (!isNullableFiniteNumber(value.subtotal) || !isNullableFiniteNumber(value.discountAmount)
     || !isNullableFiniteNumber(value.taxAmount) || !isNullableFiniteNumber(value.serviceCharge)
-    || !isNullableFiniteNumber(value.grandTotal)) {
+    || !isNullableFiniteNumber(value.grandTotal) || !isNullableFiniteNumber(value.amount)) {
     throw new OcrExtractorError('OCR_INVALID_OUTPUT')
   }
   if (!isConfidenceMap(value.confidenceByField) || !Array.isArray(value.lineItems) || !value.lineItems.every(isLineItem)
@@ -140,6 +145,21 @@ function parseExtraction(value: unknown, sourceImageSha256: string): OcrExtracti
     referenceNumber: value.referenceNumber,
     categoryId: value.categoryId,
     note: value.note,
+    senderName: value.senderName,
+    senderBank: value.senderBank,
+    senderAccountMasked: maskAccountIdentifier(value.senderAccountMasked),
+    receiverName: value.receiverName,
+    receiverBank: value.receiverBank,
+    receiverAccountMasked: maskAccountIdentifier(value.receiverAccountMasked),
+    transferDate: value.transferDate,
+    transferTime: value.transferTime,
+    amount: value.amount,
+    merchantName: value.merchantName,
+    merchantTaxId: value.merchantTaxId,
+    branch: value.branch,
+    receiptNumber: value.receiptNumber,
+    receiptDate: value.receiptDate,
+    paymentMethod: value.paymentMethod,
     sourceImageSha256,
     confidenceByField: value.confidenceByField,
     lineItems: value.lineItems,
@@ -183,6 +203,20 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string'
 }
 
+function isNullableCalendarDate(value: unknown): value is string | null {
+  if (value === null) return true
+  if (typeof value !== 'string') return false
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+  const [year, month, day] = match.slice(1).map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function isNullableTime(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(value))
+}
+
 function isNullableFiniteNumber(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value))
 }
@@ -214,13 +248,17 @@ function hasRefusal(value: unknown): boolean {
 const ROOT_KEYS = [
   'documentType', 'direction', 'documentDate', 'documentTime', 'counterpartyName', 'currency',
   'subtotal', 'discountAmount', 'taxAmount', 'serviceCharge', 'grandTotal', 'referenceNumber',
-  'categoryId', 'note', 'confidenceByField', 'lineItems',
+  'categoryId', 'note', 'senderName', 'senderBank', 'senderAccountMasked', 'receiverName', 'receiverBank',
+  'receiverAccountMasked', 'transferDate', 'transferTime', 'amount', 'merchantName', 'merchantTaxId', 'branch',
+  'receiptNumber', 'receiptDate', 'paymentMethod', 'confidenceByField', 'lineItems',
 ] as const
 
 const CONFIDENCE_KEYS = [
   'documentType', 'direction', 'documentDate', 'documentTime', 'counterpartyName', 'currency',
   'subtotal', 'discountAmount', 'taxAmount', 'serviceCharge', 'grandTotal', 'referenceNumber',
-  'categoryId', 'note',
+  'categoryId', 'note', 'senderName', 'senderBank', 'senderAccountMasked', 'receiverName', 'receiverBank',
+  'receiverAccountMasked', 'transferDate', 'transferTime', 'amount', 'merchantName', 'merchantTaxId', 'branch',
+  'receiptNumber', 'receiptDate', 'paymentMethod',
 ] as const
 
 const LINE_ITEM_KEYS = [
@@ -251,6 +289,21 @@ const OCR_DOCUMENT_SCHEMA = {
     referenceNumber: nullableString,
     categoryId: nullableString,
     note: nullableString,
+    senderName: nullableString,
+    senderBank: nullableString,
+    senderAccountMasked: nullableString,
+    receiverName: nullableString,
+    receiverBank: nullableString,
+    receiverAccountMasked: nullableString,
+    transferDate: nullableString,
+    transferTime: nullableString,
+    amount: nullableNumber,
+    merchantName: nullableString,
+    merchantTaxId: nullableString,
+    branch: nullableString,
+    receiptNumber: nullableString,
+    receiptDate: nullableString,
+    paymentMethod: nullableString,
     confidenceByField: {
       type: 'object',
       additionalProperties: false,
@@ -287,6 +340,7 @@ const SYSTEM_PROMPT = [
   'Use null for every unreadable value and its confidence.',
   'Do not claim bank verification. The workflow can only be STAFF_CONFIRMED by a human after review.',
   'For a receipt, include every visible line item in document order; for a transfer slip use an empty lineItems array.',
+  'Extract every transfer-slip and receipt-specific field in the schema. Preserve visibly masked account text and never return a full unmasked account number.',
 ].join(' ')
 
 const USER_PROMPT = 'Extract this document as a review-only draft. Its only possible verification status is STAFF_CONFIRMED after human review; do not confirm it.'

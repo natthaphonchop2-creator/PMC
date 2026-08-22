@@ -32,6 +32,10 @@ describe('createOcrLedgerWorker', () => {
     ])
     expect(store.drafts).toHaveLength(1)
     expect(store.drafts[0]).toEqual(expect.objectContaining({ state: 'PENDING_REVIEW', draftVersion: 1, sourceImageFileId: 'drive-file-1' }))
+    expect(store.drafts[0]).toMatchObject({
+      merchantName: 'Merchant Co.', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่',
+      receiptNumber: 'RCPT-1', receiptDate: '2026-08-22', paymentMethod: 'CASH',
+    })
     expect(line.push).toHaveBeenCalledWith('Cgroup1', [expect.objectContaining({ type: 'flex' })])
     expect(drive.uploadImage).toHaveBeenCalledTimes(1)
     expect(extractor.extract).toHaveBeenCalledTimes(1)
@@ -633,6 +637,10 @@ function harness(store: FakeStore, order: string[] = [], now: () => Date = () =>
         documentType: 'RECEIPT' as const, direction: 'EXPENSE' as const, documentDate: '2026-08-22', documentTime: null,
         counterpartyName: 'Merchant', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
         serviceCharge: 0, grandTotal: 100, referenceNumber: null, categoryId: 'office', note: null,
+        senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+        receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+        merchantName: 'Merchant Co.', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่', receiptNumber: 'RCPT-1',
+        receiptDate: '2026-08-22', paymentMethod: 'CASH',
         sourceImageSha256: 'ignored-by-worker', confidenceByField: {}, lineItems: [], warnings: [],
       }
     }),

@@ -29,6 +29,12 @@ describe('OpenAI OCR extractor', () => {
     expect(body.text.format.schema.properties.documentType).toMatchObject({ type: ['string', 'null'], enum: ['TRANSFER_SLIP', 'RECEIPT', null] })
     expect(body.text.format.schema.properties.direction).toMatchObject({ type: ['string', 'null'], enum: ['INCOME', 'EXPENSE', null] })
     expect(body.text.format.schema.properties.confidenceByField.properties.currency).toMatchObject({ minimum: 0, maximum: 1 })
+    expect(body.text.format.schema.properties.confidenceByField.required).toEqual(expect.arrayContaining([
+      'senderName', 'senderBank', 'senderAccountMasked', 'receiverName', 'receiverBank', 'receiverAccountMasked',
+      'transferDate', 'transferTime', 'amount', 'merchantName', 'merchantTaxId', 'branch', 'receiptNumber',
+      'receiptDate', 'paymentMethod',
+    ]))
+    expect(body.text.format.schema.required).toEqual(expect.arrayContaining(['senderName', 'amount', 'merchantName', 'paymentMethod']))
     expect(body.text.format.schema.properties.lineItems.items.properties.lineNumber).toMatchObject({ minimum: 1, multipleOf: 1 })
     expect(body.text.format.schema.required).toEqual(expect.arrayContaining(['confidenceByField', 'lineItems']))
     expect(body.max_output_tokens).toBe(512)
@@ -36,6 +42,27 @@ describe('OpenAI OCR extractor', () => {
     expect(body.instructions).toContain('bank verification')
     expect(extraction.sourceImageSha256).toBe(preparedImage.originalSha256)
     expect(extraction.warnings).toEqual([])
+    expect(extraction).toMatchObject({
+      merchantName: 'PMC Supplier', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่',
+      receiptNumber: 'R-1', receiptDate: '2026-08-22', paymentMethod: 'CASH',
+    })
+  })
+
+  it('preserves visibly masked transfer accounts and masks an unmasked account before returning it', async () => {
+    const fetch = vi.fn(async () => completedResponse(validExtraction({
+      documentType: 'TRANSFER_SLIP', lineItems: [], merchantName: null, merchantTaxId: null, branch: null,
+      receiptNumber: null, receiptDate: null, paymentMethod: null,
+      senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '123-*-***4',
+      receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '9876543210',
+      transferDate: '2026-08-22', transferTime: '10:15', amount: 100,
+    })))
+    const extractor = createOpenAiOcrExtractor({ apiKey: 'test-key', model: 'gpt-5.5', maxOutputTokens: 512, fetch, referenceDate: '2026-08-22' })
+
+    const extraction = await extractor.extract(preparedImage)
+
+    expect(extraction.senderAccountMasked).toBe('123-*-***4')
+    expect(extraction.receiverAccountMasked).toContain('****')
+    expect(extraction.receiverAccountMasked).not.toContain('9876543210')
   })
 
   it('preserves an unreadable currency as null', async () => {
@@ -109,11 +136,18 @@ function validExtraction(overrides: Record<string, unknown> = {}) {
     documentType: 'RECEIPT', direction: 'EXPENSE', documentDate: '2026-08-22', documentTime: null,
     counterpartyName: 'PMC Supplier', currency: 'THB', subtotal: 100, discountAmount: 0, taxAmount: 0,
     serviceCharge: 0, grandTotal: 100, referenceNumber: 'R-1', categoryId: 'office', note: null,
+    senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+    receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+    merchantName: 'PMC Supplier', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่', receiptNumber: 'R-1',
+    receiptDate: '2026-08-22', paymentMethod: 'CASH',
     confidenceByField: {
       documentType: 0.99, direction: 0.99, documentDate: 0.99, documentTime: null,
       counterpartyName: 0.99, currency: 0.99, subtotal: 0.99, discountAmount: 0.99,
       taxAmount: 0.99, serviceCharge: 0.99, grandTotal: 0.99, referenceNumber: 0.99,
-      categoryId: 0.99, note: null,
+      categoryId: 0.99, note: null, senderName: null, senderBank: null, senderAccountMasked: null,
+      receiverName: null, receiverBank: null, receiverAccountMasked: null, transferDate: null, transferTime: null,
+      amount: null, merchantName: 0.99, merchantTaxId: 0.99, branch: 0.99, receiptNumber: 0.99,
+      receiptDate: 0.99, paymentMethod: 0.99,
     },
     lineItems: [{ lineNumber: 1, description: 'Paper', quantity: 1, unit: 'pack', unitPrice: 100, discountAmount: 0, taxAmount: 0, lineTotal: 100, categoryId: 'office', confidence: 0.99 }],
     ...overrides,

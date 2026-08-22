@@ -47,6 +47,7 @@ describe('OCR LINE Flex messages', () => {
   it('includes present review fields and the final document number', () => {
     const review = buildDraftFlex(draft({
       documentType: 'RECEIPT', direction: 'EXPENSE', categoryId: 'office', discountAmount: 25, taxAmount: 49,
+      merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่', paymentMethod: 'เงินสด',
     }), reviewOptions())
     const final = buildFinalFlex(draft({ state: 'CONFIRMED', receiptNumber: 'REC-2026-001' }))
 
@@ -55,7 +56,27 @@ describe('OCR LINE Flex messages', () => {
     expect(visibleFlexText(review)).toContain('หมวดหมู่: office')
     expect(visibleFlexText(review)).toContain('ส่วนลด: ฿25')
     expect(visibleFlexText(review)).toContain('ภาษี: ฿49')
+    expect(visibleFlexText(review)).toContain('เลขผู้เสียภาษี: 0105555000001')
+    expect(visibleFlexText(review)).toContain('สาขา: สำนักงานใหญ่')
+    expect(visibleFlexText(review)).toContain('วิธีชำระเงิน: เงินสด')
     expect(visibleFlexText(final)).toContain('เลขที่เอกสาร: REC-2026-001')
+  })
+
+  it('shows useful transfer attribution without exposing an unmasked account', () => {
+    const review = buildDraftFlex(draft({
+      documentType: 'TRANSFER_SLIP', merchantName: null, receiptNumber: null, receiptDate: null,
+      senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '1234567890',
+      receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '987-*-***0',
+      transferDate: '2026-08-22', transferTime: '10:15', amount: 700,
+    }), reviewOptions())
+    const visible = visibleFlexText(review)
+
+    expect(visible).toContain('ผู้โอน: ผู้โอน')
+    expect(visible).toContain('ผู้รับ: ผู้รับ')
+    expect(visible).toContain('วันที่โอน: 2026-08-22')
+    expect(visible).toContain('เวลาโอน: 10:15')
+    expect(visible).toContain('ยอดโอน: ฿700')
+    expect(visible).not.toContain('1234567890')
   })
 
   it('rejects a non-final document and gives reports a fixed safe alt text', () => {

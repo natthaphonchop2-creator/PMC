@@ -79,6 +79,16 @@ export function exactImageDuplicate(hash: string, confirmedHashes: ReadonlySet<s
   return confirmedHashes.has(hash)
 }
 
+export function maskAccountIdentifier(value: string | null): string | null {
+  if (value === null) return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  if (/[*xX•]/.test(trimmed)) return trimmed
+  const digits = trimmed.replace(/\D/g, '')
+  if (digits.length < 4) return '****'
+  return `${digits.slice(0, 3)}-****-**${digits.at(-1)}`
+}
+
 export function assertConfirmableDraft(draft: OcrDraft): void {
   if (draft.documentType !== 'TRANSFER_SLIP' && draft.documentType !== 'RECEIPT') throw new Error('Draft requires review')
   if (draft.direction !== 'INCOME' && draft.direction !== 'EXPENSE') throw new Error('Draft requires review')
@@ -105,7 +115,7 @@ export function bangkokMonthKey(isoDate: string): string {
 }
 
 function assertFiniteNumbers(input: OcrExtraction): void {
-  const fields = [input.subtotal, input.discountAmount, input.taxAmount, input.serviceCharge, input.grandTotal]
+  const fields = [input.subtotal, input.discountAmount, input.taxAmount, input.serviceCharge, input.grandTotal, input.amount]
   const fieldConfidences = input.confidenceByField ? Object.values(input.confidenceByField) : []
   for (const value of [...fields, ...fieldConfidences, ...input.lineItems.flatMap((line) => [line.lineNumber, line.quantity, line.unitPrice, line.discountAmount, line.taxAmount, line.lineTotal, line.confidence])]) {
     if (value !== null && !Number.isFinite(value)) throw new TypeError('Extraction contains a non-finite number')

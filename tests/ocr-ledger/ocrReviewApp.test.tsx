@@ -14,6 +14,10 @@ const draft: OcrReviewDraft = {
   documentDate: '2026-08-22', documentTime: '10:15', counterpartyName: 'ร้านทดสอบ', currency: 'THB',
   subtotal: 100, discountAmount: 0, taxAmount: 7, serviceCharge: 3, grandTotal: 110,
   referenceNumber: 'REF-001', categoryId: 'office', note: 'เอกสารทดสอบ',
+  senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+  receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+  merchantName: 'ร้านทดสอบ', merchantTaxId: '0105555000001', branch: 'สำนักงานใหญ่', receiptNumber: 'RCPT-001',
+  receiptDate: '2026-08-22', paymentMethod: 'เงินสด',
   warnings: [{ code: 'HEADER_TOTAL_MISMATCH', field: 'grandTotal', message: 'ยอดรวมในภาพไม่ตรงกับรายการ' }],
   lineItems: [{ lineNumber: 1, description: 'กระดาษ A4', quantity: 1, unit: 'รีม', unitPrice: 100, discountAmount: 0, taxAmount: 7, lineTotal: 107, categoryId: 'office' }],
 }
@@ -43,12 +47,37 @@ describe('OCR LIFF review page', () => {
     render(<OcrReviewApp adapter={adapter()} />)
     await screen.findByRole('heading', { name: /ใบเสร็จ/ })
 
-    for (const label of ['เวลาเอกสาร', 'สกุลเงิน', 'ยอดก่อนลด', 'ส่วนลด', 'ภาษี', 'ค่าบริการ', 'หน่วย', 'ราคาต่อหน่วย', 'หมวดหมู่รายการ']) {
+    for (const label of ['เวลาเอกสาร', 'สกุลเงิน', 'ยอดก่อนลด', 'ส่วนลด', 'ภาษี', 'ค่าบริการ', 'ชื่อร้านค้า', 'เลขประจำตัวผู้เสียภาษี', 'สาขา', 'เลขที่ใบเสร็จ', 'วันที่ใบเสร็จ', 'วิธีชำระเงิน', 'หน่วย', 'ราคาต่อหน่วย', 'หมวดหมู่รายการ']) {
       expect(screen.getByLabelText(label)).toBeVisible()
     }
     expect(screen.getByLabelText('เวลาเอกสาร')).toHaveValue('10:15')
     expect(screen.getByLabelText('สกุลเงิน')).toHaveValue('THB')
     expect(screen.getByLabelText('ราคาต่อหน่วย')).toHaveAttribute('inputmode', 'decimal')
+  })
+
+  it('renders and submits every transfer-slip field through the same authenticated editor', async () => {
+    const user = userEvent.setup()
+    const transferDraft: OcrReviewDraft = {
+      ...draft, documentType: 'TRANSFER_SLIP', lineItems: [], merchantName: null, merchantTaxId: null, branch: null,
+      receiptNumber: null, receiptDate: null, paymentMethod: null,
+      senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '123-****-**0',
+      receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '987-****-**0',
+      transferDate: '2026-08-22', transferTime: '10:15', amount: 110,
+    }
+    const app = adapter({ loadDraft: vi.fn().mockResolvedValue(transferDraft) })
+    render(<OcrReviewApp adapter={app} />)
+
+    for (const label of ['ชื่อผู้โอน', 'ธนาคารผู้โอน', 'บัญชีผู้โอน', 'ชื่อผู้รับ', 'ธนาคารผู้รับ', 'บัญชีผู้รับ', 'วันที่โอน', 'เวลาโอน', 'ยอดโอน']) {
+      expect(await screen.findByLabelText(label)).toBeVisible()
+    }
+    await user.clear(screen.getByLabelText('ธนาคารผู้รับ'))
+    await user.type(screen.getByLabelText('ธนาคารผู้รับ'), 'BANK C')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
+    expect(app.submitEdit).toHaveBeenCalledWith('raw-line-id-token', expect.objectContaining({
+      senderName: 'ผู้โอน', receiverBank: 'BANK C', transferDate: '2026-08-22', transferTime: '10:15', amount: 110,
+    }))
   })
 
   it('starts draft and image reads in parallel with the raw LINE ID token', async () => {

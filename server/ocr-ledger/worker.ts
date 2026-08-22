@@ -542,6 +542,11 @@ function draftFromExtraction(
     subtotal: extraction.subtotal, discountAmount: extraction.discountAmount, taxAmount: extraction.taxAmount,
     serviceCharge: extraction.serviceCharge, grandTotal: extraction.grandTotal, referenceNumber: extraction.referenceNumber ?? null,
     categoryId: extraction.categoryId ?? null, note: extraction.note ?? null, confidenceByField: extraction.confidenceByField ?? {},
+    senderName: extraction.senderName, senderBank: extraction.senderBank, senderAccountMasked: extraction.senderAccountMasked,
+    receiverName: extraction.receiverName, receiverBank: extraction.receiverBank, receiverAccountMasked: extraction.receiverAccountMasked,
+    transferDate: extraction.transferDate, transferTime: extraction.transferTime, amount: extraction.amount,
+    merchantName: extraction.merchantName, merchantTaxId: extraction.merchantTaxId, branch: extraction.branch,
+    receiptNumber: extraction.receiptNumber, receiptDate: extraction.receiptDate, paymentMethod: extraction.paymentMethod,
     warnings: extraction.warnings, lineItems: extraction.lineItems.map((line) => ({ ...line, documentId })), ...source,
   }
 }

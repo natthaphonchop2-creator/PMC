@@ -129,6 +129,21 @@ export interface OcrExtraction {
   referenceNumber?: string | null
   categoryId?: string | null
   note?: string | null
+  senderName: string | null
+  senderBank: string | null
+  senderAccountMasked: string | null
+  receiverName: string | null
+  receiverBank: string | null
+  receiverAccountMasked: string | null
+  transferDate: string | null
+  transferTime: string | null
+  amount: number | null
+  merchantName: string | null
+  merchantTaxId: string | null
+  branch: string | null
+  receiptNumber: string | null
+  receiptDate: string | null
+  paymentMethod: string | null
   sourceImageSha256?: string | null
   confidenceByField?: Record<string, number | null>
   lineItems: OcrLineItem[]
