@@ -320,6 +320,34 @@ describe('createOcrLedgerWorker', () => {
     expect(JSON.stringify(line.push.mock.calls[0][1])).not.toContain('9,999')
   })
 
+  it('processes every leased job and the scheduled daily check after a report command succeeds', async () => {
+    const current = new Date('2026-08-22T13:00:00.000Z')
+    const existing = draft()
+    const store = new FakeStore([
+      job('REPORT_COMMAND', { command: 'TODAY', groupId: 'Cgroup1' }, null, 'report-first'),
+      job('CANCEL', actionPayload(), existing.documentId, 'cancel-second'),
+    ])
+    store.drafts.push(existing)
+    const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
+
+    const result = await worker.runOnce()
+
+    expect(result).toMatchObject({ processed: 2, succeeded: 2, failed: 0, reportSent: true })
+    expect(store.drafts[0]).toMatchObject({ state: 'CANCELLED' })
+    expect(store.jobs).toEqual(expect.arrayContaining([expect.objectContaining({ idempotencyKey: 'report:Cgroup1:2026-08-22:daily', state: 'DONE' })]))
+    expect(line.push).toHaveBeenCalledTimes(3)
+    expect(line.push.mock.calls.map(([, messages]) => (messages as Array<{ type: string }>)[0].type)).toEqual(['text', 'flex', 'text'])
+  })
+
+  it('pushes a short text report when the confirmed window has no activity', async () => {
+    const store = new FakeStore([job('REPORT_COMMAND', { command: 'TODAY', groupId: 'Cgroup1' })])
+    const { worker, line } = harness(store)
+
+    await worker.runOnce()
+
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [{ type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }])
+  })
+
   it('catches up the 20:00 Bangkok report and records its idempotency row only after the LINE push', async () => {
     const current = new Date('2026-08-22T13:00:00.000Z')
     const store = new FakeStore([])

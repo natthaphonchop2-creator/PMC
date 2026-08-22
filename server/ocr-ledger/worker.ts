@@ -40,7 +40,8 @@ export function createOcrLedgerWorker(deps: {
       for (const job of leased) {
         result.processed += 1
         try {
-          result.reportSent ||= await processJob(job, deps)
+          const reportSent = await processJob(job, deps)
+          result.reportSent ||= reportSent
           await updateJob(deps.store, { ...job, state: 'DONE', leaseUntil: null, lastErrorCode: null, updatedAt: deps.now().toISOString() })
           result.succeeded += 1
         } catch (error) {
@@ -48,7 +49,8 @@ export function createOcrLedgerWorker(deps: {
           await handleFailure(job, classifyError(error), deps)
         }
       }
-      result.reportSent ||= await sendScheduledDailyReport(deps)
+      const dailyReportSent = await sendScheduledDailyReport(deps)
+      result.reportSent ||= dailyReportSent
       return result
     },
   }
@@ -320,6 +322,7 @@ async function sendReport(
   const confirmed = await confirmedDocumentsForWindow(deps.store, window)
   const operational = await operationalDocuments(deps.store)
   const report = aggregateOcrReport([...confirmed, ...operational.filter((document) => documentIsInWindow(document, window))])
+  if (report.operational.confirmed === 0) return pushReport(deps.line, groupId, { type: 'text', text: 'ยังไม่มีรายการยืนยันในช่วงนี้' }, retryKey)
   return pushReport(deps.line, groupId, buildReportMessage({
     title: reportTitle(command),
     entries: reportEntries(report),
@@ -415,7 +418,7 @@ function reviewUrl(draft: OcrDraft, groupId: string, config: OcrLedgerConfig, no
   return url.toString()
 }
 
-async function pushReport(line: OcrLinePort, groupId: string, message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage>, retryKey?: string): Promise<void> {
+async function pushReport(line: OcrLinePort, groupId: string, message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage> | { type: 'text'; text: string }, retryKey?: string): Promise<void> {
   try {
     if (retryKey) await line.push(groupId, [message], retryKey)
     else await line.push(groupId, [message])
