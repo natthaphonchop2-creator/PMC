@@ -134,7 +134,10 @@ function textNodes(message: unknown): string[] {
   const visit = (value: unknown) => {
     if (Array.isArray(value)) return value.forEach(visit)
     if (value && typeof value === 'object') {
-      for (const [key, entry] of Object.entries(value)) key === 'text' && typeof entry === 'string' ? values.push(entry) : visit(entry)
+      for (const [key, entry] of Object.entries(value)) {
+        if (key === 'text' && typeof entry === 'string') values.push(entry)
+        else visit(entry)
+      }
     }
   }
   visit(message)
