@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { OcrDocument } from '../../src/apps/ocr-ledger/contracts'
-import { aggregateOcrReport, reportWindow, shouldSendDailyReport } from '../../server/ocr-ledger/reports'
+import { aggregateOcrReport, dailyReportRetryKey, reportWindow, shouldSendDailyReport } from '../../server/ocr-ledger/reports'
 
 describe('OCR ledger reports', () => {
   it('aggregates only confirmed financial values while retaining operational state and duplicate counts', () => {
@@ -48,6 +48,14 @@ describe('OCR ledger reports', () => {
     ])
 
     expect(report.categories.map((category) => category.categoryId)).toEqual(['office', 'alpha', 'zebra'])
+  })
+
+  it('derives a stable valid UUID retry key from the daily idempotency key', () => {
+    const key = 'report:Cgroup1:2026-08-22:daily'
+
+    expect(dailyReportRetryKey(key)).toBe(dailyReportRetryKey(key))
+    expect(dailyReportRetryKey(key)).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(dailyReportRetryKey(key)).not.toBe(dailyReportRetryKey('report:Cgroup1:2026-08-23:daily'))
   })
 })
 

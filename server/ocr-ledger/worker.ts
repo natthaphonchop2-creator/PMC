@@ -9,7 +9,7 @@ import type { OcrLedgerStore } from './googleStore.js'
 import { prepareOcrImage } from './imageProcessing.js'
 import type { OcrLinePort } from './lineClient.js'
 import { OcrExtractorError, type OcrExtractorPort } from './openAiExtractor.js'
-import { aggregateOcrReport, dailyReportIdempotencyKey, documentIsInWindow, reportWindow, shouldSendDailyReport, type OcrReportCommand } from './reports.js'
+import { aggregateOcrReport, dailyReportIdempotencyKey, dailyReportRetryKey, documentIsInWindow, reportWindow, shouldSendDailyReport, type OcrReportCommand } from './reports.js'
 import { signReviewToken } from './security.js'
 
 type WorkerErrorCode =
@@ -266,18 +266,19 @@ async function sendScheduledDailyReport(
   try { jobs = await deps.store.listJobs() } catch { throw workerError('SHEET_WRITE_FAILED') }
   const sentKeys = new Set(jobs.map((job) => job.idempotencyKey))
   if (!shouldSendDailyReport({ enabled: deps.config.dailyReportEnabled, groupId: deps.config.allowedGroupId, now, sentKeys })) return false
+  const date = reportWindow('TODAY', now).start!
+  const idempotencyKey = dailyReportIdempotencyKey(deps.config.allowedGroupId, date)
 
   try {
-    await sendReport('TODAY', deps.config.allowedGroupId, deps)
+    await sendReport('TODAY', deps.config.allowedGroupId, deps, dailyReportRetryKey(idempotencyKey))
   } catch (error) {
     if (isWorkerError(error)) return false
     throw error
   }
 
-  const date = reportWindow('TODAY', now).start!
   const marker: OcrQueueJob = {
     jobId: `report-${randomUUID()}`, jobType: 'REPORT_COMMAND', documentId: null,
-    idempotencyKey: dailyReportIdempotencyKey(deps.config.allowedGroupId, date),
+    idempotencyKey,
     payloadJson: JSON.stringify({ command: 'TODAY', groupId: deps.config.allowedGroupId, scheduled: true }),
     state: 'DONE', attempts: 0, availableAt: now.toISOString(), leaseUntil: null, lastErrorCode: null,
     createdAt: now.toISOString(), updatedAt: now.toISOString(),
@@ -290,6 +291,7 @@ async function sendReport(
   command: OcrReportCommand,
   groupId: string,
   deps: { config: OcrLedgerConfig; store: OcrLedgerStore; line: OcrLinePort; drive: OcrDrivePort; extractor: OcrExtractorPort; now: () => Date },
+  retryKey?: string,
 ): Promise<void> {
   const now = deps.now()
   if (command === 'PENDING') {
@@ -302,7 +304,7 @@ async function sendReport(
         reviewUri: reviewUrl(draft, groupId, deps.config, now),
       })),
     })
-    return pushReport(deps.line, groupId, message)
+    return pushReport(deps.line, groupId, message, retryKey)
   }
   if (command === 'ERRORS') {
     const errors = await failedJobs(deps.store)
@@ -311,7 +313,7 @@ async function sendReport(
       entries: errors.length === 0
         ? [{ label: 'ไม่พบรายการผิดพลาด' }]
         : errors.slice(0, 10).map((job) => ({ label: job.documentId ?? job.jobId, value: job.lastErrorCode ?? 'UNKNOWN' })),
-    }))
+    }), retryKey)
   }
 
   const window = reportWindow(command, now)
@@ -321,7 +323,7 @@ async function sendReport(
   return pushReport(deps.line, groupId, buildReportMessage({
     title: reportTitle(command),
     entries: reportEntries(report),
-  }))
+  }), retryKey)
 }
 
 async function confirmedDocumentsForWindow(store: OcrLedgerStore, window: ReturnType<typeof reportWindow>): Promise<OcrDocument[]> {
@@ -413,8 +415,11 @@ function reviewUrl(draft: OcrDraft, groupId: string, config: OcrLedgerConfig, no
   return url.toString()
 }
 
-async function pushReport(line: OcrLinePort, groupId: string, message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage>): Promise<void> {
-  try { await line.push(groupId, [message]) } catch { throw workerError('LINE_SEND_FAILED') }
+async function pushReport(line: OcrLinePort, groupId: string, message: ReturnType<typeof buildReportMessage> | ReturnType<typeof buildPendingReportMessage>, retryKey?: string): Promise<void> {
+  try {
+    if (retryKey) await line.push(groupId, [message], retryKey)
+    else await line.push(groupId, [message])
+  } catch { throw workerError('LINE_SEND_FAILED') }
 }
 
 function money(value: number): string {

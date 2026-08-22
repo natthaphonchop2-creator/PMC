@@ -68,6 +68,34 @@ describe('OCR LINE client', () => {
     await expect(client.push('Cgroup1', [])).rejects.toMatchObject({ message: expect.not.stringContaining('provider secret response body') })
     await expect(client.assertGroupMember('Cgroup1', 'Ustaff')).rejects.toMatchObject({ code: 'LINE_GROUP_MEMBERSHIP_REQUIRED' })
   })
+
+  it('sends the retry key on a push and accepts a 2xx response', async () => {
+    const fetch = vi.fn(async () => response(202, {}))
+    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', maxImageBytes: 1024, fetch })
+
+    await expect(client.push('Cgroup1', [{ type: 'text', text: 'รายงาน' }], '9c7e6bc6-5d38-46de-8fa9-2e0e8a580e53')).resolves.toBeUndefined()
+
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ headers: {
+      authorization: 'Bearer channel-token', 'content-type': 'application/json', 'x-line-retry-key': '9c7e6bc6-5d38-46de-8fa9-2e0e8a580e53',
+    } })
+  })
+
+  it('accepts a 409 only for an identified previously accepted retry-key push', async () => {
+    const fetch = vi.fn(async () => response(409, {}, Buffer.alloc(0), { 'x-line-accepted-request-id': 'accepted-request' }))
+    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', maxImageBytes: 1024, fetch })
+
+    await expect(client.push('Cgroup1', [], '9c7e6bc6-5d38-46de-8fa9-2e0e8a580e53')).resolves.toBeUndefined()
+  })
+
+  it.each([
+    ['without an accepted request ID', '9c7e6bc6-5d38-46de-8fa9-2e0e8a580e53', {}],
+    ['without a retry key', undefined, { 'x-line-accepted-request-id': 'accepted-request' }],
+  ])('rejects an unsafe 409 %s', async (_name, retryKey, headers) => {
+    const fetch = vi.fn(async () => response(409, {}, Buffer.alloc(0), headers))
+    const client = createOcrLineClient({ channelAccessToken: 'channel-token', liffChannelId: '2001234567', maxImageBytes: 1024, fetch })
+
+    await expect(client.push('Cgroup1', [], retryKey)).rejects.toMatchObject({ code: 'LINE_PUSH_FAILED' })
+  })
 })
 
 function response(status: number, json: unknown, bytes = Buffer.alloc(0), headers: Record<string, string> = {}) {

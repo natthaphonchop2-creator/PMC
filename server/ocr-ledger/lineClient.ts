@@ -1,7 +1,7 @@
 export interface OcrLinePort {
   downloadImage(messageId: string): Promise<{ bytes: Buffer; mimeType: 'image/jpeg' | 'image/png' }>
   reply(replyToken: string, messages: unknown[]): Promise<void>
-  push(to: string, messages: unknown[]): Promise<void>
+  push(to: string, messages: unknown[], retryKey?: string): Promise<void>
   verifyLiffIdToken(idToken: string): Promise<{ userId: string }>
   assertGroupMember(groupId: string, userId: string): Promise<{ displayName: string }>
   validatePush(messages: unknown[]): Promise<void>
@@ -80,8 +80,9 @@ export function createOcrLineClient(options: OcrLineClientOptions): OcrLinePort 
       await postJson(fetch, `${MESSAGING_API}/message/reply`, { replyToken, messages }, bearerHeaders, 'LINE_REPLY_FAILED')
     },
 
-    async push(to, messages) {
-      await postJson(fetch, `${MESSAGING_API}/message/push`, { to, messages }, bearerHeaders, 'LINE_PUSH_FAILED')
+    async push(to, messages, retryKey) {
+      if (retryKey !== undefined && !isRetryKey(retryKey)) throw new OcrLineClientError('LINE_PUSH_FAILED')
+      await postJson(fetch, `${MESSAGING_API}/message/push`, { to, messages }, bearerHeaders, 'LINE_PUSH_FAILED', retryKey)
     },
 
     async verifyLiffIdToken(idToken) {
@@ -105,9 +106,11 @@ export function createOcrLineClient(options: OcrLineClientOptions): OcrLinePort 
 
 }
 
-async function postJson(fetch: LineFetch, url: string, body: unknown, headers: Record<string, string>, code: string): Promise<void> {
-  const response = await request(fetch, url, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) }, code)
-  if (!response.ok) throw new OcrLineClientError(code)
+async function postJson(fetch: LineFetch, url: string, body: unknown, headers: Record<string, string>, code: string, retryKey?: string): Promise<void> {
+  const response = await request(fetch, url, {
+    method: 'POST', headers: { ...headers, 'content-type': 'application/json', ...(retryKey ? { 'x-line-retry-key': retryKey } : {}) }, body: JSON.stringify(body),
+  }, code)
+  if (!response.ok && !(retryKey && response.status === 409 && response.headers.get('x-line-accepted-request-id'))) throw new OcrLineClientError(code)
 }
 
 async function request(fetch: LineFetch, url: string, init: { method?: string; headers?: Record<string, string>; body?: string }, code: string): Promise<LineResponse> {
@@ -135,6 +138,10 @@ function isVerifiedLiffToken(value: unknown, audience: string): value is { sub: 
     && typeof value.sub === 'string' && value.sub.length > 0
     && value.aud === audience
     && Number.isSafeInteger(value.exp)
+}
+
+function isRetryKey(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
 
 function safeMessage(code: string): string {

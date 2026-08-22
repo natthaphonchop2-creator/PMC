@@ -370,6 +370,22 @@ describe('createOcrLedgerWorker', () => {
     expect(result.reportSent).toBe(false)
     expect(store.jobs).toEqual([])
   })
+
+  it('reuses the same daily retry key after push success but idempotency persistence fails', async () => {
+    const current = new Date('2026-08-22T16:00:00.000Z')
+    const store = new FakeStore([])
+    store.appendFailures = 1
+    const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
+
+    await expect(worker.runOnce()).rejects.toMatchObject({ code: 'SHEET_WRITE_FAILED' })
+    const retryKey = line.push.mock.calls[0]?.[2]
+    expect(retryKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ reportSent: true })
+
+    expect(line.push.mock.calls[1]?.[2]).toBe(retryKey)
+    expect(store.jobs).toEqual([expect.objectContaining({ idempotencyKey: 'report:Cgroup1:2026-08-22:daily', state: 'DONE' })])
+  })
 })
 
 class FakeStore implements OcrLedgerStore {
@@ -380,12 +396,13 @@ class FakeStore implements OcrLedgerStore {
   confirmedDocuments = new Map<string, OcrDraft[]>()
   terminalDecisions = new Map<string, 'CONFIRM' | 'CANCEL'>()
   saveFailures = 0
+  appendFailures = 0
   getDraftCalls = 0
   failGetDraftOnCall: number | null = null
 
   constructor(public jobs: OcrQueueJob[], private readonly order: string[] = []) {}
 
-  async appendJob(next: OcrQueueJob) { const found = this.jobs.find((entry) => entry.idempotencyKey === next.idempotencyKey); if (!found) this.jobs.push(next); return found ?? next }
+  async appendJob(next: OcrQueueJob) { if (this.appendFailures > 0) { this.appendFailures -= 1; throw new Error('sheet unavailable') }; const found = this.jobs.find((entry) => entry.idempotencyKey === next.idempotencyKey); if (!found) this.jobs.push(next); return found ?? next }
   async listJobs() { return this.jobs.map((entry) => structuredClone(entry)) }
   async leaseJobs({ now, leaseSeconds, limit }: { now: string; leaseSeconds: number; limit: number }) {
     this.order.push('lease')
