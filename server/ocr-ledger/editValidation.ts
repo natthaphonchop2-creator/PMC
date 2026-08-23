@@ -45,7 +45,30 @@ export function parseOcrEditablePatch(value: unknown): OcrEditablePatch | null {
   const patch = structuredClone(value) as OcrEditablePatch
   if (Object.hasOwn(patch, 'senderAccountMasked')) patch.senderAccountMasked = maskAccountIdentifier(patch.senderAccountMasked)
   if (Object.hasOwn(patch, 'receiverAccountMasked')) patch.receiverAccountMasked = maskAccountIdentifier(patch.receiverAccountMasked)
+  clearOppositeDocumentFields(patch)
   return patch
+}
+
+function clearOppositeDocumentFields(patch: OcrEditablePatch): void {
+  if (patch.documentType === 'TRANSFER_SLIP') {
+    patch.merchantName = null
+    patch.merchantTaxId = null
+    patch.branch = null
+    patch.receiptNumber = null
+    patch.receiptDate = null
+    patch.paymentMethod = null
+    patch.lineItems = []
+    return
+  }
+  patch.senderName = null
+  patch.senderBank = null
+  patch.senderAccountMasked = null
+  patch.receiverName = null
+  patch.receiverBank = null
+  patch.receiverAccountMasked = null
+  patch.transferDate = null
+  patch.transferTime = null
+  patch.amount = null
 }
 
 function isEditableLine(value: unknown, expectedLineNumber: number): value is OcrLineItem {

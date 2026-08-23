@@ -169,9 +169,11 @@ describe('OCR ledger LIFF review API', () => {
     const response = await request(deps, {
       method: 'POST', url: `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`,
       headers: { authorization: 'Bearer raw-line-id-token' }, body: JSON.stringify({ patch: editablePatch({
-        documentType: 'TRANSFER_SLIP', senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '1234567890',
+        documentType: 'TRANSFER_SLIP', senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '1234567890*',
         receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '987-*-***0',
         transferDate: '2026-08-22', transferTime: '10:15', amount: 100, lineItems: [],
+        merchantName: 'must clear', merchantTaxId: '0105555000001', branch: 'must clear', receiptNumber: 'R-1',
+        receiptDate: '2026-08-22', paymentMethod: 'CASH',
       }) }),
     })
 
@@ -179,7 +181,29 @@ describe('OCR ledger LIFF review API', () => {
     const payload = JSON.parse(deps.store.appendJob.mock.calls[0]?.[0].payloadJson ?? '{}')
     expect(payload.patch.senderAccountMasked).toContain('****')
     expect(payload.patch.senderAccountMasked).not.toContain('1234567890')
-    expect(payload.patch.receiverAccountMasked).toBe('987-*-***0')
+    expect(payload.patch.receiverAccountMasked).toBe('987-****-**0')
+    expect(payload.patch).toMatchObject({
+      merchantName: null, merchantTaxId: null, branch: null, receiptNumber: null, receiptDate: null, paymentMethod: null,
+    })
+  })
+
+  it('clears transfer-only fields when an edit classifies the document as a receipt', async () => {
+    const deps = dependencies()
+    const response = await request(deps, {
+      method: 'POST', url: `/api/ocr-ledger/review?t=${encodeURIComponent(reviewToken())}`,
+      headers: { authorization: 'Bearer raw-line-id-token' }, body: JSON.stringify({ patch: editablePatch({
+        documentType: 'RECEIPT', senderName: 'must clear', senderBank: 'must clear', senderAccountMasked: '1234567890*',
+        receiverName: 'must clear', receiverBank: 'must clear', receiverAccountMasked: '9876543210*',
+        transferDate: '2026-08-22', transferTime: '10:15', amount: 100,
+      }) }),
+    })
+
+    expect(response.statusCode).toBe(202)
+    const payload = JSON.parse(deps.store.appendJob.mock.calls[0]?.[0].payloadJson ?? '{}')
+    expect(payload.patch).toMatchObject({
+      senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+      receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+    })
   })
 
   it.each([

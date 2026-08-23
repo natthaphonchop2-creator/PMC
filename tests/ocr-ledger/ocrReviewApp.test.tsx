@@ -80,7 +80,7 @@ describe('OCR LIFF review page', () => {
     }))
   })
 
-  it('clears receipt line items when the reviewer changes the document type to a transfer slip', async () => {
+  it('clears every receipt-only field when the reviewer changes the document type to a transfer slip', async () => {
     const user = userEvent.setup()
     const app = adapter()
     render(<OcrReviewApp adapter={app} />)
@@ -90,7 +90,33 @@ describe('OCR LIFF review page', () => {
     await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
 
     await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
-    expect((app.submitEdit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1].lineItems).toEqual([])
+    expect((app.submitEdit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toMatchObject({
+      lineItems: [], merchantName: null, merchantTaxId: null, branch: null, receiptNumber: null,
+      receiptDate: null, paymentMethod: null,
+    })
+  })
+
+  it('clears every transfer-only field when the reviewer changes the document type to a receipt', async () => {
+    const user = userEvent.setup()
+    const transferDraft: OcrReviewDraft = {
+      ...draft, documentType: 'TRANSFER_SLIP', lineItems: [], merchantName: null, merchantTaxId: null, branch: null,
+      receiptNumber: null, receiptDate: null, paymentMethod: null,
+      senderName: 'ผู้โอน', senderBank: 'BANK A', senderAccountMasked: '123-****-**0',
+      receiverName: 'ผู้รับ', receiverBank: 'BANK B', receiverAccountMasked: '987-****-**0',
+      transferDate: '2026-08-22', transferTime: '10:15', amount: 110,
+    }
+    const app = adapter({ loadDraft: vi.fn().mockResolvedValue(transferDraft) })
+    render(<OcrReviewApp adapter={app} />)
+    await screen.findByLabelText('ชื่อผู้โอน')
+
+    await user.selectOptions(screen.getByLabelText(/^ประเภทเอกสาร/), 'RECEIPT')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไขเข้าคิว' }))
+
+    await waitFor(() => expect(app.submitEdit).toHaveBeenCalledOnce())
+    expect((app.submitEdit as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toMatchObject({
+      senderName: null, senderBank: null, senderAccountMasked: null, receiverName: null, receiverBank: null,
+      receiverAccountMasked: null, transferDate: null, transferTime: null, amount: null,
+    })
   })
 
   it('starts draft and image reads in parallel with the raw LINE ID token', async () => {

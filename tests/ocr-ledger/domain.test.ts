@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bangkokMonthKey, transitionDocument, validateExtraction } from '../../server/ocr-ledger/domain'
+import { bangkokMonthKey, maskAccountIdentifier, transitionDocument, validateExtraction } from '../../server/ocr-ledger/domain'
 
 describe('OCR ledger domain', () => {
   it('requires review before confirmation and makes final states immutable', () => {
@@ -52,6 +52,12 @@ describe('OCR ledger domain', () => {
 
   it('rejects invalid calendar dates instead of deriving invalid ledger keys', () => {
     expect(() => bangkokMonthKey('2026-99-22')).toThrow('Invalid ISO date')
+  })
+
+  it('derives masking from account digits even when the input already contains mask characters', () => {
+    expect(maskAccountIdentifier('1234567890*')).toBe('123-****-**0')
+    expect(maskAccountIdentifier('123-*-***4')).toBe('123-****-**4')
+    expect(maskAccountIdentifier('••••')).toBe('****')
   })
 })
 

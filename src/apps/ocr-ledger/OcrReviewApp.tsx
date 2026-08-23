@@ -142,14 +142,21 @@ export function OcrReviewApp({ adapter = defaultAdapter, initialDraft, initialIm
   }
   const updateDocumentType = (documentType: OcrDocumentType) => {
     setSaveError(null)
-    setDraft((current) => current ? {
-      ...current,
-      documentType,
-      lineItems: documentType === 'TRANSFER_SLIP' ? [] : current.lineItems,
-    } : current)
+    setDraft((current) => current ? documentType === 'TRANSFER_SLIP'
+      ? {
+          ...current, documentType, lineItems: [], merchantName: null, merchantTaxId: null, branch: null,
+          receiptNumber: null, receiptDate: null, paymentMethod: null,
+        }
+      : {
+          ...current, documentType, senderName: null, senderBank: null, senderAccountMasked: null,
+          receiverName: null, receiverBank: null, receiverAccountMasked: null, transferDate: null,
+          transferTime: null, amount: null,
+        } : current)
     if (documentType === 'TRANSFER_SLIP') {
       setRowIds([])
       setNumericTexts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !key.startsWith('line:'))))
+    } else {
+      setNumericTexts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== 'amount')))
     }
   }
   const updateLineText = (index: number, key: 'description' | 'unit' | 'categoryId', value: string) => {

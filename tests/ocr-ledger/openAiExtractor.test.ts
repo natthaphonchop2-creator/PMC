@@ -48,7 +48,7 @@ describe('OpenAI OCR extractor', () => {
     })
   })
 
-  it('preserves visibly masked transfer accounts and masks an unmasked account before returning it', async () => {
+  it('canonicalizes every transfer account mask instead of trusting visible mask characters', async () => {
     const fetch = vi.fn(async () => completedResponse(validExtraction({
       documentType: 'TRANSFER_SLIP', lineItems: [], merchantName: null, merchantTaxId: null, branch: null,
       receiptNumber: null, receiptDate: null, paymentMethod: null,
@@ -60,7 +60,7 @@ describe('OpenAI OCR extractor', () => {
 
     const extraction = await extractor.extract(preparedImage)
 
-    expect(extraction.senderAccountMasked).toBe('123-*-***4')
+    expect(extraction.senderAccountMasked).toBe('123-****-**4')
     expect(extraction.receiverAccountMasked).toContain('****')
     expect(extraction.receiverAccountMasked).not.toContain('9876543210')
   })

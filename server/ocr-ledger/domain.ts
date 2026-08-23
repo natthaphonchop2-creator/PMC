@@ -83,7 +83,6 @@ export function maskAccountIdentifier(value: string | null): string | null {
   if (value === null) return null
   const trimmed = value.trim()
   if (!trimmed) return null
-  if (/[*xX•]/.test(trimmed)) return trimmed
   const digits = trimmed.replace(/\D/g, '')
   if (digits.length < 4) return '****'
   return `${digits.slice(0, 3)}-****-**${digits.at(-1)}`
