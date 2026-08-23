@@ -370,4 +370,29 @@ describe('Google OCR ledger store', () => {
     expect(sheets.rows('monthly-2026-08', 'TRANSACTIONS')).toHaveLength(2)
     expect(sheets.rows('master', 'RECENT_TRANSACTIONS')).toHaveLength(2)
   })
+
+  it('refreshes category summary even when daily summary fails and advances freshness only after both succeed', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleOcrStore({ masterSpreadsheetId: 'master', sheets, drive: new MemoryDrive() })
+    await store.finalizeDocument(draft({ state: 'CONFIRMED', direction: 'EXPENSE', categoryId: 'office', grandTotal: 107 }), {
+      month: '2026-08', monthlySpreadsheetId: 'monthly-2026-08',
+    })
+    await sheets.update('monthly-2026-08', 'DAILY_SUMMARY!A1', [['stale-daily']])
+    await sheets.update('monthly-2026-08', 'CATEGORY_SUMMARY!A1', [['stale-category']])
+    sheets.failNextClearTab = 'DAILY_SUMMARY'
+
+    const partial = await store.refreshDerivedSurfaces('2026-08-22T11:00:00.000Z')
+
+    expect(partial.monthlySummaries).toEqual({ '2026-08': false })
+    expect(JSON.stringify(sheets.rows('monthly-2026-08', 'DAILY_SUMMARY'))).toContain('stale-daily')
+    expect(JSON.stringify(sheets.rows('monthly-2026-08', 'CATEGORY_SUMMARY'))).toContain('office')
+    expect(JSON.stringify(sheets.rows('monthly-2026-08', 'CATEGORY_SUMMARY'))).not.toContain('stale-category')
+    expect(JSON.stringify(sheets.rows('master', 'MONTHLY_INDEX'))).not.toContain('2026-08-22T11:00:00.000Z')
+
+    const repaired = await store.refreshDerivedSurfaces('2026-08-22T11:01:00.000Z')
+
+    expect(repaired.monthlySummaries).toEqual({ '2026-08': true })
+    expect(JSON.stringify(sheets.rows('monthly-2026-08', 'DAILY_SUMMARY'))).toContain('2026-08-22')
+    expect(JSON.stringify(sheets.rows('master', 'MONTHLY_INDEX'))).toContain('2026-08-22T11:01:00.000Z')
+  })
 })

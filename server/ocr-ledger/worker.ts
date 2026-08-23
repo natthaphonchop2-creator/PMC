@@ -339,6 +339,17 @@ async function sendScheduledDailyReport(
   let marker: OcrQueueJob
   try { marker = await deps.store.appendJob(pendingMarker) } catch { throw workerError('SHEET_WRITE_FAILED') }
   const payload = parsePayload(marker.payloadJson)
+  const persistedDelivery = parseDeliveryCheckpoint(payload.delivery, deps.config.allowedGroupId)
+  if (persistedDelivery) {
+    try { await pushLineDelivery(deps.line, persistedDelivery) } catch (error) {
+      if (isWorkerError(error)) return false
+      throw error
+    }
+    await updateJob(deps.store, {
+      ...marker, state: 'DONE', leaseUntil: null, lastErrorCode: null, updatedAt: deps.now().toISOString(),
+    })
+    return persistedDelivery.report
+  }
   try {
     await sendReport(marker, payload, 'TODAY', deps.config.allowedGroupId, deps)
   } catch (error) {
@@ -713,15 +724,37 @@ async function deliverMessages(
   store: OcrLedgerStore,
   line: OcrLinePort,
 ): Promise<void> {
-  const delivery: LineDeliveryCheckpoint = {
+  await checkpointJob(store, job, payload)
+  const requestedDelivery: LineDeliveryCheckpoint = {
     to,
     messages: structuredClone(messages),
     retryKey: logicalLineRetryKey(logicalKey),
     report,
   }
-  payload.delivery = delivery
-  await checkpointJob(store, job, payload)
+  const deliveryJob: OcrQueueJob = {
+    jobId: `delivery-${randomUUID()}`,
+    jobType: 'REPORT_COMMAND',
+    documentId: job.documentId,
+    idempotencyKey: `line-delivery:${logicalKey}`,
+    payloadJson: JSON.stringify({ delivery: requestedDelivery }),
+    state: 'QUEUED',
+    attempts: 0,
+    availableAt: job.updatedAt,
+    leaseUntil: null,
+    lastErrorCode: null,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  }
+  let persistedJob: OcrQueueJob
+  try { persistedJob = await store.appendJob(deliveryJob) } catch { throw workerError('SHEET_WRITE_FAILED') }
+  const createdNewDelivery = persistedJob.jobId === deliveryJob.jobId
+  const delivery = parseDeliveryCheckpoint(parsePayload(persistedJob.payloadJson).delivery, to)
+  if (!delivery) throw workerError('SHEET_WRITE_FAILED')
+  if (persistedJob.state === 'DONE' || !createdNewDelivery) return
   await pushLineDelivery(line, delivery)
+  await updateJob(store, {
+    ...persistedJob, state: 'DONE', leaseUntil: null, lastErrorCode: null, updatedAt: job.updatedAt,
+  })
 }
 
 function parseDeliveryCheckpoint(value: unknown, allowedGroupId: string): LineDeliveryCheckpoint | null {

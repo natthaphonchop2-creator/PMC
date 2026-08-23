@@ -284,10 +284,28 @@ export function createGoogleOcrStore(input: { masterSpreadsheetId: string; month
       for (const entry of ledgers) {
         const month = String(entry.value.month)
         const monthlySpreadsheetId = String(entry.value.monthlySpreadsheetId)
+        let confirmed: OcrDocument[]
         try {
-          const confirmed = await listConfirmed(monthlySpreadsheetId)
+          confirmed = await listConfirmed(monthlySpreadsheetId)
+        } catch {
+          result.monthlySummaries[month] = false
+          continue
+        }
+        let dailyReady = false
+        let categoryReady = false
+        try {
           await replaceTab(monthlySpreadsheetId, 'DAILY_SUMMARY', MONTHLY_HEADERS.DAILY_SUMMARY, dailySummaryRows(confirmed, now))
+          dailyReady = true
+        } catch { /* independently repaired on a later worker run */ }
+        try {
           await replaceTab(monthlySpreadsheetId, 'CATEGORY_SUMMARY', MONTHLY_HEADERS.CATEGORY_SUMMARY, categorySummaryRows(confirmed, now))
+          categoryReady = true
+        } catch { /* independently repaired on a later worker run */ }
+        if (!dailyReady || !categoryReady) {
+          result.monthlySummaries[month] = false
+          continue
+        }
+        try {
           await updateRow(masterSpreadsheetId, 'MONTHLY_INDEX', entry.rowNumber, MASTER_HEADERS.MONTHLY_INDEX, {
             ...entry.value, status: 'READY', aggregateFreshAt: now, updatedAt: now,
           })

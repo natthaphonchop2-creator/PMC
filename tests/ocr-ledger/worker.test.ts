@@ -29,6 +29,7 @@ describe('createOcrLedgerWorker', () => {
       'find-folder:folder-2026:08', 'create-folder:folder-2026:08',
       'find-folder:folder-08:RECEIPT', 'create-folder:folder-08:RECEIPT',
       'move-file:drive-file-1:folder-RECEIPT', 'save-draft', 'checkpoint-job', 'line-push', 'update-job',
+      'update-job',
     ])
     expect(store.drafts).toHaveLength(1)
     expect(store.drafts[0]).toEqual(expect.objectContaining({ state: 'PENDING_REVIEW', draftVersion: 1, sourceImageFileId: 'drive-file-1' }))
@@ -104,6 +105,46 @@ describe('createOcrLedgerWorker', () => {
     expect(extractor.extract).toHaveBeenCalledTimes(4)
   })
 
+  it('persists a separate retryable delivery job when a terminal error notice push fails', async () => {
+    const failedIntake = job('INTAKE', intakePayload())
+    failedIntake.attempts = 3
+    const store = new FakeStore([failedIntake])
+    const { worker, extractor, line } = harness(store)
+    extractor.extract.mockRejectedValue(Object.assign(new Error('provider body'), { code: 'OCR_RATE_LIMIT' }))
+    line.push.mockRejectedValueOnce(new Error('timeout after possible acceptance')).mockResolvedValueOnce(undefined)
+
+    await worker.runOnce()
+
+    expect(store.jobs[0]).toMatchObject({ state: 'FAILED', lastErrorCode: 'OCR_RATE_LIMIT' })
+    const deliveryJob = store.jobs.find((entry) => entry.idempotencyKey.startsWith('line-delivery:'))
+    expect(deliveryJob).toMatchObject({ state: 'QUEUED', jobType: 'REPORT_COMMAND' })
+    const persisted = JSON.parse(deliveryJob!.payloadJson).delivery
+
+    await worker.runOnce()
+
+    expect(store.jobs.find((entry) => entry.jobId === deliveryJob!.jobId)).toMatchObject({ state: 'DONE' })
+    expect(line.push).toHaveBeenCalledTimes(2)
+    expect(line.push.mock.calls[1]?.[0]).toBe(persisted.to)
+    expect(line.push.mock.calls[1]?.[1]).toEqual(persisted.messages)
+    expect(line.push.mock.calls[1]?.[2]).toBe(persisted.retryKey)
+  })
+
+  it('reuses one persisted status delivery for competing duplicate-image jobs', async () => {
+    const existing = draft({ sourceImageSha256: PNG_HASH })
+    const first = job('INTAKE', { ...intakePayload(), messageId: 'm-1' }, 'OCR-20260822-first1', 'duplicate-1')
+    const second = job('INTAKE', { ...intakePayload(), messageId: 'm-2' }, 'OCR-20260822-second1', 'duplicate-2')
+    second.createdAt = new Date(START.getTime() + 60_000).toISOString()
+    second.updatedAt = second.createdAt
+    const store = new FakeStore([first, second])
+    store.drafts.push(existing)
+    const { worker, line } = harness(store)
+
+    await worker.runOnce()
+
+    expect(line.push).toHaveBeenCalledTimes(1)
+    expect(store.jobs.filter((entry) => entry.idempotencyKey === `line-delivery:${existing.documentId}:flex:${existing.draftVersion}`)).toHaveLength(1)
+  })
+
   it('reuses a saved draft for a LINE-send retry without calling OpenAI again', async () => {
     let current = START
     const store = new FakeStore([job('INTAKE', intakePayload())])
@@ -173,7 +214,7 @@ describe('createOcrLedgerWorker', () => {
     expect(store.drafts[0].state).toBe('CONFIRMED')
     expect(store.audits.map((entry) => entry.action)).toEqual(['CONFIRM'])
     expect(store.drafts[0].note).toBeNull()
-    expect(store.jobs.map((entry) => [entry.jobId, entry.state, entry.lastErrorCode])).toEqual([
+    expect(store.jobs.filter((entry) => !entry.idempotencyKey.startsWith('line-delivery:')).map((entry) => [entry.jobId, entry.state, entry.lastErrorCode])).toEqual([
       ['job-1', 'DONE', null], ['job-2', 'DONE', null], ['job-3', 'DONE', null], ['job-4', 'DONE', null],
     ])
     expect(line.push.mock.calls.every((call) => /^[0-9a-f-]{36}$/.test(String(call[2])))).toBe(true)
@@ -433,7 +474,7 @@ describe('createOcrLedgerWorker', () => {
     const result = await worker.runOnce()
 
     expect(result.processed).toBe(2)
-    expect(store.jobs.map((entry) => entry.state)).toEqual(['DONE', 'DONE', 'QUEUED'])
+    expect(store.jobs.filter((entry) => !entry.idempotencyKey.startsWith('line-delivery:')).map((entry) => entry.state)).toEqual(['DONE', 'DONE', 'QUEUED'])
   })
 
   it('delivers a confirmed-only TODAY command report through the single writer', async () => {
@@ -539,9 +580,11 @@ describe('createOcrLedgerWorker', () => {
 
     expect(result).toMatchObject({ processed: 0, reportSent: true })
     expect(line.push).toHaveBeenCalledTimes(1)
-    expect(store.jobs).toEqual([expect.objectContaining({
+    expect(store.jobs).toEqual(expect.arrayContaining([expect.objectContaining({
       jobType: 'REPORT_COMMAND', state: 'DONE', idempotencyKey: 'report:Cgroup1:2026-08-22:daily',
-    })])
+    }), expect.objectContaining({
+      jobType: 'REPORT_COMMAND', state: 'DONE', idempotencyKey: expect.stringContaining('line-delivery:'),
+    })]))
   })
 
   it('lists the ten oldest pending drafts and refreshes each REVIEW token for 24 hours', async () => {
@@ -580,9 +623,10 @@ describe('createOcrLedgerWorker', () => {
     const result = await worker.runOnce()
 
     expect(result.reportSent).toBe(false)
-    expect(store.jobs).toEqual([expect.objectContaining({
-      state: 'QUEUED', idempotencyKey: 'report:Cgroup1:2026-08-22:daily', payloadJson: expect.stringContaining('retryKey'),
-    })])
+    expect(store.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'QUEUED', idempotencyKey: 'report:Cgroup1:2026-08-22:daily' }),
+      expect.objectContaining({ state: 'QUEUED', idempotencyKey: expect.stringContaining('line-delivery:'), payloadJson: expect.stringContaining('retryKey') }),
+    ]))
   })
 
   it('reuses the same daily retry key after push success but idempotency persistence fails', async () => {
@@ -591,14 +635,38 @@ describe('createOcrLedgerWorker', () => {
     store.failUpdateOnCall = 2
     const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
 
-    await expect(worker.runOnce()).rejects.toMatchObject({ code: 'SHEET_WRITE_FAILED' })
+    await expect(worker.runOnce()).resolves.toMatchObject({ reportSent: false })
     const retryKey = line.push.mock.calls[0]?.[2]
     expect(retryKey).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
 
     await expect(worker.runOnce()).resolves.toMatchObject({ reportSent: true })
 
     expect(line.push.mock.calls[1]?.[2]).toBe(retryKey)
-    expect(store.jobs).toEqual([expect.objectContaining({ idempotencyKey: 'report:Cgroup1:2026-08-22:daily', state: 'DONE' })])
+    expect(store.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ idempotencyKey: 'report:Cgroup1:2026-08-22:daily', state: 'DONE' }),
+      expect.objectContaining({ idempotencyKey: expect.stringContaining('line-delivery:'), state: 'DONE' }),
+    ]))
+  })
+
+  it('replays an existing scheduled delivery envelope instead of rebuilding report content', async () => {
+    const current = new Date('2026-08-22T16:00:00.000Z')
+    const retryKey = '11111111-1111-4111-8111-111111111111'
+    const marker = job('REPORT_COMMAND', {
+      command: 'TODAY', groupId: 'Cgroup1', scheduled: true,
+      delivery: { to: 'Cgroup1', messages: [{ type: 'text', text: 'persisted daily snapshot' }], retryKey, report: true },
+    }, null, 'scheduled-existing')
+    marker.idempotencyKey = 'report:Cgroup1:2026-08-22:daily'
+    marker.state = 'LEASED'
+    marker.leaseUntil = new Date(current.getTime() + 60_000).toISOString()
+    const store = new FakeStore([marker])
+    const { worker, line } = harness(store, [], () => current, { dailyReportEnabled: true })
+
+    const result = await worker.runOnce()
+
+    expect(result.reportSent).toBe(true)
+    expect(line.push).toHaveBeenCalledOnce()
+    expect(line.push).toHaveBeenCalledWith('Cgroup1', [{ type: 'text', text: 'persisted daily snapshot' }], retryKey)
+    expect(store.jobs[0]).toMatchObject({ state: 'DONE' })
   })
 })
 
