@@ -42,7 +42,14 @@ export function createOcrLedgerWorker(deps: {
         try {
           const reportSent = await processJob(job, deps)
           result.reportSent ||= reportSent
-          await updateJob(deps.store, { ...job, state: 'DONE', leaseUntil: null, lastErrorCode: null, updatedAt: deps.now().toISOString() })
+          const terminalNoticeOnly = parsePayload(job.payloadJson).terminalNoticeOnly === true
+          await updateJob(deps.store, {
+            ...job,
+            state: terminalNoticeOnly ? 'FAILED' : 'DONE',
+            leaseUntil: null,
+            lastErrorCode: terminalNoticeOnly ? job.lastErrorCode : null,
+            updatedAt: deps.now().toISOString(),
+          })
           result.succeeded += 1
         } catch (error) {
           result.failed += 1
@@ -66,6 +73,10 @@ async function processJob(
   if (delivery) {
     await pushLineDelivery(deps.line, delivery)
     return delivery.report
+  }
+  if (payload.terminalNoticeOnly === true) {
+    await pushTerminalRetry(job, deps)
+    return false
   }
   if (typeof payload.deliveryDocumentId === 'string' && typeof payload.groupId === 'string') {
     const saved = await getDraft(deps.store, payload.deliveryDocumentId)
@@ -539,7 +550,20 @@ async function handleFailure(
   const failed = { ...job, state: 'FAILED' as const, leaseUntil: null, lastErrorCode: code, updatedAt: now.toISOString() }
   await deps.store.appendError({ jobId: job.jobId, documentId: job.documentId, code, createdAt: now.toISOString() })
   await updateJob(deps.store, failed)
-  await pushTerminalRetry(failed, deps).catch(() => undefined)
+  try {
+    await pushTerminalRetry(failed, deps)
+  } catch (error) {
+    if (classifyError(error) !== 'SHEET_WRITE_FAILED') return
+    const retryPayload = parsePayload(failed.payloadJson)
+    retryPayload.terminalNoticeOnly = true
+    await updateJob(deps.store, {
+      ...failed,
+      payloadJson: JSON.stringify(retryPayload),
+      state: 'QUEUED',
+      availableAt: new Date(now.getTime() + 60_000).toISOString(),
+      updatedAt: now.toISOString(),
+    })
+  }
 }
 
 async function persistFailedIntakeDraft(job: OcrQueueJob, store: OcrLedgerStore): Promise<void> {

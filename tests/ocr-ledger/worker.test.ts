@@ -129,6 +129,31 @@ describe('createOcrLedgerWorker', () => {
     expect(line.push.mock.calls[1]?.[2]).toBe(persisted.retryKey)
   })
 
+  it('requeues the failed source job when its terminal notice cannot be durably enqueued', async () => {
+    let current = START
+    const failedIntake = job('INTAKE', intakePayload())
+    failedIntake.attempts = 3
+    const store = new FakeStore([failedIntake])
+    store.appendFailures = 1
+    const { worker, extractor } = harness(store, [], () => current)
+    extractor.extract.mockRejectedValue(Object.assign(new Error('provider body'), { code: 'OCR_RATE_LIMIT' }))
+
+    await worker.runOnce()
+
+    expect(store.jobs[0]).toMatchObject({
+      state: 'QUEUED', lastErrorCode: 'OCR_RATE_LIMIT', availableAt: new Date(current.getTime() + 60_000).toISOString(),
+    })
+    expect(store.jobs.filter((entry) => entry.idempotencyKey.startsWith('line-delivery:'))).toHaveLength(0)
+
+    current = new Date(store.jobs[0].availableAt)
+    await worker.runOnce()
+
+    expect(store.jobs[0]).toMatchObject({ state: 'FAILED' })
+    expect(store.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: 'DONE', idempotencyKey: expect.stringContaining('line-delivery:') }),
+    ]))
+  })
+
   it('reuses one persisted status delivery for competing duplicate-image jobs', async () => {
     const existing = draft({ sourceImageSha256: PNG_HASH })
     const first = job('INTAKE', { ...intakePayload(), messageId: 'm-1' }, 'OCR-20260822-first1', 'duplicate-1')
