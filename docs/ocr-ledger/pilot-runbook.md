@@ -55,6 +55,15 @@ Stop หาก test/build/lint ไม่ผ่าน หรือพบ secret/P
 - ยังไม่ได้อนุมัติหรือทำ live Google/LINE/OpenAI/Render call, webhook change, bot invitation, production credential placement, real asset creation, real message หรือ real financial-document processing
 - สถานะยังเป็น NO-GO จนกว่าจะผ่าน approved 100-unique-image evaluation, mocked browser QA, no-send LINE validation, dedicated-channel/group and Google identity/asset verification, Render one-web-instance/single-run Cron gate และ explicit owner approval ตาม rollout gates
 
+### Residual correction verification — 2026-08-23: code-ready, pre-live NO-GO
+
+- ปิด review residual I3: account identifiers ถูก canonical mask จาก digit content ทุกครั้ง แม้ input มี `*`, `x` หรือ `•`; การเปลี่ยนชนิดเอกสารล้าง field และ line items ของชนิดตรงข้ามทั้ง LIFF และ server validation
+- ปิด review residual I5: ทุก logical LINE push สร้าง durable `line-delivery:*` queue job ที่เก็บ recipient, exact message payload และ deterministic retry UUID ก่อนส่ง; FAILED notice, competing duplicate status และ scheduled report replay ใช้ envelope เดิม. หาก Sheets ล้มก่อนสร้าง notice marker ระบบ requeue เฉพาะ notice intent และคง source job เป็น `FAILED` หลัง marker ส่งสำเร็จ
+- ปิด review residual I7: `DAILY_SUMMARY` และ `CATEGORY_SUMMARY` refresh ภายใต้ failure boundary แยกกัน และ `aggregateFreshAt` ขยับเมื่อทั้งสองสำเร็จเท่านั้น
+- Automated evidence หลัง correction: `npm run ocr:test` ผ่าน 18 files / 231 tests, `npm test` ผ่าน 56 files / 559 tests, lint, client/LIFF/server build และ `git diff --check` ผ่าน; มีเพียง Vite main chunk-size warning เดิม
+- Runtime/setup evidence ยังคง fail-closed: setup เป็น `DRY_RUN`, job ที่ไม่มี config ออกด้วย `OCR ledger job failed`, evaluator ที่ไม่มี fixture directory ให้ aggregate-only `NO_GO`/`EVAL_FIXTURE_DIR_REQUIRED`
+- Code review residual ทั้งสามปิดใน regression tests แล้ว แต่สถานะ production ยังคง NO-GO ตาม external gates ด้านบน
+
 ## Stage 3 — No-send Flex validation
 
 1. สร้าง Flex payload จาก synthetic drafts/reports เท่านั้น
