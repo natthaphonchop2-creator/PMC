@@ -39,6 +39,12 @@ function requiredValue(namedValues: Record<string, string[]>, label: string): st
   return value
 }
 
+function requiredValues(namedValues: Record<string, string[]>, label: string): string[] {
+  const values = (namedValues[label] ?? []).map((value) => value.trim()).filter(Boolean)
+  if (!values.length) throw new Error(`missing Form field: ${label}`)
+  return values
+}
+
 function requiredValueFromAliases(
   namedValues: Record<string, string[]>,
   canonicalLabel: string,
@@ -51,8 +57,8 @@ function requiredValueFromAliases(
   throw new Error(`missing Form field: ${canonicalLabel}`)
 }
 
-function driveFileIds(value: string): string[] {
-  return [...new Set(value.match(/[\w-]{20,}/g) ?? [])]
+function driveFileIds(values: string[]): string[] {
+  return [...new Set(values.flatMap((value) => value.match(/[\w-]{20,}/g) ?? []))]
 }
 
 export function parseBookingFormEvent(event: BookingFormEventInput): BookingIntake {
@@ -87,8 +93,8 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     appointmentTime,
     depositAmount: Number(requiredValue(event.namedValues, BOOKING_FORM_LABELS.depositAmount).replace(/,/g, '')),
     channelId: event.namedValues[BOOKING_FORM_LABELS.channelId]?.[0]?.trim() || null,
-    paymentEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.paymentEvidence)),
-    chatEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.chatEvidence)),
+    paymentEvidenceFileIds: driveFileIds(requiredValues(event.namedValues, BOOKING_FORM_LABELS.paymentEvidence)),
+    chatEvidenceFileIds: driveFileIds(requiredValues(event.namedValues, BOOKING_FORM_LABELS.chatEvidence)),
   }
 }
 

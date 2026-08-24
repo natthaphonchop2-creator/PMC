@@ -93,6 +93,43 @@ describe('booking Form workflow', () => {
     ])
   })
 
+  it('keeps every uploaded Drive file when Google Forms returns one array entry per file', () => {
+    const intake = parseBookingFormEvent({
+      responseKey: 'sheet-multiple-files:2',
+      submittedAt: '2026-08-20T09:00:00+07:00',
+      submitterEmail: 'admin@example.com',
+      namedValues: {
+        Admin: ['มัส'],
+        AE: ['ไม่ระบุ'],
+        ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        'ชื่อ Facebook': ['PMC Beauty'],
+        เบอร์มือถือ: ['0812345678'],
+        หมอ: ['doctor-1'],
+        'บริการ/โปรแกรม': ['service-1'],
+        วันที่นัด: ['2026-08-20'],
+        เวลานัด: ['13:00'],
+        จำนวนเงินจอง: ['1000'],
+        สลิปเงินจอง: [
+          'payment-file-id-123456789012345',
+          'payment-file-id-223456789012345',
+        ],
+        หลักฐานแชท: [
+          'chat-file-id-123456789012345',
+          'chat-file-id-223456789012345',
+        ],
+      },
+    })
+
+    expect(intake.paymentEvidenceFileIds).toEqual([
+      'payment-file-id-123456789012345',
+      'payment-file-id-223456789012345',
+    ])
+    expect(intake.chatEvidenceFileIds).toEqual([
+      'chat-file-id-123456789012345',
+      'chat-file-id-223456789012345',
+    ])
+  })
+
   it('parses the compact Admin and AE field titles', () => {
     const intake = parseBookingFormEvent({
       responseKey: 'sheet-compact:2',
