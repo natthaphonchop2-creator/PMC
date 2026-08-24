@@ -2,6 +2,7 @@ export const SCRIPT_PROPERTY_KEYS = {
   spreadsheetId: 'PMC_SPREADSHEET_ID',
   bookingFormId: 'PMC_BOOKING_FORM_ID',
   callResultFormId: 'PMC_CALL_RESULT_FORM_ID',
+  queueConfirmationFormId: 'PMC_QUEUE_CONFIRMATION_FORM_ID',
   driveRootId: 'PMC_DRIVE_ROOT_ID',
   jeraIncomingFolderId: 'PMC_JERA_INCOMING_FOLDER_ID',
   backupFolderId: 'PMC_BACKUP_FOLDER_ID',

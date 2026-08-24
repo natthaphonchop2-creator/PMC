@@ -227,6 +227,13 @@ export interface FormsPort {
   ensureFacebookNameField(): void
   resumeBookingResponses(): void
   callResultPrefillUrl(caseId: string): string
+  queueConfirmationUrl(input: {
+    caseId: string
+    action: 'CONFIRM' | 'CHANGE'
+    appointmentDate?: string
+    appointmentTime?: string
+  }): string
+  ensureQueueConfirmationForm(): { confirmationFormReady: true }
 }
 export interface FilePort {
   readText(fileId: string, encoding: 'Windows-874'): string

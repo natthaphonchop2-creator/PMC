@@ -5,6 +5,10 @@ import {
   BOOKING_FORM_LEGACY_LABELS,
 } from '../config'
 import { compactAeChoices, compactIdentityFormPlan } from '../domain/formIdentity'
+import {
+  QUEUE_CONFIRM_ACTIONS,
+  type QueueConfirmationFormEventInput,
+} from '../domain/queueConfirmation'
 
 const CLOSER_FORM_TITLES: string[] = [
   BOOKING_FORM_LABELS.closerName,
@@ -154,13 +158,33 @@ export function callResultFormResponseEvent(
   }
 }
 
+export function queueConfirmationFormResponseEvent(
+  event: GoogleAppsScript.Events.FormsOnFormSubmit,
+): QueueConfirmationFormEventInput {
+  return {
+    submittedAt: bangkokIso(event.response.getTimestamp()),
+    submitterEmail: event.response.getRespondentEmail(),
+    namedValues: formNamedValues(event.response),
+  }
+}
+
 function listItem(form: GoogleAppsScript.Forms.Form, title: string): GoogleAppsScript.Forms.ListItem {
   const item = form.getItems(FormApp.ItemType.LIST).find((candidate) => candidate.getTitle() === title)
   if (!item) throw new Error(`missing Form list field: ${title}`)
   return item.asListItem()
 }
 
-export function createGoogleFormsPort(bookingFormId: string, callResultFormId: string): FormsPort {
+export function createGoogleFormsPort(
+  bookingFormId: string,
+  callResultFormId: string,
+  queueConfirmationFormId = '',
+): FormsPort {
+  const queueForm = () => {
+    if (!queueConfirmationFormId.trim()) {
+      throw new Error('queue confirmation Form is not configured')
+    }
+    return FormApp.openById(queueConfirmationFormId)
+  }
   return {
     syncBookingChoices(closerNames, aeNames, doctorIds, serviceIds, channelIds) {
       const form = FormApp.openById(bookingFormId)
@@ -286,6 +310,71 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
         .createResponse()
         .withItemResponse(item.asTextItem().createResponse(caseId))
         .toPrefilledUrl()
+    },
+    queueConfirmationUrl(input) {
+      const form = queueForm()
+      const response = form.createResponse()
+      const caseItem = form
+        .getItems(FormApp.ItemType.TEXT)
+        .find((candidate) => candidate.getTitle() === 'Case ID')
+      if (!caseItem) throw new Error('missing queue confirmation Case ID field')
+      response.withItemResponse(caseItem.asTextItem().createResponse(input.caseId))
+
+      const actionItem = form
+        .getItems(FormApp.ItemType.MULTIPLE_CHOICE)
+        .find((candidate) => candidate.getTitle() === 'การดำเนินการ')
+      if (!actionItem) throw new Error('missing queue confirmation action field')
+      const actionLabel = input.action === 'CONFIRM' ? 'ยืนยันคิวนี้' : 'เปลี่ยนวัน'
+      response.withItemResponse(actionItem.asMultipleChoiceItem().createResponse(actionLabel))
+
+      if (input.appointmentDate && input.appointmentTime) {
+        const dateItem = form
+          .getItems(FormApp.ItemType.DATE)
+          .find((candidate) => candidate.getTitle() === 'วันที่ยืนยัน')
+        const timeItem = form
+          .getItems(FormApp.ItemType.TIME)
+          .find((candidate) => candidate.getTitle() === 'เวลายืนยัน')
+        if (!dateItem || !timeItem) throw new Error('missing queue confirmation appointment fields')
+        const [year, month, day] = input.appointmentDate.split('-').map(Number)
+        const [hour, minute] = input.appointmentTime.split(':').map(Number)
+        response.withItemResponse(
+          dateItem.asDateItem().createResponse(new Date(year, month - 1, day)),
+        )
+        response.withItemResponse(timeItem.asTimeItem().createResponse(hour, minute))
+      }
+      return response.toPrefilledUrl()
+    },
+    ensureQueueConfirmationForm() {
+      const form = queueForm()
+      form.setCollectEmail(true)
+      const textItems = form.getItems(FormApp.ItemType.TEXT)
+      const caseItems = textItems.filter((item) => item.getTitle() === 'Case ID')
+      if (caseItems.length > 1) throw new Error('duplicate queue confirmation Case ID field')
+      const caseItem = caseItems[0]?.asTextItem() ?? form.addTextItem().setTitle('Case ID')
+      caseItem.setRequired(true)
+
+      const actionItems = form
+        .getItems(FormApp.ItemType.MULTIPLE_CHOICE)
+        .filter((item) => item.getTitle() === 'การดำเนินการ')
+      if (actionItems.length > 1) throw new Error('duplicate queue confirmation action field')
+      const actionItem = actionItems[0]?.asMultipleChoiceItem() ??
+        form.addMultipleChoiceItem().setTitle('การดำเนินการ')
+      actionItem.setChoiceValues([...QUEUE_CONFIRM_ACTIONS]).setRequired(true)
+
+      const dateItems = form
+        .getItems(FormApp.ItemType.DATE)
+        .filter((item) => item.getTitle() === 'วันที่ยืนยัน')
+      if (dateItems.length > 1) throw new Error('duplicate queue confirmation date field')
+      const dateItem = dateItems[0]?.asDateItem() ?? form.addDateItem().setTitle('วันที่ยืนยัน')
+      dateItem.setRequired(true)
+
+      const timeItems = form
+        .getItems(FormApp.ItemType.TIME)
+        .filter((item) => item.getTitle() === 'เวลายืนยัน')
+      if (timeItems.length > 1) throw new Error('duplicate queue confirmation time field')
+      const timeItem = timeItems[0]?.asTimeItem() ?? form.addTimeItem().setTitle('เวลายืนยัน')
+      timeItem.setRequired(true)
+      return { confirmationFormReady: true }
     },
   }
 }

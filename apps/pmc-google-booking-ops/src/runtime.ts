@@ -189,6 +189,7 @@ export function createRuntime(): BookingPorts {
     forms: createGoogleFormsPort(
       properties[SCRIPT_PROPERTY_KEYS.bookingFormId],
       properties[SCRIPT_PROPERTY_KEYS.callResultFormId],
+      properties[SCRIPT_PROPERTY_KEYS.queueConfirmationFormId] ?? '',
     ),
     files: createGoogleFilePort(properties[SCRIPT_PROPERTY_KEYS.jeraIncomingFolderId]),
     secrets: {

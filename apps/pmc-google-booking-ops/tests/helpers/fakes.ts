@@ -320,6 +320,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       resumeBookingResponses: () => undefined,
       callResultPrefillUrl: (caseId) =>
         `https://docs.google.com/forms/d/e/test/viewform?case=${encodeURIComponent(caseId)}`,
+      queueConfirmationUrl: ({ caseId, action, appointmentDate, appointmentTime }) =>
+        `https://forms.test/queue?case=${caseId}&action=${action}&date=${appointmentDate ?? ''}&time=${appointmentTime ?? ''}`,
+      ensureQueueConfirmationForm: () => ({ confirmationFormReady: true }),
     },
     files: createFakeFiles(options.jeraPhone ?? '0812345678'),
     secrets: {
