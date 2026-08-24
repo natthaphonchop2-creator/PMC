@@ -20,7 +20,7 @@ export interface DashboardSnapshot {
     aeId: string | null
     doctorId: string
     channelId: string | null
-    appointmentStart: string
+    appointmentStart: string | null
     phoneMasked: string
   }>
 }

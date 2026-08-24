@@ -1,5 +1,5 @@
 import { createGoogleCalendarPort } from './adapters/googleCalendar'
-import { ensureDoctorCalendarEvent } from './adapters/googleCalendar'
+import { calendarEventInput, ensureDoctorCalendarEvent } from './adapters/googleCalendar'
 import { createGoogleBackupPort, createGoogleDrivePort } from './adapters/googleDrive'
 import { ensureCaseEvidenceFolder } from './adapters/googleDrive'
 import { createGoogleFilePort } from './adapters/googleFiles'
@@ -11,6 +11,8 @@ import {
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import {
   adminBookingMessageBatches,
+  adminTentativeMessageBatches,
+  adminAwaitingSlotMessageBatches,
   adminEvidenceMessageBatches,
   adminTimeConflictMessage,
   bookingTeamProfiles,
@@ -464,6 +466,65 @@ export function runEligibleRetries(ports: BookingPorts): void {
           { lineState: 'OK' },
           { actor: 'system', reason: 'Admin LINE batch retry succeeded', correlationId: id },
         )
+      } else if (operation === 'ADMIN_AUTOMATIC_LINE_BATCH') {
+        const payload = retryPayload(retry.payload)
+        const paymentEvidenceFileIds = (payload.paymentEvidenceFileIds as string[]) ?? []
+        const chatEvidenceFileIds = (payload.chatEvidenceFileIds as string[]) ?? []
+        const messageVersion = Number(payload.messageVersion) || booking.version
+        const batchIndex = Number(payload.batchIndex)
+        if (!Number.isInteger(batchIndex) || batchIndex < 0) {
+          throw new Error('invalid automatic Admin LINE batch index')
+        }
+        const evidence = ports.media.images(
+          booking.caseId,
+          paymentEvidenceFileIds,
+          chatEvidenceFileIds,
+        )
+        const profiles = bookingTeamProfiles(booking, ports.config)
+        const changeUrl = ports.forms.queueConfirmationUrl({
+          caseId: booking.caseId,
+          action: 'CHANGE',
+          ...(booking.appointmentStart
+            ? {
+                appointmentDate: booking.appointmentStart.slice(0, 10),
+                appointmentTime: booking.appointmentStart.slice(11, 16),
+              }
+            : {}),
+        })
+        const batches = booking.appointmentStatus === 'TENTATIVE' && booking.appointmentStart
+          ? adminTentativeMessageBatches(
+              booking,
+              ports.config.adminLineGroupId(),
+              evidence,
+              ports.forms.queueConfirmationUrl({
+                caseId: booking.caseId,
+                action: 'CONFIRM',
+                appointmentDate: booking.appointmentStart.slice(0, 10),
+                appointmentTime: booking.appointmentStart.slice(11, 16),
+              }),
+              changeUrl,
+              ports.config.brandLogoUrl(),
+              messageVersion,
+              profiles,
+            )
+          : adminAwaitingSlotMessageBatches(
+              booking,
+              ports.config.adminLineGroupId(),
+              evidence,
+              changeUrl,
+              ports.config.brandLogoUrl(),
+              messageVersion,
+              profiles,
+            )
+        const message = batches[batchIndex]
+        if (!message) throw new Error('automatic Admin LINE batch index out of range')
+        ports.line.push(message)
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { lineState: 'OK' },
+          { actor: 'system', reason: 'Automatic Admin LINE retry succeeded', correlationId: id },
+        )
       } else if (operation === 'ADMIN_TIME_CONFLICT_LINE') {
         const payload = retryPayload(retry.payload)
         const messageVersion = Number(payload.messageVersion) || booking.version
@@ -588,6 +649,18 @@ export function runEligibleRetries(ports: BookingPorts): void {
             correlationId: id,
           },
         )
+      } else if (operation === 'TENTATIVE_CALENDAR_EVENT') {
+        if (booking.appointmentStatus !== 'TENTATIVE') {
+          throw new Error('booking is not tentative')
+        }
+        const calendarEventId = booking.calendarEventId ??
+          ports.calendar.createEvent(calendarEventInput(booking))
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { calendarEventId, calendarState: 'OK' },
+          { actor: 'system', reason: 'Tentative Calendar retry succeeded', correlationId: id },
+        )
       } else if (operation === 'DRIVE_EVIDENCE') {
         const payload = retryPayload(retry.payload)
         const intake: BookingIntake = {
@@ -603,8 +676,8 @@ export function runEligibleRetries(ports: BookingPorts): void {
           doctorId: booking.doctorId,
           serviceId: booking.serviceId,
           channelId: booking.channelId,
-          appointmentDate: booking.appointmentStart.slice(0, 10),
-          appointmentTime: booking.appointmentStart.slice(11, 16),
+          appointmentDate: booking.appointmentStart?.slice(0, 10) ?? null,
+          appointmentTime: booking.appointmentStart?.slice(11, 16) ?? null,
           depositAmount: booking.depositAmount,
           paymentEvidenceFileIds: (payload.paymentEvidenceFileIds as string[]) ?? [],
           chatEvidenceFileIds: (payload.chatEvidenceFileIds as string[]) ?? [],

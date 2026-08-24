@@ -12,6 +12,7 @@ import {
   doctorBookingMessage,
 } from '../adapters/lineMessaging'
 import { createInitialCallTask } from './callQueue'
+import { prepareAutomaticQueue } from './automaticQueue'
 
 function validateEvidence(intake: BookingIntake): void {
   if (!intake.paymentEvidenceFileIds.length) throw new Error('payment evidence is required')
@@ -29,8 +30,8 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   )) {
     throw new Error('invalid appointment date or time')
   }
-  if (!intake.appointmentDate || !intake.appointmentTime) {
-    throw new Error('automatic queue workflow is not available yet')
+  if (intake.queueType === 'AUTO' && (intake.appointmentDate || intake.appointmentTime)) {
+    throw new Error('automatic queue must not contain appointment values')
   }
 
   if (ports.repositories.bookings.findByFormResponseId(intake.formResponseId)) {
@@ -55,9 +56,13 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
 
   const phoneNormalized = normalizeThaiPhone(intake.phone)
   const customerNameNormalized = normalizeCustomerName(intake.customerName)
-  const appointmentStart = `${intake.appointmentDate}T${intake.appointmentTime}:00+07:00`
-  const appointmentEnd = addMinutesInBangkok(appointmentStart, service.durationMinutes)
-  const callWindow = deriveCallWindow(appointmentStart)
+  const appointmentStart = intake.queueType === 'NORMAL'
+    ? `${intake.appointmentDate}T${intake.appointmentTime}:00+07:00`
+    : null
+  const appointmentEnd = appointmentStart
+    ? addMinutesInBangkok(appointmentStart, service.durationMinutes)
+    : null
+  const callWindow = appointmentStart ? deriveCallWindow(appointmentStart) : null
   const sequence = ports.repositories.bookings.allocateMonthlySequence(intake.submittedAt.slice(0, 7))
   const caseId = formatCaseId(intake.submittedAt, sequence)
 
@@ -73,10 +78,12 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     aeId: ae?.id ?? null,
     aeName: ae?.name ?? NO_AE_OPTION,
     queueType: intake.queueType,
-    appointmentStatus: 'CONFIRMED',
+    appointmentStatus: intake.queueType === 'NORMAL' ? 'CONFIRMED' : 'AWAITING_ADMIN_SLOT',
     appointmentProposedAt: null,
-    appointmentConfirmedAt: intake.submittedAt,
-    appointmentConfirmedBy: intake.submitterEmail.trim().toLowerCase(),
+    appointmentConfirmedAt: intake.queueType === 'NORMAL' ? intake.submittedAt : null,
+    appointmentConfirmedBy: intake.queueType === 'NORMAL'
+      ? intake.submitterEmail.trim().toLowerCase()
+      : null,
     customerName: intake.customerName.trim(),
     customerNameNormalized,
     facebookName: intake.facebookName.trim(),
@@ -100,9 +107,9 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     doctorLineGroupId: doctor.lineGroupId,
     doctorLineNotifiedAt: null,
     callStatus: 'PENDING',
-    firstCallWindowStart: callWindow.start,
-    firstCallWindowEnd: callWindow.end,
-    nextCallAt: `${intake.appointmentDate}T09:00:00+07:00`,
+    firstCallWindowStart: callWindow?.start ?? null,
+    firstCallWindowEnd: callWindow?.end ?? null,
+    nextCallAt: intake.appointmentDate ? `${intake.appointmentDate}T09:00:00+07:00` : null,
     lastCallAt: null,
     callOwnerAdminId: closer.id,
     jeraPaymentId: null,
@@ -173,6 +180,10 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       { driveState: 'RETRY' },
       { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
     )
+  }
+
+  if (intake.queueType === 'AUTO') {
+    return prepareAutomaticQueue(current, intake, ports)
   }
 
   try {

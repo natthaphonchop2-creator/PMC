@@ -9,6 +9,8 @@ import type {
 } from '../ports'
 import {
   buildAdminMinimalReceipt,
+  buildAdminTentativeReceipt,
+  buildAdminAwaitingSlotReceipt,
   buildAdminTimeConflictReceipt,
   buildDoctorMinimalReceipt,
   type TeamProfileImages,
@@ -139,18 +141,77 @@ function lineObjectBatches(
   objects: Record<string, unknown>[],
   retryPrefix: string,
   messageVersion: number,
+  eventType: LineMessage['eventType'] = 'BOOKING_CONFIRMED',
 ): LineMessage[] {
   return Array.from(
     { length: Math.ceil(objects.length / 5) },
     (_, batchIndex) => ({
       to: adminLineGroupId,
       audience: 'admin',
-      eventType: 'BOOKING_CONFIRMED',
+      eventType,
       caseIds: [booking.caseId],
       text: `จองเคสใหม่ · ${booking.customerName}`,
       apiMessages: objects.slice(batchIndex * 5, batchIndex * 5 + 5),
       retryKey: `${booking.caseId}:${retryPrefix}:${messageVersion}:BATCH:${batchIndex + 1}`,
     }),
+  )
+}
+
+export function adminTentativeMessageBatches(
+  booking: BookingCase,
+  adminLineGroupId: string,
+  evidence: BookingEvidenceImages,
+  confirmUrl: string,
+  changeUrl: string,
+  brandLogoUrl: string,
+  messageVersion = booking.version,
+  profiles?: TeamProfileImages,
+): LineMessage[] {
+  return lineObjectBatches(
+    booking,
+    adminLineGroupId,
+    [
+      buildAdminTentativeReceipt(
+        booking,
+        evidence,
+        confirmUrl,
+        changeUrl,
+        brandLogoUrl,
+        profiles,
+      ),
+      ...buildEvidenceFlexMessages(evidence),
+    ],
+    'ADMIN_TENTATIVE_BOOKING',
+    messageVersion,
+    'TENTATIVE_BOOKING',
+  )
+}
+
+export function adminAwaitingSlotMessageBatches(
+  booking: BookingCase,
+  adminLineGroupId: string,
+  evidence: BookingEvidenceImages,
+  changeUrl: string,
+  brandLogoUrl: string,
+  messageVersion = booking.version,
+  profiles?: TeamProfileImages,
+): LineMessage[] {
+  return lineObjectBatches(
+    booking,
+    adminLineGroupId,
+    [
+      buildAdminAwaitingSlotReceipt(
+        booking,
+        evidence,
+        changeUrl,
+        brandLogoUrl,
+        profiles,
+      ),
+      ...buildEvidenceFlexMessages(evidence),
+    ],
+    'ADMIN_AWAITING_SLOT',
+    messageVersion,
+    'AWAITING_SLOT',
   )
 }
 

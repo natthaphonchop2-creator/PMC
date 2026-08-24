@@ -21,7 +21,10 @@ export function runIntegrityReport(ports: BookingPorts): IntegrityReport {
   if (missingDrive.length) findings.push({ code: 'MISSING_DRIVE_FOLDER', caseIds: missingDrive })
 
   const missingCalendar = bookings
-    .filter((booking) => ['BOOKING_CONFIRMED', 'REBOOKED'].includes(booking.status) && !booking.calendarEventId)
+    .filter((booking) =>
+      ['CONFIRMED', 'TENTATIVE'].includes(booking.appointmentStatus) &&
+      !booking.calendarEventId,
+    )
     .map((booking) => booking.caseId)
   if (missingCalendar.length) findings.push({ code: 'MISSING_CALENDAR_EVENT', caseIds: missingCalendar })
 

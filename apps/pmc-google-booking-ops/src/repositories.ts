@@ -48,6 +48,10 @@ function asBooking(row: SheetRow): BookingCase {
     ...row,
     aeId: nullableString(row.aeId),
     aeName: nullableString(row.aeName),
+    appointmentStart: nullableString(row.appointmentStart),
+    appointmentEnd: nullableString(row.appointmentEnd),
+    firstCallWindowStart: nullableString(row.firstCallWindowStart),
+    firstCallWindowEnd: nullableString(row.firstCallWindowEnd),
     phoneNormalized: storedThaiPhone(row.phoneNormalized),
   } as unknown as BookingCase
 }

@@ -37,6 +37,14 @@ function daysBetween(fromDate: string, toDate: string): number {
 export function createInitialCallTask(booking: BookingCase, ports: BookingPorts): CallTask {
   const existing = ports.repositories.calls.getOpenByCase(booking.caseId)
   if (existing) return existing
+  if (
+    booking.appointmentStatus !== 'CONFIRMED' ||
+    !booking.firstCallWindowStart ||
+    !booking.firstCallWindowEnd ||
+    !booking.nextCallAt
+  ) {
+    throw new Error('confirmed appointment is required before creating a call task')
+  }
   return ports.repositories.calls.insert({
     taskId: `CALL-${booking.caseId}-1`,
     caseId: booking.caseId,
@@ -44,7 +52,7 @@ export function createInitialCallTask(booking: BookingCase, ports: BookingPorts)
     status: 'PENDING',
     windowStart: booking.firstCallWindowStart,
     windowEnd: booking.firstCallWindowEnd,
-    nextCallAt: booking.nextCallAt ?? booking.firstCallWindowStart,
+    nextCallAt: booking.nextCallAt,
     lastReminderDate: null,
     result: null,
     note: '',
@@ -143,19 +151,22 @@ export function runDailyDoctorSchedules(ports: BookingPorts): void {
   const groups = new Map<string, BookingCase[]>()
   for (const booking of ports.repositories.bookings.list()) {
     if (!['BOOKING_CONFIRMED', 'REBOOKED', 'CALL_ACTIVE', 'CALL_OVERDUE'].includes(booking.status)) continue
+    if (booking.appointmentStatus !== 'CONFIRMED' || !booking.appointmentStart) continue
     if (bangkokDate(booking.appointmentStart) !== today || !booking.doctorLineGroupId) continue
     const rows = groups.get(booking.doctorLineGroupId) ?? []
     rows.push(booking)
     groups.set(booking.doctorLineGroupId, rows)
   }
   for (const [to, bookings] of groups) {
-    const sorted = [...bookings].sort((left, right) => left.appointmentStart.localeCompare(right.appointmentStart))
+    const sorted = [...bookings].sort((left, right) =>
+      String(left.appointmentStart).localeCompare(String(right.appointmentStart)),
+    )
     ports.line.push({
       to,
       audience: 'doctor',
       eventType: 'DAILY_SCHEDULE',
       caseIds: sorted.map((booking) => booking.caseId),
-      text: `ตารางนัดวันนี้\n${sorted.map((booking) => `${booking.appointmentStart.slice(11, 16)} · ${booking.caseId}`).join('\n')}`,
+      text: `ตารางนัดวันนี้\n${sorted.map((booking) => `${String(booking.appointmentStart).slice(11, 16)} · ${booking.caseId}`).join('\n')}`,
       retryKey: `DAILY_SCHEDULE:${today}:${to}`,
     })
   }
@@ -223,8 +234,23 @@ export function runDepositExpiryReminders(ports: BookingPorts): void {
     }
     if (![30, 14, 7].includes(daysRemaining)) continue
     const owner = booking.adminId ? ports.config.findStaffById(booking.adminId) : null
-    const task = ports.repositories.calls.getOpenByCase(booking.caseId) ?? createInitialCallTask(booking, ports)
-    ports.line.push(adminReminderMessage(booking, task, ports.config.adminLineGroupId(), 'EXPIRY_REMINDER'))
-    if (owner?.lineUserId) ports.line.push(adminReminderMessage(booking, task, owner.lineUserId, 'EXPIRY_REMINDER'))
+    const existingTask = ports.repositories.calls.getOpenByCase(booking.caseId)
+    const task = existingTask ??
+      (booking.appointmentStatus === 'CONFIRMED' ? createInitialCallTask(booking, ports) : null)
+    const reminderTask = task ?? {
+      taskId: `EXPIRY-${booking.caseId}`,
+      caseId: booking.caseId,
+      ownerAdminId: booking.adminId ?? '',
+      status: 'PENDING' as const,
+      windowStart: booking.depositExpiresAt,
+      windowEnd: booking.depositExpiresAt,
+      nextCallAt: booking.depositExpiresAt,
+      lastReminderDate: null,
+      result: null,
+      note: '',
+      version: 1,
+    }
+    ports.line.push(adminReminderMessage(booking, reminderTask, ports.config.adminLineGroupId(), 'EXPIRY_REMINDER'))
+    if (owner?.lineUserId) ports.line.push(adminReminderMessage(booking, reminderTask, owner.lineUserId, 'EXPIRY_REMINDER'))
   }
 }

@@ -77,8 +77,8 @@ export interface BookingCase {
   doctorId: string
   serviceId: string
   channelId: string | null
-  appointmentStart: string
-  appointmentEnd: string
+  appointmentStart: string | null
+  appointmentEnd: string | null
   depositAmount: number
   depositReceivedAt: string
   depositExpiresAt: string
@@ -92,8 +92,8 @@ export interface BookingCase {
   doctorLineGroupId: string | null
   doctorLineNotifiedAt: string | null
   callStatus: CallStatus
-  firstCallWindowStart: string
-  firstCallWindowEnd: string
+  firstCallWindowStart: string | null
+  firstCallWindowEnd: string | null
   nextCallAt: string | null
   lastCallAt: string | null
   callOwnerAdminId: string | null

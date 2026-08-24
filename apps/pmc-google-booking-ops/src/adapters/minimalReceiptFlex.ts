@@ -1,5 +1,6 @@
 import type { BookingCase } from '../domain/types'
 import type { BookingEvidenceImages } from '../ports'
+import { requireAppointment } from '../domain/appointment'
 
 const TEXT = '#282624'
 const SECONDARY = '#77716D'
@@ -90,7 +91,7 @@ function header(
   titleColor = GOLD,
 ): FlexComponent {
   if (!brandLogoUrl.startsWith('https://')) throw new Error('brand logo URL must use HTTPS')
-  const appointment = formatThaiAppointment(booking.appointmentStart)
+  const appointment = formatThaiAppointment(requireAppointment(booking).start)
   return {
     type: 'box',
     layout: 'vertical',
@@ -150,7 +151,7 @@ function bubble(
   bodyContents: FlexComponent[],
   titleColor = GOLD,
 ): FlexComponent {
-  const appointment = formatThaiAppointment(booking.appointmentStart)
+  const appointment = formatThaiAppointment(requireAppointment(booking).start)
   return {
     type: 'flex',
     altText: `${title} · ${appointment.date} ${appointment.time}`,
@@ -291,6 +292,117 @@ export function buildAdminMinimalReceipt(
           },
         ]),
   ])
+}
+
+function automaticReceipt(
+  booking: BookingCase,
+  evidence: BookingEvidenceImages,
+  title: string,
+  primaryAction: { label: string; uri: string },
+  secondaryAction: { label: string; uri: string } | null,
+  brandLogoUrl: string,
+  profiles: TeamProfileImages,
+): FlexComponent {
+  if (!brandLogoUrl.startsWith('https://')) throw new Error('brand logo URL must use HTTPS')
+  const appointment = booking.appointmentStart
+    ? formatThaiAppointment(booking.appointmentStart)
+    : null
+  const buttons = [primaryAction, secondaryAction]
+    .filter((action): action is { label: string; uri: string } => Boolean(action))
+    .map((action) => ({
+      type: 'button',
+      style: 'secondary',
+      height: 'sm',
+      flex: 1,
+      action: { type: 'uri', label: action.label, uri: action.uri },
+    }))
+  return {
+    type: 'flex',
+    altText: `${title} · ${booking.customerName}`,
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '18px',
+        contents: [
+          { type: 'image', url: brandLogoUrl, size: 'xs', aspectRatio: '1:1', aspectMode: 'fit' },
+          { type: 'text', text: title, size: 'lg', weight: 'bold', color: GOLD, margin: 'md' },
+          ...(appointment
+            ? [{
+                type: 'text',
+                text: `${appointment.date} · ${appointment.time}`,
+                size: 'sm',
+                color: SECONDARY,
+                margin: 'sm',
+              }]
+            : []),
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: '18px',
+        paddingTop: '0px',
+        contents: [
+          ...customerSection(booking),
+          keyValueRow('แพทย์', booking.doctorId),
+          keyValueRow('โปรแกรม', booking.serviceId),
+          keyValueRow('ยอดจอง', moneyDisplay(booking.depositAmount), true),
+          ...teamSection(booking, profiles),
+          separator(),
+          sectionTitle('หลักฐาน'),
+          keyValueRow('สลิป', `${evidence.totalPaymentCount} รูป`),
+          keyValueRow('แชท', `${evidence.totalChatCount} รูป`),
+        ],
+      },
+      footer: {
+        type: 'box',
+        layout: 'horizontal',
+        spacing: 'sm',
+        paddingAll: '18px',
+        contents: buttons,
+      },
+    },
+  }
+}
+
+export function buildAdminTentativeReceipt(
+  booking: BookingCase,
+  evidence: BookingEvidenceImages,
+  confirmUrl: string,
+  changeUrl: string,
+  brandLogoUrl: string,
+  profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
+): FlexComponent {
+  return automaticReceipt(
+    booking,
+    evidence,
+    'คิวชั่วคราว — รอยืนยัน',
+    { label: 'ยืนยันคิวนี้', uri: confirmUrl },
+    { label: 'เปลี่ยนวัน', uri: changeUrl },
+    brandLogoUrl,
+    profiles,
+  )
+}
+
+export function buildAdminAwaitingSlotReceipt(
+  booking: BookingCase,
+  evidence: BookingEvidenceImages,
+  changeUrl: string,
+  brandLogoUrl: string,
+  profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
+): FlexComponent {
+  return automaticReceipt(
+    booking,
+    evidence,
+    'รอ Admin เลือกวัน',
+    { label: 'เลือกวัน', uri: changeUrl },
+    null,
+    brandLogoUrl,
+    profiles,
+  )
 }
 
 export function buildDoctorMinimalReceipt(

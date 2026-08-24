@@ -1,5 +1,6 @@
 import type { BookingCase } from '../domain/types'
 import type { CalendarEventInput, CalendarPort } from '../ports'
+import { requireAppointment } from '../domain/appointment'
 
 function firstCustomerName(customerName: string): string {
   return customerName.trim().split(/\s+/)[0] || customerName.trim()
@@ -27,6 +28,7 @@ function facebookSearchLink(facebookName: string): string {
 
 export function calendarEventInput(booking: BookingCase): CalendarEventInput {
   if (!booking.calendarId) throw new Error('doctor calendar is not configured')
+  const appointment = requireAppointment(booking)
   const tentative = booking.appointmentStatus === 'TENTATIVE'
   const summary = `${booking.doctorId} | ${booking.serviceId} | ${firstCustomerName(booking.customerName)}`
   return {
@@ -44,8 +46,8 @@ export function calendarEventInput(booking: BookingCase): CalendarEventInput {
       `AE: ${booking.aeName || 'ไม่ระบุ'}`,
       ...(tentative ? ['สถานะนัด: รอยืนยัน'] : []),
     ].join('\n'),
-    start: booking.appointmentStart,
-    end: booking.appointmentEnd,
+    start: appointment.start,
+    end: appointment.end,
     privateProperties: {
       caseId: booking.caseId,
       doctorId: booking.doctorId,
