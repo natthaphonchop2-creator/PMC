@@ -14,6 +14,7 @@ describe('Apps Script bundle', () => {
     for (const name of [
       'onBookingFormSubmit',
       'onCallResultSubmit',
+      'onQueueConfirmationSubmit',
       'doPost',
       'runDailyOperations',
       'pollJeraIncoming',

@@ -18,6 +18,7 @@ import {
   bookingTeamProfiles,
   createAppsScriptCryptoPort,
   createGoogleLinePort,
+  doctorBookingMessage,
   sendBookingConfirmationMessages,
 } from './adapters/lineMessaging'
 import { sendDoctorBookingMessage } from './adapters/lineMessaging'
@@ -579,6 +580,22 @@ export function runEligibleRetries(ports: BookingPorts): void {
           booking.version,
           { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
           { actor: 'system', reason: 'LINE retry succeeded', correlationId: id },
+        )
+      } else if (operation === 'DOCTOR_LINE_CONFIRMATION') {
+        const payload = retryPayload(retry.payload)
+        const messageVersion = Number(payload.messageVersion) || booking.version
+        ports.line.push(doctorBookingMessage(
+          booking,
+          'BOOKING_CONFIRMED',
+          ports.config.brandLogoUrl(),
+          messageVersion,
+          bookingTeamProfiles(booking, ports.config),
+        ))
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
+          { actor: 'system', reason: 'Doctor confirmation LINE retry succeeded', correlationId: id },
         )
       } else if (operation === 'CALENDAR_EVENT') {
         const calendarEventId = ensureDoctorCalendarEvent(booking, ports.calendar)

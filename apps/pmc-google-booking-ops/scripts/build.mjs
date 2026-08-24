@@ -15,6 +15,7 @@ await build({
     js: `
 function onBookingFormSubmit(e) { return PmcBooking.onBookingFormSubmit(e); }
 function onCallResultSubmit(e) { return PmcBooking.onCallResultSubmit(e); }
+function onQueueConfirmationSubmit(e) { return PmcBooking.onQueueConfirmationSubmit(e); }
 function doPost(e) { return PmcBooking.doPost(e); }
 function runDailyOperations() { return PmcBooking.runDailyOperations(); }
 function runPmcBookingRetries() { return PmcBooking.runPmcBookingRetries(); }

@@ -1,6 +1,7 @@
 import {
   bookingFormResponseEvent,
   callResultFormResponseEvent,
+  queueConfirmationFormResponseEvent,
   parseBookingFormEvent,
   parseCallResultFormEvent,
 } from './adapters/googleForms'
@@ -27,6 +28,8 @@ import {
 } from './runtime'
 import { SCRIPT_PROPERTY_KEYS, SHARED_DOCTOR_CALENDAR_ID } from './config'
 import { recordCallResult } from './workflows/callQueue'
+import { parseQueueConfirmationFormEvent } from './domain/queueConfirmation'
+import { confirmQueue } from './workflows/queueConfirmation'
 import { configureSharedDoctorCalendar } from './workflows/calendarConfig'
 import { refreshBookingCalendarPresentation } from './workflows/bookingUpdate'
 import { submitBookingIntake } from './workflows/formSubmit'
@@ -38,6 +41,13 @@ export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSu
 
 export function onCallResultSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return recordCallResult(parseCallResultFormEvent(callResultFormResponseEvent(event)), createRuntime())
+}
+
+export function onQueueConfirmationSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
+  return confirmQueue(
+    parseQueueConfirmationFormEvent(queueConfirmationFormResponseEvent(event)),
+    createRuntime(),
+  )
 }
 
 export function doPost(event: AppsScriptDoPostEvent) {
