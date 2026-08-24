@@ -25,9 +25,13 @@ function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigra
 function configurePmcStaffProfileImages() { return PmcBooking.configurePmcStaffProfileImages(); }
 function validatePmcBookingFlexMessages() { return PmcBooking.validatePmcBookingFlexMessages(); }
 function sendPmcBookingFlexPilot() { return PmcBooking.sendPmcBookingFlexPilot(); }
+function sendPmcCallReminderFlexPilot() { return PmcBooking.sendPmcCallReminderFlexPilot(); }
 function configurePmcCompactFormIdentityFields() { return PmcBooking.configurePmcCompactFormIdentityFields(); }
+function configurePmcFacebookNameField() { return PmcBooking.configurePmcFacebookNameField(); }
 function pauseAndCutoverPmcBookingForm() { return PmcBooking.pauseAndCutoverPmcBookingForm(); }
 function resumePmcBookingFormAfterAeCutover() { return PmcBooking.resumePmcBookingFormAfterAeCutover(); }
+function configurePmcSharedDoctorCalendar() { return PmcBooking.configurePmcSharedDoctorCalendar(); }
+function refreshPmcCalendarPresentation0007() { return PmcBooking.refreshPmcCalendarPresentation0007(); }
 `,
   },
   format: 'iife',

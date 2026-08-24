@@ -22,10 +22,10 @@ describe('booking domain', () => {
     expect(addCalendarMonths('2026-08-31T10:00:00+07:00', 6)).toBe('2027-02-28T10:00:00+07:00')
   })
 
-  it('opens the first-call window on appointment day and ends after day 7', () => {
+  it('opens the first-call window on appointment day and covers exactly days 1 through 7', () => {
     expect(deriveCallWindow('2026-08-20T13:00:00+07:00')).toEqual({
       start: '2026-08-20T00:00:00+07:00',
-      end: '2026-08-27T23:59:59+07:00',
+      end: '2026-08-26T23:59:59+07:00',
     })
   })
 

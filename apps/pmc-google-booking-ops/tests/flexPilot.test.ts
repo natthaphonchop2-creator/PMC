@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sendProductionFlexPilot } from '../src/workflows/flexPilot'
+import { sendCallReminderFlexPilot, sendProductionFlexPilot } from '../src/workflows/flexPilot'
 import { createTestPorts } from './helpers/fakes'
 
 describe('production Flex pilot sender', () => {
@@ -37,6 +37,24 @@ describe('production Flex pilot sender', () => {
     expect(doctorMessage.retryKey).toBe('PMC-FLEX-PILOT-V2:DOCTOR-BENZ')
     expect(JSON.stringify(adminMessage.apiMessage)).toContain('PMC Validation')
     expect(JSON.stringify(doctorMessage.apiMessage)).toContain('PMC Validation')
+    expect(ports.bookings.list()).toEqual([])
+    expect(ports.calls.list()).toEqual([])
+  })
+
+  it('sends one synthetic call-reminder Carousel only to the Admin group', () => {
+    const ports = createTestPorts()
+
+    expect(sendCallReminderFlexPilot(ports.config, ports.line)).toEqual({
+      sentMessages: 1,
+      adminSent: true,
+    })
+
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.doctorMessages()).toEqual([])
+    const [message] = ports.line.adminMessages()
+    expect(message.retryKey).toBe('PMC-CALL-FLEX-PILOT-V3:ADMIN')
+    expect(message.eventType).toBe('CALL_REMINDER')
+    expect(JSON.stringify(message.apiMessage)).toContain('แจ้งเตือนโทรติดตาม')
     expect(ports.bookings.list()).toEqual([])
     expect(ports.calls.list()).toEqual([])
   })

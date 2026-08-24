@@ -23,10 +23,14 @@ describe('Apps Script bundle', () => {
       'configurePmcStaffProfileImages',
       'validatePmcBookingFlexMessages',
       'sendPmcBookingFlexPilot',
+      'sendPmcCallReminderFlexPilot',
       'configurePmcCompactFormIdentityFields',
+      'configurePmcFacebookNameField',
       'runPmcBookingRetries',
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',
+      'configurePmcSharedDoctorCalendar',
+      'refreshPmcCalendarPresentation0007',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }

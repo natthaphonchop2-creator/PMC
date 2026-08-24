@@ -53,6 +53,7 @@ export interface ConfigPort {
   findChannel(id: string): ChannelConfig | null
   adminLineGroupId(): string
   brandLogoUrl(): string
+  callQueueUrl(): string
   listDoctors(): DoctorConfig[]
   listServices(): ServiceConfig[]
   listChannels(): ChannelConfig[]
@@ -213,11 +214,14 @@ export interface FormsPort {
   bookingCollectsEmail(): boolean
   bookingHasCloserField(): boolean
   bookingHasAeField(): boolean
+  bookingHasFacebookNameField(): boolean
   pauseBookingResponses(): void
   ensureCloserField(): void
   renameAdminFieldToAe(): void
   configureCompactIdentityFields(aeNames: string[]): void
+  ensureFacebookNameField(): void
   resumeBookingResponses(): void
+  callResultPrefillUrl(caseId: string): string
 }
 export interface FilePort {
   readText(fileId: string, encoding: 'Windows-874'): string

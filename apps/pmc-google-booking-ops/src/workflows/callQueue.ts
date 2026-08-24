@@ -1,5 +1,11 @@
 import type { BookingCase, CallResult, CallTask } from '../domain/types'
 import type { BookingPorts, LineMessage } from '../ports'
+import { deriveCallWindow } from '../domain/callSchedule'
+import {
+  buildCallReminderFlex,
+  callReminderTiming,
+  type CallReminderTiming,
+} from '../adapters/callReminderFlex'
 
 export interface CallResultInput {
   caseId: string
@@ -68,19 +74,58 @@ function adminReminderMessage(
 export function runDailyCallReminders(ports: BookingPorts): void {
   const now = ports.clock.nowIso()
   const today = bangkokDate(now)
+  const reminders: Array<{
+    booking: BookingCase
+    task: CallTask
+    timing: CallReminderTiming
+  }> = []
   for (const task of ports.repositories.calls.list()) {
     if (['DONE', 'CANCELLED'].includes(task.status)) continue
-    if (bangkokDate(task.nextCallAt) > today || task.lastReminderDate === today) continue
+    if (task.lastReminderDate === today) continue
     const booking = ports.repositories.bookings.getByCaseId(task.caseId)
     if (!booking || ['CLOSED_JERA', 'REFUNDED', 'EXPIRED_6M'].includes(booking.status)) continue
     const owner = ports.config.findStaffById(task.ownerAdminId)
     if (!owner?.active) throw new Error(`call owner is not active: ${task.ownerAdminId}`)
-    ports.line.push(adminReminderMessage(booking, task, ports.config.adminLineGroupId(), 'CALL_REMINDER'))
-    if (owner.lineUserId) ports.line.push(adminReminderMessage(booking, task, owner.lineUserId, 'CALL_REMINDER'))
-    const overdue = Date.parse(now) > Date.parse(task.windowEnd)
+    const timing = callReminderTiming(today, task.nextCallAt)
+    if (timing.kind === 'FUTURE') continue
+    reminders.push({ booking, task, timing })
+  }
+
+  reminders.sort((left, right) =>
+    left.timing.priority - right.timing.priority ||
+    left.task.nextCallAt.localeCompare(right.task.nextCallAt) ||
+    left.booking.caseId.localeCompare(right.booking.caseId),
+  )
+  if (!reminders.length) return
+
+  const displayed = reminders.slice(0, 10)
+  const moreCount = Math.max(reminders.length - displayed.length, 0)
+  const apiMessage = buildCallReminderFlex(
+    displayed.map(({ booking, task, timing }) => ({
+      booking,
+      task,
+      timing,
+      callResultUrl: ports.forms.callResultPrefillUrl(booking.caseId),
+    })),
+    moreCount,
+    ports.config.callQueueUrl(),
+  )
+  const adminGroup = ports.config.adminLineGroupId()
+  ports.line.push({
+    to: adminGroup,
+    audience: 'admin',
+    eventType: 'CALL_REMINDER',
+    caseIds: reminders.map(({ booking }) => booking.caseId),
+    text: `งานโทรติดตาม ${reminders.length} ราย`,
+    apiMessage,
+    retryKey: `CALL_REMINDER:${today}:${adminGroup}`,
+  })
+
+  for (const { booking, task, timing } of reminders) {
+    const overdue = timing.kind === 'OVERDUE'
     ports.repositories.calls.update(task.taskId, task.version, {
       lastReminderDate: today,
-      status: overdue ? 'OVERDUE' : 'ACTIVE',
+      status: overdue ? 'OVERDUE' : timing.kind === 'ADVANCE' ? 'PENDING' : 'ACTIVE',
     })
     if (overdue && booking.status !== 'CALL_OVERDUE') {
       ports.repositories.bookings.update(
@@ -144,13 +189,14 @@ export function recordCallResult(input: CallResultInput, ports: BookingPorts): C
   )
   const nextCallAt = suggestedNextCall(input, now)
   if (!nextCallAt) return { ...task, status: 'DONE', result: input.result, note: input.note, version: task.version + 1 }
+  const callWindow = deriveCallWindow(nextCallAt)
   return ports.repositories.calls.insert({
     taskId: `CALL-${booking.caseId}-${task.version + 1}`,
     caseId: booking.caseId,
     ownerAdminId: task.ownerAdminId,
     status: 'PENDING',
-    windowStart: nextCallAt,
-    windowEnd: booking.depositExpiresAt,
+    windowStart: callWindow.start,
+    windowEnd: callWindow.end,
     nextCallAt,
     lastReminderDate: null,
     result: null,

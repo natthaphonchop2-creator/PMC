@@ -21,7 +21,7 @@ export function deriveCallWindow(appointmentStartIso: string): { start: string; 
   if (!match) throw new Error('invalid appointment timestamp')
   const startDate = `${match[1]}-${match[2]}-${match[3]}`
   const offset = match[5]
-  const end = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 7))
+  const end = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 6))
   return {
     start: `${startDate}T00:00:00${offset}`,
     end: `${end.toISOString().slice(0, 10)}T23:59:59${offset}`,

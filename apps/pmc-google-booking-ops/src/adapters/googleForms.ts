@@ -66,6 +66,7 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
       [BOOKING_FORM_LEGACY_LABELS.aeName],
     ),
     customerName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.customerName),
+    facebookName: requiredValue(event.namedValues, BOOKING_FORM_LABELS.facebookName),
     phone: requiredValue(event.namedValues, BOOKING_FORM_LABELS.phone),
     doctorId: requiredValue(event.namedValues, BOOKING_FORM_LABELS.doctorId),
     serviceId: requiredValue(event.namedValues, BOOKING_FORM_LABELS.serviceId),
@@ -182,6 +183,15 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
         .filter((item) => AE_FORM_TITLES.includes(item.getTitle()))
         .length === 1
     },
+    bookingHasFacebookNameField() {
+      const form = FormApp.openById(bookingFormId)
+      const candidates = form
+        .getItems()
+        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.facebookName)
+      return candidates.length === 1 &&
+        candidates[0].getType() === FormApp.ItemType.TEXT &&
+        candidates[0].asTextItem().isRequired()
+    },
     pauseBookingResponses() {
       FormApp.openById(bookingFormId).setAcceptingResponses(false)
     },
@@ -227,8 +237,47 @@ export function createGoogleFormsPort(bookingFormId: string, callResultFormId: s
         .setChoiceValues(plan.aeChoices)
         .setRequired(true)
     },
+    ensureFacebookNameField() {
+      const form = FormApp.openById(bookingFormId)
+      const candidates = form
+        .getItems()
+        .filter((item) => item.getTitle() === BOOKING_FORM_LABELS.facebookName)
+      if (candidates.length > 1) throw new Error('expected at most one Facebook name Form field')
+      if (candidates.length === 1 && candidates[0].getType() !== FormApp.ItemType.TEXT) {
+        throw new Error('Facebook name Form field must be short answer')
+      }
+
+      const facebookItem = candidates.length
+        ? candidates[0].asTextItem()
+        : form.addTextItem().setTitle(BOOKING_FORM_LABELS.facebookName)
+      facebookItem
+        .setHelpText('หากลูกค้าไม่มี Facebook ให้กรอก ไม่มี')
+        .setRequired(true)
+
+      const items = form.getItems()
+      const customerIndex = items.findIndex(
+        (item) => item.getTitle() === BOOKING_FORM_LABELS.customerName,
+      )
+      if (customerIndex === -1) throw new Error('missing customer name Form field')
+      const facebookIndex = items.findIndex(
+        (item) => item.getTitle() === BOOKING_FORM_LABELS.facebookName,
+      )
+      if (facebookIndex === -1) throw new Error('Facebook name Form field was not created')
+      form.moveItem(facebookIndex, facebookIndex < customerIndex ? customerIndex : customerIndex + 1)
+    },
     resumeBookingResponses() {
       FormApp.openById(bookingFormId).setAcceptingResponses(true)
+    },
+    callResultPrefillUrl(caseId) {
+      const form = FormApp.openById(callResultFormId)
+      const item = form
+        .getItems(FormApp.ItemType.TEXT)
+        .find((candidate) => candidate.getTitle() === 'Case ID')
+      if (!item) throw new Error('missing Call Result Case ID field')
+      return form
+        .createResponse()
+        .withItemResponse(item.asTextItem().createResponse(caseId))
+        .toPrefilledUrl()
     },
   }
 }

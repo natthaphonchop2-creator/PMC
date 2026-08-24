@@ -13,17 +13,22 @@ import {
   createRuntime,
   configureStaffProfileImagesWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
+  configureFacebookNameFieldWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
   runDailyOperationsWorkflow,
   runBookingRetriesWorkflow,
   runIntegrityAndBackupWorkflow,
+  sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
   setupSystem,
   validateProductionFlexMessagesWorkflow,
 } from './runtime'
+import { SCRIPT_PROPERTY_KEYS, SHARED_DOCTOR_CALENDAR_ID } from './config'
 import { recordCallResult } from './workflows/callQueue'
+import { configureSharedDoctorCalendar } from './workflows/calendarConfig'
+import { refreshBookingCalendarPresentation } from './workflows/bookingUpdate'
 import { submitBookingIntake } from './workflows/formSubmit'
 import { pollJeraIncoming as pollJeraIncomingWorkflow } from './workflows/jeraImport'
 
@@ -76,8 +81,16 @@ export function sendPmcBookingFlexPilot() {
   return sendProductionFlexPilotWorkflow()
 }
 
+export function sendPmcCallReminderFlexPilot() {
+  return sendCallReminderFlexPilotWorkflow()
+}
+
 export function configurePmcCompactFormIdentityFields() {
   return configureCompactBookingIdentityFieldsWorkflow()
+}
+
+export function configurePmcFacebookNameField() {
+  return configureFacebookNameFieldWorkflow()
 }
 
 export function pauseAndCutoverPmcBookingForm() {
@@ -86,4 +99,19 @@ export function pauseAndCutoverPmcBookingForm() {
 
 export function resumePmcBookingFormAfterAeCutover() {
   return resumeBookingFormAfterAeCutoverWorkflow()
+}
+
+export function configurePmcSharedDoctorCalendar() {
+  const spreadsheetId = PropertiesService.getScriptProperties()
+    .getProperty(SCRIPT_PROPERTY_KEYS.spreadsheetId)
+    ?.trim()
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  return configureSharedDoctorCalendar(
+    SpreadsheetApp.openById(spreadsheetId),
+    SHARED_DOCTOR_CALENDAR_ID,
+  )
+}
+
+export function refreshPmcCalendarPresentation0007() {
+  return refreshBookingCalendarPresentation('PMC-202608-0007', createRuntime())
 }

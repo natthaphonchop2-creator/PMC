@@ -4,7 +4,7 @@ import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { createTestPorts, validBookingIntake } from './helpers/fakes'
 
 describe('booking Form workflow', () => {
-  it('maps the eleven Thai Form fields and uploaded Drive file IDs', () => {
+  it('maps the required Facebook name and uploaded Drive file IDs', () => {
     const intake = parseBookingFormEvent({
       responseKey: 'sheet-1:2',
       submittedAt: '2026-08-20T09:00:00+07:00',
@@ -13,6 +13,7 @@ describe('booking Form workflow', () => {
         ผู้ปิดการจอง: ['มัส'],
         'AE ผู้เปิดแชท': ['เอม'],
         ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        'ชื่อ Facebook': ['PMC Beauty'],
         เบอร์มือถือ: ['0812345678'],
         หมอ: ['doctor-1'],
         'บริการ/โปรแกรม': ['service-1'],
@@ -30,6 +31,7 @@ describe('booking Form workflow', () => {
     expect(intake.closerName).toBe('มัส')
     expect(intake.aeName).toBe('เอม')
     expect(intake.submitterEmail).toBe('admin@example.com')
+    expect(intake.facebookName).toBe('PMC Beauty')
     expect(intake.channelId).toBe('เพจหลัก')
     expect(intake.paymentEvidenceFileIds).toEqual(['payment-file-id-123456789012345'])
     expect(intake.chatEvidenceFileIds).toEqual([
@@ -47,6 +49,7 @@ describe('booking Form workflow', () => {
         Admin: ['มัส'],
         AE: ['ไม่ระบุ'],
         ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        'ชื่อ Facebook': ['ไม่มี'],
         เบอร์มือถือ: ['0812345678'],
         หมอ: ['doctor-1'],
         'บริการ/โปรแกรม': ['service-1'],
@@ -70,6 +73,7 @@ describe('booking Form workflow', () => {
         ผู้ปิดการจอง: ['มัส'],
         'AE ผู้เปิดแชท': ['เอม'],
         ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        'ชื่อ Facebook': ['PMC Beauty'],
         เบอร์มือถือ: ['0812345678'],
         หมอ: ['doctor-1'],
         'บริการ/โปรแกรม': ['service-1'],
@@ -134,6 +138,7 @@ describe('booking Form workflow', () => {
     expect(result.caseId).toBe('PMC-202608-0001')
     expect(result.depositExpiresAt).toBe('2027-02-20T09:00:00+07:00')
     expect(result.appointmentEnd).toBe('2026-08-20T14:00:00+07:00')
+    expect(result.facebookName).toBe('PMC Beauty')
     expect(result.commissionEligibility).toBe('NOT_ELIGIBLE')
     expect(result.commissionAmount).toBeNull()
   })

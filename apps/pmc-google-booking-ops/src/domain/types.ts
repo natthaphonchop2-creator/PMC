@@ -38,6 +38,7 @@ export interface BookingIntake {
   closerName: string
   aeName: string
   customerName: string
+  facebookName: string
   phone: string
   doctorId: string
   serviceId: string
@@ -62,6 +63,7 @@ export interface BookingCase {
   aeName: string | null
   customerName: string
   customerNameNormalized: string
+  facebookName: string
   phoneNormalized: string
   phoneMasked: string
   doctorId: string

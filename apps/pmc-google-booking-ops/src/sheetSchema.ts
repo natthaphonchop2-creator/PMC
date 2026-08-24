@@ -12,6 +12,7 @@ export const BOOKING_MASTER_COLUMNS = [
   'aeId',
   'aeName',
   'customerName',
+  'facebookName',
   'customerNameNormalized',
   'phoneNormalized',
   'phoneMasked',

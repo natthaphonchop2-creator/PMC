@@ -3,7 +3,11 @@ import { ensureDoctorCalendarEvent } from './adapters/googleCalendar'
 import { createGoogleBackupPort, createGoogleDrivePort } from './adapters/googleDrive'
 import { ensureCaseEvidenceFolder } from './adapters/googleDrive'
 import { createGoogleFilePort } from './adapters/googleFiles'
-import { createGoogleFormsPort } from './adapters/googleForms'
+import {
+  bookingFormResponseEvent,
+  createGoogleFormsPort,
+  parseBookingFormEvent,
+} from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import {
   adminBookingMessage,
@@ -30,7 +34,14 @@ import {
   validateStaffDirectory,
 } from './domain/staffDirectory'
 import { staffProfileUrlPlan } from './domain/staffProfileConfig'
-import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
+import { repairShiftedFacebookBookingRow } from './domain/facebookRowRepair'
+import {
+  addCalendarMonths,
+  addMinutesInBangkok,
+  deriveCallWindow,
+} from './domain/callSchedule'
+import { maskThaiPhone, normalizeCustomerName, normalizeThaiPhone } from './domain/normalize'
+import { BOOKING_MASTER_COLUMNS, STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
@@ -46,7 +57,7 @@ import {
   buildProductionFlexValidationMessages,
   lineValidationPropertyPaths,
 } from './workflows/flexValidation'
-import { sendProductionFlexPilot } from './workflows/flexPilot'
+import { sendCallReminderFlexPilot, sendProductionFlexPilot } from './workflows/flexPilot'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention } from './workflows/retention'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
@@ -80,6 +91,7 @@ function createConfigPort(
   adminLineGroupId: string,
   brandLogoUrl: string,
   sharedAccountEmail: string,
+  callQueueUrl: string,
 ): ConfigPort {
   const staff = (): StaffConfig[] =>
     store.read('CONFIG_STAFF').map((row) => ({
@@ -128,6 +140,7 @@ function createConfigPort(
     findChannel: (id) => channels().find((channel) => channel.id === id) ?? null,
     adminLineGroupId: () => adminLineGroupId,
     brandLogoUrl: () => brandLogoUrl,
+    callQueueUrl: () => callQueueUrl,
     listDoctors: doctors,
     listServices: services,
     listChannels: channels,
@@ -142,6 +155,8 @@ export function createRuntime(): BookingPorts {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
+  const callQueueSheet = spreadsheet.getSheetByName('CALL_QUEUE')
+  if (!callQueueSheet) throw new Error('missing required sheet: CALL_QUEUE')
   const store = createGoogleSheetStore(spreadsheet)
   const clock = { nowIso: bangkokNow }
   const crypto = createAppsScriptCryptoPort()
@@ -164,6 +179,7 @@ export function createRuntime(): BookingPorts {
       properties[SCRIPT_PROPERTY_KEYS.adminLineGroupId],
       properties[SCRIPT_PROPERTY_KEYS.brandLogoUrl],
       properties[SCRIPT_PROPERTY_KEYS.sharedAccountEmail] ?? '',
+      `${spreadsheet.getUrl()}#gid=${callQueueSheet.getSheetId()}`,
     ),
     repositories: createBookingRepositories(store, locks, clock),
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
@@ -212,6 +228,154 @@ export function runBookingRetriesWorkflow(): {
   return {
     pendingBefore,
     pendingAfter: runtime.repositories.retries.listPending().length,
+  }
+}
+
+export function repairAndRetryFacebookShiftedCaseWorkflow(caseId: string): {
+  caseId: string
+  status: string
+  calendarState: string
+  lineState: string
+} {
+  if (!/^PMC-\d{6}-\d{4}$/.test(caseId)) throw new Error('invalid repair Case ID')
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  validateRuntimeProperties(properties)
+  const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
+  const sheet = spreadsheet.getSheetByName('BOOKING_MASTER')
+  if (!sheet) throw new Error('missing BOOKING_MASTER sheet')
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
+  if (JSON.stringify(headers) !== JSON.stringify(BOOKING_MASTER_COLUMNS)) {
+    throw new Error('BOOKING_MASTER header mismatch')
+  }
+  const caseIdIndex = headers.indexOf('caseId')
+  const formResponseIndex = headers.indexOf('formResponseId')
+  const rows = sheet.getLastRow() < 2
+    ? []
+    : sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
+  const offset = rows.findIndex((row) => String(row[caseIdIndex]) === caseId)
+  if (offset === -1) throw new Error('repair booking not found')
+  const rowNumber = offset + 2
+  const currentRow = rows[offset]
+  const responseId = String(currentRow[formResponseIndex] ?? '').trim()
+  const formResponse = FormApp.openById(properties[SCRIPT_PROPERTY_KEYS.bookingFormId])
+    .getResponse(responseId)
+  if (!formResponse) throw new Error('repair Form response not found')
+  const intake = parseBookingFormEvent(bookingFormResponseEvent({
+    response: formResponse,
+  } as GoogleAppsScript.Events.FormsOnFormSubmit))
+  const index = Object.fromEntries(headers.map((header, position) => [header, position]))
+  const runtime = createRuntime()
+  const doctor = runtime.config.findDoctor(intake.doctorId)
+  const service = runtime.config.findService(intake.serviceId)
+  if (!doctor?.active || !service?.active) throw new Error('repair booking config is inactive')
+  if (String(currentRow[index.status]) !== 'FORM_SUBMITTED') {
+    throw new Error('repair booking status is not FORM_SUBMITTED')
+  }
+  const expectedStart = `${intake.appointmentDate}T${intake.appointmentTime}:00+07:00`
+  const expectedEnd = addMinutesInBangkok(expectedStart, service.durationMinutes)
+  const callWindow = deriveCallWindow(expectedStart)
+  const previousHeaders = headers.filter((header) => header !== 'facebookName')
+  const previousValue = (field: string) => {
+    const previousIndex = previousHeaders.indexOf(field)
+    if (previousIndex === -1) throw new Error(`repair previous field missing: ${field}`)
+    return currentRow[previousIndex]
+  }
+  const driveFolderId = String(previousValue('driveFolderId') ?? '').trim()
+  const driveFolderUrl = String(previousValue('driveFolderUrl') ?? '').trim()
+  if (!driveFolderId || !driveFolderUrl) {
+    throw new Error('repair booking Drive folder is missing')
+  }
+  const phoneNormalized = normalizeThaiPhone(intake.phone)
+  const repaired = repairShiftedFacebookBookingRow(
+    headers,
+    currentRow,
+    intake.facebookName,
+    {
+      caseId,
+      version: Number(currentRow[index.version]),
+      status: 'FORM_SUBMITTED',
+      formResponseId: responseId,
+      adminId: currentRow[index.adminId],
+      adminName: currentRow[index.adminName],
+      submitterEmail: intake.submitterEmail,
+      adminIdentityStatus: currentRow[index.adminIdentityStatus],
+      aeId: currentRow[index.aeId],
+      aeName: currentRow[index.aeName],
+      customerName: intake.customerName.trim(),
+      facebookName: intake.facebookName.trim(),
+      customerNameNormalized: normalizeCustomerName(intake.customerName),
+      phoneNormalized,
+      phoneMasked: maskThaiPhone(phoneNormalized),
+      doctorId: doctor.id,
+      serviceId: service.id,
+      channelId: intake.channelId ?? '',
+      appointmentStart: expectedStart,
+      appointmentEnd: expectedEnd,
+      depositAmount: intake.depositAmount,
+      depositReceivedAt: intake.submittedAt,
+      depositExpiresAt: addCalendarMonths(intake.submittedAt, 6),
+      depositStatus: 'VALID',
+      driveFolderId,
+      driveFolderUrl,
+      paymentEvidenceCount: intake.paymentEvidenceFileIds.length,
+      chatEvidenceCount: intake.chatEvidenceFileIds.length,
+      calendarId: doctor.calendarId,
+      calendarEventId: '',
+      doctorLineGroupId: doctor.lineGroupId,
+      doctorLineNotifiedAt: '',
+      callStatus: 'PENDING',
+      firstCallWindowStart: callWindow.start,
+      firstCallWindowEnd: callWindow.end,
+      nextCallAt: `${intake.appointmentDate}T09:00:00+07:00`,
+      lastCallAt: '',
+      callOwnerAdminId: currentRow[index.adminId],
+      jeraPaymentId: '',
+      jeraStatus: '',
+      jeraClosedAt: '',
+      jeraActualRevenue: '',
+      jeraImportFileId: '',
+      reconciliationStatus: 'NONE',
+      commissionEligibility: 'NOT_ELIGIBLE',
+      commissionAmount: '',
+      driveState: 'OK',
+      calendarState: 'PENDING',
+      lineState: 'PENDING',
+      jeraImportState: 'NOT_IMPORTED',
+      createdAt: intake.submittedAt,
+      createdBy: intake.submitterEmail,
+      updatedAt: runtime.clock.nowIso(),
+      updatedBy: 'system',
+    },
+  )
+
+  sheet.getRange(rowNumber, 1, 1, headers.length).setValues([repaired])
+  const readback = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0]
+  if (String(readback[index.facebookName] ?? '').trim() !== intake.facebookName.trim()) {
+    throw new Error('repair booking readback mismatch')
+  }
+
+  runtime.repositories.retries.enqueue({
+    id: `RETRY-${caseId}-CALENDAR-FACEBOOK-REPAIR`,
+    caseId,
+    operation: 'CALENDAR_EVENT',
+    idempotencyKey: `${caseId}:CALENDAR_EVENT:FACEBOOK_REPAIR`,
+    attempts: 0,
+    nextAttemptAt: '',
+    status: 'PENDING',
+    safeError: '',
+    payload: {
+      paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
+      chatEvidenceFileIds: intake.chatEvidenceFileIds,
+    },
+  })
+  runEligibleRetries(runtime)
+  const result = runtime.repositories.bookings.getByCaseId(caseId)
+  if (!result) throw new Error('repair booking readback missing')
+  return {
+    caseId,
+    status: result.status,
+    calendarState: result.calendarState,
+    lineState: result.lineState,
   }
 }
 
@@ -321,9 +485,6 @@ export function runEligibleRetries(ports: BookingPorts): void {
           { actor: 'system', reason: 'LINE retry succeeded', correlationId: id },
         )
       } else if (operation === 'CALENDAR_EVENT') {
-        if (ports.calendar.hasConflict(booking.calendarId ?? '', booking.appointmentStart, booking.appointmentEnd)) {
-          throw new Error('Doctor Calendar overlap')
-        }
         const calendarEventId = ensureDoctorCalendarEvent(booking, ports.calendar)
         const confirmed = ports.repositories.bookings.update(
           caseId,
@@ -400,6 +561,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
           closerName: booking.adminName,
           aeName: booking.aeName ?? booking.adminName,
           customerName: booking.customerName,
+          facebookName: booking.facebookName,
           phone: booking.phoneNormalized,
           doctorId: booking.doctorId,
           serviceId: booking.serviceId,
@@ -494,6 +656,7 @@ export function setupSystem(): {
     }
   }
   runtime.forms.ensureCloserField()
+  runtime.forms.ensureFacebookNameField()
   runtime.forms.syncBookingChoices(
     activeClosers.map((closer) => closer.name),
     aes.map((ae) => ae.name),
@@ -623,6 +786,7 @@ export function validateProductionFlexMessagesWorkflow(): {
   doctorHasProfiles: true
   adminHasEvidence: true
   doctorHasEvidence: false
+  callReminderReady: true
 } {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
@@ -655,6 +819,7 @@ export function validateProductionFlexMessagesWorkflow(): {
     doctorHasProfiles: true,
     adminHasEvidence: true,
     doctorHasEvidence: false,
+    callReminderReady: true,
   }
 }
 
@@ -666,6 +831,14 @@ export function sendProductionFlexPilotWorkflow(): {
 } {
   const runtime = createRuntime()
   return sendProductionFlexPilot(runtime.config, runtime.line)
+}
+
+export function sendCallReminderFlexPilotWorkflow(): {
+  sentMessages: 1
+  adminSent: true
+} {
+  const runtime = createRuntime()
+  return sendCallReminderFlexPilot(runtime.config, runtime.line)
 }
 
 export function configureCompactBookingIdentityFieldsWorkflow(): {
@@ -685,6 +858,46 @@ export function configureCompactBookingIdentityFieldsWorkflow(): {
     aeTitle: BOOKING_FORM_LABELS.aeName,
     noAeOption: NO_AE_OPTION,
     aeChoiceCount: activeAes.length + 1,
+  }
+}
+
+export function configureFacebookNameFieldWorkflow(): {
+  backupCreated: true
+  formField: typeof BOOKING_FORM_LABELS.facebookName
+  sheetColumn: 'facebookName'
+  acceptingResponses: true
+} {
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  validateRuntimeProperties(properties)
+  const spreadsheetId = properties[SCRIPT_PROPERTY_KEYS.spreadsheetId]
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  const runtime = createRuntime()
+  if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
+
+  runtime.forms.pauseBookingResponses()
+  const backupFolder = DriveApp.getFolderById(properties[SCRIPT_PROPERTY_KEYS.backupFolderId])
+  const backupTimestamp = Utilities.formatDate(
+    new Date(),
+    'Asia/Bangkok',
+    'yyyy-MM-dd_HH-mm-ss',
+  )
+  DriveApp.getFileById(spreadsheetId).makeCopy(
+    `PMC Booking Pre-Facebook-Name Cutover ${backupTimestamp}`,
+    backupFolder,
+  )
+
+  migrateBookingMasterStaffColumns(spreadsheet)
+  ensureSheetTopology(spreadsheet)
+  runtime.forms.ensureFacebookNameField()
+  if (!runtime.forms.bookingHasFacebookNameField()) {
+    throw new Error('booking Form Facebook name field is missing or optional')
+  }
+  runtime.forms.resumeBookingResponses()
+  return {
+    backupCreated: true,
+    formField: BOOKING_FORM_LABELS.facebookName,
+    sheetColumn: 'facebookName',
+    acceptingResponses: true,
   }
 }
 

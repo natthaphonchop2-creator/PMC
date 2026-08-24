@@ -30,33 +30,53 @@ describe('call queue', () => {
     })
   })
 
-  it('starts reminders on appointment day and routes to the Admin group plus owner', () => {
-    const ports = createTestPorts({ now: '2026-08-20T09:00:00+07:00' })
+  it('starts a Flex reminder one day before the scheduled call and routes only to the Admin group', () => {
+    const ports = createTestPorts({ now: '2026-08-19T09:00:00+07:00' })
     ports.bookings.insert(ports.bookingFixture())
     ports.calls.insertFixture({
       caseId: 'PMC-202608-0001',
       windowStart: '2026-08-20T00:00:00+07:00',
-      windowEnd: '2026-08-27T23:59:59+07:00',
+      windowEnd: '2026-08-26T23:59:59+07:00',
       nextCallAt: '2026-08-20T09:00:00+07:00',
     })
     runDailyCallReminders(ports)
-    expect(ports.line.adminMessages().map((message) => message.to)).toEqual(['admin-group', 'admin-user-1'])
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    const [message] = ports.line.adminMessages()
+    expect(message.to).toBe('admin-group')
+    const carousel = message.apiMessage?.contents as { contents: Array<Record<string, unknown>> }
+    const bubble = carousel.contents[0] as {
+      header: Record<string, unknown>
+      body: Record<string, unknown>
+      footer: { contents: Array<Record<string, unknown>> }
+    }
+    expect(JSON.stringify(bubble.header)).toContain('แจ้งเตือนโทรติดตาม')
+    const bodyJson = JSON.stringify(bubble.body)
+    expect(bodyJson).toContain('☎')
+    expect(bodyJson.match(/พรุ่งนี้ต้องโทร/g)).toHaveLength(1)
+    expect(bodyJson).toContain('เวลาโทร')
+    expect(bodyJson).toContain('เบอร์โทร')
+    expect(bodyJson).toContain('โปรแกรม')
+    expect(bodyJson).toContain('Admin')
+    expect(bodyJson).not.toContain('Facebook:')
+    expect(bodyJson).not.toContain('นัดหมาย')
+    expect(bubble.footer.contents[0]).toMatchObject({ type: 'box', layout: 'horizontal' })
+    const buttonRow = bubble.footer.contents[0] as { contents: Array<Record<string, unknown>> }
+    expect(buttonRow.contents).toMatchObject([
+      { type: 'button', style: 'secondary' },
+      { type: 'button', style: 'secondary' },
+    ])
+    expect(JSON.stringify(bubble.footer)).toContain('PMC Call Queue')
+    expect(JSON.stringify(message.apiMessage)).toContain('tel:0812345678')
+    expect(JSON.stringify(message.apiMessage)).toContain(
+      'https://docs.google.com/forms/d/e/test/viewform?case=PMC-202608-0001',
+    )
+    expect(JSON.stringify(message.apiMessage)).toContain(
+      'https://docs.google.com/spreadsheets/d/test/edit#gid=CALL_QUEUE',
+    )
   })
 
-  it('routes reminders only to the Admin group when the owner has no direct LINE mapping', () => {
+  it('routes reminders only to the Admin group even when the owner has a direct LINE mapping', () => {
     const ports = createTestPorts({ now: '2026-08-20T09:00:00+07:00' })
-    ports.config.findStaffById = (id) =>
-      id === 'admin-1'
-        ? {
-            id: 'admin-1',
-            name: 'Admin A',
-            email: 'admin@example.com',
-            lineUserId: '',
-            canCloseBooking: true,
-            canBeAe: true,
-            active: true,
-          }
-        : null
     ports.bookings.insert(ports.bookingFixture())
     ports.calls.insertFixture({ nextCallAt: '2026-08-20T09:00:00+07:00' })
 
@@ -71,15 +91,16 @@ describe('call queue', () => {
     ports.calls.insertFixture({ nextCallAt: '2026-08-20T09:00:00+07:00', lastReminderDate: null })
     runDailyCallReminders(ports)
     runDailyCallReminders(ports)
-    expect(ports.line.adminMessages()).toHaveLength(2)
+    expect(ports.line.adminMessages()).toHaveLength(1)
   })
 
-  it('marks an unfinished first call overdue after Day 7', () => {
-    const ports = createTestPorts({ now: '2026-08-28T09:00:00+07:00' })
+  it('marks an unfinished call overdue on Day 8', () => {
+    const ports = createTestPorts({ now: '2026-08-27T09:00:00+07:00' })
     ports.bookings.insert(ports.bookingFixture())
-    ports.calls.insertFixture({ windowEnd: '2026-08-27T23:59:59+07:00' })
+    ports.calls.insertFixture({ windowEnd: '2026-08-26T23:59:59+07:00' })
     runDailyCallReminders(ports)
     expect(ports.calls.getOpenByCase('PMC-202608-0001')?.status).toBe('OVERDUE')
+    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain('เกินกำหนด 1 วัน')
   })
 
   it('suggests but allows overriding the next call date', () => {
@@ -97,6 +118,41 @@ describe('call queue', () => {
       ports,
     )
     expect(result.nextCallAt).toBe('2026-09-10T09:00:00+07:00')
+    expect(result.windowEnd).toBe('2026-09-16T23:59:59+07:00')
+  })
+
+  it('batches at most ten customers in one Carousel and links to the remaining queue', () => {
+    const ports = createTestPorts({ now: '2026-08-20T09:00:00+07:00' })
+    for (let index = 1; index <= 12; index += 1) {
+      const suffix = String(index).padStart(4, '0')
+      const caseId = `PMC-202608-${suffix}`
+      ports.bookings.insert(ports.bookingFixture({
+        caseId,
+        formResponseId: `response-${index}`,
+        customerName: `ลูกค้า ${index}`,
+        phoneNormalized: `081234${String(5600 + index)}`,
+      }))
+      ports.calls.insertFixture({
+        taskId: `CALL-${caseId}-1`,
+        caseId,
+        nextCallAt: '2026-08-20T09:00:00+07:00',
+      })
+    }
+
+    runDailyCallReminders(ports)
+
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    const [message] = ports.line.adminMessages()
+    expect(message.caseIds).toHaveLength(12)
+    expect(message.apiMessage?.contents).toMatchObject({ type: 'carousel' })
+    const bubbles = (message.apiMessage?.contents as { contents: unknown[] }).contents
+    expect(bubbles).toHaveLength(11)
+    expect(JSON.stringify(message.apiMessage)).toContain('ดูเพิ่มเติมอีก 2 ราย')
+    expect(JSON.stringify(message.apiMessage)).toContain(
+      'https://docs.google.com/spreadsheets/d/test/edit#gid=CALL_QUEUE',
+    )
+    expect(JSON.stringify(message.apiMessage).length).toBeLessThan(50_000)
+    expect(ports.calls.list().every((task) => task.lastReminderDate === '2026-08-20')).toBe(true)
   })
 
   it('sends each doctor only that doctor’s daily schedule', () => {

@@ -7,7 +7,6 @@ import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
 import {
-  adminTimeConflictMessage,
   bookingTeamProfiles,
   sendBookingConfirmationMessages,
 } from '../adapters/lineMessaging'
@@ -66,6 +65,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     aeName: ae?.name ?? NO_AE_OPTION,
     customerName: intake.customerName.trim(),
     customerNameNormalized,
+    facebookName: intake.facebookName.trim(),
     phoneNormalized,
     phoneMasked: maskThaiPhone(phoneNormalized),
     doctorId: doctor.id,
@@ -159,54 +159,6 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
       { driveState: 'RETRY' },
       { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
     )
-  }
-
-  if (ports.calendar.hasConflict(current.calendarId ?? '', current.appointmentStart, current.appointmentEnd)) {
-    const conflict = ports.repositories.bookings.update(
-      caseId,
-      current.version,
-      { status: 'TIME_CONFLICT', calendarState: 'CONFLICT' },
-      { actor: 'system', reason: 'Doctor Calendar overlap', correlationId: intake.formResponseId },
-    )
-    try {
-      ports.line.push(
-        adminTimeConflictMessage(
-          conflict,
-          ports.config.adminLineGroupId(),
-          ports.config.brandLogoUrl(),
-          conflict.version,
-          bookingTeamProfiles(conflict, ports.config),
-        ),
-      )
-      return ports.repositories.bookings.update(
-        caseId,
-        conflict.version,
-        { lineState: 'OK' },
-        {
-          actor: 'system',
-          reason: 'Admin time-conflict LINE notification sent',
-          correlationId: intake.formResponseId,
-        },
-      )
-    } catch (error) {
-      const safeError = error instanceof Error ? error.message : 'Time-conflict LINE notification failed'
-      ports.repositories.retries.enqueue({
-        id: `RETRY-${caseId}-ADMIN-TIME-CONFLICT`,
-        caseId,
-        operation: 'ADMIN_TIME_CONFLICT_LINE',
-        idempotencyKey: `${caseId}:ADMIN_TIME_CONFLICT`,
-        attempts: 0,
-        status: 'PENDING',
-        safeError,
-        payload: { messageVersion: conflict.version },
-      })
-      return ports.repositories.bookings.update(
-        caseId,
-        conflict.version,
-        { lineState: 'RETRY' },
-        { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
-      )
-    }
   }
 
   try {

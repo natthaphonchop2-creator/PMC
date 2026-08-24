@@ -1,6 +1,7 @@
 import { buildAdminMinimalReceipt, buildDoctorMinimalReceipt } from '../adapters/minimalReceiptFlex'
+import { buildCallReminderFlex, callReminderTiming } from '../adapters/callReminderFlex'
 import { staffProfileUrlPlan } from '../domain/staffProfileConfig'
-import type { BookingCase } from '../domain/types'
+import type { BookingCase, CallTask } from '../domain/types'
 
 export function lineValidationPropertyPaths(responseBody: string): string[] {
   try {
@@ -39,6 +40,7 @@ export function buildProductionFlexValidationMessages(
     aeName: 'แวว',
     customerName: 'PMC Validation',
     customerNameNormalized: 'pmc validation',
+    facebookName: 'PMC Validation',
     phoneNormalized: '0800000000',
     phoneMasked: '080-XXX-XXXX',
     doctorId: 'แพทย์ทดสอบระบบ',
@@ -82,6 +84,32 @@ export function buildProductionFlexValidationMessages(
     updatedBy: 'system-validation',
   } satisfies BookingCase
   const teamProfiles = { closer: profileUrl('มัส'), ae: profileUrl('แวว') }
+  const callTiming = callReminderTiming('2026-08-21T09:00:00+07:00', '2026-08-21T09:00:00+07:00')
+  const callCards = Array.from({ length: 10 }, (_, index) => {
+    const caseId = `PMC-VALIDATION-${String(index + 1).padStart(2, '0')}`
+    return {
+      booking: {
+        ...booking,
+        caseId,
+        customerName: `PMC Validation ${index + 1}`,
+      } satisfies BookingCase,
+      task: {
+        taskId: `CALL-${caseId}-1`,
+        caseId,
+        ownerAdminId: 'validation-closer',
+        status: 'PENDING',
+        windowStart: '2026-08-21T00:00:00+07:00',
+        windowEnd: '2026-08-27T23:59:59+07:00',
+        nextCallAt: '2026-08-21T09:00:00+07:00',
+        lastReminderDate: null,
+        result: null,
+        note: '',
+        version: 1,
+      } satisfies CallTask,
+      timing: callTiming,
+      callResultUrl: `https://docs.google.com/forms/d/e/validation/viewform?case=${caseId}`,
+    }
+  })
   return [
     buildAdminMinimalReceipt(
       booking,
@@ -106,6 +134,11 @@ export function buildProductionFlexValidationMessages(
       'BOOKING_CONFIRMED',
       brandLogoUrl,
       teamProfiles,
+    ),
+    buildCallReminderFlex(
+      callCards,
+      2,
+      'https://docs.google.com/spreadsheets/d/validation/edit#gid=1',
     ),
   ]
 }

@@ -19,6 +19,7 @@ export const BOOKING_FORM_LABELS = {
   closerName: 'Admin',
   aeName: 'AE',
   customerName: 'ชื่อลูกค้า',
+  facebookName: 'ชื่อ Facebook',
   phone: 'เบอร์มือถือ',
   doctorId: 'หมอ',
   serviceId: 'บริการ/โปรแกรม',
@@ -36,3 +37,5 @@ export const BOOKING_FORM_LEGACY_LABELS = {
 } as const
 
 export const NO_AE_OPTION = 'ไม่ระบุ'
+
+export const SHARED_DOCTOR_CALENDAR_ID = 'promedcalender@gmail.com'

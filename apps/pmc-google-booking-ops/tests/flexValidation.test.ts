@@ -10,9 +10,10 @@ describe('production Flex validation payload', () => {
       'https://evidence.example/assets/pmc-flex-logo-v1.png',
       'https://evidence.example',
     )
-    expect(messages).toHaveLength(2)
+    expect(messages).toHaveLength(3)
     const adminJson = JSON.stringify(messages[0])
     const doctorJson = JSON.stringify(messages[1])
+    const callJson = JSON.stringify(messages[2])
 
     for (const json of [adminJson, doctorJson]) {
       expect(json).toContain('/assets/staff-profiles/mus.jpg')
@@ -24,6 +25,14 @@ describe('production Flex validation payload', () => {
     expect(adminJson).toContain('หลักฐาน')
     expect(doctorJson).not.toContain('หลักฐาน')
     expect(doctorJson).not.toContain('/api/booking-evidence/')
+    expect(callJson).toContain('แจ้งเตือนโทรติดตาม')
+    expect(callJson).toContain('วันที่ 1 จาก 7')
+    expect(callJson).toContain('tel:0800000000')
+    expect(callJson).toContain('บันทึกผลโทร')
+    expect(callJson).toContain('ดูเพิ่มเติมอีก 2 ราย')
+    expect(callJson).not.toContain('Facebook:')
+    expect(callJson).not.toContain('นัดหมาย')
+    expect(callJson.length).toBeLessThan(50_000)
   })
 
   it('extracts only safe LINE detail property paths from a validation error', () => {

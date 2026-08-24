@@ -87,6 +87,8 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Deployed Apps Script version `12` for the any-email policy after confirming the prior personal-email test failed before side effects; Form readback remained accepting with `Admin`, `AE`, and `ไม่ระบุ`, and the failed response was intentionally not replayed.
 - Fixed Calendar retry continuity after the personal-email smoke test exposed a deleted deterministic event-ID collision: event keys now include the immutable Form response ID, Calendar retries retain evidence IDs, and a recovered retry continues through call-task creation and both LINE deliveries via an explicit retry-only operator.
 - Deployed Apps Script version `13` and completed the approved retry recovery. The synthetic any-email case reached `BOOKING_CONFIRMED` with Drive/Calendar/LINE `OK`, Calendar event present, doctor notified, one call task, and no pending retry; the pre-v13 retry used the no-image Admin fallback because its payload did not yet contain evidence IDs.
+- Added a compact A4-landscape booking report generator for monthly operations: five customers per page, repeated table headers, chronological ordering, Admin/AE attribution, booking details, deposit totals, and small rounded slip/chat evidence thumbnails.
+- Added a final commission-summary page to the booking PDF: per-person closer/AE counts, deposit totals, threshold disclosure, and approved rates of 100/60/40 above 30 cases or 70/42/28 at 30 cases or fewer.
 
 ## 2026-05-30 - Ads Dashboard and Insights polish deploy
 

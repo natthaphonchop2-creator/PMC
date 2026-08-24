@@ -49,7 +49,9 @@ describe('PMC booking end to end', () => {
     expect(ports.line.doctorMessages()).toHaveLength(1)
 
     runDailyCallReminders(ports)
-    expect(ports.line.adminMessages()).toHaveLength(3)
+    expect(ports.line.adminMessages()).toHaveLength(2)
+    expect(ports.line.adminMessages()[1].eventType).toBe('CALL_REMINDER')
+    expect(ports.line.adminMessages()[1].apiMessage?.type).toBe('flex')
 
     importJeraFile('jera-file-1', ports)
     expect(ports.bookings.getByCaseId(booking.caseId)?.status).toBe('CLOSED_JERA')
@@ -137,33 +139,20 @@ describe('PMC booking end to end', () => {
     )
   })
 
-  it('retries only the Admin alert when a time-conflict notification fails', () => {
-    const ports = createTestPorts({ calendarConflicts: true, linePushFails: true })
+  it('does not block a booking when the Calendar interval overlaps', () => {
+    const ports = createTestPorts({ calendarConflicts: true })
     const booking = submitBookingIntake(validBookingIntake(), ports)
 
     expect(booking).toMatchObject({
-      status: 'TIME_CONFLICT',
-      calendarState: 'CONFLICT',
-      lineState: 'RETRY',
-    })
-    expect(ports.retries.listPending()).toHaveLength(1)
-    expect(ports.retries.listPending()[0]).toMatchObject({
-      operation: 'ADMIN_TIME_CONFLICT_LINE',
-    })
-    expect(ports.line.doctorMessages()).toEqual([])
-    expect(ports.calls.list()).toEqual([])
-
-    ports.line.allowPushes()
-    runEligibleRetries(ports)
-
-    expect(ports.bookings.getByCaseId(booking.caseId)).toMatchObject({
-      status: 'TIME_CONFLICT',
-      calendarState: 'CONFLICT',
+      status: 'BOOKING_CONFIRMED',
+      calendarState: 'OK',
       lineState: 'OK',
     })
+    expect(ports.calendar.createdEvents()).toHaveLength(1)
     expect(ports.line.adminMessages()).toHaveLength(1)
-    expect(ports.line.adminMessages()[0].eventType).toBe('TIME_CONFLICT')
-    expect(ports.line.doctorMessages()).toEqual([])
+    expect(ports.line.adminMessages()[0].eventType).toBe('BOOKING_CONFIRMED')
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(ports.calls.getOpenByCase(booking.caseId)).not.toBeNull()
     expect(ports.retries.listPending()).toEqual([])
   })
 

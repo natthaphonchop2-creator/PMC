@@ -9,7 +9,7 @@ import {
   isLinePushAcceptedStatus,
 } from '../src/adapters/lineMessaging'
 import { submitBookingIntake } from '../src/workflows/formSubmit'
-import { rescheduleBooking } from '../src/workflows/bookingUpdate'
+import { refreshBookingCalendarPresentation, rescheduleBooking } from '../src/workflows/bookingUpdate'
 import { bookingFixture, createFakeDrive, createTestPorts, validBookingIntake } from './helpers/fakes'
 
 function visibleFlexText(value: unknown): string {
@@ -76,30 +76,72 @@ describe('doctor Calendar', () => {
     expect(first.externalId).not.toBe(second.externalId)
   })
 
-  it('sets TIME_CONFLICT and creates no event when the interval overlaps', () => {
+  it('creates the event and notifies when the interval overlaps', () => {
     const ports = createTestPorts({ calendarConflicts: true })
     const result = submitBookingIntake(validBookingIntake(), ports)
-    expect(result.status).toBe('TIME_CONFLICT')
-    expect(result.calendarState).toBe('CONFLICT')
+    expect(result.status).toBe('BOOKING_CONFIRMED')
+    expect(result.calendarState).toBe('OK')
     expect(result.lineState).toBe('OK')
-    expect(ports.calendar.createdEvents()).toHaveLength(0)
+    expect(ports.calendar.createdEvents()).toHaveLength(1)
     expect(ports.line.adminMessages()).toHaveLength(1)
-    expect(ports.line.adminMessages()[0].eventType).toBe('TIME_CONFLICT')
-    expect(ports.line.doctorMessages()).toEqual([])
-    expect(ports.calls.list()).toEqual([])
+    expect(ports.line.adminMessages()[0].eventType).toBe('BOOKING_CONFIRMED')
+    expect(ports.line.doctorMessages()).toHaveLength(1)
+    expect(ports.calls.list()).toHaveLength(1)
   })
 
-  it('creates one gold event with full customer name and phone', () => {
+  it('creates one clean mobile-friendly event with the approved booking details', () => {
     const ports = createTestPorts()
     const result = submitBookingIntake(validBookingIntake(), ports)
     expect(result.calendarEventId).toBe('event-PMC-202608-0001:response-1')
     expect(ports.calendar.createdEvents()[0]).toMatchObject({
       calendarId: 'doctor-calendar-1',
       externalId: 'PMC-202608-0001:response-1',
-      summary: 'ลูกค้าทดสอบ · 0812345678',
-      description: 'บริการ service-1\nอ้างอิง PMC-202608-0001',
+      summary: 'doctor-1 | service-1 | ลูกค้าทดสอบ',
+      description: [
+        'ลูกค้า: ลูกค้าทดสอบ',
+        'Facebook: <a href="https://www.facebook.com/search/people/?q=PMC%20Beauty">PMC Beauty</a>',
+        'โทร: 0812345678',
+        'ช่องทาง: ไม่ระบุ',
+        'มัดจำ: 1,000 บาท · โอนแล้ว',
+        'Admin: Admin A',
+        'AE: Admin A',
+      ].join('\n'),
       colorId: '5',
     })
+  })
+
+  it('encodes the Facebook search query and escapes the visible Facebook name', () => {
+    const event = calendarEventInput(bookingFixture({
+      facebookName: 'Mew & <Tanjung>',
+      calendarId: 'promedcalender@gmail.com',
+    }))
+
+    expect(event.description).toContain(
+      'Facebook: <a href="https://www.facebook.com/search/people/?q=Mew%20%26%20%3CTanjung%3E">Mew &amp; &lt;Tanjung&gt;</a>',
+    )
+  })
+
+  it('uses only the customer first name in the Calendar title', () => {
+    expect(calendarEventInput(bookingFixture({
+      customerName: 'พิมพ์ชนก ท่าน้ำเที่ยง',
+      doctorId: 'หมอ Benz',
+      serviceId: 'เติมไขมัน',
+      calendarId: 'promedcalender@gmail.com',
+    })).summary).toBe('หมอ Benz | เติมไขมัน | พิมพ์ชนก')
+  })
+
+  it('refreshes an existing Calendar card without sending another LINE message', () => {
+    const ports = createTestPorts()
+    const booking = submitBookingIntake(validBookingIntake(), ports)
+    const doctorMessagesBefore = ports.line.doctorMessages().length
+
+    refreshBookingCalendarPresentation(booking.caseId, ports)
+
+    expect(ports.calendar.updatedEvents()).toHaveLength(1)
+    expect(ports.calendar.updatedEvents()[0].input.summary).toBe(
+      'doctor-1 | service-1 | ลูกค้าทดสอบ',
+    )
+    expect(ports.line.doctorMessages()).toHaveLength(doctorMessagesBefore)
   })
 
   it('patches the same event on reschedule', () => {
