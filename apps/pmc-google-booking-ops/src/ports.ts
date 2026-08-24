@@ -179,7 +179,7 @@ export interface CalendarPort {
 export interface LineMessage {
   to: string
   audience: 'doctor' | 'admin'
-  eventType: 'BOOKING_CONFIRMED' | 'RESCHEDULED' | 'CANCELLED' | 'TIME_CONFLICT' | 'DAILY_SCHEDULE' | 'CALL_REMINDER' | 'EXPIRY_REMINDER'
+  eventType: 'BOOKING_CONFIRMED' | 'TENTATIVE_BOOKING' | 'AWAITING_SLOT' | 'RESCHEDULED' | 'CANCELLED' | 'TIME_CONFLICT' | 'DAILY_SCHEDULE' | 'CALL_REMINDER' | 'EXPIRY_REMINDER'
   caseIds: string[]
   text: string
   apiMessage?: Record<string, unknown>
