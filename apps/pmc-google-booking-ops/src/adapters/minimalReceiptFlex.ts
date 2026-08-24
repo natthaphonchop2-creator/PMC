@@ -1,5 +1,5 @@
 import type { BookingCase } from '../domain/types'
-import type { BookingEvidenceImages } from '../ports'
+import type { BookingEvidenceImages, EvidenceImageRef } from '../ports'
 import { requireAppointment } from '../domain/appointment'
 
 const TEXT = '#282624'
@@ -249,14 +249,98 @@ function teamSection(
   ]
 }
 
+function evidenceTile(
+  image: EvidenceImageRef,
+  label: string,
+  aspectMode: 'fit' | 'cover',
+): FlexComponent {
+  return {
+    type: 'box',
+    layout: 'vertical',
+    flex: 1,
+    contents: [
+      {
+        type: 'box',
+        layout: 'vertical',
+        cornerRadius: 'md',
+        backgroundColor: '#F6F5F3',
+        contents: [
+          {
+            type: 'image',
+            url: image.previewUrl,
+            size: 'full',
+            aspectRatio: '1:1',
+            aspectMode,
+            backgroundColor: '#F6F5F3',
+            action: { type: 'uri', label: 'เปิดรูปขนาดเต็ม', uri: image.fullUrl },
+          },
+        ],
+      },
+      { type: 'text', text: label, size: 'xxs', color: SECONDARY, align: 'center', margin: 'xs' },
+    ],
+  }
+}
+
+export function buildEvidencePreviewComponents(
+  driveFolderUrl: string | null,
+  evidence: BookingEvidenceImages,
+): FlexComponent[] {
+  const labeled = [
+    ...evidence.payments.map((image, index) => ({
+      image,
+      label: evidence.totalPaymentCount > 1 ? `สลิป ${index + 1}` : 'สลิป',
+      aspectMode: 'fit' as const,
+    })),
+    ...evidence.chats.map((image, index) => ({
+      image,
+      label: `แชท ${index + 1}`,
+      aspectMode: 'cover' as const,
+    })),
+  ].slice(0, 4)
+  const total = evidence.totalPaymentCount + evidence.totalChatCount
+  if (!labeled.length) {
+    return [{
+      type: 'text',
+      text: total ? 'รูปหลักฐานกำลังเตรียมแสดง' : 'รูปหลักฐานยังไม่พร้อมแสดง',
+      size: 'sm',
+      color: SECONDARY,
+      margin: 'md',
+    }]
+  }
+
+  const slots: FlexComponent[] = labeled.map(({ image, label, aspectMode }) =>
+    evidenceTile(image, label, aspectMode))
+  while (slots.length < 4) slots.push({ type: 'filler', flex: 1 })
+  const hiddenCount = Math.max(0, total - labeled.length)
+  const helper: FlexComponent = {
+    type: 'text',
+    text: hiddenCount
+      ? `แสดง ${labeled.length} จากทั้งหมด ${total} รูป · ดูทั้งหมดใน Drive`
+      : 'แตะรูปเพื่อเปิดภาพขนาดเต็ม',
+    size: 'xxs',
+    color: SECONDARY,
+    align: 'center',
+    margin: 'sm',
+  }
+  if (hiddenCount && driveFolderUrl?.startsWith('https://')) {
+    helper.action = {
+      type: 'uri',
+      label: 'ดูหลักฐานทั้งหมดใน Drive',
+      uri: driveFolderUrl,
+    }
+  }
+  return [
+    { type: 'box', layout: 'horizontal', spacing: 'sm', margin: 'md', contents: slots },
+    helper,
+  ]
+}
+
 export function buildAdminMinimalReceipt(
   booking: BookingCase,
   evidence: BookingEvidenceImages,
   brandLogoUrl: string,
   profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent {
-  const hasEvidence = Boolean(evidence.totalPaymentCount || evidence.totalChatCount)
-  const evidenceReady = Boolean(evidence.payments.length || evidence.chats.length)
   return bubble('จองเคสใหม่', booking, brandLogoUrl, [
     ...customerSection(booking),
     separator(),
@@ -268,29 +352,7 @@ export function buildAdminMinimalReceipt(
     ...teamSection(booking, profiles),
     separator(),
     sectionTitle('หลักฐาน'),
-    ...(hasEvidence
-      ? [
-          keyValueRow('สลิป', `${evidence.totalPaymentCount} รูป`),
-          keyValueRow('แชท', `${evidence.totalChatCount} รูป`),
-          {
-            type: 'text',
-            text: evidenceReady
-              ? 'รูปทั้งหมดแสดงในข้อความถัดไป'
-              : 'รูปหลักฐานกำลังเตรียมแสดง',
-            size: 'xxs',
-            color: SECONDARY,
-            margin: 'sm',
-          },
-        ]
-      : [
-          {
-            type: 'text',
-            text: 'รูปหลักฐานยังไม่พร้อมแสดง',
-            size: 'sm',
-            color: SECONDARY,
-            margin: 'md',
-          },
-        ]),
+    ...buildEvidencePreviewComponents(booking.driveFolderUrl, evidence),
   ])
 }
 
@@ -353,8 +415,7 @@ function automaticReceipt(
           ...teamSection(booking, profiles),
           separator(),
           sectionTitle('หลักฐาน'),
-          keyValueRow('สลิป', `${evidence.totalPaymentCount} รูป`),
-          keyValueRow('แชท', `${evidence.totalChatCount} รูป`),
+          ...buildEvidencePreviewComponents(booking.driveFolderUrl, evidence),
         ],
       },
       footer: {

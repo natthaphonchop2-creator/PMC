@@ -132,7 +132,7 @@ Set `PMC_AUTO_QUEUE_MIGRATION_APPROVED=true` only immediately before an explicit
 
 ## Complete evidence delivery
 
-Admin LINE receives the compact booking summary followed by every submitted slip and chat image. Images are ordered slips first, then chats, ten images per Flex carousel. Up to five LINE objects share one push request; additional requests use deterministic batch retry keys. Doctor groups never receive evidence.
+Admin LINE receives one compact booking summary with at most four small evidence thumbnails embedded in the `หลักฐาน` section. Thumbnails are ordered slips first, then chats, and each opens its signed full image. When more than four files exist, the helper line links to the private case Drive folder. Every accepted file remains stored and counted in Drive/Sheet; no large evidence carousel follows the summary. Doctor groups never receive evidence.
 
 Use `LINE_DIRECTORY_CAPTURE_ENABLED=false` during normal operation.
 

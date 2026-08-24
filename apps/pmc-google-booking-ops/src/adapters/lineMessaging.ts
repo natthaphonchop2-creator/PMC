@@ -179,7 +179,6 @@ export function adminTentativeMessageBatches(
         brandLogoUrl,
         profiles,
       ),
-      ...buildEvidenceFlexMessages(evidence),
     ],
     'ADMIN_TENTATIVE_BOOKING',
     messageVersion,
@@ -207,7 +206,6 @@ export function adminAwaitingSlotMessageBatches(
         brandLogoUrl,
         profiles,
       ),
-      ...buildEvidenceFlexMessages(evidence),
     ],
     'ADMIN_AWAITING_SLOT',
     messageVersion,
@@ -227,7 +225,7 @@ export function adminBookingMessageBatches(
   return lineObjectBatches(
     booking,
     adminLineGroupId,
-    [summary, ...buildEvidenceFlexMessages(evidence)],
+    [summary],
     'ADMIN_BOOKING_CONFIRMED',
     messageVersion,
   )
@@ -242,7 +240,7 @@ export function adminEvidenceMessageBatches(
   return lineObjectBatches(
     booking,
     adminLineGroupId,
-    buildEvidenceFlexMessages(evidence),
+    buildEvidenceFlexMessages(evidence, booking.driveFolderUrl),
     'ADMIN_EVIDENCE_READY',
     messageVersion,
   )

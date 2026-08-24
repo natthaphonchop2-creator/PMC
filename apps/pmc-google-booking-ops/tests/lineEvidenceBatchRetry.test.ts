@@ -12,7 +12,7 @@ import {
 const logoUrl = 'https://evidence.example/assets/pmc-flex-logo-v1.png'
 
 describe('LINE evidence request batching', () => {
-  it('packs summary plus evidence into requests of at most five objects', () => {
+  it('sends one summary object with at most four embedded thumbnails', () => {
     const batches = adminBookingMessageBatches(
       bookingFixture(),
       'admin-group',
@@ -21,16 +21,19 @@ describe('LINE evidence request batching', () => {
       4,
     )
 
-    expect(batches).toHaveLength(2)
-    expect(batches[0].apiMessages).toHaveLength(5)
-    expect(batches[1].apiMessages).toHaveLength(1)
+    expect(batches).toHaveLength(1)
+    expect(batches[0].apiMessages).toHaveLength(1)
     expect(batches.map((item) => item.retryKey)).toEqual([
       'PMC-202608-0001:ADMIN_BOOKING_CONFIRMED:4:BATCH:1',
-      'PMC-202608-0001:ADMIN_BOOKING_CONFIRMED:4:BATCH:2',
     ])
+    const json = JSON.stringify(batches[0].apiMessages)
+    expect(json).not.toContain('"type":"carousel"')
+    expect(json).toContain('payment-1/preview')
+    expect(json).toContain('chat-2/preview')
+    expect(json).not.toContain('chat-3/preview')
   })
 
-  it('retries only the failed Admin request batch', () => {
+  it('retries the single failed Admin summary without resending doctor LINE', () => {
     const paymentEvidenceFileIds = Array.from(
       { length: 2 },
       (_, index) => `payment-file-${index + 1}`,
@@ -40,7 +43,7 @@ describe('LINE evidence request batching', () => {
       (_, index) => `chat-file-${index + 1}`,
     )
     const ports = createTestPorts({
-      lineFailsAtPush: 2,
+      lineFailsAtPush: 1,
       extraDriveFileIds: [...paymentEvidenceFileIds, ...chatEvidenceFileIds],
     })
     const booking = submitBookingIntake(validBookingIntake({
@@ -49,15 +52,15 @@ describe('LINE evidence request batching', () => {
     }), ports)
 
     expect(booking.lineState).toBe('RETRY')
-    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.line.adminMessages()).toHaveLength(0)
     expect(ports.line.doctorMessages()).toHaveLength(1)
     expect(ports.retries.listPending()).toMatchObject([
-      { operation: 'ADMIN_BOOKING_LINE_BATCH', payload: { batchIndex: 1 } },
+      { operation: 'ADMIN_BOOKING_LINE_BATCH', payload: { batchIndex: 0 } },
     ])
 
     runEligibleRetries(ports)
 
-    expect(ports.line.adminMessages()).toHaveLength(2)
+    expect(ports.line.adminMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()).toHaveLength(1)
     expect(ports.retries.listPending()).toEqual([])
   })

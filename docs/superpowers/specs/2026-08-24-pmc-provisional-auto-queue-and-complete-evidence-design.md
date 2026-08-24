@@ -2,7 +2,8 @@
 
 ## Status
 
-- The complete-evidence behavior, normal/automatic queue choice, provisional appointment behavior, automatic slot rule, and minimal staff flow were approved in chat on 2026-08-24.
+- The normal/automatic queue choice, provisional appointment behavior, automatic slot rule, and minimal staff flow were approved in chat on 2026-08-24.
+- The Admin evidence presentation was later simplified on 2026-08-24 to a maximum of four compact tappable thumbnails; every file remains canonical in Drive/Sheet and excess images are reached through the Drive link.
 - Google Sheets remains the company operational source of truth.
 - JERA remains the only authority for closing a case at the clinic.
 - This specification authorizes design only. It does not authorize implementation, Form mutation, Sheet migration, Apps Script push, LINE delivery, or production deployment.
@@ -12,7 +13,7 @@
 
 Make two focused improvements without adding staff-facing rules:
 
-1. show every payment-slip and chat-evidence image submitted with a booking in the Admin LINE notification; and
+1. show a clean four-thumbnail preview of submitted payment-slip and chat evidence in the Admin LINE notification while retaining every file in Drive/Sheet; and
 2. let staff choose either a customer-specified appointment or an automatically proposed provisional appointment when the customer has paid a deposit but has not selected a date.
 
 Staff make only two decisions:
@@ -37,8 +38,8 @@ Everything else is derived and recorded by the system.
 - Confirmation by any Admin who can access the company workflow.
 - Updating the same Calendar event from provisional to confirmed.
 - Doctor LINE notification and call-queue creation only after appointment confirmation.
-- Every evidence image accepted by the booking Form, with no additional truncation in application code.
-- Automatic evidence batching within LINE Flex Message limits.
+- Every evidence image accepted by the booking Form remains stored and counted in Drive/Sheet.
+- A maximum of four slip-first evidence thumbnails in Admin LINE, each opening its full image.
 
 ### 2.2 Out of scope
 
@@ -217,26 +218,19 @@ For every booking, create signed preview and full-image references for:
 1. all payment-slip files in upload order; then
 2. all chat-evidence files in upload order.
 
-The application displays every file accepted by Google Forms. It adds no lower count limit of its own.
+The application stores and counts every file accepted by Google Forms. LINE preview selection does not change the canonical Drive/Sheet evidence set.
 
 ### 8.2 LINE presentation
 
-The Admin delivery consists of:
+The Admin delivery uses the existing compact booking-summary Flex with one small evidence strip embedded in the `หลักฐาน` section.
 
-1. the existing compact booking-summary Flex; followed by
-2. one or more evidence Flex carousels.
+- show at most four square thumbnails in one horizontal row;
+- order payment slips first, followed by chat images;
+- label each thumbnail concisely;
+- make each thumbnail open its signed full image when tapped; and
+- when more than four files exist, show `แสดง 4 จากทั้งหมด X รูป · ดูทั้งหมดใน Drive` with the case Drive folder action.
 
-Remove the old partial thumbnail strip from the summary card so the same images are not shown twice. The summary may state the total slip and chat counts, while the following evidence carousels are the complete visual record.
-
-Each evidence bubble contains:
-
-- one square preview;
-- a short label such as `สลิป 1` or `แชท 7`; and
-- a tap action that opens the signed full image.
-
-Use at most ten evidence bubbles per carousel, preserving two bubbles of headroom under LINE's maximum of twelve. Build additional carousels until every image is represented.
-
-The LINE adapter groups up to five message objects in one push request. If the summary and evidence require more than five objects, it creates additional deterministic push batches. Each batch has its own retry key and durable retry record so an accepted earlier batch is never resent.
+Do not append large evidence carousels or duplicate thumbnails in a following message. If media signing is temporarily unavailable, the existing retry may send one compact evidence-only card after recovery.
 
 No evidence is sent to the doctor group.
 
@@ -252,17 +246,17 @@ No evidence is sent to the doctor group.
 
 ### 9.1 Normal queue
 
-- Admin: confirmed booking summary plus all evidence batches.
+- Admin: confirmed booking summary with up to four embedded evidence thumbnails.
 - Doctor: existing confirmed booking Flex without evidence.
 
 ### 9.2 Automatic queue with candidate
 
-- Admin: provisional booking summary, proposed date/time, `ยืนยันคิวนี้`, `เปลี่ยนวัน`, and all evidence batches.
+- Admin: provisional booking summary, proposed date/time, `ยืนยันคิวนี้`, `เปลี่ยนวัน`, and up to four embedded evidence thumbnails.
 - Doctor: nothing until confirmation.
 
 ### 9.3 Automatic queue without candidate
 
-- Admin: paid booking summary, `รอ Admin เลือกวัน`, `เลือกวัน`, and all evidence batches.
+- Admin: paid booking summary, `รอ Admin เลือกวัน`, `เลือกวัน`, and up to four embedded evidence thumbnails.
 - Doctor: nothing.
 
 ### 9.4 After confirmation
@@ -327,9 +321,10 @@ Required automated coverage:
 - duplicate confirmation does not duplicate doctor LINE or call tasks;
 - all payment and chat files receive signed references in order;
 - zero truncation at the former one-slip/three-chat boundaries;
-- ten evidence images per carousel and deterministic continuation batches;
-- every generated Flex object remains under LINE's 50 KB carousel limit;
-- a failed evidence batch retries without resending accepted batches;
+- at most four compact slip-first thumbnails with full-image actions;
+- no large evidence carousel is appended to the booking summary;
+- every generated Flex object remains under LINE's 50 KB limit;
+- a failed compact Admin delivery retries without resending accepted messages;
 - daily-stage isolation allows expiry and dashboard work after a LINE reminder failure; and
 - full booking tests, TypeScript, lint, build, LINE validation, and readback checks pass before production activation.
 
@@ -344,7 +339,7 @@ The feature is complete only when:
 5. provisional appointments never notify the doctor or start Day 1–7 calls;
 6. any Admin can confirm with a short prefilled Form;
 7. confirmation updates one Calendar event and triggers doctor/call workflows once;
-8. every submitted evidence image appears in the Admin LINE delivery and opens full size;
+8. Admin LINE shows at most four slip-first evidence thumbnails that open full size, while every submitted file remains available in the case Drive folder and counted in Sheet;
 9. no evidence is made public or sent to doctors;
 10. failure in one outbound batch or daily stage does not block unrelated operational stages; and
 11. existing bookings remain readable and operational after migration.

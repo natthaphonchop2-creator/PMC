@@ -41,7 +41,7 @@ describe('Minimal Receipt Flex', () => {
     expect(json).toContain('21 สิงหาคม 2569')
     expect(json).not.toContain('PMC-202608-0001')
     expect(json).not.toContain('ยืนยันแล้ว')
-    expect(json).not.toContain('สลิป 1')
+    expect(json).toContain('สลิป')
     expect(json).not.toContain('รูปเพิ่มเติม')
     expect(json).not.toContain('"hero"')
     expect(json).not.toContain('"footer"')
@@ -160,15 +160,37 @@ describe('Minimal Receipt Flex', () => {
     expect(json).not.toContain('staff-profiles')
   })
 
-  it('shows evidence counts without duplicating partial thumbnails', () => {
-    const json = JSON.stringify(buildAdminMinimalReceipt(bookingFixture(), evidence, logoUrl))
-    expect(json).toContain('สลิป')
-    expect(json).toContain('1 รูป')
-    expect(json).toContain('แชท')
-    expect(json).toContain('5 รูป')
-    expect(json).toContain('รูปทั้งหมดแสดงในข้อความถัดไป')
-    expect(json).not.toContain('https://media/pay-preview')
-    expect(json).not.toContain('https://media/chat-preview')
+  it('shows at most four small slip-first thumbnails that open the full images', () => {
+    const thumbnailEvidence = {
+      payments: [
+        { previewUrl: 'https://media/pay-1-preview', fullUrl: 'https://media/pay-1-full' },
+        { previewUrl: 'https://media/pay-2-preview', fullUrl: 'https://media/pay-2-full' },
+      ],
+      chats: [1, 2, 3, 4].map((index) => ({
+        previewUrl: `https://media/chat-${index}-preview`,
+        fullUrl: `https://media/chat-${index}-full`,
+      })),
+      totalPaymentCount: 2,
+      totalChatCount: 4,
+    }
+    const json = JSON.stringify(buildAdminMinimalReceipt(
+      bookingFixture({ driveFolderUrl: 'https://drive.google.com/drive/folders/case-1' }),
+      thumbnailEvidence,
+      logoUrl,
+    ))
+
+    expect(json).toContain('https://media/pay-1-preview')
+    expect(json).toContain('https://media/pay-2-preview')
+    expect(json).toContain('https://media/chat-1-preview')
+    expect(json).toContain('https://media/chat-2-preview')
+    expect(json).not.toContain('https://media/chat-3-preview')
+    expect(json).not.toContain('https://media/chat-4-preview')
+    expect(json).toContain('https://media/pay-1-full')
+    expect(json).toContain('https://media/chat-2-full')
+    expect(json).toContain('แสดง 4 จากทั้งหมด 6 รูป')
+    expect(json).toContain('https://drive.google.com/drive/folders/case-1')
+    expect((json.match(/"aspectRatio":"1:1"/g) ?? [])).toHaveLength(5)
+    expect(json).not.toContain('รูปทั้งหมดแสดงในข้อความถัดไป')
   })
 
   it('keeps doctor payload evidence, deposit, and channel free', () => {
