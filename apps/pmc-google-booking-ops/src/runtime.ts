@@ -1055,10 +1055,15 @@ export function configureQueueModeFormsWorkflow(): {
     createdConfirmationForm = true
   }
   const runtime = createRuntime()
-  const queue = runtime.forms.configureQueueModeForm()
-  const confirmation = runtime.forms.ensureQueueConfirmationForm()
-  const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
-  return { ...queue, ...confirmation, createdTrigger, createdConfirmationForm }
+  runtime.forms.pauseBookingResponses()
+  try {
+    const queue = runtime.forms.configureQueueModeForm()
+    const confirmation = runtime.forms.ensureQueueConfirmationForm()
+    const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
+    return { ...queue, ...confirmation, createdTrigger, createdConfirmationForm }
+  } finally {
+    runtime.forms.resumeBookingResponses()
+  }
 }
 
 export function prepareAutoQueueMigrationWorkflow(): {
