@@ -25,24 +25,34 @@ Do not create production assets under an individual Admin's personal account.
 
 ### PMC Booking Intake
 
-Create one page with these exact required titles:
+Use these exact common required titles:
 
-1. `Admin ผู้รับจอง` — Dropdown
-2. `ชื่อลูกค้า` — Short answer
-3. `เบอร์มือถือ` — Short answer
-4. `หมอ` — Dropdown
-5. `บริการ/โปรแกรม` — Dropdown
-6. `วันที่นัด` — Date
-7. `เวลานัด` — Time
-8. `จำนวนเงินจอง` — Short answer with numeric validation
-9. `สลิปเงินจอง` — File upload, required
-10. `หลักฐานแชท` — File upload, required, multiple files allowed
+1. `Admin` — Dropdown
+2. `AE` — Dropdown, including `ไม่ระบุ`
+3. `ชื่อลูกค้า` — Short answer
+4. `ชื่อ Facebook` — Short answer
+5. `เบอร์มือถือ` — Short answer with `^0[0-9]{9}$` validation
+6. `หมอ` — Dropdown
+7. `บริการ/โปรแกรม` — Dropdown
+8. `รูปแบบคิวนัดหมาย` — Multiple choice: `คิวปกติ` or `คิวอัตโนมัติ`
+9. `จำนวนเงินจอง` — Short answer with numeric validation
+10. `สลิปเงินจอง` — File upload, required, multiple files allowed
+11. `หลักฐานแชท` — File upload, required, multiple files allowed
 
-Optional:
+Optional: `เพจคลินิก/ช่องทาง` — Dropdown.
 
-11. `เพจคลินิก/ช่องทาง` — Dropdown, not required
+`คิวปกติ` branches to the required `วันที่นัด` and `เวลานัด` fields. `คิวอัตโนมัติ` skips those two fields and goes directly to deposit/evidence. Enable email collection; the selected Admin controls attribution and the respondent email is audit-only.
 
-All Admins use one company Google account. Enable email collection for technical audit, restrict submission to that authorized company account, and keep `Admin ผู้รับจอง` required because the selected Admin is the authority for performance attribution.
+### PMC Queue Confirmation
+
+Create or configure these fields:
+
+1. `Case ID` — Short answer, required
+2. `การดำเนินการ` — Multiple choice: `ยืนยันคิวนี้` or `เปลี่ยนวัน`
+3. `วันที่ยืนยัน` — Date, required
+4. `เวลายืนยัน` — Time, required
+
+Enable email collection. Any authorized Admin may confirm; the collected email is stored in `appointmentConfirmedBy` and Audit Log.
 
 ### PMC Call Result
 
@@ -92,6 +102,7 @@ Set these in Apps Script Project Settings. Do not put values in Sheet cells, sou
 PMC_SPREADSHEET_ID
 PMC_BOOKING_FORM_ID
 PMC_CALL_RESULT_FORM_ID
+PMC_QUEUE_CONFIRMATION_FORM_ID
 PMC_DRIVE_ROOT_ID
 PMC_JERA_INCOMING_FOLDER_ID
 PMC_BACKUP_FOLDER_ID
@@ -99,7 +110,27 @@ PMC_ADMIN_LINE_GROUP_ID
 LINE_CHANNEL_ACCESS_TOKEN
 PMC_BOOKING_INGRESS_SECRET
 LINE_DIRECTORY_CAPTURE_ENABLED
+BOOKING_MEDIA_BASE_URL
+BOOKING_MEDIA_SIGNING_SECRET
+BOOKING_BRAND_LOGO_URL
+PMC_SHARED_ACCOUNT_EMAIL
 ```
+
+Set `PMC_AUTO_QUEUE_MIGRATION_APPROVED=true` only immediately before an explicitly approved `applyPmcAutoQueueMigration()` run. The function deletes the marker before writing.
+
+## Automatic provisional queue
+
+- Search from payment receipt through six calendar months.
+- Use only dates where the selected doctor already has a confirmed PMC case.
+- Choose the first clear 30-minute start after a confirmed doctor case, from 10:30 through 20:30; the selected service may finish later.
+- Create Calendar color `8` with `รอยืนยัน |` and notify Admin only.
+- Do not notify doctors or create Day 1–7 calls until confirmation.
+- Confirmation updates the same event to color `5`, sends doctor LINE once, and creates one call task.
+- If no candidate exists, store `AWAITING_ADMIN_SLOT`, create no fake Calendar date, and show `รอ Admin เลือกวัน`.
+
+## Complete evidence delivery
+
+Admin LINE receives the compact booking summary followed by every submitted slip and chat image. Images are ordered slips first, then chats, ten images per Flex carousel. Up to five LINE objects share one push request; additional requests use deterministic batch retry keys. Doctor groups never receive evidence.
 
 Use `LINE_DIRECTORY_CAPTURE_ENABLED=false` during normal operation.
 
@@ -325,6 +356,7 @@ Confirm exactly one of each:
 
 - `onBookingFormSubmit` — Booking Form submit
 - `onCallResultSubmit` — Call Result Form submit
+- `onQueueConfirmationSubmit` — Queue Confirmation Form submit
 - `pollJeraIncoming` — every 15 minutes
 - `runDailyOperations` — daily at approximately 09:00 Asia/Bangkok
 - `runIntegrityChecks` — daily at approximately 02:00 Asia/Bangkok
@@ -333,7 +365,7 @@ Apps Script may slightly randomize clock-trigger execution within the selected h
 
 ## Rollback without data deletion
 
-1. disable/delete the five installable triggers;
+1. disable/delete the six installable triggers;
 2. disable the Apps Script Web App deployment;
 3. disable the LINE Developers webhook;
 4. leave Forms, Sheets, Drive, Calendars, audit rows, and imported JERA evidence intact;

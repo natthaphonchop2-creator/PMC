@@ -29,6 +29,18 @@ For every scenario, record:
 
 Do not paste tokens, full phone numbers, national IDs, slip/chat content, or unrestricted links into the register.
 
+## Automatic queue and complete evidence pre-production checkpoint — 2026-08-24
+
+- Added backward-compatible `NORMAL`/`AUTO` parsing; old Form responses remain normal queues.
+- Added separate paid-booking and appointment states: `CONFIRMED`, `TENTATIVE`, and `AWAITING_ADMIN_SLOT`.
+- Added a pure automatic slot planner using confirmed doctor days, 30-minute starts, the selected service duration, the 10:30–20:30 start window, and the six-month deposit horizon.
+- Added gray provisional Calendar events, Admin-only tentative/awaiting Flex messages, a prefilled confirmation Form adapter, idempotent confirmation, deterministic deleted-event recovery, doctor notification, and call-task creation after confirmation only.
+- Removed one-slip/three-chat truncation. Admin delivery now creates signed references for every Form-accepted image and sends ten-image carousels in retry-safe LINE request batches.
+- Added isolated daily stages so call-reminder LINE failure cannot block deposit expiry or Dashboard refresh.
+- Added read-only `preparePmcAutoQueueMigration()`, one-time-marker `applyPmcAutoQueueMigration()`, and idempotent `configurePmcQueueModeForms()` operators.
+- Expanded validation-only LINE payloads across two `/validate/push` requests: confirmed Admin, doctor, call reminder, tentative Admin, awaiting-slot Admin, and ten-image evidence carousel.
+- No Apps Script push, Sheet migration, Form mutation, trigger installation, Calendar pilot, or LINE group delivery was performed in this checkpoint. Production remains stopped at Gate A.
+
 ## Scenarios
 
 ### 1. Valid booking

@@ -15,6 +15,16 @@ Release-specific documents, previews, PDFs, screenshots, and visual QA assets mu
 - Branch: `main`
 - Release folder: `docs/releases/2026-05-29-v0.1.0/`
 
+## 2026-08-24 - PMC provisional automatic queue and complete evidence
+
+- Added a minimal `คิวปกติ`/`คิวอัตโนมัติ` booking model while preserving legacy Form responses as normal queues.
+- Added provisional appointment planning from confirmed doctor days, 30-minute start slots, service duration, clinic start window, and six-month deposit expiry.
+- Added gray tentative Calendar events, Admin-only confirmation actions, any-Admin email audit, idempotent same-event confirmation, deleted-event recovery, doctor delivery, and call creation after confirmation.
+- Removed application-level evidence truncation and added all-slip/all-chat signed media carousels with ten images per carousel, five LINE objects per request, and retry-safe batch continuation.
+- Isolated daily operational stages so a LINE failure cannot stop expiry or Dashboard work.
+- Added dry-run/apply migration separation, one-time migration approval marker, Form-branching operator, expanded LINE validation-only payloads, and production rollback gates.
+- Local implementation remains unpushed and has not changed the live Form, Sheet schema, triggers, Calendar, or LINE groups.
+
 ## 2026-08-22 - Gentelella Booking Attribution Dashboard design
 
 - Approved a new authenticated `/booking-dashboard` route built from the real Gentelella v4 source pinned to upstream commit `d0064ca25fc916981556e2b2439e569000f61da9` rather than a visual imitation.
