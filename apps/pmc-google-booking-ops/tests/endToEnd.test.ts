@@ -76,14 +76,11 @@ describe('PMC booking end to end', () => {
       ports,
     )
     expect(booking.lineState).toBe('RETRY')
-    expect(ports.retries.listPending()).toHaveLength(1)
-    expect(ports.retries.listPending()[0]).toMatchObject({
-      operation: 'BOOKING_LINE',
-      payload: {
-        paymentEvidenceFileIds: ['payment-file-1'],
-        chatEvidenceFileIds: ['chat-file-1', 'chat-file-2'],
-      },
-    })
+    expect(ports.retries.listPending()).toHaveLength(2)
+    expect(ports.retries.listPending().map((retry) => retry.operation).sort()).toEqual([
+      'ADMIN_BOOKING_LINE_BATCH',
+      'DOCTOR_LINE',
+    ])
     ports.line.allowPushes()
     runEligibleRetries(ports)
     expect(ports.bookings.getByCaseId(booking.caseId)?.lineState).toBe('OK')
@@ -91,7 +88,7 @@ describe('PMC booking end to end', () => {
     expect(ports.calendar.createdEvents()).toHaveLength(1)
     expect(ports.line.adminMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()).toHaveLength(1)
-    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain('payment-file-1')
+    expect(JSON.stringify(ports.line.adminMessages()[0])).toContain('payment-file-1')
     expect(JSON.stringify(ports.line.doctorMessages()[0].apiMessage)).not.toContain('payment-file-1')
     expect(ports.retries.listPending()).toHaveLength(0)
   })
@@ -134,7 +131,7 @@ describe('PMC booking end to end', () => {
     expect(ports.calls.getOpenByCase(booking.caseId)).not.toBeNull()
     expect(ports.line.adminMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()).toHaveLength(1)
-    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain(
+    expect(JSON.stringify(ports.line.adminMessages()[0])).toContain(
       'payment-file-1',
     )
   })
@@ -178,8 +175,8 @@ describe('PMC booking end to end', () => {
     expect(booking.lineState).toBe('RETRY')
     expect(ports.line.adminMessages()).toHaveLength(1)
     expect(ports.line.doctorMessages()).toHaveLength(1)
-    expect(JSON.stringify(ports.line.adminMessages()[0].apiMessage)).toContain(
-      'รูปหลักฐานยังไม่พร้อมแสดง',
+    expect(JSON.stringify(ports.line.adminMessages()[0])).toContain(
+      'รูปหลักฐานกำลังเตรียมแสดง',
     )
     expect(ports.retries.listPending()).toHaveLength(1)
     expect(ports.retries.listPending()[0]).toMatchObject({ operation: 'ADMIN_EVIDENCE_LINE' })
@@ -188,7 +185,7 @@ describe('PMC booking end to end', () => {
 
     expect(ports.line.adminMessages()).toHaveLength(2)
     expect(ports.line.doctorMessages()).toHaveLength(1)
-    expect(JSON.stringify(ports.line.adminMessages()[1].apiMessage)).toContain('payment-file-1')
+    expect(JSON.stringify(ports.line.adminMessages()[1])).toContain('payment-file-1')
     expect(ports.retries.listPending()).toHaveLength(0)
   })
 

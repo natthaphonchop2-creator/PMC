@@ -180,6 +180,7 @@ export interface LineMessage {
   caseIds: string[]
   text: string
   apiMessage?: Record<string, unknown>
+  apiMessages?: Record<string, unknown>[]
   retryKey: string
 }
 

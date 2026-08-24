@@ -145,6 +145,7 @@ export interface TestPortOptions {
   linePushFails?: boolean
   lineFailsAtPush?: number
   mediaSigningFailsOnce?: boolean
+  extraDriveFileIds?: string[]
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
@@ -298,7 +299,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     retention: repositories.retention,
     retries: repositories.retries,
     lineDirectory: repositories.lineDirectory,
-    drive: createFakeDrive(),
+    drive: createFakeDrive(options.extraDriveFileIds),
     calendar: createFakeCalendar(options),
     line: createFakeLine(options.linePushFails ?? false, options.lineFailsAtPush),
     forms: {
@@ -577,12 +578,16 @@ export interface FakeDrivePort extends DrivePort {
   trashedFolderIds(): string[]
 }
 
-export function createFakeDrive(): FakeDrivePort {
+export function createFakeDrive(extraFileIds: string[] = []): FakeDrivePort {
   const folders = new Map<string, { parentId: string; name: string; marker: string }>()
   const files = new Map<string, { name: string; folderId: string | null }>([
     ['payment-file-1', { name: 'payment.jpg', folderId: null }],
     ['chat-file-1', { name: 'chat.jpg', folderId: null }],
     ['chat-file-2', { name: 'chat.png', folderId: null }],
+    ...extraFileIds.map((fileId, index) => [
+      fileId,
+      { name: `evidence-${index + 1}.jpg`, folderId: null },
+    ] as const),
   ])
   let moved = 0
   const trashed: string[] = []

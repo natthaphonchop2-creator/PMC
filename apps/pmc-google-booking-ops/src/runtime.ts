@@ -10,7 +10,8 @@ import {
 } from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import {
-  adminBookingMessage,
+  adminBookingMessageBatches,
+  adminEvidenceMessageBatches,
   adminTimeConflictMessage,
   bookingTeamProfiles,
   createAppsScriptCryptoPort,
@@ -431,6 +432,37 @@ export function runEligibleRetries(ports: BookingPorts): void {
           { lineState: 'OK', doctorLineNotifiedAt: ports.clock.nowIso() },
           { actor: 'system', reason: 'LINE retry succeeded', correlationId: id },
         )
+      } else if (operation === 'ADMIN_BOOKING_LINE_BATCH') {
+        const payload = retryPayload(retry.payload)
+        const paymentEvidenceFileIds = (payload.paymentEvidenceFileIds as string[]) ?? []
+        const chatEvidenceFileIds = (payload.chatEvidenceFileIds as string[]) ?? []
+        const messageVersion = Number(payload.messageVersion) || booking.version
+        const batchIndex = Number(payload.batchIndex)
+        if (!Number.isInteger(batchIndex) || batchIndex < 0) {
+          throw new Error('invalid Admin LINE batch index')
+        }
+        const evidence = ports.media.images(
+          booking.caseId,
+          paymentEvidenceFileIds,
+          chatEvidenceFileIds,
+        )
+        const batches = adminBookingMessageBatches(
+          booking,
+          ports.config.adminLineGroupId(),
+          evidence,
+          ports.config.brandLogoUrl(),
+          messageVersion,
+          bookingTeamProfiles(booking, ports.config),
+        )
+        const message = batches[batchIndex]
+        if (!message) throw new Error('Admin LINE batch index out of range')
+        ports.line.push(message)
+        ports.repositories.bookings.update(
+          caseId,
+          booking.version,
+          { lineState: 'OK' },
+          { actor: 'system', reason: 'Admin LINE batch retry succeeded', correlationId: id },
+        )
       } else if (operation === 'ADMIN_TIME_CONFLICT_LINE') {
         const payload = retryPayload(retry.payload)
         const messageVersion = Number(payload.messageVersion) || booking.version
@@ -459,16 +491,13 @@ export function runEligibleRetries(ports: BookingPorts): void {
           paymentEvidenceFileIds,
           chatEvidenceFileIds,
         )
-        const message = adminBookingMessage(
+        const messages = adminEvidenceMessageBatches(
           booking,
           ports.config.adminLineGroupId(),
           evidence,
-          ports.config.brandLogoUrl(),
           messageVersion,
-          bookingTeamProfiles(booking, ports.config),
         )
-        message.retryKey = `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`
-        ports.line.push(message)
+        for (const message of messages) ports.line.push(message)
         ports.repositories.bookings.update(
           caseId,
           booking.version,

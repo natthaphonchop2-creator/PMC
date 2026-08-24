@@ -7,8 +7,9 @@ import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
 import {
+  adminBookingMessageBatches,
   bookingTeamProfiles,
-  sendBookingConfirmationMessages,
+  doctorBookingMessage,
 } from '../adapters/lineMessaging'
 import { createInitialCallTask } from './callQueue'
 
@@ -223,67 +224,97 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     }
   }
 
-  try {
-    createInitialCallTask(current, ports)
-    sendBookingConfirmationMessages(
-      current,
-      ports.line,
-      ports.config.adminLineGroupId(),
-      evidence,
-      ports.config.brandLogoUrl(),
-      current.version,
-      bookingTeamProfiles(current, ports.config),
-    )
-    if (mediaSafeError) {
+  createInitialCallTask(current, ports)
+  const profiles = bookingTeamProfiles(current, ports.config)
+  const adminBatches = adminBookingMessageBatches(
+    current,
+    ports.config.adminLineGroupId(),
+    evidence,
+    ports.config.brandLogoUrl(),
+    current.version,
+    profiles,
+  )
+  let lineFailed = false
+  let lastSafeError = mediaSafeError
+  for (const [batchIndex, message] of adminBatches.entries()) {
+    try {
+      ports.line.push(message)
+    } catch (error) {
+      lineFailed = true
+      const safeError = error instanceof Error ? error.message : 'Admin LINE batch failed'
+      lastSafeError = safeError
       ports.repositories.retries.enqueue({
-        id: `RETRY-${caseId}-ADMIN-EVIDENCE`,
+        id: `RETRY-${caseId}-ADMIN-LINE-BATCH-${batchIndex + 1}`,
         caseId,
-        operation: 'ADMIN_EVIDENCE_LINE',
-        idempotencyKey: `${caseId}:ADMIN_EVIDENCE_READY:${current.version}`,
+        operation: 'ADMIN_BOOKING_LINE_BATCH',
+        idempotencyKey: `${caseId}:ADMIN_BOOKING_LINE_BATCH:${current.version}:${batchIndex + 1}`,
         attempts: 0,
         status: 'PENDING',
-        safeError: mediaSafeError,
+        safeError,
         payload: {
           paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
           chatEvidenceFileIds: intake.chatEvidenceFileIds,
           messageVersion: current.version,
+          batchIndex,
         },
       })
     }
-    return ports.repositories.bookings.update(
-      caseId,
+  }
+
+  let doctorLineNotifiedAt: string | null = null
+  try {
+    ports.line.push(doctorBookingMessage(
+      current,
+      'BOOKING_CONFIRMED',
+      ports.config.brandLogoUrl(),
       current.version,
-      {
-        lineState: mediaSafeError ? 'RETRY' : 'OK',
-        doctorLineNotifiedAt: ports.clock.nowIso(),
-      },
-      {
-        actor: 'system',
-        reason: mediaSafeError ? mediaSafeError : 'Admin and doctor LINE notifications sent',
-        correlationId: intake.formResponseId,
-      },
-    )
+      profiles,
+    ))
+    doctorLineNotifiedAt = ports.clock.nowIso()
   } catch (error) {
-    const safeError = error instanceof Error ? error.message : 'LINE notification failed'
+    lineFailed = true
+    const safeError = error instanceof Error ? error.message : 'Doctor LINE failed'
+    lastSafeError = safeError
     ports.repositories.retries.enqueue({
-      id: `RETRY-${caseId}-LINE`,
+      id: `RETRY-${caseId}-DOCTOR-LINE`,
       caseId,
-      operation: 'BOOKING_LINE',
-      idempotencyKey: `${caseId}:BOOKING_CONFIRMED`,
+      operation: 'DOCTOR_LINE',
+      idempotencyKey: `${caseId}:DOCTOR_LINE:${current.version}`,
       attempts: 0,
       status: 'PENDING',
       safeError,
+      payload: { messageVersion: current.version },
+    })
+  }
+
+  if (mediaSafeError) {
+    ports.repositories.retries.enqueue({
+      id: `RETRY-${caseId}-ADMIN-EVIDENCE`,
+      caseId,
+      operation: 'ADMIN_EVIDENCE_LINE',
+      idempotencyKey: `${caseId}:ADMIN_EVIDENCE_READY:${current.version}`,
+      attempts: 0,
+      status: 'PENDING',
+      safeError: mediaSafeError,
       payload: {
         paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
         chatEvidenceFileIds: intake.chatEvidenceFileIds,
         messageVersion: current.version,
       },
     })
-    return ports.repositories.bookings.update(
-      caseId,
-      current.version,
-      { lineState: 'RETRY' },
-      { actor: 'system', reason: safeError, correlationId: intake.formResponseId },
-    )
   }
+
+  return ports.repositories.bookings.update(
+    caseId,
+    current.version,
+    {
+      lineState: lineFailed || mediaSafeError ? 'RETRY' : 'OK',
+      doctorLineNotifiedAt,
+    },
+    {
+      actor: 'system',
+      reason: lastSafeError ?? 'Admin and doctor LINE notifications sent',
+      correlationId: intake.formResponseId,
+    },
+  )
 }

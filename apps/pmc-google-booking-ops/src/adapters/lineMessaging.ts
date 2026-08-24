@@ -13,6 +13,7 @@ import {
   buildDoctorMinimalReceipt,
   type TeamProfileImages,
 } from './minimalReceiptFlex'
+import { buildEvidenceFlexMessages } from './evidenceCarouselFlex'
 
 export interface BookingIngressPayload {
   timestamp: number
@@ -132,6 +133,60 @@ export function adminBookingMessage(
   }
 }
 
+function lineObjectBatches(
+  booking: BookingCase,
+  adminLineGroupId: string,
+  objects: Record<string, unknown>[],
+  retryPrefix: string,
+  messageVersion: number,
+): LineMessage[] {
+  return Array.from(
+    { length: Math.ceil(objects.length / 5) },
+    (_, batchIndex) => ({
+      to: adminLineGroupId,
+      audience: 'admin',
+      eventType: 'BOOKING_CONFIRMED',
+      caseIds: [booking.caseId],
+      text: `จองเคสใหม่ · ${booking.customerName}`,
+      apiMessages: objects.slice(batchIndex * 5, batchIndex * 5 + 5),
+      retryKey: `${booking.caseId}:${retryPrefix}:${messageVersion}:BATCH:${batchIndex + 1}`,
+    }),
+  )
+}
+
+export function adminBookingMessageBatches(
+  booking: BookingCase,
+  adminLineGroupId: string,
+  evidence: BookingEvidenceImages,
+  brandLogoUrl: string,
+  messageVersion = booking.version,
+  profiles?: TeamProfileImages,
+): LineMessage[] {
+  const summary = buildAdminMinimalReceipt(booking, evidence, brandLogoUrl, profiles)
+  return lineObjectBatches(
+    booking,
+    adminLineGroupId,
+    [summary, ...buildEvidenceFlexMessages(evidence)],
+    'ADMIN_BOOKING_CONFIRMED',
+    messageVersion,
+  )
+}
+
+export function adminEvidenceMessageBatches(
+  booking: BookingCase,
+  adminLineGroupId: string,
+  evidence: BookingEvidenceImages,
+  messageVersion = booking.version,
+): LineMessage[] {
+  return lineObjectBatches(
+    booking,
+    adminLineGroupId,
+    buildEvidenceFlexMessages(evidence),
+    'ADMIN_EVIDENCE_READY',
+    messageVersion,
+  )
+}
+
 export function adminTimeConflictMessage(
   booking: BookingCase,
   adminLineGroupId: string,
@@ -170,14 +225,14 @@ export function sendBookingConfirmationMessages(
   messageVersion = booking.version,
   profiles?: TeamProfileImages,
 ): void {
-  line.push(adminBookingMessage(
+  for (const message of adminBookingMessageBatches(
     booking,
     adminLineGroupId,
     evidence,
     brandLogoUrl,
     messageVersion,
     profiles,
-  ))
+  )) line.push(message)
   line.push(doctorBookingMessage(
     booking,
     'BOOKING_CONFIRMED',
@@ -210,6 +265,12 @@ export function createGoogleLinePort(accessToken: string): LinePort {
   const properties = PropertiesService.getScriptProperties()
   return {
     push(message) {
+      const messages = message.apiMessages ?? [
+        message.apiMessage ?? { type: 'text', text: message.text },
+      ]
+      if (messages.length < 1 || messages.length > 5) {
+        throw new Error('LINE push requires 1-5 messages')
+      }
       const propertyKey = `LINE_RETRY_${message.retryKey}`
       const retryUuid = properties.getProperty(propertyKey) ?? Utilities.getUuid()
       properties.setProperty(propertyKey, retryUuid)
@@ -222,7 +283,7 @@ export function createGoogleLinePort(accessToken: string): LinePort {
         },
         payload: JSON.stringify({
           to: message.to,
-          messages: [message.apiMessage ?? { type: 'text', text: message.text }],
+          messages,
         }),
         muteHttpExceptions: true,
       })

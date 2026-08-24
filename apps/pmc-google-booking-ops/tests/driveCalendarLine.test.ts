@@ -3,6 +3,7 @@ import { ensureCaseEvidenceFolder } from '../src/adapters/googleDrive'
 import { calendarEventInput } from '../src/adapters/googleCalendar'
 import {
   adminBookingMessage,
+  adminBookingMessageBatches,
   doctorBookingMessage,
   formatLinePushError,
   handleLineDirectoryIngress,
@@ -284,7 +285,9 @@ describe('LINE routing', () => {
       calendarId: 'doctor-calendar-1',
     })
     const logoUrl = 'https://evidence.example/assets/pmc-flex-logo-v1.png'
-    const adminJson = JSON.stringify(adminBookingMessage(booking, 'admin-group', evidence, logoUrl))
+    const adminJson = JSON.stringify(
+      adminBookingMessageBatches(booking, 'admin-group', evidence, logoUrl),
+    )
     const doctorJson = JSON.stringify(doctorBookingMessage(booking, 'BOOKING_CONFIRMED', logoUrl))
 
     expect(adminJson).toContain('#FFFFFF')
@@ -295,8 +298,7 @@ describe('LINE routing', () => {
     expect(adminJson).not.toContain('รูปเพิ่มเติมใน Drive')
     expect(adminJson).toContain('https://media.test/pay-full')
     expect(adminJson).toContain('https://media.test/chat-3-full')
-    expect(adminJson).toContain('"aspectMode":"fit"')
-    expect(adminJson).not.toContain('"aspectMode":"contain"')
+    expect(adminJson).toContain('"aspectMode":"cover"')
     expect(doctorJson).not.toContain('media.test')
     expect(doctorJson).not.toContain('หลักฐาน')
   })
@@ -310,7 +312,7 @@ describe('LINE routing', () => {
         totalChatCount: 2,
       }, 'https://evidence.example/assets/pmc-flex-logo-v1.png'),
     )
-    expect(payload).toContain('รูปหลักฐานยังไม่พร้อมแสดง')
+    expect(payload).toContain('รูปหลักฐานกำลังเตรียมแสดง')
     expect(payload).not.toContain('media.test')
   })
 
