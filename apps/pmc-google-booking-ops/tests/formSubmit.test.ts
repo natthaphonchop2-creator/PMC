@@ -4,6 +4,59 @@ import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { createTestPorts, validBookingIntake } from './helpers/fakes'
 
 describe('booking Form workflow', () => {
+  it('treats a legacy response with no queue type as NORMAL', () => {
+    const intake = parseBookingFormEvent({
+      responseKey: 'legacy-normal:2',
+      submittedAt: '2026-08-20T09:00:00+07:00',
+      submitterEmail: 'admin@example.com',
+      namedValues: {
+        Admin: ['มัส'],
+        AE: ['ไม่ระบุ'],
+        ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        'ชื่อ Facebook': ['PMC Beauty'],
+        เบอร์มือถือ: ['0812345678'],
+        หมอ: ['doctor-1'],
+        'บริการ/โปรแกรม': ['service-1'],
+        วันที่นัด: ['2026-08-20'],
+        เวลานัด: ['13:00'],
+        จำนวนเงินจอง: ['1000'],
+        สลิปเงินจอง: ['payment-file-id-123456789012345'],
+        หลักฐานแชท: ['chat-file-id-123456789012345'],
+      },
+    })
+    expect(intake).toMatchObject({
+      queueType: 'NORMAL',
+      appointmentDate: '2026-08-20',
+      appointmentTime: '13:00',
+    })
+  })
+
+  it('parses AUTO without appointment date or time', () => {
+    const intake = parseBookingFormEvent({
+      responseKey: 'auto-no-date:2',
+      submittedAt: '2026-08-20T09:00:00+07:00',
+      submitterEmail: 'admin@example.com',
+      namedValues: {
+        Admin: ['มัส'],
+        AE: ['ไม่ระบุ'],
+        รูปแบบคิวนัดหมาย: ['คิวอัตโนมัติ'],
+        ชื่อลูกค้า: ['ลูกค้าทดสอบ'],
+        'ชื่อ Facebook': ['PMC Beauty'],
+        เบอร์มือถือ: ['0812345678'],
+        หมอ: ['doctor-1'],
+        'บริการ/โปรแกรม': ['service-1'],
+        จำนวนเงินจอง: ['1000'],
+        สลิปเงินจอง: ['payment-file-id-123456789012345'],
+        หลักฐานแชท: ['chat-file-id-123456789012345'],
+      },
+    })
+    expect(intake).toMatchObject({
+      queueType: 'AUTO',
+      appointmentDate: null,
+      appointmentTime: null,
+    })
+  })
+
   it('maps the required Facebook name and uploaded Drive file IDs', () => {
     const intake = parseBookingFormEvent({
       responseKey: 'sheet-1:2',

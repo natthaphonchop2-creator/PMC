@@ -301,6 +301,11 @@ export function repairAndRetryFacebookShiftedCaseWorkflow(caseId: string): {
       adminIdentityStatus: currentRow[index.adminIdentityStatus],
       aeId: currentRow[index.aeId],
       aeName: currentRow[index.aeName],
+      queueType: 'NORMAL',
+      appointmentStatus: 'CONFIRMED',
+      appointmentProposedAt: '',
+      appointmentConfirmedAt: intake.submittedAt,
+      appointmentConfirmedBy: intake.submitterEmail,
       customerName: intake.customerName.trim(),
       facebookName: intake.facebookName.trim(),
       customerNameNormalized: normalizeCustomerName(intake.customerName),
@@ -555,6 +560,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
       } else if (operation === 'DRIVE_EVIDENCE') {
         const payload = retryPayload(retry.payload)
         const intake: BookingIntake = {
+          queueType: booking.queueType,
           formResponseId: booking.formResponseId,
           submittedAt: booking.depositReceivedAt,
           submitterEmail: booking.submitterEmail,

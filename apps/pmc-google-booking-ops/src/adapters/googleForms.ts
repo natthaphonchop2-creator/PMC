@@ -51,7 +51,15 @@ function driveFileIds(value: string): string[] {
 }
 
 export function parseBookingFormEvent(event: BookingFormEventInput): BookingIntake {
+  const queueAnswer = event.namedValues[BOOKING_FORM_LABELS.queueType]?.[0]?.trim()
+  const queueType = queueAnswer === 'คิวอัตโนมัติ' ? 'AUTO' : 'NORMAL'
+  const appointmentDate = event.namedValues[BOOKING_FORM_LABELS.appointmentDate]?.[0]?.trim() || null
+  const appointmentTime = event.namedValues[BOOKING_FORM_LABELS.appointmentTime]?.[0]?.trim() || null
+  if (queueType === 'NORMAL' && (!appointmentDate || !appointmentTime)) {
+    throw new Error('normal queue requires appointment date and time')
+  }
   return {
+    queueType,
     formResponseId: event.responseKey,
     submittedAt: event.submittedAt,
     submitterEmail: event.submitterEmail.trim().toLowerCase(),
@@ -70,8 +78,8 @@ export function parseBookingFormEvent(event: BookingFormEventInput): BookingInta
     phone: requiredValue(event.namedValues, BOOKING_FORM_LABELS.phone),
     doctorId: requiredValue(event.namedValues, BOOKING_FORM_LABELS.doctorId),
     serviceId: requiredValue(event.namedValues, BOOKING_FORM_LABELS.serviceId),
-    appointmentDate: requiredValue(event.namedValues, BOOKING_FORM_LABELS.appointmentDate),
-    appointmentTime: requiredValue(event.namedValues, BOOKING_FORM_LABELS.appointmentTime),
+    appointmentDate,
+    appointmentTime,
     depositAmount: Number(requiredValue(event.namedValues, BOOKING_FORM_LABELS.depositAmount).replace(/,/g, '')),
     channelId: event.namedValues[BOOKING_FORM_LABELS.channelId]?.[0]?.trim() || null,
     paymentEvidenceFileIds: driveFileIds(requiredValue(event.namedValues, BOOKING_FORM_LABELS.paymentEvidence)),

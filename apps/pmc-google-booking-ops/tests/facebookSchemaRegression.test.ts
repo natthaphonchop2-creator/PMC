@@ -5,7 +5,8 @@ import { BOOKING_MASTER_COLUMNS } from '../src/sheetSchema'
 
 describe('Facebook booking schema regression', () => {
   it('keeps Facebook name between customer name and normalized customer data', () => {
-    expect(BOOKING_MASTER_COLUMNS.slice(10, 13)).toEqual([
+    const customerIndex = BOOKING_MASTER_COLUMNS.indexOf('customerName')
+    expect(BOOKING_MASTER_COLUMNS.slice(customerIndex, customerIndex + 3)).toEqual([
       'customerName',
       'facebookName',
       'customerNameNormalized',
@@ -41,7 +42,7 @@ describe('Facebook booking schema regression', () => {
     const preFacebook = BOOKING_MASTER_COLUMNS.filter((column) => column !== 'facebookName')
     expect(bookingMasterMigrationPlan([...preFacebook])).toEqual({
       kind: 'INSERT_FACEBOOK_NAME_COLUMN',
-      afterColumn: 11,
+      afterColumn: BOOKING_MASTER_COLUMNS.indexOf('customerName') + 1,
       headers: ['facebookName'],
     })
   })

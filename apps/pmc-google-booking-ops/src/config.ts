@@ -18,6 +18,7 @@ export const SCRIPT_PROPERTY_KEYS = {
 export const BOOKING_FORM_LABELS = {
   closerName: 'Admin',
   aeName: 'AE',
+  queueType: 'รูปแบบคิวนัดหมาย',
   customerName: 'ชื่อลูกค้า',
   facebookName: 'ชื่อ Facebook',
   phone: 'เบอร์มือถือ',

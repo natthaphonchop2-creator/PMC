@@ -16,6 +16,8 @@ export type CommissionEligibility = 'NOT_ELIGIBLE' | 'PENDING_RULE' | 'ELIGIBLE'
 export type StepState = 'PENDING' | 'OK' | 'RETRY' | 'FAILED'
 export type CallResult = 'REBOOKED' | 'NO_ANSWER' | 'CALL_BACK_REQUESTED' | 'NOT_READY' | 'DECLINED' | 'WRONG_NUMBER'
 export type AdminIdentityStatus = 'SHARED_ACCOUNT' | 'VERIFIED_EMAIL' | 'SELECTED_ADMIN'
+export type QueueType = 'NORMAL' | 'AUTO'
+export type AppointmentStatus = 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT'
 
 export interface CallTask {
   taskId: string
@@ -32,6 +34,7 @@ export interface CallTask {
 }
 
 export interface BookingIntake {
+  queueType: QueueType
   formResponseId: string
   submittedAt: string
   submitterEmail: string
@@ -42,8 +45,8 @@ export interface BookingIntake {
   phone: string
   doctorId: string
   serviceId: string
-  appointmentDate: string
-  appointmentTime: string
+  appointmentDate: string | null
+  appointmentTime: string | null
   depositAmount: number
   channelId: string | null
   paymentEvidenceFileIds: string[]
@@ -61,6 +64,11 @@ export interface BookingCase {
   adminIdentityStatus: AdminIdentityStatus
   aeId: string | null
   aeName: string | null
+  queueType: QueueType
+  appointmentStatus: AppointmentStatus
+  appointmentProposedAt: string | null
+  appointmentConfirmedAt: string | null
+  appointmentConfirmedBy: string | null
   customerName: string
   customerNameNormalized: string
   facebookName: string

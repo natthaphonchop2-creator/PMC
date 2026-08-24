@@ -20,8 +20,16 @@ function validateEvidence(intake: BookingIntake): void {
 export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts): BookingCase {
   validateEvidence(intake)
   if (!Number.isFinite(intake.depositAmount) || intake.depositAmount <= 0) throw new Error('deposit amount must be positive')
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(intake.appointmentDate) || !/^\d{2}:\d{2}$/.test(intake.appointmentTime)) {
+  if (intake.queueType === 'NORMAL' && (
+    !intake.appointmentDate ||
+    !intake.appointmentTime ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(intake.appointmentDate) ||
+    !/^\d{2}:\d{2}$/.test(intake.appointmentTime)
+  )) {
     throw new Error('invalid appointment date or time')
+  }
+  if (!intake.appointmentDate || !intake.appointmentTime) {
+    throw new Error('automatic queue workflow is not available yet')
   }
 
   if (ports.repositories.bookings.findByFormResponseId(intake.formResponseId)) {
@@ -63,6 +71,11 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     adminIdentityStatus: 'SELECTED_ADMIN',
     aeId: ae?.id ?? null,
     aeName: ae?.name ?? NO_AE_OPTION,
+    queueType: intake.queueType,
+    appointmentStatus: 'CONFIRMED',
+    appointmentProposedAt: null,
+    appointmentConfirmedAt: intake.submittedAt,
+    appointmentConfirmedBy: intake.submitterEmail.trim().toLowerCase(),
     customerName: intake.customerName.trim(),
     customerNameNormalized,
     facebookName: intake.facebookName.trim(),

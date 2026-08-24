@@ -44,6 +44,11 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
     adminIdentityStatus: 'SHARED_ACCOUNT',
     aeId: 'staff-ae',
     aeName: 'เอม',
+    queueType: 'NORMAL',
+    appointmentStatus: 'CONFIRMED',
+    appointmentProposedAt: null,
+    appointmentConfirmedAt: null,
+    appointmentConfirmedBy: null,
     customerName: 'ลูกค้าทดสอบ',
     customerNameNormalized: 'ลูกค้าทดสอบ',
     facebookName: 'PMC Beauty',
@@ -527,6 +532,7 @@ export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarP
 
 export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingIntake {
   return {
+    queueType: 'NORMAL',
     formResponseId: 'response-1',
     submittedAt: '2026-08-20T09:00:00+07:00',
     submitterEmail: 'admin@example.com',
