@@ -27,11 +27,13 @@ function facebookSearchLink(facebookName: string): string {
 
 export function calendarEventInput(booking: BookingCase): CalendarEventInput {
   if (!booking.calendarId) throw new Error('doctor calendar is not configured')
+  const tentative = booking.appointmentStatus === 'TENTATIVE'
+  const summary = `${booking.doctorId} | ${booking.serviceId} | ${firstCustomerName(booking.customerName)}`
   return {
     calendarId: booking.calendarId,
     externalId: `${booking.caseId}:${booking.formResponseId}`,
-    colorId: '5',
-    summary: `${booking.doctorId} | ${booking.serviceId} | ${firstCustomerName(booking.customerName)}`,
+    colorId: tentative ? '8' : '5',
+    summary: tentative ? `รอยืนยัน | ${summary}` : summary,
     description: [
       `ลูกค้า: ${booking.customerName}`,
       `Facebook: ${facebookSearchLink(booking.facebookName)}`,
@@ -40,9 +42,15 @@ export function calendarEventInput(booking: BookingCase): CalendarEventInput {
       `มัดจำ: ${booking.depositAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })} บาท · ${depositStatusLabel(booking.depositStatus)}`,
       `Admin: ${booking.adminName}`,
       `AE: ${booking.aeName || 'ไม่ระบุ'}`,
+      ...(tentative ? ['สถานะนัด: รอยืนยัน'] : []),
     ].join('\n'),
     start: booking.appointmentStart,
     end: booking.appointmentEnd,
+    privateProperties: {
+      caseId: booking.caseId,
+      doctorId: booking.doctorId,
+      appointmentStatus: booking.appointmentStatus,
+    },
   }
 }
 
@@ -57,11 +65,16 @@ interface AdvancedCalendarEvent {
   end?: { dateTime?: string }
 }
 
+interface AdvancedCalendarList {
+  items?: AdvancedCalendarEvent[]
+  nextPageToken?: string
+}
+
 interface AdvancedCalendarService {
   Events: {
     insert(resource: Record<string, unknown>, calendarId: string): AdvancedCalendarEvent
     update(resource: Record<string, unknown>, calendarId: string, eventId: string): AdvancedCalendarEvent
-    list(calendarId: string, options: Record<string, unknown>): { items?: AdvancedCalendarEvent[] }
+    list(calendarId: string, options: Record<string, unknown>): AdvancedCalendarList
   }
 }
 
@@ -77,7 +90,7 @@ function resource(input: CalendarEventInput): Record<string, unknown> {
     description: input.description,
     start: { dateTime: input.start, timeZone: 'Asia/Bangkok' },
     end: { dateTime: input.end, timeZone: 'Asia/Bangkok' },
-    extendedProperties: { private: { caseId: input.externalId } },
+    extendedProperties: { private: input.privateProperties },
   }
 }
 
@@ -102,14 +115,44 @@ export function createGoogleCalendarPort(): CalendarPort {
       }).items
       return isCalendarAtCapacity(items ?? [], excludeEventId)
     },
+    listEvents(calendarId, start, end) {
+      const events: AdvancedCalendarEvent[] = []
+      let pageToken: string | undefined
+      do {
+        const page = service().Events.list(calendarId, {
+          timeMin: start,
+          timeMax: end,
+          singleEvents: true,
+          showDeleted: false,
+          ...(pageToken ? { pageToken } : {}),
+        })
+        events.push(...(page.items ?? []))
+        pageToken = page.nextPageToken
+      } while (pageToken)
+      return events.flatMap((event) =>
+        event.start?.dateTime && event.end?.dateTime
+          ? [{ start: event.start.dateTime, end: event.end.dateTime }]
+          : [],
+      )
+    },
     createEvent(input) {
       const created = service().Events.insert(resource(input), input.calendarId)
       if (!created.id) throw new Error('Calendar event ID missing')
       return created.id
     },
     updateEvent(eventId, input) {
-      const updated = service().Events.update(resource(input), input.calendarId, eventId)
-      if (!updated.id) throw new Error('Calendar update did not return an event ID')
+      try {
+        const updated = service().Events.update(resource(input), input.calendarId, eventId)
+        if (!updated.id) throw new Error('Calendar update did not return an event ID')
+        return 'UPDATED'
+      } catch (error) {
+        const details = error && typeof error === 'object'
+          ? (error as { details?: { code?: unknown }; code?: unknown })
+          : null
+        const code = Number(details?.details?.code ?? details?.code)
+        if (code === 404) return 'NOT_FOUND'
+        throw error
+      }
     },
   }
 }

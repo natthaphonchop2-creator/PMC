@@ -1,4 +1,5 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
+import type { CalendarInterval } from './domain/automaticQueue'
 
 export interface Clock {
   nowIso(): string
@@ -166,12 +167,14 @@ export interface CalendarEventInput {
   description: string
   start: string
   end: string
+  privateProperties: Record<string, string>
 }
 
 export interface CalendarPort {
   hasConflict(calendarId: string, start: string, end: string, excludeEventId?: string | null): boolean
+  listEvents(calendarId: string, start: string, end: string): CalendarInterval[]
   createEvent(input: CalendarEventInput): string
-  updateEvent(eventId: string, input: CalendarEventInput): void
+  updateEvent(eventId: string, input: CalendarEventInput): 'UPDATED' | 'NOT_FOUND'
 }
 export interface LineMessage {
   to: string

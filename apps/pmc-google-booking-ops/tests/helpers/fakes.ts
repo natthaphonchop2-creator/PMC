@@ -12,6 +12,7 @@ import type {
   LinePort,
 } from '../../src/ports'
 import type { BookingIngressPayload } from '../../src/adapters/lineMessaging'
+import type { CalendarInterval } from '../../src/domain/automaticQueue'
 import { createBookingRepositories, type SheetRow, type SheetStore } from '../../src/repositories'
 
 class MemorySheetStore implements SheetStore {
@@ -146,6 +147,8 @@ export interface TestPortOptions {
   lineFailsAtPush?: number
   mediaSigningFailsOnce?: boolean
   extraDriveFileIds?: string[]
+  calendarEvents?: CalendarInterval[]
+  calendarUpdateResult?: 'UPDATED' | 'NOT_FOUND'
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
@@ -532,6 +535,7 @@ export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarP
   let createFails = options.calendarCreateFails ?? false
   return {
     hasConflict: () => options.calendarConflicts ?? false,
+    listEvents: () => structuredClone(options.calendarEvents ?? []),
     createEvent(input) {
       if (createFails) throw new Error('Calendar create failed')
       created.push(structuredClone(input))
@@ -539,6 +543,7 @@ export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarP
     },
     updateEvent(eventId, input) {
       updated.push({ eventId, input: structuredClone(input) })
+      return options.calendarUpdateResult ?? 'UPDATED'
     },
     createdEvents: () => structuredClone(created),
     updatedEvents: () => structuredClone(updated),
