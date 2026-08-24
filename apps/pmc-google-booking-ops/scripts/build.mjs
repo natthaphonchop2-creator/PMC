@@ -29,6 +29,7 @@ function sendPmcBookingFlexPilot() { return PmcBooking.sendPmcBookingFlexPilot()
 function sendPmcCallReminderFlexPilot() { return PmcBooking.sendPmcCallReminderFlexPilot(); }
 function configurePmcCompactFormIdentityFields() { return PmcBooking.configurePmcCompactFormIdentityFields(); }
 function configurePmcFacebookNameField() { return PmcBooking.configurePmcFacebookNameField(); }
+function configurePmcQueueModeForms() { return PmcBooking.configurePmcQueueModeForms(); }
 function pauseAndCutoverPmcBookingForm() { return PmcBooking.pauseAndCutoverPmcBookingForm(); }
 function resumePmcBookingFormAfterAeCutover() { return PmcBooking.resumePmcBookingFormAfterAeCutover(); }
 function configurePmcSharedDoctorCalendar() { return PmcBooking.configurePmcSharedDoctorCalendar(); }

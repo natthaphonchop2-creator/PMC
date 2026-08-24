@@ -9,6 +9,7 @@ import {
   QUEUE_CONFIRM_ACTIONS,
   type QueueConfirmationFormEventInput,
 } from '../domain/queueConfirmation'
+import { queueFormPlan } from '../domain/queueFormPlan'
 
 const CLOSER_FORM_TITLES: string[] = [
   BOOKING_FORM_LABELS.closerName,
@@ -375,6 +376,61 @@ export function createGoogleFormsPort(
       const timeItem = timeItems[0]?.asTimeItem() ?? form.addTimeItem().setTitle('เวลายืนยัน')
       timeItem.setRequired(true)
       return { confirmationFormReady: true }
+    },
+    configureQueueModeForm() {
+      const form = FormApp.openById(bookingFormId)
+      const plan = queueFormPlan(form.getItems().map((item) => item.getTitle()))
+      const queueCandidates = form
+        .getItems()
+        .filter((item) => item.getTitle() === plan.queueQuestionTitle)
+      if (queueCandidates.length > 1) throw new Error('duplicate queue type question')
+      if (queueCandidates[0] && queueCandidates[0].getType() !== FormApp.ItemType.MULTIPLE_CHOICE) {
+        throw new Error('queue type question must be Multiple choice')
+      }
+      const queueItem = queueCandidates[0]?.asMultipleChoiceItem() ??
+        form.addMultipleChoiceItem().setTitle(plan.queueQuestionTitle)
+
+      const pageBreak = (title: string) => {
+        const matches = form
+          .getItems(FormApp.ItemType.PAGE_BREAK)
+          .filter((item) => item.getTitle() === title)
+        if (matches.length > 1) throw new Error(`duplicate Form section: ${title}`)
+        return matches[0]?.asPageBreakItem() ?? form.addPageBreakItem().setTitle(title)
+      }
+      const normalSection = pageBreak(plan.normalSectionTitle)
+      const sharedSection = pageBreak(plan.sharedSectionTitle)
+      const uniqueItem = (title: string) => {
+        const matches = form.getItems().filter((item) => item.getTitle() === title)
+        if (matches.length !== 1) throw new Error(`expected one Form field: ${title}`)
+        return matches[0]
+      }
+      const serviceItem = uniqueItem(plan.insertAfterTitle)
+      const dateItem = uniqueItem(plan.normalFields[0])
+      const timeItem = uniqueItem(plan.normalFields[1])
+      const serviceIndex = form.getItems().findIndex((item) => item.getId() === serviceItem.getId())
+      for (const [offset, item] of [
+        queueItem,
+        normalSection,
+        dateItem,
+        timeItem,
+        sharedSection,
+      ].entries()) {
+        const currentIndex = form.getItems().findIndex(
+          (candidate) => candidate.getId() === item.getId(),
+        )
+        if (currentIndex === -1) throw new Error('queue Form item disappeared during reorder')
+        form.moveItem(currentIndex, serviceIndex + 1 + offset)
+      }
+      queueItem
+        .setTitle(plan.queueQuestionTitle)
+        .setHelpText('คิวปกติ: ลูกค้าเลือกวันแล้ว · คิวอัตโนมัติ: ระบบเสนอวันชั่วคราว')
+        .setRequired(true)
+        .setChoices([
+          queueItem.createChoice('คิวปกติ', normalSection),
+          queueItem.createChoice('คิวอัตโนมัติ', sharedSection),
+        ])
+      normalSection.setGoToPage(sharedSection)
+      return { queueQuestionReady: true }
     },
   }
 }

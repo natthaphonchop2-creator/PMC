@@ -988,6 +988,21 @@ export function configureCompactBookingIdentityFieldsWorkflow(): {
   }
 }
 
+export function configureQueueModeFormsWorkflow(): {
+  queueQuestionReady: true
+  confirmationFormReady: true
+  createdTrigger: boolean
+} {
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  const confirmationFormId = properties[SCRIPT_PROPERTY_KEYS.queueConfirmationFormId]?.trim()
+  if (!confirmationFormId) throw new Error('queue confirmation Form is not configured')
+  const runtime = createRuntime()
+  const queue = runtime.forms.configureQueueModeForm()
+  const confirmation = runtime.forms.ensureQueueConfirmationForm()
+  const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
+  return { ...queue, ...confirmation, createdTrigger }
+}
+
 export function configureFacebookNameFieldWorkflow(): {
   backupCreated: true
   formField: typeof BOOKING_FORM_LABELS.facebookName

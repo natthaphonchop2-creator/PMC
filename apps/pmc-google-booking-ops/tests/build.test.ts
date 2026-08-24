@@ -27,6 +27,7 @@ describe('Apps Script bundle', () => {
       'sendPmcCallReminderFlexPilot',
       'configurePmcCompactFormIdentityFields',
       'configurePmcFacebookNameField',
+      'configurePmcQueueModeForms',
       'runPmcBookingRetries',
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',

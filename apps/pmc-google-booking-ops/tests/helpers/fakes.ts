@@ -323,6 +323,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       queueConfirmationUrl: ({ caseId, action, appointmentDate, appointmentTime }) =>
         `https://forms.test/queue?case=${caseId}&action=${action}&date=${appointmentDate ?? ''}&time=${appointmentTime ?? ''}`,
       ensureQueueConfirmationForm: () => ({ confirmationFormReady: true }),
+      configureQueueModeForm: () => ({ queueQuestionReady: true }),
     },
     files: createFakeFiles(options.jeraPhone ?? '0812345678'),
     secrets: {

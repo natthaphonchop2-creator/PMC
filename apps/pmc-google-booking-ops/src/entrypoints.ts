@@ -15,6 +15,7 @@ import {
   configureStaffProfileImagesWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
   configureFacebookNameFieldWorkflow,
+  configureQueueModeFormsWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
@@ -101,6 +102,10 @@ export function configurePmcCompactFormIdentityFields() {
 
 export function configurePmcFacebookNameField() {
   return configureFacebookNameFieldWorkflow()
+}
+
+export function configurePmcQueueModeForms() {
+  return configureQueueModeFormsWorkflow()
 }
 
 export function pauseAndCutoverPmcBookingForm() {

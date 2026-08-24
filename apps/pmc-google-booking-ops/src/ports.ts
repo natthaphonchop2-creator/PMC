@@ -234,6 +234,7 @@ export interface FormsPort {
     appointmentTime?: string
   }): string
   ensureQueueConfirmationForm(): { confirmationFormReady: true }
+  configureQueueModeForm(): { queueQuestionReady: true }
 }
 export interface FilePort {
   readText(fileId: string, encoding: 'Windows-874'): string
