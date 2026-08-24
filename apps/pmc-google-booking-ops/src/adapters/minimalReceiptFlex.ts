@@ -1,5 +1,5 @@
 import type { BookingCase } from '../domain/types'
-import type { BookingEvidenceImages, EvidenceImageRef } from '../ports'
+import type { BookingEvidenceImages } from '../ports'
 
 const TEXT = '#282624'
 const SECONDARY = '#77716D'
@@ -143,48 +143,6 @@ function header(
   }
 }
 
-function evidenceTile(
-  image: EvidenceImageRef,
-  label: string,
-  aspectMode: 'fit' | 'cover',
-): FlexComponent {
-  return {
-    type: 'box',
-    layout: 'vertical',
-    flex: 1,
-    contents: [
-      {
-        type: 'box',
-        layout: 'vertical',
-        cornerRadius: 'md',
-        backgroundColor: '#F6F5F3',
-        contents: [
-          {
-            type: 'image',
-            url: image.previewUrl,
-            size: 'full',
-            aspectRatio: '1:1',
-            aspectMode,
-            backgroundColor: '#F6F5F3',
-            action: { type: 'uri', label: 'เปิดรูปขนาดเต็ม', uri: image.fullUrl },
-          },
-        ],
-      },
-      { type: 'text', text: label, size: 'xxs', color: SECONDARY, align: 'center', margin: 'xs' },
-    ],
-  }
-}
-
-function evidenceStrip(evidence: BookingEvidenceImages): FlexComponent {
-  const slots: FlexComponent[] = []
-  if (evidence.payments[0]) slots.push(evidenceTile(evidence.payments[0], 'สลิป', 'fit'))
-  for (const [index, image] of evidence.chats.slice(0, 3).entries()) {
-    slots.push(evidenceTile(image, `แชท ${index + 1}`, 'cover'))
-  }
-  while (slots.length < 4) slots.push({ type: 'filler', flex: 1 })
-  return { type: 'box', layout: 'horizontal', spacing: 'sm', margin: 'md', contents: slots }
-}
-
 function bubble(
   title: string,
   booking: BookingCase,
@@ -296,7 +254,8 @@ export function buildAdminMinimalReceipt(
   brandLogoUrl: string,
   profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent {
-  const hasEvidence = Boolean(evidence.payments.length || evidence.chats.length)
+  const hasEvidence = Boolean(evidence.totalPaymentCount || evidence.totalChatCount)
+  const evidenceReady = Boolean(evidence.payments.length || evidence.chats.length)
   return bubble('จองเคสใหม่', booking, brandLogoUrl, [
     ...customerSection(booking),
     separator(),
@@ -310,13 +269,15 @@ export function buildAdminMinimalReceipt(
     sectionTitle('หลักฐาน'),
     ...(hasEvidence
       ? [
-          evidenceStrip(evidence),
+          keyValueRow('สลิป', `${evidence.totalPaymentCount} รูป`),
+          keyValueRow('แชท', `${evidence.totalChatCount} รูป`),
           {
             type: 'text',
-            text: 'แตะรูปเพื่อเปิดภาพขนาดเต็ม',
+            text: evidenceReady
+              ? 'รูปทั้งหมดแสดงในข้อความถัดไป'
+              : 'รูปหลักฐานกำลังเตรียมแสดง',
             size: 'xxs',
             color: SECONDARY,
-            align: 'center',
             margin: 'sm',
           },
         ]

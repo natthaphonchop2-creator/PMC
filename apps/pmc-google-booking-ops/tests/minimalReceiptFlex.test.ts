@@ -160,38 +160,15 @@ describe('Minimal Receipt Flex', () => {
     expect(json).not.toContain('staff-profiles')
   })
 
-  it('uses fixed square evidence slots with payment fit and chat cover', () => {
-    const payload = buildAdminMinimalReceipt(bookingFixture(), evidence, logoUrl)
-    const json = JSON.stringify(payload)
-    expect(json).toContain('"aspectRatio":"1:1"')
-    expect(json).toContain('"aspectMode":"fit"')
-    expect(json).toContain('"aspectMode":"cover"')
-    expect((json.match(/"type":"filler"/g) ?? [])).toHaveLength(2)
-
-    const roundedFrames: Array<Record<string, unknown>> = []
-    const visit = (value: unknown): void => {
-      if (Array.isArray(value)) {
-        value.forEach(visit)
-        return
-      }
-      if (!value || typeof value !== 'object') return
-      const component = value as Record<string, unknown>
-      if (component.type === 'box' && component.cornerRadius === 'md') roundedFrames.push(component)
-      Object.values(component).forEach(visit)
-    }
-    visit(payload)
-
-    expect(roundedFrames).toHaveLength(2)
-    for (const frame of roundedFrames) {
-      expect(frame).toMatchObject({
-        type: 'box',
-        layout: 'vertical',
-        cornerRadius: 'md',
-        backgroundColor: '#F6F5F3',
-      })
-      expect(JSON.stringify(frame)).toContain('"type":"image"')
-      expect(JSON.stringify(frame)).toContain('"label":"เปิดรูปขนาดเต็ม"')
-    }
+  it('shows evidence counts without duplicating partial thumbnails', () => {
+    const json = JSON.stringify(buildAdminMinimalReceipt(bookingFixture(), evidence, logoUrl))
+    expect(json).toContain('สลิป')
+    expect(json).toContain('1 รูป')
+    expect(json).toContain('แชท')
+    expect(json).toContain('5 รูป')
+    expect(json).toContain('รูปทั้งหมดแสดงในข้อความถัดไป')
+    expect(json).not.toContain('https://media/pay-preview')
+    expect(json).not.toContain('https://media/chat-preview')
   })
 
   it('keeps doctor payload evidence, deposit, and channel free', () => {
