@@ -23,6 +23,8 @@ function pollJeraIncoming() { return PmcBooking.pollJeraIncoming(); }
 function runIntegrityChecks() { return PmcBooking.runIntegrityChecks(); }
 function setupPmcBookingSystem() { return PmcBooking.setupPmcBookingSystem(); }
 function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigration(); }
+function preparePmcAutoQueueMigration() { return PmcBooking.preparePmcAutoQueueMigration(); }
+function applyPmcAutoQueueMigration() { return PmcBooking.applyPmcAutoQueueMigration(); }
 function configurePmcStaffProfileImages() { return PmcBooking.configurePmcStaffProfileImages(); }
 function validatePmcBookingFlexMessages() { return PmcBooking.validatePmcBookingFlexMessages(); }
 function sendPmcBookingFlexPilot() { return PmcBooking.sendPmcBookingFlexPilot(); }

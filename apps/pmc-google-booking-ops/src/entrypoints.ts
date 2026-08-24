@@ -16,6 +16,8 @@ import {
   configureCompactBookingIdentityFieldsWorkflow,
   configureFacebookNameFieldWorkflow,
   configureQueueModeFormsWorkflow,
+  prepareAutoQueueMigrationWorkflow,
+  applyAutoQueueMigrationWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
@@ -78,6 +80,14 @@ export function setupPmcBookingSystem() {
 
 export function preparePmcStaffAeMigration() {
   return prepareStaffAeMigrationWorkflow()
+}
+
+export function preparePmcAutoQueueMigration() {
+  return prepareAutoQueueMigrationWorkflow()
+}
+
+export function applyPmcAutoQueueMigration() {
+  return applyAutoQueueMigrationWorkflow()
 }
 
 export function configurePmcStaffProfileImages() {

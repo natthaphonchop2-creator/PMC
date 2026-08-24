@@ -39,6 +39,7 @@ import {
 } from './domain/staffDirectory'
 import { staffProfileUrlPlan } from './domain/staffProfileConfig'
 import { repairShiftedFacebookBookingRow } from './domain/facebookRowRepair'
+import { migrateAppointmentRows } from './domain/appointmentMigration'
 import {
   addCalendarMonths,
   addMinutesInBangkok,
@@ -49,7 +50,7 @@ import { BOOKING_MASTER_COLUMNS, STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
-import { createBookingRepositories, type SheetStore } from './repositories'
+import { createBookingRepositories, type SheetRow, type SheetStore } from './repositories'
 import {
   createInitialCallTask,
   runDailyCallReminders,
@@ -944,6 +945,8 @@ export function validateProductionFlexMessagesWorkflow(): {
   adminHasEvidence: true
   doctorHasEvidence: false
   callReminderReady: true
+  automaticQueueReady: true
+  validationRequests: 2
 } {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
@@ -952,22 +955,28 @@ export function validateProductionFlexMessagesWorkflow(): {
   if (!logoUrl.endsWith(logoSuffix)) throw new Error('brand logo URL has an unexpected path')
   const baseUrl = logoUrl.slice(0, -logoSuffix.length)
   const messages = buildProductionFlexValidationMessages(logoUrl, baseUrl)
-  const response = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/validate/push', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: {
-      Authorization: `Bearer ${properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]}`,
-    },
-    payload: JSON.stringify({ messages }),
-    muteHttpExceptions: true,
-  })
-  const status = response.getResponseCode()
-  if (status !== 200) {
-    const propertyPaths = lineValidationPropertyPaths(response.getContentText())
-    throw new Error(
-      `LINE Flex validation failed with status ${status}` +
-      (propertyPaths.length ? ` at ${propertyPaths.join(',')}` : ''),
-    )
+  const chunks = Array.from(
+    { length: Math.ceil(messages.length / 5) },
+    (_, index) => messages.slice(index * 5, index * 5 + 5),
+  )
+  for (const [index, chunk] of chunks.entries()) {
+    const response = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/validate/push', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: {
+        Authorization: `Bearer ${properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]}`,
+      },
+      payload: JSON.stringify({ messages: chunk }),
+      muteHttpExceptions: true,
+    })
+    const status = response.getResponseCode()
+    if (status !== 200) {
+      const propertyPaths = lineValidationPropertyPaths(response.getContentText())
+      throw new Error(
+        `LINE Flex validation batch ${index + 1} failed with status ${status}` +
+        (propertyPaths.length ? ` at ${propertyPaths.join(',')}` : ''),
+      )
+    }
   }
   return {
     validatorStatus: 200,
@@ -977,6 +986,8 @@ export function validateProductionFlexMessagesWorkflow(): {
     adminHasEvidence: true,
     doctorHasEvidence: false,
     callReminderReady: true,
+    automaticQueueReady: true,
+    validationRequests: 2,
   }
 }
 
@@ -1031,6 +1042,105 @@ export function configureQueueModeFormsWorkflow(): {
   const confirmation = runtime.forms.ensureQueueConfirmationForm()
   const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
   return { ...queue, ...confirmation, createdTrigger }
+}
+
+export function prepareAutoQueueMigrationWorkflow(): {
+  bookingRows: number
+  rowsNeedingBackfill: number
+  queueConfirmationFormReady: boolean
+  triggerWouldBeCreated: boolean
+  liveWrites: false
+} {
+  const properties = PropertiesService.getScriptProperties().getProperties()
+  const spreadsheetId = properties[SCRIPT_PROPERTY_KEYS.spreadsheetId]?.trim()
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  const sheet = spreadsheet.getSheetByName('BOOKING_MASTER')
+  if (!sheet) throw new Error('missing required sheet: BOOKING_MASTER')
+  const bookingRows = Math.max(sheet.getLastRow() - 1, 0)
+  const headers = sheet.getLastColumn()
+    ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
+    : []
+  const queueIndex = headers.indexOf('queueType')
+  const appointmentIndex = headers.indexOf('appointmentStatus')
+  let rowsNeedingBackfill = bookingRows
+  if (bookingRows && queueIndex >= 0 && appointmentIndex >= 0) {
+    const values = sheet
+      .getRange(2, 1, bookingRows, headers.length)
+      .getDisplayValues()
+    rowsNeedingBackfill = values.filter((row) =>
+      !row[queueIndex]?.trim() || !row[appointmentIndex]?.trim(),
+    ).length
+  } else if (!bookingRows) {
+    rowsNeedingBackfill = 0
+  }
+  const queueConfirmationFormReady = Boolean(
+    properties[SCRIPT_PROPERTY_KEYS.queueConfirmationFormId]?.trim(),
+  )
+  const triggerWouldBeCreated = !ScriptApp.getProjectTriggers().some(
+    (trigger) => trigger.getHandlerFunction() === 'onQueueConfirmationSubmit',
+  )
+  return {
+    bookingRows,
+    rowsNeedingBackfill,
+    queueConfirmationFormReady,
+    triggerWouldBeCreated,
+    liveWrites: false,
+  }
+}
+
+export function applyAutoQueueMigrationWorkflow(): {
+  backupCreated: true
+  migratedRows: number
+  preservedReferences: true
+} {
+  const scriptProperties = PropertiesService.getScriptProperties()
+  const properties = scriptProperties.getProperties()
+  if (properties[SCRIPT_PROPERTY_KEYS.autoQueueMigrationApproval] !== 'true') {
+    throw new Error('auto queue migration approval marker is missing')
+  }
+  scriptProperties.deleteProperty(SCRIPT_PROPERTY_KEYS.autoQueueMigrationApproval)
+  const spreadsheetId = properties[SCRIPT_PROPERTY_KEYS.spreadsheetId]
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  const backupFolderId = properties[SCRIPT_PROPERTY_KEYS.backupFolderId]
+  if (!backupFolderId) throw new Error('PMC_BACKUP_FOLDER_ID is not configured')
+  const timestamp = Utilities.formatDate(
+    new Date(),
+    'Asia/Bangkok',
+    'yyyy-MM-dd_HH-mm-ss',
+  )
+  DriveApp.getFileById(spreadsheetId).makeCopy(
+    `PMC Booking Pre-Auto-Queue ${timestamp}`,
+    DriveApp.getFolderById(backupFolderId),
+  )
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  migrateBookingMasterStaffColumns(spreadsheet)
+  ensureSheetTopology(spreadsheet)
+  const store = createGoogleSheetStore(spreadsheet)
+  const before = store.read('BOOKING_MASTER')
+  const references = before.map((row) => ({
+    caseId: String(row.caseId ?? ''),
+    calendarEventId: String(row.calendarEventId ?? ''),
+    driveFolderId: String(row.driveFolderId ?? ''),
+  }))
+  store.replace('BOOKING_MASTER', migrateAppointmentRows(before) as unknown as SheetRow[])
+  const after = store.read('BOOKING_MASTER')
+  const readbackReferences = after.map((row) => ({
+    caseId: String(row.caseId ?? ''),
+    calendarEventId: String(row.calendarEventId ?? ''),
+    driveFolderId: String(row.driveFolderId ?? ''),
+  }))
+  if (JSON.stringify(readbackReferences) !== JSON.stringify(references)) {
+    throw new Error('auto queue migration reference readback mismatch')
+  }
+  if (after.some((row) => !row.queueType || !row.appointmentStatus)) {
+    throw new Error('auto queue migration state readback mismatch')
+  }
+  return {
+    backupCreated: true,
+    migratedRows: after.length,
+    preservedReferences: true,
+  }
 }
 
 export function configureFacebookNameFieldWorkflow(): {

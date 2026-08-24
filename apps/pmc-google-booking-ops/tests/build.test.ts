@@ -21,6 +21,8 @@ describe('Apps Script bundle', () => {
       'runIntegrityChecks',
       'setupPmcBookingSystem',
       'preparePmcStaffAeMigration',
+      'preparePmcAutoQueueMigration',
+      'applyPmcAutoQueueMigration',
       'configurePmcStaffProfileImages',
       'validatePmcBookingFlexMessages',
       'sendPmcBookingFlexPilot',

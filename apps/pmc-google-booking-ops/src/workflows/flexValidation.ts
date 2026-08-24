@@ -1,5 +1,11 @@
-import { buildAdminMinimalReceipt, buildDoctorMinimalReceipt } from '../adapters/minimalReceiptFlex'
+import {
+  buildAdminAwaitingSlotReceipt,
+  buildAdminMinimalReceipt,
+  buildAdminTentativeReceipt,
+  buildDoctorMinimalReceipt,
+} from '../adapters/minimalReceiptFlex'
 import { buildCallReminderFlex, callReminderTiming } from '../adapters/callReminderFlex'
+import { buildEvidenceFlexMessages } from '../adapters/evidenceCarouselFlex'
 import { staffProfileUrlPlan } from '../domain/staffProfileConfig'
 import type { BookingCase, CallTask } from '../domain/types'
 
@@ -115,23 +121,40 @@ export function buildProductionFlexValidationMessages(
       callResultUrl: `https://docs.google.com/forms/d/e/validation/viewform?case=${caseId}`,
     }
   })
+  const validationEvidence = {
+    payments: [{
+      previewUrl: `${baseUrl}/assets/pmc-flex-logo-v1.png`,
+      fullUrl: `${baseUrl}/assets/pmc-flex-logo-v1.png`,
+    }],
+    chats: Array.from({ length: 9 }, (_, index) => ({
+      previewUrl: `${baseUrl}/assets/staff-profiles/cat.jpg?chat=${index + 1}`,
+      fullUrl: `${baseUrl}/assets/staff-profiles/cat.jpg?chat=${index + 1}`,
+    })),
+    totalPaymentCount: 1,
+    totalChatCount: 9,
+  }
+  const tentativeBooking = {
+    ...booking,
+    queueType: 'AUTO',
+    appointmentStatus: 'TENTATIVE',
+    appointmentProposedAt: '2026-08-21T09:00:00+07:00',
+    appointmentConfirmedAt: null,
+    appointmentConfirmedBy: null,
+  } satisfies BookingCase
+  const awaitingBooking = {
+    ...tentativeBooking,
+    appointmentStatus: 'AWAITING_ADMIN_SLOT',
+    appointmentStart: null,
+    appointmentEnd: null,
+    appointmentProposedAt: null,
+    firstCallWindowStart: null,
+    firstCallWindowEnd: null,
+    nextCallAt: null,
+  } satisfies BookingCase
   return [
     buildAdminMinimalReceipt(
       booking,
-      {
-        payments: [{
-          previewUrl: `${baseUrl}/assets/pmc-flex-logo-v1.png`,
-          fullUrl: `${baseUrl}/assets/pmc-flex-logo-v1.png`,
-        }],
-        chats: [
-          {
-            previewUrl: `${baseUrl}/assets/staff-profiles/cat.jpg`,
-            fullUrl: `${baseUrl}/assets/staff-profiles/cat.jpg`,
-          },
-        ],
-        totalPaymentCount: 1,
-        totalChatCount: 1,
-      },
+      validationEvidence,
       brandLogoUrl,
       teamProfiles,
     ),
@@ -146,5 +169,21 @@ export function buildProductionFlexValidationMessages(
       2,
       'https://docs.google.com/spreadsheets/d/validation/edit#gid=1',
     ),
+    buildAdminTentativeReceipt(
+      tentativeBooking,
+      validationEvidence,
+      'https://docs.google.com/forms/d/e/validation/viewform?action=confirm',
+      'https://docs.google.com/forms/d/e/validation/viewform?action=change',
+      brandLogoUrl,
+      teamProfiles,
+    ),
+    buildAdminAwaitingSlotReceipt(
+      awaitingBooking,
+      validationEvidence,
+      'https://docs.google.com/forms/d/e/validation/viewform?action=change',
+      brandLogoUrl,
+      teamProfiles,
+    ),
+    ...buildEvidenceFlexMessages(validationEvidence),
   ]
 }

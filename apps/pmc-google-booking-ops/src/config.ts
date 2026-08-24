@@ -14,6 +14,7 @@ export const SCRIPT_PROPERTY_KEYS = {
   mediaSigningSecret: 'BOOKING_MEDIA_SIGNING_SECRET',
   brandLogoUrl: 'BOOKING_BRAND_LOGO_URL',
   sharedAccountEmail: 'PMC_SHARED_ACCOUNT_EMAIL',
+  autoQueueMigrationApproval: 'PMC_AUTO_QUEUE_MIGRATION_APPROVED',
 } as const
 
 export const BOOKING_FORM_LABELS = {
