@@ -18,6 +18,26 @@ const crypto = {
 }
 
 describe('Apps Script evidence media signer', () => {
+  it('returns every slip and chat reference in source order', () => {
+    const port = createEvidenceMediaPort(
+      'https://example.com/api/booking-evidence/image',
+      'unit-test-secret',
+      crypto,
+    )
+    const images = port.images(
+      'PMC-202608-0001',
+      ['pay-1aaaaa', 'pay-2bbbbb', 'pay-3ccccc'],
+      ['chat-1aaaa', 'chat-2bbbb', 'chat-3cccc', 'chat-4dddd', 'chat-5eeee', 'chat-6ffff'],
+    )
+
+    expect(images.payments).toHaveLength(3)
+    expect(images.chats).toHaveLength(6)
+    expect(images.totalPaymentCount).toBe(3)
+    expect(images.totalChatCount).toBe(6)
+    expect(images.payments[2].previewUrl).toContain('?t=')
+    expect(images.chats[5].fullUrl).toContain('?t=')
+  })
+
   it('matches the Node fixed token vector', () => {
     expect(
       evidenceToken(
@@ -37,7 +57,7 @@ describe('Apps Script evidence media signer', () => {
     )
   })
 
-  it('selects one payment and at most three chat files with deterministic variants', () => {
+  it('creates deterministic variants for every selected file', () => {
     const port = createEvidenceMediaPort(
       'https://example.com/api/booking-evidence/image',
       'unit-test-secret',
@@ -50,11 +70,12 @@ describe('Apps Script evidence media signer', () => {
       'chat-444444',
     ])
 
-    expect(images.payment?.previewUrl).toContain('?t=')
-    expect(images.payment?.previewUrl).not.toBe(images.payment?.fullUrl)
-    expect(images.chats).toHaveLength(3)
+    expect(images.payments[0]?.previewUrl).toContain('?t=')
+    expect(images.payments[0]?.previewUrl).not.toBe(images.payments[0]?.fullUrl)
+    expect(images.chats).toHaveLength(4)
+    expect(images.totalPaymentCount).toBe(1)
     expect(images.totalChatCount).toBe(4)
-    expect(port.images('PMC-202608-0001', ['pay-123456'], []).payment).toEqual(images.payment)
+    expect(port.images('PMC-202608-0001', ['pay-123456'], []).payments).toEqual(images.payments)
   })
 
   it('returns a no-image shape for empty evidence arrays', () => {
@@ -64,8 +85,9 @@ describe('Apps Script evidence media signer', () => {
       crypto,
     )
     expect(port.images('PMC-202608-0001', [], [])).toEqual({
-      payment: null,
+      payments: [],
       chats: [],
+      totalPaymentCount: 0,
       totalChatCount: 0,
     })
   })

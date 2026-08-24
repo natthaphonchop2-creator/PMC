@@ -216,8 +216,9 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
   } catch (error) {
     mediaSafeError = error instanceof Error ? error.message : 'Evidence media signing failed'
     evidence = {
-      payment: null,
+      payments: [],
       chats: [],
+      totalPaymentCount: intake.paymentEvidenceFileIds.length,
       totalChatCount: intake.chatEvidenceFileIds.length,
     }
   }

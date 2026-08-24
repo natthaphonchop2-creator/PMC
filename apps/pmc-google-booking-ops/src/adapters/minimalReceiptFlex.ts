@@ -177,7 +177,7 @@ function evidenceTile(
 
 function evidenceStrip(evidence: BookingEvidenceImages): FlexComponent {
   const slots: FlexComponent[] = []
-  if (evidence.payment) slots.push(evidenceTile(evidence.payment, 'สลิป', 'fit'))
+  if (evidence.payments[0]) slots.push(evidenceTile(evidence.payments[0], 'สลิป', 'fit'))
   for (const [index, image] of evidence.chats.slice(0, 3).entries()) {
     slots.push(evidenceTile(image, `แชท ${index + 1}`, 'cover'))
   }
@@ -296,7 +296,7 @@ export function buildAdminMinimalReceipt(
   brandLogoUrl: string,
   profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent {
-  const hasEvidence = Boolean(evidence.payment || evidence.chats.length)
+  const hasEvidence = Boolean(evidence.payments.length || evidence.chats.length)
   return bubble('จองเคสใหม่', booking, brandLogoUrl, [
     ...customerSection(booking),
     separator(),

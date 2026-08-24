@@ -71,14 +71,13 @@ export function createEvidenceMediaPort(
   return {
     images(caseId, paymentFileIds, chatFileIds): BookingEvidenceImages {
       return {
-        payment: paymentFileIds[0]
-          ? imageRef(baseUrl, caseId, paymentFileIds[0], 'PAYMENT', 1, secret, crypto)
-          : null,
-        chats: chatFileIds
-          .slice(0, 3)
-          .map((fileId, index) =>
-            imageRef(baseUrl, caseId, fileId, 'CHAT', index + 1, secret, crypto),
-          ),
+        payments: paymentFileIds.map((fileId, index) =>
+          imageRef(baseUrl, caseId, fileId, 'PAYMENT', index + 1, secret, crypto),
+        ),
+        chats: chatFileIds.map((fileId, index) =>
+          imageRef(baseUrl, caseId, fileId, 'CHAT', index + 1, secret, crypto),
+        ),
+        totalPaymentCount: paymentFileIds.length,
         totalChatCount: chatFileIds.length,
       }
     },

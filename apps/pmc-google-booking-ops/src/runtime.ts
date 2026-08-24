@@ -512,8 +512,9 @@ export function runEligibleRetries(ports: BookingPorts): void {
         } catch (error) {
           mediaSafeError = error instanceof Error ? error.message : 'Evidence media signing failed'
           evidence = {
-            payment: null,
+            payments: [],
             chats: [],
+            totalPaymentCount: paymentEvidenceFileIds.length,
             totalChatCount: chatEvidenceFileIds.length,
           }
         }

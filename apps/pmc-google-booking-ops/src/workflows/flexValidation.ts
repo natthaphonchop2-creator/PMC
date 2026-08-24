@@ -119,16 +119,17 @@ export function buildProductionFlexValidationMessages(
     buildAdminMinimalReceipt(
       booking,
       {
-        payment: {
+        payments: [{
           previewUrl: `${baseUrl}/assets/pmc-flex-logo-v1.png`,
           fullUrl: `${baseUrl}/assets/pmc-flex-logo-v1.png`,
-        },
+        }],
         chats: [
           {
             previewUrl: `${baseUrl}/assets/staff-profiles/cat.jpg`,
             fullUrl: `${baseUrl}/assets/staff-profiles/cat.jpg`,
           },
         ],
+        totalPaymentCount: 1,
         totalChatCount: 1,
       },
       brandLogoUrl,

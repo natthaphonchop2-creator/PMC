@@ -161,10 +161,10 @@ describe('doctor Calendar', () => {
 
 describe('LINE routing', () => {
   const evidence = {
-    payment: {
+    payments: [{
       previewUrl: 'https://media.test/pay-preview',
       fullUrl: 'https://media.test/pay-full',
-    },
+    }],
     chats: [
       {
         previewUrl: 'https://media.test/chat-1-preview',
@@ -179,6 +179,7 @@ describe('LINE routing', () => {
         fullUrl: 'https://media.test/chat-3-full',
       },
     ],
+    totalPaymentCount: 1,
     totalChatCount: 5,
   }
 
@@ -303,8 +304,9 @@ describe('LINE routing', () => {
   it('shows a safe fallback when evidence URLs are unavailable', () => {
     const payload = JSON.stringify(
       adminBookingMessage(bookingFixture(), 'admin-group', {
-        payment: null,
+        payments: [],
         chats: [],
+        totalPaymentCount: 1,
         totalChatCount: 2,
       }, 'https://evidence.example/assets/pmc-flex-logo-v1.png'),
     )

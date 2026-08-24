@@ -4,7 +4,9 @@ import type {
   BookingPorts,
   CalendarEventInput,
   CalendarPort,
+  BookingEvidenceImages,
   DrivePort,
+  EvidenceImageRef,
   FilePort,
   LineMessage,
   LinePort,
@@ -94,6 +96,22 @@ export function bookingFixture(patch: Partial<BookingCase> = {}): BookingCase {
     updatedAt: '2026-08-20T09:00:00+07:00',
     updatedBy: 'admin@example.com',
     ...patch,
+  }
+}
+
+export function evidenceFixture(input: {
+  paymentCount: number
+  chatCount: number
+}): BookingEvidenceImages {
+  const ref = (kind: 'payment' | 'chat', index: number): EvidenceImageRef => ({
+    previewUrl: `https://media.test/${kind}-${index + 1}/preview`,
+    fullUrl: `https://media.test/${kind}-${index + 1}/full`,
+  })
+  return {
+    payments: Array.from({ length: input.paymentCount }, (_, index) => ref('payment', index)),
+    chats: Array.from({ length: input.chatCount }, (_, index) => ref('chat', index)),
+    totalPaymentCount: input.paymentCount,
+    totalChatCount: input.chatCount,
   }
 }
 
@@ -321,16 +339,15 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
         const ref = (fileId: string, variant: 'preview' | 'full') =>
           `https://media.test/${caseId}/${fileId}/${variant}`
         return {
-          payment: paymentFileIds[0]
-            ? {
-                previewUrl: ref(paymentFileIds[0], 'preview'),
-                fullUrl: ref(paymentFileIds[0], 'full'),
-              }
-            : null,
-          chats: chatFileIds.slice(0, 3).map((fileId) => ({
+          payments: paymentFileIds.map((fileId) => ({
             previewUrl: ref(fileId, 'preview'),
             fullUrl: ref(fileId, 'full'),
           })),
+          chats: chatFileIds.map((fileId) => ({
+            previewUrl: ref(fileId, 'preview'),
+            fullUrl: ref(fileId, 'full'),
+          })),
+          totalPaymentCount: paymentFileIds.length,
           totalChatCount: chatFileIds.length,
         }
       },

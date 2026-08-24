@@ -9,10 +9,11 @@ import { bookingFixture } from './helpers/fakes'
 
 const logoUrl = 'https://evidence.example/assets/pmc-flex-logo-v1.png'
 const evidence = {
-  payment: { previewUrl: 'https://media/pay-preview', fullUrl: 'https://media/pay-full' },
+  payments: [{ previewUrl: 'https://media/pay-preview', fullUrl: 'https://media/pay-full' }],
   chats: [
     { previewUrl: 'https://media/chat-preview', fullUrl: 'https://media/chat-full' },
   ],
+  totalPaymentCount: 1,
   totalChatCount: 5,
 }
 

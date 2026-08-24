@@ -193,8 +193,9 @@ export interface EvidenceImageRef {
 }
 
 export interface BookingEvidenceImages {
-  payment: EvidenceImageRef | null
+  payments: EvidenceImageRef[]
   chats: EvidenceImageRef[]
+  totalPaymentCount: number
   totalChatCount: number
 }
 
