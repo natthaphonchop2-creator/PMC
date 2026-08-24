@@ -215,12 +215,42 @@ export function createRuntime(): BookingPorts {
   }
 }
 
-export function runDailyOperationsWorkflow(ports: BookingPorts): void {
-  runEligibleRetries(ports)
-  runDailyDoctorSchedules(ports)
-  runDailyCallReminders(ports)
-  runDepositExpiryReminders(ports)
-  writeDashboard(ports)
+export interface DailyOperationsResult {
+  stages: Record<
+    'retries' | 'doctorSchedules' | 'callReminders' | 'depositExpiry' | 'dashboard',
+    'OK' | 'FAILED'
+  >
+}
+
+function runDailyStage(
+  name: keyof DailyOperationsResult['stages'],
+  operation: () => void,
+): 'OK' | 'FAILED' {
+  try {
+    operation()
+    return 'OK'
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'failed'
+    const safeDetail = detail
+      .replace(/https?:\/\/\S+/g, '[url]')
+      .replace(/PMC-\d{6}-\d{4}/g, '[case]')
+      .replace(/0\d{8,9}/g, '[phone]')
+      .slice(0, 300)
+    console.error(`${name}: ${safeDetail}`)
+    return 'FAILED'
+  }
+}
+
+export function runDailyOperationsWorkflow(ports: BookingPorts): DailyOperationsResult {
+  return {
+    stages: {
+      retries: runDailyStage('retries', () => runEligibleRetries(ports)),
+      doctorSchedules: runDailyStage('doctorSchedules', () => runDailyDoctorSchedules(ports)),
+      callReminders: runDailyStage('callReminders', () => runDailyCallReminders(ports)),
+      depositExpiry: runDailyStage('depositExpiry', () => runDepositExpiryReminders(ports)),
+      dashboard: runDailyStage('dashboard', () => writeDashboard(ports)),
+    },
+  }
 }
 
 export function runBookingRetriesWorkflow(): {
