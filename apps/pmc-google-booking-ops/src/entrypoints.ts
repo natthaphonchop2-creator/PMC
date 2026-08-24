@@ -83,7 +83,9 @@ export function preparePmcStaffAeMigration() {
 }
 
 export function preparePmcAutoQueueMigration() {
-  return prepareAutoQueueMigrationWorkflow()
+  const result = prepareAutoQueueMigrationWorkflow()
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function applyPmcAutoQueueMigration() {
