@@ -96,21 +96,29 @@ export function prepareAutomaticQueue(
     candidate.doctorId === booking.doctorId &&
     candidate.appointmentStatus === 'CONFIRMED' &&
     Boolean(candidate.appointmentStart && candidate.appointmentEnd) &&
-    String(candidate.appointmentStart) >= booking.createdAt &&
+    String(candidate.appointmentStart).slice(0, 10) >= booking.createdAt.slice(0, 10) &&
     String(candidate.appointmentStart) <= booking.depositExpiresAt,
   )
-  const busy = ports.calendar.listEvents(
-    requireCalendarId(booking),
-    booking.createdAt,
-    booking.depositExpiresAt,
-  )
-  const proposal = proposeAutomaticAppointment({
-    durationMinutes: requireServiceConfig(booking, ports).durationMinutes,
-    submittedAt: booking.createdAt,
-    expiresAt: booking.depositExpiresAt,
-    doctorCases: doctorCases.map(bookingInterval),
-    busy,
-  })
+  let slotSafeError: string | null = null
+  let proposal: CalendarInterval | null = null
+  try {
+    const busy = ports.calendar.listEvents(
+      requireCalendarId(booking),
+      booking.createdAt,
+      booking.depositExpiresAt,
+    )
+    proposal = proposeAutomaticAppointment({
+      durationMinutes: requireServiceConfig(booking, ports).durationMinutes,
+      submittedAt: booking.createdAt,
+      expiresAt: booking.depositExpiresAt,
+      doctorCases: doctorCases.map(bookingInterval),
+      busy,
+    })
+  } catch (error) {
+    slotSafeError = error instanceof Error
+      ? error.message.replace(/https?:\/\/\S+/g, '[url]').slice(0, 300)
+      : 'Automatic slot lookup failed'
+  }
 
   let current = ports.repositories.bookings.update(
     booking.caseId,
@@ -144,7 +152,9 @@ export function prepareAutomaticQueue(
         },
     {
       actor: 'system',
-      reason: proposal ? 'Automatic provisional slot proposed' : 'Automatic slot not found',
+      reason: proposal
+        ? 'Automatic provisional slot proposed'
+        : slotSafeError ?? 'Automatic slot not found',
       correlationId: `${booking.caseId}:AUTO_SLOT`,
     },
   )
@@ -222,7 +232,7 @@ export function prepareAutomaticQueue(
       )
 
   let lineFailed = false
-  let lastSafeError = mediaSafeError
+  let lastSafeError = mediaSafeError ?? slotSafeError
   for (const [batchIndex, message] of messages.entries()) {
     try {
       ports.line.push(message)

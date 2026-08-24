@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { BookingCase } from '../src/domain/types'
 import { submitBookingIntake } from '../src/workflows/formSubmit'
+import { runEligibleRetries } from '../src/runtime'
 import { bookingFixture, createTestPorts, validBookingIntake } from './helpers/fakes'
 
 function confirmedDoctorCaseFor(date: string, doctorId: string): BookingCase {
@@ -66,5 +67,44 @@ describe('automatic queue submission workflow', () => {
     expect(JSON.stringify(ports.line.adminMessages()[0])).toContain('รอ Admin เลือกวัน')
     expect(ports.line.doctorMessages()).toEqual([])
     expect(ports.calls.list()).toEqual([])
+  })
+
+  it('keeps the paid booking and alerts Admin when Calendar availability cannot be read', () => {
+    const ports = createTestPorts({ calendarListFails: true })
+    const result = submitBookingIntake(validBookingIntake({
+      queueType: 'AUTO',
+      appointmentDate: null,
+      appointmentTime: null,
+    }), ports)
+    expect(result).toMatchObject({
+      status: 'BOOKING_CONFIRMED',
+      appointmentStatus: 'AWAITING_ADMIN_SLOT',
+      appointmentStart: null,
+      appointmentEnd: null,
+    })
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(JSON.stringify(ports.line.adminMessages()[0])).toContain('รอ Admin เลือกวัน')
+  })
+
+  it('continues an AUTO booking after a transient Drive retry', () => {
+    const ports = createTestPorts({ driveMoveFailsOnce: true })
+    const submitted = submitBookingIntake(validBookingIntake({
+      queueType: 'AUTO',
+      appointmentDate: null,
+      appointmentTime: null,
+    }), ports)
+    expect(submitted.driveState).toBe('RETRY')
+    expect(ports.line.adminMessages()).toEqual([])
+
+    ports.drive.allowMoves()
+    runEligibleRetries(ports)
+
+    expect(ports.bookings.getByCaseId(submitted.caseId)).toMatchObject({
+      driveState: 'OK',
+      status: 'BOOKING_CONFIRMED',
+      appointmentStatus: 'AWAITING_ADMIN_SLOT',
+    })
+    expect(ports.line.adminMessages()).toHaveLength(1)
+    expect(ports.retries.listPending()).toEqual([])
   })
 })

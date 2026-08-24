@@ -72,4 +72,19 @@ describe('automatic provisional appointment planner', () => {
       busy: [],
     })).toBeNull()
   })
+
+  it('uses an earlier confirmed case on the submission day when a future slot remains', () => {
+    expect(proposeAutomaticAppointment({
+      durationMinutes: 60,
+      submittedAt: '2026-08-25T15:00:00+07:00',
+      expiresAt: '2027-02-25T15:00:00+07:00',
+      doctorCases: [
+        { start: '2026-08-25T13:00:00+07:00', end: '2026-08-25T14:00:00+07:00' },
+      ],
+      busy: [],
+    })).toEqual({
+      start: '2026-08-25T15:00:00+07:00',
+      end: '2026-08-25T16:00:00+07:00',
+    })
+  })
 })

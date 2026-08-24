@@ -149,6 +149,8 @@ export interface TestPortOptions {
   extraDriveFileIds?: string[]
   calendarEvents?: CalendarInterval[]
   calendarUpdateResult?: 'UPDATED' | 'NOT_FOUND'
+  calendarListFails?: boolean
+  driveMoveFailsOnce?: boolean
 }
 
 export function createTestPorts(options: TestPortOptions = {}): TestPorts {
@@ -302,7 +304,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     retention: repositories.retention,
     retries: repositories.retries,
     lineDirectory: repositories.lineDirectory,
-    drive: createFakeDrive(options.extraDriveFileIds),
+    drive: createFakeDrive(options.extraDriveFileIds, options.driveMoveFailsOnce),
     calendar: createFakeCalendar(options),
     line: createFakeLine(options.linePushFails ?? false, options.lineFailsAtPush),
     forms: {
@@ -539,7 +541,10 @@ export function createFakeCalendar(options: TestPortOptions = {}): FakeCalendarP
   let createFails = options.calendarCreateFails ?? false
   return {
     hasConflict: () => options.calendarConflicts ?? false,
-    listEvents: () => structuredClone(options.calendarEvents ?? []),
+    listEvents: () => {
+      if (options.calendarListFails) throw new Error('Calendar list failed')
+      return structuredClone(options.calendarEvents ?? [])
+    },
     createEvent(input) {
       if (createFails) throw new Error('Calendar create failed')
       created.push(structuredClone(input))
@@ -585,9 +590,13 @@ export interface FakeDrivePort extends DrivePort {
   movedFileCount(): number
   publicLinks(): string[]
   trashedFolderIds(): string[]
+  allowMoves(): void
 }
 
-export function createFakeDrive(extraFileIds: string[] = []): FakeDrivePort {
+export function createFakeDrive(
+  extraFileIds: string[] = [],
+  initiallyFailing = false,
+): FakeDrivePort {
   const folders = new Map<string, { parentId: string; name: string; marker: string }>()
   const files = new Map<string, { name: string; folderId: string | null }>([
     ['payment-file-1', { name: 'payment.jpg', folderId: null }],
@@ -599,6 +608,7 @@ export function createFakeDrive(extraFileIds: string[] = []): FakeDrivePort {
     ] as const),
   ])
   let moved = 0
+  let moveFails = initiallyFailing
   const trashed: string[] = []
 
   return {
@@ -621,6 +631,7 @@ export function createFakeDrive(extraFileIds: string[] = []): FakeDrivePort {
       return [...files.entries()].find(([, file]) => file.folderId === folderId && file.name === name)?.[0] ?? null
     },
     moveAndRenameFile(fileId, folderId, name) {
+      if (moveFails) throw new Error('Drive move failed')
       const file = files.get(fileId)
       if (!file) throw new Error('file not found')
       file.folderId = folderId
@@ -636,5 +647,8 @@ export function createFakeDrive(extraFileIds: string[] = []): FakeDrivePort {
     movedFileCount: () => moved,
     publicLinks: () => [],
     trashedFolderIds: () => [...trashed],
+    allowMoves() {
+      moveFails = false
+    },
   }
 }

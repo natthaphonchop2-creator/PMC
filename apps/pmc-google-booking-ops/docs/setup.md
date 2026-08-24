@@ -116,6 +116,8 @@ BOOKING_BRAND_LOGO_URL
 PMC_SHARED_ACCOUNT_EMAIL
 ```
 
+`PMC_QUEUE_CONFIRMATION_FORM_ID` may be left unset before the approved Form cutover. `configurePmcQueueModeForms()` creates `PMC Queue Confirmation`, enables email collection, and stores the new Form ID automatically when the property is blank.
+
 Set `PMC_AUTO_QUEUE_MIGRATION_APPROVED=true` only immediately before an explicitly approved `applyPmcAutoQueueMigration()` run. The function deletes the marker before writing.
 
 ## Automatic provisional queue

@@ -66,6 +66,7 @@ import { sendCallReminderFlexPilot, sendProductionFlexPilot } from './workflows/
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention } from './workflows/retention'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
+import { prepareAutomaticQueue } from './workflows/automaticQueue'
 
 const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.spreadsheetId,
@@ -731,12 +732,15 @@ export function runEligibleRetries(ports: BookingPorts): void {
           chatEvidenceFileIds: (payload.chatEvidenceFileIds as string[]) ?? [],
         }
         const evidence = ensureCaseEvidenceFolder(booking, intake, ports.drive)
-        ports.repositories.bookings.update(
+        const recovered = ports.repositories.bookings.update(
           caseId,
           booking.version,
           { driveFolderId: evidence.folderId, driveFolderUrl: evidence.folderUrl, driveState: 'OK' },
           { actor: 'system', reason: 'Drive retry succeeded', correlationId: id },
         )
+        if (recovered.queueType === 'AUTO') {
+          prepareAutomaticQueue(recovered, intake, ports)
+        }
       } else {
         throw new Error(`unsupported retry operation: ${operation}`)
       }
@@ -1033,15 +1037,28 @@ export function configureQueueModeFormsWorkflow(): {
   queueQuestionReady: true
   confirmationFormReady: true
   createdTrigger: boolean
+  createdConfirmationForm: boolean
 } {
-  const properties = PropertiesService.getScriptProperties().getProperties()
-  const confirmationFormId = properties[SCRIPT_PROPERTY_KEYS.queueConfirmationFormId]?.trim()
-  if (!confirmationFormId) throw new Error('queue confirmation Form is not configured')
+  const scriptProperties = PropertiesService.getScriptProperties()
+  let confirmationFormId = scriptProperties
+    .getProperty(SCRIPT_PROPERTY_KEYS.queueConfirmationFormId)
+    ?.trim()
+  let createdConfirmationForm = false
+  if (!confirmationFormId) {
+    const confirmationForm = FormApp.create('PMC Queue Confirmation')
+    confirmationForm.setCollectEmail(true)
+    confirmationFormId = confirmationForm.getId()
+    scriptProperties.setProperty(
+      SCRIPT_PROPERTY_KEYS.queueConfirmationFormId,
+      confirmationFormId,
+    )
+    createdConfirmationForm = true
+  }
   const runtime = createRuntime()
   const queue = runtime.forms.configureQueueModeForm()
   const confirmation = runtime.forms.ensureQueueConfirmationForm()
   const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
-  return { ...queue, ...confirmation, createdTrigger }
+  return { ...queue, ...confirmation, createdTrigger, createdConfirmationForm }
 }
 
 export function prepareAutoQueueMigrationWorkflow(): {

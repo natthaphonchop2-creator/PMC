@@ -52,7 +52,8 @@ export function proposeAutomaticAppointment(
   const candidates = [...new Set(
     input.doctorCases
       .filter((doctorCase) =>
-        doctorCase.start >= input.submittedAt && doctorCase.start <= input.expiresAt,
+        doctorCase.start.slice(0, 10) >= input.submittedAt.slice(0, 10) &&
+        doctorCase.start <= input.expiresAt,
       )
       .sort((left, right) => left.end.localeCompare(right.end))
       .flatMap((doctorCase) => startsEveryThirtyMinutes(roundUpThirty(doctorCase.end)))
