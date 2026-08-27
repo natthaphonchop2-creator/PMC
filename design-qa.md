@@ -51,6 +51,22 @@ No actionable P0, P1, or P2 findings remain.
 
 ## Follow-up polish
 
-- P3: After the JERA report center is implemented, its first report card can inherit the same card radius and icon-container treatment for stronger cross-screen continuity.
+- The JERA report center now inherits the approved card radius, white surfaces, gold icon containers, spacing rhythm, and fixed bottom navigation.
+
+## JERA report-center verification
+
+- Report Center screenshot: `/tmp/pmc-report-center.png`
+- Payment report screenshot: `/tmp/pmc-report-payment.png`
+- Reference comparison: `/tmp/pmc-report-reference-comparison.png`
+- Mobile viewport: 390 × 844
+- Report choices rendered: 6
+- Report card minimum height: 148 px
+- Refresh control height: 48 px
+- Root horizontal overflow: none (`scrollWidth=clientWidth=390`)
+- Report table overflow is contained in its own keyboard-focusable horizontal region.
+- Console errors and warnings: 0
+- The information density stays lower than the earlier rejected report treatments: one filter card, two-column KPI cards, one compact breakdown, and one bounded detail table.
+- Additional-report screenshot: `/tmp/pmc-additional-reports.png`
+- Additional-report mobile check at 360 × 800: 8 visible destinations, 72 px minimum row height, no root horizontal overflow, and no console warnings/errors.
 
 final result: passed

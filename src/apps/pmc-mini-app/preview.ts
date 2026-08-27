@@ -1,6 +1,6 @@
 import type { MiniAppBrowserApi } from './api'
 import type { BookingDraftInput, BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
-import type { JeraClientEnvelope } from './reports'
+import type { JeraClientEnvelope, JeraReportType } from './reports'
 
 export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displayName: 'มัส', active: true }
 
@@ -54,15 +54,35 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
       current = { ...current!, state: 'CONFIRMED', version: current!.version + 1, confirmationStatus: 'CONFIRMED' }
       return { caseId: 'PMC-PREVIEW-0001', status: 'CONFIRMED' }
     },
-    async loadReport<T>() { return previewReport<T>() },
+    async loadReport<T>(_token: string, reportType: JeraReportType): Promise<JeraClientEnvelope<T>> { return previewReport<T>(reportType) },
     async refreshReport() { return { accepted: true, correlationId: 'preview-refresh-1' } },
   }
 }
 
-function previewReport<T>(): JeraClientEnvelope<T> {
+function previewReport<T>(reportType: JeraReportType): JeraClientEnvelope<T> {
+  const rows = [{
+    sourceUuid: 'preview-row-1', eventDate: '2026-08-27', patientName: 'ลูกค้าทดสอบ',
+    paymentCode: 'PAY-PREVIEW-001', itemName: 'เติมไขมัน', itemCode: 'SERVICE-01',
+    status: 'PAID', paidAmountSatang: 90_000, refundAmountSatang: 0, remainingValueSatang: 0,
+  }]
+  const data = reportType === 'TODAY_SUMMARY'
+    ? { totals: { receivedSatang: 90_000, depositSatang: 90_000, refundSatang: 0, netCashFlowSatang: 180_000, appointmentCount: 2 } }
+    : reportType === 'APPOINTMENT'
+      ? { totals: { appointmentCount: 2 }, rows: rows.map((row) => ({ ...row, paidAmountSatang: null, status: 'Confirmed' })) }
+      : reportType === 'REFUND'
+        ? { totals: { rowCount: 1, refundAmountSatang: 90_000 }, rows: rows.map((row) => ({ ...row, paidAmountSatang: null, refundAmountSatang: 90_000 })) }
+        : {
+          totals: {
+            rowCount: 1, totalSatang: 90_000, paidAmountSatang: 90_000, refundAmountSatang: 0,
+            normalPaidSatang: 90_000, depositPaidSatang: 0, cashSatang: 0, transferSatang: 90_000,
+            creditCardSatang: 0, eWalletSatang: 0, paymentLinkSatang: 0, otherPaymentSatang: 0,
+            netSatang: 90_000, quantity: 1, remainingQuantity: 1, remainingValueSatang: 90_000,
+          },
+          rows,
+        }
   return {
-    data: { totals: { rowCount: 0 }, rows: [] } as T,
-    source: 'CACHE', fetchedAt: new Date().toISOString(), lastSuccessAt: new Date().toISOString(),
+    data: data as unknown as T,
+    source: 'CACHE', fetchedAt: '2026-08-27T13:55:00.000Z', lastSuccessAt: '2026-08-27T13:55:00.000Z',
     refreshing: false, stale: false, warningCode: null,
   }
 }

@@ -4,7 +4,8 @@ import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
 import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
 import { Home } from './Home'
-import { ReportCenter } from './ReportCenter'
+import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
+import { ReportPage, type ReportPageAdapter } from './ReportPage'
 import {
   loadReportFilterPreferences,
   saveReportFilterPreferences,
@@ -64,6 +65,11 @@ export function PmcMiniApp({
     confirm: (draftId, version) => api.confirm(idToken, draftId, version),
   }), [api, idToken])
 
+  const reportAdapter = useMemo<ReportPageAdapter>(() => ({
+    load: (reportType, filters) => api.loadReport(idToken, reportType, filters),
+    refresh: (reportType, filters) => api.refreshReport(idToken, reportType, filters),
+  }), [api, idToken])
+
   const openBooking = async () => {
     if (!config) {
       setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
@@ -97,15 +103,26 @@ export function PmcMiniApp({
           else setView(action)
         }}
       />}
-      {view === 'REPORTS' && (selectedReport
-        ? <SimplePage title={selectedReport === 'ADDITIONAL' ? 'รายงานเพิ่มเติม' : 'รายงาน JERA'} description="กำลังเตรียมหน้ารายงาน" />
-        : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
+      {view === 'REPORTS' && (selectedReport === 'ADDITIONAL'
+        ? <AdditionalReportMenu onBack={() => setSelectedReport(null)} onSelect={setSelectedReport} />
+        : selectedReport
+          ? <ReportPage
+            reportType={selectedReport}
+            filters={reportFilters}
+            onFiltersChange={setReportFilters}
+            adapter={reportAdapter}
+            onBack={() => setSelectedReport(isAdditionalReport(selectedReport) ? 'ADDITIONAL' : null)}
+          />
+          : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
       {message && <p className="pmc-shell-alert" role="alert">{message}</p>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
       <BottomNavigation view={view} onChange={(next) => {
         if (next === 'BOOKING') void openBooking()
-        else { setView(next); if (next !== 'REPORTS') setSelectedReport(null) }
+        else {
+          if (next === 'REPORTS' && view === 'REPORTS') setSelectedReport(null)
+          else { setView(next); if (next !== 'REPORTS') setSelectedReport(null) }
+        }
       }} />
     </div>
   )
@@ -124,14 +141,14 @@ function BottomNavigation({ view, onChange }: { view: MiniAppView; onChange: (vi
   ><item.icon aria-hidden="true" /><span>{item.label}</span></button>)}</nav>
 }
 
-function SimplePage({ title, description }: { title: string; description: string }) {
-  return <main className="pmc-simple-page"><h1>{title}</h1><p>{description}</p><div className="pmc-empty-rule" /></main>
-}
-
 function AccountPage({ session, fallbackFormUrl }: { session: MiniAppSession; fallbackFormUrl?: string }) {
   return <main className="pmc-simple-page"><h1>บัญชี</h1><dl className="pmc-account-list"><div><dt>ชื่อผู้ใช้งาน</dt><dd>{session.displayName}</dd></div><div><dt>สถานะ</dt><dd>ใช้งานได้</dd></div></dl>{fallbackFormUrl && <a className="pmc-fallback-link" href={fallbackFormUrl}>เปิด Google Form สำรอง</a>}</main>
 }
 
 function Notice({ children }: { children: string }) {
   return <main className="pmc-mini-app-notice" aria-live="polite"><p>{children}</p></main>
+}
+
+function isAdditionalReport(value: ReportSelection): boolean {
+  return !['TODAY_SUMMARY', 'PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'].includes(value)
 }

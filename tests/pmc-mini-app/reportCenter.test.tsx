@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ReportCenter } from '../../src/apps/pmc-mini-app/ReportCenter'
+import { AdditionalReportMenu, ReportCenter } from '../../src/apps/pmc-mini-app/ReportCenter'
 import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
 afterEach(cleanup)
@@ -27,5 +27,14 @@ describe('PMC JERA report center', () => {
 
     expect(onSelect).toHaveBeenCalledWith('PAYMENT')
     expect(localStorage).toHaveLength(0)
+  })
+
+  it('shows all approved additional reports before later role-based separation', () => {
+    render(<AdditionalReportMenu onBack={() => undefined} onSelect={() => undefined} />)
+
+    for (const label of [
+      'การใช้สินค้าและบริการ', 'ยอดขายสินค้าและบริการ', 'รับชำระที่ยกเลิก', 'รายงาน OPD',
+      'ค้างชำระที่ยกเลิก', 'ยอดขายคอร์ส', 'คอร์สคงเหลือ', 'คอร์สคงเหลือตามวันที่',
+    ]) expect(screen.getByRole('button', { name: label })).toBeVisible()
   })
 })
