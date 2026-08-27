@@ -20,12 +20,13 @@ type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'ACCOUNT'
 export function PmcMiniApp({
   initialSession,
   initialConfig,
-  api = createMiniAppApi(),
+  api: suppliedApi,
 }: {
   initialSession?: MiniAppSession
   initialConfig?: MiniAppConfig
   api?: PmcMiniAppApi
 }) {
+  const api = useMemo(() => suppliedApi ?? createMiniAppApi(), [suppliedApi])
   const [session, setSession] = useState<MiniAppSession | null>(initialSession ?? null)
   const [config, setConfig] = useState<MiniAppConfig | null>(initialConfig ?? null)
   const [idToken, setIdToken] = useState(initialSession ? 'preview-token' : '')
