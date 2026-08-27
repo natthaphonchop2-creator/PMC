@@ -23,6 +23,8 @@ describe('PMC Mini App security regression', () => {
     expect(assets).not.toContain(sentinel)
     expect(assets).not.toContain('PMC_BOOKING_INGRESS_SECRET')
     expect(assets).not.toContain('PMC_MINI_APP_SIGNING_SECRET')
+    expect(assets).not.toContain('PMC-PREVIEW-0001')
+    expect(assets).not.toContain('staff-preview')
   })
 
   it('requires HTTPS ingress and fallback URLs before constructing production dependencies', () => {

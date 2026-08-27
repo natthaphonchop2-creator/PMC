@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent, type FormEvent, type ReactElement } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent, type Dispatch, type FormEvent, type ReactElement } from 'react'
 import { ArrowLeft, Check, ImagePlus, X } from 'lucide-react'
 import { BrandMark } from './BrandMark'
 import {
@@ -8,6 +8,7 @@ import {
   reduceBooking,
   validateBookingStep,
   type BookingEvidenceItem,
+  type BookingWizardAction,
   type BookingValues,
 } from './bookingModel'
 import type {
@@ -22,6 +23,7 @@ export interface BookingWizardAdapter {
   upload(draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   save(draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(draftId: string, version: number): Promise<BookingConfirmationResult>
+  cancel(draftId: string, version: number): Promise<BookingDraftProjection>
 }
 
 export function BookingWizard({
@@ -60,10 +62,22 @@ export function BookingWizard({
     dispatch({ type: 'SET_VALUE', field, value })
     if (errors[field]) setErrors((current) => ({ ...current, [field]: '' }))
   }
-  const goBack = () => {
+  const goBack = async () => {
     setFailure('')
-    if (state.step === 0) onExit?.()
-    else dispatch({ type: 'GO_BACK' })
+    if (state.step > 0) {
+      dispatch({ type: 'GO_BACK' })
+      return
+    }
+    if (busy) return
+    setBusy(true)
+    try {
+      await adapter.cancel(draft.draftId, draft.version)
+      setBusy(false)
+      onExit?.()
+    } catch {
+      setFailure('ยกเลิกร่างไม่สำเร็จ กรุณาลองอีกครั้ง')
+      setBusy(false)
+    }
   }
   const goNext = async (event: FormEvent) => {
     event.preventDefault()
@@ -81,8 +95,16 @@ export function BookingWizard({
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
         const newChats = state.evidence.CHAT.flatMap(({ file }) => file ? [file] : [])
-        if (newPayments.length > 0) current = await adapter.upload(current.draftId, 'PAYMENT', newPayments)
-        if (newChats.length > 0) current = await adapter.upload(current.draftId, 'CHAT', newChats)
+        if (newPayments.length > 0) {
+          current = await adapter.upload(current.draftId, 'PAYMENT', newPayments)
+          setDraft(current)
+          replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, dispatch)
+        }
+        if (newChats.length > 0) {
+          current = await adapter.upload(current.draftId, 'CHAT', newChats)
+          setDraft(current)
+          replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, dispatch)
+        }
         current = await adapter.save(current.draftId, current.version, bookingInput(state))
         setDraft(current)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
@@ -145,7 +167,7 @@ export function BookingWizard({
   return (
     <main className="pmc-booking-page">
       <header className="pmc-booking-header">
-        <button type="button" className="pmc-icon-button" aria-label="ย้อนกลับ" onClick={goBack}><ArrowLeft aria-hidden="true" /></button>
+        <button type="button" className="pmc-icon-button" aria-label="ย้อนกลับ" disabled={busy} onClick={() => { void goBack() }}><ArrowLeft aria-hidden="true" /></button>
         <BrandMark compact />
         <div>
           <p>ลงนัดหมาย</p>
@@ -277,4 +299,26 @@ function statusLabel(status: BookingConfirmationResult['status']): string {
   if (status === 'CONFIRMED') return 'ยืนยันวันนัดแล้ว'
   if (status === 'TENTATIVE') return 'ได้วันนัดชั่วคราว'
   return 'รอ Admin จัดวันนัด'
+}
+
+function replaceUploadedEvidence(
+  kind: 'PAYMENT' | 'CHAT',
+  currentItems: BookingEvidenceItem[],
+  fileIds: string[],
+  dispatch: Dispatch<BookingWizardAction>,
+): void {
+  for (const item of currentItems) {
+    if (item.previewUrl.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl)
+  }
+  dispatch({
+    type: 'REPLACE_EVIDENCE',
+    kind,
+    items: fileIds.map((id) => ({
+      id,
+      name: kind === 'PAYMENT' ? 'สลิปที่แนบแล้ว' : 'แชทที่แนบแล้ว',
+      size: 0,
+      type: 'image/jpeg',
+      previewUrl: '',
+    })),
+  })
 }

@@ -71,6 +71,9 @@ export function confirmQueue(
   ports: BookingPorts,
 ): BookingCase {
   const confirmed = ports.locks.withLock(() => {
+    if (!ports.config.findCloserByEmail(input.actorEmail)) {
+      throw new Error('queue confirmation actor is not an active Admin')
+    }
     const booking = requireBooking(input.caseId, ports)
     if (booking.appointmentStatus === 'CONFIRMED') return booking
     const start = `${input.appointmentDate}T${input.appointmentTime}:00+07:00`

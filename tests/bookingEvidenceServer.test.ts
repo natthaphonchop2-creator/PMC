@@ -22,10 +22,10 @@ async function invoke(
 }
 
 describe('dedicated booking evidence server', () => {
-  it('serves health without invoking the evidence proxy', async () => {
+  it.each(['/health', '/healthz', '/api/healthz'])('serves health at %s without invoking the evidence proxy', async (path) => {
     let proxyCalls = 0
     const handler = createBookingEvidenceRequestHandler(async () => { proxyCalls += 1 })
-    const response = await invoke(handler, '/health')
+    const response = await invoke(handler, path)
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toEqual({ ok: true })
     expect(proxyCalls).toBe(0)

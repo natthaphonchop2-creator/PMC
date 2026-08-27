@@ -80,6 +80,7 @@ export function PmcMiniApp({
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
     save: (draftId, version, input) => api.save(idToken, draftId, version, input),
     confirm: (draftId, version) => api.confirm(idToken, draftId, version),
+    cancel: (draftId, version) => api.cancel(idToken, draftId, version),
   }), [api, idToken])
 
   const reportAdapter = useMemo<ReportPageAdapter>(() => ({

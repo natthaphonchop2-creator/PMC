@@ -182,6 +182,9 @@ function suggestedNextCall(input: CallResultInput, now: string): string | null {
 }
 
 export function recordCallResult(input: CallResultInput, ports: BookingPorts): CallTask {
+  if (!ports.config.findCloserByEmail(input.actor)) {
+    throw new Error('call result actor is not an active Admin')
+  }
   const task = ports.repositories.calls.getOpenByCase(input.caseId)
   if (!task) throw new Error('open call task not found')
   const booking = ports.repositories.bookings.getByCaseId(input.caseId)

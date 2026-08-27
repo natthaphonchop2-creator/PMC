@@ -21,11 +21,15 @@ describe('PMC Mini App evidence API', () => {
     expect({ status: response.status, body: await response.json() }).toEqual({
       status: 200,
       body: {
-        uploaded: [
-          { fileId: 'drive-file-1', kind: 'CHAT', order: 1 },
-          { fileId: 'drive-file-2', kind: 'CHAT', order: 2 },
-        ],
-        draftVersion: 5,
+        draftId: 'draft-1',
+        requestId: 'request-1',
+        state: 'DRAFT',
+        retentionState: '',
+        version: 5,
+        input: null,
+        paymentEvidenceIds: [],
+        chatEvidenceIds: ['drive-file-1', 'drive-file-2'],
+        confirmationStatus: null,
       },
     })
     expect(deps.drive.uploadEvidence).toHaveBeenNthCalledWith(1, expect.objectContaining({

@@ -42,6 +42,22 @@ describe('PMC Mini App browser API', () => {
     expect((init?.body as FormData).getAll('files')).toHaveLength(2)
   })
 
+  it('cancels a draft with its current version and bearer auth', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      draftId: 'draft-1', requestId: 'request-1', state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2,
+      input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await api.cancel('raw-id-token', 'draft-1', 1)
+
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/cancel', expect.objectContaining({
+      method: 'POST',
+      headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 1 }),
+    }))
+  })
+
   it('keeps first-time linking PIN in the authenticated POST body only', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/enrollment-options')
       ? jsonResponse(200, { staff: [{ id: 'staff-1', name: 'มัส' }] })

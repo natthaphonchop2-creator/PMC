@@ -34,7 +34,6 @@ import { recordCallResult } from './workflows/callQueue'
 import { parseQueueConfirmationFormEvent } from './domain/queueConfirmation'
 import { confirmQueue } from './workflows/queueConfirmation'
 import { configureSharedDoctorCalendar } from './workflows/calendarConfig'
-import { refreshBookingCalendarPresentation } from './workflows/bookingUpdate'
 import { submitBookingIntake } from './workflows/formSubmit'
 import { pollJeraIncoming as pollJeraIncomingWorkflow } from './workflows/jeraImport'
 import { parseAppsScriptDoPostBody, verifyMiniAppIngressPayload } from './domain/miniAppIngress'
@@ -87,6 +86,14 @@ export function runPmcBookingRetries() {
 }
 
 export function pollJeraIncoming() {
+  const legacyTriggers = ScriptApp.getProjectTriggers().filter(
+    (trigger) => trigger.getHandlerFunction() === 'pollJeraIncoming',
+  )
+  for (const trigger of legacyTriggers) ScriptApp.deleteTrigger(trigger)
+  return { paused: true as const, deletedTriggers: legacyTriggers.length }
+}
+
+export function runPmcJeraFileImportManually() {
   return pollJeraIncomingWorkflow(createRuntime())
 }
 
@@ -157,8 +164,4 @@ export function configurePmcSharedDoctorCalendar() {
     SpreadsheetApp.openById(spreadsheetId),
     SHARED_DOCTOR_CALENDAR_ID,
   )
-}
-
-export function refreshPmcCalendarPresentation0007() {
-  return refreshBookingCalendarPresentation('PMC-202608-0007', createRuntime())
 }

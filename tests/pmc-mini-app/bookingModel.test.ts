@@ -29,6 +29,19 @@ describe('PMC Mini App booking wizard model', () => {
     expect(unchanged).toEqual(state)
   })
 
+  it('replaces local evidence with the server projection after a successful upload', () => {
+    let state = initialBooking('request-1')
+    state = reduceBooking(state, {
+      type: 'ADD_EVIDENCE', kind: 'PAYMENT', items: [evidence('local-payment')],
+    })
+
+    state = reduceBooking(state, {
+      type: 'REPLACE_EVIDENCE', kind: 'PAYMENT', items: [evidence('drive-payment')],
+    })
+
+    expect(state.evidence.PAYMENT.map(({ id }) => id)).toEqual(['drive-payment'])
+  })
+
   it('normalizes Thai mobile input without dropping a leading zero', () => {
     expect(normalizeThaiPhoneInput('+66 81-234-5678')).toBe('0812345678')
     expect(() => normalizeThaiPhoneInput('123')).toThrow('INVALID_THAI_PHONE')

@@ -20,6 +20,7 @@ function doPost(e) { return PmcBooking.doPost(e); }
 function runDailyOperations() { return PmcBooking.runDailyOperations(); }
 function runPmcBookingRetries() { return PmcBooking.runPmcBookingRetries(); }
 function pollJeraIncoming() { return PmcBooking.pollJeraIncoming(); }
+function runPmcJeraFileImportManually() { return PmcBooking.runPmcJeraFileImportManually(); }
 function runIntegrityChecks() { return PmcBooking.runIntegrityChecks(); }
 function setupPmcBookingSystem() { return PmcBooking.setupPmcBookingSystem(); }
 function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigration(); }
@@ -35,7 +36,6 @@ function configurePmcQueueModeForms() { return PmcBooking.configurePmcQueueModeF
 function pauseAndCutoverPmcBookingForm() { return PmcBooking.pauseAndCutoverPmcBookingForm(); }
 function resumePmcBookingFormAfterAeCutover() { return PmcBooking.resumePmcBookingFormAfterAeCutover(); }
 function configurePmcSharedDoctorCalendar() { return PmcBooking.configurePmcSharedDoctorCalendar(); }
-function refreshPmcCalendarPresentation0007() { return PmcBooking.refreshPmcCalendarPresentation0007(); }
 `,
   },
   format: 'iife',

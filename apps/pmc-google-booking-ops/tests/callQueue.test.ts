@@ -121,6 +121,21 @@ describe('call queue', () => {
     expect(result.windowEnd).toBe('2026-09-16T23:59:59+07:00')
   })
 
+  it('rejects a call result from an email that is not an active Admin', () => {
+    const ports = createTestPorts()
+    ports.bookings.insert(ports.bookingFixture())
+    ports.calls.insertFixture()
+
+    expect(() => recordCallResult({
+      caseId: 'PMC-202608-0001',
+      result: 'NOT_READY',
+      nextCallAt: null,
+      note: '',
+      actor: 'outside@example.com',
+    }, ports)).toThrow('call result actor is not an active Admin')
+    expect(ports.calls.getOpenByCase('PMC-202608-0001')?.status).toBe('PENDING')
+  })
+
   it('batches at most ten customers in one Carousel and links to the remaining queue', () => {
     const ports = createTestPorts({ now: '2026-08-20T09:00:00+07:00' })
     for (let index = 1; index <= 12; index += 1) {

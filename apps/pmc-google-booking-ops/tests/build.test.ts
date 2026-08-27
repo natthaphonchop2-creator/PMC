@@ -18,6 +18,7 @@ describe('Apps Script bundle', () => {
       'doPost',
       'runDailyOperations',
       'pollJeraIncoming',
+      'runPmcJeraFileImportManually',
       'runIntegrityChecks',
       'setupPmcBookingSystem',
       'preparePmcStaffAeMigration',
@@ -34,10 +35,16 @@ describe('Apps Script bundle', () => {
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',
       'configurePmcSharedDoctorCalendar',
-      'refreshPmcCalendarPresentation0007',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }
+    expect(sandbox.refreshPmcCalendarPresentation0007).toBeUndefined()
+  })
+
+  it('does not recreate the paused legacy JERA polling trigger', () => {
+    const runtime = readFileSync('apps/pmc-google-booking-ops/src/runtime.ts', 'utf8')
+
+    expect(runtime).not.toContain("ensureClockTrigger('pollJeraIncoming'")
   })
 
   it('declares the HMAC-protected LINE ingress as a deployable web app', () => {

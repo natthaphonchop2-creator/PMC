@@ -353,7 +353,7 @@ export function createGoogleFormsPort(
     },
     ensureQueueConfirmationForm() {
       const form = queueForm()
-      form.setCollectEmail(true)
+      if (!form.collectsEmail()) throw new Error('queue confirmation Form must collect email')
       const textItems = form.getItems(FormApp.ItemType.TEXT)
       const caseItems = textItems.filter((item) => item.getTitle() === 'Case ID')
       if (caseItems.length > 1) throw new Error('duplicate queue confirmation Case ID field')

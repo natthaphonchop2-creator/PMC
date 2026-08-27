@@ -4,9 +4,7 @@ import { createGoogleBackupPort, createGoogleDrivePort } from './adapters/google
 import { ensureCaseEvidenceFolder } from './adapters/googleDrive'
 import { createGoogleFilePort } from './adapters/googleFiles'
 import {
-  bookingFormResponseEvent,
   createGoogleFormsPort,
-  parseBookingFormEvent,
 } from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
 import {
@@ -38,15 +36,8 @@ import {
   validateStaffDirectory,
 } from './domain/staffDirectory'
 import { staffProfileUrlPlan } from './domain/staffProfileConfig'
-import { repairShiftedFacebookBookingRow } from './domain/facebookRowRepair'
 import { migrateAppointmentRows } from './domain/appointmentMigration'
-import {
-  addCalendarMonths,
-  addMinutesInBangkok,
-  deriveCallWindow,
-} from './domain/callSchedule'
-import { maskThaiPhone, normalizeCustomerName, normalizeThaiPhone } from './domain/normalize'
-import { BOOKING_MASTER_COLUMNS, STAFF_CONFIG_COLUMNS } from './sheetSchema'
+import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
@@ -265,159 +256,6 @@ export function runBookingRetriesWorkflow(): {
   return {
     pendingBefore,
     pendingAfter: runtime.repositories.retries.listPending().length,
-  }
-}
-
-export function repairAndRetryFacebookShiftedCaseWorkflow(caseId: string): {
-  caseId: string
-  status: string
-  calendarState: string
-  lineState: string
-} {
-  if (!/^PMC-\d{6}-\d{4}$/.test(caseId)) throw new Error('invalid repair Case ID')
-  const properties = PropertiesService.getScriptProperties().getProperties()
-  validateRuntimeProperties(properties)
-  const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
-  const sheet = spreadsheet.getSheetByName('BOOKING_MASTER')
-  if (!sheet) throw new Error('missing BOOKING_MASTER sheet')
-  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
-  if (JSON.stringify(headers) !== JSON.stringify(BOOKING_MASTER_COLUMNS)) {
-    throw new Error('BOOKING_MASTER header mismatch')
-  }
-  const caseIdIndex = headers.indexOf('caseId')
-  const formResponseIndex = headers.indexOf('formResponseId')
-  const rows = sheet.getLastRow() < 2
-    ? []
-    : sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
-  const offset = rows.findIndex((row) => String(row[caseIdIndex]) === caseId)
-  if (offset === -1) throw new Error('repair booking not found')
-  const rowNumber = offset + 2
-  const currentRow = rows[offset]
-  const responseId = String(currentRow[formResponseIndex] ?? '').trim()
-  const formResponse = FormApp.openById(properties[SCRIPT_PROPERTY_KEYS.bookingFormId])
-    .getResponse(responseId)
-  if (!formResponse) throw new Error('repair Form response not found')
-  const intake = parseBookingFormEvent(bookingFormResponseEvent({
-    response: formResponse,
-  } as GoogleAppsScript.Events.FormsOnFormSubmit))
-  const index = Object.fromEntries(headers.map((header, position) => [header, position]))
-  const runtime = createRuntime()
-  const doctor = runtime.config.findDoctor(intake.doctorId)
-  const service = runtime.config.findService(intake.serviceId)
-  if (!doctor?.active || !service?.active) throw new Error('repair booking config is inactive')
-  if (String(currentRow[index.status]) !== 'FORM_SUBMITTED') {
-    throw new Error('repair booking status is not FORM_SUBMITTED')
-  }
-  const expectedStart = `${intake.appointmentDate}T${intake.appointmentTime}:00+07:00`
-  const expectedEnd = addMinutesInBangkok(expectedStart, service.durationMinutes)
-  const callWindow = deriveCallWindow(expectedStart)
-  const previousHeaders = headers.filter((header) => header !== 'facebookName')
-  const previousValue = (field: string) => {
-    const previousIndex = previousHeaders.indexOf(field)
-    if (previousIndex === -1) throw new Error(`repair previous field missing: ${field}`)
-    return currentRow[previousIndex]
-  }
-  const driveFolderId = String(previousValue('driveFolderId') ?? '').trim()
-  const driveFolderUrl = String(previousValue('driveFolderUrl') ?? '').trim()
-  if (!driveFolderId || !driveFolderUrl) {
-    throw new Error('repair booking Drive folder is missing')
-  }
-  const phoneNormalized = normalizeThaiPhone(intake.phone)
-  const repaired = repairShiftedFacebookBookingRow(
-    headers,
-    currentRow,
-    intake.facebookName,
-    {
-      caseId,
-      version: Number(currentRow[index.version]),
-      status: 'FORM_SUBMITTED',
-      formResponseId: responseId,
-      adminId: currentRow[index.adminId],
-      adminName: currentRow[index.adminName],
-      submitterEmail: intake.submitterEmail,
-      adminIdentityStatus: currentRow[index.adminIdentityStatus],
-      aeId: currentRow[index.aeId],
-      aeName: currentRow[index.aeName],
-      queueType: 'NORMAL',
-      appointmentStatus: 'CONFIRMED',
-      appointmentProposedAt: '',
-      appointmentConfirmedAt: intake.submittedAt,
-      appointmentConfirmedBy: intake.submitterEmail,
-      customerName: intake.customerName.trim(),
-      facebookName: intake.facebookName.trim(),
-      customerNameNormalized: normalizeCustomerName(intake.customerName),
-      phoneNormalized,
-      phoneMasked: maskThaiPhone(phoneNormalized),
-      doctorId: doctor.id,
-      serviceId: service.id,
-      channelId: intake.channelId ?? '',
-      appointmentStart: expectedStart,
-      appointmentEnd: expectedEnd,
-      depositAmount: intake.depositAmount,
-      depositReceivedAt: intake.submittedAt,
-      depositExpiresAt: addCalendarMonths(intake.submittedAt, 6),
-      depositStatus: 'VALID',
-      driveFolderId,
-      driveFolderUrl,
-      paymentEvidenceCount: intake.paymentEvidenceFileIds.length,
-      chatEvidenceCount: intake.chatEvidenceFileIds.length,
-      calendarId: doctor.calendarId,
-      calendarEventId: '',
-      doctorLineGroupId: doctor.lineGroupId,
-      doctorLineNotifiedAt: '',
-      callStatus: 'PENDING',
-      firstCallWindowStart: callWindow.start,
-      firstCallWindowEnd: callWindow.end,
-      nextCallAt: `${intake.appointmentDate}T09:00:00+07:00`,
-      lastCallAt: '',
-      callOwnerAdminId: currentRow[index.adminId],
-      jeraPaymentId: '',
-      jeraStatus: '',
-      jeraClosedAt: '',
-      jeraActualRevenue: '',
-      jeraImportFileId: '',
-      reconciliationStatus: 'NONE',
-      commissionEligibility: 'NOT_ELIGIBLE',
-      commissionAmount: '',
-      driveState: 'OK',
-      calendarState: 'PENDING',
-      lineState: 'PENDING',
-      jeraImportState: 'NOT_IMPORTED',
-      createdAt: intake.submittedAt,
-      createdBy: intake.submitterEmail,
-      updatedAt: runtime.clock.nowIso(),
-      updatedBy: 'system',
-    },
-  )
-
-  sheet.getRange(rowNumber, 1, 1, headers.length).setValues([repaired])
-  const readback = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0]
-  if (String(readback[index.facebookName] ?? '').trim() !== intake.facebookName.trim()) {
-    throw new Error('repair booking readback mismatch')
-  }
-
-  runtime.repositories.retries.enqueue({
-    id: `RETRY-${caseId}-CALENDAR-FACEBOOK-REPAIR`,
-    caseId,
-    operation: 'CALENDAR_EVENT',
-    idempotencyKey: `${caseId}:CALENDAR_EVENT:FACEBOOK_REPAIR`,
-    attempts: 0,
-    nextAttemptAt: '',
-    status: 'PENDING',
-    safeError: '',
-    payload: {
-      paymentEvidenceFileIds: intake.paymentEvidenceFileIds,
-      chatEvidenceFileIds: intake.chatEvidenceFileIds,
-    },
-  })
-  runEligibleRetries(runtime)
-  const result = runtime.repositories.bookings.getByCaseId(caseId)
-  if (!result) throw new Error('repair booking readback missing')
-  return {
-    caseId,
-    status: result.status,
-    calendarState: result.calendarState,
-    lineState: result.lineState,
   }
 }
 
@@ -838,7 +676,6 @@ export function setupSystem(): {
   const created = [
     ensureFormTrigger('onBookingFormSubmit', properties[SCRIPT_PROPERTY_KEYS.bookingFormId]),
     ensureFormTrigger('onCallResultSubmit', properties[SCRIPT_PROPERTY_KEYS.callResultFormId]),
-    ensureClockTrigger('pollJeraIncoming', (builder) => builder.everyMinutes(15).create()),
     ensureClockTrigger('runDailyOperations', (builder) => builder.everyDays(1).atHour(9).create()),
     ensureClockTrigger('runIntegrityChecks', (builder) => builder.everyDays(1).atHour(2).create()),
   ].filter(Boolean).length

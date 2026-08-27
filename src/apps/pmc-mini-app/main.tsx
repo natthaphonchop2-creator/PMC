@@ -1,22 +1,30 @@
-import { StrictMode } from 'react'
+import { StrictMode, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { PmcMiniApp } from './PmcMiniApp'
-import { createPreviewMiniAppApi, PREVIEW_CONFIG, PREVIEW_SESSION } from './preview'
 import './styles.css'
 
 const root = document.getElementById('root')
 
 if (!root) throw new Error('Mini App root element is missing')
 
-const previewMode = import.meta.env.DEV ? new URLSearchParams(window.location.search).get('preview') : null
-const preview = previewMode === '1'
-const unknownPreview = previewMode === 'unknown'
+async function previewProps(): Promise<ComponentProps<typeof PmcMiniApp>> {
+  if (!import.meta.env.DEV) return {}
+  const previewMode = new URLSearchParams(window.location.search).get('preview')
+  if (previewMode !== '1' && previewMode !== 'unknown') return {}
+  const previewModulePath = ['./preview', '.ts'].join('')
+  const preview = await import(/* @vite-ignore */ previewModulePath)
+  if (previewMode === 'unknown') return { api: preview.createPreviewMiniAppApi({ staffAllowed: false }) }
+  return {
+    initialSession: preview.PREVIEW_SESSION,
+    initialConfig: preview.PREVIEW_CONFIG,
+    api: preview.createPreviewMiniAppApi(),
+  }
+}
 
-createRoot(root).render(
-  <StrictMode>
-    <PmcMiniApp
-      {...(preview ? { initialSession: PREVIEW_SESSION, initialConfig: PREVIEW_CONFIG, api: createPreviewMiniAppApi() } : {})}
-      {...(unknownPreview ? { api: createPreviewMiniAppApi({ staffAllowed: false }) } : {})}
-    />
-  </StrictMode>,
-)
+void previewProps().then((props) => {
+  createRoot(root).render(
+    <StrictMode>
+      <PmcMiniApp {...props} />
+    </StrictMode>,
+  )
+})

@@ -64,6 +64,11 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
       current = { ...current!, state: 'CONFIRMED', version: current!.version + 1, confirmationStatus: 'CONFIRMED' }
       return { caseId: 'PMC-PREVIEW-0001', status: 'CONFIRMED' }
     },
+    async cancel(_token, draftId, version) {
+      requireDraft(current, draftId, version)
+      current = { ...current!, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: current!.version + 1 }
+      return structuredClone(current)
+    },
     async loadReport<T>(_token: string, reportType: JeraReportType): Promise<JeraClientEnvelope<T>> { return previewReport<T>(reportType) },
     async refreshReport() { return { accepted: true, correlationId: 'preview-refresh-1' } },
   }

@@ -26,6 +26,7 @@ export interface MiniAppBrowserApi {
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   save(idToken: string, draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(idToken: string, draftId: string, version: number): Promise<BookingConfirmationResult>
+  cancel(idToken: string, draftId: string, version: number): Promise<BookingDraftProjection>
   loadReport<T = unknown>(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<JeraClientEnvelope<T>>
   refreshReport(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<{ accepted: true; correlationId: string }>
 }
@@ -95,6 +96,9 @@ export function createMiniAppApi(options: {
     },
     confirm(idToken, draftId, version) {
       return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', { version }))
+    },
+    cancel(idToken, draftId, version) {
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/cancel`, authenticatedJson(idToken, 'POST', { version }))
     },
     loadReport(idToken, reportType, filters) {
       const query = buildReportSearchParams(reportType, filters)

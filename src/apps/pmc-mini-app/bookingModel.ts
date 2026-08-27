@@ -34,6 +34,7 @@ export type BookingWizardAction =
   | { type: 'SET_VALUE'; field: keyof BookingValues; value: string }
   | { type: 'SET_QUEUE_TYPE'; value: BookingQueueType }
   | { type: 'ADD_EVIDENCE'; kind: 'PAYMENT' | 'CHAT'; items: BookingEvidenceItem[] }
+  | { type: 'REPLACE_EVIDENCE'; kind: 'PAYMENT' | 'CHAT'; items: BookingEvidenceItem[] }
   | { type: 'REMOVE_EVIDENCE'; kind: 'PAYMENT' | 'CHAT'; id: string }
   | { type: 'GO_TO_STEP'; step: number }
   | { type: 'GO_BACK' }
@@ -80,6 +81,9 @@ export function reduceBooking(state: BookingWizardState, action: BookingWizardAc
     const unique = action.items.filter(({ id }) => !existing.has(id))
     if (current.length + unique.length > 10) return state
     return { ...state, evidence: { ...state.evidence, [action.kind]: [...current, ...unique] } }
+  }
+  if (action.type === 'REPLACE_EVIDENCE') {
+    return { ...state, evidence: { ...state.evidence, [action.kind]: action.items } }
   }
   if (action.type === 'REMOVE_EVIDENCE') {
     return {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BookingWizard, type BookingWizardAdapter } from '../../src/apps/pmc-mini-app/BookingWizard'
@@ -54,15 +54,74 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(app.confirm).toHaveBeenCalledOnce()
     expect(await screen.findByText('PMC-202608-0001')).toBeVisible()
   })
+
+  it('cancels the server draft before leaving the first step', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    expect(app.cancel).toHaveBeenCalledWith('draft-1', 1)
+    expect(onExit).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the wizard open when cancelling the server draft fails', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel).mockRejectedValueOnce(new Error('network'))
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('ยกเลิกร่างไม่สำเร็จ')
+    expect(onExit).not.toHaveBeenCalled()
+  })
+
+  it('does not upload the same evidence again when saving fails after uploads succeeded', async () => {
+    const user = userEvent.setup()
+    const current = { ...draft, input: completeInput() }
+    let version = current.version
+    const app = adapter()
+    vi.mocked(app.upload).mockImplementation(async (_draftId, kind) => {
+      version += 1
+      return {
+        ...current,
+        version,
+        paymentEvidenceIds: kind === 'PAYMENT' ? ['payment-drive-1'] : ['payment-drive-1'],
+        chatEvidenceIds: kind === 'CHAT' ? ['chat-drive-1'] : [],
+      }
+    })
+    vi.mocked(app.save).mockRejectedValue(new Error('save failed'))
+    renderWizard({ initialStep: 3, adapter: app, draft: current })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await screen.findByText('บันทึกร่างไม่สำเร็จ กรุณาลองอีกครั้ง')
+    expect(app.upload).toHaveBeenCalledTimes(2)
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await waitFor(() => expect(app.save).toHaveBeenCalledTimes(2))
+    expect(app.upload).toHaveBeenCalledTimes(2)
+  })
 })
 
-function renderWizard(options: { initialStep?: number; adapter?: BookingWizardAdapter } = {}) {
+function renderWizard(options: {
+  initialStep?: number
+  adapter?: BookingWizardAdapter
+  draft?: BookingDraftProjection
+  onExit?: () => void
+} = {}) {
   return render(<BookingWizard
     session={session}
     config={config}
-    draft={draft}
+    draft={options.draft ?? draft}
     adapter={options.adapter ?? adapter()}
     initialStep={options.initialStep}
+    onExit={options.onExit}
   />)
 }
 
@@ -82,6 +141,15 @@ function adapter(): BookingWizardAdapter {
     upload: vi.fn(async () => draft),
     save: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),
     confirm: vi.fn(async () => ({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })),
+    cancel: vi.fn(async () => ({ ...draft, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2 })),
+  }
+}
+
+function completeInput() {
+  return {
+    requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+    phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+    appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
   }
 }
 

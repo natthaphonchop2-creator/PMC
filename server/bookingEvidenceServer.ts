@@ -20,7 +20,7 @@ export function createBookingEvidenceRequestHandler(
   staticAssets: StaticAssetMap = {},
 ) {
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.url === '/health') {
+    if (req.url === '/health' || req.url === '/healthz' || req.url === '/api/healthz') {
       res.statusCode = 200
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.setHeader('cache-control', 'no-cache')

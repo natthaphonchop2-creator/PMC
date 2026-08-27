@@ -29,7 +29,7 @@ function validQueueConfirmation(): QueueConfirmationInput {
     action: 'CONFIRM',
     appointmentDate: '2026-08-25',
     appointmentTime: '14:00',
-    actorEmail: 'staff.personal@gmail.com',
+    actorEmail: 'admin@example.com',
     submittedAt: '2026-08-24T12:00:00+07:00',
   }
 }
@@ -49,7 +49,7 @@ describe('queue confirmation workflow', () => {
     expect(ports.calendar.updatedEvents()[0].input.colorId).toBe('5')
     expect(ports.line.doctorMessages()).toHaveLength(1)
     expect(ports.calls.list()).toHaveLength(1)
-    expect(first.appointmentConfirmedBy).toBe('staff.personal@gmail.com')
+    expect(first.appointmentConfirmedBy).toBe('admin@example.com')
     expect(first.firstCallWindowStart).toBe('2026-08-25T00:00:00+07:00')
   })
 
@@ -67,7 +67,7 @@ describe('queue confirmation workflow', () => {
     )
   })
 
-  it('accepts a replacement date from any collected Admin email', () => {
+  it('accepts a replacement date from a verified active Admin email', () => {
     const ports = createTestPorts()
     ports.bookings.insert(tentativeBookingFixture())
     const result = confirmQueue({
@@ -75,12 +75,23 @@ describe('queue confirmation workflow', () => {
       action: 'CHANGE',
       appointmentDate: '2026-08-26',
       appointmentTime: '15:30',
-      actorEmail: 'another.admin@gmail.com',
+      actorEmail: 'admin@example.com',
     }, ports)
     expect(result).toMatchObject({
       appointmentStart: '2026-08-26T15:30:00+07:00',
       appointmentEnd: '2026-08-26T16:30:00+07:00',
-      appointmentConfirmedBy: 'another.admin@gmail.com',
+      appointmentConfirmedBy: 'admin@example.com',
     })
+  })
+
+  it('rejects an email that is not mapped to an active booking Admin', () => {
+    const ports = createTestPorts()
+    ports.bookings.insert(tentativeBookingFixture())
+
+    expect(() => confirmQueue({
+      ...validQueueConfirmation(),
+      actorEmail: 'outside@example.com',
+    }, ports)).toThrow('queue confirmation actor is not an active Admin')
+    expect(ports.calendar.updatedEvents()).toHaveLength(0)
   })
 })

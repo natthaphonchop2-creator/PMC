@@ -435,7 +435,6 @@ async function handleEvidenceUpload(
     return
   }
 
-  const uploaded: Array<{ fileId: string; kind: MiniAppEvidenceKind; order: number }> = []
   try {
     await consumeEvidenceMultipart(req, {
       maxFiles: deps.config.maxFilesPerKind,
@@ -463,13 +462,12 @@ async function handleEvidenceUpload(
         evidenceCount: paymentEvidenceFileIds.length + chatEvidenceFileIds.length,
         updatedAt: (deps.now ?? (() => new Date()))().toISOString(),
       })
-      uploaded.push({ fileId, kind, order: evidenceIdsFor(current, kind).length })
     })
     current = await deps.store.updateDraft(current.draftId, current.version, {
       state: 'DRAFT',
       updatedAt: (deps.now ?? (() => new Date()))().toISOString(),
     })
-    respond(res, 200, { uploaded, draftVersion: current.version })
+    respond(res, 200, draftProjection(current))
   } catch (error) {
     try {
       if (current.state === 'UPLOADING') {
