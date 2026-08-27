@@ -71,6 +71,21 @@ test('fallback remains in Account while Stock stays disabled on Home', async ({ 
   await expect(page.getByRole('link', { name: 'เปิด Google Form สำรอง' })).toBeVisible()
 })
 
+test('active staff can open the report center, a live report, and every additional report choice', async ({ page }) => {
+  await page.goto('/mini-app/?preview=1')
+  await page.getByRole('button', { name: 'รายงาน', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'ยอดรับชำระ' })).toBeVisible()
+  await page.getByRole('button', { name: 'ยอดรับชำระ' }).click()
+  await expect(page.getByRole('heading', { name: 'ยอดรับชำระ' })).toBeVisible()
+  await expect(page.getByText('900 บาท').first()).toBeVisible()
+  await expect(page.getByRole('table')).toBeVisible()
+  await page.getByRole('button', { name: 'กลับไปรายงาน' }).click()
+  await page.getByRole('button', { name: 'รายงานเพิ่มเติม' }).click()
+  await expect(page.getByRole('heading', { name: 'รายงานเพิ่มเติม' })).toBeVisible()
+  await expect(page.locator('.pmc-additional-report-menu section button')).toHaveCount(8)
+})
+
 function imageFile(name: string) {
   return {
     name,
