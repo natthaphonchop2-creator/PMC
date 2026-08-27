@@ -1,5 +1,6 @@
 import type { MiniAppBrowserApi } from './api'
 import type { BookingDraftInput, BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
+import type { JeraClientEnvelope } from './reports'
 
 export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displayName: 'มัส', active: true }
 
@@ -53,6 +54,16 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
       current = { ...current!, state: 'CONFIRMED', version: current!.version + 1, confirmationStatus: 'CONFIRMED' }
       return { caseId: 'PMC-PREVIEW-0001', status: 'CONFIRMED' }
     },
+    async loadReport<T>() { return previewReport<T>() },
+    async refreshReport() { return { accepted: true, correlationId: 'preview-refresh-1' } },
+  }
+}
+
+function previewReport<T>(): JeraClientEnvelope<T> {
+  return {
+    data: { totals: { rowCount: 0 }, rows: [] } as T,
+    source: 'CACHE', fetchedAt: new Date().toISOString(), lastSuccessAt: new Date().toISOString(),
+    refreshing: false, stale: false, warningCode: null,
   }
 }
 

@@ -63,5 +63,6 @@ function miniAppApi(): PmcMiniAppApi {
       paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
     })),
     upload: vi.fn(), save: vi.fn(), confirm: vi.fn(),
+    loadReport: vi.fn(), refreshReport: vi.fn(),
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMiniAppApi } from '../../src/apps/pmc-mini-app/api'
+import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
 describe('PMC Mini App browser API', () => {
   it('initializes LIFF from public config and keeps the raw ID token in authorization headers only', async () => {
@@ -39,6 +40,27 @@ describe('PMC Mini App browser API', () => {
     expect(init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer raw-id-token' } })
     expect(init?.body).toBeInstanceOf(FormData)
     expect((init?.body as FormData).getAll('files')).toHaveLength(2)
+  })
+
+  it('loads reports with one encoded value per supported filter and bearer auth', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      data: { totals: { appointmentCount: 0 }, rows: [] }, source: 'CACHE', fetchedAt: null,
+      lastSuccessAt: null, refreshing: true, stale: true, warningCode: 'JERA_CACHE_EMPTY',
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await api.loadReport('raw-id-token', 'APPOINTMENT', {
+      ...defaultReportFilters('2026-08-27'), status: 'Confirmed', doctorUuid: 'ignored-doctor',
+    })
+
+    const [url, init] = fetch.mock.calls[0]!
+    const parsed = new URL(String(url), 'https://mini-app.example')
+    expect(parsed.pathname).toBe('/api/mini-app/reports/APPOINTMENT')
+    expect(parsed.searchParams.getAll('startDate')).toEqual(['2026-08-27'])
+    expect(parsed.searchParams.getAll('endDate')).toEqual(['2026-08-27'])
+    expect(parsed.searchParams.getAll('status')).toEqual(['Confirmed'])
+    expect(parsed.searchParams.has('doctorUuid')).toBe(false)
+    expect(init).toMatchObject({ headers: { authorization: 'Bearer raw-id-token' } })
   })
 })
 

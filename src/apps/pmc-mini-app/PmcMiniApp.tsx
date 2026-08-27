@@ -4,6 +4,13 @@ import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
 import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
 import { Home } from './Home'
+import { ReportCenter } from './ReportCenter'
+import {
+  loadReportFilterPreferences,
+  saveReportFilterPreferences,
+  type ReportFilterState,
+  type ReportSelection,
+} from './reports'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'ACCOUNT'
@@ -24,6 +31,10 @@ export function PmcMiniApp({
   const [draft, setDraft] = useState<BookingDraftProjection | null>(null)
   const [loading, setLoading] = useState(!initialSession)
   const [message, setMessage] = useState('')
+  const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
+  const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
+
+  useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
 
   useEffect(() => {
     if (initialSession) return
@@ -86,11 +97,16 @@ export function PmcMiniApp({
           else setView(action)
         }}
       />}
-      {view === 'REPORTS' && <SimplePage title="รายงาน JERA" description="เลือกดูรายงานหลักจากระบบ JERA" />}
+      {view === 'REPORTS' && (selectedReport
+        ? <SimplePage title={selectedReport === 'ADDITIONAL' ? 'รายงานเพิ่มเติม' : 'รายงาน JERA'} description="กำลังเตรียมหน้ารายงาน" />
+        : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
       {message && <p className="pmc-shell-alert" role="alert">{message}</p>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
-      <BottomNavigation view={view} onChange={(next) => next === 'BOOKING' ? void openBooking() : setView(next)} />
+      <BottomNavigation view={view} onChange={(next) => {
+        if (next === 'BOOKING') void openBooking()
+        else { setView(next); if (next !== 'REPORTS') setSelectedReport(null) }
+      }} />
     </div>
   )
 }

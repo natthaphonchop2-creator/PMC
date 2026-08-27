@@ -6,6 +6,7 @@ import type {
   MiniAppConfig,
   MiniAppSession,
 } from './contracts'
+import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -22,17 +23,21 @@ export interface MiniAppBrowserApi {
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   save(idToken: string, draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(idToken: string, draftId: string, version: number): Promise<BookingConfirmationResult>
+  loadReport<T = unknown>(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<JeraClientEnvelope<T>>
+  refreshReport(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<{ accepted: true; correlationId: string }>
 }
 
 export class MiniAppApiError extends Error {
   readonly code: string
   readonly status: number
+  readonly retryAfterSeconds: number | null
 
-  constructor(code: string, status: number) {
+  constructor(code: string, status: number, retryAfterSeconds: number | null = null) {
     super(`Mini App API failed: ${code}`)
     this.name = 'MiniAppApiError'
     this.code = code
     this.status = status
+    this.retryAfterSeconds = retryAfterSeconds
   }
 }
 
@@ -82,6 +87,16 @@ export function createMiniAppApi(options: {
     confirm(idToken, draftId, version) {
       return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', { version }))
     },
+    loadReport(idToken, reportType, filters) {
+      const query = buildReportSearchParams(reportType, filters)
+      return requestJson(request, `/api/mini-app/reports/${encodeURIComponent(reportType)}?${query}`, authenticated(idToken))
+    },
+    refreshReport(idToken, reportType, filters) {
+      const query = buildReportSearchParams(reportType, filters)
+      return requestJson(request, `/api/mini-app/reports/${encodeURIComponent(reportType)}/refresh?${query}`, {
+        method: 'POST', headers: { authorization: `Bearer ${idToken}` },
+      })
+    },
   }
 }
 
@@ -104,7 +119,9 @@ async function requestJson<T>(request: typeof globalThis.fetch, url: string, ini
   try { body = await response.json() } catch { throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', response.status) }
   if (!response.ok) {
     const code = body && typeof body === 'object' && !Array.isArray(body) && 'error' in body ? String(body.error) : 'MINI_APP_REQUEST_FAILED'
-    throw new MiniAppApiError(/^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED', response.status)
+    const retryAfterSeconds = body && typeof body === 'object' && !Array.isArray(body) && 'retryAfterSeconds' in body
+      && Number.isSafeInteger(Number(body.retryAfterSeconds)) ? Number(body.retryAfterSeconds) : null
+    throw new MiniAppApiError(/^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED', response.status, retryAfterSeconds)
   }
   return body as T
 }
