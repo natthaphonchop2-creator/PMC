@@ -1,12 +1,11 @@
-import { CalendarDays, ChartNoAxesCombined, ChevronRight, FileText, Plus, UserRound } from 'lucide-react'
+import { CalendarDays, ChartNoAxesCombined, ChevronRight, PackageOpen, Plus, UserRound } from 'lucide-react'
 import { BrandMark } from './BrandMark'
 import type { MiniAppSession } from './contracts'
 
 export type MiniAppHomeAction = 'BOOKING' | 'REPORTS' | 'ACCOUNT'
 
-export function Home({ session, fallbackFormUrl, onAction }: {
+export function Home({ session, onAction }: {
   session: MiniAppSession
-  fallbackFormUrl?: string
   onAction?: (action: MiniAppHomeAction) => void
 }) {
   return (
@@ -33,14 +32,11 @@ export function Home({ session, fallbackFormUrl, onAction }: {
           <small>ดูข้อมูลรายงานของคลินิก</small>
           <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
         </button>
-        {fallbackFormUrl ? <a className="pmc-home-quick-card" aria-label="Google Form สำรอง" href={fallbackFormUrl} target="_blank" rel="noreferrer">
-          <span className="pmc-card-icon"><FileText aria-hidden="true" /></span>
-          <strong>Form สำรอง</strong>
-          <small>เปิดแบบฟอร์มเดิมเมื่อจำเป็น</small>
-          <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
-        </a> : <div className="pmc-home-quick-card unavailable" aria-hidden="true">
-          <span className="pmc-card-icon"><FileText /></span><strong>Form สำรอง</strong><small>ยังไม่พร้อมใช้งาน</small>
-        </div>}
+        <button type="button" className="pmc-home-quick-card unavailable" aria-label="Stock" disabled>
+          <span className="pmc-card-icon"><PackageOpen aria-hidden="true" /></span>
+          <strong>Stock</strong>
+          <small>ยังไม่เปิดใช้งาน</small>
+        </button>
       </section>
 
       <button type="button" className="pmc-home-account-card" aria-label="บัญชีผู้ใช้" onClick={() => onAction?.('ACCOUNT')}>

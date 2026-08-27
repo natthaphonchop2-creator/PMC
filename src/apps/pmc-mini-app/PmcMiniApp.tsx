@@ -81,7 +81,6 @@ export function PmcMiniApp({
     <div className="pmc-mini-app-shell">
       {view === 'HOME' && <Home
         session={session}
-        fallbackFormUrl={config?.fallbackFormUrl}
         onAction={(action) => {
           if (action === 'BOOKING') void openBooking()
           else setView(action)
