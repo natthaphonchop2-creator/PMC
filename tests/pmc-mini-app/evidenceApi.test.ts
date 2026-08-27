@@ -83,7 +83,7 @@ function dependencies(patch: Partial<MiniAppRequestRecord> = {}) {
     state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
     phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
     depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
-    createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, safeErrorCode: null,
+    createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
     updatedAt: '2026-08-27T10:00:00.000Z', ...patch,
   }
   let uploadCount = 0

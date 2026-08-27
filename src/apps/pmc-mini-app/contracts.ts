@@ -44,10 +44,12 @@ export interface BookingDraftProjection {
   draftId: string
   requestId: string
   state: BookingDraftState
+  retentionState: '' | 'PENDING_APPROVAL'
   version: number
   input: BookingDraftInput | null
   paymentEvidenceIds: string[]
   chatEvidenceIds: string[]
+  confirmationStatus: BookingConfirmationResult['status'] | null
 }
 
 export interface BookingConfirmationResult {

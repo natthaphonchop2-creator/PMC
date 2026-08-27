@@ -12,12 +12,13 @@ describe('PMC Mini App Sheet store', () => {
     await firstStore.createDraft(validDraft())
 
     expect((await firstStore.claimConfirmation('request-1', 'hash-1')).claimed).toBe(true)
-    await firstStore.completeConfirmation('request-1', 'PMC-202608-0001', '2026-08-27T10:05:00.000Z')
+    await firstStore.completeConfirmation('request-1', 'PMC-202608-0001', '2026-08-27T10:05:00.000Z', 'CONFIRMED')
 
     const restartedStore = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
     expect(await restartedStore.claimConfirmation('request-1', 'hash-1')).toEqual({
       claimed: false,
       caseId: 'PMC-202608-0001',
+      status: 'CONFIRMED',
     })
     expect((await restartedStore.getDraft('draft-1'))?.state).toBe('CONFIRMED')
   })
@@ -94,7 +95,7 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
     doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01',
     appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'], evidenceCount: 2,
-    createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, safeErrorCode: null,
+    createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
     updatedAt: '2026-08-27T10:00:00.000Z',
     ...patch,
   }

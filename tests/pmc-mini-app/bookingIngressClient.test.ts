@@ -71,7 +71,7 @@ function confirmedDraft(): MiniAppRequestRecord {
     customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678', doctorId: 'doctor-1',
     serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01', appointmentTime: '13:00',
     depositAmount: 900, channelId: 'เพจหลัก', paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
-    evidenceCount: 2, createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null,
+    evidenceCount: 2, createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null,
     safeErrorCode: null, updatedAt: '2026-08-27T10:01:00.000Z',
   }
 }

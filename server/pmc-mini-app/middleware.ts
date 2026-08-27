@@ -1,8 +1,9 @@
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ProductionMiddleware } from '../productionApp.js'
 import type { PmcMiniAppServerConfig } from './config.js'
 import type { AuthenticatedMiniAppContext, LineIdentityPort } from './contracts.js'
+import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind } from './googleClient.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
@@ -14,6 +15,9 @@ export interface PmcMiniAppMiddlewareDependencies {
   drive?: MiniAppDrivePort
   now?: () => Date
   randomId?: () => string
+  requestId?: () => string
+  draftId?: () => string
+  ingress?: { send(draft: MiniAppRequestRecord): Promise<{ caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> }> }
 }
 
 export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencies): ProductionMiddleware {
@@ -43,6 +47,14 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
       await handleEvidenceUpload(req, res, url, evidenceRoute[1]!, authenticated, deps)
+      return
+    }
+
+    const bookingRoute = bookingDraftRoute(pathname)
+    if (bookingRoute) {
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      await handleBookingDraftRoute(req, res, bookingRoute, authenticated, deps)
       return
     }
 
@@ -77,6 +89,240 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     }
   }
+}
+
+type BookingDraftRoute =
+  | { action: 'CREATE' }
+  | { action: 'GET' | 'PATCH' | 'CONFIRM' | 'CANCEL'; draftId: string }
+
+function bookingDraftRoute(pathname: string): BookingDraftRoute | null {
+  if (pathname === '/api/mini-app/booking-drafts') return { action: 'CREATE' }
+  const match = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})(?:\/(confirm|cancel))?$/.exec(pathname)
+  if (!match) return null
+  if (match[2] === 'confirm') return { action: 'CONFIRM', draftId: match[1]! }
+  if (match[2] === 'cancel') return { action: 'CANCEL', draftId: match[1]! }
+  return { action: 'GET', draftId: match[1]! }
+}
+
+async function handleBookingDraftRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  route: BookingDraftRoute,
+  authenticated: AuthenticatedMiniAppContext,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  if (route.action === 'CREATE') {
+    if (req.method !== 'POST') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+    const body = await readRequiredJson(req, res)
+    if (!body) return
+    if (!hasExactKeys(body, [])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+    const now = currentIso(deps)
+    const requestId = deps.requestId?.() ?? `request-${randomUUID()}`
+    const draftId = deps.draftId?.() ?? `draft-${randomUUID()}`
+    const draft: MiniAppRequestRecord = {
+      requestId, draftId, staffId: authenticated.staffId,
+      lineUserIdHash: createHmac('sha256', deps.config.signingSecret).update(authenticated.lineUserId).digest('base64url'),
+      state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
+      phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
+      depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
+      createdAt: now, confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null, updatedAt: now,
+    }
+    try {
+      respond(res, 201, draftProjection(await deps.store.createDraft(draft)))
+    } catch {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    }
+    return
+  }
+
+  if (route.action === 'GET' && req.method === 'PATCH') route = { action: 'PATCH', draftId: route.draftId }
+  if (route.action === 'GET') {
+    if (req.method !== 'GET') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+    const draft = await ownedDraft(route.draftId, authenticated.staffId, deps, res)
+    if (draft) respond(res, 200, draftProjection(draft))
+    return
+  }
+  if (req.method !== 'POST' && route.action !== 'PATCH') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+  if (route.action === 'PATCH' && req.method !== 'PATCH') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+  const body = await readRequiredJson(req, res)
+  if (!body) return
+
+  const draft = await ownedDraft(route.draftId, authenticated.staffId, deps, res)
+  if (!draft) return
+  const version = body.version
+  if (!Number.isSafeInteger(version) || version !== draft.version) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+
+  if (route.action === 'PATCH') {
+    if (!hasExactKeys(body, ['version', 'input'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+    let config
+    try { config = await deps.store.getActiveBookingConfig() } catch { return respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' }) }
+    try {
+      const parsed = parseBookingDraft(body.input, {
+        draftId: draft.draftId, staffId: draft.staffId, lineUserIdHash: draft.lineUserIdHash,
+        doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
+        channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
+        paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
+        now: currentIso(deps),
+      })
+      if (parsed.requestId !== draft.requestId) throw new Error('REQUEST_ID_MISMATCH')
+      const updated = await deps.store.updateDraft(draft.draftId, draft.version, {
+        state: 'READY_TO_CONFIRM', payloadHash: null, aeName: parsed.aeName, customerName: parsed.customerName,
+        facebookName: parsed.facebookName, phoneNormalized: parsed.phoneNormalized, doctorId: parsed.doctorId,
+        serviceId: parsed.serviceId, queueType: parsed.queueType, appointmentDate: parsed.appointmentDate,
+        appointmentTime: parsed.appointmentTime, depositAmount: parsed.depositAmount, channelId: parsed.channelId,
+        evidenceCount: parsed.evidenceCount, safeErrorCode: null, updatedAt: currentIso(deps),
+      })
+      respond(res, 200, draftProjection(updated))
+    } catch (error) {
+      respond(res, bookingErrorStatus(error), { error: safeBookingError(error) })
+    }
+    return
+  }
+
+  if (!hasExactKeys(body, ['version'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+  if (route.action === 'CANCEL') {
+    if (!['DRAFT', 'UPLOADING', 'READY_TO_CONFIRM', 'FAILED_RETRYABLE'].includes(draft.state)) {
+      return respond(res, 409, { error: 'INVALID_DRAFT_TRANSITION' })
+    }
+    try {
+      const cancelled = await deps.store.updateDraft(draft.draftId, draft.version, { state: 'CANCELLED', updatedAt: currentIso(deps) })
+      const retained = await deps.store.markRetentionPending(cancelled.draftId, cancelled.version, currentIso(deps))
+      respond(res, 200, draftProjection(retained))
+    } catch (error) {
+      respond(res, bookingErrorStatus(error), { error: safeBookingError(error) })
+    }
+    return
+  }
+
+  if (draft.state === 'CONFIRMED' && draft.caseId && draft.confirmationStatus) {
+    respond(res, 200, { caseId: draft.caseId, status: draft.confirmationStatus })
+    return
+  }
+  if (draft.state !== 'READY_TO_CONFIRM' && draft.state !== 'FAILED_RETRYABLE') {
+    respond(res, 409, { error: 'DRAFT_NOT_READY' })
+    return
+  }
+  if (!deps.ingress) {
+    respond(res, 503, { error: 'BOOKING_INGRESS_NOT_CONFIGURED' })
+    return
+  }
+  const payloadHash = bookingPayloadHash(draft)
+  try {
+    const claimed = await deps.store.claimConfirmation(draft.requestId, payloadHash)
+    if (!claimed.claimed) {
+      if (claimed.caseId && claimed.status) respond(res, 200, { caseId: claimed.caseId, status: claimed.status })
+      else respond(res, 409, { error: 'BOOKING_CONFIRMATION_IN_PROGRESS' })
+      return
+    }
+    const result = await deps.ingress.send(claimed.draft)
+    await deps.store.completeConfirmation(draft.requestId, result.caseId, currentIso(deps), result.status)
+    respond(res, 200, result)
+  } catch (error) {
+    const code = safeIngressError(error)
+    try { await deps.store.failConfirmation(draft.requestId, code, currentIso(deps)) } catch {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      return
+    }
+    respond(res, code === 'BOOKING_INGRESS_TIMEOUT' ? 504 : 502, { error: code })
+  }
+}
+
+async function ownedDraft(
+  draftId: string,
+  staffId: string,
+  deps: PmcMiniAppMiddlewareDependencies,
+  res: ServerResponse,
+): Promise<MiniAppRequestRecord | null> {
+  try {
+    const draft = await deps.store.getDraft(draftId)
+    if (!draft || draft.staffId !== staffId) {
+      respond(res, 404, { error: 'DRAFT_NOT_FOUND' })
+      return null
+    }
+    return draft
+  } catch {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return null
+  }
+}
+
+function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
+  const hasInput = Boolean(draft.customerName && draft.phoneNormalized && draft.doctorId && draft.serviceId && draft.channelId)
+  return {
+    draftId: draft.draftId,
+    requestId: draft.requestId,
+    state: draft.state,
+    retentionState: draft.retentionState,
+    version: draft.version,
+    input: hasInput ? {
+      requestId: draft.requestId, aeName: draft.aeName, customerName: draft.customerName, facebookName: draft.facebookName,
+      phone: draft.phoneNormalized, doctorId: draft.doctorId, serviceId: draft.serviceId, queueType: draft.queueType,
+      appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
+      channelId: draft.channelId,
+    } : null,
+    paymentEvidenceIds: [...draft.paymentEvidenceFileIds],
+    chatEvidenceIds: [...draft.chatEvidenceFileIds],
+    confirmationStatus: draft.confirmationStatus,
+  }
+}
+
+async function readRequiredJson(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
+  const contentType = req.headers['content-type']
+  if (typeof contentType !== 'string' || contentType.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+    respond(res, 415, { error: 'MINI_APP_JSON_REQUIRED' })
+    return null
+  }
+  const advertised = Number(req.headers['content-length'])
+  if (Number.isFinite(advertised) && advertised > 64 * 1024) {
+    respond(res, 413, { error: 'MINI_APP_PAYLOAD_TOO_LARGE' })
+    return null
+  }
+  const chunks: Buffer[] = []
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      const bytes = Buffer.from(chunk)
+      size += bytes.length
+      if (size > 64 * 1024) {
+        respond(res, 413, { error: 'MINI_APP_PAYLOAD_TOO_LARGE' })
+        return null
+      }
+      chunks.push(bytes)
+    }
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')
+    return parsed as Record<string, unknown>
+  } catch {
+    respond(res, 400, { error: 'MINI_APP_INVALID_JSON' })
+    return null
+  }
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+function currentIso(deps: PmcMiniAppMiddlewareDependencies): string {
+  return (deps.now ?? (() => new Date()))().toISOString()
+}
+
+function safeBookingError(error: unknown): string {
+  const code = error instanceof Error ? error.message : ''
+  return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'INVALID_BOOKING_INPUT'
+}
+
+function bookingErrorStatus(error: unknown): number {
+  const code = safeBookingError(error)
+  if (code === 'STALE_DRAFT_VERSION' || code === 'PAYLOAD_HASH_CONFLICT' || code === 'INVALID_DRAFT_TRANSITION') return 409
+  if (code === 'DRAFT_NOT_FOUND') return 404
+  return 400
+}
+
+function safeIngressError(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  return /^BOOKING_INGRESS_[A-Z_]{1,60}$/.test(code) ? code : 'BOOKING_INGRESS_FAILED'
 }
 
 async function handleEvidenceUpload(

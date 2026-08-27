@@ -453,6 +453,7 @@ evidenceCount
 createdAt
 confirmedAt
 caseId
+confirmationStatus
 safeErrorCode
 updatedAt
 ```

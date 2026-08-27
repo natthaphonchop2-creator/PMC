@@ -38,6 +38,7 @@ export interface MiniAppRequestRecord {
   createdAt: string
   confirmedAt: string | null
   caseId: string | null
+  confirmationStatus: 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT' | null
   safeErrorCode: string | null
   updatedAt: string
 }
@@ -91,8 +92,8 @@ export interface MiniAppStore {
   getDraft(draftId: string): Promise<MiniAppRequestRecord | null>
   updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch): Promise<MiniAppRequestRecord>
   markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string): Promise<MiniAppRequestRecord>
-  claimConfirmation(requestId: string, payloadHash: string): Promise<{ claimed: true; draft: MiniAppRequestRecord } | { claimed: false; caseId: string | null }>
-  completeConfirmation(requestId: string, caseId: string, confirmedAt: string): Promise<MiniAppRequestRecord>
+  claimConfirmation(requestId: string, payloadHash: string): Promise<{ claimed: true; draft: MiniAppRequestRecord } | { claimed: false; caseId: string | null; status: MiniAppRequestRecord['confirmationStatus'] }>
+  completeConfirmation(requestId: string, caseId: string, confirmedAt: string, status: NonNullable<MiniAppRequestRecord['confirmationStatus']>): Promise<MiniAppRequestRecord>
   failConfirmation(requestId: string, safeErrorCode: string, updatedAt: string): Promise<MiniAppRequestRecord>
 }
 
@@ -100,7 +101,7 @@ export const MINI_APP_REQUEST_HEADERS = [
   'requestId', 'draftId', 'staffId', 'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash',
   'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
   'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
-  'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'safeErrorCode', 'updatedAt',
+  'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode', 'updatedAt',
 ] as const
 
 const REQUEST_TAB = 'MINI_APP_REQUESTS'
@@ -202,8 +203,8 @@ export function createGoogleMiniAppStore(input: {
         const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
         if (row.value.payloadHash && row.value.payloadHash !== payloadHash) throw new Error('PAYLOAD_HASH_CONFLICT')
-        if (row.value.state === 'CONFIRMED') return { claimed: false as const, caseId: row.value.caseId }
-        if (row.value.state === 'CONFIRMING') return { claimed: false as const, caseId: null }
+        if (row.value.state === 'CONFIRMED') return { claimed: false as const, caseId: row.value.caseId, status: row.value.confirmationStatus }
+        if (row.value.state === 'CONFIRMING') return { claimed: false as const, caseId: null, status: null }
         if (row.value.state !== 'READY_TO_CONFIRM' && row.value.state !== 'FAILED_RETRYABLE') throw new Error('DRAFT_NOT_READY')
         const next = normalizeRequestRecord({
           ...row.value, state: 'CONFIRMING', payloadHash, safeErrorCode: null, version: row.value.version + 1,
@@ -212,7 +213,7 @@ export function createGoogleMiniAppStore(input: {
         return { claimed: true as const, draft: next }
       })
     },
-    async completeConfirmation(requestId, caseId, confirmedAt) {
+    async completeConfirmation(requestId, caseId, confirmedAt, status) {
       if (!safeId(requestId) || !safeCaseId(caseId)) throw new Error('INVALID_CONFIRMATION_RESULT')
       return withMutex(mutexKey, async () => {
         const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
@@ -220,7 +221,7 @@ export function createGoogleMiniAppStore(input: {
         if (row.value.state === 'CONFIRMED' && row.value.caseId === caseId) return row.value
         if (row.value.state !== 'CONFIRMING') throw new Error('DRAFT_NOT_CONFIRMING')
         const next = normalizeRequestRecord({
-          ...row.value, state: 'CONFIRMED', caseId, confirmedAt, updatedAt: confirmedAt,
+          ...row.value, state: 'CONFIRMED', caseId, confirmedAt, confirmationStatus: status, updatedAt: confirmedAt,
           safeErrorCode: null, version: row.value.version + 1,
         })
         await writeRequest(row.rowNumber, next)
@@ -249,7 +250,7 @@ function requestToRow(value: MiniAppRequestRecord): unknown[] {
     value.payloadHash ?? '', value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId,
     value.serviceId, value.queueType, value.appointmentDate ?? '', value.appointmentTime ?? '', value.depositAmount,
     value.channelId, JSON.stringify(value.paymentEvidenceFileIds), JSON.stringify(value.chatEvidenceFileIds),
-    value.evidenceCount, value.createdAt, value.confirmedAt ?? '', value.caseId ?? '', value.safeErrorCode ?? '', value.updatedAt,
+    value.evidenceCount, value.createdAt, value.confirmedAt ?? '', value.caseId ?? '', value.confirmationStatus ?? '', value.safeErrorCode ?? '', value.updatedAt,
   ]
 }
 
@@ -263,7 +264,9 @@ function requestFromRow(row: unknown[]): MiniAppRequestRecord {
     queueType: text(row[14]) as 'NORMAL' | 'AUTO', appointmentDate: nullableText(row[15]), appointmentTime: nullableText(row[16]),
     depositAmount: numberValue(row[17]), channelId: text(row[18]), paymentEvidenceFileIds: stringArray(row[19]),
     chatEvidenceFileIds: stringArray(row[20]), evidenceCount: numberValue(row[21]), createdAt: text(row[22]),
-    confirmedAt: nullableText(row[23]), caseId: nullableText(row[24]), safeErrorCode: nullableText(row[25]), updatedAt: text(row[26]),
+    confirmedAt: nullableText(row[23]), caseId: nullableText(row[24]),
+    confirmationStatus: nullableText(row[25]) as MiniAppRequestRecord['confirmationStatus'],
+    safeErrorCode: nullableText(row[26]), updatedAt: text(row[27]),
   })
 }
 
@@ -274,6 +277,9 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
   if (value.retentionState !== '' && value.retentionState !== 'PENDING_APPROVAL') throw new Error('INVALID_RETENTION_STATE')
   if (!Number.isSafeInteger(value.version) || value.version < 1) throw new Error('INVALID_DRAFT_VERSION')
   if (value.payloadHash !== null && !safeHash(value.payloadHash)) throw new Error('INVALID_PAYLOAD_HASH')
+  if (value.confirmationStatus !== null && !['CONFIRMED', 'TENTATIVE', 'AWAITING_ADMIN_SLOT'].includes(value.confirmationStatus)) {
+    throw new Error('INVALID_CONFIRMATION_STATUS')
+  }
   if (value.queueType !== 'NORMAL' && value.queueType !== 'AUTO') throw new Error('INVALID_QUEUE_TYPE')
   if (!Number.isFinite(value.depositAmount) || value.depositAmount < 0) throw new Error('INVALID_DEPOSIT_AMOUNT')
   if (!Number.isSafeInteger(value.evidenceCount) || value.evidenceCount < 0 || value.evidenceCount > 20) throw new Error('INVALID_EVIDENCE_COUNT')

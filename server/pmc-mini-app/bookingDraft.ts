@@ -90,6 +90,7 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
     createdAt: now,
     confirmedAt: null,
     caseId: null,
+    confirmationStatus: null,
     safeErrorCode: null,
     updatedAt: now,
   }
