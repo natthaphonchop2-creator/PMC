@@ -31,6 +31,7 @@ describe('production PMC Mini App route isolation', () => {
 
     expect((await invoke(app, '/api/mini-app/session')).status).toBe(503)
     expect((await invoke(app, '/healthz')).status).toBe(200)
+    expect((await invoke(app, '/api/healthz')).status).toBe(200)
     expect((await invoke(app, '/api/booking-line/webhook', { method: 'POST' })).status).not.toBe(503)
     expect((await invoke(app, '/api/ocr-ledger/client-config')).status).not.toBe(503)
     expect((await invoke(app, '/')).status).toBe(401)

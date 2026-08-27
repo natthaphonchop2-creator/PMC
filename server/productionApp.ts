@@ -49,7 +49,7 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
   const allowUnauthenticated = deps.allowUnauthenticated ?? false
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.url === '/healthz') {
+    if (req.url === '/healthz' || req.url === '/api/healthz') {
       res.statusCode = 200
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.setHeader('cache-control', 'no-cache')
