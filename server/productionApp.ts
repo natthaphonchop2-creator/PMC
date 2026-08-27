@@ -16,6 +16,7 @@ export interface ProductionAppDependencies {
   pageAutomationApi: ProductionMiddleware
   bookingLineWebhook: ProductionMiddleware
   ocrLedger?: ProductionMiddleware
+  pmcMiniApp?: ProductionMiddleware
 }
 
 const OCR_API_PATHS = new Set([
@@ -42,6 +43,7 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
   const distDir = resolve(deps.distDir ?? resolve(process.cwd(), 'dist'))
   const indexHtml = join(distDir, 'index.html')
   const ocrReviewDir = join(distDir, 'ocr-review')
+  const miniAppDir = join(distDir, 'mini-app')
   const basicAuthUser = deps.basicAuthUser ?? 'pmc'
   const basicAuthPassword = deps.basicAuthPassword ?? ''
   const allowUnauthenticated = deps.allowUnauthenticated ?? false
@@ -86,6 +88,24 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
 
     if (pathname && isOcrReviewPath(pathname)) {
       await serveOcrReview(req, res, pathname, ocrReviewDir)
+      return
+    }
+
+    if (pathname && isMiniAppApiPath(pathname)) {
+      if (!deps.pmcMiniApp) {
+        jsonError(res, 503, 'Mini App is not configured')
+        return
+      }
+      try {
+        await deps.pmcMiniApp(req, res)
+      } catch {
+        jsonError(res, 500, 'Mini App route failed')
+      }
+      return
+    }
+
+    if (pathname && isMiniAppPath(pathname)) {
+      await serveMiniApp(req, res, pathname, miniAppDir)
       return
     }
 
@@ -153,6 +173,45 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
         res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Production server failed' }))
       }
     }
+  }
+}
+
+async function serveMiniApp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  miniAppDir: string,
+): Promise<void> {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    jsonError(res, 405, 'Method not allowed')
+    return
+  }
+
+  let decodedPathname: string
+  try {
+    decodedPathname = decodeURIComponent(pathname)
+  } catch {
+    res.statusCode = 400
+    res.end('Invalid path')
+    return
+  }
+
+  const relativePath = decodedPathname === '/mini-app' || decodedPathname === '/mini-app/'
+    ? 'index.html'
+    : decodedPathname.slice('/mini-app/'.length)
+  const staticPath = resolve(miniAppDir, relativePath)
+  if (!isWithin(miniAppDir, staticPath)) {
+    res.statusCode = 403
+    res.end('Forbidden')
+    return
+  }
+
+  try {
+    const filePath = await resolveStaticFile(staticPath)
+    serveStaticFile(req, res, filePath, join(miniAppDir, 'assets'))
+  } catch {
+    res.statusCode = 404
+    res.end('Not found')
   }
 }
 
@@ -240,12 +299,26 @@ function isOcrReviewPath(pathname: string): boolean {
   return pathname === '/ocr-review' || pathname === '/ocr-review/' || pathname.startsWith('/ocr-review/')
 }
 
+function isMiniAppApiPath(pathname: string): boolean {
+  return pathname === '/api/mini-app' || pathname.startsWith('/api/mini-app/')
+}
+
+function isMiniAppPath(pathname: string): boolean {
+  return pathname === '/mini-app' || pathname === '/mini-app/' || pathname.startsWith('/mini-app/')
+}
+
 function isWithin(root: string, pathname: string): boolean {
   return pathname === root || pathname.startsWith(`${root}${sep}`)
 }
 
 function isAssetRequest(url: string): boolean {
   return extname(new URL(url, 'http://localhost').pathname) !== ''
+}
+
+function jsonError(res: ServerResponse, status: number, error: string): void {
+  res.statusCode = status
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.end(JSON.stringify({ error }))
 }
 
 function isBasicAuthAllowed(

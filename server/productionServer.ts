@@ -6,6 +6,7 @@ import { createOpenAiMiddleware } from './openAiPlugin.js'
 import { createPageAutomationMiddleware } from './pageAutomationPlugin.js'
 import { createBookingLineWebhookMiddleware } from './bookingLineWebhook.js'
 import { createOcrLedgerRuntime } from './ocr-ledger/runtime.js'
+import { createPmcMiniAppRuntime } from './pmc-mini-app/runtime.js'
 
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 4174)
@@ -15,6 +16,7 @@ const openAiApi = createOpenAiMiddleware(process.env)
 const pageAutomationApi = createPageAutomationMiddleware(process.env)
 const bookingLineWebhook = createBookingLineWebhookMiddleware(process.env)
 const ocrLedger = createOcrLedgerRuntime(process.env)
+const pmcMiniApp = createPmcMiniAppRuntime(process.env)
 
 const server = createServer(createProductionRequestHandler({
   distDir,
@@ -26,6 +28,7 @@ const server = createServer(createProductionRequestHandler({
   pageAutomationApi,
   bookingLineWebhook,
   ocrLedger,
+  pmcMiniApp,
 }))
 
 server.listen(port, host, () => {
