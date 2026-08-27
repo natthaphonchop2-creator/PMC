@@ -261,8 +261,10 @@ function cacheRowToCells(row: JeraNormalizedRow): unknown[] {
   return [
     row.cacheKey, row.reportType, row.sourceUuid, row.branchUuid ?? '', row.branchName ?? '', row.eventDate,
     row.patientUuid ?? '', row.patientCode ?? '', row.patientName ?? '', row.paymentCode ?? '', row.status ?? '', row.type ?? '',
-    row.totalSatang ?? '', row.paidAmountSatang ?? '', row.refundAmountSatang ?? '', row.doctorName ?? '',
-    row.salespersonName ?? '', row.sourceCreatedAt ?? '', row.sourceUpdatedAt ?? '', row.fetchedAt, row.sourceHash,
+    row.totalSatang ?? '', row.paidAmountSatang ?? '', row.refundAmountSatang ?? '', row.cashSatang ?? '',
+    row.transferSatang ?? '', row.creditCardSatang ?? '', row.eWalletSatang ?? '', row.paymentLinkSatang ?? '',
+    row.otherPaymentSatang ?? '', row.doctorName ?? '', row.salespersonName ?? '', row.sourceCreatedAt ?? '',
+    row.sourceUpdatedAt ?? '', row.fetchedAt, row.sourceHash,
   ]
 }
 
@@ -274,9 +276,12 @@ function cacheRowFromCells(cells: unknown[]): JeraNormalizedRow {
     eventDate: stringValue(cells[5]), patientUuid: nullableString(cells[6]), patientCode: nullableString(cells[7]),
     patientName: nullableString(cells[8]), paymentCode: nullableString(cells[9]), status: nullableString(cells[10]),
     type: nullableString(cells[11]), totalSatang: nullableSatang(cells[12]), paidAmountSatang: nullableSatang(cells[13]),
-    refundAmountSatang: nullableSatang(cells[14]), doctorName: nullableString(cells[15]),
-    salespersonName: nullableString(cells[16]), sourceCreatedAt: nullableString(cells[17]),
-    sourceUpdatedAt: nullableString(cells[18]), fetchedAt: stringValue(cells[19]), sourceHash: stringValue(cells[20]),
+    refundAmountSatang: nullableSatang(cells[14]), cashSatang: nullableSatang(cells[15]),
+    transferSatang: nullableSatang(cells[16]), creditCardSatang: nullableSatang(cells[17]),
+    eWalletSatang: nullableSatang(cells[18]), paymentLinkSatang: nullableSatang(cells[19]),
+    otherPaymentSatang: nullableSatang(cells[20]), doctorName: nullableString(cells[21]),
+    salespersonName: nullableString(cells[22]), sourceCreatedAt: nullableString(cells[23]),
+    sourceUpdatedAt: nullableString(cells[24]), fetchedAt: stringValue(cells[25]), sourceHash: stringValue(cells[26]),
   }, stringValue(cells[1]) as JeraSourceReportType)
 }
 
@@ -290,7 +295,10 @@ function validateCacheRow(row: JeraNormalizedRow, expectedType: JeraSourceReport
   for (const value of [row.branchName, row.patientCode, row.patientName, row.paymentCode, row.status, row.type, row.doctorName, row.salespersonName]) {
     if (value !== null && (typeof value !== 'string' || value.length > 256)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
   }
-  for (const value of [row.totalSatang, row.paidAmountSatang, row.refundAmountSatang]) {
+  for (const value of [
+    row.totalSatang, row.paidAmountSatang, row.refundAmountSatang, row.cashSatang, row.transferSatang,
+    row.creditCardSatang, row.eWalletSatang, row.paymentLinkSatang, row.otherPaymentSatang,
+  ]) {
     if (value !== null && (!Number.isSafeInteger(value) || value < 0)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
   }
   if (row.sourceCreatedAt !== null) dateTime(row.sourceCreatedAt)

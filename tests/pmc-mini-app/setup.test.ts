@@ -41,6 +41,7 @@ describe('PMC Mini App managed Sheet setup', () => {
   it('names stored monetary columns as integer satang and includes lease fields', () => {
     expect(MANAGED_TAB_HEADERS.JERA_API_CACHE).toEqual(expect.arrayContaining([
       'branchName', 'patientName', 'totalSatang', 'paidAmountSatang', 'refundAmountSatang',
+      'cashSatang', 'transferSatang', 'creditCardSatang', 'eWalletSatang', 'paymentLinkSatang', 'otherPaymentSatang',
     ]))
     expect(MANAGED_TAB_HEADERS.JERA_SYNC_STATE).toEqual(expect.arrayContaining(['lastManualAt', 'leaseOwner', 'leaseExpiresAt']))
   })

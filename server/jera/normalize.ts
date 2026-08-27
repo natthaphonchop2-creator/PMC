@@ -39,8 +39,16 @@ export function normalizePaymentReport(payload: unknown, context: JeraNormalizat
       branchName: optionalText(row.branch_name), eventDate: eventDate(row.create_date),
       patientUuid: optionalUuid(row.patient_uuid), patientCode: optionalText(row.patient_code, MAX_CODE),
       patientName: optionalText(row.patient_name), paymentCode,
-      status: optionalText(row.status, MAX_CODE), type: optionalText(row.type, MAX_CODE),
+      status: row.is_unpaid === true ? 'UNPAID' : optionalText(row.status, MAX_CODE),
+      type: row.is_cash_deposit === true ? 'CASH_DEPOSIT' : optionalText(row.type, MAX_CODE),
       totalSatang: requiredMoney(row.total), paidAmountSatang: requiredMoney(row.paid_amount), refundAmountSatang: null,
+      cashSatang: optionalMoney(row.paid_amount_cash), transferSatang: optionalMoney(row.paid_amount_transfer),
+      creditCardSatang: optionalMoney(row.paid_amount_credit_card), eWalletSatang: optionalMoney(row.paid_amount_e_wallet),
+      paymentLinkSatang: optionalMoney(row.paid_amount_payment_link),
+      otherPaymentSatang: sumOptionalMoney([
+        row.paid_amount_card_cash, row.paid_amount_card_point, row.paid_amount_social_security,
+        row.paid_amount_cash_voucher, row.paid_amount_product_voucher,
+      ]),
       doctorName: optionalText(row.doctor_name), salespersonName: personNames(row.seller),
       sourceCreatedAt, sourceUpdatedAt: null,
     }
@@ -63,7 +71,7 @@ export function normalizeDepositReport(payload: unknown, context: JeraNormalizat
       patientName: optionalText(row.patient_name), paymentCode: requiredText(row.payment_code, MAX_CODE),
       status: null, type: group.type,
       totalSatang: requiredMoney(row.total), paidAmountSatang: requiredMoney(row.paid_amount),
-      refundAmountSatang: optionalMoney(row.total_refund), doctorName: null,
+      refundAmountSatang: optionalMoney(row.total_refund), ...emptyPaymentBreakdown(), doctorName: null,
       salespersonName: personNames(row.sellers), sourceCreatedAt: requiredDateTime(row.create_date), sourceUpdatedAt: null,
     }
     return finishRow(base, safeContext)
@@ -102,7 +110,8 @@ export function normalizeRefundReport(payload: unknown, context: JeraNormalizati
       branchName: optionalText(row.branch_name), eventDate: eventDate(row.refund_date),
       patientUuid: optionalUuid(row.patient_uuid), patientCode, patientName: optionalText(row.patient_name), paymentCode,
       status: null, type: refundType, totalSatang: optionalMoney(row.total), paidAmountSatang: null,
-      refundAmountSatang: requiredMoney(row.total_refund_cost), doctorName: null, salespersonName: null,
+      refundAmountSatang: requiredMoney(row.total_refund_cost), ...emptyPaymentBreakdown(),
+      doctorName: null, salespersonName: null,
       sourceCreatedAt, sourceUpdatedAt: null,
     }
     return finishRow(base, safeContext)
@@ -121,6 +130,7 @@ export function normalizeAppointmentList(payload: unknown, context: JeraNormaliz
       patientName: optionalText(row.patient_name), paymentCode: null,
       status: optionalText(row.status_text, MAX_CODE), type: optionalText(row.type_text, MAX_CODE),
       totalSatang: null, paidAmountSatang: null, refundAmountSatang: null,
+      ...emptyPaymentBreakdown(),
       doctorName: optionalText(row.staff_name), salespersonName: null,
       sourceCreatedAt: optionalDateTime(row.create_date), sourceUpdatedAt: optionalDateTime(row.update_date),
     }
@@ -140,7 +150,8 @@ export function normalizePaymentList(payload: unknown, context: JeraNormalizatio
       patientName: optionalText(row.patient_name), paymentCode: requiredText(row.code, MAX_CODE),
       status: requiredBoolean(row.is_unpaid) ? 'UNPAID' : 'PAID', type: 'PAYMENT_LIST',
       totalSatang: requiredMoney(row.total), paidAmountSatang: requiredMoney(row.paid_amount),
-      refundAmountSatang: optionalMoney(row.total_refund), doctorName: optionalText(row.doctor_name), salespersonName: null,
+      refundAmountSatang: optionalMoney(row.total_refund), ...emptyPaymentBreakdown(),
+      doctorName: optionalText(row.doctor_name), salespersonName: null,
       sourceCreatedAt: requiredDateTime(row.create_date), sourceUpdatedAt: null,
     }
     return finishRow(base, safeContext)
@@ -275,6 +286,19 @@ function requiredMoney(value: unknown): number {
 function optionalMoney(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null
   return requiredMoney(value)
+}
+
+function sumOptionalMoney(values: unknown[]): number | null {
+  const parsed = values.map(optionalMoney)
+  return parsed.every((value) => value === null) ? null : parsed.reduce<number>((sum, value) => sum + (value ?? 0), 0)
+}
+
+function emptyPaymentBreakdown(): Pick<RowBase,
+  'cashSatang' | 'transferSatang' | 'creditCardSatang' | 'eWalletSatang' | 'paymentLinkSatang' | 'otherPaymentSatang'> {
+  return {
+    cashSatang: null, transferSatang: null, creditCardSatang: null,
+    eWalletSatang: null, paymentLinkSatang: null, otherPaymentSatang: null,
+  }
 }
 
 function requiredBoolean(value: unknown): boolean {

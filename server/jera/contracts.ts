@@ -84,6 +84,12 @@ export interface JeraNormalizedRow {
   totalSatang: number | null
   paidAmountSatang: number | null
   refundAmountSatang: number | null
+  cashSatang: number | null
+  transferSatang: number | null
+  creditCardSatang: number | null
+  eWalletSatang: number | null
+  paymentLinkSatang: number | null
+  otherPaymentSatang: number | null
   doctorName: string | null
   salespersonName: string | null
   sourceCreatedAt: string | null

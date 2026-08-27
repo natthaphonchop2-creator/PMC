@@ -151,6 +151,8 @@ function paymentRow(patch: Partial<JeraNormalizedRow> = {}): JeraNormalizedRow {
     branchName: 'Synthetic Branch', eventDate: '2026-08-27', patientUuid: null, patientCode: 'PAT-SYN-1',
     patientName: 'Synthetic Patient', paymentCode: 'PAY-SYN-1', status: 'PAID', type: 'normal',
     totalSatang: 10_000, paidAmountSatang: 10_000, refundAmountSatang: null,
+    cashSatang: null, transferSatang: null, creditCardSatang: null, eWalletSatang: null,
+    paymentLinkSatang: null, otherPaymentSatang: null,
     doctorName: 'Doctor Synthetic', salespersonName: null, sourceCreatedAt: '2026-08-27T16:00:00+07:00',
     sourceUpdatedAt: null, fetchedAt: '2026-08-27T09:55:00.000Z', sourceHash: 'a'.repeat(64),
     ...patch,

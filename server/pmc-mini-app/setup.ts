@@ -4,6 +4,7 @@ import { MINI_APP_REQUEST_HEADERS } from './store.js'
 export const JERA_API_CACHE_HEADERS = [
   'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'branchName', 'eventDate', 'patientUuid', 'patientCode',
   'patientName', 'paymentCode', 'status', 'type', 'totalSatang', 'paidAmountSatang', 'refundAmountSatang',
+  'cashSatang', 'transferSatang', 'creditCardSatang', 'eWalletSatang', 'paymentLinkSatang', 'otherPaymentSatang',
   'doctorName', 'salespersonName', 'sourceCreatedAt', 'sourceUpdatedAt', 'fetchedAt', 'sourceHash',
 ] as const
 
