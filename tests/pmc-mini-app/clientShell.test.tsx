@@ -14,6 +14,7 @@ describe('PMC LINE Mini App shell', () => {
 
     expect(screen.getByRole('button', { name: 'ลงนัดหมาย' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'รายงาน JERA' })).toBeVisible()
+    expect(screen.getByRole('img', { name: 'Promed Clinic' })).toBeVisible()
     expect(screen.getByRole('navigation', { name: 'เมนูด้านล่าง' })).toBeVisible()
     expect(screen.queryByText('LINE Assistant')).not.toBeInTheDocument()
   })

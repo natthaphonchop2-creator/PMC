@@ -1,5 +1,6 @@
 import { CalendarDays, FileChartColumn } from 'lucide-react'
 import type { MiniAppSession } from './contracts'
+import { BrandMark } from './BrandMark'
 
 export type MiniAppHomeAction = 'BOOKING' | 'REPORTS'
 
@@ -10,7 +11,7 @@ export function Home({ session, onAction }: {
   return (
     <main className="pmc-mini-app-home">
       <header className="pmc-mini-app-header">
-        <p>PMC</p>
+        <BrandMark />
         <h1>ระบบงานคลินิก</h1>
         <span>สวัสดี {session.displayName}</span>
       </header>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent, type FormEvent, type ReactElement } from 'react'
 import { ArrowLeft, Check, ImagePlus, X } from 'lucide-react'
+import { BrandMark } from './BrandMark'
 import {
   bookingInput,
   initialBooking,
@@ -145,6 +146,7 @@ export function BookingWizard({
     <main className="pmc-booking-page">
       <header className="pmc-booking-header">
         <button type="button" className="pmc-icon-button" aria-label="ย้อนกลับ" onClick={goBack}><ArrowLeft aria-hidden="true" /></button>
+        <BrandMark compact />
         <div>
           <p>ลงนัดหมาย</p>
           <span>ขั้นตอน {Math.min(state.step + 1, 5)} จาก 5</span>
