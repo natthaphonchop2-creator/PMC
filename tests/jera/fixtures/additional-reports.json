@@ -1,0 +1,50 @@
+{
+  "PRODUCT_USE": [
+    { "opd_code": "OPD-SYN-1", "opd_create_date": "2026-08-27 10:00:00", "product_code": "PRD-SYN-1", "product_name": "Synthetic Product", "action": "use", "type_name": "Medicine", "branch_name": "Synthetic Branch", "patient_code": "PAT-SYN-1", "patient_name": "Synthetic Patient", "price": 100, "amount": 2, "payment_price": 200, "paid_amount": 200, "refund_price": 0, "doctor_name": "Doctor Synthetic", "sales_name": "Sales Synthetic" },
+    { "opd_code": "OPD-SYN-2", "opd_create_date": "2026-08-27 10:30:00", "product_code": "PRD-SYN-2", "product_name": null, "action": "use", "type_name": "Service", "branch_name": null, "patient_code": "PAT-SYN-2", "patient_name": null, "price": 0, "amount": 1, "payment_price": 0, "paid_amount": 0, "refund_price": null, "doctor_name": null, "sales_name": null },
+    { "opd_code": "OPD-BAD", "opd_create_date": "27/08/2026", "product_code": "PRD-BAD", "action": "use", "patient_code": "PAT-BAD", "payment_price": 1, "paid_amount": 1 },
+    { "opd_code": "OPD-SYN-4", "opd_create_date": "2026-08-27 11:00:00", "product_code": "PRD-SYN-4", "product_name": "Synthetic Product", "action": "use", "type_name": "Medicine", "branch_name": "Synthetic Branch", "patient_code": "PAT-SYN-4", "patient_name": "<b onclick=alert(1)>Synthetic</b>", "price": 100, "amount": 1, "payment_price": 100, "paid_amount": 100, "refund_price": 0 }
+  ],
+  "PRODUCT_SALES": [
+    { "type_name": "Medicine", "product_code": "PRD-SYN-1", "action": "sale", "cat_name": "Synthetic Category", "subcat_name": "Synthetic Subcategory", "sum_amount": 2, "payment_price": 200, "paid_amount": 180, "refund_price": 20 },
+    { "type_name": null, "product_code": "PRD-SYN-2", "action": "sale", "cat_name": null, "subcat_name": null, "sum_amount": 0, "payment_price": 0, "paid_amount": 0, "refund_price": null },
+    { "type_name": "Medicine", "product_code": "PRD-BAD", "action": "sale", "sum_amount": 1, "payment_price": "1.001", "paid_amount": 1 },
+    { "type_name": "<b onclick=alert(1)>Medicine</b>", "product_code": "PRD-SYN-4", "action": "sale", "cat_name": "Synthetic", "sum_amount": 1, "payment_price": 100, "paid_amount": 100, "refund_price": 0 }
+  ],
+  "CANCELLED_PAYMENT": [
+    { "uuid": "71000000-0000-4000-8000-000000000001", "create_date": "2026-08-26 09:00:00", "code": "PAY-CAN-1", "patient_code": "PAT-SYN-1", "patient_name": "Synthetic Patient", "total": 1000, "paid_amount": 900, "del_date": "2026-08-27 09:00:00", "del_by": "Operator Synthetic" },
+    { "uuid": "71000000-0000-4000-8000-000000000002", "create_date": "2026-08-26 09:00:00", "code": "PAY-CAN-2", "patient_code": null, "patient_name": null, "total": 0, "paid_amount": 0, "del_date": "2026-08-27 09:30:00", "del_by": null },
+    { "uuid": "bad-uuid", "create_date": "2026-08-26 09:00:00", "code": "PAY-BAD", "total": 1, "paid_amount": 1, "del_date": "2026-08-27 09:00:00" },
+    { "uuid": "71000000-0000-4000-8000-000000000004", "create_date": "2026-08-26 09:00:00", "code": "PAY-CAN-4", "patient_code": "PAT-SYN-4", "patient_name": "<b onclick=alert(1)>Synthetic</b>", "total": 100, "paid_amount": 100, "del_date": "2026-08-27 10:00:00" }
+  ],
+  "OPD": [
+    { "uuid": "72000000-0000-4000-8000-000000000001", "date": "2026-08-27", "code": "OPD-SYN-1", "patient_code": "PAT-SYN-1", "full_name": "Synthetic Patient", "doctor": "Doctor Synthetic", "is_paid": true, "disc_price": "500.00", "paid_amount": "500.00" },
+    { "uuid": "72000000-0000-4000-8000-000000000002", "date": "2026-08-27", "code": "OPD-SYN-2", "patient_code": null, "full_name": null, "doctor": null, "is_paid": false, "disc_price": "0.00", "paid_amount": "0.00" },
+    { "uuid": "72000000-0000-4000-8000-000000000003", "date": "bad-date", "code": "OPD-BAD", "is_paid": true, "disc_price": "1.00", "paid_amount": "1.00" },
+    { "uuid": "72000000-0000-4000-8000-000000000004", "date": "2026-08-27", "code": "OPD-SYN-4", "patient_code": "PAT-SYN-4", "full_name": "<b onclick=alert(1)>Synthetic</b>", "doctor": null, "is_paid": true, "disc_price": "100.00", "paid_amount": "100.00" }
+  ],
+  "CANCELLED_UNPAID": [
+    { "payment_uuid": "73000000-0000-4000-8000-000000000001", "payment_code": "PAY-UNP-1", "payment_date": "2026-08-26 10:00:00", "cancel_date": "2026-08-27 10:00:00", "payment_type": "Unpaid", "payment_branch": "Synthetic Branch", "patient_code": "PAT-SYN-1", "patient_name": "Synthetic Patient", "disc_price": 1000, "paid_amount": 0, "refund_total": 0 },
+    { "payment_uuid": "73000000-0000-4000-8000-000000000002", "payment_code": "PAY-UNP-2", "payment_date": "2026-08-26 10:00:00", "cancel_date": "2026-08-27 10:30:00", "payment_type": null, "payment_branch": null, "patient_code": null, "patient_name": null, "disc_price": 0, "paid_amount": 0, "refund_total": null },
+    { "payment_uuid": "73000000-0000-4000-8000-000000000003", "payment_code": "PAY-BAD", "payment_date": "2026-08-26 10:00:00", "cancel_date": "bad-date", "disc_price": 1, "paid_amount": 0 },
+    { "payment_uuid": "73000000-0000-4000-8000-000000000004", "payment_code": "PAY-UNP-4", "payment_date": "2026-08-26 10:00:00", "cancel_date": "2026-08-27 11:00:00", "payment_type": "Unpaid", "payment_branch": "Synthetic Branch", "patient_code": "PAT-SYN-4", "patient_name": "<b onclick=alert(1)>Synthetic</b>", "disc_price": 100, "paid_amount": 0, "refund_total": 0 }
+  ],
+  "COURSE_SALES": [
+    { "uuid": "74000000-0000-4000-8000-000000000001", "course_code": "CRS-SYN-1", "course_name": "Synthetic Course", "patient_uuid": "24000000-0000-4000-8000-000000000001", "patient_code": "PAT-SYN-1", "patient_name": "Synthetic Patient", "buy_date": "2026-08-27", "status": "Active", "branch_name": "Synthetic Branch", "price": "5000.00", "realized_paid_amount": "4500.00", "performer_names": "Doctor Synthetic", "create_by_name": "Sales Synthetic", "create_date": "2026-08-27 12:00:00", "update_date": "2026-08-27 12:30:00", "payment_code": "PAY-CRS-1" },
+    { "uuid": "74000000-0000-4000-8000-000000000002", "course_code": null, "course_name": null, "patient_uuid": "24000000-0000-4000-8000-000000000002", "patient_code": null, "patient_name": null, "buy_date": "2026-08-27", "status": null, "branch_name": null, "price": "0.00", "realized_paid_amount": "0.00", "performer_names": null, "create_by_name": null, "create_date": "2026-08-27 12:00:00", "update_date": null, "payment_code": null },
+    { "uuid": "74000000-0000-4000-8000-000000000003", "patient_uuid": "24000000-0000-4000-8000-000000000003", "buy_date": "2026-08-27", "price": "1.001", "realized_paid_amount": "1.00", "create_date": "2026-08-27 12:00:00" },
+    { "uuid": "74000000-0000-4000-8000-000000000004", "course_code": "CRS-SYN-4", "course_name": "Synthetic Course", "patient_uuid": "24000000-0000-4000-8000-000000000004", "patient_code": "PAT-SYN-4", "patient_name": "<b onclick=alert(1)>Synthetic</b>", "buy_date": "2026-08-27", "status": "Active", "branch_name": "Synthetic Branch", "price": "100.00", "realized_paid_amount": "100.00", "create_date": "2026-08-27 12:00:00" }
+  ],
+  "REMAINING_COURSE": [
+    { "uuid": "75000000-0000-4000-8000-000000000001", "course_code": "REM-SYN-1", "course_name": "Synthetic Remaining Course", "patient_uuid": "25000000-0000-4000-8000-000000000001", "patient_code": "PAT-SYN-1", "patient_name": "Synthetic Patient", "buy_date": "2026-08-01", "status": "Active", "branch_name": "Synthetic Branch", "payment_total": 5000, "refund_total": 500, "unused_medicine_amount": 1, "unused_service_amount": 2, "unused_price": 3000 },
+    { "uuid": "75000000-0000-4000-8000-000000000002", "course_code": null, "course_name": null, "patient_uuid": "25000000-0000-4000-8000-000000000002", "patient_code": null, "patient_name": null, "buy_date": "2026-08-01", "status": null, "branch_name": null, "payment_total": 0, "refund_total": null, "unused_medicine_amount": null, "unused_service_amount": null, "unused_price": null },
+    { "uuid": "bad-uuid", "patient_uuid": "25000000-0000-4000-8000-000000000003", "buy_date": "2026-08-01", "payment_total": 1 },
+    { "uuid": "75000000-0000-4000-8000-000000000004", "course_code": "REM-SYN-4", "course_name": "Synthetic Remaining Course", "patient_uuid": "25000000-0000-4000-8000-000000000004", "patient_code": "PAT-SYN-4", "patient_name": "<b onclick=alert(1)>Synthetic</b>", "buy_date": "2026-08-01", "status": "Active", "branch_name": "Synthetic Branch", "payment_total": 100, "refund_total": 0, "unused_medicine_amount": 0, "unused_service_amount": 1, "unused_price": 100 }
+  ],
+  "REMAINING_COURSE_BY_DATE": [
+    { "uuid": "76000000-0000-4000-8000-000000000001", "course_code": "RBD-SYN-1", "course_name": "Synthetic By Date", "patient_uuid": "26000000-0000-4000-8000-000000000001", "patient_code": "PAT-SYN-1", "patient_name": "Synthetic Patient", "buy_date": "2026-08-01", "status": "Active", "branch_name": "Synthetic Branch", "payment_total": 6000, "refund_total": 0, "unused_medicine_amount": 1, "unused_service_amount": 1, "unused_price": 2500 },
+    { "uuid": "76000000-0000-4000-8000-000000000002", "course_code": null, "course_name": null, "patient_uuid": "26000000-0000-4000-8000-000000000002", "patient_code": null, "patient_name": null, "buy_date": "2026-08-01", "status": null, "branch_name": null, "payment_total": 0, "refund_total": null, "unused_medicine_amount": null, "unused_service_amount": null, "unused_price": null },
+    { "uuid": "76000000-0000-4000-8000-000000000003", "patient_uuid": "26000000-0000-4000-8000-000000000003", "buy_date": "bad-date", "payment_total": 1 },
+    { "uuid": "76000000-0000-4000-8000-000000000004", "course_code": "RBD-SYN-4", "course_name": "Synthetic By Date", "patient_uuid": "26000000-0000-4000-8000-000000000004", "patient_code": "PAT-SYN-4", "patient_name": "<b onclick=alert(1)>Synthetic</b>", "buy_date": "2026-08-01", "status": "Active", "branch_name": "Synthetic Branch", "payment_total": 100, "refund_total": 0, "unused_medicine_amount": 0, "unused_service_amount": 1, "unused_price": 100 }
+  ]
+}

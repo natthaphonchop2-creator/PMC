@@ -1,4 +1,16 @@
-import type { JeraNormalizedRow, JeraSourceReportType } from './contracts.js'
+import { JERA_ENDPOINTS, type JeraNormalizedRow, type JeraSourceReportType } from './contracts.js'
+
+const ADDITIONAL_REPORT_TYPES = [
+  'PRODUCT_USE', 'PRODUCT_SALES', 'CANCELLED_PAYMENT', 'OPD',
+  'CANCELLED_UNPAID', 'COURSE_SALES', 'REMAINING_COURSE', 'REMAINING_COURSE_BY_DATE',
+] as const
+
+const ADDITIONAL_REPORT_LABELS: Record<(typeof ADDITIONAL_REPORT_TYPES)[number], string> = {
+  PRODUCT_USE: 'การใช้สินค้าและบริการ', PRODUCT_SALES: 'ยอดขายสินค้าและบริการ',
+  CANCELLED_PAYMENT: 'รายการรับชำระที่ยกเลิก', OPD: 'รายงาน OPD',
+  CANCELLED_UNPAID: 'รายการค้างชำระที่ยกเลิก', COURSE_SALES: 'ยอดขายคอร์ส',
+  REMAINING_COURSE: 'คอร์สคงเหลือ', REMAINING_COURSE_BY_DATE: 'คอร์สคงเหลือตามวันที่',
+}
 
 export interface JeraReportDataQuality {
   inputRows: number
@@ -72,6 +84,37 @@ export interface JeraAppointmentReport {
   breakdowns: { byBranch: JeraCountBreakdown[]; byDoctor: JeraCountBreakdown[]; byStatus: JeraCountBreakdown[]; byType: JeraCountBreakdown[] }
   warnings: string[]
   dataQuality: JeraReportDataQuality
+}
+
+export function listAvailableReports(): Array<{
+  type: (typeof ADDITIONAL_REPORT_TYPES)[number]
+  label: string
+  filters: string[]
+}> {
+  return ADDITIONAL_REPORT_TYPES.map((type) => ({
+    type, label: ADDITIONAL_REPORT_LABELS[type], filters: [...JERA_ENDPOINTS[type].allowedFilters],
+  }))
+}
+
+export function buildAdditionalReport(reportType: (typeof ADDITIONAL_REPORT_TYPES)[number], inputRows: JeraNormalizedRow[]) {
+  const rows = rowsFor(inputRows, reportType)
+  return {
+    rows,
+    totals: {
+      rowCount: rows.length, totalSatang: sum(rows.map((row) => row.totalSatang)),
+      paidAmountSatang: sum(rows.map((row) => row.paidAmountSatang)),
+      refundAmountSatang: sum(rows.map((row) => row.refundAmountSatang)),
+      quantity: sumNumbers(rows.map((row) => row.quantity)),
+      remainingQuantity: sumNumbers(rows.map((row) => row.remainingQuantity)),
+      remainingValueSatang: sum(rows.map((row) => row.remainingValueSatang)),
+    },
+    breakdowns: {
+      byBranch: moneyBreakdown(rows, (row) => row.branchName),
+      byType: moneyBreakdown(rows, (row) => row.type),
+      byItem: moneyBreakdown(rows, (row) => row.itemName ?? row.itemCode),
+    },
+    warnings: duplicateWarnings(rows), dataQuality: quality(rows),
+  }
 }
 
 export function buildPaymentReport(inputRows: JeraNormalizedRow[]): JeraPaymentReport {
@@ -194,6 +237,10 @@ function methodValues(row: JeraNormalizedRow): Array<number | null> {
 }
 
 function sum(values: Array<number | null>): number {
+  return values.reduce<number>((total, value) => total + (value ?? 0), 0)
+}
+
+function sumNumbers(values: Array<number | null>): number {
   return values.reduce<number>((total, value) => total + (value ?? 0), 0)
 }
 

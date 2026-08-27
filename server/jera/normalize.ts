@@ -49,6 +49,7 @@ export function normalizePaymentReport(payload: unknown, context: JeraNormalizat
         row.paid_amount_card_cash, row.paid_amount_card_point, row.paid_amount_social_security,
         row.paid_amount_cash_voucher, row.paid_amount_product_voucher,
       ]),
+      ...emptyAdditionalFields(),
       doctorName: optionalText(row.doctor_name), salespersonName: personNames(row.seller),
       sourceCreatedAt, sourceUpdatedAt: null,
     }
@@ -71,7 +72,7 @@ export function normalizeDepositReport(payload: unknown, context: JeraNormalizat
       patientName: optionalText(row.patient_name), paymentCode: requiredText(row.payment_code, MAX_CODE),
       status: null, type: group.type,
       totalSatang: requiredMoney(row.total), paidAmountSatang: requiredMoney(row.paid_amount),
-      refundAmountSatang: optionalMoney(row.total_refund), ...emptyPaymentBreakdown(), doctorName: null,
+      refundAmountSatang: optionalMoney(row.total_refund), ...emptyPaymentBreakdown(), ...emptyAdditionalFields(), doctorName: null,
       salespersonName: personNames(row.sellers), sourceCreatedAt: requiredDateTime(row.create_date), sourceUpdatedAt: null,
     }
     return finishRow(base, safeContext)
@@ -111,6 +112,7 @@ export function normalizeRefundReport(payload: unknown, context: JeraNormalizati
       patientUuid: optionalUuid(row.patient_uuid), patientCode, patientName: optionalText(row.patient_name), paymentCode,
       status: null, type: refundType, totalSatang: optionalMoney(row.total), paidAmountSatang: null,
       refundAmountSatang: requiredMoney(row.total_refund_cost), ...emptyPaymentBreakdown(),
+      ...emptyAdditionalFields(),
       doctorName: null, salespersonName: null,
       sourceCreatedAt, sourceUpdatedAt: null,
     }
@@ -130,7 +132,7 @@ export function normalizeAppointmentList(payload: unknown, context: JeraNormaliz
       patientName: optionalText(row.patient_name), paymentCode: null,
       status: optionalText(row.status_text, MAX_CODE), type: optionalText(row.type_text, MAX_CODE),
       totalSatang: null, paidAmountSatang: null, refundAmountSatang: null,
-      ...emptyPaymentBreakdown(),
+      ...emptyPaymentBreakdown(), ...emptyAdditionalFields(),
       doctorName: optionalText(row.staff_name), salespersonName: null,
       sourceCreatedAt: optionalDateTime(row.create_date), sourceUpdatedAt: optionalDateTime(row.update_date),
     }
@@ -151,6 +153,7 @@ export function normalizePaymentList(payload: unknown, context: JeraNormalizatio
       status: requiredBoolean(row.is_unpaid) ? 'UNPAID' : 'PAID', type: 'PAYMENT_LIST',
       totalSatang: requiredMoney(row.total), paidAmountSatang: requiredMoney(row.paid_amount),
       refundAmountSatang: optionalMoney(row.total_refund), ...emptyPaymentBreakdown(),
+      ...emptyAdditionalFields(),
       doctorName: optionalText(row.doctor_name), salespersonName: null,
       sourceCreatedAt: requiredDateTime(row.create_date), sourceUpdatedAt: null,
     }
@@ -223,6 +226,163 @@ export function normalizePaymentDetail(payload: unknown, context: JeraNormalizat
   }
 }
 
+export function normalizeProductUseReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  return requiredArray(payload).map((value) => {
+    const row = record(value)
+    const opdCode = requiredText(row.opd_code, MAX_CODE)
+    const productCode = requiredText(row.product_code, MAX_CODE)
+    const patientCode = requiredText(row.patient_code, MAX_CODE)
+    const sourceCreatedAt = requiredDateTime(row.opd_create_date)
+    const action = requiredText(row.action, MAX_CODE)
+    const base: RowBase = {
+      reportType: 'PRODUCT_USE',
+      sourceUuid: hashedSource('product-use', { opdCode, productCode, patientCode, sourceCreatedAt, action }),
+      branchUuid: safeContext.branchUuid, branchName: optionalText(row.branch_name), eventDate: eventDate(row.opd_create_date),
+      patientUuid: optionalUuid(row.patient_uuid), patientCode, patientName: optionalText(row.patient_name), paymentCode: null,
+      status: action, type: optionalText(row.type_name, MAX_CODE) ?? optionalText(row.item_type, MAX_CODE),
+      totalSatang: requiredMoney(row.payment_price ?? row.price), paidAmountSatang: requiredMoney(row.paid_amount),
+      refundAmountSatang: optionalMoney(row.refund_price), ...emptyPaymentBreakdown(),
+      itemCode: productCode, itemName: optionalText(row.product_name), quantity: requiredQuantity(row.amount),
+      remainingQuantity: null, remainingValueSatang: null, doctorName: optionalText(row.doctor_name),
+      salespersonName: optionalText(row.sales_name), sourceCreatedAt, sourceUpdatedAt: null,
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
+export function normalizeProductSalesReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  const reportDate = requiredContextEndDate(safeContext)
+  return payloadRows(payload, 'data').map((value) => {
+    const row = record(value)
+    const productCode = requiredText(row.product_code, MAX_CODE)
+    const action = requiredText(row.action, MAX_CODE)
+    const type = optionalText(row.type_name, MAX_CODE)
+    const category = optionalText(row.cat_name)
+    const subcategory = optionalText(row.subcat_name)
+    const base: RowBase = {
+      reportType: 'PRODUCT_SALES',
+      sourceUuid: hashedSource('product-sales', { productCode, action, type, category, subcategory, reportDate }),
+      branchUuid: safeContext.branchUuid, branchName: null, eventDate: reportDate,
+      patientUuid: null, patientCode: null, patientName: null, paymentCode: null,
+      status: action, type, totalSatang: requiredMoney(row.payment_price), paidAmountSatang: requiredMoney(row.paid_amount),
+      refundAmountSatang: optionalMoney(row.refund_price), ...emptyPaymentBreakdown(),
+      itemCode: productCode, itemName: category, quantity: requiredQuantity(row.sum_amount),
+      remainingQuantity: null, remainingValueSatang: null, doctorName: null, salespersonName: null,
+      sourceCreatedAt: null, sourceUpdatedAt: null,
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
+export function normalizeCancelledPaymentReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  return requiredArray(payload).map((value) => {
+    const row = record(value)
+    const base: RowBase = {
+      reportType: 'CANCELLED_PAYMENT', sourceUuid: requiredUuid(row.uuid),
+      branchUuid: safeContext.branchUuid, branchName: optionalText(row.branch_name), eventDate: eventDate(row.del_date),
+      patientUuid: optionalUuid(row.patient_uuid), patientCode: optionalText(row.patient_code, MAX_CODE),
+      patientName: optionalText(row.patient_name), paymentCode: requiredText(row.code, MAX_CODE), status: 'CANCELLED',
+      type: optionalText(row.type, MAX_CODE), totalSatang: requiredMoney(row.total), paidAmountSatang: requiredMoney(row.paid_amount),
+      refundAmountSatang: null, ...emptyPaymentBreakdown(), ...emptyAdditionalFields(),
+      doctorName: null, salespersonName: null, sourceCreatedAt: requiredDateTime(row.create_date),
+      sourceUpdatedAt: requiredDateTime(row.del_date),
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
+export function normalizeOpdReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  return requiredArray(payload).map((value) => {
+    const row = record(value)
+    const opdCode = requiredText(row.code, MAX_CODE)
+    const base: RowBase = {
+      reportType: 'OPD', sourceUuid: requiredUuid(row.uuid), branchUuid: safeContext.branchUuid,
+      branchName: optionalText(row.branch_name), eventDate: eventDate(row.date), patientUuid: optionalUuid(row.patient_uuid),
+      patientCode: optionalText(row.patient_code, MAX_CODE), patientName: optionalText(row.full_name), paymentCode: null,
+      status: requiredBoolean(row.is_paid) ? 'PAID' : 'UNPAID', type: 'OPD',
+      totalSatang: requiredMoney(row.disc_price), paidAmountSatang: requiredMoney(row.paid_amount), refundAmountSatang: null,
+      ...emptyPaymentBreakdown(), itemCode: opdCode, itemName: null, quantity: null,
+      remainingQuantity: null, remainingValueSatang: null, doctorName: personNames(row.doctor), salespersonName: null,
+      sourceCreatedAt: optionalDateTime(row.date), sourceUpdatedAt: null,
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
+export function normalizeCancelledUnpaidReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  return requiredArray(payload).map((value) => {
+    const row = record(value)
+    const base: RowBase = {
+      reportType: 'CANCELLED_UNPAID', sourceUuid: requiredUuid(row.payment_uuid),
+      branchUuid: safeContext.branchUuid, branchName: optionalText(row.payment_branch), eventDate: eventDate(row.cancel_date),
+      patientUuid: optionalUuid(row.patient_uuid), patientCode: optionalText(row.patient_code, MAX_CODE),
+      patientName: optionalText(row.patient_name), paymentCode: requiredText(row.payment_code, MAX_CODE),
+      status: 'CANCELLED_UNPAID', type: optionalText(row.payment_type, MAX_CODE),
+      totalSatang: requiredMoney(row.disc_price), paidAmountSatang: requiredMoney(row.paid_amount),
+      refundAmountSatang: optionalMoney(row.refund_total), ...emptyPaymentBreakdown(), ...emptyAdditionalFields(),
+      doctorName: null, salespersonName: null, sourceCreatedAt: requiredDateTime(row.payment_date),
+      sourceUpdatedAt: requiredDateTime(row.cancel_date),
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
+export function normalizeCourseSalesReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  return requiredArray(payload).map((value) => {
+    const row = record(value)
+    const base: RowBase = {
+      reportType: 'COURSE_SALES', sourceUuid: requiredUuid(row.uuid), branchUuid: safeContext.branchUuid,
+      branchName: optionalText(row.branch_name), eventDate: eventDate(row.buy_date), patientUuid: requiredUuid(row.patient_uuid),
+      patientCode: optionalText(row.patient_code, MAX_CODE), patientName: optionalText(row.patient_name),
+      paymentCode: optionalText(row.payment_code, MAX_CODE), status: optionalText(row.status, MAX_CODE), type: 'COURSE_SALE',
+      totalSatang: requiredMoney(row.price), paidAmountSatang: requiredMoney(row.realized_paid_amount), refundAmountSatang: null,
+      ...emptyPaymentBreakdown(), itemCode: optionalText(row.course_code, MAX_CODE), itemName: optionalText(row.course_name),
+      quantity: null, remainingQuantity: null, remainingValueSatang: null, doctorName: optionalText(row.performer_names),
+      salespersonName: optionalText(row.create_by_name), sourceCreatedAt: requiredDateTime(row.create_date),
+      sourceUpdatedAt: optionalDateTime(row.update_date),
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
+export function normalizeRemainingCourseReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  return normalizeRemainingCourse(payload, context, 'REMAINING_COURSE')
+}
+
+export function normalizeRemainingCourseByDateReport(payload: unknown, context: JeraNormalizationContext): JeraNormalizedRow[] {
+  return normalizeRemainingCourse(payload, context, 'REMAINING_COURSE_BY_DATE')
+}
+
+function normalizeRemainingCourse(
+  payload: unknown,
+  context: JeraNormalizationContext,
+  reportType: 'REMAINING_COURSE' | 'REMAINING_COURSE_BY_DATE',
+): JeraNormalizedRow[] {
+  const safeContext = normalizationContext(context)
+  return requiredArray(payload).map((value) => {
+    const row = record(value)
+    const base: RowBase = {
+      reportType, sourceUuid: requiredUuid(row.uuid), branchUuid: safeContext.branchUuid,
+      branchName: optionalText(row.branch_name), eventDate: eventDate(row.buy_date), patientUuid: requiredUuid(row.patient_uuid),
+      patientCode: optionalText(row.patient_code, MAX_CODE), patientName: optionalText(row.patient_name), paymentCode: null,
+      status: optionalText(row.status, MAX_CODE), type: reportType === 'REMAINING_COURSE' ? 'REMAINING_COURSE' : 'REMAINING_BY_DATE',
+      totalSatang: requiredMoney(row.payment_total), paidAmountSatang: null,
+      refundAmountSatang: optionalMoney(row.refund_total), ...emptyPaymentBreakdown(),
+      itemCode: optionalText(row.course_code, MAX_CODE), itemName: optionalText(row.course_name), quantity: null,
+      remainingQuantity: sumOptionalQuantity([row.unused_medicine_amount, row.unused_service_amount]),
+      remainingValueSatang: optionalMoney(row.unused_price), doctorName: null, salespersonName: null,
+      sourceCreatedAt: optionalDateTime(row.buy_date), sourceUpdatedAt: null,
+    }
+    return finishRow(base, safeContext)
+  })
+}
+
 function finishRow(base: RowBase, context: JeraNormalizationContext): JeraNormalizedRow {
   return { cacheKey: context.cacheKey, ...base, fetchedAt: context.fetchedAt, sourceHash: canonicalHash(base) }
 }
@@ -232,7 +392,10 @@ function normalizationContext(context: JeraNormalizationContext): JeraNormalizat
   const cacheKey = requiredText(context.cacheKey, MAX_TEXT)
   const branchUuid = context.branchUuid === null ? null : requiredUuid(context.branchUuid)
   const fetchedAt = requiredIsoInstant(context.fetchedAt)
-  return { cacheKey, branchUuid, fetchedAt }
+  const startDate = context.startDate === undefined ? undefined : eventDate(context.startDate)
+  const endDate = context.endDate === undefined ? undefined : eventDate(context.endDate)
+  if (startDate && endDate && startDate > endDate) throw new JeraNormalizationError()
+  return { cacheKey, branchUuid, fetchedAt, startDate, endDate }
 }
 
 function payloadRows(payload: unknown, key: string): unknown[] {
@@ -301,6 +464,10 @@ function emptyPaymentBreakdown(): Pick<RowBase,
   }
 }
 
+function emptyAdditionalFields(): Pick<RowBase, 'itemCode' | 'itemName' | 'quantity' | 'remainingQuantity' | 'remainingValueSatang'> {
+  return { itemCode: null, itemName: null, quantity: null, remainingQuantity: null, remainingValueSatang: null }
+}
+
 function requiredBoolean(value: unknown): boolean {
   if (typeof value !== 'boolean') throw new JeraNormalizationError()
   return value
@@ -313,6 +480,17 @@ function optionalQuantity(value: unknown): number | null {
     throw new JeraNormalizationError()
   }
   return quantity
+}
+
+function requiredQuantity(value: unknown): number {
+  const result = optionalQuantity(value)
+  if (result === null) throw new JeraNormalizationError()
+  return result
+}
+
+function sumOptionalQuantity(values: unknown[]): number | null {
+  const parsed = values.map(optionalQuantity)
+  return parsed.every((value) => value === null) ? null : parsed.reduce<number>((sum, value) => sum + (value ?? 0), 0)
 }
 
 function eventDate(value: unknown): string {
@@ -378,6 +556,15 @@ function displayName(patient: Record<string, unknown>): string | null {
   if (direct) return direct
   const parts = [optionalText(patient.fname), optionalText(patient.lname)].filter((value): value is string => value !== null)
   return parts.length ? parts.join(' ').slice(0, MAX_TEXT) : null
+}
+
+function requiredContextEndDate(context: JeraNormalizationContext): string {
+  if (!context.endDate) throw new JeraNormalizationError()
+  return context.endDate
+}
+
+function hashedSource(prefix: string, value: unknown): string {
+  return `${prefix}:${canonicalHash(value).slice(0, 32)}`
 }
 
 function canonicalHash(value: unknown): string {

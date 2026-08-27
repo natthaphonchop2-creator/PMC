@@ -263,7 +263,8 @@ function cacheRowToCells(row: JeraNormalizedRow): unknown[] {
     row.patientUuid ?? '', row.patientCode ?? '', row.patientName ?? '', row.paymentCode ?? '', row.status ?? '', row.type ?? '',
     row.totalSatang ?? '', row.paidAmountSatang ?? '', row.refundAmountSatang ?? '', row.cashSatang ?? '',
     row.transferSatang ?? '', row.creditCardSatang ?? '', row.eWalletSatang ?? '', row.paymentLinkSatang ?? '',
-    row.otherPaymentSatang ?? '', row.doctorName ?? '', row.salespersonName ?? '', row.sourceCreatedAt ?? '',
+    row.otherPaymentSatang ?? '', row.itemCode ?? '', row.itemName ?? '', row.quantity ?? '', row.remainingQuantity ?? '',
+    row.remainingValueSatang ?? '', row.doctorName ?? '', row.salespersonName ?? '', row.sourceCreatedAt ?? '',
     row.sourceUpdatedAt ?? '', row.fetchedAt, row.sourceHash,
   ]
 }
@@ -279,9 +280,11 @@ function cacheRowFromCells(cells: unknown[]): JeraNormalizedRow {
     refundAmountSatang: nullableSatang(cells[14]), cashSatang: nullableSatang(cells[15]),
     transferSatang: nullableSatang(cells[16]), creditCardSatang: nullableSatang(cells[17]),
     eWalletSatang: nullableSatang(cells[18]), paymentLinkSatang: nullableSatang(cells[19]),
-    otherPaymentSatang: nullableSatang(cells[20]), doctorName: nullableString(cells[21]),
-    salespersonName: nullableString(cells[22]), sourceCreatedAt: nullableString(cells[23]),
-    sourceUpdatedAt: nullableString(cells[24]), fetchedAt: stringValue(cells[25]), sourceHash: stringValue(cells[26]),
+    otherPaymentSatang: nullableSatang(cells[20]), itemCode: nullableString(cells[21]), itemName: nullableString(cells[22]),
+    quantity: nullableQuantity(cells[23]), remainingQuantity: nullableQuantity(cells[24]),
+    remainingValueSatang: nullableSatang(cells[25]), doctorName: nullableString(cells[26]),
+    salespersonName: nullableString(cells[27]), sourceCreatedAt: nullableString(cells[28]),
+    sourceUpdatedAt: nullableString(cells[29]), fetchedAt: stringValue(cells[30]), sourceHash: stringValue(cells[31]),
   }, stringValue(cells[1]) as JeraSourceReportType)
 }
 
@@ -292,14 +295,22 @@ function validateCacheRow(row: JeraNormalizedRow, expectedType: JeraSourceReport
   if (row.branchUuid !== null) uuid(row.branchUuid)
   if (row.patientUuid !== null) uuid(row.patientUuid)
   if (!/^[a-f0-9]{64}$/.test(row.sourceHash)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
-  for (const value of [row.branchName, row.patientCode, row.patientName, row.paymentCode, row.status, row.type, row.doctorName, row.salespersonName]) {
+  for (const value of [
+    row.branchName, row.patientCode, row.patientName, row.paymentCode, row.status, row.type,
+    row.itemCode, row.itemName, row.doctorName, row.salespersonName,
+  ]) {
     if (value !== null && (typeof value !== 'string' || value.length > 256)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
   }
   for (const value of [
     row.totalSatang, row.paidAmountSatang, row.refundAmountSatang, row.cashSatang, row.transferSatang,
-    row.creditCardSatang, row.eWalletSatang, row.paymentLinkSatang, row.otherPaymentSatang,
+    row.creditCardSatang, row.eWalletSatang, row.paymentLinkSatang, row.otherPaymentSatang, row.remainingValueSatang,
   ]) {
     if (value !== null && (!Number.isSafeInteger(value) || value < 0)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
+  }
+  for (const value of [row.quantity, row.remainingQuantity]) {
+    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1_000_000_000)) {
+      throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
+    }
   }
   if (row.sourceCreatedAt !== null) dateTime(row.sourceCreatedAt)
   if (row.sourceUpdatedAt !== null) dateTime(row.sourceUpdatedAt)
@@ -410,6 +421,13 @@ function integerValue(value: unknown): number {
 }
 
 function nullableInteger(value: unknown): number | null { return blank(value) ? null : integerValue(value) }
+
+function nullableQuantity(value: unknown): number | null {
+  if (blank(value)) return null
+  const result = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(result) || result < 0 || result > 1_000_000_000) throw new JeraStoreError('JERA_STORE_CORRUPT_ROW')
+  return result
+}
 
 function safeToken(value: string): void {
   if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,256}$/.test(value)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')

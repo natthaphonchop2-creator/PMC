@@ -84,14 +84,7 @@ describe('JERA management report projections', () => {
   })
 })
 
-type ReportRow = JeraNormalizedRow & {
-  cashSatang: number | null
-  transferSatang: number | null
-  creditCardSatang: number | null
-  eWalletSatang: number | null
-  paymentLinkSatang: number | null
-  otherPaymentSatang: number | null
-}
+type ReportRow = JeraNormalizedRow
 
 function row(patch: Partial<ReportRow> = {}): ReportRow {
   return {
@@ -101,6 +94,7 @@ function row(patch: Partial<ReportRow> = {}): ReportRow {
     totalSatang: 55_000, paidAmountSatang: 55_000, refundAmountSatang: null,
     cashSatang: null, transferSatang: null, creditCardSatang: null, eWalletSatang: null,
     paymentLinkSatang: null, otherPaymentSatang: null,
+    itemCode: null, itemName: null, quantity: null, remainingQuantity: null, remainingValueSatang: null,
     doctorName: 'Doctor A', salespersonName: 'Sales A', sourceCreatedAt: '2026-08-27T10:00:00+07:00',
     sourceUpdatedAt: null, fetchedAt: '2026-08-27T03:00:00.000Z', sourceHash: 'a'.repeat(64),
     ...patch,

@@ -153,6 +153,7 @@ function paymentRow(patch: Partial<JeraNormalizedRow> = {}): JeraNormalizedRow {
     totalSatang: 10_000, paidAmountSatang: 10_000, refundAmountSatang: null,
     cashSatang: null, transferSatang: null, creditCardSatang: null, eWalletSatang: null,
     paymentLinkSatang: null, otherPaymentSatang: null,
+    itemCode: null, itemName: null, quantity: null, remainingQuantity: null, remainingValueSatang: null,
     doctorName: 'Doctor Synthetic', salespersonName: null, sourceCreatedAt: '2026-08-27T16:00:00+07:00',
     sourceUpdatedAt: null, fetchedAt: '2026-08-27T09:55:00.000Z', sourceHash: 'a'.repeat(64),
     ...patch,

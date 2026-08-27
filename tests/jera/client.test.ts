@@ -83,6 +83,17 @@ describe('bounded JERA read client', () => {
     ])
   })
 
+  it('extracts rows from the documented product-sales data envelope', async () => {
+    const fetch = vi.fn(async () => response(200, {
+      data: [{ product_code: 'PRD-SYN-1' }], summary: { paid_amount: 100 },
+    }))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await expect(client.request('PRODUCT_SALES', {
+      branchUuid: uuid(), startDate: '2026-01-01', endDate: '2026-01-01', type: 'medicine',
+    })).resolves.toEqual([{ product_code: 'PRD-SYN-1' }])
+  })
+
   it('paginates with bounded page sizes and deduplicates stable provider identities', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ uuid: `appointment-${index}`, value: index }))
     const fetch = vi.fn(async (url: string) => {

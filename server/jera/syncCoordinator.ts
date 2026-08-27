@@ -10,10 +10,18 @@ import type {
 } from './contracts.js'
 import {
   normalizeAppointmentList,
+  normalizeCancelledPaymentReport,
+  normalizeCancelledUnpaidReport,
+  normalizeCourseSalesReport,
   normalizeDepositReport,
+  normalizeOpdReport,
   normalizePaymentList,
   normalizePaymentReport,
+  normalizeProductSalesReport,
+  normalizeProductUseReport,
   normalizeRefundReport,
+  normalizeRemainingCourseByDateReport,
+  normalizeRemainingCourseReport,
 } from './normalize.js'
 import type { JeraReportStore, JeraSyncAuditRecord, JeraSyncStateRecord } from './store.js'
 
@@ -49,6 +57,14 @@ const DEFAULT_NORMALIZERS: Partial<Record<JeraSourceReportType, JeraNormalizer>>
   REFUND: normalizeRefundReport,
   APPOINTMENT: normalizeAppointmentList,
   PAYMENT_LIST: normalizePaymentList,
+  PRODUCT_USE: normalizeProductUseReport,
+  PRODUCT_SALES: normalizeProductSalesReport,
+  CANCELLED_PAYMENT: normalizeCancelledPaymentReport,
+  OPD: normalizeOpdReport,
+  CANCELLED_UNPAID: normalizeCancelledUnpaidReport,
+  COURSE_SALES: normalizeCourseSalesReport,
+  REMAINING_COURSE: normalizeRemainingCourseReport,
+  REMAINING_COURSE_BY_DATE: normalizeRemainingCourseByDateReport,
 }
 
 export class JeraSyncError extends Error {
@@ -117,6 +133,7 @@ export function createJeraSyncCoordinator(options: {
       if (!normalizer) throw new JeraSyncError('JERA_NORMALIZER_UNAVAILABLE')
       const normalizedRows = normalizer(providerRows, {
         cacheKey: key, branchUuid: query.filters.branchUuid, fetchedAt,
+        startDate: query.filters.startDate, endDate: query.filters.endDate,
       })
       recordCount = normalizedRows.length
       await options.store.replaceRows(query.reportType, key, normalizedRows)

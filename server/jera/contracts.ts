@@ -90,6 +90,11 @@ export interface JeraNormalizedRow {
   eWalletSatang: number | null
   paymentLinkSatang: number | null
   otherPaymentSatang: number | null
+  itemCode: string | null
+  itemName: string | null
+  quantity: number | null
+  remainingQuantity: number | null
+  remainingValueSatang: number | null
   doctorName: string | null
   salespersonName: string | null
   sourceCreatedAt: string | null
@@ -102,6 +107,8 @@ export interface JeraNormalizationContext {
   cacheKey: string
   branchUuid: string | null
   fetchedAt: string
+  startDate?: string
+  endDate?: string
 }
 
 export interface JeraNormalizedPaymentMethod {

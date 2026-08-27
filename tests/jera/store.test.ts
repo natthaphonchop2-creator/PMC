@@ -44,6 +44,20 @@ describe('Google Sheets JERA report store', () => {
     expect((await store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }))[0]?.patientName).toBeNull()
   })
 
+  it('round-trips bounded item quantities and remaining-course value', async () => {
+    const sheets = sheetsFixture()
+    const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.upsertRows('PAYMENT', [paymentRow({
+      itemCode: 'ITEM-SYN-1', itemName: 'Synthetic Item', quantity: 2.5,
+      remainingQuantity: 3, remainingValueSatang: 300_000,
+    })])
+
+    expect((await store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }))[0]).toMatchObject({
+      itemCode: 'ITEM-SYN-1', itemName: 'Synthetic Item', quantity: 2.5,
+      remainingQuantity: 3, remainingValueSatang: 300_000,
+    })
+  })
+
   it('replaces one cache key and clears rows no longer returned by a valid provider response', async () => {
     const sheets = sheetsFixture()
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
@@ -129,6 +143,7 @@ function paymentRow(patch: Partial<JeraNormalizedRow> = {}): JeraNormalizedRow {
     totalSatang: 10_000, paidAmountSatang: 10_000, refundAmountSatang: null,
     cashSatang: null, transferSatang: null, creditCardSatang: null, eWalletSatang: null,
     paymentLinkSatang: null, otherPaymentSatang: null,
+    itemCode: null, itemName: null, quantity: null, remainingQuantity: null, remainingValueSatang: null,
     doctorName: 'Doctor Synthetic', salespersonName: 'Sales Synthetic',
     sourceCreatedAt: '2026-08-27T10:00:00+07:00', sourceUpdatedAt: null,
     fetchedAt: '2026-08-27T03:01:00.000Z', sourceHash: hash('a'),
