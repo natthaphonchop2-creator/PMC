@@ -7,7 +7,27 @@ describe('JERA Production read-only configuration', () => {
     expect(readJeraConfig({ JERA_REPORTING_ENABLED: 'true' })).toBeNull()
     expect(readJeraConfig(validJeraEnvironment())).toMatchObject({
       baseUrl: 'https://jera.example', syncIntervalMinutes: 15, manualRefreshSeconds: 300,
+      scheduler: null,
     })
+  })
+
+  it('accepts scheduler OIDC settings only as a complete HTTPS/email pair', () => {
+    expect(readJeraConfig({
+      ...validJeraEnvironment(),
+      JERA_SCHEDULER_AUDIENCE: 'https://pmc-mini-app.example',
+      JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL: 'pmc-scheduler@synthetic-project.iam.gserviceaccount.com',
+    })).toMatchObject({
+      scheduler: {
+        audience: 'https://pmc-mini-app.example',
+        serviceAccountEmail: 'pmc-scheduler@synthetic-project.iam.gserviceaccount.com',
+      },
+    })
+    expect(readJeraConfig({ ...validJeraEnvironment(), JERA_SCHEDULER_AUDIENCE: 'https://pmc-mini-app.example' })).toBeNull()
+    expect(readJeraConfig({
+      ...validJeraEnvironment(),
+      JERA_SCHEDULER_AUDIENCE: 'http://unsafe.example',
+      JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL: 'pmc-scheduler@synthetic-project.iam.gserviceaccount.com',
+    })).toBeNull()
   })
 
   it.each([

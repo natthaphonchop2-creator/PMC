@@ -301,6 +301,7 @@ function isOcrReviewPath(pathname: string): boolean {
 
 function isMiniAppApiPath(pathname: string): boolean {
   return pathname === '/api/mini-app' || pathname.startsWith('/api/mini-app/')
+    || pathname === '/internal/mini-app/jera-sync'
 }
 
 function isMiniAppPath(pathname: string): boolean {

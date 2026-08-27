@@ -28,6 +28,11 @@ export interface JeraMiniAppApi {
     url: URL,
     authenticated: AuthenticatedMiniAppContext,
   ): Promise<boolean>
+  handleInternal(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean>
+}
+
+export interface JeraSchedulerIdentityPort {
+  verify(idToken: string, audience: string): Promise<{ email: string; emailVerified: boolean }>
 }
 
 const ADDITIONAL_TYPES = new Set<JeraSourceReportType>([
@@ -45,10 +50,20 @@ export function createJeraMiniAppApi(options: {
   defaultBranchUuid: string
   now?: () => Date
   id?: () => string
+  scheduler?: {
+    identity: JeraSchedulerIdentityPort
+    audience: string
+    serviceAccountEmail: string
+  }
 }): JeraMiniAppApi {
   const now = options.now ?? (() => new Date())
   const id = options.id ?? randomUUID
   const defaultBranchUuid = requiredUuid(options.defaultBranchUuid)
+  const scheduler = options.scheduler ? {
+    ...options.scheduler,
+    audience: requiredHttpsUrl(options.scheduler.audience),
+    serviceAccountEmail: requiredServiceAccountEmail(options.scheduler.serviceAccountEmail),
+  } : null
 
   return {
     async handle(req, res, url, authenticated) {
@@ -104,7 +119,71 @@ export function createJeraMiniAppApi(options: {
       }
       return true
     },
+    async handleInternal(req, res, url) {
+      if (url.pathname !== '/internal/mini-app/jera-sync') return false
+      if (req.method !== 'POST') return handledMethodNotAllowed(res)
+      if (!scheduler) {
+        respond(res, 503, { error: 'JERA_SCHEDULER_UNAVAILABLE' })
+        return true
+      }
+      const token = bearerToken(req.headers.authorization)
+      if (!token) {
+        respond(res, 401, { error: 'JERA_SCHEDULER_UNAUTHORIZED' })
+        return true
+      }
+      let identity: { email: string; emailVerified: boolean }
+      try { identity = await scheduler.identity.verify(token, scheduler.audience) } catch {
+        respond(res, 401, { error: 'JERA_SCHEDULER_UNAUTHORIZED' })
+        return true
+      }
+      if (!identity.emailVerified || identity.email.toLowerCase() !== scheduler.serviceAccountEmail.toLowerCase()) {
+        respond(res, 403, { error: 'JERA_SCHEDULER_FORBIDDEN' })
+        return true
+      }
+      const modes = url.searchParams.getAll('mode')
+      if ([...url.searchParams.keys()].some((key) => key !== 'mode') || modes.length !== 1
+        || (modes[0] !== 'current' && modes[0] !== 'daily')) {
+        respond(res, 400, { error: 'JERA_SYNC_MODE_INVALID' })
+        return true
+      }
+      const syncRunId = safeCorrelationId(id())
+      try {
+        await runScheduledWindows(modes[0], bangkokDate(now()), defaultBranchUuid, options.coordinator)
+        respond(res, 202, { accepted: true, syncRunId })
+      } catch {
+        respond(res, 503, { error: 'JERA_SYNC_FAILED' })
+      }
+      return true
+    },
   }
+}
+
+const ACTIVE_SCHEDULE_REPORTS = ['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT', 'PAYMENT_LIST'] as const
+
+async function runScheduledWindows(
+  mode: 'current' | 'daily',
+  today: string,
+  branchUuid: string,
+  coordinator: JeraSyncCoordinator,
+): Promise<void> {
+  const windows = mode === 'current' ? currentWindows(today) : dailyWindows(today)
+  await Promise.all(windows.flatMap(({ startDate, endDate }) => ACTIVE_SCHEDULE_REPORTS.map((reportType) =>
+    coordinator.scheduledRefresh({ reportType, filters: { branchUuid, startDate, endDate } }))))
+}
+
+function currentWindows(today: string): Array<{ startDate: string; endDate: string }> {
+  return [{ startDate: today, endDate: today }, { startDate: `${today.slice(0, 7)}-01`, endDate: today }]
+}
+
+function dailyWindows(today: string): Array<{ startDate: string; endDate: string }> {
+  const current = new Date(`${today}T00:00:00Z`)
+  const yesterday = new Date(current.getTime() - 86_400_000).toISOString().slice(0, 10)
+  const previousMonthEnd = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 0))
+  const previousMonthStart = new Date(Date.UTC(previousMonthEnd.getUTCFullYear(), previousMonthEnd.getUTCMonth(), 1))
+  return [
+    { startDate: yesterday, endDate: yesterday },
+    { startDate: previousMonthStart.toISOString().slice(0, 10), endDate: previousMonthEnd.toISOString().slice(0, 10) },
+  ]
 }
 
 async function readReport(
@@ -278,6 +357,27 @@ function oldest(values: Array<string | null>): string | null {
 
 function safeCorrelationId(value: string): string {
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(value)) throw new Error('invalid')
+  return value
+}
+
+function bearerToken(value: string | string[] | undefined): string | null {
+  if (typeof value !== 'string' || !value.startsWith('Bearer ')) return null
+  const token = value.slice('Bearer '.length)
+  return token.length > 0 && token.length <= 8_192 && !/\s/.test(token) ? token : null
+}
+
+function requiredHttpsUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('invalid')
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    throw new Error('invalid')
+  }
+}
+
+function requiredServiceAccountEmail(value: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value)) throw new Error('invalid')
   return value
 }
 

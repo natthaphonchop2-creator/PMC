@@ -24,11 +24,13 @@ export interface JeraConfig {
   interactiveTimeoutMs: 8_000
   scheduledTimeoutMs: 30_000
   maxResponseBytes: 2_000_000
+  scheduler: { audience: string; serviceAccountEmail: string } | null
 }
 
 const ALLOWED_NAMES = new Set([
   'JERA_REPORTING_ENABLED', 'JERA_API_BASE_URL', 'JERA_DEFAULT_BRANCH_UUID',
   'JERA_SYNC_INTERVAL_MINUTES', 'JERA_API_USERNAME', 'JERA_API_PASSWORD',
+  'JERA_SCHEDULER_AUDIENCE', 'JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL',
 ])
 
 type JeraEnvironment = Record<string, string | undefined>
@@ -42,8 +44,9 @@ export function readJeraConfig(environment: JeraEnvironment): JeraConfig | null 
   const username = boundedSecret(environment.JERA_API_USERNAME)
   const password = boundedSecret(environment.JERA_API_PASSWORD)
   const syncIntervalMinutes = positiveInteger(environment.JERA_SYNC_INTERVAL_MINUTES)
+  const scheduler = schedulerConfig(environment)
   if (!baseUrl || !uuid(defaultBranchUuid) || !username || !password
-    || syncIntervalMinutes === null || syncIntervalMinutes < 15 || syncIntervalMinutes > 60) return null
+    || syncIntervalMinutes === null || syncIntervalMinutes < 15 || syncIntervalMinutes > 60 || scheduler === undefined) return null
 
   return {
     enabled: true,
@@ -57,6 +60,21 @@ export function readJeraConfig(environment: JeraEnvironment): JeraConfig | null 
     interactiveTimeoutMs: 8_000,
     scheduledTimeoutMs: 30_000,
     maxResponseBytes: 2_000_000,
+    scheduler,
+  }
+}
+
+function schedulerConfig(environment: JeraEnvironment): JeraConfig['scheduler'] | undefined {
+  const audienceValue = environment.JERA_SCHEDULER_AUDIENCE?.trim() ?? ''
+  const email = environment.JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL?.trim() ?? ''
+  if (!audienceValue && !email) return null
+  if (!audienceValue || !email || !/^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(email)) return undefined
+  try {
+    const audience = new URL(audienceValue)
+    if (audience.protocol !== 'https:' || audience.username || audience.password || audience.search || audience.hash) return undefined
+    return { audience: audience.toString().replace(/\/$/, ''), serviceAccountEmail: email }
+  } catch {
+    return undefined
   }
 }
 

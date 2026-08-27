@@ -1,7 +1,8 @@
 import type { MiniAppSheetsPort } from '../pmc-mini-app/googleClient.js'
+import { google } from 'googleapis'
 import { createJeraReadClient } from './client.js'
 import { readJeraConfig, type JeraConfig } from './config.js'
-import { createJeraMiniAppApi, type JeraMiniAppApi } from './middleware.js'
+import { createJeraMiniAppApi, type JeraMiniAppApi, type JeraSchedulerIdentityPort } from './middleware.js'
 import { createGoogleJeraReportStore, type JeraReportStore } from './store.js'
 import { createJeraSyncCoordinator, type JeraSyncCoordinator } from './syncCoordinator.js'
 import { createJeraTokenClient } from './tokenClient.js'
@@ -45,8 +46,28 @@ function constructJeraRuntime(input: {
     client, store, manualRefreshSeconds: input.config.manualRefreshSeconds,
     staleAfterMs: input.config.syncIntervalMinutes * 2 * 60_000,
   })
+  const schedulerIdentity = input.config.scheduler ? createGoogleSchedulerIdentity() : null
   const api = createJeraMiniAppApi({
     coordinator, store, defaultBranchUuid: input.config.defaultBranchUuid,
+    ...(input.config.scheduler && schedulerIdentity ? {
+      scheduler: {
+        identity: schedulerIdentity,
+        audience: input.config.scheduler.audience,
+        serviceAccountEmail: input.config.scheduler.serviceAccountEmail,
+      },
+    } : {}),
   })
   return { config: input.config, coordinator, store, api }
+}
+
+function createGoogleSchedulerIdentity(): JeraSchedulerIdentityPort {
+  const verifier = new google.auth.OAuth2()
+  return {
+    async verify(idToken, audience) {
+      const ticket = await verifier.verifyIdToken({ idToken, audience })
+      const payload = ticket.getPayload()
+      if (!payload?.email) throw new Error('invalid scheduler identity')
+      return { email: payload.email, emailVerified: payload.email_verified === true }
+    },
+  }
 }
