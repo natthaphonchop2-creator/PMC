@@ -1,0 +1,130 @@
+:root {
+  font-family: 'Noto Sans Thai', 'Sukhumvit Set', 'Thonburi', system-ui, sans-serif;
+  color: #202020;
+  background: #ffffff;
+  line-height: 1.7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+
+html { background: #ffffff; }
+
+body {
+  min-width: 320px;
+  min-height: 100dvh;
+  margin: 0;
+  background: #ffffff;
+}
+
+button { font: inherit; }
+
+button:focus-visible {
+  outline: 3px solid #8b641f;
+  outline-offset: 3px;
+}
+
+.pmc-mini-app-home,
+.pmc-mini-app-notice {
+  width: min(100%, 560px);
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding: max(28px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom));
+}
+
+.pmc-mini-app-header {
+  padding-block: 20px 36px;
+}
+
+.pmc-mini-app-header p,
+.pmc-mini-app-header h1,
+.pmc-mini-app-header span {
+  margin: 0;
+  letter-spacing: normal;
+}
+
+.pmc-mini-app-header p {
+  color: #a87520;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.pmc-mini-app-header h1 {
+  margin-block-start: 6px;
+  font-size: clamp(1.75rem, 8vw, 2.25rem);
+  line-height: 1.3;
+}
+
+.pmc-mini-app-header span {
+  display: block;
+  margin-block-start: 8px;
+  color: #666666;
+  font-size: 1rem;
+}
+
+.pmc-mini-app-actions {
+  border-block: 1px solid #e8e8e8;
+}
+
+.pmc-mini-app-actions button {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 88px;
+  padding: 18px 4px;
+  border: 0;
+  border-block-end: 1px solid #e8e8e8;
+  color: #202020;
+  background: #ffffff;
+  text-align: start;
+  cursor: pointer;
+}
+
+.pmc-mini-app-actions button:last-child { border-block-end: 0; }
+
+.pmc-mini-app-actions button:active { background: #f8f8f8; }
+
+.pmc-mini-app-actions svg {
+  width: 25px;
+  height: 25px;
+  color: #a87520;
+  stroke-width: 1.8;
+}
+
+.pmc-mini-app-actions span { min-width: 0; }
+
+.pmc-mini-app-actions strong,
+.pmc-mini-app-actions small {
+  display: block;
+  letter-spacing: normal;
+}
+
+.pmc-mini-app-actions strong {
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+
+.pmc-mini-app-actions small {
+  margin-block-start: 3px;
+  color: #707070;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.pmc-mini-app-notice {
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+.pmc-mini-app-notice p { margin: 0; }
+
+@media (hover: hover) {
+  .pmc-mini-app-actions button:hover { background: #fafafa; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pmc-mini-app-actions button { transition: background-color 140ms ease; }
+}
