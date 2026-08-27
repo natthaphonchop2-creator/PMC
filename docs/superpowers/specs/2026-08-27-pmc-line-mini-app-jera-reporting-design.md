@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-27
 
-**Status:** Approved design decisions captured; awaiting owner review before implementation planning
+**Status:** Approved by owner; ready for implementation planning
 
 **Project:** PMC Web
 
@@ -433,6 +433,7 @@ draftId
 staffId
 lineUserIdHash
 state
+retentionState
 payloadHash
 aeName
 customerName
