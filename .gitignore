@@ -24,6 +24,8 @@ knowledge-base/runtime/
 .worktrees/
 apps/pmc-google-booking-ops/dist/
 apps/pmc-google-booking-ops/.clasp.json
+test-results/
+playwright-report/
 
 node_modules
 dist

@@ -16,11 +16,14 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
 }
 
-export function createPreviewMiniAppApi(): MiniAppBrowserApi {
+export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}): MiniAppBrowserApi {
   let current: BookingDraftProjection | null = null
   return {
     async initialize() { return 'preview-token' },
-    async loadSession() { return PREVIEW_SESSION },
+    async loadSession() {
+      if (options.staffAllowed === false) throw Object.assign(new Error('Staff is not allowed'), { code: 'STAFF_NOT_ALLOWED' })
+      return PREVIEW_SESSION
+    },
     async loadConfig() { return PREVIEW_CONFIG },
     async createDraft() {
       current = {

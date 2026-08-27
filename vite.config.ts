@@ -12,7 +12,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), createMetaApiPlugin(env), createOpenAiPlugin(env), createPageAutomationPlugin(env)],
     test: {
-      exclude: [...configDefaults.exclude, '**/.worktrees/**'],
+      exclude: [...configDefaults.exclude, '**/.worktrees/**', '**/browserAcceptance.spec.ts'],
     },
   }
 })
