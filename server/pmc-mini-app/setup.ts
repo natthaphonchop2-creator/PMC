@@ -2,14 +2,14 @@ import type { MiniAppSheetsPort } from './googleClient.js'
 import { MINI_APP_REQUEST_HEADERS } from './store.js'
 
 export const JERA_API_CACHE_HEADERS = [
-  'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'eventDate', 'patientUuid', 'patientCode', 'paymentCode',
-  'status', 'type', 'total', 'paidAmount', 'refundAmount', 'doctorName', 'salespersonName', 'sourceCreatedAt',
-  'sourceUpdatedAt', 'fetchedAt', 'sourceHash',
+  'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'branchName', 'eventDate', 'patientUuid', 'patientCode',
+  'patientName', 'paymentCode', 'status', 'type', 'totalSatang', 'paidAmountSatang', 'refundAmountSatang',
+  'doctorName', 'salespersonName', 'sourceCreatedAt', 'sourceUpdatedAt', 'fetchedAt', 'sourceHash',
 ] as const
 
 export const JERA_SYNC_STATE_HEADERS = [
   'cacheKey', 'reportType', 'filterHash', 'lastAttemptAt', 'lastSuccessAt', 'lastSourceDate', 'status',
-  'recordCount', 'nextPage', 'safeErrorCode',
+  'recordCount', 'nextPage', 'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
 ] as const
 
 export const JERA_SYNC_AUDIT_HEADERS = [

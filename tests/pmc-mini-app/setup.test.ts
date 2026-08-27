@@ -37,6 +37,13 @@ describe('PMC Mini App managed Sheet setup', () => {
     expect(sheets.headerWrites).toEqual([])
     expect(sheets.deletedTabs).toEqual([])
   })
+
+  it('names stored monetary columns as integer satang and includes lease fields', () => {
+    expect(MANAGED_TAB_HEADERS.JERA_API_CACHE).toEqual(expect.arrayContaining([
+      'branchName', 'patientName', 'totalSatang', 'paidAmountSatang', 'refundAmountSatang',
+    ]))
+    expect(MANAGED_TAB_HEADERS.JERA_SYNC_STATE).toEqual(expect.arrayContaining(['leaseOwner', 'leaseExpiresAt']))
+  })
 })
 
 class SetupSheets implements MiniAppSheetsPort {
