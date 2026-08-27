@@ -11,7 +11,7 @@
   --lh-body: 1.7;
   font-family: 'Noto Sans Thai', 'Sukhumvit Set', 'Thonburi', system-ui, sans-serif;
   color: var(--pmc-text);
-  background: #ffffff;
+  background: #f6f7f9;
   line-height: 1.7;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -19,13 +19,13 @@
 
 * { box-sizing: border-box; }
 
-html { background: #ffffff; }
+html { background: #f6f7f9; }
 
 body {
   min-width: 320px;
   min-height: 100dvh;
   margin: 0;
-  background: #ffffff;
+  background: #f6f7f9;
 }
 
 button, input, select, textarea { font: inherit; }
@@ -37,95 +37,102 @@ button:focus-visible {
   outline-offset: 3px;
 }
 
-.pmc-mini-app-home,
-.pmc-mini-app-notice {
+.pmc-mini-app-home {
   width: min(100%, 560px);
   min-height: 100dvh;
   margin-inline: auto;
-  padding: max(28px, env(safe-area-inset-top)) 24px calc(104px + env(safe-area-inset-bottom));
+  padding: max(20px, env(safe-area-inset-top)) 18px calc(108px + env(safe-area-inset-bottom));
+  background: #f6f7f9;
+  container-type: inline-size;
 }
 
 .pmc-mini-app-header {
-  padding-block: 20px 36px;
+  padding: 4px 6px 26px;
 }
 
-.pmc-brand { display: flex; align-items: center; gap: 12px; margin-block-end: 20px; }
+.pmc-brand { display: flex; align-items: center; justify-content: center; gap: 9px; margin-block-end: 30px; }
 .pmc-brand-mark { display: block; width: 72px; height: 72px; object-fit: contain; }
 .pmc-brand-mark.compact { flex: 0 0 36px; width: 36px; height: 36px; }
 .pmc-brand strong { color: var(--pmc-gold-dark); font-size: .86rem; font-weight: 650; letter-spacing: .04em; }
+.pmc-mini-app-header .pmc-brand-mark { width: 48px; height: 48px; }
 
 .pmc-mini-app-header h1,
-.pmc-mini-app-header span {
+.pmc-mini-app-header p {
   margin: 0;
   letter-spacing: normal;
 }
 
 .pmc-mini-app-header h1 {
-  margin-block-start: 6px;
-  font-size: clamp(1.75rem, 8vw, 2.25rem);
-  line-height: 1.3;
+  font-size: clamp(1.85rem, 1.35rem + 2.5vw, 2.25rem);
+  line-height: var(--lh-heading);
 }
 
-.pmc-mini-app-header span {
-  display: block;
-  margin-block-start: 8px;
-  color: #666666;
+.pmc-mini-app-header p {
+  margin-block-start: 7px;
+  color: var(--pmc-muted);
   font-size: 1rem;
+  line-height: var(--lh-body);
 }
 
-.pmc-mini-app-actions {
-  border-block: 1px solid #e8e8e8;
+.pmc-home-primary-card {
+  position: relative;
+  isolation: isolate;
+  min-height: 190px;
+  overflow: hidden;
+  padding: 25px 22px;
+  border: 1px solid #8b611d;
+  border-radius: 20px;
+  color: #fff;
+  background: linear-gradient(135deg, #ba8a38 0%, #8a5b12 100%);
+  box-shadow: 0 14px 32px rgba(90, 60, 13, .18);
 }
 
-.pmc-mini-app-actions button {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  align-items: center;
-  width: 100%;
-  min-height: 88px;
-  padding: 18px 4px;
-  border: 0;
-  border-block-end: 1px solid #e8e8e8;
-  color: #202020;
-  background: #ffffff;
-  text-align: start;
-  cursor: pointer;
+.pmc-home-primary-card::before,
+.pmc-home-primary-card::after {
+  position: absolute;
+  z-index: -1;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 50%;
+  content: '';
 }
+.pmc-home-primary-card::before { width: 150px; height: 150px; inset-block-start: -58px; inset-inline-end: -42px; }
+.pmc-home-primary-card::after { width: 106px; height: 106px; inset-block-end: -60px; inset-inline-end: 34px; }
+.pmc-primary-card-copy { position: relative; z-index: 2; max-width: 70%; }
+.pmc-primary-card-copy h2 { margin: 0; font-size: 1.65rem; line-height: var(--lh-heading); letter-spacing: normal; }
+.pmc-primary-card-copy p { margin: 6px 0 20px; color: rgba(255, 255, 255, .86); font-size: .92rem; line-height: 1.65; }
+.pmc-primary-card-copy button { display: inline-flex; align-items: center; justify-content: center; min-height: 50px; gap: 7px; padding: 9px 18px; border: 0; border-radius: 13px; color: var(--pmc-gold-dark); background: #fff; font-weight: 750; }
+.pmc-primary-card-copy button svg { width: 18px; height: 18px; }
+.pmc-primary-card-art { position: absolute; inset-block-start: 34px; inset-inline-end: 20px; display: grid; width: 64px; height: 64px; place-items: center; border: 1px solid rgba(255, 255, 255, .22); border-radius: 18px; background: rgba(255, 255, 255, .12); transform: rotate(4deg); }
+.pmc-primary-card-art svg { width: 38px; height: 38px; stroke-width: 1.6; }
 
-.pmc-mini-app-actions button:last-child { border-block-end: 0; }
+.pmc-home-quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-block-start: 15px; }
+.pmc-home-quick-card { position: relative; display: flex; min-width: 0; min-height: 164px; flex-direction: column; align-items: flex-start; padding: 18px 16px; border: 1px solid #e7e8eb; border-radius: 18px; color: var(--pmc-text); background: #fff; box-shadow: 0 8px 24px rgba(24, 32, 46, .055); text-align: start; text-decoration: none; }
+.pmc-home-quick-card .pmc-card-icon { display: grid; width: 46px; height: 46px; margin-block-end: 19px; place-items: center; border-radius: 13px; color: var(--pmc-gold-dark); background: var(--pmc-gold-soft); }
+.pmc-card-icon svg { width: 24px; height: 24px; stroke-width: 1.75; }
+.pmc-home-quick-card strong, .pmc-home-quick-card small { display: block; letter-spacing: normal; }
+.pmc-home-quick-card strong { font-size: 1rem; line-height: 1.4; }
+.pmc-home-quick-card small { margin-block-start: 5px; color: var(--pmc-muted); font-size: .78rem; line-height: 1.55; }
+.pmc-card-chevron { position: absolute; width: 17px; height: 17px; inset-block-start: 20px; inset-inline-end: 15px; color: #a7a7a7; stroke-width: 1.7; }
+.pmc-home-quick-card.unavailable { opacity: .58; }
 
-.pmc-mini-app-actions button:active { background: #f8f8f8; }
+.pmc-home-account-card { display: grid; grid-template-columns: 46px minmax(0, 1fr) 20px; align-items: center; width: 100%; min-height: 80px; gap: 14px; margin-block-start: 12px; padding: 14px 16px; border: 1px solid #e7e8eb; border-radius: 18px; color: var(--pmc-text); background: #fff; box-shadow: 0 8px 24px rgba(24, 32, 46, .05); text-align: start; }
+.pmc-home-account-card .pmc-card-icon { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 13px; color: var(--pmc-gold-dark); background: var(--pmc-gold-soft); }
+.pmc-home-account-card > span:nth-child(2) { min-width: 0; }
+.pmc-home-account-card strong, .pmc-home-account-card small { display: block; letter-spacing: normal; }
+.pmc-home-account-card strong { line-height: 1.4; }
+.pmc-home-account-card small { margin-block-start: 3px; color: var(--pmc-muted); font-size: .79rem; line-height: 1.55; }
+.pmc-home-account-card > svg { width: 19px; height: 19px; color: #a7a7a7; }
 
-.pmc-mini-app-actions svg {
-  width: 25px;
-  height: 25px;
-  color: #a87520;
-  stroke-width: 1.8;
-}
-
-.pmc-mini-app-actions span { min-width: 0; }
-
-.pmc-mini-app-actions strong,
-.pmc-mini-app-actions small {
-  display: block;
-  letter-spacing: normal;
-}
-
-.pmc-mini-app-actions strong {
-  font-size: 1.125rem;
-  line-height: 1.35;
-}
-
-.pmc-mini-app-actions small {
-  margin-block-start: 3px;
-  color: #707070;
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
+.pmc-home-quick-card:active,
+.pmc-home-account-card:active { transform: translateY(1px); box-shadow: 0 4px 12px rgba(24, 32, 46, .05); }
 
 .pmc-mini-app-notice {
   display: grid;
+  width: min(100%, 560px);
   place-items: center;
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding: 24px;
   text-align: center;
 }
 
@@ -135,7 +142,7 @@ button:focus-visible {
   width: min(100%, 560px);
   min-height: 100dvh;
   margin-inline: auto;
-  background: #fff;
+  background: #f6f7f9;
 }
 
 .pmc-bottom-nav {
@@ -271,11 +278,15 @@ button:focus-visible {
 .pmc-booking-success > button { min-height: 50px; margin-block-start: 32px; padding: 10px 24px; border: 1px solid #cccccc; border-radius: 9px; background: #fff; font-weight: 650; }
 
 @media (hover: hover) {
-  .pmc-mini-app-actions button:hover { background: #fafafa; }
+  .pmc-home-quick-card:hover,
+  .pmc-home-account-card:hover { border-color: #d7c39f; transform: translateY(-2px); box-shadow: 0 12px 28px rgba(64, 45, 14, .09); }
+  .pmc-primary-card-copy button:hover { background: #fffaf1; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .pmc-mini-app-actions button { transition: background-color 140ms ease; }
+  .pmc-home-quick-card,
+  .pmc-home-account-card,
+  .pmc-primary-card-copy button { transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
 }
 
 @media (min-width: 480px) {
@@ -284,6 +295,15 @@ button:focus-visible {
   .pmc-booking-footer { margin-inline: -28px; padding-inline: 28px; }
 }
 
+@container (max-width: 310px) {
+  .pmc-home-quick-grid { grid-template-columns: 1fr; }
+  .pmc-primary-card-copy { max-width: 78%; }
+  .pmc-primary-card-art { width: 54px; height: 54px; inset-inline-end: 14px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  .pmc-progress span,
+  .pmc-home-quick-card,
+  .pmc-home-account-card,
+  .pmc-primary-card-copy button { transition: none; }
 }

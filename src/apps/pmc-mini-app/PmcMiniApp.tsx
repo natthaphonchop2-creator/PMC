@@ -79,7 +79,14 @@ export function PmcMiniApp({
 
   return (
     <div className="pmc-mini-app-shell">
-      {view === 'HOME' && <Home session={session} onAction={(action) => action === 'BOOKING' ? void openBooking() : setView('REPORTS')} />}
+      {view === 'HOME' && <Home
+        session={session}
+        fallbackFormUrl={config?.fallbackFormUrl}
+        onAction={(action) => {
+          if (action === 'BOOKING') void openBooking()
+          else setView(action)
+        }}
+      />}
       {view === 'REPORTS' && <SimplePage title="รายงาน JERA" description="เลือกดูรายงานหลักจากระบบ JERA" />}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
       {message && <p className="pmc-shell-alert" role="alert">{message}</p>}

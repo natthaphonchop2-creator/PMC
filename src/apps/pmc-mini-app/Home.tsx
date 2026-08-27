@@ -1,37 +1,53 @@
-import { CalendarDays, FileChartColumn } from 'lucide-react'
-import type { MiniAppSession } from './contracts'
+import { CalendarDays, ChartNoAxesCombined, ChevronRight, FileText, Plus, UserRound } from 'lucide-react'
 import { BrandMark } from './BrandMark'
+import type { MiniAppSession } from './contracts'
 
-export type MiniAppHomeAction = 'BOOKING' | 'REPORTS'
+export type MiniAppHomeAction = 'BOOKING' | 'REPORTS' | 'ACCOUNT'
 
-export function Home({ session, onAction }: {
+export function Home({ session, fallbackFormUrl, onAction }: {
   session: MiniAppSession
+  fallbackFormUrl?: string
   onAction?: (action: MiniAppHomeAction) => void
 }) {
   return (
     <main className="pmc-mini-app-home">
       <header className="pmc-mini-app-header">
         <BrandMark />
-        <h1>ระบบงานคลินิก</h1>
-        <span>สวัสดี {session.displayName}</span>
+        <h1>สวัสดี, {session.displayName}</h1>
+        <p>จัดการงานจองและรายงานของคลินิก</p>
       </header>
 
-      <section className="pmc-mini-app-actions" aria-label="เมนูหลัก">
-        <button type="button" aria-label="ลงนัดหมาย" aria-describedby="booking-action-description" onClick={() => onAction?.('BOOKING')}>
-          <CalendarDays aria-hidden="true" />
-          <span>
-            <strong>ลงนัดหมาย</strong>
-            <small id="booking-action-description">บันทึกเคสและแนบหลักฐาน</small>
-          </span>
-        </button>
-        <button type="button" aria-label="รายงาน JERA" aria-describedby="reports-action-description" onClick={() => onAction?.('REPORTS')}>
-          <FileChartColumn aria-hidden="true" />
-          <span>
-            <strong>รายงาน JERA</strong>
-            <small id="reports-action-description">ดูข้อมูลจากระบบ JERA</small>
-          </span>
-        </button>
+      <section className="pmc-home-primary-card" aria-labelledby="booking-card-title">
+        <div className="pmc-primary-card-copy">
+          <h2 id="booking-card-title">ลงนัดหมาย</h2>
+          <p>สร้างรายการจองและแนบหลักฐานลูกค้า</p>
+          <button type="button" onClick={() => onAction?.('BOOKING')}>เริ่มลงนัด <Plus aria-hidden="true" /></button>
+        </div>
+        <div className="pmc-primary-card-art" aria-hidden="true"><CalendarDays /></div>
       </section>
+
+      <section className="pmc-home-quick-grid" aria-label="ทางลัด">
+        <button type="button" className="pmc-home-quick-card" aria-label="รายงาน JERA" onClick={() => onAction?.('REPORTS')}>
+          <span className="pmc-card-icon"><ChartNoAxesCombined aria-hidden="true" /></span>
+          <strong>รายงาน JERA</strong>
+          <small>ดูข้อมูลรายงานของคลินิก</small>
+          <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
+        </button>
+        {fallbackFormUrl ? <a className="pmc-home-quick-card" aria-label="Google Form สำรอง" href={fallbackFormUrl} target="_blank" rel="noreferrer">
+          <span className="pmc-card-icon"><FileText aria-hidden="true" /></span>
+          <strong>Form สำรอง</strong>
+          <small>เปิดแบบฟอร์มเดิมเมื่อจำเป็น</small>
+          <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
+        </a> : <div className="pmc-home-quick-card unavailable" aria-hidden="true">
+          <span className="pmc-card-icon"><FileText /></span><strong>Form สำรอง</strong><small>ยังไม่พร้อมใช้งาน</small>
+        </div>}
+      </section>
+
+      <button type="button" className="pmc-home-account-card" aria-label="บัญชีผู้ใช้" onClick={() => onAction?.('ACCOUNT')}>
+        <span className="pmc-card-icon"><UserRound aria-hidden="true" /></span>
+        <span><strong>บัญชีผู้ใช้</strong><small>ดูชื่อผู้ใช้งานและทางเลือกสำรอง</small></span>
+        <ChevronRight aria-hidden="true" />
+      </button>
     </main>
   )
 }

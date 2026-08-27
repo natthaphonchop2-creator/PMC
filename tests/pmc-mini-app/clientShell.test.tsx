@@ -10,13 +10,24 @@ afterEach(cleanup)
 
 describe('PMC LINE Mini App shell', () => {
   it('shows only the two approved version-1 home actions', () => {
-    render(<PmcMiniApp initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }} />)
+    const view = render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={miniAppApi()}
+    />)
 
-    expect(screen.getByRole('button', { name: 'ลงนัดหมาย' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(screen.getByText('จัดการงานจองและรายงานของคลินิก')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'เริ่มลงนัด' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'รายงาน JERA' })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Google Form สำรอง' })).toHaveAttribute('href', config.fallbackFormUrl)
+    expect(screen.getByRole('button', { name: 'บัญชีผู้ใช้' })).toBeVisible()
     expect(screen.getByRole('img', { name: 'Promed Clinic' })).toBeVisible()
     expect(screen.getByRole('navigation', { name: 'เมนูด้านล่าง' })).toBeVisible()
     expect(screen.queryByText('LINE Assistant')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'ระบบงานคลินิก' })).not.toBeInTheDocument()
+    expect(view.container.querySelectorAll('.pmc-home-primary-card')).toHaveLength(1)
+    expect(view.container.querySelectorAll('.pmc-home-quick-card')).toHaveLength(2)
   })
 
   it('opens a server-created booking draft from the home action', async () => {
@@ -28,7 +39,7 @@ describe('PMC LINE Mini App shell', () => {
       api={api}
     />)
 
-    await user.click(screen.getByRole('button', { name: 'ลงนัดหมาย' }))
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
 
     expect(api.createDraft).toHaveBeenCalledOnce()
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
