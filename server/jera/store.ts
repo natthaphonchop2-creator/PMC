@@ -57,6 +57,7 @@ export interface JeraReportStore {
   replaceRows(reportType: JeraSourceReportType, cacheKey: string, rows: JeraNormalizedRow[]): Promise<JeraStoreWriteResult>
   readRows(reportType: JeraSourceReportType, query?: JeraCacheReadQuery): Promise<JeraNormalizedRow[]>
   getSyncState(cacheKey: string): Promise<JeraSyncStateRecord | null>
+  listSyncStates(): Promise<JeraSyncStateRecord[]>
   saveSyncState(state: JeraSyncStateRecord): Promise<void>
   appendSyncAudit(audit: JeraSyncAuditRecord): Promise<void>
   claimLease(input: {
@@ -211,6 +212,9 @@ export function createGoogleJeraReportStore(input: {
     async getSyncState(cacheKey) {
       safeToken(cacheKey)
       return (await readStates()).find(({ value }) => value.cacheKey === cacheKey)?.value ?? null
+    },
+    async listSyncStates() {
+      return (await readStates()).map(({ value }) => value)
     },
     async saveSyncState(state) {
       await withMutex(mutexKey, () => writeState(state))

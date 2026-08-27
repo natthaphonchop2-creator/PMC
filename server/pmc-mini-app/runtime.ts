@@ -4,9 +4,10 @@ import { createMiniAppGooglePorts } from './googleClient.js'
 import { createLineIdentityClient } from './lineIdentity.js'
 import { createPmcMiniAppMiddleware } from './middleware.js'
 import { createGoogleMiniAppStore } from './store.js'
+import { createJeraRuntime } from '../jera/runtime.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
-export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig) => PmcMiniAppRuntimeMiddleware
+export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
 
 export function createPmcMiniAppRuntime(
   env: NodeJS.ProcessEnv,
@@ -15,13 +16,13 @@ export function createPmcMiniAppRuntime(
   try {
     const config = readPmcMiniAppConfig(env)
     if (!config) return undefined
-    return construct(config)
+    return construct(config, env)
   } catch {
     return undefined
   }
 }
 
-function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig): PmcMiniAppRuntimeMiddleware {
+function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv): PmcMiniAppRuntimeMiddleware {
   const google = createMiniAppGooglePorts({
     spreadsheetId: config.spreadsheetId,
     intakeFolderId: config.intakeFolderId,
@@ -32,12 +33,14 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig): PmcMiniAppR
     url: config.bookingIngressUrl,
     secret: config.bookingIngressSecret,
   })
+  const jera = createJeraRuntime(env, { spreadsheetId: config.spreadsheetId, sheets: google.sheets })
   return createPmcMiniAppMiddleware({
     config,
     store,
     identity,
     drive: google.drive,
     ingress,
+    jera: jera?.api,
     now: () => new Date(),
   })
 }

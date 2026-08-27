@@ -199,6 +199,7 @@ class MemoryReportStore implements JeraReportStore {
   }
 
   async getSyncState(key: string): Promise<JeraSyncStateRecord | null> { return structuredClone(this.states.get(key) ?? null) }
+  async listSyncStates(): Promise<JeraSyncStateRecord[]> { return structuredClone([...this.states.values()]) }
   async saveSyncState(value: JeraSyncStateRecord): Promise<void> { this.states.set(value.cacheKey, structuredClone(value)) }
   async appendSyncAudit(value: JeraSyncAuditRecord): Promise<void> { this.audits.push(structuredClone(value)) }
 

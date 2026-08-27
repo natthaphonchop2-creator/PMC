@@ -7,6 +7,7 @@ import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind } from './googleClient.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
+import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 
 export interface PmcMiniAppMiddlewareDependencies {
   config: PmcMiniAppServerConfig
@@ -18,6 +19,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   requestId?: () => string
   draftId?: () => string
   ingress?: { send(draft: MiniAppRequestRecord): Promise<{ caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> }> }
+  jera?: JeraMiniAppApi
 }
 
 export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencies): ProductionMiddleware {
@@ -35,6 +37,17 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     if (pathname === '/api/mini-app/client-config') {
       if (!requireGet(req, res)) return
       respond(res, 200, { miniAppId: deps.config.miniAppId })
+      return
+    }
+
+    if (isJeraMiniAppApiPath(pathname)) {
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      if (!deps.jera) {
+        respond(res, 503, { error: 'JERA_REPORTING_UNAVAILABLE' })
+        return
+      }
+      if (!await deps.jera.handle(req, res, url, authenticated)) respond(res, 404, { error: 'JERA_REPORT_NOT_FOUND' })
       return
     }
 
