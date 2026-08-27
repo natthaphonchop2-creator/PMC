@@ -5,6 +5,7 @@ import {
   type MiniAppBookingIngressEnvelope,
 } from '../../../shared/pmcMiniAppBooking'
 import { parseAndVerifyMiniAppIngress } from '../src/domain/miniAppIngress'
+import { processBookingDoPost } from '../src/entrypoints'
 import { createTestPorts } from './helpers/fakes'
 
 describe('Apps Script Mini App booking ingress', () => {
@@ -14,6 +15,22 @@ describe('Apps Script Mini App booking ingress', () => {
     expect(parseAndVerifyMiniAppIngress(event(envelope()), ports)).toMatchObject({
       requestId: 'request-1', staffId: 'admin-1', doctorId: 'doctor-1', serviceId: 'service-1', channelId: 'เพจหลัก',
     })
+    expect(ports.repositories.lineDirectory.hasNonce('nonce-123456')).toBe(true)
+  })
+
+  it('routes Mini App and legacy LINE directory payloads without changing the legacy contract', () => {
+    const miniPorts = createTestPorts()
+    expect(processBookingDoPost(event(envelope()), miniPorts)).toEqual({
+      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+    })
+    expect(miniPorts.bookings.list()).toHaveLength(1)
+
+    const legacyPorts = createTestPorts({ lineDirectoryCaptureEnabled: true })
+    const legacyPayload = legacyPorts.signedBookingIngressFixture('group', 'group-source-1')
+    expect(processBookingDoPost(event(legacyPayload), legacyPorts)).toEqual({ ok: true })
+    expect(legacyPorts.lineDirectory.list()).toEqual([{
+      sourceType: 'group', sourceId: 'group-source-1', capturedAt: legacyPorts.clock.nowIso(),
+    }])
   })
 
   it.each([
@@ -50,7 +67,7 @@ function signedEnvelope(overrides: Partial<Omit<MiniAppBookingIngressEnvelope, '
       customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678',
       doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01',
       appointmentTime: '13:00', depositAmount: 900, channelId: 'เพจหลัก',
-      paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
+      paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'],
     },
     ...overrides,
   }

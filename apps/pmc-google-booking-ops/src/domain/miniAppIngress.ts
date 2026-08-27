@@ -18,12 +18,14 @@ export function parseAndVerifyMiniAppIngress(
   event: AppsScriptDoPostEvent,
   ports: BookingPorts,
 ): MiniAppBookingIngressPayload {
+  return verifyMiniAppIngressPayload(parseAppsScriptDoPostBody(event), ports)
+}
+
+export function parseAppsScriptDoPostBody(event: AppsScriptDoPostEvent): unknown {
   if (!event.postData || event.postData.length <= 0 || event.postData.length > 262_144 || event.postData.type !== 'application/json') {
     throw new Error('invalid mini app ingress event')
   }
-  let parsed: unknown
-  try { parsed = JSON.parse(event.postData.contents) } catch { throw new Error('invalid mini app ingress JSON') }
-  return verifyMiniAppIngressPayload(parsed, ports)
+  try { return JSON.parse(event.postData.contents) } catch { throw new Error('invalid mini app ingress JSON') }
 }
 
 export function verifyMiniAppIngressPayload(input: unknown, ports: BookingPorts): MiniAppBookingIngressPayload {
@@ -47,6 +49,7 @@ export function verifyMiniAppIngressPayload(input: unknown, ports: BookingPorts)
   if (ports.repositories.lineDirectory.hasNonce(unsigned.nonce)) throw new Error('mini app ingress replay detected')
 
   validatePayload(unsigned.payload, ports)
+  ports.repositories.lineDirectory.rememberNonce(unsigned.nonce, ports.clock.nowIso())
   return clonePayload(unsigned.payload)
 }
 

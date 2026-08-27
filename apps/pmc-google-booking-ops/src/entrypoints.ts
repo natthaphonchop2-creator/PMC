@@ -7,7 +7,7 @@ import {
 } from './adapters/googleForms'
 import {
   handleLineDirectoryIngress,
-  parseBookingIngressEvent,
+  parseBookingIngressPayload,
   type AppsScriptDoPostEvent,
 } from './adapters/lineMessaging'
 import {
@@ -37,6 +37,9 @@ import { configureSharedDoctorCalendar } from './workflows/calendarConfig'
 import { refreshBookingCalendarPresentation } from './workflows/bookingUpdate'
 import { submitBookingIntake } from './workflows/formSubmit'
 import { pollJeraIncoming as pollJeraIncomingWorkflow } from './workflows/jeraImport'
+import { parseAppsScriptDoPostBody, verifyMiniAppIngressPayload } from './domain/miniAppIngress'
+import { submitMiniAppBooking } from './workflows/miniAppSubmit'
+import type { BookingPorts } from './ports'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -54,8 +57,25 @@ export function onQueueConfirmationSubmit(event: GoogleAppsScript.Events.FormsOn
 }
 
 export function doPost(event: AppsScriptDoPostEvent) {
-  handleLineDirectoryIngress(parseBookingIngressEvent(event), createRuntime())
-  return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON)
+  const result = processBookingDoPost(event, createRuntime())
+  return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON)
+}
+
+export function processBookingDoPost(event: AppsScriptDoPostEvent, ports: BookingPorts) {
+  const parsed = parseAppsScriptDoPostBody(event)
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_BOOKING') {
+    const booking = submitMiniAppBooking(verifyMiniAppIngressPayload(parsed, ports), ports)
+    return { caseId: booking.caseId, status: booking.appointmentStatus }
+  }
+  if (isRecord(parsed) && !Object.prototype.hasOwnProperty.call(parsed, 'kind')) {
+    handleLineDirectoryIngress(parseBookingIngressPayload(parsed), ports)
+    return { ok: true as const }
+  }
+  throw new Error('unsupported ingress kind')
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 export function runDailyOperations() {

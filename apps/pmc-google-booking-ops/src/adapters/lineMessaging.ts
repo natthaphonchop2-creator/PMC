@@ -30,8 +30,13 @@ export interface AppsScriptDoPostEvent {
 }
 
 export function parseBookingIngressEvent(event: AppsScriptDoPostEvent): BookingIngressPayload {
-  const parsed = JSON.parse(event.postData.contents) as Partial<BookingIngressPayload>
+  return parseBookingIngressPayload(JSON.parse(event.postData.contents))
+}
+
+export function parseBookingIngressPayload(input: unknown): BookingIngressPayload {
+  const parsed = input as Partial<BookingIngressPayload>
   if (
+    !parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
     typeof parsed.timestamp !== 'number' ||
     typeof parsed.nonce !== 'string' ||
     !['user', 'group'].includes(String(parsed.sourceType)) ||
