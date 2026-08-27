@@ -1,0 +1,19 @@
+{
+  "file": "pmc-staff-rich-menu-2500x843.png",
+  "width": 2500,
+  "height": 843,
+  "format": "png",
+  "sizeBytes": 41126,
+  "sourceLogo": "assets/pmc-flex-logo-v1.png",
+  "exactCopy": [
+    "ระบบพนักงาน",
+    "PMC STAFF MINI APP",
+    "แตะเพื่อเปิดระบบ"
+  ],
+  "destination": "https://liff.line.me/2011294483-b9b5RBP6",
+  "oaDisplayName": "PMC notification",
+  "oaBasicId": "@326kptsd",
+  "richMenuId": "richmenu-62b735a9f5094b9e3e4fb42ea78dce34",
+  "default": true,
+  "createdAt": "2026-08-27T20:15:36.715Z"
+}
