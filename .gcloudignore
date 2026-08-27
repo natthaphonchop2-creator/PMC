@@ -10,10 +10,14 @@
 !tsconfig.node.json
 !tsconfig.server.json
 !vite.config.ts
+!vite.mini-app.config.ts
+!vite.ocr-review.config.ts
 !src/
 !src/**
 !server/
 !server/**
+!shared/
+!shared/**
 !assets/
 !assets/**
 !public/
