@@ -25,6 +25,24 @@ describe('PMC Mini App runtime configuration checker', () => {
     expect(serialized).not.toContain(environment.PMC_MINI_APP_SIGNING_SECRET)
   })
 
+  it('requires the enrollment PIN binding only when first-time linking is enabled', async () => {
+    const checker = await import('../../scripts/check-pmc-mini-app-runtime.mjs')
+    const enabled = {
+      ...validEnvironment(),
+      PMC_MINI_APP_ENROLLMENT_ENABLED: 'true',
+      PMC_MINI_APP_ENROLLMENT_PIN: '482731',
+    }
+
+    const ready = checker.inspectMiniAppRuntime(enabled)
+    const missingPin = checker.inspectMiniAppRuntime({ ...enabled, PMC_MINI_APP_ENROLLMENT_PIN: '' })
+
+    expect(ready).toMatchObject({ ready: true, enrollmentEnabled: true })
+    expect(ready.secretBindings.present).toContain('PMC_MINI_APP_ENROLLMENT_PIN')
+    expect(JSON.stringify(ready)).not.toContain(enabled.PMC_MINI_APP_ENROLLMENT_PIN)
+    expect(missingPin).toMatchObject({ ready: false, enrollmentEnabled: true })
+    expect(missingPin.secretBindings.missing).toContain('PMC_MINI_APP_ENROLLMENT_PIN')
+  })
+
   it('runs against an env file and prints valid JSON without secret values', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pmc-runtime-check-'))
     temporaryDirectories.push(directory)
@@ -60,6 +78,7 @@ function validEnvironment(): Record<string, string> {
     PMC_SPREADSHEET_ID: 'sheet-1', PMC_DRIVE_INTAKE_FOLDER_ID: 'folder-1',
     PMC_BOOKING_INGRESS_URL: 'https://script.google.com/macros/s/deployment/exec',
     PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
+    PMC_MINI_APP_ENROLLMENT_ENABLED: 'false',
     PMC_BOOKING_INGRESS_SECRET: 'booking-secret-sentinel', PMC_MINI_APP_SIGNING_SECRET: 'signing-secret-sentinel',
   }
 }

@@ -9,7 +9,7 @@ describe('PMC Mini App managed Sheet setup', () => {
     await ensureMiniAppWorkbook({ spreadsheetId: 'sheet-1', sheets })
 
     expect(sheets.workbook.map(({ title }) => title)).toEqual([
-      'BOOKING_MASTER', 'MINI_APP_REQUESTS', 'JERA_API_CACHE', 'JERA_SYNC_STATE', 'JERA_SYNC_AUDIT',
+      'BOOKING_MASTER', 'MINI_APP_REQUESTS', 'MINI_APP_LINK_ATTEMPTS', 'JERA_API_CACHE', 'JERA_SYNC_STATE', 'JERA_SYNC_AUDIT',
     ])
     for (const [tab, headers] of Object.entries(MANAGED_TAB_HEADERS)) {
       expect(sheets.headers.get(tab)).toEqual(headers)
@@ -39,6 +39,9 @@ describe('PMC Mini App managed Sheet setup', () => {
   })
 
   it('names stored monetary columns as integer satang and includes lease fields', () => {
+    expect(MANAGED_TAB_HEADERS.MINI_APP_LINK_ATTEMPTS).toEqual([
+      'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
+    ])
     expect(MANAGED_TAB_HEADERS.JERA_API_CACHE).toEqual(expect.arrayContaining([
       'branchName', 'patientName', 'totalSatang', 'paidAmountSatang', 'refundAmountSatang',
       'cashSatang', 'transferSatang', 'creditCardSatang', 'eWalletSatang', 'paymentLinkSatang', 'otherPaymentSatang',

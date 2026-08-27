@@ -97,6 +97,16 @@ export interface MiniAppStore {
   failConfirmation(requestId: string, safeErrorCode: string, updatedAt: string): Promise<MiniAppRequestRecord>
 }
 
+export interface MiniAppEnrollmentStore {
+  listUnlinkedBookingStaff(): Promise<Array<{ id: string; name: string }>>
+  linkLineUserToStaff(staffId: string, lineUserId: string): Promise<MiniAppStaffRecord>
+  consumeEnrollmentAttempt(
+    lineUserIdHash: string,
+    pinAccepted: boolean,
+    nowIso: string,
+  ): Promise<{ allowed: boolean; retryAfterSeconds: number }>
+}
+
 export const MINI_APP_REQUEST_HEADERS = [
   'requestId', 'draftId', 'staffId', 'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash',
   'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
@@ -104,18 +114,34 @@ export const MINI_APP_REQUEST_HEADERS = [
   'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode', 'updatedAt',
 ] as const
 
+export const MINI_APP_LINK_ATTEMPT_HEADERS = [
+  'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
+] as const
+
 const REQUEST_TAB = 'MINI_APP_REQUESTS'
 const REQUEST_RANGE = `'${REQUEST_TAB}'!A2:${columnName(MINI_APP_REQUEST_HEADERS.length)}`
 const STAFF_RANGE = "'CONFIG_STAFF'!A2:H"
+const LINK_ATTEMPT_TAB = 'MINI_APP_LINK_ATTEMPTS'
+const LINK_ATTEMPT_RANGE = `'${LINK_ATTEMPT_TAB}'!A2:${columnName(MINI_APP_LINK_ATTEMPT_HEADERS.length)}`
 const DOCTORS_RANGE = "'CONFIG_DOCTORS'!A2:E"
 const SERVICES_RANGE = "'CONFIG_SERVICES'!A2:D"
 const CHANNELS_RANGE = "'CONFIG_CHANNELS'!A2:C"
 const requestMutexes = new Map<string, Promise<void>>()
+const ENROLLMENT_MAX_FAILURES = 5
+const ENROLLMENT_WINDOW_MS = 15 * 60 * 1_000
+
+interface EnrollmentAttemptRecord {
+  lineUserIdHash: string
+  failureCount: number
+  windowStartedAt: string
+  lockedUntil: string
+  lastAttemptAt: string
+}
 
 export function createGoogleMiniAppStore(input: {
   spreadsheetId: string
   sheets: MiniAppSheetsPort
-}): MiniAppStore {
+}): MiniAppStore & MiniAppEnrollmentStore {
   const { spreadsheetId, sheets } = input
   const mutexKey = `pmc-mini-app:${spreadsheetId}`
 
@@ -127,6 +153,32 @@ export function createGoogleMiniAppStore(input: {
   async function writeRequest(rowNumber: number, value: MiniAppRequestRecord): Promise<void> {
     const end = columnName(MINI_APP_REQUEST_HEADERS.length)
     await sheets.update(spreadsheetId, `'${REQUEST_TAB}'!A${rowNumber}:${end}${rowNumber}`, [requestToRow(value)])
+  }
+
+  async function readStaffRows(): Promise<Array<{ rowNumber: number; row: unknown[] }>> {
+    const response = await sheets.batchGet(spreadsheetId, [STAFF_RANGE])
+    return (response[STAFF_RANGE] ?? []).map((row, index) => ({ rowNumber: index + 2, row }))
+  }
+
+  async function readLinkAttemptRows(): Promise<Array<{ rowNumber: number; value: EnrollmentAttemptRecord }>> {
+    const response = await sheets.batchGet(spreadsheetId, [LINK_ATTEMPT_RANGE])
+    return (response[LINK_ATTEMPT_RANGE] ?? []).flatMap((row, index) => {
+      const value = enrollmentAttemptFromRow(row)
+      return value ? [{ rowNumber: index + 2, value }] : []
+    })
+  }
+
+  async function writeLinkAttempt(rowNumber: number | null, value: EnrollmentAttemptRecord): Promise<void> {
+    const row = enrollmentAttemptToRow(value)
+    if (rowNumber === null) {
+      await sheets.append(spreadsheetId, `'${LINK_ATTEMPT_TAB}'!A:${columnName(MINI_APP_LINK_ATTEMPT_HEADERS.length)}`, [row])
+      return
+    }
+    await sheets.update(
+      spreadsheetId,
+      `'${LINK_ATTEMPT_TAB}'!A${rowNumber}:${columnName(MINI_APP_LINK_ATTEMPT_HEADERS.length)}${rowNumber}`,
+      [row],
+    )
   }
 
   async function mutateDraft(
@@ -158,7 +210,7 @@ export function createGoogleMiniAppStore(input: {
       const ranges = [STAFF_RANGE, DOCTORS_RANGE, SERVICES_RANGE, CHANNELS_RANGE]
       const response = await sheets.batchGet(spreadsheetId, ranges)
       const aes = (response[STAFF_RANGE] ?? [])
-        .map(staffFromRow)
+        .map(staffCandidateFromRow)
         .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canBeAe))
         .map(({ id, name }) => ({ id, name }))
       const doctors = (response[DOCTORS_RANGE] ?? []).flatMap((row) => {
@@ -175,6 +227,73 @@ export function createGoogleMiniAppStore(input: {
         return active && safeId(id) && name ? [{ id, name }] : []
       })
       return { doctors, services, channels, aes }
+    },
+    async listUnlinkedBookingStaff() {
+      return (await readStaffRows())
+        .map(({ row }) => staffCandidateFromRow(row))
+        .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canCloseBooking && !staff.lineUserId))
+        .map(({ id, name }) => ({ id, name }))
+    },
+    async linkLineUserToStaff(staffId, lineUserId) {
+      if (!safeId(staffId) || !safeLineUserId(lineUserId)) throw new Error('INVALID_ENROLLMENT_IDENTITY')
+      return withMutex(mutexKey, async () => {
+        const rows = await readStaffRows()
+        const candidates = rows.flatMap(({ rowNumber, row }) => {
+          const staff = staffCandidateFromRow(row)
+          return staff ? [{ rowNumber, row, staff }] : []
+        })
+        const existingIdentity = candidates.find(({ staff }) => staff.lineUserId === lineUserId)
+        if (existingIdentity) {
+          if (existingIdentity.staff.id === staffId) return existingIdentity.staff
+          throw new Error('LINE_USER_ALREADY_LINKED')
+        }
+        const target = candidates.find(({ staff }) => staff.id === staffId && staff.canCloseBooking)
+        if (!target) throw new Error('ENROLLMENT_STAFF_NOT_AVAILABLE')
+        if (target.staff.lineUserId) throw new Error('STAFF_ALREADY_LINKED')
+        const nextRow = [...target.row]
+        while (nextRow.length < 8) nextRow.push('')
+        nextRow[3] = lineUserId
+        await sheets.update(spreadsheetId, `'CONFIG_STAFF'!A${target.rowNumber}:H${target.rowNumber}`, [nextRow.slice(0, 8)])
+        const linked = staffFromRow(nextRow)
+        if (!linked) throw new Error('ENROLLMENT_STAFF_UPDATE_FAILED')
+        return linked
+      })
+    },
+    async consumeEnrollmentAttempt(lineUserIdHash, pinAccepted, nowIso) {
+      if (!safeHash(lineUserIdHash)) throw new Error('INVALID_ENROLLMENT_HASH')
+      const nowMs = Date.parse(nowIso)
+      if (!Number.isFinite(nowMs)) throw new Error('INVALID_ENROLLMENT_TIME')
+      return withMutex(mutexKey, async () => {
+        const rows = await readLinkAttemptRows()
+        const existing = rows.find(({ value }) => value.lineUserIdHash === lineUserIdHash)
+        const lockedUntilMs = existing?.value.lockedUntil ? Date.parse(existing.value.lockedUntil) : 0
+        if (Number.isFinite(lockedUntilMs) && lockedUntilMs > nowMs) {
+          return { allowed: false, retryAfterSeconds: Math.ceil((lockedUntilMs - nowMs) / 1_000) }
+        }
+        if (pinAccepted) {
+          if (existing) await writeLinkAttempt(existing.rowNumber, {
+            lineUserIdHash, failureCount: 0, windowStartedAt: nowIso, lockedUntil: '', lastAttemptAt: nowIso,
+          })
+          return { allowed: true, retryAfterSeconds: 0 }
+        }
+        const windowStartedMs = existing?.value.windowStartedAt ? Date.parse(existing.value.windowStartedAt) : 0
+        const sameWindow = Number.isFinite(windowStartedMs) && nowMs - windowStartedMs >= 0 && nowMs - windowStartedMs < ENROLLMENT_WINDOW_MS
+        const failureCount = (sameWindow ? existing?.value.failureCount ?? 0 : 0) + 1
+        const lockedUntil = failureCount >= ENROLLMENT_MAX_FAILURES
+          ? new Date(nowMs + ENROLLMENT_WINDOW_MS).toISOString()
+          : ''
+        await writeLinkAttempt(existing?.rowNumber ?? null, {
+          lineUserIdHash,
+          failureCount,
+          windowStartedAt: sameWindow ? existing!.value.windowStartedAt : nowIso,
+          lockedUntil,
+          lastAttemptAt: nowIso,
+        })
+        return {
+          allowed: false,
+          retryAfterSeconds: lockedUntil ? Math.ceil((Date.parse(lockedUntil) - nowMs) / 1_000) : 0,
+        }
+      })
     },
     async createDraft(draft) {
       const normalized = normalizeRequestRecord(draft)
@@ -291,13 +410,34 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
 }
 
 function staffFromRow(row: unknown[]): MiniAppStaffRecord | null {
+  const staff = staffCandidateFromRow(row)
+  return staff && safeLineUserId(staff.lineUserId) ? staff : null
+}
+
+function staffCandidateFromRow(row: unknown[]): MiniAppStaffRecord | null {
   const [id, name, email, lineUserId, canCloseBooking, canBeAe, active, profileImageUrl] = row
-  if (!safeId(text(id)) || !text(name) || !safeLineUserId(text(lineUserId)) || !booleanValue(active)) return null
+  const normalizedLineUserId = text(lineUserId)
+  if (!safeId(text(id)) || !text(name) || (normalizedLineUserId && !safeLineUserId(normalizedLineUserId)) || !booleanValue(active)) return null
   return {
-    id: text(id), name: text(name), email: text(email), lineUserId: text(lineUserId),
+    id: text(id), name: text(name), email: text(email), lineUserId: normalizedLineUserId,
     canCloseBooking: booleanValue(canCloseBooking), canBeAe: booleanValue(canBeAe), active: true,
     profileImageUrl: nullableText(profileImageUrl),
   }
+}
+
+function enrollmentAttemptFromRow(row: unknown[]): EnrollmentAttemptRecord | null {
+  const lineUserIdHash = text(row[0])
+  const failureCount = numberValue(row[1])
+  const windowStartedAt = text(row[2])
+  const lockedUntil = text(row[3])
+  const lastAttemptAt = text(row[4])
+  if (!safeHash(lineUserIdHash) || !Number.isSafeInteger(failureCount) || failureCount < 0 || failureCount > ENROLLMENT_MAX_FAILURES) return null
+  if (!validIso(windowStartedAt) || (lockedUntil && !validIso(lockedUntil)) || !validIso(lastAttemptAt)) return null
+  return { lineUserIdHash, failureCount, windowStartedAt, lockedUntil, lastAttemptAt }
+}
+
+function enrollmentAttemptToRow(value: EnrollmentAttemptRecord): unknown[] {
+  return [value.lineUserIdHash, value.failureCount, value.windowStartedAt, value.lockedUntil, value.lastAttemptAt]
 }
 
 const REQUEST_STATES = new Set<MiniAppRequestState>([
@@ -313,6 +453,7 @@ function safeLineUserId(value: string): boolean { return /^[A-Za-z0-9_-]{2,128}$
 function safeHash(value: string): boolean { return /^[A-Za-z0-9_-]{4,128}$/.test(value) }
 function safeCaseId(value: string): boolean { return /^PMC-\d{6}-\d{4,}$/.test(value) }
 function safeError(value: string): boolean { return /^[A-Z0-9_]{1,80}$/.test(value) }
+function validIso(value: string): boolean { return Boolean(value) && Number.isFinite(Date.parse(value)) }
 
 function stringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(text)

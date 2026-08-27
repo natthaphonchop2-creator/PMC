@@ -138,6 +138,26 @@ button:focus-visible {
 
 .pmc-mini-app-notice p { margin: 0; }
 
+.pmc-enrollment-page {
+  width: min(100%, 560px);
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding: max(24px, env(safe-area-inset-top)) 20px calc(28px + env(safe-area-inset-bottom));
+  background: #f6f7f9;
+}
+
+.pmc-enrollment-page header { padding: 2px 4px 24px; }
+.pmc-enrollment-page header .pmc-brand { margin-block-end: 24px; }
+.pmc-enrollment-page header .pmc-brand-mark { width: 48px; height: 48px; }
+.pmc-enrollment-page h1 { margin: 0; font-size: 1.8rem; line-height: var(--lh-heading); }
+.pmc-enrollment-page header p { margin: 6px 0 0; color: var(--pmc-muted); line-height: var(--lh-body); }
+.pmc-enrollment-page form { padding: 21px 18px; border: 1px solid #e7e8eb; border-radius: 18px; background: #fff; box-shadow: 0 8px 24px rgba(24, 32, 46, .05); }
+.pmc-enrollment-page .pmc-primary-button { width: 100%; border: 0; color: #fff; background: var(--pmc-gold-dark); }
+.pmc-enrollment-page .pmc-primary-button:disabled { cursor: wait; opacity: .6; }
+.pmc-enrollment-page :is(input, select):user-invalid { border-color: var(--pmc-error); background: #fff8f7; }
+.pmc-enrollment-message { margin: 0 0 14px; color: var(--pmc-muted); font-size: .86rem; line-height: 1.65; }
+.pmc-enrollment-message.error { color: var(--pmc-error); }
+
 .pmc-mini-app-shell {
   width: min(100%, 560px);
   min-height: 100dvh;

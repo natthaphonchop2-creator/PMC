@@ -4,6 +4,7 @@ import type {
   BookingDraftInput,
   BookingDraftProjection,
   MiniAppConfig,
+  MiniAppEnrollmentOptions,
   MiniAppSession,
 } from './contracts'
 import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
@@ -18,6 +19,8 @@ export interface MiniAppLiffPort {
 export interface MiniAppBrowserApi {
   initialize(): Promise<string>
   loadSession(idToken: string): Promise<MiniAppSession>
+  loadEnrollmentOptions(idToken: string): Promise<MiniAppEnrollmentOptions>
+  enroll(idToken: string, staffId: string, pin: string): Promise<MiniAppSession>
   loadConfig(idToken: string): Promise<MiniAppConfig>
   createDraft(idToken: string): Promise<BookingDraftProjection>
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
@@ -66,6 +69,12 @@ export function createMiniAppApi(options: {
     },
     loadSession(idToken) {
       return requestJson(request, '/api/mini-app/session', authenticated(idToken))
+    },
+    loadEnrollmentOptions(idToken) {
+      return requestJson(request, '/api/mini-app/enrollment-options', authenticated(idToken))
+    },
+    enroll(idToken, staffId, pin) {
+      return requestJson(request, '/api/mini-app/enroll', authenticatedJson(idToken, 'POST', { staffId, pin }))
     },
     async loadConfig(idToken) {
       const config = await requestJson<Omit<MiniAppConfig, 'miniAppId'>>(request, '/api/mini-app/config', authenticated(idToken))

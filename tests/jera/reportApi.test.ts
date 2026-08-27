@@ -174,7 +174,7 @@ function config(): PmcMiniAppServerConfig {
     enabled: true, miniAppId: '2001234567-mini-app', lineChannelId: '2001234567', spreadsheetId: 'sheet-1',
     intakeFolderId: 'folder-1', bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'production-secret',
-    signingSecret: 'signing-secret', maxImageBytes: 10_000_000, maxFilesPerKind: 10,
+    signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
   }
 }
 

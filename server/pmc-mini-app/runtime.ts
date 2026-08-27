@@ -5,6 +5,7 @@ import { createLineIdentityClient } from './lineIdentity.js'
 import { createPmcMiniAppMiddleware } from './middleware.js'
 import { createGoogleMiniAppStore } from './store.js'
 import { createJeraRuntime } from '../jera/runtime.js'
+import { createEnrollmentService } from './enrollment.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -33,6 +34,11 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     url: config.bookingIngressUrl,
     secret: config.bookingIngressSecret,
   })
+  const enrollment = config.enrollmentPin ? createEnrollmentService({
+    pin: config.enrollmentPin,
+    signingSecret: config.signingSecret,
+    store,
+  }) : undefined
   const jera = createJeraRuntime(env, { spreadsheetId: config.spreadsheetId, sheets: google.sheets })
   return createPmcMiniAppMiddleware({
     config,
@@ -40,6 +46,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     identity,
     drive: google.drive,
     ingress,
+    ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
     now: () => new Date(),
   })

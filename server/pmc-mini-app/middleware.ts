@@ -8,6 +8,7 @@ import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, val
 import type { MiniAppDrivePort, MiniAppEvidenceKind } from './googleClient.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
+import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 
 export interface PmcMiniAppMiddlewareDependencies {
   config: PmcMiniAppServerConfig
@@ -19,6 +20,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   requestId?: () => string
   draftId?: () => string
   ingress?: { send(draft: MiniAppRequestRecord): Promise<{ caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> }> }
+  enrollment?: EnrollmentService
   jera?: JeraMiniAppApi
 }
 
@@ -45,6 +47,50 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     if (pathname === '/api/mini-app/client-config') {
       if (!requireGet(req, res)) return
       respond(res, 200, { miniAppId: deps.config.miniAppId })
+      return
+    }
+
+    if (pathname === '/api/mini-app/enrollment-options' || pathname === '/api/mini-app/enroll') {
+      if (!deps.enrollment) {
+        respond(res, 503, { error: 'MINI_APP_ENROLLMENT_UNAVAILABLE' })
+        return
+      }
+      const lineUserId = await authenticateLineIdentity(req, res, deps)
+      if (!lineUserId) return
+      if (pathname === '/api/mini-app/enrollment-options') {
+        if (!requireGet(req, res)) return
+        try {
+          respond(res, 200, { staff: await deps.enrollment.listOptions() })
+        } catch {
+          respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+        }
+        return
+      }
+      if (req.method !== 'POST') {
+        respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+        return
+      }
+      const body = await readRequiredJson(req, res)
+      if (!body) return
+      if (!hasExactKeys(body, ['staffId', 'pin']) || typeof body.staffId !== 'string' || typeof body.pin !== 'string') {
+        respond(res, 400, { error: 'MINI_APP_INVALID_ENROLLMENT' })
+        return
+      }
+      try {
+        respond(res, 200, await deps.enrollment.enroll({ staffId: body.staffId, pin: body.pin, lineUserId }))
+      } catch (error) {
+        if (error instanceof EnrollmentError) {
+          const status = error.code === 'ENROLLMENT_RATE_LIMITED' ? 429
+            : error.code === 'ENROLLMENT_STAFF_UNAVAILABLE' ? 409
+              : 403
+          respond(res, status, {
+            error: error.code,
+            ...(error.retryAfterSeconds > 0 ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+          })
+          return
+        }
+        respond(res, 503, { error: 'MINI_APP_ENROLLMENT_FAILED' })
+      }
       return
     }
 
@@ -101,6 +147,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       const bookingConfig = await deps.store.getActiveBookingConfig()
       respond(res, 200, {
         fallbackFormUrl: deps.config.fallbackFormUrl,
+        reportingEnabled: Boolean(deps.jera),
         doctors: bookingConfig.doctors,
         services: bookingConfig.services,
         channels: bookingConfig.channels,
@@ -456,19 +503,8 @@ async function authenticate(
   res: ServerResponse,
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<AuthenticatedMiniAppContext | null> {
-  const idToken = bearerToken(req.headers.authorization)
-  if (!idToken) {
-    respond(res, 401, { error: 'MINI_APP_UNAUTHORIZED' })
-    return null
-  }
-
-  let lineUserId: string
-  try {
-    lineUserId = (await deps.identity.verify(idToken)).lineUserId
-  } catch {
-    respond(res, 401, { error: 'MINI_APP_UNAUTHORIZED' })
-    return null
-  }
+  const lineUserId = await authenticateLineIdentity(req, res, deps)
+  if (!lineUserId) return null
 
   try {
     const staff = await deps.store.getActiveStaffByLineUserId(lineUserId)
@@ -479,6 +515,25 @@ async function authenticate(
     return { staffId: staff.id, displayName: staff.name, lineUserId }
   } catch {
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return null
+  }
+}
+
+async function authenticateLineIdentity(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<string | null> {
+  const idToken = bearerToken(req.headers.authorization)
+  if (!idToken) {
+    respond(res, 401, { error: 'MINI_APP_UNAUTHORIZED' })
+    return null
+  }
+
+  try {
+    return (await deps.identity.verify(idToken)).lineUserId
+  } catch {
+    respond(res, 401, { error: 'MINI_APP_UNAUTHORIZED' })
     return null
   }
 }

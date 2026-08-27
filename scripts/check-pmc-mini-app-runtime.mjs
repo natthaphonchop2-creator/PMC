@@ -10,6 +10,7 @@ export const MINI_APP_NON_SECRET_NAMES = [
   'PMC_DRIVE_INTAKE_FOLDER_ID',
   'PMC_BOOKING_INGRESS_URL',
   'PMC_BOOKING_FALLBACK_FORM_URL',
+  'PMC_MINI_APP_ENROLLMENT_ENABLED',
 ]
 
 export const MINI_APP_SECRET_BINDING_NAMES = [
@@ -30,13 +31,20 @@ export const FUTURE_JERA_BINDING_NAMES = [
 
 export function inspectMiniAppRuntime(environment) {
   const nonSecret = presence(MINI_APP_NON_SECRET_NAMES, environment)
-  const secretBindings = presence(MINI_APP_SECRET_BINDING_NAMES, environment)
+  const enrollmentEnabled = environment.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
+  const enrollmentFlagValid = environment.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
+    || environment.PMC_MINI_APP_ENROLLMENT_ENABLED === 'false'
+  const secretBindings = presence([
+    ...MINI_APP_SECRET_BINDING_NAMES,
+    ...(enrollmentEnabled ? ['PMC_MINI_APP_ENROLLMENT_PIN'] : []),
+  ], environment)
   const futureJeraBindings = presence(FUTURE_JERA_BINDING_NAMES, environment)
   const featureEnabled = environment.PMC_MINI_APP_ENABLED === 'true'
   return {
     mode: 'READ_ONLY',
-    ready: featureEnabled && nonSecret.missing.length === 0 && secretBindings.missing.length === 0,
+    ready: featureEnabled && enrollmentFlagValid && nonSecret.missing.length === 0 && secretBindings.missing.length === 0,
     featureEnabled,
+    enrollmentEnabled,
     nonSecret,
     secretBindings,
     futureJeraBindings,

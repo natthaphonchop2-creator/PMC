@@ -7,6 +7,7 @@ export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displ
 export const PREVIEW_CONFIG: MiniAppConfig = {
   miniAppId: 'preview-mini-app',
   fallbackFormUrl: 'https://docs.google.com/forms/',
+  reportingEnabled: false,
   doctors: [{ id: 'doctor-benz', name: 'หมอ Benz' }, { id: 'doctor-jam', name: 'หมอ Jam' }],
   services: [
     { id: 'fat-transfer', name: 'เติมไขมัน', durationMinutes: 60 },
@@ -19,10 +20,19 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
 
 export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}): MiniAppBrowserApi {
   let current: BookingDraftProjection | null = null
+  let staffAllowed = options.staffAllowed !== false
   return {
     async initialize() { return 'preview-token' },
     async loadSession() {
-      if (options.staffAllowed === false) throw Object.assign(new Error('Staff is not allowed'), { code: 'STAFF_NOT_ALLOWED' })
+      if (!staffAllowed) throw Object.assign(new Error('Staff is not allowed'), { code: 'STAFF_NOT_ALLOWED' })
+      return PREVIEW_SESSION
+    },
+    async loadEnrollmentOptions() { return { staff: [{ id: PREVIEW_SESSION.staffId, name: PREVIEW_SESSION.displayName }] } },
+    async enroll(_token, staffId, pin) {
+      if (staffId !== PREVIEW_SESSION.staffId || pin !== '123456') {
+        throw Object.assign(new Error('Enrollment denied'), { code: 'ENROLLMENT_DENIED', retryAfterSeconds: 0 })
+      }
+      staffAllowed = true
       return PREVIEW_SESSION
     },
     async loadConfig() { return PREVIEW_CONFIG },

@@ -1,12 +1,14 @@
 # PMC LINE Mini App — Pilot and Cloud Run Runbook
 
-**Status:** Local implementation only. This document does not authorize a deployment, Google permission change, Apps Script push, LINE Console change, or production booking.
+**Status:** Booking V1 is deployed on Cloud Run. First-time LINE account linking remains disabled until the owner adds the enrollment PIN secret and explicitly enables it.
 
 ## Safety boundary
 
 - Cloud Run hosts only `/mini-app/*`, `/api/mini-app/*`, and the later internal JERA sync route.
 - `BOOKING_MASTER` remains canonical. The Google Form remains the fallback throughout the pilot.
 - Mini App identity is a server-verified LINE ID token mapped to active `CONFIG_STAFF` rows.
+- An unlinked active staff member can claim one unlinked `CONFIG_STAFF` name with the six-digit company PIN. A linked name cannot be overwritten through the Mini App.
+- PIN failures are persisted by a keyed LINE-user hash; five failures lock linking for 15 minutes. Raw PIN values are never stored in Sheets or returned to the browser.
 - Google access uses the Cloud Run service identity. Do not create or upload a service-account key file.
 - Version 1 does not write to JERA.
 - Render stays unchanged and receives no Mini App or JERA variables.
@@ -23,6 +25,7 @@ PMC_SPREADSHEET_ID
 PMC_DRIVE_INTAKE_FOLDER_ID
 PMC_BOOKING_INGRESS_URL
 PMC_BOOKING_FALLBACK_FORM_URL
+PMC_MINI_APP_ENROLLMENT_ENABLED
 ```
 
 Secret Manager bindings:
@@ -30,6 +33,7 @@ Secret Manager bindings:
 ```text
 PMC_BOOKING_INGRESS_SECRET
 PMC_MINI_APP_SIGNING_SECRET
+PMC_MINI_APP_ENROLLMENT_PIN (required only when PMC_MINI_APP_ENROLLMENT_ENABLED=true)
 ```
 
 Reserved for the separate read-only JERA reporting rollout:
@@ -76,7 +80,7 @@ Stop for explicit owner approval before these actions.
 2. Use region `asia-southeast1` unless the owner selects another existing region.
 3. Create a dedicated runtime service identity named `pmc-mini-app-runtime`.
 4. Enable Cloud Run, Cloud Build, Artifact Registry, Secret Manager, Sheets, and Drive APIs.
-5. Grant only the roles required to deploy and read the two named secrets. Do not grant project Owner or Editor to the runtime identity.
+5. Grant only the roles required to deploy and read the named secrets. Do not grant project Owner or Editor to the runtime identity.
 
 Suggested resource names:
 
@@ -95,9 +99,10 @@ Create separate secrets named exactly:
 ```text
 PMC_BOOKING_INGRESS_SECRET
 PMC_MINI_APP_SIGNING_SECRET
+PMC_MINI_APP_ENROLLMENT_PIN
 ```
 
-Bind the runtime service identity as Secret Manager Secret Accessor on only these two secrets. Do not apply that role project-wide.
+Bind the runtime service identity as Secret Manager Secret Accessor on only these named secrets. Do not apply that role project-wide. Enter the six-digit enrollment PIN interactively; never place it in shell history, source, logs, screenshots, Sheets, LINE, or a `.env` file.
 
 The Apps Script property `PMC_BOOKING_INGRESS_SECRET` must contain the same value as its Secret Manager counterpart. Updating or pushing Apps Script is a separate gate.
 
@@ -110,7 +115,7 @@ Stop for explicit approval before changing sharing.
 3. Keep the intake folder private to the clinic and runtime identity.
 4. Confirm the identity cannot list or read unrelated Drive resources.
 
-After approval and local ADC authentication, create or validate the four managed tabs with the already-built setup function:
+After approval and local ADC authentication, create or validate the five managed tabs with the already-built setup function:
 
 ```bash
 npm run build:server
@@ -150,7 +155,7 @@ Create a no-traffic tagged revision with:
 PMC_MINI_APP_ENABLED=false
 ```
 
-Bind the two Booking secrets, set only the approved non-secret variables, and use the dedicated runtime service identity. The service must allow unauthenticated HTTP reachability because static LIFF assets and the public client-config endpoint must load; every operational API still requires a verified LINE ID token and active Staff mapping.
+Bind the Booking secrets, set only the approved non-secret variables, and use the dedicated runtime service identity. The service must allow unauthenticated HTTP reachability because static LIFF assets and the public client-config endpoint must load; every operational API still requires a verified LINE ID token and active Staff mapping.
 
 Acceptance order for the tagged revision:
 
@@ -165,12 +170,13 @@ Acceptance order for the tagged revision:
 Stop for explicit approval before enabling the flag.
 
 1. Deploy another tagged/no-traffic revision with `PMC_MINI_APP_ENABLED=true`.
-2. Add only approved pilot LINE users to active `CONFIG_STAFF` rows.
-3. Submit one synthetic normal booking and one synthetic automatic booking.
-4. Verify one Case ID per request, ordered evidence, Sheet rows, private Drive movement, Calendar behavior, Admin/doctor LINE behavior, and call-task rules.
-5. Verify an unknown LINE user sees `รอผู้ดูแลอนุมัติ`.
-6. Verify a duplicate confirmation returns the same Case ID.
-7. Record only commit SHA, revision name, Case ID, safe counts, pass/fail, reviewer, and timestamp. Do not copy customer fields or tokens into rollout evidence.
+2. Start with `PMC_MINI_APP_ENROLLMENT_ENABLED=false`; confirm Booking APIs remain healthy.
+3. After the owner adds the PIN secret, enable first-time linking and let each staff member claim only their own unlinked name.
+4. Submit one synthetic normal booking and one synthetic automatic booking.
+5. Verify one Case ID per request, ordered evidence, Sheet rows, private Drive movement, Calendar behavior, Admin/doctor LINE behavior, and call-task rules.
+6. Verify a valid LINE user sees the one-time linking form, a wrong PIN remains generic, five failures lock for 15 minutes, and a linked name cannot be claimed again.
+7. Verify a duplicate confirmation returns the same Case ID.
+8. Record only commit SHA, revision name, Case ID, safe counts, pass/fail, reviewer, and timestamp. Do not copy customer fields or tokens into rollout evidence.
 
 ## Owner gate 6 — Rich Menu switch
 

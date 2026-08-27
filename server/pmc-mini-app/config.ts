@@ -8,6 +8,7 @@ export interface PmcMiniAppServerConfig {
   fallbackFormUrl: string
   bookingIngressSecret: string
   signingSecret: string
+  enrollmentPin: string | null
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
 }
@@ -41,6 +42,13 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   if (!isAllowedFallbackFormUrl(env.PMC_BOOKING_FALLBACK_FORM_URL!)) return null
   if (!matchesFixedLimit(env.PMC_MINI_APP_MAX_IMAGE_BYTES, MAX_IMAGE_BYTES)) return null
   if (!matchesFixedLimit(env.PMC_MINI_APP_MAX_FILES_PER_KIND, MAX_FILES_PER_KIND)) return null
+  if (env.PMC_MINI_APP_ENROLLMENT_ENABLED !== undefined
+    && env.PMC_MINI_APP_ENROLLMENT_ENABLED !== 'true'
+    && env.PMC_MINI_APP_ENROLLMENT_ENABLED !== 'false') return null
+  const enrollmentPin = env.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
+    ? env.PMC_MINI_APP_ENROLLMENT_PIN?.trim() ?? ''
+    : null
+  if (enrollmentPin !== null && !/^\d{6}$/.test(enrollmentPin)) return null
 
   return {
     enabled: true,
@@ -52,6 +60,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     fallbackFormUrl: env.PMC_BOOKING_FALLBACK_FORM_URL!.trim(),
     bookingIngressSecret: env.PMC_BOOKING_INGRESS_SECRET!.trim(),
     signingSecret: env.PMC_MINI_APP_SIGNING_SECRET!.trim(),
+    enrollmentPin,
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
   }

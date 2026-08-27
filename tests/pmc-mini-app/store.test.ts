@@ -58,10 +58,55 @@ describe('PMC Mini App Sheet store', () => {
     await expect(store.getActiveStaffByLineUserId('Uinactive')).resolves.toBeNull()
   })
 
+  it('lists only unlinked booking staff and links each LINE account exactly once', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-open', 'มัส', 'open@example.com', '', true, true, true, ''],
+      ['staff-second', 'หมวย', 'second@example.com', '', true, true, true, ''],
+      ['staff-linked', 'มิ้น', 'linked@example.com', 'Uexisting', true, true, true, ''],
+      ['staff-ae-only', 'เออี', 'ae@example.com', '', false, true, true, ''],
+      ['staff-inactive', 'เก่า', 'old@example.com', '', true, true, false, ''],
+    ])
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await expect(store.listUnlinkedBookingStaff()).resolves.toEqual([
+      { id: 'staff-open', name: 'มัส' },
+      { id: 'staff-second', name: 'หมวย' },
+    ])
+    await expect(store.linkLineUserToStaff('staff-open', 'Unew')).resolves.toMatchObject({ id: 'staff-open', name: 'มัส' })
+    await expect(store.getActiveStaffByLineUserId('Unew')).resolves.toMatchObject({ id: 'staff-open', name: 'มัส' })
+    await expect(store.linkLineUserToStaff('staff-open', 'Uother')).rejects.toThrow('STAFF_ALREADY_LINKED')
+    await expect(store.linkLineUserToStaff('staff-second', 'Unew')).rejects.toThrow('LINE_USER_ALREADY_LINKED')
+  })
+
+  it('persists PIN attempt lockout across store restarts', async () => {
+    const sheets = new MemorySheets()
+    const firstStore = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const start = '2026-08-28T01:00:00.000Z'
+
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      await expect(firstStore.consumeEnrollmentAttempt('line-user-hash', false, start)).resolves.toEqual({
+        allowed: false, retryAfterSeconds: 0,
+      })
+    }
+    await expect(firstStore.consumeEnrollmentAttempt('line-user-hash', false, start)).resolves.toEqual({
+      allowed: false, retryAfterSeconds: 900,
+    })
+
+    const restartedStore = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await expect(restartedStore.consumeEnrollmentAttempt('line-user-hash', true, '2026-08-28T01:05:00.000Z')).resolves.toEqual({
+      allowed: false, retryAfterSeconds: 600,
+    })
+    await expect(restartedStore.consumeEnrollmentAttempt('line-user-hash', true, '2026-08-28T01:16:00.000Z')).resolves.toEqual({
+      allowed: true, retryAfterSeconds: 0,
+    })
+  })
+
   it('projects only active booking choices without operational identifiers', async () => {
     const sheets = new MemorySheets()
     sheets.setTab('CONFIG_STAFF', [
       ['staff-ae', 'มัส', 'private@example.com', 'Uprivate', true, true, true, 'https://example.com/private.png'],
+      ['staff-unlinked-ae', 'หมวย', 'unlinked@example.com', '', true, true, true, ''],
       ['staff-old', 'เก่า', 'old@example.com', 'Uold', true, true, false, ''],
     ])
     sheets.setTab('CONFIG_DOCTORS', [
@@ -82,7 +127,7 @@ describe('PMC Mini App Sheet store', () => {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
-      aes: [{ id: 'staff-ae', name: 'มัส' }],
+      aes: [{ id: 'staff-ae', name: 'มัส' }, { id: 'staff-unlinked-ae', name: 'หมวย' }],
     })
   })
 })

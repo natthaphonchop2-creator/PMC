@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
+import { createEnrollmentService, type EnrollmentStore } from '../../server/pmc-mini-app/enrollment'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 import type { MiniAppStore } from '../../server/pmc-mini-app/store'
 
@@ -45,6 +46,39 @@ describe('PMC Mini App session and configuration API', () => {
     })
   })
 
+  it('links an unknown LINE account once with a valid company PIN', async () => {
+    const middleware = createPmcMiniAppMiddleware(enrollmentDependencies())
+    const options = await invoke(middleware, '/api/mini-app/enrollment-options', {
+      headers: { authorization: 'Bearer unknown-staff-token' },
+    })
+    const denied = await invoke(middleware, '/api/mini-app/enroll', {
+      method: 'POST',
+      headers: { authorization: 'Bearer unknown-staff-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ staffId: 'staff-open', pin: '000000' }),
+    })
+    const linked = await invoke(middleware, '/api/mini-app/enroll', {
+      method: 'POST',
+      headers: { authorization: 'Bearer unknown-staff-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ staffId: 'staff-open', pin: '482731' }),
+    })
+    const session = await invoke(middleware, '/api/mini-app/session', {
+      headers: { authorization: 'Bearer unknown-staff-token' },
+    })
+
+    expect({ status: options.status, body: await options.json() }).toEqual({
+      status: 200, body: { staff: [{ id: 'staff-open', name: 'หมวย' }] },
+    })
+    expect({ status: denied.status, body: await denied.json() }).toEqual({
+      status: 403, body: { error: 'ENROLLMENT_DENIED' },
+    })
+    expect({ status: linked.status, body: await linked.json() }).toEqual({
+      status: 200, body: { staffId: 'staff-open', displayName: 'หมวย', active: true },
+    })
+    expect({ status: session.status, body: await session.json() }).toEqual({
+      status: 200, body: { staffId: 'staff-open', displayName: 'หมวย', active: true },
+    })
+  })
+
   it('returns only active public booking choices and the explicit no-AE option', async () => {
     const response = await invoke(createPmcMiniAppMiddleware(dependencies()), '/api/mini-app/config', {
       headers: { authorization: 'Bearer valid-token' },
@@ -53,6 +87,7 @@ describe('PMC Mini App session and configuration API', () => {
 
     expect(body).toEqual({
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
+      reportingEnabled: false,
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
@@ -62,6 +97,17 @@ describe('PMC Mini App session and configuration API', () => {
     expect(serialized).not.toContain('private@example.com')
     expect(serialized).not.toContain('Uactive')
     expect(serialized).not.toContain('private-calendar')
+  })
+
+  it('advertises reporting only when the JERA runtime exists', async () => {
+    const response = await invoke(createPmcMiniAppMiddleware({
+      ...dependencies(),
+      jera: { handle: vi.fn(), handleInternal: vi.fn() },
+    }), '/api/mini-app/config', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(await response.json()).toMatchObject({ reportingEnabled: true })
   })
 })
 
@@ -100,11 +146,43 @@ function dependencies(): {
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
       bookingIngressSecret: 'ingress-secret',
       signingSecret: 'signing-secret',
+      enrollmentPin: null,
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
     },
     identity,
     store,
+  }
+}
+
+function enrollmentDependencies() {
+  const deps = dependencies()
+  let linked = false
+  const enrollmentStore: EnrollmentStore = {
+    async listUnlinkedBookingStaff() { return linked ? [] : [{ id: 'staff-open', name: 'หมวย' }] },
+    async consumeEnrollmentAttempt(_lineUserIdHash, pinAccepted) {
+      return { allowed: pinAccepted, retryAfterSeconds: 0 }
+    },
+    async linkLineUserToStaff(staffId, lineUserId) {
+      if (linked) throw new Error('STAFF_ALREADY_LINKED')
+      linked = true
+      return {
+        id: staffId, name: 'หมวย', email: '', lineUserId, canCloseBooking: true, canBeAe: true,
+        active: true as const, profileImageUrl: null,
+      }
+    },
+  }
+  const originalLookup = deps.store.getActiveStaffByLineUserId.bind(deps.store)
+  deps.store.getActiveStaffByLineUserId = async (lineUserId) => {
+    if (linked && lineUserId === 'Uunknown') return {
+      id: 'staff-open', name: 'หมวย', email: '', lineUserId, canCloseBooking: true, canBeAe: true,
+      active: true, profileImageUrl: null,
+    }
+    return originalLookup(lineUserId)
+  }
+  return {
+    ...deps,
+    enrollment: createEnrollmentService({ pin: '482731', signingSecret: 'signing-secret', store: enrollmentStore }),
   }
 }
 

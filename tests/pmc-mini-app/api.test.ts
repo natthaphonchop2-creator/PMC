@@ -42,6 +42,28 @@ describe('PMC Mini App browser API', () => {
     expect((init?.body as FormData).getAll('files')).toHaveLength(2)
   })
 
+  it('keeps first-time linking PIN in the authenticated POST body only', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/enrollment-options')
+      ? jsonResponse(200, { staff: [{ id: 'staff-1', name: 'มัส' }] })
+      : jsonResponse(200, { staffId: 'staff-1', displayName: 'มัส', active: true }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadEnrollmentOptions('raw-id-token')).resolves.toEqual({ staff: [{ id: 'staff-1', name: 'มัส' }] })
+    await expect(api.enroll('raw-id-token', 'staff-1', '482731')).resolves.toEqual({
+      staffId: 'staff-1', displayName: 'มัส', active: true,
+    })
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/mini-app/enrollment-options', expect.objectContaining({
+      headers: { authorization: 'Bearer raw-id-token' },
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/mini-app/enroll', expect.objectContaining({
+      method: 'POST',
+      headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ staffId: 'staff-1', pin: '482731' }),
+    }))
+    expect(fetch.mock.calls.map(([url]) => String(url)).join(' ')).not.toContain('482731')
+  })
+
   it('loads reports with one encoded value per supported filter and bearer auth', async () => {
     const fetch = vi.fn(async () => jsonResponse(200, {
       data: { totals: { appointmentCount: 0 }, rows: [] }, source: 'CACHE', fetchedAt: null,

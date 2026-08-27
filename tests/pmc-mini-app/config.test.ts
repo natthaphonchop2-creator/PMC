@@ -15,9 +15,28 @@ describe('PMC Mini App server configuration', () => {
     expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
+      enrollmentPin: null,
       bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
     })
+  })
+
+  it('enables first-time account linking only with an exact six-digit secret PIN', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_MINI_APP_ENROLLMENT_ENABLED: 'true',
+      PMC_MINI_APP_ENROLLMENT_PIN: '482731',
+    })).toMatchObject({ enrollmentPin: '482731' })
+
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_MINI_APP_ENROLLMENT_ENABLED: 'true',
+    })).toBeNull()
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_MINI_APP_ENROLLMENT_ENABLED: 'true',
+      PMC_MINI_APP_ENROLLMENT_PIN: '12345',
+    })).toBeNull()
   })
 
   it('requires the HTTPS Google Form fallback while the Mini App is in pilot', () => {

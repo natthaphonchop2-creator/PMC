@@ -1,8 +1,12 @@
 import { expect, test } from '@playwright/test'
 
-test('unknown staff sees the approval waiting screen', async ({ page }) => {
+test('unknown staff links a LINE account once before entering the app', async ({ page }) => {
   await page.goto('/mini-app/?preview=unknown')
-  await expect(page.getByText('รอผู้ดูแลอนุมัติ', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'ผูกบัญชีครั้งแรก' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'ชื่อพนักงาน' }).selectOption('staff-preview')
+  await page.getByLabel(/PIN บริษัท/).fill('123456')
+  await page.getByRole('button', { name: 'ผูกบัญชี' }).click()
+  await expect(page.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
 })
 
 test('active staff can traverse normal booking, multiple evidence, preview, and idempotent confirmation', async ({ page }) => {
@@ -71,19 +75,11 @@ test('fallback remains in Account while Stock stays disabled on Home', async ({ 
   await expect(page.getByRole('link', { name: 'เปิด Google Form สำรอง' })).toBeVisible()
 })
 
-test('active staff can open the report center, a live report, and every additional report choice', async ({ page }) => {
+test('booking-only V1 hides JERA navigation while reporting is paused', async ({ page }) => {
   await page.goto('/mini-app/?preview=1')
-  await page.getByRole('button', { name: 'รายงาน', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'ยอดรับชำระ' })).toBeVisible()
-  await page.getByRole('button', { name: 'ยอดรับชำระ' }).click()
-  await expect(page.getByRole('heading', { name: 'ยอดรับชำระ' })).toBeVisible()
-  await expect(page.getByText('900 บาท').first()).toBeVisible()
-  await expect(page.getByRole('table')).toBeVisible()
-  await page.getByRole('button', { name: 'กลับไปรายงาน' }).click()
-  await page.getByRole('button', { name: 'รายงานเพิ่มเติม' }).click()
-  await expect(page.getByRole('heading', { name: 'รายงานเพิ่มเติม' })).toBeVisible()
-  await expect(page.locator('.pmc-additional-report-menu section button')).toHaveCount(8)
+  await expect(page.getByRole('button', { name: 'รายงาน JERA' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'รายงาน', exact: true })).toHaveCount(0)
+  await expect(page.getByText('จัดการงานจองของคลินิก')).toBeVisible()
 })
 
 function imageFile(name: string) {

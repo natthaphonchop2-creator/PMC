@@ -4,8 +4,9 @@ import type { MiniAppSession } from './contracts'
 
 export type MiniAppHomeAction = 'BOOKING' | 'REPORTS' | 'ACCOUNT'
 
-export function Home({ session, onAction }: {
+export function Home({ session, reportingEnabled, onAction }: {
   session: MiniAppSession
+  reportingEnabled: boolean
   onAction?: (action: MiniAppHomeAction) => void
 }) {
   return (
@@ -13,7 +14,7 @@ export function Home({ session, onAction }: {
       <header className="pmc-mini-app-header">
         <BrandMark />
         <h1>สวัสดี, {session.displayName}</h1>
-        <p>จัดการงานจองและรายงานของคลินิก</p>
+        <p>{reportingEnabled ? 'จัดการงานจองและรายงานของคลินิก' : 'จัดการงานจองของคลินิก'}</p>
       </header>
 
       <section className="pmc-home-primary-card" aria-labelledby="booking-card-title">
@@ -26,12 +27,12 @@ export function Home({ session, onAction }: {
       </section>
 
       <section className="pmc-home-quick-grid" aria-label="ทางลัด">
-        <button type="button" className="pmc-home-quick-card" aria-label="รายงาน JERA" onClick={() => onAction?.('REPORTS')}>
+        {reportingEnabled && <button type="button" className="pmc-home-quick-card" aria-label="รายงาน JERA" onClick={() => onAction?.('REPORTS')}>
           <span className="pmc-card-icon"><ChartNoAxesCombined aria-hidden="true" /></span>
           <strong>รายงาน JERA</strong>
           <small>ดูข้อมูลรายงานของคลินิก</small>
           <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
-        </button>
+        </button>}
         <button type="button" className="pmc-home-quick-card unavailable" aria-label="Stock" disabled>
           <span className="pmc-card-icon"><PackageOpen aria-hidden="true" /></span>
           <strong>Stock</strong>

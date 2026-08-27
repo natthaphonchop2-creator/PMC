@@ -309,7 +309,7 @@ export function sendBookingConfirmationMessages(
 export function createAppsScriptCryptoPort(): CryptoPort {
   const hex = (bytes: number[]) => bytes.map((byte) => (byte & 0xff).toString(16).padStart(2, '0')).join('')
   return {
-    hmacSha256Hex: (value, secret) => hex(Utilities.computeHmacSha256Signature(value, secret)),
+    hmacSha256Hex: (value, secret) => hex(Utilities.computeHmacSha256Signature(value, secret, Utilities.Charset.UTF_8)),
     sha256Hex: (value) => hex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value)),
     base64UrlUtf8: (value) =>
       Utilities.base64EncodeWebSafe(value, Utilities.Charset.UTF_8).replace(/=+$/, ''),

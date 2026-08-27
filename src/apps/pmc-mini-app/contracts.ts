@@ -7,10 +7,15 @@ export interface MiniAppSession {
 export interface MiniAppConfig {
   miniAppId: string
   fallbackFormUrl: string
+  reportingEnabled: boolean
   doctors: Array<{ id: string; name: string }>
   services: Array<{ id: string; name: string; durationMinutes: number }>
   channels: Array<{ id: string; name: string }>
   aes: Array<{ id: string; name: string }>
+}
+
+export interface MiniAppEnrollmentOptions {
+  staff: Array<{ id: string; name: string }>
 }
 
 export type BookingQueueType = 'NORMAL' | 'AUTO'
