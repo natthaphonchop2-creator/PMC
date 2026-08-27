@@ -40,7 +40,11 @@ JERA_DEFAULT_BRANCH_UUID
 JERA_SYNC_INTERVAL_MINUTES
 JERA_API_USERNAME
 JERA_API_PASSWORD
+JERA_SCHEDULER_AUDIENCE
+JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL
 ```
+
+The exact disabled-first comparison, one-day GET, audit, scheduler, and rollback gates are documented in `docs/pmc-mini-app/jera-shadow-runbook.md`. That runbook still requires fresh owner approval before every Production action.
 
 Do not bind JERA credentials during Booking-only acceptance. Never paste credential values into this repository, terminal history, screenshots, logs, Sheets, or LINE.
 
@@ -58,6 +62,7 @@ npm run booking:build
 npm run build
 npx eslint src/apps/pmc-mini-app server/pmc-mini-app tests/pmc-mini-app shared/pmcMiniAppBooking.ts apps/pmc-google-booking-ops/src apps/pmc-google-booking-ops/tests
 node scripts/check-pmc-mini-app-runtime.mjs --env-file /dev/null
+node scripts/check-jera-readonly-runtime.mjs --env-file /dev/null
 git diff --check
 ```
 
