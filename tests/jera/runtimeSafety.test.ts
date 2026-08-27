@@ -48,7 +48,7 @@ describe('JERA Production read-only runtime gates', () => {
 
   it('limits an authorized synthetic probe to token POST plus one approved GET and prints no rows', async () => {
     const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
-    const fetch = vi.fn(async (url: string, init: RequestInit) => {
+    const fetch = vi.fn(async (url: string) => {
       if (String(url).endsWith('/openapi/v1/token/')) return jsonResponse(200, {
         access_token: 'synthetic-bearer-token', expires_in: 36_000, token_type: 'Bearer', scope: 'read write',
       })
