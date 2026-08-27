@@ -1,0 +1,23 @@
+[
+  {
+    "refund_date": "2026-08-27 13:30:00",
+    "refund_by": "Operator Synthetic",
+    "refund_type": "course",
+    "return_stock_flag": false,
+    "payment_code": "PAY-SYN-0002",
+    "patient_code": "PAT-SYN-0004",
+    "patient_name": "<img src=x onerror=alert(1)> Ray",
+    "is_new_patient": false,
+    "branch_name": "Synthetic Branch",
+    "medicine_service_name": null,
+    "course_name": "Synthetic Course",
+    "amount": "1.00",
+    "total_refund_cost": "100.00",
+    "vat": "0.00",
+    "cash_cost": "100.00",
+    "credit_cost": "0.00",
+    "transfer_cost": "0.00",
+    "e_wallet_cost": "0.00",
+    "payment_link_cost": "0.00"
+  }
+]

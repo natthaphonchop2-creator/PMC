@@ -1,0 +1,29 @@
+{
+  "cash_deposits": [
+    {
+      "uuid": "30000000-0000-4000-8000-000000000001",
+      "create_date": "2026-08-27 11:20:00",
+      "payment_code": "DEP-SYN-0001",
+      "patient_code": "PAT-SYN-0002",
+      "patient_name": "Synthetic Patient Two",
+      "total": 900,
+      "paid_amount": 900,
+      "total_refund": null,
+      "sellers": [{ "name": "Sales Synthetic" }],
+      "remark": "fixture-only-data"
+    }
+  ],
+  "product_deposits": [
+    {
+      "uuid": "30000000-0000-4000-8000-000000000002",
+      "create_date": "2026-08-27 11:45:00",
+      "payment_code": "DEP-SYN-0002",
+      "patient_code": "PAT-SYN-0003",
+      "patient_name": "Synthetic Patient Three",
+      "total": "500.00",
+      "paid_amount": "500.00",
+      "total_refund": "100.00",
+      "sellers": []
+    }
+  ]
+}

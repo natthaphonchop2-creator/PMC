@@ -124,7 +124,7 @@ export function createJeraReadClient(
         while (true) {
           const query = endpointQuery(reportType, { ...normalized, ...chunk }, endpoint, page)
           const parsed = await rawRequest({ method: 'GET', path, query })
-          const pageResult = extractRows(parsed, endpoint.paginated)
+          const pageResult = extractRows(reportType, parsed, endpoint.paginated)
           pageResult.rows.forEach((row, index) => {
             const identity = stableIdentity(row) ?? `${chunk.startDate}:${page}:${index}`
             if (!seen.has(identity)) { seen.add(identity); rows.push(row) }
@@ -219,10 +219,26 @@ function endpointQuery(
   return query
 }
 
-function extractRows(value: unknown, paginated: boolean): { rows: unknown[]; hasMore(page: number, accumulated: number): boolean } {
+function extractRows(
+  endpointKey: JeraEndpointKey,
+  value: unknown,
+  paginated: boolean,
+): { rows: unknown[]; hasMore(page: number, accumulated: number): boolean } {
   if (Array.isArray(value)) return { rows: value, hasMore: () => false }
   if (!value || typeof value !== 'object') throw new JeraReadError('JERA_SCHEMA_INVALID')
   const body = value as Record<string, unknown>
+  if (endpointKey === 'PAYMENT' && Array.isArray(body.payment_data)) {
+    return { rows: body.payment_data, hasMore: () => false }
+  }
+  if (endpointKey === 'DEPOSIT' && Array.isArray(body.cash_deposits) && Array.isArray(body.product_deposits)) {
+    return {
+      rows: [
+        ...body.cash_deposits.map((data) => ({ __jeraDepositType: 'CASH_DEPOSIT', data })),
+        ...body.product_deposits.map((data) => ({ __jeraDepositType: 'PRODUCT_DEPOSIT', data })),
+      ],
+      hasMore: () => false,
+    }
+  }
   const rows = Array.isArray(body.results) ? body.results : Array.isArray(body.data) ? body.data : null
   if (!rows) throw new JeraReadError('JERA_SCHEMA_INVALID')
   if (!paginated) return { rows, hasMore: () => false }
@@ -274,6 +290,10 @@ function safeRelativePath(path: string): boolean {
 function stableIdentity(value: unknown): string | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const row = value as Record<string, unknown>
+  if ((row.__jeraDepositType === 'CASH_DEPOSIT' || row.__jeraDepositType === 'PRODUCT_DEPOSIT') && row.data) {
+    const identity = stableIdentity(row.data)
+    return identity ? `${row.__jeraDepositType}:${identity}` : null
+  }
   for (const key of ['uuid', 'id', 'appointment_uuid', 'payment_uuid', 'code']) {
     if (typeof row[key] === 'string' && row[key]) return `${key}:${row[key]}`
   }

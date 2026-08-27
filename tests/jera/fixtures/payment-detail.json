@@ -1,0 +1,37 @@
+{
+  "uuid": "60000000-0000-4000-8000-000000000001",
+  "code": "PAY-SYN-0004",
+  "branch_name": "Synthetic Branch",
+  "create_by_name": "Operator Synthetic",
+  "create_date": "2026-08-27 16:10",
+  "total": "2000.00",
+  "paid_amount": "1800.00",
+  "patient": {
+    "patient_uuid": "20000000-0000-4000-8000-000000000007",
+    "patient_code": "PAT-SYN-0007",
+    "fname": "Synthetic",
+    "lname": "Patient Seven",
+    "nickname": "Seven",
+    "mobile": "0800000000",
+    "facebook": "synthetic.profile",
+    "citizen_id": "must-not-be-normalized"
+  },
+  "payment_methods": [
+    { "method_txt": "Transfer", "cash_amount": "1800.00", "provider_secret": "must-not-leak" }
+  ],
+  "salespersons": [
+    { "name": "Sales Synthetic", "fee": "60.00", "fee_unit_txt": "THB" }
+  ],
+  "opds": [
+    {
+      "opd_code": "OPD-SYN-0001",
+      "opd_create_date": "2026-08-27 16:00:00",
+      "total": "2000.00",
+      "paid_amount": "1800.00",
+      "items": [
+        { "code": "ITEM-SYN-01", "name": "Synthetic Service", "action": "service", "price": "2000.00", "disc_price": "200.00", "amount": 1 }
+      ]
+    }
+  ],
+  "courses": []
+}

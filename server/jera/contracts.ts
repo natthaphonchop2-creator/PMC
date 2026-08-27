@@ -92,6 +92,72 @@ export interface JeraNormalizedRow {
   sourceHash: string
 }
 
+export interface JeraNormalizationContext {
+  cacheKey: string
+  branchUuid: string | null
+  fetchedAt: string
+}
+
+export interface JeraNormalizedPaymentMethod {
+  method: string
+  amountSatang: number
+}
+
+export interface JeraNormalizedSalesperson {
+  name: string
+  feeSatang: number | null
+  feeUnit: string | null
+}
+
+export interface JeraNormalizedOpdItem {
+  code: string | null
+  name: string
+  action: string | null
+  priceSatang: number | null
+  discountSatang: number | null
+  quantity: number | null
+}
+
+export interface JeraNormalizedOpd {
+  code: string | null
+  eventDate: string | null
+  totalSatang: number | null
+  paidAmountSatang: number | null
+  items: JeraNormalizedOpdItem[]
+}
+
+export interface JeraNormalizedCourse {
+  code: string | null
+  name: string | null
+  totalSatang: number | null
+  paidAmountSatang: number | null
+}
+
+export interface JeraNormalizedPaymentDetail {
+  sourceUuid: string
+  paymentCode: string
+  branchName: string | null
+  eventDate: string
+  sourceCreatedAt: string
+  totalSatang: number
+  paidAmountSatang: number
+  patient: {
+    sourceUuid: string
+    patientCode: string
+    displayName: string | null
+    nickname: string | null
+    mobile: string | null
+    facebook: string | null
+  }
+  paymentMethods: JeraNormalizedPaymentMethod[]
+  salespersons: JeraNormalizedSalesperson[]
+  opds: JeraNormalizedOpd[]
+  courses: JeraNormalizedCourse[]
+  fetchedAt: string
+  sourceHash: string
+  truncated: boolean
+}
+
 export interface JeraCacheEnvelope<T> {
   data: T
   source: 'CACHE' | 'LIVE'

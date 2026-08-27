@@ -58,6 +58,31 @@ describe('bounded JERA read client', () => {
     expect(urls.every((url) => url.origin === 'https://jera.example')).toBe(true)
   })
 
+  it('extracts payment rows from the documented payment_data envelope', async () => {
+    const fetch = vi.fn(async () => response(200, {
+      payment_data: [{ uuid: 'payment-1' }], refund_data: [], summary_data: { total: '1.00' },
+    }))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await expect(client.request('PAYMENT', {
+      branchUuid: uuid(), startDate: '2026-01-01', endDate: '2026-01-01',
+    })).resolves.toEqual([{ uuid: 'payment-1' }])
+  })
+
+  it('preserves cash and product source kinds from the documented deposit envelope', async () => {
+    const fetch = vi.fn(async () => response(200, {
+      cash_deposits: [{ uuid: 'cash-1' }], product_deposits: [{ uuid: 'product-1' }],
+    }))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await expect(client.request('DEPOSIT', {
+      branchUuid: uuid(), startDate: '2026-01-01', endDate: '2026-01-01',
+    })).resolves.toEqual([
+      { __jeraDepositType: 'CASH_DEPOSIT', data: { uuid: 'cash-1' } },
+      { __jeraDepositType: 'PRODUCT_DEPOSIT', data: { uuid: 'product-1' } },
+    ])
+  })
+
   it('paginates with bounded page sizes and deduplicates stable provider identities', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ uuid: `appointment-${index}`, value: index }))
     const fetch = vi.fn(async (url: string) => {

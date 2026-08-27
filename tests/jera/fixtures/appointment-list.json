@@ -1,0 +1,22 @@
+{
+  "count": 1,
+  "pages": 1,
+  "data": [
+    {
+      "uuid": "40000000-0000-4000-8000-000000000001",
+      "patient_uuid": "20000000-0000-4000-8000-000000000005",
+      "patient_code": "PAT-SYN-0005",
+      "patient_name": "Synthetic Patient Five",
+      "appoint_date": "2026-08-28",
+      "appoint_time": "14:00",
+      "staff_name": "Doctor Synthetic",
+      "branch_uuid": "11111111-2222-4333-8444-555555555555",
+      "branch_name": "Synthetic Branch",
+      "type_text": "Treatment",
+      "status_text": "Confirmed",
+      "create_date": "2026-08-27T07:00:00.000000+07:00",
+      "update_date": "2026-08-27T07:30:00.000000+07:00",
+      "description": "fixture-only-data"
+    }
+  ]
+}
