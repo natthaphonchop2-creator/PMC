@@ -42,7 +42,7 @@ describe('PMC Mini App managed Sheet setup', () => {
     expect(MANAGED_TAB_HEADERS.JERA_API_CACHE).toEqual(expect.arrayContaining([
       'branchName', 'patientName', 'totalSatang', 'paidAmountSatang', 'refundAmountSatang',
     ]))
-    expect(MANAGED_TAB_HEADERS.JERA_SYNC_STATE).toEqual(expect.arrayContaining(['leaseOwner', 'leaseExpiresAt']))
+    expect(MANAGED_TAB_HEADERS.JERA_SYNC_STATE).toEqual(expect.arrayContaining(['lastManualAt', 'leaseOwner', 'leaseExpiresAt']))
   })
 })
 

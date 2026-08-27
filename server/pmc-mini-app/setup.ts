@@ -8,7 +8,7 @@ export const JERA_API_CACHE_HEADERS = [
 ] as const
 
 export const JERA_SYNC_STATE_HEADERS = [
-  'cacheKey', 'reportType', 'filterHash', 'lastAttemptAt', 'lastSuccessAt', 'lastSourceDate', 'status',
+  'cacheKey', 'reportType', 'filterHash', 'lastAttemptAt', 'lastManualAt', 'lastSuccessAt', 'lastSourceDate', 'status',
   'recordCount', 'nextPage', 'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
 ] as const
 

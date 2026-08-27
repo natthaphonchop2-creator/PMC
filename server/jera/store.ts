@@ -13,6 +13,7 @@ export interface JeraSyncStateRecord {
   reportType: JeraSourceReportType
   filterHash: string
   lastAttemptAt: string | null
+  lastManualAt: string | null
   lastSuccessAt: string | null
   lastSourceDate: string | null
   status: JeraSyncStatus
@@ -234,7 +235,8 @@ export function createGoogleJeraReportStore(input: {
           && Date.parse(existing.leaseExpiresAt) > Date.parse(now)) return false
         const next: JeraSyncStateRecord = {
           cacheKey: lease.cacheKey, reportType: lease.reportType, filterHash: lease.filterHash,
-          lastAttemptAt: existing?.lastAttemptAt ?? null, lastSuccessAt: existing?.lastSuccessAt ?? null,
+          lastAttemptAt: existing?.lastAttemptAt ?? null, lastManualAt: existing?.lastManualAt ?? null,
+          lastSuccessAt: existing?.lastSuccessAt ?? null,
           lastSourceDate: existing?.lastSourceDate ?? null, status: 'RUNNING', recordCount: existing?.recordCount ?? 0,
           nextPage: existing?.nextPage ?? null, safeErrorCode: null, leaseOwner: lease.owner,
           leaseExpiresAt: new Date(Date.parse(now) + lease.ttlMs).toISOString(),
@@ -302,8 +304,8 @@ function cacheIdentity(row: JeraNormalizedRow): string {
 
 function stateToCells(state: JeraSyncStateRecord): unknown[] {
   return [
-    state.cacheKey, state.reportType, state.filterHash, state.lastAttemptAt ?? '', state.lastSuccessAt ?? '',
-    state.lastSourceDate ?? '', state.status, state.recordCount, state.nextPage ?? '', state.safeErrorCode ?? '',
+    state.cacheKey, state.reportType, state.filterHash, state.lastAttemptAt ?? '', state.lastManualAt ?? '',
+    state.lastSuccessAt ?? '', state.lastSourceDate ?? '', state.status, state.recordCount, state.nextPage ?? '', state.safeErrorCode ?? '',
     state.leaseOwner ?? '', state.leaseExpiresAt ?? '',
   ]
 }
@@ -311,10 +313,10 @@ function stateToCells(state: JeraSyncStateRecord): unknown[] {
 function stateFromCells(cells: unknown[]): JeraSyncStateRecord {
   return validateState({
     cacheKey: stringValue(cells[0]), reportType: stringValue(cells[1]) as JeraSourceReportType,
-    filterHash: stringValue(cells[2]), lastAttemptAt: nullableString(cells[3]), lastSuccessAt: nullableString(cells[4]),
-    lastSourceDate: nullableString(cells[5]), status: stringValue(cells[6]) as JeraSyncStatus,
-    recordCount: integerValue(cells[7]), nextPage: nullableInteger(cells[8]), safeErrorCode: nullableString(cells[9]),
-    leaseOwner: nullableString(cells[10]), leaseExpiresAt: nullableString(cells[11]),
+    filterHash: stringValue(cells[2]), lastAttemptAt: nullableString(cells[3]), lastManualAt: nullableString(cells[4]),
+    lastSuccessAt: nullableString(cells[5]), lastSourceDate: nullableString(cells[6]), status: stringValue(cells[7]) as JeraSyncStatus,
+    recordCount: integerValue(cells[8]), nextPage: nullableInteger(cells[9]), safeErrorCode: nullableString(cells[10]),
+    leaseOwner: nullableString(cells[11]), leaseExpiresAt: nullableString(cells[12]),
   })
 }
 
@@ -322,6 +324,7 @@ function validateState(state: JeraSyncStateRecord): JeraSyncStateRecord {
   if (!state || typeof state !== 'object') throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
   safeToken(state.cacheKey); validateReportType(state.reportType); safeToken(state.filterHash)
   if (state.lastAttemptAt !== null) isoInstant(state.lastAttemptAt)
+  if (state.lastManualAt !== null) isoInstant(state.lastManualAt)
   if (state.lastSuccessAt !== null) isoInstant(state.lastSuccessAt)
   if (state.lastSourceDate !== null) isoDate(state.lastSourceDate)
   if (!['IDLE', 'RUNNING', 'SUCCESS', 'FAILED'].includes(state.status)) throw new JeraStoreError('JERA_STORE_INVALID_INPUT')

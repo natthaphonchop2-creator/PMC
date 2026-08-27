@@ -74,6 +74,23 @@ describe('Google Sheets JERA report store', () => {
     expect((await store.getSyncState('PAYMENT:key'))?.leaseOwner).toBeNull()
   })
 
+  it('round-trips distinct attempt, manual, and success timestamps in their exact columns', async () => {
+    const sheets = sheetsFixture()
+    const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.saveSyncState({
+      cacheKey: 'PAYMENT:key', reportType: 'PAYMENT', filterHash: hash('f'),
+      lastAttemptAt: '2026-08-27T10:00:00.000Z', lastManualAt: '2026-08-27T10:01:00.000Z',
+      lastSuccessAt: '2026-08-27T10:02:00.000Z', lastSourceDate: '2026-08-27', status: 'SUCCESS',
+      recordCount: 1, nextPage: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
+    })
+
+    expect(await store.getSyncState('PAYMENT:key')).toMatchObject({
+      lastAttemptAt: '2026-08-27T10:00:00.000Z',
+      lastManualAt: '2026-08-27T10:01:00.000Z',
+      lastSuccessAt: '2026-08-27T10:02:00.000Z',
+    })
+  })
+
   it('writes only the bounded audit contract and ignores injected provider data', async () => {
     const sheets = sheetsFixture()
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
