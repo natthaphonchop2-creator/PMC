@@ -173,8 +173,20 @@ function requiredText(value: unknown, maxLength: number, code: string): string {
 }
 
 function allowedId(value: unknown, allowed: readonly string[], code: string): string {
-  if (typeof value !== 'string' || !allowed.includes(value)) throw new Error(code)
-  return requiredId(value, code)
+  if (typeof value !== 'string' || !safeConfigId(value) || !allowed.includes(value)) throw new Error(code)
+  return value
+}
+
+function safeConfigId(value: string): boolean {
+  return value.length > 0 && value.length <= 124 && value.trim() === value && hasNoControlCharacters(value)
+}
+
+function hasNoControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    if (codePoint !== undefined && (codePoint < 32 || codePoint === 127)) return false
+  }
+  return true
 }
 
 function requiredId(value: unknown, code: string): string {

@@ -215,16 +215,16 @@ export function createGoogleMiniAppStore(input: {
         .map(({ id, name }) => ({ id, name }))
       const doctors = (response[DOCTORS_RANGE] ?? []).flatMap((row) => {
         const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[4])
-        return active && safeId(id) && name ? [{ id, name }] : []
+        return active && safeConfigId(id) && name ? [{ id, name }] : []
       })
       const services = (response[SERVICES_RANGE] ?? []).flatMap((row) => {
         const id = text(row[0]); const name = text(row[1]); const durationMinutes = numberValue(row[2]); const active = booleanValue(row[3])
-        return active && safeId(id) && name && Number.isSafeInteger(durationMinutes) && durationMinutes > 0
+        return active && safeConfigId(id) && name && Number.isSafeInteger(durationMinutes) && durationMinutes > 0
           ? [{ id, name, durationMinutes }] : []
       })
       const channels = (response[CHANNELS_RANGE] ?? []).flatMap((row) => {
         const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[2])
-        return active && safeId(id) && name ? [{ id, name }] : []
+        return active && safeConfigId(id) && name ? [{ id, name }] : []
       })
       return { doctors, services, channels, aes }
     },
@@ -449,6 +449,16 @@ function nullableText(value: unknown): string | null { const result = text(value
 function numberValue(value: unknown): number { return typeof value === 'number' ? value : Number(value) }
 function booleanValue(value: unknown): boolean { return value === true || String(value).toLowerCase() === 'true' }
 function safeId(value: string): boolean { return /^[A-Za-z0-9._:-]{1,124}$/.test(value) }
+function safeConfigId(value: string): boolean {
+  return value.length > 0 && value.length <= 124 && value.trim() === value && hasNoControlCharacters(value)
+}
+function hasNoControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)
+    if (codePoint !== undefined && (codePoint < 32 || codePoint === 127)) return false
+  }
+  return true
+}
 function safeLineUserId(value: string): boolean { return /^[A-Za-z0-9_-]{2,128}$/.test(value) }
 function safeHash(value: string): boolean { return /^[A-Za-z0-9_-]{4,128}$/.test(value) }
 function safeCaseId(value: string): boolean { return /^PMC-\d{6}-\d{4,}$/.test(value) }

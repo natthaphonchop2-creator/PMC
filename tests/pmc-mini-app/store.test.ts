@@ -130,6 +130,20 @@ describe('PMC Mini App Sheet store', () => {
       aes: [{ id: 'staff-ae', name: 'มัส' }, { id: 'staff-unlinked-ae', name: 'หมวย' }],
     })
   })
+
+  it('keeps allowlisted Thai names as canonical doctor, service, and channel IDs', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_DOCTORS', [['หมอ Benz', 'หมอ Benz', 'private-calendar', 'private-group', true]])
+    sheets.setTab('CONFIG_SERVICES', [['เติมไขมัน', 'เติมไขมัน', 60, true]])
+    sheets.setTab('CONFIG_CHANNELS', [['เพจหลัก', 'เพจหลัก', true]])
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await expect(store.getActiveBookingConfig()).resolves.toMatchObject({
+      doctors: [{ id: 'หมอ Benz', name: 'หมอ Benz' }],
+      services: [{ id: 'เติมไขมัน', name: 'เติมไขมัน', durationMinutes: 60 }],
+      channels: [{ id: 'เพจหลัก', name: 'เพจหลัก' }],
+    })
+  })
 })
 
 function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {

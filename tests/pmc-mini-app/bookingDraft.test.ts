@@ -29,6 +29,16 @@ describe('PMC Mini App booking draft validation', () => {
     })
   })
 
+  it('accepts server-allowlisted Thai configuration IDs without weakening request IDs', () => {
+    const draft = parseBookingDraft(validInput({
+      doctorId: 'หมอ Benz', serviceId: 'เติมไขมัน', channelId: 'เพจหลัก',
+    }), context({
+      doctorIds: ['หมอ Benz'], serviceIds: ['เติมไขมัน'], channelIds: ['เพจหลัก'],
+    }))
+
+    expect(draft).toMatchObject({ doctorId: 'หมอ Benz', serviceId: 'เติมไขมัน', channelId: 'เพจหลัก' })
+  })
+
   it.each([
     ['invalid Thai phone', validInput({ phone: '123' }), 'INVALID_THAI_PHONE'],
     ['zero deposit', validInput({ depositAmount: 0 }), 'DEPOSIT_AMOUNT_REQUIRED'],

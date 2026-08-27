@@ -123,7 +123,7 @@ export function createMiniAppGooglePorts(
         const response = await sheetsApi.spreadsheets.values.batchGet({ spreadsheetId, ranges })
         const valueRanges = response.data.valueRanges ?? []
         return Object.fromEntries(ranges.map((range) => {
-          const match = valueRanges.find((candidate) => normalizeA1(candidate.range ?? '') === normalizeA1(range))
+          const match = valueRanges.find((candidate) => sheetRangeMatches(range, candidate.range ?? ''))
           return [range, match?.values ?? []]
         }))
       },
@@ -227,6 +227,22 @@ function assertRange(range: string): void {
 
 function normalizeA1(range: string): string {
   return range.replaceAll("'", '').replaceAll('$', '').toUpperCase()
+}
+
+function sheetRangeMatches(requested: string, returned: string): boolean {
+  const expected = normalizeA1(requested)
+  const actual = normalizeA1(returned)
+  if (expected === actual) return true
+  const expectedParts = /^([^!]+)!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(expected)
+  const actualParts = /^([^!]+)!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(actual)
+  if (!expectedParts || !actualParts) return false
+  const [, expectedSheet, expectedStartColumn, expectedStartRow, expectedEndColumn, expectedEndRow] = expectedParts
+  const [, actualSheet, actualStartColumn, actualStartRow, actualEndColumn, actualEndRow] = actualParts
+  return expectedSheet === actualSheet
+    && expectedStartColumn === actualStartColumn
+    && expectedEndColumn === actualEndColumn
+    && (expectedStartRow ? expectedStartRow === actualStartRow : actualStartRow === '1')
+    && (expectedEndRow ? expectedEndRow === actualEndRow : /^\d+$/.test(actualEndRow))
 }
 
 function isDriveMetadata(value: unknown): value is {

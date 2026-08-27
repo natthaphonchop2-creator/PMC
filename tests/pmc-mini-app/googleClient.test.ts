@@ -52,6 +52,29 @@ describe('PMC Mini App keyless Google ports', () => {
     })
   })
 
+  it('matches an open-ended requested range when Google returns its populated end row', async () => {
+    const batchGet = vi.fn(async () => ({ data: { valueRanges: [
+      { range: "'CONFIG_STAFF'!A2:H9", values: [['staff-1', 'มัส']] },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get: vi.fn(), batchUpdate: vi.fn(),
+            values: { batchGet, append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.batchGet('sheet-1', ["'CONFIG_STAFF'!A2:H"])).resolves.toEqual({
+      "'CONFIG_STAFF'!A2:H": [['staff-1', 'มัส']],
+    })
+  })
+
   it('uploads evidence only to the intake folder with bounded app properties', async () => {
     const create = vi.fn(async () => ({ data: { id: 'file-1' } }))
     const ports = createMiniAppGooglePorts(
