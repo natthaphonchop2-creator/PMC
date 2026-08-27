@@ -1,0 +1,73 @@
+export interface PmcMiniAppServerConfig {
+  enabled: true
+  miniAppId: string
+  lineChannelId: string
+  spreadsheetId: string
+  intakeFolderId: string
+  bookingIngressUrl: string
+  bookingIngressSecret: string
+  signingSecret: string
+  maxImageBytes: 10_000_000
+  maxFilesPerKind: 10
+}
+
+const REQUIRED = [
+  'PMC_MINI_APP_ID',
+  'PMC_MINI_APP_LIFF_CHANNEL_ID',
+  'PMC_SPREADSHEET_ID',
+  'PMC_DRIVE_INTAKE_FOLDER_ID',
+  'PMC_BOOKING_INGRESS_URL',
+] as const
+
+const REQUIRED_SECRETS = [
+  'PMC_BOOKING_INGRESS_SECRET',
+  'PMC_MINI_APP_SIGNING_SECRET',
+] as const
+
+const MAX_IMAGE_BYTES = 10_000_000 as const
+const MAX_FILES_PER_KIND = 10 as const
+
+type MiniAppEnvironment = Record<string, string | undefined>
+
+export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerConfig | null {
+  if (env.PMC_MINI_APP_ENABLED !== 'true') return null
+
+  const requiredNames = [...REQUIRED, ...REQUIRED_SECRETS]
+  if (requiredNames.some((name) => !boundedValue(env[name]))) return null
+  if (!/^\d+$/.test(env.PMC_MINI_APP_LIFF_CHANNEL_ID!.trim())) return null
+  if (!isHttpsUrl(env.PMC_BOOKING_INGRESS_URL!)) return null
+  if (!matchesFixedLimit(env.PMC_MINI_APP_MAX_IMAGE_BYTES, MAX_IMAGE_BYTES)) return null
+  if (!matchesFixedLimit(env.PMC_MINI_APP_MAX_FILES_PER_KIND, MAX_FILES_PER_KIND)) return null
+
+  return {
+    enabled: true,
+    miniAppId: env.PMC_MINI_APP_ID!.trim(),
+    lineChannelId: env.PMC_MINI_APP_LIFF_CHANNEL_ID!.trim(),
+    spreadsheetId: env.PMC_SPREADSHEET_ID!.trim(),
+    intakeFolderId: env.PMC_DRIVE_INTAKE_FOLDER_ID!.trim(),
+    bookingIngressUrl: env.PMC_BOOKING_INGRESS_URL!.trim(),
+    bookingIngressSecret: env.PMC_BOOKING_INGRESS_SECRET!.trim(),
+    signingSecret: env.PMC_MINI_APP_SIGNING_SECRET!.trim(),
+    maxImageBytes: MAX_IMAGE_BYTES,
+    maxFilesPerKind: MAX_FILES_PER_KIND,
+  }
+}
+
+function boundedValue(value: string | undefined): boolean {
+  const trimmed = value?.trim() ?? ''
+  return trimmed.length > 0 && trimmed.length <= 2_048
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim())
+    return parsed.protocol === 'https:' && Boolean(parsed.hostname) && !parsed.username && !parsed.password
+  } catch {
+    return false
+  }
+}
+
+function matchesFixedLimit(value: string | undefined, expected: number): boolean {
+  if (value === undefined || value === '') return true
+  return value === String(expected)
+}
