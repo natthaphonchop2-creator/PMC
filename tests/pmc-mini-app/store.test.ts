@@ -56,6 +56,34 @@ describe('PMC Mini App Sheet store', () => {
     await expect(store.getActiveStaffByLineUserId('Uactive')).resolves.toMatchObject({ id: 'staff-active', name: 'มัส', active: true })
     await expect(store.getActiveStaffByLineUserId('Uinactive')).resolves.toBeNull()
   })
+
+  it('projects only active booking choices without operational identifiers', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-ae', 'มัส', 'private@example.com', 'Uprivate', true, true, true, 'https://example.com/private.png'],
+      ['staff-old', 'เก่า', 'old@example.com', 'Uold', true, true, false, ''],
+    ])
+    sheets.setTab('CONFIG_DOCTORS', [
+      ['doctor-1', 'หมอ Benz', 'private-calendar', 'private-group', true],
+      ['doctor-old', 'หมอเก่า', 'old-calendar', 'old-group', false],
+    ])
+    sheets.setTab('CONFIG_SERVICES', [
+      ['service-1', 'เติมไขมัน', 60, true],
+      ['service-old', 'ปิดบริการ', 30, false],
+    ])
+    sheets.setTab('CONFIG_CHANNELS', [
+      ['channel-1', 'เพจTAB', true],
+      ['channel-old', 'ปิดช่องทาง', false],
+    ])
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await expect(store.getActiveBookingConfig()).resolves.toEqual({
+      doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
+      services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
+      channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+      aes: [{ id: 'staff-ae', name: 'มัส' }],
+    })
+  })
 })
 
 function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {

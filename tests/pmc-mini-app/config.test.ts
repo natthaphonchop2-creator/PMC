@@ -16,7 +16,14 @@ describe('PMC Mini App server configuration', () => {
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
       bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
+      fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
     })
+  })
+
+  it('requires the HTTPS Google Form fallback while the Mini App is in pilot', () => {
+    const env = validEnvironment()
+    delete env.PMC_BOOKING_FALLBACK_FORM_URL
+    expect(readPmcMiniAppConfig(env)).toBeNull()
   })
 
   it.each([
@@ -38,6 +45,7 @@ function validEnvironment(): NodeJS.ProcessEnv {
     PMC_SPREADSHEET_ID: 'spreadsheet-id',
     PMC_DRIVE_INTAKE_FOLDER_ID: 'intake-folder-id',
     PMC_BOOKING_INGRESS_URL: 'https://script.google.com/macros/s/deployment/exec',
+    PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
     PMC_BOOKING_INGRESS_SECRET: 'booking-ingress-secret',
     PMC_MINI_APP_SIGNING_SECRET: 'mini-app-signing-secret',
   }

@@ -5,6 +5,7 @@ export interface PmcMiniAppServerConfig {
   spreadsheetId: string
   intakeFolderId: string
   bookingIngressUrl: string
+  fallbackFormUrl: string
   bookingIngressSecret: string
   signingSecret: string
   maxImageBytes: 10_000_000
@@ -17,6 +18,7 @@ const REQUIRED = [
   'PMC_SPREADSHEET_ID',
   'PMC_DRIVE_INTAKE_FOLDER_ID',
   'PMC_BOOKING_INGRESS_URL',
+  'PMC_BOOKING_FALLBACK_FORM_URL',
 ] as const
 
 const REQUIRED_SECRETS = [
@@ -36,6 +38,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   if (requiredNames.some((name) => !boundedValue(env[name]))) return null
   if (!/^\d+$/.test(env.PMC_MINI_APP_LIFF_CHANNEL_ID!.trim())) return null
   if (!isHttpsUrl(env.PMC_BOOKING_INGRESS_URL!)) return null
+  if (!isAllowedFallbackFormUrl(env.PMC_BOOKING_FALLBACK_FORM_URL!)) return null
   if (!matchesFixedLimit(env.PMC_MINI_APP_MAX_IMAGE_BYTES, MAX_IMAGE_BYTES)) return null
   if (!matchesFixedLimit(env.PMC_MINI_APP_MAX_FILES_PER_KIND, MAX_FILES_PER_KIND)) return null
 
@@ -46,6 +49,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     spreadsheetId: env.PMC_SPREADSHEET_ID!.trim(),
     intakeFolderId: env.PMC_DRIVE_INTAKE_FOLDER_ID!.trim(),
     bookingIngressUrl: env.PMC_BOOKING_INGRESS_URL!.trim(),
+    fallbackFormUrl: env.PMC_BOOKING_FALLBACK_FORM_URL!.trim(),
     bookingIngressSecret: env.PMC_BOOKING_INGRESS_SECRET!.trim(),
     signingSecret: env.PMC_MINI_APP_SIGNING_SECRET!.trim(),
     maxImageBytes: MAX_IMAGE_BYTES,
@@ -62,6 +66,18 @@ function isHttpsUrl(value: string): boolean {
   try {
     const parsed = new URL(value.trim())
     return parsed.protocol === 'https:' && Boolean(parsed.hostname) && !parsed.username && !parsed.password
+  } catch {
+    return false
+  }
+}
+
+function isAllowedFallbackFormUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim())
+    return parsed.protocol === 'https:'
+      && (parsed.hostname === 'docs.google.com' || parsed.hostname === 'forms.gle')
+      && !parsed.username
+      && !parsed.password
   } catch {
     return false
   }

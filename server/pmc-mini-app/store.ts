@@ -53,6 +53,13 @@ export interface MiniAppStaffRecord {
   profileImageUrl: string | null
 }
 
+export interface MiniAppBookingConfigProjection {
+  doctors: Array<{ id: string; name: string }>
+  services: Array<{ id: string; name: string; durationMinutes: number }>
+  channels: Array<{ id: string; name: string }>
+  aes: Array<{ id: string; name: string }>
+}
+
 export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'state'
   | 'retentionState'
@@ -79,6 +86,7 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
 
 export interface MiniAppStore {
   getActiveStaffByLineUserId(lineUserId: string): Promise<MiniAppStaffRecord | null>
+  getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection>
   createDraft(draft: MiniAppRequestRecord): Promise<MiniAppRequestRecord>
   getDraft(draftId: string): Promise<MiniAppRequestRecord | null>
   updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch): Promise<MiniAppRequestRecord>
@@ -98,6 +106,9 @@ export const MINI_APP_REQUEST_HEADERS = [
 const REQUEST_TAB = 'MINI_APP_REQUESTS'
 const REQUEST_RANGE = `'${REQUEST_TAB}'!A2:${columnName(MINI_APP_REQUEST_HEADERS.length)}`
 const STAFF_RANGE = "'CONFIG_STAFF'!A2:H"
+const DOCTORS_RANGE = "'CONFIG_DOCTORS'!A2:E"
+const SERVICES_RANGE = "'CONFIG_SERVICES'!A2:D"
+const CHANNELS_RANGE = "'CONFIG_CHANNELS'!A2:C"
 const requestMutexes = new Map<string, Promise<void>>()
 
 export function createGoogleMiniAppStore(input: {
@@ -141,6 +152,28 @@ export function createGoogleMiniAppStore(input: {
         if (staff?.lineUserId === lineUserId && staff.active) return staff
       }
       return null
+    },
+    async getActiveBookingConfig() {
+      const ranges = [STAFF_RANGE, DOCTORS_RANGE, SERVICES_RANGE, CHANNELS_RANGE]
+      const response = await sheets.batchGet(spreadsheetId, ranges)
+      const aes = (response[STAFF_RANGE] ?? [])
+        .map(staffFromRow)
+        .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canBeAe))
+        .map(({ id, name }) => ({ id, name }))
+      const doctors = (response[DOCTORS_RANGE] ?? []).flatMap((row) => {
+        const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[4])
+        return active && safeId(id) && name ? [{ id, name }] : []
+      })
+      const services = (response[SERVICES_RANGE] ?? []).flatMap((row) => {
+        const id = text(row[0]); const name = text(row[1]); const durationMinutes = numberValue(row[2]); const active = booleanValue(row[3])
+        return active && safeId(id) && name && Number.isSafeInteger(durationMinutes) && durationMinutes > 0
+          ? [{ id, name, durationMinutes }] : []
+      })
+      const channels = (response[CHANNELS_RANGE] ?? []).flatMap((row) => {
+        const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[2])
+        return active && safeId(id) && name ? [{ id, name }] : []
+      })
+      return { doctors, services, channels, aes }
     },
     async createDraft(draft) {
       const normalized = normalizeRequestRecord(draft)
