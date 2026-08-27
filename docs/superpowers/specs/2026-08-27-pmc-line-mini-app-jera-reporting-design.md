@@ -434,6 +434,7 @@ staffId
 lineUserIdHash
 state
 retentionState
+version
 payloadHash
 aeName
 customerName
