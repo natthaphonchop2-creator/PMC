@@ -26,24 +26,19 @@ export async function inspectPmcAsyncRuntime(inputs, execute = runGoogleCommand,
     safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', inputs.service, '--region', inputs.region, '--project', inputs.project, '--format=json']),
     safeJson(execute, ['gcloud', 'projects', 'get-iam-policy', inputs.project, '--format=json']),
   ])
-  const deployed = deployedReport(service)
+  const expectedTaskInvokerIdentity = dedicatedTaskInvokerIdentity(inputs.project)
+  const deployed = deployedReport(service, expectedTaskInvokerIdentity)
   const runtimeIdentity = deployed.runtimeIdentity
-  const taskInvokerIdentity = deployed.taskInvokerIdentity
-  const exactBindingsReady = Boolean(runtimeIdentity && taskInvokerIdentity)
+  const exactBindingsReady = Boolean(runtimeIdentity)
     && hasMemberRole(bucketIam, 'roles/storage.objectUser', runtimeIdentity)
     && hasMemberRole(queueIam, 'roles/cloudtasks.enqueuer', runtimeIdentity)
-    && hasMemberRole(serviceIam, 'roles/run.invoker', taskInvokerIdentity)
-  const forbiddenBroadBindings = Boolean(runtimeIdentity || taskInvokerIdentity)
-    && [runtimeIdentity, taskInvokerIdentity].filter(Boolean).some((identity) => hasForbiddenProjectRole(projectIam, identity))
+    && hasMemberRole(serviceIam, 'roles/run.invoker', expectedTaskInvokerIdentity)
+  const forbiddenBroadBindings = Boolean(runtimeIdentity)
+    && [runtimeIdentity, expectedTaskInvokerIdentity].some((identity) => hasForbiddenProjectRole(projectIam, identity))
   const roles = [...new Set([bucketIam, queueIam, serviceIam, projectIam].flatMap(roleNames))].sort()
   const apisReport = REQUIRED_APIS.map((name) => ({ name, enabled: enabledApiNames(apis).has(name) }))
   const retrySettings = queue ? retryReport(queue) : emptyRetryReport()
-  const bucketReport = {
-    exists: bucket !== null,
-    locationMatches: bucket !== null && bucket.location === inputs.region,
-    uniformBucketLevelAccess: bucket?.iamConfiguration?.uniformBucketLevelAccess?.enabled === true,
-    publicAccessPrevention: bucket?.iamConfiguration?.publicAccessPrevention === 'enforced',
-  }
+  const bucketReport = normalizeBucket(bucket, inputs.region)
   const queueReport = { exists: queue !== null, locationMatches: queue !== null, retrySettings }
   const iam = { requiredBindingCount: 3, exactBindingsReady, forbiddenBroadBindings, roles }
   const safeDeployed = {
@@ -51,14 +46,16 @@ export async function inspectPmcAsyncRuntime(inputs, execute = runGoogleCommand,
     asyncDisabled: deployed.asyncDisabled,
     requiredNameCount: REQUIRED_DEPLOYED_NAMES.length,
     presentNameCount: deployed.presentNameCount,
+    taskInvokerMatchesExpected: deployed.taskInvokerMatchesExpected,
   }
-  const ready = apisReport.every(({ enabled }) => enabled)
+  const infrastructureReady = apisReport.every(({ enabled }) => enabled)
     && Object.values(bucketReport).every(Boolean)
     && queueReport.exists && queueReport.locationMatches && matchesRetrySettings(retrySettings)
     && iam.exactBindingsReady && !iam.forbiddenBroadBindings
-    && safeDeployed.serviceExists && safeDeployed.asyncDisabled
+  const ready = infrastructureReady
+    && safeDeployed.serviceExists && safeDeployed.asyncDisabled && safeDeployed.taskInvokerMatchesExpected
     && safeDeployed.presentNameCount === safeDeployed.requiredNameCount
-  return { mode: 'READ_ONLY', ready, apis: apisReport, bucket: bucketReport, queue: queueReport, iam, deployed: safeDeployed }
+  return { mode: 'READ_ONLY', ready, infrastructureReady, apis: apisReport, bucket: bucketReport, queue: queueReport, iam, deployed: safeDeployed }
 }
 
 export async function runPmcAsyncRuntimeCheck(args, io = { stdout: process.stdout, stderr: process.stderr }, execute = runGoogleCommand, environment = process.env) {
@@ -72,7 +69,7 @@ export async function runPmcAsyncRuntimeCheck(args, io = { stdout: process.stdou
   return parsed.strict && !report.ready ? 1 : 0
 }
 
-function deployedReport(service) {
+function deployedReport(service, expectedTaskInvokerIdentity) {
   const spec = service?.spec?.template?.spec
   const env = Array.isArray(spec?.containers) ? spec.containers.flatMap((container) => Array.isArray(container?.env) ? container.env : []) : []
   const configured = new Map(env.filter((entry) => typeof entry?.name === 'string').map((entry) => [entry.name, entry]))
@@ -86,7 +83,28 @@ function deployedReport(service) {
     asyncDisabled: flag?.value === 'false',
     presentNameCount: REQUIRED_DEPLOYED_NAMES.filter((name) => configured.has(name)).length,
     runtimeIdentity,
-    taskInvokerIdentity,
+    taskInvokerMatchesExpected: taskInvokerIdentity === expectedTaskInvokerIdentity,
+  }
+}
+
+function dedicatedTaskInvokerIdentity(project) {
+  return `serviceAccount:pmc-mini-app-task-invoker@${project}.iam.gserviceaccount.com`
+}
+
+function normalizeBucket(bucket, region) {
+  const snake = bucket && Object.hasOwn(bucket, 'uniform_bucket_level_access') && Object.hasOwn(bucket, 'public_access_prevention')
+  const camel = bucket?.iamConfiguration && Object.hasOwn(bucket.iamConfiguration, 'uniformBucketLevelAccess') && Object.hasOwn(bucket.iamConfiguration, 'publicAccessPrevention')
+  const schema = snake && !camel ? {
+    uniformBucketLevelAccess: bucket.uniform_bucket_level_access === true,
+    publicAccessPrevention: bucket.public_access_prevention === 'enforced',
+  } : camel && !snake ? {
+    uniformBucketLevelAccess: bucket.iamConfiguration.uniformBucketLevelAccess?.enabled === true,
+    publicAccessPrevention: bucket.iamConfiguration.publicAccessPrevention === 'enforced',
+  } : { uniformBucketLevelAccess: false, publicAccessPrevention: false }
+  return {
+    exists: bucket !== null,
+    locationMatches: typeof bucket?.location === 'string' && bucket.location.toUpperCase() === String(region).toUpperCase(),
+    ...schema,
   }
 }
 

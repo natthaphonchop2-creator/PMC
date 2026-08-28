@@ -18,6 +18,7 @@ describe('PMC async runtime checker', () => {
 
     expect(report).toMatchObject({
       ready: true,
+      infrastructureReady: true,
       apis: expect.arrayContaining([
         { name: 'cloudtasks.googleapis.com', enabled: true },
         { name: 'storage.googleapis.com', enabled: true },
@@ -50,7 +51,40 @@ describe('PMC async runtime checker', () => {
       deployed: { serviceExists: true, asyncDisabled: true, requiredNameCount: 10, presentNameCount: 10 },
     })
     for (const value of Object.values(privateInputs)) expect(serialized).not.toContain(value)
-    expect(serialized).not.toContain('private-invoker@private-project-123.iam.gserviceaccount.com')
+    expect(serialized).not.toContain('pmc-mini-app-task-invoker@private-project-123.iam.gserviceaccount.com')
+  })
+
+  it('accepts the real gcloud bucket schema without exposing infrastructure values', async () => {
+    const execute = vi.fn(async (command: string[]) => {
+      if (command[1] === 'storage' && command[2] === 'buckets' && command[3] === 'describe') return JSON.stringify({
+        location: 'ASIA-SOUTHEAST1', uniform_bucket_level_access: true, public_access_prevention: 'enforced',
+      })
+      return responseFor(command)
+    })
+
+    const report = await inspectPmcAsyncRuntime(privateInputs, execute, asyncEnvironment())
+
+    expect(report).toMatchObject({ infrastructureReady: true, ready: true, bucket: {
+      locationMatches: true, uniformBucketLevelAccess: true, publicAccessPrevention: true,
+    } })
+    expect(JSON.stringify(report)).not.toContain(privateInputs.bucket)
+  })
+
+  it('fails closed for a mixed bucket schema or deployed task-invoker mismatch', async () => {
+    const mixed = vi.fn(async (command: string[]) => {
+      if (command[1] === 'storage' && command[2] === 'buckets' && command[3] === 'describe') return JSON.stringify({
+        location: privateInputs.region, uniform_bucket_level_access: true,
+        iamConfiguration: { publicAccessPrevention: 'enforced' },
+      })
+      return responseFor(command)
+    })
+    const mismatch = vi.fn(async (command: string[]) => {
+      if (command[1] === 'run' && command[2] === 'services' && command[3] === 'describe') return JSON.stringify(serviceConfig('other-invoker@private-project-123.iam.gserviceaccount.com'))
+      return responseFor(command)
+    })
+
+    await expect(inspectPmcAsyncRuntime(privateInputs, mixed, asyncEnvironment())).resolves.toMatchObject({ infrastructureReady: false })
+    await expect(inspectPmcAsyncRuntime(privateInputs, mismatch, asyncEnvironment())).resolves.toMatchObject({ infrastructureReady: true, ready: false })
   })
 
   it('returns a nonzero strict result when a required safe check is missing', async () => {
@@ -161,7 +195,7 @@ function responseFor(command: string[]): string {
       { name: 'PMC_ASYNC_BUCKET', value: privateInputs.bucket }, { name: 'PMC_ASYNC_QUEUE', value: privateInputs.queue },
       { name: 'PMC_ASYNC_WORKER_URL', value: 'https://private.example/internal/mini-app/finalize-booking' },
       { name: 'PMC_ASYNC_WORKER_AUDIENCE', value: 'https://private.example' },
-      { name: 'PMC_ASYNC_TASK_INVOKER_EMAIL', value: 'private-invoker@private-project-123.iam.gserviceaccount.com' },
+      { name: 'PMC_ASYNC_TASK_INVOKER_EMAIL', value: 'pmc-mini-app-task-invoker@private-project-123.iam.gserviceaccount.com' },
       { name: 'PMC_ASYNC_OWNER_STAFF_IDS', value: 'staff-owner' },
       { name: 'PMC_BOOKING_INGRESS_SECRET', valueFrom: { secretKeyRef: { name: 'private-secret', key: 'latest' } } },
     ] }] } } },
@@ -170,6 +204,18 @@ function responseFor(command: string[]): string {
   return JSON.stringify({ bindings: [
     { role: 'roles/storage.objectUser', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },
     { role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },
-    { role: 'roles/run.invoker', members: ['serviceAccount:private-invoker@private-project-123.iam.gserviceaccount.com'] },
+    { role: 'roles/run.invoker', members: ['serviceAccount:pmc-mini-app-task-invoker@private-project-123.iam.gserviceaccount.com'] },
   ] })
+}
+
+function serviceConfig(taskInvoker: string) {
+  return {
+    spec: { template: { spec: { serviceAccountName: 'private-runtime@private-project-123.iam.gserviceaccount.com', containers: [{ env: [
+      { name: 'PMC_MINI_APP_ASYNC_ENABLED', value: 'false' }, { name: 'PMC_GCP_PROJECT_ID', value: privateInputs.project },
+      { name: 'PMC_ASYNC_LOCATION', value: privateInputs.region }, { name: 'PMC_ASYNC_BUCKET', value: privateInputs.bucket },
+      { name: 'PMC_ASYNC_QUEUE', value: privateInputs.queue }, { name: 'PMC_ASYNC_WORKER_URL', value: 'https://private.example/internal/mini-app/finalize-booking' },
+      { name: 'PMC_ASYNC_WORKER_AUDIENCE', value: 'https://private.example' }, { name: 'PMC_ASYNC_TASK_INVOKER_EMAIL', value: taskInvoker },
+      { name: 'PMC_ASYNC_OWNER_STAFF_IDS', value: 'staff-owner' }, { name: 'PMC_BOOKING_INGRESS_SECRET', valueFrom: { secretKeyRef: { name: 'private-secret', key: 'latest' } } },
+    ] }] } } },
+  }
 }

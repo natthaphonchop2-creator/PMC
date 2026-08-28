@@ -20,7 +20,7 @@ gcloud tasks queues create pmc-booking-finalize --location=asia-southeast1 --max
 gcloud iam service-accounts create pmc-mini-app-task-invoker --display-name="PMC Mini App task invoker"
 ```
 
-Acceptance evidence contains only safe booleans, counts, API names, role names, and status names. After approval, the owner may run the read-only checker with the approved command arguments. Its output must not echo the supplied project, region, service, bucket, queue, email, or resource values.
+Acceptance evidence contains only safe booleans, counts, API names, role names, and status names. After approval, Gate A runs the read-only checker **without** `--strict` and requires `infrastructureReady:true`. Its output must not echo the supplied project, region, service, bucket, queue, email, or resource values. Full `--strict` / `ready:true` is reserved for after the separately approved disabled Cloud Run environment and revision gate, because it requires deployed async-disabled configuration and all deployed environment/secret names.
 
 ## Owner gate B — narrow IAM
 
@@ -115,6 +115,8 @@ gcloud run deploy "$PMC_MINI_APP_SERVICE" --region=asia-southeast1 --no-traffic 
 ```
 
 Bind only approved environment variable and secret names. Verify health, public Mini App shell/config, unauthenticated session rejection, worker OIDC rejection, legacy booking routes, Google Form fallback, and stock-ledger paths. Do not change traffic or enable the async flag at this gate.
+
+After this gate's deployed revision is verified, the owner may run the checker with `--strict`; require `ready:true` in addition to `infrastructureReady:true`.
 
 ## Owner gate F — synthetic acceptance
 
