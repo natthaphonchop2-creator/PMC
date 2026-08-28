@@ -87,7 +87,7 @@ export function ReportPage({
     <main className="pmc-report-page">
       <header className="pmc-report-page-header">
         <button type="button" className="pmc-icon-button" aria-label="กลับไปรายงาน" onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
-        <div><p lang="en">JERA REPORT</p><h1>{REPORT_TITLES[reportType]}</h1></div>
+        <div><p lang="en">CLINIC REPORT</p><h1>{REPORT_TITLES[reportType]}</h1></div>
       </header>
       <ReportFilters reportType={reportType} value={filters} onChange={onFiltersChange} options={options} />
       <section className="pmc-report-status" aria-live="polite">

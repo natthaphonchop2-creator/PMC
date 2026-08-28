@@ -38,7 +38,7 @@ export function ReportCenter({
         <BrandMark />
         <p lang="en">REPORT CENTER</p>
         <h1>รายงานคลินิก</h1>
-        <span>ข้อมูลจาก JERA Production แบบอ่านอย่างเดียว</span>
+        <span>ข้อมูลจากระบบคลินิกแบบอ่านอย่างเดียว</span>
       </header>
       <ReportFilters reportType="TODAY_SUMMARY" value={filters} onChange={onFiltersChange} options={options} />
       <section className="pmc-report-card-grid" aria-label="ประเภทรายงาน">
@@ -71,12 +71,12 @@ export function AdditionalReportMenu({ onBack, onSelect }: {
   return <main className="pmc-additional-report-menu">
     <header className="pmc-report-page-header">
       <button type="button" className="pmc-icon-button" aria-label="กลับไปรายงาน" onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
-      <div><p lang="en">JERA REPORT</p><h1>รายงานเพิ่มเติม</h1></div>
+      <div><p lang="en">CLINIC REPORT</p><h1>รายงานเพิ่มเติม</h1></div>
     </header>
     <p className="pmc-additional-report-intro">เลือกข้อมูลที่ต้องการดู</p>
     <section aria-label="รายการรายงานเพิ่มเติม">
       {ADDITIONAL_REPORTS.map((report) => <button key={report.type} type="button" aria-label={report.label} onClick={() => onSelect(report.type)}>
-        <span><strong>{report.label}</strong><small>ดูข้อมูลจาก JERA</small></span><ChevronRight aria-hidden="true" />
+        <span><strong>{report.label}</strong><small>ดูข้อมูลรายงาน</small></span><ChevronRight aria-hidden="true" />
       </button>)}
     </section>
   </main>

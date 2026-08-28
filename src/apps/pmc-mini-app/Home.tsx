@@ -28,10 +28,10 @@ export function Home({ session, reportingEnabled, stockEnabled, onAction }: {
       </section>
 
       <section className="pmc-home-quick-grid" aria-label="ทางลัด">
-        {reportingEnabled && <button type="button" className="pmc-home-quick-card" aria-label="รายงาน JERA" onClick={() => onAction?.('REPORTS')}>
+        {reportingEnabled && <button type="button" className="pmc-home-quick-card" aria-label="รายงานคลินิก" onClick={() => onAction?.('REPORTS')}>
           <span className="pmc-card-icon"><ChartNoAxesCombined aria-hidden="true" /></span>
-          <strong>รายงาน JERA</strong>
-          <small>ดูข้อมูลรายงานของคลินิก</small>
+          <strong>รายงานคลินิก</strong>
+          <small>ดูข้อมูลการเงิน นัดหมาย และการดำเนินงาน</small>
           <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
         </button>}
         {stockEnabled

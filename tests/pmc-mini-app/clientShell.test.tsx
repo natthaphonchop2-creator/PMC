@@ -19,7 +19,7 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
     expect(screen.getByText('จัดการงานจองของคลินิก')).toBeVisible()
     expect(screen.getByRole('button', { name: 'เริ่มลงนัด' })).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'รายงาน JERA' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'รายงานคลินิก' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'รายงาน' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Google Form สำรอง' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Stock' })).toBeDisabled()
@@ -43,7 +43,7 @@ describe('PMC LINE Mini App shell', () => {
     />)
 
     expect(screen.getByText('จัดการงานจองและรายงานของคลินิก')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'รายงาน JERA' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'รายงานคลินิก' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'รายงาน' })).toBeVisible()
   })
 
@@ -225,7 +225,7 @@ describe('PMC LINE Mini App shell', () => {
 
     await user.click(screen.getByRole('button', { name: 'Stock' }))
     expect(await screen.findByRole('alert')).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'รายงาน JERA' }))
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
