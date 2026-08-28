@@ -58,6 +58,19 @@ describe('PMC Mini App runtime configuration checker', () => {
     expect(result.stdout).not.toContain(environment.PMC_MINI_APP_SIGNING_SECRET)
   })
 
+  it('reports only async configuration presence, never configured async values', async () => {
+    const checker = await import('../../scripts/check-pmc-mini-app-runtime.mjs')
+    const environment = { ...validEnvironment(), ...validAsyncEnvironment() }
+    const report = checker.inspectMiniAppRuntime(environment)
+    const serialized = JSON.stringify(report)
+
+    expect(report).toMatchObject({ asyncBookingEnabled: true })
+    expect(report.asyncBooking.present).toContain('PMC_ASYNC_TASK_INVOKER_EMAIL')
+    for (const [name, value] of Object.entries(validAsyncEnvironment())) {
+      if (name !== 'PMC_MINI_APP_ASYNC_ENABLED') expect(serialized).not.toContain(value)
+    }
+  })
+
   it('keeps Render unchanged and documents Cloud Run disabled-first rollout', async () => {
     const [runbook, render] = await Promise.all([
       readFile(resolve('docs/pmc-mini-app/pilot-runbook.md'), 'utf8'),
@@ -80,5 +93,19 @@ function validEnvironment(): Record<string, string> {
     PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
     PMC_MINI_APP_ENROLLMENT_ENABLED: 'false',
     PMC_BOOKING_INGRESS_SECRET: 'booking-secret-sentinel', PMC_MINI_APP_SIGNING_SECRET: 'signing-secret-sentinel',
+  }
+}
+
+function validAsyncEnvironment(): Record<string, string> {
+  return {
+    PMC_MINI_APP_ASYNC_ENABLED: 'true',
+    PMC_GCP_PROJECT_ID: 'project-2099d92f-51c8-4d2b-a8c',
+    PMC_ASYNC_LOCATION: 'asia-southeast1',
+    PMC_ASYNC_BUCKET: 'pmc-mini-app-evidence-staging',
+    PMC_ASYNC_QUEUE: 'pmc-booking-finalize',
+    PMC_ASYNC_WORKER_URL: 'https://pmc-mini-app.example/internal/mini-app/finalize-booking',
+    PMC_ASYNC_WORKER_AUDIENCE: 'https://pmc-mini-app.example',
+    PMC_ASYNC_TASK_INVOKER_EMAIL: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+    PMC_ASYNC_OWNER_STAFF_IDS: 'staff-owner',
   }
 }

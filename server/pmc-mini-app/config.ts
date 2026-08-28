@@ -1,3 +1,5 @@
+import { readPmcAsyncBookingConfig, type PmcAsyncBookingConfig } from './asyncConfig.js'
+
 export interface PmcMiniAppServerConfig {
   enabled: true
   miniAppId: string
@@ -11,6 +13,7 @@ export interface PmcMiniAppServerConfig {
   enrollmentPin: string | null
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
+  asyncBooking: PmcAsyncBookingConfig | null
 }
 
 const REQUIRED = [
@@ -50,6 +53,9 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     : null
   if (enrollmentPin !== null && !/^\d{6}$/.test(enrollmentPin)) return null
 
+  const asyncBooking = readPmcAsyncBookingConfig(env)
+  if (env.PMC_MINI_APP_ASYNC_ENABLED === 'true' && !asyncBooking) return null
+
   return {
     enabled: true,
     miniAppId: env.PMC_MINI_APP_ID!.trim(),
@@ -63,6 +69,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     enrollmentPin,
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
+    asyncBooking,
   }
 }
 

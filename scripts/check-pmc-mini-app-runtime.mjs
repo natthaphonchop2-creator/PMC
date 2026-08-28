@@ -18,6 +18,17 @@ export const MINI_APP_SECRET_BINDING_NAMES = [
   'PMC_MINI_APP_SIGNING_SECRET',
 ]
 
+export const MINI_APP_ASYNC_BINDING_NAMES = [
+  'PMC_GCP_PROJECT_ID',
+  'PMC_ASYNC_LOCATION',
+  'PMC_ASYNC_BUCKET',
+  'PMC_ASYNC_QUEUE',
+  'PMC_ASYNC_WORKER_URL',
+  'PMC_ASYNC_WORKER_AUDIENCE',
+  'PMC_ASYNC_TASK_INVOKER_EMAIL',
+  'PMC_ASYNC_OWNER_STAFF_IDS',
+]
+
 export const FUTURE_JERA_BINDING_NAMES = [
   'JERA_REPORTING_ENABLED',
   'JERA_API_BASE_URL',
@@ -40,11 +51,15 @@ export function inspectMiniAppRuntime(environment) {
   ], environment)
   const futureJeraBindings = presence(FUTURE_JERA_BINDING_NAMES, environment)
   const featureEnabled = environment.PMC_MINI_APP_ENABLED === 'true'
+  const asyncBookingEnabled = environment.PMC_MINI_APP_ASYNC_ENABLED === 'true'
+  const asyncBooking = presence(MINI_APP_ASYNC_BINDING_NAMES, environment)
   return {
     mode: 'READ_ONLY',
     ready: featureEnabled && enrollmentFlagValid && nonSecret.missing.length === 0 && secretBindings.missing.length === 0,
     featureEnabled,
     enrollmentEnabled,
+    asyncBookingEnabled,
+    asyncBooking,
     nonSecret,
     secretBindings,
     futureJeraBindings,

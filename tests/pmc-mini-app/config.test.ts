@@ -21,6 +21,17 @@ describe('PMC Mini App server configuration', () => {
     })
   })
 
+  it('keeps the synchronous configuration unchanged when async booking is disabled', () => {
+    expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({ asyncBooking: null })
+  })
+
+  it('fails closed when enabled async booking configuration is incomplete', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_MINI_APP_ASYNC_ENABLED: 'true',
+    })).toBeNull()
+  })
+
   it('enables first-time account linking only with an exact six-digit secret PIN', () => {
     expect(readPmcMiniAppConfig({
       ...validEnvironment(),
