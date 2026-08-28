@@ -2,6 +2,8 @@
 
 **Status:** Booking V1 is deployed on Cloud Run. First-time LINE account linking remains disabled until the owner adds the enrollment PIN secret and explicitly enables it.
 
+Async booking remains disabled-first. The separate owner-gated infrastructure, migration, Apps Script, no-traffic revision, synthetic acceptance, pilot, rollout, telemetry, cost, and rollback procedure is in `docs/pmc-mini-app/async-booking-runbook.md`; this task did not execute any of those commands.
+
 ## Safety boundary
 
 - Cloud Run hosts only `/mini-app/*`, `/api/mini-app/*`, and the later internal JERA sync route.
@@ -26,6 +28,15 @@ PMC_DRIVE_INTAKE_FOLDER_ID
 PMC_BOOKING_INGRESS_URL
 PMC_BOOKING_FALLBACK_FORM_URL
 PMC_MINI_APP_ENROLLMENT_ENABLED
+PMC_MINI_APP_ASYNC_ENABLED
+PMC_GCP_PROJECT_ID
+PMC_ASYNC_LOCATION
+PMC_ASYNC_BUCKET
+PMC_ASYNC_QUEUE
+PMC_ASYNC_WORKER_URL
+PMC_ASYNC_WORKER_AUDIENCE
+PMC_ASYNC_TASK_INVOKER_EMAIL
+PMC_ASYNC_OWNER_STAFF_IDS
 ```
 
 Secret Manager bindings:

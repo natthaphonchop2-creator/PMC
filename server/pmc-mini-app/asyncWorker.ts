@@ -7,6 +7,7 @@ import type { BookingIngressPort } from './bookingIngressClient.js'
 import type { EvidenceIngressPort } from './evidenceIngressClient.js'
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
+import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 
 const CLAIM_LEASE_MS = 15_000
 const FINAL_WAIT_MS = 30_000
@@ -40,6 +41,7 @@ type WorkerContext = {
   deadline: FinalAttemptDeadline | null
   ownerToken: string
   taskAttempt: number
+  startedAt: number
 }
 
 type TaskSnapshot = {
@@ -78,11 +80,15 @@ export function createAsyncBookingWorker(input: {
   evidenceIngress: EvidenceIngressPort
   bookingIngress: BookingIngressPort
   stateIngress: AsyncStateIngressPort
+  telemetry?: AsyncBookingTelemetry
   ownerToken?: () => string
   now: () => Date
   wait: (milliseconds: number) => Promise<void>
 }): AsyncBookingWorker {
   const nextOwnerToken = input.ownerToken ?? randomUUID
+  const emit = (name: Parameters<AsyncBookingTelemetry>[0], fields: Parameters<AsyncBookingTelemetry>[1]): void => {
+    try { input.telemetry?.(name, fields) } catch { /* telemetry cannot alter finalization */ }
+  }
   const nowDate = (): Date => {
     const value = input.now()
     if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
@@ -237,6 +243,11 @@ export function createAsyncBookingWorker(input: {
       context.deadline,
     )
     assertEvidenceLayout(context.bound, context.draft, true)
+    emit('drive_copy_completed', {
+      requestId: context.draft.requestId, draftId: context.draft.draftId, attempt: context.taskAttempt,
+      state: context.draft.state, fileCount: context.draft.evidenceCount,
+      elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+    })
   }
 
   async function copyMissingEvidence(
@@ -267,6 +278,10 @@ export function createAsyncBookingWorker(input: {
     if (!SAFE_CASE_ID.test(result.caseId) || !isConfirmationStatus(result.status) || !validResultProjection(result)) {
       throw new AsyncBookingWorkerError('BOOKING_INGRESS_RETRY')
     }
+    emit('booking_ingress_completed', {
+      requestId: context.draft.requestId, draftId: context.draft.draftId, caseId: result.caseId,
+      attempt: context.taskAttempt, state: result.status, elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+    })
     return result
   }
 
@@ -282,6 +297,10 @@ export function createAsyncBookingWorker(input: {
       validExpectedCompletion(context.snapshot, context.bound, previous, persisted, result),
       context.deadline,
     )
+    emit('booking_worker_completed', {
+      requestId: context.draft.requestId, draftId: context.draft.draftId, caseId: result.caseId,
+      attempt: context.taskAttempt, state: context.draft.state, elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+    })
   }
 
   async function recordRetry(context: WorkerContext, safeErrorCode: string): Promise<AsyncBookingWorkerResult | null> {
@@ -302,6 +321,11 @@ export function createAsyncBookingWorker(input: {
       context.deadline,
     )
     context.draft = persisted
+    emit(targetState === 'NEEDS_REVIEW' ? 'booking_worker_needs_review' : 'booking_worker_retrying', {
+      requestId: persisted.requestId, draftId: persisted.draftId, attempt: context.taskAttempt,
+      state: targetState, safeErrorCode: retry.safeErrorCode ?? 'ASYNC_STATE_RETRY',
+      elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+    })
     return targetState === 'NEEDS_REVIEW' ? terminalResult(persisted) : null
   }
 
@@ -462,6 +486,10 @@ export function createAsyncBookingWorker(input: {
       }
 
       if (!lastDraft || !bound) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
+      emit('booking_worker_claimed', {
+        requestId: lastDraft.requestId, draftId: lastDraft.draftId, attempt: finalizeInput.attempt,
+        state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - startedAt),
+      })
       const context: WorkerContext = {
         draft: lastDraft,
         bound,
@@ -469,6 +497,7 @@ export function createAsyncBookingWorker(input: {
         deadline: finalizeInput.attempt === MAX_TASK_ATTEMPTS ? finalAttemptDeadline : null,
         ownerToken,
         taskAttempt: finalizeInput.attempt,
+        startedAt,
       }
       let stage: WorkerSafeErrorCode = 'EVIDENCE_COPY_RETRY'
       let bookingResult: MiniAppBookingIngressResult | null = null

@@ -12,6 +12,7 @@ import { createGoogleBookingTaskQueue } from './taskQueue.js'
 import { createWorkerIdentityVerifier } from './workerAuth.js'
 import { createAsyncBookingWorker } from './asyncWorker.js'
 import { createAsyncStateIngressClient } from './asyncStateIngressClient.js'
+import { createAsyncBookingTelemetry } from './asyncTelemetry.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -45,6 +46,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     secret: config.bookingIngressSecret,
   })
   const now = () => new Date()
+  const asyncTelemetry = createAsyncBookingTelemetry()
   const enrollment = config.enrollmentPin ? createEnrollmentService({
     pin: config.enrollmentPin,
     signingSecret: config.signingSecret,
@@ -78,6 +80,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
         evidenceIngress,
         bookingIngress: ingress,
         stateIngress,
+        telemetry: asyncTelemetry,
         now,
         wait: (milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
       }),
@@ -90,6 +93,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     drive: google.drive,
     ingress,
     evidenceIngress,
+    asyncTelemetry,
     ...asyncDependencies,
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,

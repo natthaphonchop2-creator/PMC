@@ -16,6 +16,7 @@ import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerA
 import type { AsyncBookingWorker } from './asyncWorker.js'
 import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
+import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
@@ -32,6 +33,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   workerIdentity?: WorkerIdentityVerifier
   asyncWorker?: AsyncBookingWorker
   stateIngress?: AsyncStateIngressPort
+  asyncTelemetry?: AsyncBookingTelemetry
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -530,6 +532,9 @@ async function handleBookingDraftRoute(
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
       return
     }
+    deps.asyncTelemetry?.('booking_task_enqueued', {
+      requestId: draft.requestId, draftId: draft.draftId, attempt: 1, state: 'QUEUED', fileCount: draft.evidenceCount,
+    })
     const queueMutation: MiniAppAsyncStateMutation = {
       operation: 'QUEUE', requestId: draft.requestId, draftId: draft.draftId, payloadHash,
       expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
@@ -796,6 +801,13 @@ async function handleEvidenceBatchUpload(
       maxFileBytes: deps.config.maxImageBytes,
       maxTotalBytes: asyncConfig.maxBatchBytes,
     })
+    const startedAt = (deps.now ?? (() => new Date()))().getTime()
+    const totalBytes = batch.paymentFiles.reduce((total, file) => total + file.bytes.length, 0)
+      + batch.chatFiles.reduce((total, file) => total + file.bytes.length, 0)
+    deps.asyncTelemetry?.('evidence_stage_started', {
+      requestId: draft.requestId, draftId: draft.draftId,
+      fileCount: batch.paymentFiles.length + batch.chatFiles.length, totalBytes,
+    })
     const staged = await stageEvidenceBatch(draft.draftId, batch, deps.evidenceStaging)
     const updated = await deps.store.updateDraft(draft.draftId, draft.version, {
       state: 'DRAFT',
@@ -803,6 +815,11 @@ async function handleEvidenceBatchUpload(
       chatEvidenceObjectKeys: staged.chatObjectKeys,
       evidenceCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length,
       updatedAt: currentIso(deps),
+    })
+    deps.asyncTelemetry?.('evidence_stage_completed', {
+      requestId: updated.requestId, draftId: updated.draftId, state: updated.state,
+      fileCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length, totalBytes,
+      elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - startedAt),
     })
     respond(res, 200, draftProjection(updated))
   } catch (error) {
@@ -1016,7 +1033,7 @@ function applySecurityHeaders(res: ServerResponse): void {
   res.setHeader('x-content-type-options', 'nosniff')
 }
 
-function respond(res: ServerResponse, status: number, body: Record<string, unknown>): void {
+function respond(res: ServerResponse, status: number, body: Record<string, unknown> | null): void {
   res.statusCode = status
   res.setHeader('content-type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(body))
