@@ -12,12 +12,12 @@ describe('PMC Mini App managed Sheet setup', () => {
     await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
       appendedColumns: [
         'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt',
-        'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount',
+        'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken',
       ],
     })
 
     expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
-    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AC1:AJ1"])
+    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AC1:AK1"])
   })
 
   it('rejects a changed legacy request header without writes', async () => {
@@ -30,6 +30,17 @@ describe('PMC Mini App managed Sheet setup', () => {
 
     expect(sheets.headerWrites).toEqual([])
     expect(sheets.headerWriteRanges).toEqual([])
+  })
+
+  it('appends only processingOwnerToken to the previously migrated async header', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -1))
+
+    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
+      appendedColumns: ['processingOwnerToken'],
+    })
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
+    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AK1:AK1"])
   })
 
   it('adds only missing managed tabs with exact headers and frozen first rows', async () => {

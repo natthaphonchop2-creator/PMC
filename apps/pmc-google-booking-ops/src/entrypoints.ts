@@ -43,6 +43,7 @@ import {
   uploadMiniAppEvidence,
 } from './domain/miniAppEvidenceIngress'
 import type { BookingPorts } from './ports'
+import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -69,6 +70,9 @@ export function processBookingDoPost(event: AppsScriptDoPostEvent, ports: Bookin
   const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EVIDENCE') {
     return uploadMiniAppEvidence(parsed, ports)
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_ASYNC_STATE') {
+    return mutateMiniAppAsyncState(parsed, ports)
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_BOOKING') {
     const booking = submitMiniAppBooking(verifyMiniAppIngressPayload(parsed, ports), ports)

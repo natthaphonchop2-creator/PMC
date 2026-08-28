@@ -9,17 +9,16 @@ import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBat
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
-import type { AsyncMiniAppStore } from './store.js'
 import type { BookingTaskQueuePort } from './taskQueue.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerAuth.js'
 import type { AsyncBookingWorker } from './asyncWorker.js'
-import type { WorkerLeasePort } from './workerLease.js'
+import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
+import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
-const ASYNC_COORDINATION_LEASE_MS = 4 * 60_000
 
 export type AsyncBookingWorkerEntrypoint = AsyncBookingWorker
 
@@ -32,7 +31,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   taskQueue?: BookingTaskQueuePort
   workerIdentity?: WorkerIdentityVerifier
   asyncWorker?: AsyncBookingWorker
-  workerLease?: WorkerLeasePort
+  stateIngress?: AsyncStateIngressPort
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -360,6 +359,7 @@ async function handleBookingDraftRoute(
       depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null, processingStartedAt: null,
       processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
+      processingOwnerToken: null,
       createdAt: now, confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null, updatedAt: now,
     }
     try {
@@ -476,7 +476,7 @@ async function handleBookingDraftRoute(
   }
   const payloadHash = bookingPayloadHash(draft)
   if (asyncOwner) {
-    if (!deps.taskQueue || !deps.workerLease || !hasAsyncQueueStore(deps.store)) {
+    if (!deps.taskQueue || !deps.stateIngress) {
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_NOT_CONFIGURED' })
       return
     }
@@ -493,40 +493,24 @@ async function handleBookingDraftRoute(
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
       return
     }
-    let coordination: Awaited<ReturnType<WorkerLeasePort['acquire']>>
+    const queueMutation: MiniAppAsyncStateMutation = {
+      operation: 'QUEUE', requestId: draft.requestId, draftId: draft.draftId, payloadHash,
+      expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
+      leaseOwnerToken: null, nowIso, leaseUntil: null, taskName: task.taskName,
+      paymentEvidenceObjectKeys: [...draft.paymentEvidenceObjectKeys],
+      chatEvidenceObjectKeys: [...draft.chatEvidenceObjectKeys],
+      paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds],
+      chatEvidenceFileIds: [...draft.chatEvidenceFileIds], evidenceCount: draft.evidenceCount,
+      safeErrorCode: null, caseId: null, confirmationStatus: null,
+    }
     try {
-      coordination = await deps.workerLease.acquire({
-        requestId: draft.requestId,
-        nowIso,
-        leaseUntil: new Date(now.getTime() + ASYNC_COORDINATION_LEASE_MS).toISOString(),
-      })
-    } catch {
-      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
-      return
-    }
-    if (!coordination.acquired) {
-      respond(res, 202, { requestId: draft.requestId, status: 'QUEUED' })
-      return
-    }
-    let queued: MiniAppRequestRecord | null = null
-    let queueError: unknown
-    try {
-      queued = await deps.store.queueDraft(draft.requestId, payloadHash, task.taskName, nowIso)
-    } catch (error) {
-      queueError = error
-    } finally {
-      try { await deps.workerLease.release(coordination.lease) } catch { /* expiry is the safe fallback */ }
-    }
-    if (queued) {
-      respond(res, 202, { requestId: queued.requestId, status: 'QUEUED' })
-    } else {
-      const code = safeBookingError(queueError)
-      if (code === 'PAYLOAD_HASH_CONFLICT' || code === 'TASK_NAME_CONFLICT' || code === 'DRAFT_NOT_READY') {
-        respond(res, 409, { error: code })
-      } else {
-        respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
-      }
-    }
+      await deps.stateIngress.mutate(queueMutation)
+    } catch { /* persisted reread below resolves response loss */ }
+    let persisted: MiniAppRequestRecord | null
+    try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
+    if (persisted && validQueuedPersistence(draft, persisted, payloadHash)) {
+      respond(res, 202, { requestId: persisted.requestId, status: 'QUEUED' })
+    } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return
   }
   try {
@@ -549,16 +533,34 @@ async function handleBookingDraftRoute(
   }
 }
 
-function hasAsyncQueueStore(store: MiniAppStore): store is MiniAppStore & Pick<AsyncMiniAppStore, 'queueDraft'> {
-  return typeof (store as Partial<AsyncMiniAppStore>).queueDraft === 'function'
-}
-
 function isBoundAsyncConfirmation(draft: MiniAppRequestRecord): boolean {
   return (draft.state === 'QUEUED' || draft.state === 'PROCESSING' || draft.state === 'RETRYING')
     && typeof draft.payloadHash === 'string'
     && /^[A-Za-z0-9_-]{4,128}$/.test(draft.payloadHash)
     && (typeof draft.taskName === 'string' && /^[A-Za-z0-9._:/-]{1,512}$/.test(draft.taskName)
       || draft.taskName === null && draft.state !== 'QUEUED')
+}
+
+function validQueuedPersistence(
+  before: MiniAppRequestRecord,
+  persisted: MiniAppRequestRecord,
+  payloadHash: string,
+): boolean {
+  return persisted.requestId === before.requestId && persisted.draftId === before.draftId
+    && persisted.payloadHash === payloadHash && bookingPayloadHash(persisted) === payloadHash
+    && persisted.staffId === before.staffId && persisted.aeName === before.aeName
+    && persisted.customerName === before.customerName && persisted.facebookName === before.facebookName
+    && persisted.phoneNormalized === before.phoneNormalized && persisted.doctorId === before.doctorId
+    && persisted.serviceId === before.serviceId && persisted.queueType === before.queueType
+    && persisted.appointmentDate === before.appointmentDate && persisted.appointmentTime === before.appointmentTime
+    && persisted.depositAmount === before.depositAmount && persisted.channelId === before.channelId
+    && sameStringArray(persisted.paymentEvidenceObjectKeys, before.paymentEvidenceObjectKeys)
+    && sameStringArray(persisted.chatEvidenceObjectKeys, before.chatEvidenceObjectKeys)
+    && ['QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMED', 'NEEDS_REVIEW'].includes(persisted.state)
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 async function ownedDraft(

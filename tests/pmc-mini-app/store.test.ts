@@ -19,6 +19,7 @@ describe('PMC Mini App Sheet store', () => {
       processingLeaseUntil: '2026-08-28T02:06:00.000Z',
       lastProgressAt: '2026-08-28T02:02:00.000Z',
       attemptCount: 2,
+      processingOwnerToken: 'worker-owner-token-1',
     })
 
     await store.createDraft(draft)
@@ -32,6 +33,7 @@ describe('PMC Mini App Sheet store', () => {
       processingLeaseUntil: '2026-08-28T02:06:00.000Z',
       lastProgressAt: '2026-08-28T02:02:00.000Z',
       attemptCount: 2,
+      processingOwnerToken: 'worker-owner-token-1',
     })
   })
 
@@ -49,6 +51,7 @@ describe('PMC Mini App Sheet store', () => {
     expect(draft).toMatchObject({
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
       processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
+      processingOwnerToken: null,
     })
   })
 
@@ -93,234 +96,12 @@ describe('PMC Mini App Sheet store', () => {
     await expect(store.getLatestActiveDraftByStaff('staff-missing')).resolves.toBeNull()
   })
 
-  it('queues a ready draft once with matching payload and task identity', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    const draft = validDraft()
-    const payloadHash = bookingPayloadHash(draft)
-    await store.createDraft(draft)
+  it('exposes no direct distributed async mutation authority from Cloud Run', () => {
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets: new MemorySheets() }) as Record<string, unknown>
 
-    const queued = await store.queueDraft(
-      'request-1', payloadHash, 'projects/project-1/locations/asia-southeast1/queues/queue-1/tasks/request-1', '2026-08-28T02:00:00.000Z',
-    )
-    const replay = await store.queueDraft(
-      'request-1', payloadHash, queued.taskName!, '2026-08-28T02:01:00.000Z',
-    )
-
-    expect(queued).toMatchObject({
-      state: 'QUEUED', payloadHash, queuedAt: '2026-08-28T02:00:00.000Z', updatedAt: '2026-08-28T02:00:00.000Z', version: 2,
-    })
-    expect(replay).toEqual(queued)
-    await expect(store.queueDraft('request-1', 'wrong-hash', queued.taskName!, '2026-08-28T02:02:00.000Z'))
-      .rejects.toThrow('PAYLOAD_HASH_CONFLICT')
-  })
-
-  it('claims a queued draft with the first processing lease and one attempt', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    const draft = validDraft()
-    await store.createDraft(draft)
-    await store.queueDraft(
-      draft.requestId,
-      bookingPayloadHash(draft),
-      'projects/project-1/locations/asia-southeast1/queues/queue-1/tasks/request-1',
-      '2026-08-28T02:00:00.000Z',
-    )
-
-    await expect(store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:01:00.000Z', leaseUntil: '2026-08-28T02:06:00.000Z',
-    })).resolves.toMatchObject({
-      claimed: true,
-      draft: {
-        state: 'PROCESSING', processingStartedAt: '2026-08-28T02:01:00.000Z',
-        processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:01:00.000Z', attemptCount: 1, version: 3,
-      },
-    })
-  })
-
-  it('claims only the matching unbound ready draft when task delivery wins the queue update race', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft())
-
-    await expect(store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-other', nowIso: '2026-08-28T02:01:00.000Z', leaseUntil: '2026-08-28T02:06:00.000Z',
-    })).rejects.toThrow('ASYNC_TASK_IDENTITY_CONFLICT')
-
-    await expect(store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:01:00.000Z', leaseUntil: '2026-08-28T02:06:00.000Z',
-    })).resolves.toMatchObject({ claimed: true, draft: { requestId: 'request-1', draftId: 'draft-1', state: 'PROCESSING' } })
-  })
-
-  it('reconciles queue identity without regressing processing when task delivery wins the Sheet update race', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    const draft = validDraft()
-    const payloadHash = bookingPayloadHash(draft)
-    const taskName = 'projects/project-1/locations/asia-southeast1/queues/queue-1/tasks/request-1'
-    await store.createDraft(draft)
-
-    const claimed = await store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:00:01.000Z', leaseUntil: '2026-08-28T02:05:01.000Z',
-    })
-    const reconciled = await store.queueDraft('request-1', payloadHash, taskName, '2026-08-28T02:00:00.000Z')
-
-    expect(claimed).toMatchObject({ claimed: true, draft: { state: 'PROCESSING', taskName: null, version: 2 } })
-    expect(reconciled).toMatchObject({
-      state: 'PROCESSING', payloadHash, taskName, queuedAt: '2026-08-28T02:00:00.000Z',
-      processingStartedAt: '2026-08-28T02:00:01.000Z', processingLeaseUntil: '2026-08-28T02:05:01.000Z', attemptCount: 1, version: 3,
-    })
-  })
-
-  it('keeps the bound submission hash when queue reconciliation follows processing progress', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    const draft = validDraft()
-    const payloadHash = bookingPayloadHash(draft)
-    const taskName = 'projects/project-1/locations/asia-southeast1/queues/queue-1/tasks/request-1'
-    await store.createDraft(draft)
-    const claimed = await store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:00:01.000Z', leaseUntil: '2026-08-28T02:05:01.000Z',
-    })
-    await store.updateProcessingProjection({
-      requestId: 'request-1', expectedAttempt: claimed.draft.attemptCount, expectedVersion: claimed.draft.version,
-      nowIso: '2026-08-28T02:00:02.000Z', patch: { paymentEvidenceFileIds: ['verified-drive-payment'] },
-    })
-
-    await expect(store.queueDraft('request-1', payloadHash, taskName, '2026-08-28T02:00:00.000Z')).resolves.toMatchObject({
-      state: 'PROCESSING', payloadHash, taskName, paymentEvidenceFileIds: ['verified-drive-payment'],
-    })
-  })
-
-  it('blocks a live lease and reclaims only after expiry while preserving the first processing time', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({
-      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:05:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
-    }))
-
-    const live = await store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:04:59.000Z', leaseUntil: '2026-08-28T02:09:59.000Z',
-    })
-    const reclaimed = await store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:05:00.000Z', leaseUntil: '2026-08-28T02:10:00.000Z',
-    })
-
-    expect(live).toMatchObject({ claimed: false, draft: { attemptCount: 1, version: 1 } })
-    expect(reclaimed).toMatchObject({
-      claimed: true,
-      draft: {
-        processingStartedAt: '2026-08-28T02:00:00.000Z', processingLeaseUntil: '2026-08-28T02:10:00.000Z',
-        lastProgressAt: '2026-08-28T02:05:00.000Z', attemptCount: 2, version: 2,
-      },
-    })
-  })
-
-  it('reclaims a retry using its persisted submission hash after projection fields changed', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    const payloadHash = bookingPayloadHash(validDraft())
-    await store.createDraft(validDraft({
-      state: 'RETRYING', payloadHash, taskName: 'projects/p/tasks/request-1',
-      paymentEvidenceFileIds: ['verified-drive-payment'], processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: null, lastProgressAt: '2026-08-28T02:01:00.000Z', attemptCount: 1,
-    }))
-
-    await expect(store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:02:00.000Z', leaseUntil: '2026-08-28T02:07:00.000Z',
-    })).resolves.toMatchObject({ claimed: true, draft: { state: 'PROCESSING', payloadHash, attemptCount: 2 } })
-  })
-
-  it('serializes concurrent claims so only one worker obtains the live lease', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({ state: 'QUEUED', payloadHash: bookingPayloadHash(validDraft()), taskName: 'projects/p/tasks/request-1' }))
-
-    const claims = await Promise.all([
-      store.claimProcessing({ requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:01:00.000Z', leaseUntil: '2026-08-28T02:06:00.000Z' }),
-      store.claimProcessing({ requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:01:01.000Z', leaseUntil: '2026-08-28T02:06:01.000Z' }),
-    ])
-
-    expect(claims.map(({ claimed }) => claimed).sort()).toEqual([false, true])
-    expect((await store.getDraft('draft-1'))?.attemptCount).toBe(1)
-  })
-
-  it('records retry progress and moves the eighth failed claim to operator review', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({
-      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
-    }))
-
-    const retrying = await store.markAsyncRetry({
-      requestId: 'request-1', safeErrorCode: 'EVIDENCE_COPY_RETRY', nowIso: '2026-08-28T02:01:00.000Z',
-      expectedAttempt: 1, expectedVersion: 1,
-    })
-    expect(retrying).toMatchObject({
-      state: 'RETRYING', safeErrorCode: 'EVIDENCE_COPY_RETRY', processingLeaseUntil: null,
-      lastProgressAt: '2026-08-28T02:01:00.000Z', updatedAt: '2026-08-28T02:01:00.000Z', attemptCount: 1, version: 2,
-    })
-
-    await store.createDraft(validDraft({
-      requestId: 'request-8', draftId: 'draft-8', state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 8,
-    }))
-    await expect(store.markAsyncRetry({
-      requestId: 'request-8', safeErrorCode: 'RETRY_EXHAUSTED', nowIso: '2026-08-28T02:01:00.000Z',
-      expectedAttempt: 8, expectedVersion: 1,
-    })).resolves.toMatchObject({
-      state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED', processingLeaseUntil: null,
-    })
-  })
-
-  it('honors Cloud Tasks retry exhaustion even when earlier deliveries failed before claiming a lease', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({
-      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
-    }))
-
-    await expect(store.markAsyncRetry({
-      requestId: 'request-1', safeErrorCode: 'RETRY_EXHAUSTED', nowIso: '2026-08-28T02:01:00.000Z',
-      expectedAttempt: 1, expectedVersion: 1,
-    })).resolves.toMatchObject({
-      state: 'NEEDS_REVIEW', attemptCount: 1, safeErrorCode: 'RETRY_EXHAUSTED', processingLeaseUntil: null,
-    })
-  })
-
-  it('rejects retry and completion from a stale worker after another worker reclaims the lease', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({
-      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:05:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
-    }))
-    const reclaimed = await store.claimProcessing({
-      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:05:00.000Z', leaseUntil: '2026-08-28T02:10:00.000Z',
-    })
-
-    await expect(store.markAsyncRetry({
-      requestId: 'request-1', safeErrorCode: 'STALE_WORKER_RETRY', nowIso: '2026-08-28T02:06:00.000Z',
-      expectedAttempt: 1, expectedVersion: 1,
-    })).rejects.toThrow('STALE_PROCESSING_LEASE')
-    await expect(store.completeAsyncBooking({
-      requestId: 'request-1', caseId: 'PMC-202608-0001', status: 'CONFIRMED', projectionState: 'CONFIRMED',
-      nowIso: '2026-08-28T02:06:00.000Z', expectedAttempt: 1, expectedVersion: 1,
-    })).rejects.toThrow('STALE_PROCESSING_LEASE')
-    expect(await store.getDraft('draft-1')).toEqual(reclaimed.draft)
-
-    const retried = await store.markAsyncRetry({
-      requestId: 'request-1', safeErrorCode: 'CURRENT_WORKER_RETRY', nowIso: '2026-08-28T02:06:00.000Z',
-      expectedAttempt: reclaimed.draft.attemptCount, expectedVersion: reclaimed.draft.version,
-    })
-    await expect(store.markAsyncRetry({
-      requestId: 'request-1', safeErrorCode: 'STALE_WORKER_RETRY', nowIso: '2026-08-28T02:06:01.000Z',
-      expectedAttempt: 1, expectedVersion: 1,
-    })).rejects.toThrow('STALE_PROCESSING_LEASE')
-    expect(await store.getDraft('draft-1')).toEqual(retried)
+    for (const method of ['queueDraft', 'claimProcessing', 'updateProcessingProjection', 'markAsyncRetry', 'completeAsyncBooking']) {
+      expect(store[method]).toBeUndefined()
+    }
   })
 
   it.each([
@@ -426,74 +207,6 @@ describe('PMC Mini App Sheet store', () => {
       state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: '2026-08-28T02:02:00.000Z',
     })).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
     expect(await store.getDraft('draft-1')).toEqual(protectedDraft)
-  })
-
-  it('updates processing projections only for the current attempt and version', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({
-      state: 'PROCESSING', payloadHash: bookingPayloadHash(validDraft()),
-      processingStartedAt: '2026-08-28T02:00:00.000Z', processingLeaseUntil: '2026-08-28T02:05:00.000Z',
-      lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 2,
-    }))
-
-    await expect(store.updateProcessingProjection({
-      requestId: 'request-1', expectedAttempt: 2, expectedVersion: 1, nowIso: '2026-08-28T02:01:00.000Z',
-      patch: { paymentEvidenceFileIds: ['drive-payment'], chatEvidenceFileIds: ['drive-chat'], evidenceCount: 2 },
-    })).resolves.toMatchObject({
-      state: 'PROCESSING', paymentEvidenceFileIds: ['drive-payment'], chatEvidenceFileIds: ['drive-chat'], evidenceCount: 2,
-      attemptCount: 2, lastProgressAt: '2026-08-28T02:01:00.000Z', updatedAt: '2026-08-28T02:01:00.000Z', version: 2,
-    })
-  })
-
-  it('rejects stale or unknown processing projection mutations without a write', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    const original = validDraft({
-      state: 'PROCESSING', payloadHash: bookingPayloadHash(validDraft()), version: 3,
-      processingStartedAt: '2026-08-28T02:00:00.000Z', processingLeaseUntil: '2026-08-28T02:05:00.000Z',
-      lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 2,
-    })
-    await store.createDraft(original)
-
-    await expect(store.updateProcessingProjection({
-      requestId: 'request-1', expectedAttempt: 1, expectedVersion: 3, nowIso: '2026-08-28T02:01:00.000Z', patch: {},
-    })).rejects.toThrow('STALE_PROCESSING_LEASE')
-    await expect(store.updateProcessingProjection({
-      requestId: 'request-1', expectedAttempt: 2, expectedVersion: 2, nowIso: '2026-08-28T02:01:00.000Z', patch: {},
-    })).rejects.toThrow('STALE_PROCESSING_LEASE')
-    await expect(store.updateProcessingProjection({
-      requestId: 'request-1', expectedAttempt: 2, expectedVersion: 3, nowIso: '2026-08-28T02:01:00.000Z',
-      patch: { customerName: 'ห้ามแก้' } as never,
-    })).rejects.toThrow('INVALID_PROCESSING_PROJECTION_PATCH')
-    expect(await store.getDraft('draft-1')).toEqual(original)
-  })
-
-  it('completes once and never regresses a terminal async state', async () => {
-    const sheets = new MemorySheets()
-    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({
-      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
-    }))
-    const completion = {
-      requestId: 'request-1', caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const,
-      projectionState: 'CONFIRMED_WITH_RETRY' as const, nowIso: '2026-08-28T02:01:00.000Z', expectedAttempt: 1, expectedVersion: 1,
-    }
-
-    const completed = await store.completeAsyncBooking(completion)
-    const replayed = await store.completeAsyncBooking({ ...completion, nowIso: '2026-08-28T02:02:00.000Z' })
-    const lateRetry = await store.markAsyncRetry({
-      requestId: 'request-1', safeErrorCode: 'LATE_RETRY', nowIso: '2026-08-28T02:03:00.000Z',
-      expectedAttempt: completed.attemptCount, expectedVersion: completed.version,
-    })
-
-    expect(completed).toMatchObject({
-      state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
-      confirmedAt: '2026-08-28T02:01:00.000Z', processingLeaseUntil: null, safeErrorCode: null, version: 2,
-    })
-    expect(replayed).toEqual(completed)
-    expect(lateRetry).toEqual(completed)
   })
 
   it('marks cancelled evidence for approval-bound retention without deleting IDs', async () => {
@@ -620,6 +333,7 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
     paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'], evidenceCount: 2,
     paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
     processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
+    processingOwnerToken: null,
     createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
     updatedAt: '2026-08-27T10:00:00.000Z',
     ...patch,

@@ -36,6 +36,7 @@ const ASYNC_REQUEST_HEADERS = [
   'processingLeaseUntil',
   'lastProgressAt',
   'attemptCount',
+  'processingOwnerToken',
 ] as const
 
 const LEGACY_REQUEST_HEADERS = MINI_APP_REQUEST_HEADERS.slice(0, -ASYNC_REQUEST_HEADERS.length)
@@ -50,6 +51,12 @@ export async function migrateMiniAppAsyncRequestColumns(input: {
   const expected = [...MINI_APP_REQUEST_HEADERS]
 
   if (sameHeader(current, expected)) return { appendedColumns: [] }
+  const previousAsync = expected.slice(0, -1)
+  if (sameHeader(current, previousAsync)) {
+    const column = columnName(expected.length)
+    await sheets.update(spreadsheetId, `'MINI_APP_REQUESTS'!${column}1:${column}1`, [['processingOwnerToken']])
+    return { appendedColumns: ['processingOwnerToken'] }
+  }
   if (!sameHeader(current, [...LEGACY_REQUEST_HEADERS])) throw new Error('incompatible header: MINI_APP_REQUESTS')
 
   const start = LEGACY_REQUEST_HEADERS.length + 1

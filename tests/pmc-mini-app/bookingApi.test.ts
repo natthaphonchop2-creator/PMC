@@ -7,9 +7,8 @@ import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { BookingIngressClientError } from '../../server/pmc-mini-app/bookingIngressClient'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 import type { BookingTaskQueuePort } from '../../server/pmc-mini-app/taskQueue'
-import type { WorkerLeaseHandle, WorkerLeasePort } from '../../server/pmc-mini-app/workerLease'
+import type { AsyncStateIngressPort } from '../../server/pmc-mini-app/asyncStateIngressClient'
 import type {
-  AsyncMiniAppStore,
   MiniAppBookingConfigProjection,
   MiniAppDraftPatch,
   MiniAppRequestRecord,
@@ -178,7 +177,7 @@ describe('PMC Mini App booking draft API', () => {
     const response = await createReadyDraftAndConfirm(deps)
 
     expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
-    expect(events).toEqual(['enqueue', 'leaseAcquire', 'queueDraft', 'leaseRelease'])
+    expect(events).toEqual(['enqueue', 'stateIngress', 'queueDraft'])
     expect(deps.taskQueue.enqueue).toHaveBeenCalledWith({
       requestId: 'request-1', draftId: 'draft-1', scheduleAt: new Date('2026-08-27T10:00:02.000Z'),
     })
@@ -186,30 +185,39 @@ describe('PMC Mini App booking draft API', () => {
     expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED', taskName: 'task/request-1' })
   })
 
-  it('returns accepted without queueDraft when task delivery owns the shared coordination lease', async () => {
-    const events: string[] = []
-    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])), events })
-    const ready = await createReadyDraft(deps)
-    deps.workerLeaseFixture.setBusy(true)
-    deps.taskQueue.enqueue.mockImplementationOnce(async () => {
-      events.push('enqueue')
-      const current = deps.storeFixture.read('draft-1')!
-      deps.storeFixture.replace({
-        state: 'PROCESSING', payloadHash: 'bound-payload-hash', taskName: null,
-        processingStartedAt: '2026-08-27T10:00:00.000Z',
-        processingLeaseUntil: '2026-08-27T10:04:00.000Z',
-        lastProgressAt: '2026-08-27T10:00:00.000Z', attemptCount: 1, version: current.version + 1,
-      })
-      return { taskName: 'task/request-1', alreadyExists: false }
-    })
+  it.each([false, true])(
+    'queues only through Apps Script state ingress and recovers response loss=%s from persisted reread',
+    async (loseResponse) => {
+      const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+      const ready = await createReadyDraft(deps)
+      const stateIngress: AsyncStateIngressPort = {
+        mutate: vi.fn(async (mutation) => {
+          const current = deps.storeFixture.read('draft-1')!
+          deps.storeFixture.replace({
+            state: 'QUEUED', payloadHash: mutation.payloadHash, taskName: mutation.taskName,
+            queuedAt: mutation.nowIso, updatedAt: mutation.nowIso, version: current.version + 1,
+          })
+          if (loseResponse) throw new Error('simulated async state response loss')
+          const persisted = deps.storeFixture.read('draft-1')!
+          return {
+            requestId: persisted.requestId, draftId: persisted.draftId, state: persisted.state,
+            version: persisted.version, attemptCount: persisted.attemptCount, caseId: persisted.caseId,
+            confirmationStatus: persisted.confirmationStatus, outcome: 'APPLIED' as const,
+          }
+        }),
+      }
 
-    const response = await confirmDraft(deps, Number(ready.body.version))
+      const response = await confirmDraft({
+        ...deps,
+        stateIngress,
+      }, Number(ready.body.version))
 
-    expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
-    expect(events).toEqual(['enqueue', 'leaseAcquire'])
-    expect(deps.storeFixture.queueWriteCount()).toBe(0)
-    expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'PROCESSING', taskName: null, attemptCount: 1 })
-  })
+      expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+      expect(stateIngress.mutate).toHaveBeenCalledOnce()
+      expect(deps.storeFixture.queueWriteCount()).toBe(0)
+      expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED', version: Number(ready.body.version) + 1 })
+    },
+  )
 
   it('keeps synchronous confirmation unchanged when async is off or the staff member is not an owner', async () => {
     const disabled = dependencies()
@@ -270,7 +278,7 @@ describe('PMC Mini App booking draft API', () => {
     const committed = deps.storeFixture.read('draft-1')!
     const retry = await confirmDraft(deps, clientVersion)
 
-    expect(first).toEqual({ status: 503, body: { error: 'MINI_APP_STORAGE_UNAVAILABLE' } })
+    expect(first).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
     expect(retry).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
     expect(deps.storeFixture.read('draft-1')).toEqual(committed)
     expect(committed).toMatchObject({ state: 'QUEUED', version: clientVersion + 1, taskName: 'task/request-1' })
@@ -391,7 +399,19 @@ function dependencies(options: {
       return { taskName: 'task/request-1', alreadyExists: false }
     }),
   }
-  const workerLeaseFixture = new QueueWorkerLease(options.events)
+  const stateIngress: AsyncStateIngressPort = {
+    mutate: vi.fn(async (mutation) => {
+      options.events?.push('stateIngress')
+      const persisted = await storeFixture.queueDraft(
+        mutation.requestId, mutation.payloadHash, mutation.taskName!, mutation.nowIso,
+      )
+      return {
+        requestId: persisted.requestId, draftId: persisted.draftId, state: persisted.state,
+        version: persisted.version, attemptCount: persisted.attemptCount, caseId: persisted.caseId,
+        confirmationStatus: persisted.confirmationStatus, outcome: 'APPLIED' as const,
+      }
+    }),
+  }
   const config: PmcMiniAppServerConfig = {
     enabled: true, miniAppId: '2001234567-mini-app', lineChannelId: '2001234567', spreadsheetId: 'sheet-1',
     intakeFolderId: 'folder-1', bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
@@ -401,40 +421,11 @@ function dependencies(options: {
   }
   storeFixture.onQueueWrite(() => options.events?.push('queueDraft'))
   return {
-    config, identity, store: storeFixture as MiniAppStore & AsyncMiniAppStore, ingress, taskQueue,
-    workerLease: workerLeaseFixture as WorkerLeasePort,
+    config, identity, store: storeFixture as MiniAppStore, ingress, taskQueue, stateIngress,
     now: () => new Date('2026-08-27T10:00:00.000Z'),
     requestId: () => 'request-1', draftId: () => 'draft-1',
-    storeFixture, workerLeaseFixture,
+    storeFixture,
   }
-}
-
-class QueueWorkerLease implements WorkerLeasePort {
-  private busy = false
-  private generation = 0
-
-  constructor(private readonly events?: string[]) {}
-
-  setBusy(value: boolean): void { this.busy = value }
-
-  async acquire(input: Parameters<WorkerLeasePort['acquire']>[0]) {
-    this.events?.push('leaseAcquire')
-    if (this.busy) return { acquired: false as const, expiresAt: '2026-08-27T10:04:00.000Z' }
-    this.generation += 1
-    return {
-      acquired: true as const,
-      lease: {
-        lockKey: 'locks/request-hash', ownerToken: 'owner-token-queue1',
-        expiresAt: input.leaseUntil, generation: String(this.generation),
-      },
-    }
-  }
-
-  async renew(input: Parameters<WorkerLeasePort['renew']>[0]): Promise<WorkerLeaseHandle> {
-    return { ...input.lease, expiresAt: input.leaseUntil }
-  }
-
-  async release(): Promise<void> { this.events?.push('leaseRelease') }
 }
 
 class TestStore implements MiniAppStore {

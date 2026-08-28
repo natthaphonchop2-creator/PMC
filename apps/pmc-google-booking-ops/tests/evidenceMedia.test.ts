@@ -12,6 +12,9 @@ const crypto = {
   sha256Hex(value: string) {
     return createHash('sha256').update(value).digest('hex')
   },
+  sha256Base64Url(value: string) {
+    return createHash('sha256').update(value).digest('base64url')
+  },
   base64UrlUtf8(value: string) {
     return Buffer.from(value, 'utf8').toString('base64url')
   },

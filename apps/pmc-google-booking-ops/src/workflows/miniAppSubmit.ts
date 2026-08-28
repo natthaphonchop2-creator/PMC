@@ -5,9 +5,10 @@ import { NO_AE_OPTION } from '../config'
 import { submitBookingIntake } from './formSubmit'
 
 export function submitMiniAppBooking(input: MiniAppBookingIngressPayload, ports: BookingPorts): BookingCase {
-  const formResponseId = `mini:${input.requestId}`
-  const existing = ports.repositories.bookings.findByFormResponseId(formResponseId)
+  const identity = miniAppFormIdentity(input, ports)
+  const existing = findExistingMiniAppBooking(input, identity, ports)
   if (existing) return finalizeIngressAudit(existing, input, ports)
+  const formResponseId = identity.current
 
   const staff = ports.config.findStaffById(input.staffId)
   if (!staff?.active || !staff.canCloseBooking) throw new Error('mini app staff is not active or eligible')
@@ -49,11 +50,19 @@ function finalizeIngressAudit(
   input: MiniAppBookingIngressPayload,
   ports: BookingPorts,
 ): BookingCase {
-  const formResponseId = `mini:${input.requestId}`
   return ports.locks.withLock(() => {
-    const persisted = ports.repositories.bookings.findByFormResponseId(formResponseId)
+    const persisted = ports.repositories.bookings.getByCaseId(booking.caseId)
     if (!persisted || persisted.caseId !== booking.caseId || !matchesRecoverableInput(persisted, input, ports)) {
       throw new Error('mini app duplicate booking conflict')
+    }
+    if (!ports.repositories.bookings.hasFormResponseMapping(persisted.formResponseId, persisted.caseId)
+      || !validCreationAudit(persisted, ports)) throw new Error('mini app duplicate booking is not durable')
+    if (!durableDownstream(persisted, input, ports)) throw new Error('mini app duplicate booking is not durable')
+
+    const eventId = `AUDIT-MINI-INGRESS-${input.requestId}`
+    const globalAudits = ports.repositories.audit.listByEventId(eventId)
+    if (globalAudits.length > 1 || (globalAudits[0] && !matchesIngressAudit(globalAudits[0], persisted, input))) {
+      throw new Error('mini app payload hash conflict')
     }
     const audits = ports.repositories.audit.listForCase(persisted.caseId)
       .filter((event) => event.action === 'MINI_APP_INGRESS_ACCEPTED')
@@ -67,7 +76,7 @@ function finalizeIngressAudit(
     }
 
     ports.repositories.audit.append({
-      eventId: `AUDIT-MINI-INGRESS-${input.requestId}`,
+      eventId,
       caseId: persisted.caseId,
       actor: persisted.submitterEmail,
       action: 'MINI_APP_INGRESS_ACCEPTED',
@@ -98,7 +107,8 @@ function matchesRecoverableInput(
   const appointmentMatches = input.queueType === 'AUTO'
     ? input.appointmentDate === null && input.appointmentTime === null
     : appointmentStart !== null && booking.appointmentStart === appointmentStart
-  return booking.formResponseId === `mini:${input.requestId}`
+  const identity = miniAppFormIdentity(input, ports)
+  return (booking.formResponseId === identity.current || booking.formResponseId === identity.legacy)
     && booking.adminId === input.staffId
     && booking.adminName === staff.name
     && booking.submitterEmail === actorEmail
@@ -115,6 +125,107 @@ function matchesRecoverableInput(
     && booking.depositAmount === input.depositAmount
     && booking.paymentEvidenceCount === input.paymentEvidenceFileIds.length
     && booking.chatEvidenceCount === input.chatEvidenceFileIds.length
+}
+
+function miniAppFormIdentity(input: MiniAppBookingIngressPayload, ports: BookingPorts) {
+  const encodedRequestId = ports.crypto.base64UrlUtf8(input.requestId)
+  return {
+    current: `mini:v2:${encodedRequestId}:${input.payloadHash}`,
+    prefix: `mini:v2:${encodedRequestId}:`,
+    legacy: `mini:${input.requestId}`,
+  }
+}
+
+function findExistingMiniAppBooking(
+  input: MiniAppBookingIngressPayload,
+  identity: ReturnType<typeof miniAppFormIdentity>,
+  ports: BookingPorts,
+): BookingCase | null {
+  const candidates = ports.repositories.bookings.list().filter((booking) =>
+    booking.formResponseId === identity.legacy || booking.formResponseId.startsWith(identity.prefix),
+  )
+  if (candidates.length > 1) throw new Error('mini app payload hash conflict')
+  const existing = candidates[0]
+  if (!existing) return null
+  if (existing.formResponseId.startsWith(identity.prefix) && existing.formResponseId !== identity.current) {
+    throw new Error('mini app payload hash conflict')
+  }
+  return existing
+}
+
+function validCreationAudit(booking: BookingCase, ports: BookingPorts): boolean {
+  const audits = ports.repositories.audit.listByEventId(`AUDIT-${booking.formResponseId}-1`)
+  const audit = audits[0]
+  return Boolean(audits.length === 1 && audit
+    && audit.caseId === booking.caseId
+    && audit.action === 'BOOKING_CREATED'
+    && audit.target === 'BOOKING_MASTER'
+    && audit.before === null
+    && audit.correlationId === booking.formResponseId)
+}
+
+function durableDownstream(
+  booking: BookingCase,
+  input: MiniAppBookingIngressPayload,
+  ports: BookingPorts,
+): boolean {
+  const pending = ports.repositories.retries.listPending()
+  const exactRetry = (id: string, operation: string, idempotencyKey: string, evidenceBound = false) => pending.some((retry) => {
+    if (retry.id !== id || retry.caseId !== booking.caseId || retry.operation !== operation
+      || retry.idempotencyKey !== idempotencyKey || retry.status !== 'PENDING') return false
+    if (!evidenceBound) return true
+    const payload = retryPayload(retry.payload)
+    return sameStrings(payload.paymentEvidenceFileIds, input.paymentEvidenceFileIds)
+      && sameStrings(payload.chatEvidenceFileIds, input.chatEvidenceFileIds)
+  })
+  const driveDurable = booking.driveState === 'OK' && Boolean(booking.driveFolderId && booking.driveFolderUrl)
+    || booking.driveState === 'RETRY' && exactRetry(
+      `RETRY-${booking.caseId}-DRIVE`, 'DRIVE_EVIDENCE', `${booking.caseId}:DRIVE_EVIDENCE`, true,
+    )
+  if (!driveDurable) return false
+
+  let calendarDurable: boolean
+  if (booking.queueType === 'NORMAL') {
+    calendarDurable = booking.calendarState === 'OK' && Boolean(booking.calendarEventId)
+      || booking.calendarState === 'RETRY' && exactRetry(
+        `RETRY-${booking.caseId}-CALENDAR`, 'CALENDAR_EVENT', `${booking.caseId}:CALENDAR_EVENT`, true,
+      )
+  } else if (booking.appointmentStatus === 'AWAITING_ADMIN_SLOT') {
+    calendarDurable = booking.calendarState === 'OK'
+  } else {
+    calendarDurable = booking.calendarState === 'OK' && Boolean(booking.calendarEventId)
+      || booking.calendarState === 'RETRY' && exactRetry(
+        `RETRY-${booking.caseId}-TENTATIVE-CALENDAR`,
+        'TENTATIVE_CALENDAR_EVENT',
+        `${booking.caseId}:TENTATIVE_CALENDAR_EVENT`,
+      )
+  }
+  if (!calendarDurable) return false
+
+  const allowedLineOperations = new Set([
+    'ADMIN_BOOKING_LINE_BATCH', 'ADMIN_AUTOMATIC_LINE_BATCH', 'ADMIN_EVIDENCE_LINE', 'DOCTOR_LINE', 'BOOKING_LINE',
+  ])
+  const lineDurable = booking.lineState === 'OK'
+    || booking.lineState === 'RETRY' && pending.some((retry) =>
+      retry.caseId === booking.caseId && retry.status === 'PENDING'
+      && allowedLineOperations.has(String(retry.operation))
+      && String(retry.idempotencyKey).startsWith(`${booking.caseId}:`),
+    )
+  return lineDurable
+    && booking.paymentEvidenceCount === input.paymentEvidenceFileIds.length
+    && booking.chatEvidenceCount === input.chatEvidenceFileIds.length
+}
+
+function retryPayload(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try { return JSON.parse(value) as Record<string, unknown> } catch { return {} }
+  }
+  return isRecord(value) ? value : {}
+}
+
+function sameStrings(value: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(value) && value.length === expected.length
+    && value.every((item, index) => item === expected[index])
 }
 
 function matchesIngressAudit(

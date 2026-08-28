@@ -42,6 +42,7 @@ import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
 import { createBookingRepositories, type SheetRow, type SheetStore } from './repositories'
+import { createGoogleMiniAppRequestStatePort } from './adapters/miniAppRequestState'
 import {
   createInitialCallTask,
   runDailyCallReminders,
@@ -179,6 +180,7 @@ export function createRuntime(): BookingPorts {
       `${spreadsheet.getUrl()}#gid=${callQueueSheet.getSheetId()}`,
     ),
     repositories: createBookingRepositories(store, locks, clock),
+    miniAppRequests: createGoogleMiniAppRequestStatePort(spreadsheet),
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
     calendar: createGoogleCalendarPort(),
     line: createGoogleLinePort(properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]),

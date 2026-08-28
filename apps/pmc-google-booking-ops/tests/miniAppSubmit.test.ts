@@ -11,7 +11,7 @@ describe('Mini App canonical booking submission', () => {
 
     expect(second.caseId).toBe(first.caseId)
     expect(ports.bookings.list()).toHaveLength(1)
-    expect(first.formResponseId).toBe('mini:request-1')
+    expect(first.formResponseId).toBe('mini:v2:cmVxdWVzdC0x:payload-hash-1')
   })
 
   it('rejects a reused request ID with a conflicting payload hash', () => {
@@ -131,6 +131,93 @@ describe('Mini App canonical booking submission', () => {
       after: { requestId: 'request-1', payloadHash: 'payload-hash-1' },
     })
   })
+
+  it('preserves compatibility for an exact durable legacy mini request record', () => {
+    const ports = createTestPorts()
+    const legacy = ports.repositories.bookings.insert(ports.bookingFixture({
+      formResponseId: 'mini:request-1', adminIdentityStatus: 'SELECTED_ADMIN', aeId: 'admin-1', aeName: 'Admin A',
+      channelId: 'เพจหลัก', appointmentStart: '2026-08-20T13:00:00+07:00', depositAmount: 1000,
+      driveFolderId: 'drive-folder-1', driveFolderUrl: 'https://drive.test/folder-1', calendarEventId: 'calendar-event-1',
+      driveState: 'OK', calendarState: 'OK', lineState: 'OK', paymentEvidenceCount: 1, chatEvidenceCount: 1,
+    }))
+    ports.repositories.bookings.rememberFormResponse(legacy.formResponseId, legacy.caseId)
+    appendCreationAudit(ports, legacy.caseId, legacy.formResponseId)
+    ports.repositories.audit.append(ingressAudit(legacy.caseId))
+
+    const recovered = submitMiniAppBooking(validMiniAppInput(), ports)
+
+    expect(recovered.caseId).toBe(legacy.caseId)
+    expect(ports.bookings.list()).toHaveLength(1)
+  })
+
+  it('does not seal a partial inserted booking as accepted when downstream durability is missing', () => {
+    const ports = createTestPorts()
+    const formResponseId = 'mini:v2:cmVxdWVzdC0x:payload-hash-1'
+    const partial = ports.repositories.bookings.insert(ports.bookingFixture({
+      formResponseId, adminIdentityStatus: 'SELECTED_ADMIN', aeId: 'admin-1', aeName: 'Admin A',
+      channelId: 'เพจหลัก', appointmentStart: '2026-08-20T13:00:00+07:00', depositAmount: 1000,
+      driveState: 'PENDING', calendarState: 'PENDING', lineState: 'PENDING',
+      paymentEvidenceCount: 1, chatEvidenceCount: 1,
+    }))
+    ports.repositories.bookings.rememberFormResponse(formResponseId, partial.caseId)
+    appendCreationAudit(ports, partial.caseId, formResponseId)
+
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('mini app duplicate booking is not durable')
+    expect(ports.repositories.audit.listForCase(partial.caseId)
+      .filter(({ action }) => action === 'MINI_APP_INGRESS_ACCEPTED')).toHaveLength(0)
+  })
+
+  it('rejects a projection retry whose deterministic identity matches but evidence payload is corrupted', () => {
+    const ports = createTestPorts()
+    const formResponseId = 'mini:v2:cmVxdWVzdC0x:payload-hash-1'
+    const booking = ports.repositories.bookings.insert(ports.bookingFixture({
+      formResponseId, adminIdentityStatus: 'SELECTED_ADMIN', aeId: 'admin-1', aeName: 'Admin A',
+      channelId: 'เพจหลัก', appointmentStart: '2026-08-20T13:00:00+07:00', depositAmount: 1000,
+      driveState: 'RETRY', calendarState: 'OK', calendarEventId: 'calendar-event-1', lineState: 'OK',
+      paymentEvidenceCount: 1, chatEvidenceCount: 1,
+    }))
+    ports.repositories.bookings.rememberFormResponse(formResponseId, booking.caseId)
+    appendCreationAudit(ports, booking.caseId, formResponseId)
+    ports.repositories.retries.enqueue({
+      id: `RETRY-${booking.caseId}-DRIVE`, caseId: booking.caseId, operation: 'DRIVE_EVIDENCE',
+      idempotencyKey: `${booking.caseId}:DRIVE_EVIDENCE`, attempts: 0, status: 'PENDING', safeError: 'retry',
+      payload: { paymentEvidenceFileIds: ['wrong-payment'], chatEvidenceFileIds: ['chat-file-1'] },
+    })
+
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('mini app duplicate booking is not durable')
+  })
+
+  it('fails closed on a globally corrupted deterministic ingress audit identity without appending a duplicate ID', () => {
+    const ports = createTestPorts()
+    failMiniIngressAuditOnce(ports)
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('injected audit write failure')
+    const booking = ports.bookings.list()[0]!
+    ports.repositories.audit.append({
+      ...ingressAudit('PMC-202608-9999'),
+      action: 'OTHER_ACTION',
+      target: 'OTHER_TAB',
+    })
+
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('mini app payload hash conflict')
+    const matchingIds = [
+      ...ports.repositories.audit.listForCase(booking.caseId),
+      ...ports.repositories.audit.listForCase('PMC-202608-9999'),
+    ].filter(({ eventId }) => eventId === 'AUDIT-MINI-INGRESS-request-1')
+    expect(matchingIds).toHaveLength(1)
+  })
+
+  it('rejects a second global audit row even when the first deterministic audit is valid', () => {
+    const ports = createTestPorts()
+    const booking = submitMiniAppBooking(validMiniAppInput(), ports)
+    ports.repositories.audit.append({
+      ...ingressAudit('PMC-202608-9999'), action: 'OTHER_ACTION', target: 'OTHER_TAB',
+    })
+
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('mini app payload hash conflict')
+    expect(ports.bookings.list()).toHaveLength(1)
+    expect(ports.repositories.audit.listForCase(booking.caseId)
+      .filter(({ eventId }) => eventId === 'AUDIT-MINI-INGRESS-request-1')).toHaveLength(1)
+  })
 })
 
 function validMiniAppInput(patch: Partial<MiniAppBookingIngressPayload> = {}): MiniAppBookingIngressPayload {
@@ -152,5 +239,26 @@ function failMiniIngressAuditOnce(ports: ReturnType<typeof createTestPorts>): vo
       throw new Error('injected audit write failure')
     }
     append(event)
+  }
+}
+
+function appendCreationAudit(
+  ports: ReturnType<typeof createTestPorts>,
+  caseId: string,
+  formResponseId: string,
+): void {
+  ports.repositories.audit.append({
+    eventId: `AUDIT-${formResponseId}-1`, caseId, actor: 'admin@example.com', action: 'BOOKING_CREATED',
+    target: 'BOOKING_MASTER', before: null, after: { status: 'FORM_SUBMITTED', adminId: 'admin-1', aeId: 'admin-1' },
+    reason: 'Google Form submission', timestamp: ports.clock.nowIso(), correlationId: formResponseId,
+  })
+}
+
+function ingressAudit(caseId: string) {
+  return {
+    eventId: 'AUDIT-MINI-INGRESS-request-1', caseId, actor: 'admin@example.com',
+    action: 'MINI_APP_INGRESS_ACCEPTED', target: 'BOOKING_MASTER', before: null,
+    after: { requestId: 'request-1', payloadHash: 'payload-hash-1' },
+    reason: 'Verified LINE Mini App booking ingress', timestamp: '2026-08-20T09:00:00+07:00', correlationId: 'request-1',
   }
 }

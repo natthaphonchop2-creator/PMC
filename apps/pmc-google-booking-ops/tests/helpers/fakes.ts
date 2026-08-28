@@ -293,6 +293,10 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       listChannels: () => [{ id: 'เพจหลัก', name: 'เพจหลัก', active: true }],
     },
     repositories,
+    miniAppRequests: {
+      getByRequestId: () => null,
+      updateByRequestId: () => { throw new Error('mini app request not configured') },
+    },
     bookings: repositories.bookings,
     calls: Object.assign(repositories.calls, {
       insertFixture(patch: Partial<CallTask> = {}) {
@@ -336,6 +340,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     crypto: {
       hmacSha256Hex: (value, secret) => createHmac('sha256', secret).update(value).digest('hex'),
       sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
+      sha256Base64Url: (value) => createHash('sha256').update(value).digest('base64url'),
       base64UrlUtf8: (value) => Buffer.from(value, 'utf8').toString('base64url'),
       base64Decode: (value) => [...Buffer.from(value, 'base64')],
     },

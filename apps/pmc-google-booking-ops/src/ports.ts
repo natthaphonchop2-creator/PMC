@@ -1,5 +1,6 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { CalendarInterval } from './domain/automaticQueue'
+import type { MiniAppAsyncRequestRecord } from '../../../shared/pmcMiniAppAsyncState'
 
 export interface Clock {
   nowIso(): string
@@ -63,6 +64,7 @@ export interface ConfigPort {
 export interface BookingRepository {
   allocateMonthlySequence(month: string): number
   findByFormResponseId(formResponseId: string): BookingCase | null
+  hasFormResponseMapping(formResponseId: string, caseId: string): boolean
   rememberFormResponse(formResponseId: string, caseId: string): void
   insert(booking: BookingCase): BookingCase
   getByCaseId(caseId: string): BookingCase | null
@@ -137,6 +139,7 @@ export interface RetentionRepository {
 export interface AuditRepository {
   append(event: AuditEvent): void
   listForCase(caseId: string): AuditEvent[]
+  listByEventId(eventId: string): AuditEvent[]
 }
 
 export interface BookingRepositories {
@@ -253,8 +256,18 @@ export interface SecretsPort {
 export interface CryptoPort {
   hmacSha256Hex(value: string, secret: string): string
   sha256Hex(value: string): string
+  sha256Base64Url(value: string): string
   base64UrlUtf8(value: string): string
   base64Decode(value: string): number[]
+}
+
+export interface MiniAppRequestStatePort {
+  getByRequestId(requestId: string): MiniAppAsyncRequestRecord | null
+  updateByRequestId(
+    requestId: string,
+    expectedVersion: number,
+    next: MiniAppAsyncRequestRecord,
+  ): MiniAppAsyncRequestRecord
 }
 
 export interface DashboardPort {
@@ -274,6 +287,7 @@ export interface BookingPorts {
   locks: LockPort
   config: ConfigPort
   repositories: BookingRepositories
+  miniAppRequests: MiniAppRequestStatePort
   drive: DrivePort
   calendar: CalendarPort
   line: LinePort

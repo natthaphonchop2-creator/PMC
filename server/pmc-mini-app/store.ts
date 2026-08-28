@@ -1,6 +1,5 @@
 import type { MiniAppSheetsPort } from './googleClient.js'
-import { bookingPayloadHash } from './bookingDraft.js'
-import { canTransitionAsyncBooking } from './asyncState.js'
+import { MINI_APP_ASYNC_REQUEST_HEADERS } from '../../shared/pmcMiniAppAsyncState.js'
 
 export type MiniAppRequestState =
   | 'DRAFT'
@@ -50,6 +49,7 @@ export interface MiniAppRequestRecord {
   processingLeaseUntil: string | null
   lastProgressAt: string | null
   attemptCount: number
+  processingOwnerToken: string | null
   createdAt: string
   confirmedAt: string | null
   caseId: string | null
@@ -108,12 +108,6 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'updatedAt'
 >>
 
-export type MiniAppProcessingProjectionPatch = Partial<Pick<MiniAppRequestRecord,
-  | 'paymentEvidenceFileIds'
-  | 'chatEvidenceFileIds'
-  | 'evidenceCount'
->>
-
 export interface MiniAppStore {
   getActiveStaffByLineUserId(lineUserId: string): Promise<MiniAppStaffRecord | null>
   getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection>
@@ -126,38 +120,8 @@ export interface MiniAppStore {
   failConfirmation(requestId: string, safeErrorCode: string, updatedAt: string): Promise<MiniAppRequestRecord>
 }
 
-export interface AsyncMiniAppStore {
+export interface MiniAppResumeStore {
   getLatestActiveDraftByStaff(staffId: string): Promise<MiniAppRequestRecord | null>
-  queueDraft(requestId: string, payloadHash: string, taskName: string, queuedAt: string): Promise<MiniAppRequestRecord>
-  claimProcessing(input: {
-    requestId: string
-    draftId: string
-    leaseUntil: string
-    nowIso: string
-  }): Promise<{ claimed: boolean; draft: MiniAppRequestRecord }>
-  updateProcessingProjection(input: {
-    requestId: string
-    expectedAttempt: number
-    expectedVersion: number
-    nowIso: string
-    patch: MiniAppProcessingProjectionPatch
-  }): Promise<MiniAppRequestRecord>
-  markAsyncRetry(input: {
-    requestId: string
-    safeErrorCode: string
-    nowIso: string
-    expectedAttempt: number
-    expectedVersion: number
-  }): Promise<MiniAppRequestRecord>
-  completeAsyncBooking(input: {
-    requestId: string
-    caseId: string
-    status: NonNullable<MiniAppRequestRecord['confirmationStatus']>
-    projectionState: 'CONFIRMED' | 'CONFIRMED_WITH_RETRY'
-    nowIso: string
-    expectedAttempt: number
-    expectedVersion: number
-  }): Promise<MiniAppRequestRecord>
 }
 
 export interface MiniAppEnrollmentStore {
@@ -170,14 +134,7 @@ export interface MiniAppEnrollmentStore {
   ): Promise<{ allowed: boolean; retryAfterSeconds: number }>
 }
 
-export const MINI_APP_REQUEST_HEADERS = [
-  'requestId', 'draftId', 'staffId', 'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash',
-  'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
-  'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
-  'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode', 'updatedAt',
-  'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt', 'processingStartedAt',
-  'processingLeaseUntil', 'lastProgressAt', 'attemptCount',
-] as const
+export const MINI_APP_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS
 
 export const MINI_APP_LINK_ATTEMPT_HEADERS = [
   'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
@@ -206,7 +163,7 @@ interface EnrollmentAttemptRecord {
 export function createGoogleMiniAppStore(input: {
   spreadsheetId: string
   sheets: MiniAppSheetsPort
-}): MiniAppStore & MiniAppEnrollmentStore & AsyncMiniAppStore {
+}): MiniAppStore & MiniAppEnrollmentStore & MiniAppResumeStore {
   const { spreadsheetId, sheets } = input
   const mutexKey = `pmc-mini-app:${spreadsheetId}`
 
@@ -393,168 +350,6 @@ export function createGoogleMiniAppStore(input: {
     async markRetentionPending(draftId, expectedVersion, updatedAt) {
       return mutateDraft(draftId, expectedVersion, { retentionState: 'PENDING_APPROVAL', updatedAt })
     },
-    async queueDraft(requestId, payloadHash, taskName, queuedAt) {
-      if (!safeId(requestId) || !safeHash(payloadHash) || !safeTaskName(taskName) || !validIso(queuedAt)) {
-        throw new Error('INVALID_ASYNC_QUEUE')
-      }
-      return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
-        if (!row) throw new Error('DRAFT_NOT_FOUND')
-        const boundPayloadHash = row.value.payloadHash ?? bookingPayloadHash(row.value)
-        if (boundPayloadHash !== payloadHash) {
-          throw new Error('PAYLOAD_HASH_CONFLICT')
-        }
-        if (row.value.taskName && row.value.taskName !== taskName) throw new Error('TASK_NAME_CONFLICT')
-        if (row.value.state === 'QUEUED' && row.value.payloadHash === payloadHash && row.value.taskName === taskName) return row.value
-        if (ASYNC_QUEUED_OR_LATER_STATES.has(row.value.state)) {
-          if (row.value.taskName === taskName) return row.value
-          const reconciled = normalizeRequestRecord({
-            ...row.value,
-            payloadHash,
-            taskName,
-            queuedAt: row.value.queuedAt ?? queuedAt,
-            version: row.value.version + 1,
-          })
-          await writeRequest(row.rowNumber, reconciled)
-          return reconciled
-        }
-        if (!canTransitionAsyncBooking(row.value.state, 'QUEUED')) throw new Error('DRAFT_NOT_READY')
-        const next = normalizeRequestRecord({
-          ...row.value,
-          state: 'QUEUED',
-          payloadHash,
-          taskName,
-          queuedAt,
-          safeErrorCode: null,
-          updatedAt: queuedAt,
-          version: row.value.version + 1,
-        })
-        await writeRequest(row.rowNumber, next)
-        return next
-      })
-    },
-    async claimProcessing({ requestId, draftId, leaseUntil, nowIso }) {
-      if (!safeId(requestId) || !safeId(draftId) || !validIso(nowIso) || !validIso(leaseUntil) || Date.parse(leaseUntil) <= Date.parse(nowIso)) {
-        throw new Error('INVALID_PROCESSING_CLAIM')
-      }
-      return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
-        if (!row) throw new Error('DRAFT_NOT_FOUND')
-        if (row.value.draftId !== draftId) throw new Error('ASYNC_TASK_IDENTITY_CONFLICT')
-        if (TERMINAL_REQUEST_STATES.has(row.value.state)) return { claimed: false, draft: row.value }
-        if (row.value.state === 'PROCESSING') {
-          const liveLease = row.value.processingLeaseUntil && Date.parse(row.value.processingLeaseUntil) > Date.parse(nowIso)
-          if (liveLease) return { claimed: false, draft: row.value }
-        } else {
-          if (!canTransitionAsyncBooking(row.value.state, 'PROCESSING')) throw new Error('DRAFT_NOT_CLAIMABLE')
-          if (row.value.state === 'READY_TO_CONFIRM' && (row.value.payloadHash !== null || row.value.taskName !== null)) {
-            throw new Error('ASYNC_TASK_IDENTITY_CONFLICT')
-          }
-          if (row.value.state === 'QUEUED' || row.value.state === 'RETRYING') {
-            if (!row.value.payloadHash) throw new Error('PAYLOAD_HASH_CONFLICT')
-            if ((row.value.state === 'QUEUED' && !row.value.taskName) || (row.value.taskName && !safeTaskName(row.value.taskName))) {
-              throw new Error('ASYNC_TASK_IDENTITY_CONFLICT')
-            }
-          }
-        }
-        const next = normalizeRequestRecord({
-          ...row.value,
-          state: 'PROCESSING',
-          payloadHash: row.value.payloadHash ?? bookingPayloadHash(row.value),
-          processingStartedAt: row.value.processingStartedAt ?? nowIso,
-          processingLeaseUntil: leaseUntil,
-          lastProgressAt: nowIso,
-          attemptCount: row.value.attemptCount + 1,
-          safeErrorCode: null,
-          updatedAt: nowIso,
-          version: row.value.version + 1,
-        })
-        await writeRequest(row.rowNumber, next)
-        return { claimed: true, draft: next }
-      })
-    },
-    async updateProcessingProjection({ requestId, expectedAttempt, expectedVersion, nowIso, patch }) {
-      if (!safeId(requestId) || !validProcessingOwner(expectedAttempt, expectedVersion) || !validIso(nowIso)) {
-        throw new Error('INVALID_PROCESSING_PROJECTION')
-      }
-      if (!validProcessingProjectionPatch(patch)) throw new Error('INVALID_PROCESSING_PROJECTION_PATCH')
-      return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
-        if (!row) throw new Error('DRAFT_NOT_FOUND')
-        assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
-        const next = normalizeRequestRecord({
-          ...row.value,
-          ...patch,
-          lastProgressAt: nowIso,
-          updatedAt: nowIso,
-          version: row.value.version + 1,
-        })
-        await writeRequest(row.rowNumber, next)
-        return next
-      })
-    },
-    async markAsyncRetry({ requestId, safeErrorCode, nowIso, expectedAttempt, expectedVersion }) {
-      if (!safeId(requestId) || !safeError(safeErrorCode) || !validIso(nowIso) || !validProcessingOwner(expectedAttempt, expectedVersion)) {
-        throw new Error('INVALID_ASYNC_RETRY')
-      }
-      return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
-        if (!row) throw new Error('DRAFT_NOT_FOUND')
-        if (TERMINAL_REQUEST_STATES.has(row.value.state) || row.value.state === 'RETRYING') {
-          assertIdempotentAsyncMutationOwner(row.value, expectedAttempt, expectedVersion)
-          return row.value
-        }
-        assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
-        const state: MiniAppRequestState = safeErrorCode === 'RETRY_EXHAUSTED' || row.value.attemptCount >= ASYNC_MAX_ATTEMPTS
-          ? 'NEEDS_REVIEW'
-          : 'RETRYING'
-        if (!canTransitionAsyncBooking(row.value.state, state)) throw new Error('DRAFT_NOT_PROCESSING')
-        const next = normalizeRequestRecord({
-          ...row.value,
-          state,
-          safeErrorCode,
-          processingLeaseUntil: null,
-          lastProgressAt: nowIso,
-          updatedAt: nowIso,
-          version: row.value.version + 1,
-        })
-        await writeRequest(row.rowNumber, next)
-        return next
-      })
-    },
-    async completeAsyncBooking({ requestId, caseId, status, projectionState, nowIso, expectedAttempt, expectedVersion }) {
-      if (!safeId(requestId) || !safeCaseId(caseId) || !CONFIRMATION_STATUSES.has(status) || !validIso(nowIso)
-        || !validProcessingOwner(expectedAttempt, expectedVersion) || !ASYNC_COMPLETION_STATES.has(projectionState)) {
-        throw new Error('INVALID_ASYNC_COMPLETION')
-      }
-      return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
-        if (!row) throw new Error('DRAFT_NOT_FOUND')
-        if (TERMINAL_REQUEST_STATES.has(row.value.state)) {
-          assertIdempotentAsyncMutationOwner(row.value, expectedAttempt, expectedVersion)
-          if ((row.value.state === 'CONFIRMED' || row.value.state === 'CONFIRMED_WITH_RETRY') && row.value.caseId !== caseId) {
-            throw new Error('CASE_ID_CONFLICT')
-          }
-          return row.value
-        }
-        assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
-        if (!canTransitionAsyncBooking(row.value.state, projectionState)) throw new Error('DRAFT_NOT_PROCESSING')
-        const next = normalizeRequestRecord({
-          ...row.value,
-          state: projectionState,
-          caseId,
-          confirmedAt: nowIso,
-          confirmationStatus: status,
-          processingLeaseUntil: null,
-          lastProgressAt: nowIso,
-          safeErrorCode: null,
-          updatedAt: nowIso,
-          version: row.value.version + 1,
-        })
-        await writeRequest(row.rowNumber, next)
-        return next
-      })
-    },
     async claimConfirmation(requestId, payloadHash) {
       if (!safeId(requestId) || !safeHash(payloadHash)) throw new Error('INVALID_CONFIRMATION_CLAIM')
       return withMutex(mutexKey, async () => {
@@ -611,6 +406,7 @@ function requestToRow(value: MiniAppRequestRecord): unknown[] {
     value.evidenceCount, value.createdAt, value.confirmedAt ?? '', value.caseId ?? '', value.confirmationStatus ?? '', value.safeErrorCode ?? '', value.updatedAt,
     JSON.stringify(value.paymentEvidenceObjectKeys), JSON.stringify(value.chatEvidenceObjectKeys), value.taskName ?? '',
     value.queuedAt ?? '', value.processingStartedAt ?? '', value.processingLeaseUntil ?? '', value.lastProgressAt ?? '', value.attemptCount,
+    value.processingOwnerToken ?? '',
   ]
 }
 
@@ -630,6 +426,7 @@ function requestFromRow(row: unknown[]): MiniAppRequestRecord {
     paymentEvidenceObjectKeys: stringArray(row[28], safeObjectKey), chatEvidenceObjectKeys: stringArray(row[29], safeObjectKey),
     taskName: nullableText(row[30]), queuedAt: nullableText(row[31]), processingStartedAt: nullableText(row[32]),
     processingLeaseUntil: nullableText(row[33]), lastProgressAt: nullableText(row[34]), attemptCount: row[35] === undefined ? 0 : numberValue(row[35]),
+    processingOwnerToken: nullableText(row[36]),
   })
 }
 
@@ -650,13 +447,15 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
     throw new Error('INVALID_EVIDENCE_COUNT')
   }
   if (!Number.isSafeInteger(value.attemptCount) || value.attemptCount < 0) throw new Error('INVALID_ATTEMPT_COUNT')
+  if (value.processingOwnerToken !== null && value.processingOwnerToken !== undefined
+    && !/^[A-Za-z0-9_-]{16,128}$/.test(value.processingOwnerToken)) throw new Error('INVALID_PROCESSING_OWNER')
   for (const field of [value.taskName, value.queuedAt, value.processingStartedAt, value.processingLeaseUntil, value.lastProgressAt]) {
     if (field !== null && (typeof field !== 'string' || field.length > 512)) throw new Error('INVALID_DRAFT_FIELD')
   }
   for (const field of [value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId, value.serviceId, value.channelId, value.createdAt, value.updatedAt]) {
     if (typeof field !== 'string' || field.length > 512) throw new Error('INVALID_DRAFT_FIELD')
   }
-  return structuredClone(value)
+  return structuredClone({ ...value, processingOwnerToken: value.processingOwnerToken ?? null })
 }
 
 function staffFromRow(row: unknown[]): MiniAppStaffRecord | null {
@@ -698,9 +497,6 @@ const REQUEST_STATES = new Set<MiniAppRequestState>([
 const ACTIVE_RESUMABLE_STATES = new Set<MiniAppRequestState>([
   'DRAFT', 'READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'NEEDS_REVIEW',
 ])
-const ASYNC_QUEUED_OR_LATER_STATES = new Set<MiniAppRequestState>([
-  'PROCESSING', 'RETRYING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW',
-])
 const IDENTITY_BOUND_STATES = new Set<MiniAppRequestState>([
   'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW',
   'FAILED_RETRYABLE', 'CANCELLED', 'EXPIRED',
@@ -709,19 +505,9 @@ const BOUND_DRAFT_MUTATION_KEYS = new Set<string>([
   'state', 'retentionState', 'payloadHash', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIds',
   'chatEvidenceFileIds', 'evidenceCount', 'paymentEvidenceObjectKeys', 'chatEvidenceObjectKeys', 'taskName', 'queuedAt',
-  'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'confirmedAt', 'caseId', 'safeErrorCode',
+  'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken',
+  'confirmedAt', 'caseId', 'safeErrorCode',
 ])
-const PROCESSING_PROJECTION_KEYS = new Set<string>([
-  'paymentEvidenceFileIds', 'chatEvidenceFileIds', 'evidenceCount',
-])
-const TERMINAL_REQUEST_STATES = new Set<MiniAppRequestState>([
-  'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED',
-])
-const CONFIRMATION_STATUSES = new Set<NonNullable<MiniAppRequestRecord['confirmationStatus']>>([
-  'CONFIRMED', 'TENTATIVE', 'AWAITING_ADMIN_SLOT',
-])
-const ASYNC_COMPLETION_STATES = new Set<MiniAppRequestState>(['CONFIRMED', 'CONFIRMED_WITH_RETRY'])
-const ASYNC_MAX_ATTEMPTS = 8
 
 function text(value: unknown): string { return value === null || value === undefined ? '' : String(value) }
 function nullableText(value: unknown): string | null { const result = text(value); return result ? result : null }
@@ -743,7 +529,6 @@ function safeHash(value: string): boolean { return /^[A-Za-z0-9_-]{4,128}$/.test
 function safeCaseId(value: string): boolean { return /^PMC-\d{6}-\d{4,}$/.test(value) }
 function safeError(value: string): boolean { return /^[A-Z0-9_]{1,80}$/.test(value) }
 function validIso(value: string): boolean { return Boolean(value) && Number.isFinite(Date.parse(value)) }
-function safeTaskName(value: string): boolean { return /^[A-Za-z0-9._:/-]{1,512}$/.test(value) }
 
 function isDraftIdentityBound(draft: MiniAppRequestRecord): boolean {
   return draft.payloadHash !== null || IDENTITY_BOUND_STATES.has(draft.state)
@@ -758,43 +543,6 @@ function isExactFailedConfirmationCancellation(draft: MiniAppRequestRecord, patc
     && validIso(patch.updatedAt)
     && keys.length === 3
     && keys.every((key) => key === 'state' || key === 'retentionState' || key === 'updatedAt')
-}
-
-function validProcessingOwner(expectedAttempt: number, expectedVersion: number): boolean {
-  return Number.isSafeInteger(expectedAttempt) && expectedAttempt >= 1
-    && Number.isSafeInteger(expectedVersion) && expectedVersion >= 1
-}
-
-function validProcessingProjectionPatch(patch: MiniAppProcessingProjectionPatch): boolean {
-  return typeof patch === 'object' && patch !== null && !Array.isArray(patch)
-    && Object.keys(patch).every((key) => PROCESSING_PROJECTION_KEYS.has(key))
-}
-
-function assertCurrentProcessingLease(
-  draft: MiniAppRequestRecord,
-  expectedAttempt: number,
-  expectedVersion: number,
-  nowIso: string,
-): void {
-  if (draft.state !== 'PROCESSING') throw new Error('DRAFT_NOT_PROCESSING')
-  if (draft.attemptCount !== expectedAttempt || draft.version !== expectedVersion) throw new Error('STALE_PROCESSING_LEASE')
-  assertLiveProcessingLease(draft, nowIso)
-}
-
-function assertIdempotentAsyncMutationOwner(
-  draft: MiniAppRequestRecord,
-  expectedAttempt: number,
-  expectedVersion: number,
-): void {
-  const matchesCurrentOrJustCompletedVersion = draft.version === expectedVersion || draft.version === expectedVersion + 1
-  if (draft.attemptCount !== expectedAttempt || !matchesCurrentOrJustCompletedVersion) throw new Error('STALE_PROCESSING_LEASE')
-}
-
-function assertLiveProcessingLease(draft: MiniAppRequestRecord, nowIso: string): void {
-  if (draft.state !== 'PROCESSING') throw new Error('DRAFT_NOT_PROCESSING')
-  if (!draft.processingLeaseUntil || Date.parse(draft.processingLeaseUntil) <= Date.parse(nowIso)) {
-    throw new Error('PROCESSING_LEASE_EXPIRED')
-  }
 }
 
 function safeObjectKey(value: string): boolean { return /^[A-Za-z0-9._/-]{1,512}$/.test(value) }

@@ -2,15 +2,11 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
-import { bookingPayloadHash } from '../../server/pmc-mini-app/bookingDraft'
-import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
 import {
   createPmcMiniAppMiddleware,
   type PmcMiniAppMiddlewareDependencies,
 } from '../../server/pmc-mini-app/middleware'
 import {
-  createGoogleMiniAppStore,
-  type MiniAppRequestRecord,
   type MiniAppStore,
 } from '../../server/pmc-mini-app/store'
 import type { WorkerIdentityVerifier } from '../../server/pmc-mini-app/workerAuth'
@@ -169,65 +165,6 @@ describe('PMC async worker route', () => {
     expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: terminal })
   })
 
-  it('passes retry count plus one to the worker and claims the first queued lease through the real store', async () => {
-    const draft = validDraft()
-    const fixture = await leaseFixture(draft)
-    await fixture.store.queueDraft(
-      'request-1',
-      bookingPayloadHash(draft),
-      'projects/project-1/locations/asia-southeast1/queues/queue-1/tasks/request-1',
-      '2026-08-28T02:00:00.000Z',
-    )
-
-    const response = await invoke(createPmcMiniAppMiddleware(fixture.deps), route, workerRequest('2'))
-
-    expect(response.status).toBe(200)
-    expect(fixture.finalize).toHaveBeenCalledWith({ requestId: 'request-1', draftId: 'draft-1', attempt: 3 })
-    await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({
-      state: 'PROCESSING', processingStartedAt: fixedNow.toISOString(),
-      processingLeaseUntil: '2026-08-28T02:05:00.000Z', attemptCount: 1,
-    })
-  })
-
-  it('claims only the exact matching READY_TO_CONFIRM identity when task delivery wins the queue-write race', async () => {
-    const fixture = await leaseFixture(validDraft())
-    const mismatch = await invoke(createPmcMiniAppMiddleware(fixture.deps), route, workerRequest('0', {
-      requestId: 'request-1', draftId: 'draft-other',
-    }))
-
-    expect({ status: mismatch.status, body: await mismatch.json() }).toEqual({
-      status: 503,
-      body: { error: 'ASYNC_WORKER_FAILED' },
-    })
-    await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({ state: 'READY_TO_CONFIRM', attemptCount: 0 })
-
-    const matched = await invoke(createPmcMiniAppMiddleware(fixture.deps), route, workerRequest('1'))
-    expect(matched.status).toBe(200)
-    await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({
-      requestId: 'request-1', draftId: 'draft-1', state: 'PROCESSING', attemptCount: 1,
-    })
-  })
-
-  it('leaves a live lease untouched and reclaims it only at expiry through the real store', async () => {
-    const fixture = await leaseFixture(validDraft({
-      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:01:01.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
-    }))
-
-    const live = await invoke(createPmcMiniAppMiddleware(fixture.deps), route, workerRequest('1'))
-    expect(live.status).toBe(200)
-    await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({
-      processingLeaseUntil: '2026-08-28T02:01:01.000Z', attemptCount: 1, version: 1,
-    })
-
-    fixture.clock.setTime('2026-08-28T02:01:01.000Z')
-    const reclaimed = await invoke(createPmcMiniAppMiddleware(fixture.deps), route, workerRequest('2'))
-    expect(reclaimed.status).toBe(200)
-    await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({
-      processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:05:01.000Z', attemptCount: 2, version: 2,
-    })
-  })
 })
 
 function dependencies(overrides: Partial<PmcMiniAppMiddlewareDependencies> = {}) {
@@ -248,29 +185,6 @@ function dependencies(overrides: Partial<PmcMiniAppMiddlewareDependencies> = {})
     asyncWorker,
     now: () => fixedNow,
     ...overrides,
-  }
-}
-
-async function leaseFixture(draft: MiniAppRequestRecord) {
-  const sheets = new MemorySheets()
-  const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-  await store.createDraft(draft)
-  const clock = { now: new Date(fixedNow), setTime(value: string) { this.now = new Date(value) } }
-  const finalize = vi.fn(async (input: { requestId: string; draftId: string; attempt: number }) => {
-    const now = clock.now
-    await store.claimProcessing({
-      requestId: input.requestId,
-      draftId: input.draftId,
-      nowIso: now.toISOString(),
-      leaseUntil: new Date(now.getTime() + 4 * 60_000).toISOString(),
-    })
-    return { requestId: input.requestId, caseId: null, state: 'NEEDS_REVIEW' as const }
-  })
-  return {
-    store,
-    finalize,
-    clock,
-    deps: dependencies({ store, asyncWorker: { finalize }, now: () => clock.now }),
   }
 }
 
@@ -300,55 +214,6 @@ function inaccessibleStore(): MiniAppStore {
     completeConfirmation: unavailable,
     failConfirmation: unavailable,
   } as unknown as MiniAppStore
-}
-
-function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {
-  return {
-    requestId: 'request-1', draftId: 'draft-1', staffId: 'staff-active', lineUserIdHash: 'line-user-hash',
-    state: 'READY_TO_CONFIRM', retentionState: '', version: 1, payloadHash: null, aeName: 'ไม่ระบุ',
-    customerName: 'ลูกค้า ทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678',
-    doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01',
-    appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
-    paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'], evidenceCount: 2,
-    paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
-    processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
-    createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
-    updatedAt: '2026-08-27T10:00:00.000Z',
-    ...patch,
-  }
-}
-
-class MemorySheets implements MiniAppSheetsPort {
-  private readonly tabs = new Map<string, unknown[][]>()
-
-  async batchGet(_spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
-    return Object.fromEntries(ranges.map((range) => [range, structuredClone(this.tabs.get(tabName(range)) ?? [])]))
-  }
-
-  async append(_spreadsheetId: string, range: string, rows: unknown[][]): Promise<void> {
-    const tab = tabName(range)
-    this.tabs.set(tab, [...(this.tabs.get(tab) ?? []), ...structuredClone(rows)])
-  }
-
-  async update(_spreadsheetId: string, range: string, rows: unknown[][]): Promise<void> {
-    const tab = tabName(range)
-    const rowNumber = Number(range.match(/!(?:[A-Z]+)(\d+)/)?.[1] ?? 2)
-    const index = Math.max(0, rowNumber - 2)
-    const current = [...(this.tabs.get(tab) ?? [])]
-    current[index] = structuredClone(rows[0] ?? [])
-    this.tabs.set(tab, current)
-  }
-
-  async batchUpdate(spreadsheetId: string, data: Array<{ range: string; values: unknown[][] }>): Promise<void> {
-    for (const item of data) await this.update(spreadsheetId, item.range, item.values)
-  }
-
-  async getWorkbook(): Promise<Array<{ sheetId: number; title: string }>> { return [] }
-  async applyWorkbookRequests(): Promise<void> { return undefined }
-}
-
-function tabName(range: string): string {
-  return range.split('!', 1)[0]!.replaceAll("'", '')
 }
 
 const asyncConfig = {

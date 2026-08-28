@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts.js'
 import type { MiniAppRequestRecord, MiniAppRequestState } from './store.js'
+import { canonicalMiniAppAsyncIdentity } from '../../shared/pmcMiniAppAsyncState.js'
 
 export interface BookingDraftContext {
   draftId: string
@@ -111,6 +112,7 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
     processingLeaseUntil: null,
     lastProgressAt: null,
     attemptCount: 0,
+    processingOwnerToken: null,
     createdAt: now,
     confirmedAt: null,
     caseId: null,
@@ -121,26 +123,7 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
 }
 
 export function bookingPayloadHash(draft: MiniAppRequestRecord): string {
-  const canonical = JSON.stringify({
-    requestId: draft.requestId,
-    staffId: draft.staffId,
-    aeName: draft.aeName,
-    customerName: draft.customerName,
-    facebookName: draft.facebookName,
-    phoneNormalized: draft.phoneNormalized,
-    doctorId: draft.doctorId,
-    serviceId: draft.serviceId,
-    queueType: draft.queueType,
-    appointmentDate: draft.appointmentDate,
-    appointmentTime: draft.appointmentTime,
-    depositAmount: draft.depositAmount,
-    channelId: draft.channelId,
-    paymentEvidenceFileIds: draft.paymentEvidenceFileIds,
-    chatEvidenceFileIds: draft.chatEvidenceFileIds,
-    paymentEvidenceObjectKeys: draft.paymentEvidenceObjectKeys,
-    chatEvidenceObjectKeys: draft.chatEvidenceObjectKeys,
-  })
-  return createHash('sha256').update(canonical, 'utf8').digest('base64url')
+  return createHash('sha256').update(canonicalMiniAppAsyncIdentity(draft), 'utf8').digest('base64url')
 }
 
 export function transitionDraft(draft: MiniAppRequestRecord, action: BookingDraftAction): MiniAppRequestRecord {

@@ -118,6 +118,23 @@ describe('PMC Mini App booking draft validation', () => {
     expect(bookingPayloadHash(reordered)).not.toBe(bookingPayloadHash(draft))
   })
 
+  it('keeps the async payload hash stable when deterministic Drive IDs replace staged evidence', () => {
+    const draft = parseBookingDraft(validInput(), context({
+      asyncEvidence: true,
+      paymentEvidenceFileIds: [],
+      chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [stagingKey('PAYMENT', 'a')],
+      chatEvidenceObjectKeys: [stagingKey('CHAT', 'b')],
+    }))
+    const projected = {
+      ...draft,
+      paymentEvidenceFileIds: ['owner-drive-payment-1'],
+      chatEvidenceFileIds: ['owner-drive-chat-1'],
+    }
+
+    expect(bookingPayloadHash(projected)).toBe(bookingPayloadHash(draft))
+  })
+
   it('allows only explicit state transitions and marks terminal evidence for retention review', () => {
     const draft = parseBookingDraft(validInput(), context())
     const confirming = transitionDraft(draft, { type: 'SET_STATE', state: 'CONFIRMING', updatedAt: '2026-08-27T10:01:00.000Z' })

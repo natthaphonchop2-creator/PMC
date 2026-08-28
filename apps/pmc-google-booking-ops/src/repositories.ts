@@ -68,6 +68,9 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
     listForCase(caseId: string) {
       return store.read('AUDIT_LOG').filter((row) => row.caseId === caseId) as unknown as AuditEvent[]
     },
+    listByEventId(eventId: string) {
+      return store.read('AUDIT_LOG').filter((row) => row.eventId === eventId) as unknown as AuditEvent[]
+    },
   }
 
   const bookings = {
@@ -94,6 +97,9 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
         .read('BOOKING_MASTER')
         .find((candidate) => (caseId ? candidate.caseId === caseId : candidate.formResponseId === formResponseId))
       return row ? asBooking(row) : null
+    },
+    hasFormResponseMapping(formResponseId: string, caseId: string): boolean {
+      return store.read('FORM_RESPONSE_MAP').some((row) => row.formResponseId === formResponseId && row.caseId === caseId)
     },
     rememberFormResponse(formResponseId: string, caseId: string): void {
       locks.withLock(() => {
