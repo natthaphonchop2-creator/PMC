@@ -27,6 +27,7 @@ function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigra
 function preparePmcAutoQueueMigration() { return PmcBooking.preparePmcAutoQueueMigration(); }
 function applyPmcAutoQueueMigration() { return PmcBooking.applyPmcAutoQueueMigration(); }
 function configurePmcStaffProfileImages() { return PmcBooking.configurePmcStaffProfileImages(); }
+function configurePmcStockManagers() { return PmcBooking.configurePmcStockManagers(); }
 function validatePmcBookingFlexMessages() { return PmcBooking.validatePmcBookingFlexMessages(); }
 function sendPmcBookingFlexPilot() { return PmcBooking.sendPmcBookingFlexPilot(); }
 function sendPmcCallReminderFlexPilot() { return PmcBooking.sendPmcCallReminderFlexPilot(); }

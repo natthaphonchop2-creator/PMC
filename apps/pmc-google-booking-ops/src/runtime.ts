@@ -41,7 +41,17 @@ import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
-import { createBookingRepositories, type SheetRow, type SheetStore } from './repositories'
+import {
+  createBookingRepositories,
+  createStockRepository,
+  type SheetRow,
+  type SheetStore,
+} from './repositories'
+import { canonicalMiniAppStockCommand } from '../../../shared/pmcMiniAppStockIngress'
+import {
+  configureStockManagers,
+  type StockIngressPorts,
+} from './stock/ingress'
 import {
   createInitialCallTask,
   runDailyCallReminders,
@@ -149,7 +159,7 @@ function bangkokNow(): string {
   return Utilities.formatDate(new Date(), 'Asia/Bangkok', "yyyy-MM-dd'T'HH:mm:ssXXX")
 }
 
-export function createRuntime(): BookingPorts {
+export function createRuntime(): BookingPorts & StockIngressPorts {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
@@ -158,6 +168,7 @@ export function createRuntime(): BookingPorts {
   const store = createGoogleSheetStore(spreadsheet)
   const clock = { nowIso: bangkokNow }
   const crypto = createAppsScriptCryptoPort()
+  const stock = createStockRepository(store)
   const locks = {
     withLock<T>(operation: () => T): T {
       const lock = LockService.getScriptLock()
@@ -180,6 +191,9 @@ export function createRuntime(): BookingPorts {
       `${spreadsheet.getUrl()}#gid=${callQueueSheet.getSheetId()}`,
     ),
     repositories: createBookingRepositories(store, locks, clock),
+    stock,
+    commandFingerprint: (command) => crypto.sha256Hex(canonicalMiniAppStockCommand(command)),
+    allocateId: (prefix) => `${prefix}-${Utilities.getUuid()}`,
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
     calendar: createGoogleCalendarPort(),
     line: createGoogleLinePort(properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]),
@@ -777,6 +791,42 @@ export function configureStaffProfileImagesWorkflow(): {
     updatedProfiles: plan.filter((item) => item.profileImageUrl).length,
     blankProfiles: plan.filter((item) => !item.profileImageUrl).length,
   }
+}
+
+export function configureStockManagersWorkflow(): {
+  managerCount: 3
+  changedRows: number
+} {
+  const spreadsheetId = PropertiesService.getScriptProperties()
+    .getProperty(SCRIPT_PROPERTY_KEYS.spreadsheetId)
+    ?.trim()
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
+  const headers = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(String)
+  if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
+    throw new Error('sheet header mismatch: CONFIG_STAFF')
+  }
+  const source = createGoogleSheetStore(spreadsheet)
+  const managerColumn = STAFF_CONFIG_COLUMNS.indexOf('canManageStock') + 1
+  return configureStockManagers({
+    read: (tab) => source.read(tab),
+    replace(tab, rows) {
+      if (tab !== 'CONFIG_STAFF') throw new Error('unexpected Stock manager tab')
+      const rowCount = sheet.getLastRow() - 1
+      if (rows.length !== rowCount) throw new Error('CONFIG_STAFF row count changed')
+      const expected = rows.map((row) => [row.canManageStock === true])
+      sheet.getRange(2, managerColumn, rowCount, 1).setValues(expected)
+      const readback = sheet.getRange(2, managerColumn, rowCount, 1).getValues()
+      if (readback.some(([value], index) => value !== expected[index][0])) {
+        throw new Error('PMC Stock manager readback mismatch')
+      }
+    },
+  })
 }
 
 export function validateProductionFlexMessagesWorkflow(): {
