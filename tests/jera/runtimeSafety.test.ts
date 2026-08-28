@@ -93,6 +93,129 @@ describe('JERA Production read-only runtime gates', () => {
     expect(stdout).not.toContain('must-not-print')
   })
 
+  it('uses redirect-safe requests for both the token POST and one-day provider GET', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const fetch = vi.fn(async (url: string) => String(url).endsWith('/openapi/v1/token/')
+      ? jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      : jsonResponse(200, { payment_data: [] }))
+
+    await expect(runPaymentProbe(checker, fetch)).resolves.toBe(0)
+    expect(fetch.mock.calls.map(([, init]) => init.redirect)).toEqual(['error', 'error'])
+  })
+
+  it('cancels a chunked provider response before retaining an overflowing chunk', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const oversized = chunkedResponse([new Uint8Array(2_000_000), new Uint8Array([0])])
+    const fetch = vi.fn(async (url: string) => String(url).endsWith('/openapi/v1/token/')
+      ? jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      : oversized.response)
+
+    await expect(runPaymentProbe(checker, fetch)).rejects.toThrow('JERA runtime probe failed')
+    expect(oversized.read).toHaveBeenCalledTimes(2)
+    expect(oversized.cancel).toHaveBeenCalledOnce()
+    expect(oversized.arrayBuffer).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid token contract before the provider GET', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Basic',
+    }))
+
+    await expect(runPaymentProbe(checker, fetch)).rejects.toThrow('JERA runtime probe failed')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('retries a scheduled provider 429 using its bounded Retry-After delay', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const sleep = vi.fn(async () => undefined)
+    let providerAttempts = 0
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/openapi/v1/token/')) {
+        return jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      }
+      providerAttempts += 1
+      return providerAttempts === 1
+        ? jsonResponse(429, {}, { 'retry-after': '31' })
+        : jsonResponse(200, { payment_data: [] })
+    })
+
+    await expect(runPaymentProbe(checker, fetch, { sleep })).resolves.toBe(0)
+    expect(sleep).toHaveBeenCalledWith(31_000)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps thrown provider details out of the runtime probe failure', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const rawProviderError = 'private-provider-error-detail'
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/openapi/v1/token/')) {
+        return jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      }
+      throw new Error(rawProviderError)
+    })
+
+    try {
+      await runPaymentProbe(checker, fetch)
+      throw new Error('expected probe failure')
+    } catch (error) {
+      expect(String(error)).toContain('JERA runtime probe failed')
+      expect(String(error)).not.toContain(rawProviderError)
+    }
+  })
+
+  it('reads all bounded appointment pages rather than reporting only page one', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const appointments = Array.from({ length: 101 }, (_, index) => ({
+      uuid: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+    }))
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/openapi/v1/token/')) {
+        return jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      }
+      const page = new URL(String(url)).searchParams.get('page')
+      return page === '1'
+        ? jsonResponse(200, { count: 101, next: 'page-2', data: appointments.slice(0, 100) })
+        : jsonResponse(200, { count: 101, next: null, data: appointments.slice(100) })
+    })
+    let stdout = ''
+
+    await checker.runJeraRuntimeCheck([
+      '--allow-readonly-production', '--report', 'APPOINTMENT',
+      '--start-date', '2026-08-27', '--end-date', '2026-08-27',
+    ], {
+      environment: validEnvironment(), fetch,
+      io: { stdout: { write: (value: string) => { stdout += value } }, stderr: { write: () => undefined } },
+    })
+
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(fetch.mock.calls.slice(1).map(([url]) => new URL(String(url)).searchParams.get('page'))).toEqual(['1', '2'])
+    expect(stdout).toContain('"count": 101')
+  })
+
+  it('rejects non-progressing appointment pagination instead of silently using page one', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const stableUuid = '00000000-0000-4000-8000-000000000001'
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).endsWith('/openapi/v1/token/')) {
+        return jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      }
+      const page = new URL(String(url)).searchParams.get('page')
+      return page === '1'
+        ? jsonResponse(200, { count: 101, next: 'page-2', data: Array.from({ length: 100 }, () => ({ uuid: stableUuid })) })
+        : jsonResponse(200, { count: 101, next: null, data: [{ uuid: stableUuid }] })
+    })
+
+    await expect(checker.runJeraRuntimeCheck([
+      '--allow-readonly-production', '--report', 'APPOINTMENT',
+      '--start-date', '2026-08-27', '--end-date', '2026-08-27',
+    ], {
+      environment: validEnvironment(), fetch,
+      io: { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+    })).rejects.toThrow('JERA runtime probe failed')
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
   it('documents disabled-first shadow comparison, audit fields, scheduler gate, and rollback', async () => {
     const runbook = await readFile(resolve('docs/pmc-mini-app/jera-shadow-runbook.md'), 'utf8')
     for (const required of [
@@ -129,6 +252,38 @@ function validEnvironment(): Record<string, string> {
   }
 }
 
-function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
+}
+
+function runPaymentProbe(checker: typeof import('../../scripts/check-jera-readonly-runtime.mjs'), fetch: typeof globalThis.fetch, options: { sleep?: (milliseconds: number) => Promise<void> } = {}) {
+  return checker.runJeraRuntimeCheck([
+    '--allow-readonly-production', '--report', 'PAYMENT',
+    '--start-date', '2026-08-27', '--end-date', '2026-08-27',
+  ], {
+    environment: validEnvironment(), fetch,
+    io: { stdout: { write: () => undefined }, stderr: { write: () => undefined } },
+    ...options,
+  })
+}
+
+function chunkedResponse(chunks: Uint8Array[]) {
+  let index = 0
+  const read = vi.fn(async () => index < chunks.length
+    ? { done: false, value: chunks[index++] }
+    : { done: true, value: undefined })
+  const cancel = vi.fn(async () => undefined)
+  const arrayBuffer = vi.fn(async () => { throw new Error('must not buffer stream') })
+  return {
+    read,
+    cancel,
+    arrayBuffer,
+    response: {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: { getReader: () => ({ read, cancel }) },
+      arrayBuffer,
+    },
+  }
 }

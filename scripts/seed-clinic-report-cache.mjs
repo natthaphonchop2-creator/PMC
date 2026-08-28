@@ -75,7 +75,7 @@ async function createCoordinator(environment, dependencies) {
 
   const ports = runtime.createMiniAppGooglePorts({ spreadsheetId, intakeFolderId })
   const tokens = runtime.createJeraTokenClient(config)
-  const client = runtime.createJeraReadClient(config, tokens)
+  const client = runtime.createJeraReadClient(config, tokens, { mode: 'SCHEDULED' })
   const store = runtime.createGoogleJeraReportStore({ spreadsheetId, sheets: ports.sheets })
   return runtime.createJeraSyncCoordinator({
     client, store, manualRefreshSeconds: config.manualRefreshSeconds,

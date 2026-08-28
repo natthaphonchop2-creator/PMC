@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { requestOperatorToken, requestScheduledProviderJson } from './jera-operator-transport.mjs'
 
 export const JERA_NON_SECRET_NAMES = [
   'JERA_REPORTING_ENABLED',
@@ -18,6 +19,9 @@ const PROBE_REPORTS = {
   REFUND: '/openapi/v1/report/refund/',
   APPOINTMENT: '/openapi/v1/appointment/',
 }
+
+const APPOINTMENT_PAGE_SIZE = 100
+const MAX_APPOINTMENT_PAGES = 1_000
 
 export function inspectJeraRuntime(environment) {
   const nonSecret = presence(JERA_NON_SECRET_NAMES, environment)
@@ -61,6 +65,7 @@ export async function runJeraRuntimeCheck(args, options = {}) {
       date: parsed.startDate,
       environment: effectiveEnvironment,
       fetch: request,
+      sleep: options.sleep,
     })
   } else if (parsed.report || parsed.startDate || parsed.endDate) {
     throw new Error('Production probe requires --allow-readonly-production')
@@ -70,7 +75,7 @@ export async function runJeraRuntimeCheck(args, options = {}) {
   return parsed.strict && !report.ready ? 1 : 0
 }
 
-async function probeOneDay({ report, date, environment, fetch }) {
+async function probeOneDay({ report, date, environment, fetch, sleep }) {
   if (!(report in PROBE_REPORTS) || !isoDate(date)) throw new Error('Production probe report or one-day range is invalid')
   if (typeof fetch !== 'function') throw new Error('Fetch is unavailable')
   const baseUrl = safeBaseUrl(environment.JERA_API_BASE_URL)
@@ -79,47 +84,103 @@ async function probeOneDay({ report, date, environment, fetch }) {
   const password = environment.JERA_API_PASSWORD
   if (!baseUrl || !uuid(branchUuid) || !boundedSecret(username) || !boundedSecret(password)) throw new Error('JERA runtime bindings are not ready')
 
-  const tokenResponse = await fetch(`${baseUrl}/openapi/v1/token/`, {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: 'grant_type=client_credentials',
-    signal: AbortSignal.timeout(30_000),
-  })
-  if (!tokenResponse.ok) throw new Error('JERA token verification failed')
-  const tokenBody = await boundedJson(tokenResponse)
-  if (!tokenBody || typeof tokenBody !== 'object' || typeof tokenBody.access_token !== 'string'
-    || tokenBody.access_token.length < 6 || tokenBody.access_token.length > 8_192 || /\s/.test(tokenBody.access_token)) {
-    throw new Error('JERA token verification failed')
+  try {
+    const token = await requestOperatorToken({ fetch, baseUrl, username, password })
+    const rows = report === 'APPOINTMENT'
+      ? await readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep })
+      : rowsFor(report, await readOneDayReport({ report, baseUrl, branchUuid, date, fetch, token, sleep }))
+    return {
+      executed: true,
+      report,
+      startDate: date,
+      endDate: date,
+      count: rows.length,
+      totalSatang: rows.reduce((sum, row) => sum + moneyFor(report, row), 0),
+    }
+  } catch {
+    throw new Error('JERA runtime probe failed')
   }
+}
 
+async function readOneDayReport({ report, baseUrl, branchUuid, date, fetch, token, sleep }) {
   const url = new URL(PROBE_REPORTS[report], `${baseUrl}/`)
   url.searchParams.set('branch_uuid', branchUuid)
   url.searchParams.set('start_date', date)
   url.searchParams.set('end_date', date)
-  if (report === 'APPOINTMENT') {
+  return requestScheduledProviderJson({ fetch, url: url.toString(), accessToken: token, sleep })
+}
+
+async function readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep }) {
+  const rows = []
+  const seenUuids = new Set()
+  let expectedCount = null
+  let rawRows = 0
+
+  for (let page = 1; page <= MAX_APPOINTMENT_PAGES; page += 1) {
+    const url = new URL(PROBE_REPORTS.APPOINTMENT, `${baseUrl}/`)
+    url.searchParams.set('branch_uuid', branchUuid)
+    url.searchParams.set('start_date', date)
+    url.searchParams.set('end_date', date)
     url.searchParams.set('search_by_date', 'appoint_date')
-    url.searchParams.set('page', '1')
-    url.searchParams.set('row_per_page', '100')
+    url.searchParams.set('page', String(page))
+    url.searchParams.set('row_per_page', String(APPOINTMENT_PAGE_SIZE))
+    const body = await requestScheduledProviderJson({ fetch, url: url.toString(), accessToken: token, sleep })
+    const pageResult = appointmentPage(body)
+    if (pageResult.count !== null) {
+      if (expectedCount === null) expectedCount = pageResult.count
+      else if (expectedCount !== pageResult.count) throw new Error('JERA appointment pagination is inconsistent')
+    }
+
+    rawRows += pageResult.rows.length
+    if (expectedCount !== null && rawRows > expectedCount) throw new Error('JERA appointment pagination is inconsistent')
+    let addedRows = 0
+    for (const row of pageResult.rows) {
+      const stableUuid = providerUuid(row)
+      if (stableUuid) {
+        if (seenUuids.has(stableUuid)) continue
+        seenUuids.add(stableUuid)
+      }
+      rows.push(row)
+      addedRows += 1
+    }
+
+    if (expectedCount !== null) {
+      if (rawRows === expectedCount) {
+        if (rows.length !== expectedCount) throw new Error('JERA appointment pagination is inconsistent')
+        return rows
+      }
+      if (pageResult.rows.length === 0 || addedRows === 0 || page === MAX_APPOINTMENT_PAGES) {
+        throw new Error('JERA appointment pagination is inconsistent')
+      }
+      continue
+    }
+
+    const hasNext = typeof pageResult.next === 'string' && pageResult.next.length > 0 && pageResult.next.length <= 2_048
+    if (!hasNext || pageResult.rows.length < APPOINTMENT_PAGE_SIZE) return rows
+    if (addedRows === 0 || page === MAX_APPOINTMENT_PAGES) throw new Error('JERA appointment pagination is inconsistent')
   }
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: { authorization: `Bearer ${tokenBody.access_token}`, accept: 'application/json' },
-    signal: AbortSignal.timeout(30_000),
-  })
-  if (!response.ok) throw new Error('JERA one-day read failed')
-  const body = await boundedJson(response)
-  const rows = rowsFor(report, body)
-  return {
-    executed: true,
-    report,
-    startDate: date,
-    endDate: date,
-    count: rows.length,
-    totalSatang: rows.reduce((sum, row) => sum + moneyFor(report, row), 0),
+  throw new Error('JERA appointment pagination is inconsistent')
+}
+
+function appointmentPage(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('JERA one-day schema is invalid')
+  const rows = Array.isArray(body.data) ? body.data : Array.isArray(body.results) ? body.results : null
+  if (!rows) throw new Error('JERA one-day schema is invalid')
+  const count = body.count === undefined || body.count === null
+    ? null
+    : Number.isSafeInteger(body.count) && body.count >= 0 ? body.count : schemaError()
+  return { rows, count, next: body.next }
+}
+
+function providerUuid(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  for (const key of ['uuid', 'appointment_uuid']) {
+    const candidate = value[key]
+    if (typeof candidate === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate)) {
+      return candidate.toLowerCase()
+    }
   }
+  return null
 }
 
 function rowsFor(report, body) {
@@ -129,7 +190,6 @@ function rowsFor(report, body) {
     return [...body.cash_deposits, ...body.product_deposits]
   }
   if (report === 'REFUND') return Array.isArray(body) ? body : schemaError()
-  if (report === 'APPOINTMENT') return Array.isArray(body?.data) ? body.data : Array.isArray(body?.results) ? body.results : schemaError()
   return schemaError()
 }
 
@@ -147,14 +207,6 @@ function moneyToSatang(value) {
   const satang = BigInt(match[1]) * 100n + BigInt((match[2] ?? '').padEnd(2, '0') || '0')
   if (satang > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('JERA one-day total is unsafe')
   return Number(satang)
-}
-
-async function boundedJson(response) {
-  const advertised = Number(response.headers.get('content-length'))
-  if (Number.isFinite(advertised) && advertised > 2_000_000) throw new Error('JERA response is too large')
-  const bytes = Buffer.from(await response.arrayBuffer())
-  if (bytes.length === 0 || bytes.length > 2_000_000) throw new Error('JERA response is invalid')
-  try { return JSON.parse(bytes.toString('utf8')) } catch { throw new Error('JERA response is invalid') }
 }
 
 function parseArguments(args) {

@@ -53,6 +53,7 @@ export function createPreviewMiniAppApi(options: {
 } = {}): MiniAppBrowserApi {
   let current: BookingDraftProjection | null = null
   let staffAllowed = options.staffAllowed !== false
+  let reportRefreshSequence = 0
   const config = createPreviewMiniAppConfig(options)
   const stock = createPreviewStockStore({ canManageStock: config.canManageStock })
   return {
@@ -120,8 +121,11 @@ export function createPreviewMiniAppApi(options: {
       current = { ...current!, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: current!.version + 1 }
       return structuredClone(current)
     },
-    async loadReport<T>(_token: string, reportType: JeraReportType): Promise<JeraClientEnvelope<T>> { return previewReport<T>(reportType) },
-    async refreshReport() { return { accepted: true, correlationId: 'preview-refresh-1' } },
+    async loadReport<T>(_token: string, reportType: JeraReportType): Promise<JeraClientEnvelope<T>> { return previewReport<T>(reportType, reportRefreshSequence) },
+    async refreshReport() {
+      reportRefreshSequence += 1
+      return { accepted: true, correlationId: `preview-refresh-${reportRefreshSequence}` }
+    },
     async loadStockProducts() { return stock.loadProducts() },
     async loadStockHistory(_token: string, cursor?: string) { return stock.loadHistory(cursor) },
     async submitStockCommand(_token: string, command: StockClientCommand) {
@@ -321,7 +325,7 @@ function previewStockError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code })
 }
 
-function previewReport<T>(reportType: JeraReportType): JeraClientEnvelope<T> {
+function previewReport<T>(reportType: JeraReportType, refreshSequence: number): JeraClientEnvelope<T> {
   const rows = [{
     sourceUuid: 'preview-row-1', eventDate: '2026-08-27', patientName: 'ลูกค้าทดสอบ',
     paymentCode: 'PAY-PREVIEW-001', itemName: 'เติมไขมัน', itemCode: 'SERVICE-01',
@@ -342,9 +346,10 @@ function previewReport<T>(reportType: JeraReportType): JeraClientEnvelope<T> {
           },
           rows,
         }
+  const refreshedAt = new Date(Date.parse('2026-08-27T13:55:00.000Z') + refreshSequence * 60_000).toISOString()
   return {
     data: data as unknown as T,
-    source: 'CACHE', fetchedAt: '2026-08-27T13:55:00.000Z', lastSuccessAt: '2026-08-27T13:55:00.000Z',
+    source: 'CACHE', fetchedAt: refreshedAt, lastSuccessAt: refreshedAt,
     refreshing: false, stale: false, warningCode: null,
   }
 }

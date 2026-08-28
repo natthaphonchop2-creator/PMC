@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createPreviewMiniAppApi, createPreviewMiniAppConfig } from '../../src/apps/pmc-mini-app/preview'
+import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
 describe('PMC Mini App local visual preview adapter', () => {
   it('creates a deterministic draft and confirmation without network access', async () => {
@@ -18,6 +19,18 @@ describe('PMC Mini App local visual preview adapter', () => {
   it('keeps reporting disabled by default and enables it only for an explicit preview option', () => {
     expect(createPreviewMiniAppConfig().reportingEnabled).toBe(false)
     expect(createPreviewMiniAppConfig({ reportingEnabled: true }).reportingEnabled).toBe(true)
+  })
+
+  it('advances the safe preview report timestamp after a refresh', async () => {
+    const api = createPreviewMiniAppApi({ reportingEnabled: true })
+    const filters = defaultReportFilters('2026-08-27')
+
+    const before = await api.loadReport('preview-token', 'PAYMENT', filters)
+    await api.refreshReport('preview-token', 'PAYMENT', filters)
+    const after = await api.loadReport('preview-token', 'PAYMENT', filters)
+
+    expect(before.lastSuccessAt).toBe('2026-08-27T13:55:00.000Z')
+    expect(after.lastSuccessAt).toBe('2026-08-27T13:56:00.000Z')
   })
 
   it('rejects an invalid multi-line ISSUE without mutating an earlier valid product', async () => {

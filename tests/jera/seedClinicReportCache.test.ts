@@ -64,6 +64,34 @@ describe('clinic report cache seeding', () => {
     }
   })
 
+  it('constructs the default read client in scheduled mode', async () => {
+    const createJeraReadClient = vi.fn(() => ({ request: vi.fn() }))
+    const coordinator = { scheduledRefresh: vi.fn(async () => emptyEnvelope()) }
+    const runtime = {
+      readJeraConfig: vi.fn(() => ({ manualRefreshSeconds: 60, syncIntervalMinutes: 15 })),
+      createMiniAppGooglePorts: vi.fn(() => ({ sheets: {} })),
+      createJeraTokenClient: vi.fn(() => ({ getAccessToken: vi.fn(), invalidate: vi.fn() })),
+      createJeraReadClient,
+      createGoogleJeraReportStore: vi.fn(() => ({})),
+      createJeraSyncCoordinator: vi.fn(() => coordinator),
+    }
+
+    await seedClinicReportCache(
+      ['--allow-readonly-production', '--project', PROJECT, '--date', '2026-08-29'],
+      environment(),
+      {
+        runtime,
+        loadJeraOperatorSecrets: vi.fn(async () => ({
+          baseUrl: 'https://jera.example', username: 'synthetic-user', password: 'synthetic-password',
+        })),
+      },
+    )
+
+    expect(createJeraReadClient).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), { mode: 'SCHEDULED' },
+    )
+  })
+
   it('refuses production access without explicit approval, project, and one-day date', async () => {
     await expect(seedClinicReportCache(['--date', '2026-08-29'], environment(), dependencies()))
       .rejects.toThrow('Explicit read-only production approval is required')

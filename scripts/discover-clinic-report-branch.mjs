@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url'
 import { JERA_OPERATOR_PROJECT, loadJeraOperatorSecrets } from './jera-operator-secrets.mjs'
+import { requestOperatorToken, requestScheduledProviderJson } from './jera-operator-transport.mjs'
 
-const MAX_RESPONSE_BYTES = 2_000_000
 const MAX_BRANCH_NAME_LENGTH = 160
-const TOKEN_RESPONSE_BYTES = 64 * 1024
 
 export async function discoverClinicBranches(args, dependencies = {}) {
   try {
@@ -15,15 +14,14 @@ export async function discoverClinicBranches(args, dependencies = {}) {
     const request = dependencies.fetch ?? globalThis.fetch
     if (typeof request !== 'function') throw new Error('unavailable')
 
-    const token = await obtainTemporaryToken(request, secrets)
-    const response = await request(new URL('/openapi/v1/clinic/', `${secrets.baseUrl}/`).toString(), {
-      method: 'GET',
-      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-      signal: AbortSignal.timeout(30_000),
-      redirect: 'error',
+    const token = await requestOperatorToken({ fetch: request, ...secrets })
+    const clinicBody = await requestScheduledProviderJson({
+      fetch: request,
+      url: new URL('/openapi/v1/clinic/', `${secrets.baseUrl}/`).toString(),
+      accessToken: token,
+      sleep: dependencies.sleep,
     })
-    if (!response?.ok) throw new Error('provider failed')
-    return sanitizeClinicBranches(await boundedJson(response, MAX_RESPONSE_BYTES))
+    return sanitizeClinicBranches(clinicBody)
   } catch {
     throw new Error('Clinic branch discovery failed')
   }
@@ -45,83 +43,6 @@ function parseArguments(args) {
   }
   if (!allowReadonlyProduction || project !== JERA_OPERATOR_PROJECT) throw new Error('production flag required')
   return { project }
-}
-
-async function obtainTemporaryToken(request, secrets) {
-  const response = await request(new URL('/openapi/v1/token/', `${secrets.baseUrl}/`).toString(), {
-    method: 'POST',
-    headers: {
-      authorization: `Basic ${Buffer.from(`${secrets.username}:${secrets.password}`, 'utf8').toString('base64')}`,
-      'content-type': 'application/x-www-form-urlencoded',
-    },
-    body: 'grant_type=client_credentials',
-    signal: AbortSignal.timeout(30_000),
-    redirect: 'error',
-  })
-  if (!response?.ok) throw new Error('token request failed')
-  const body = await boundedJson(response, TOKEN_RESPONSE_BYTES)
-  if (!validTokenPayload(body)) throw new Error('token response invalid')
-  return body.access_token
-}
-
-function validTokenPayload(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  return typeof value.access_token === 'string'
-    && value.access_token.length >= 6
-    && value.access_token.length <= 8_192
-    && !/\s/.test(value.access_token)
-    && Number.isSafeInteger(value.expires_in)
-    && value.expires_in > 0
-    && value.token_type === 'Bearer'
-    && (value.scope === undefined || typeof value.scope === 'string')
-}
-
-async function boundedJson(response, maxBytes) {
-  const advertisedLength = Number(response.headers?.get?.('content-length'))
-  if (Number.isFinite(advertisedLength) && advertisedLength > maxBytes) throw new Error('response too large')
-  const bytes = await boundedBytes(response, maxBytes)
-  if (bytes.length === 0 || bytes.length > maxBytes) throw new Error('response invalid')
-  try {
-    return JSON.parse(bytes.toString('utf8'))
-  } catch {
-    throw new Error('response invalid')
-  }
-}
-
-async function boundedBytes(response, maxBytes) {
-  const body = response.body
-  if (!body || typeof body.getReader !== 'function') {
-    if (typeof response.arrayBuffer !== 'function') throw new Error('response invalid')
-    const bytes = Buffer.from(await response.arrayBuffer())
-    if (bytes.length > maxBytes) throw new Error('response too large')
-    return bytes
-  }
-
-  const reader = body.getReader()
-  const chunks = []
-  let length = 0
-  let cancelled = false
-  const cancel = async () => {
-    if (cancelled) return
-    cancelled = true
-    try { await reader.cancel() } catch { /* cancellation cannot make oversized data valid */ }
-  }
-  try {
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      if (!(chunk.value instanceof Uint8Array) || chunk.value.byteLength > maxBytes - length) {
-        await cancel()
-        throw new Error('response too large')
-      }
-      chunks.push(chunk.value)
-      length += chunk.value.byteLength
-    }
-  } catch (error) {
-    await cancel()
-    throw error
-  }
-  return Buffer.concat(chunks, length)
 }
 
 function sanitizeClinicBranches(value) {

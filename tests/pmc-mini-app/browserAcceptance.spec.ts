@@ -90,9 +90,9 @@ test('fallback remains in Account while Stock stays disabled on Home', async ({ 
   await expect(page.getByRole('link', { name: 'เปิด Google Form สำรอง' })).toBeVisible()
 })
 
-test('booking-only V1 hides JERA navigation while reporting is paused', async ({ page }) => {
+test('booking-only V1 hides clinic reports navigation while reporting is paused', async ({ page }) => {
   await page.goto('/mini-app/?preview=1')
-  await expect(page.getByRole('button', { name: 'รายงาน JERA' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'รายงานคลินิก' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'รายงาน', exact: true })).toHaveCount(0)
   await expect(page.getByText('จัดการงานจองของคลินิก')).toBeVisible()
 })
@@ -116,8 +116,9 @@ test.describe('Clinic report Android acceptance', () => {
     await expect(page.getByText(expectedDate, { exact: true })).toBeVisible()
 
     await expect(page.locator('body')).not.toContainText(/JERA/i)
+    await expect(page.getByText('อัปเดตล่าสุดเมื่อ 20:55')).toBeVisible()
     await page.getByRole('button', { name: 'รีเฟรชข้อมูล' }).click()
-    await expect(page.getByText(/อัปเดตล่าสุดเมื่อ|ข้อมูลอาจล่าช้า/)).toBeVisible()
+    await expect(page.getByText('อัปเดตล่าสุดเมื่อ 20:56')).toBeVisible()
     await page.getByRole('button', { name: 'กลับไปรายงาน' }).click()
     await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
   })
