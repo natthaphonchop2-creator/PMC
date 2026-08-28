@@ -71,23 +71,34 @@ export async function migrateMiniAppAsyncRequestColumns(input: {
   const expected = [...MINI_APP_REQUEST_HEADERS]
 
   if (sameHeader(current, expected)) return { appendedColumns: [] }
-  for (const missingCount of [1, 2]) {
-    if (!sameHeader(current, expected.slice(0, -missingCount))) continue
-    const appendedColumns = expected.slice(-missingCount)
-    const start = current.length + 1
-    await sheets.update(
-      spreadsheetId,
-      `'MINI_APP_REQUESTS'!${columnName(start)}1:${columnName(expected.length)}1`,
-      [appendedColumns],
-    )
-    return { appendedColumns }
+  if (current.length < LEGACY_REQUEST_HEADERS.length || !sameHeader(current, expected.slice(0, current.length))) {
+    throw new Error('incompatible header: MINI_APP_REQUESTS')
   }
-  if (!sameHeader(current, [...LEGACY_REQUEST_HEADERS])) throw new Error('incompatible header: MINI_APP_REQUESTS')
 
-  const start = LEGACY_REQUEST_HEADERS.length + 1
-  const end = LEGACY_REQUEST_HEADERS.length + ASYNC_REQUEST_HEADERS.length
-  await sheets.update(spreadsheetId, `'MINI_APP_REQUESTS'!${columnName(start)}1:${columnName(end)}1`, [[...ASYNC_REQUEST_HEADERS]])
-  return { appendedColumns: [...ASYNC_REQUEST_HEADERS] }
+  const appendedColumns = expected.slice(current.length)
+  const sheet = (await sheets.getWorkbook(spreadsheetId)).find(({ title }) => title === 'MINI_APP_REQUESTS')
+  if (!sheet) throw new Error('managed tab missing: MINI_APP_REQUESTS')
+  const existingColumnCount = sheet.columnCount ?? current.length
+  const additionalColumns = Math.max(0, expected.length - existingColumnCount)
+  const requests: Array<Record<string, unknown>> = []
+  if (additionalColumns > 0) {
+    requests.push({ appendDimension: { sheetId: sheet.sheetId, dimension: 'COLUMNS', length: additionalColumns } })
+  }
+  requests.push({
+    updateCells: {
+      range: {
+        sheetId: sheet.sheetId,
+        startRowIndex: 0,
+        endRowIndex: 1,
+        startColumnIndex: current.length,
+        endColumnIndex: expected.length,
+      },
+      rows: [{ values: appendedColumns.map((stringValue) => ({ userEnteredValue: { stringValue } })) }],
+      fields: 'userEnteredValue',
+    },
+  })
+  await sheets.applyWorkbookRequests(spreadsheetId, requests)
+  return { appendedColumns }
 }
 
 export async function ensureMiniAppWorkbook(input: {

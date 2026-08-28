@@ -10,7 +10,15 @@ type GoogleMethod<T> = (input: Record<string, unknown>, options?: Record<string,
 
 interface MiniAppSheetsApi {
   spreadsheets: {
-    get: GoogleMethod<{ sheets?: Array<{ properties?: { sheetId?: number | null; title?: string | null } }> }>
+    get: GoogleMethod<{
+      sheets?: Array<{
+        properties?: {
+          sheetId?: number | null
+          title?: string | null
+          gridProperties?: { columnCount?: number | null }
+        }
+      }>
+    }>
     batchUpdate: GoogleMethod<unknown>
     values: {
       batchGet: GoogleMethod<{ valueRanges?: Array<{ range?: string | null; values?: unknown[][] }> }>
@@ -46,7 +54,7 @@ export interface MiniAppSheetsPort {
   append(spreadsheetId: string, range: string, rows: unknown[][]): Promise<void>
   update(spreadsheetId: string, range: string, rows: unknown[][]): Promise<void>
   batchUpdate(spreadsheetId: string, data: Array<{ range: string; values: unknown[][] }>): Promise<void>
-  getWorkbook(spreadsheetId: string): Promise<Array<{ sheetId: number; title: string }>>
+  getWorkbook(spreadsheetId: string): Promise<Array<{ sheetId: number; title: string; columnCount?: number }>>
   applyWorkbookRequests(spreadsheetId: string, requests: Array<Record<string, unknown>>): Promise<void>
 }
 
@@ -150,11 +158,14 @@ export function createMiniAppGooglePorts(
       },
       async getWorkbook(candidate) {
         assertSpreadsheet(candidate)
-        const response = await sheetsApi.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(sheetId,title)' })
+        const response = await sheetsApi.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(sheetId,title,gridProperties.columnCount)' })
         return (response.data.sheets ?? []).flatMap(({ properties }) => {
           const sheetId = properties?.sheetId
           const title = properties?.title
-          return typeof sheetId === 'number' && typeof title === 'string' ? [{ sheetId, title }] : []
+          const columnCount = properties?.gridProperties?.columnCount
+          return typeof sheetId === 'number' && typeof title === 'string'
+            ? [{ sheetId, title, ...(typeof columnCount === 'number' ? { columnCount } : {}) }]
+            : []
         })
       },
       async applyWorkbookRequests(candidate, requests) {
@@ -233,6 +244,13 @@ function sheetRangeMatches(requested: string, returned: string): boolean {
   const expected = normalizeA1(requested)
   const actual = normalizeA1(returned)
   if (expected === actual) return true
+  const expectedRow = /^([^!]+)!(\d+):(\d+)$/.exec(expected)
+  const boundedActual = /^([^!]+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(actual)
+  if (expectedRow && boundedActual) {
+    const [, expectedSheet, expectedStartRow, expectedEndRow] = expectedRow
+    const [, actualSheet, , actualStartRow, , actualEndRow] = boundedActual
+    return expectedSheet === actualSheet && expectedStartRow === actualStartRow && expectedEndRow === actualEndRow
+  }
   const expectedParts = /^([^!]+)!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(expected)
   const actualParts = /^([^!]+)!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(actual)
   if (!expectedParts || !actualParts) return false

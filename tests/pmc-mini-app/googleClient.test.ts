@@ -75,6 +75,80 @@ describe('PMC Mini App keyless Google ports', () => {
     })
   })
 
+  it('maps a row-only header request to Google’s bounded populated range', async () => {
+    const batchGet = vi.fn(async () => ({ data: { valueRanges: [
+      { range: "'$MINI_APP_REQUESTS'!$A$1:$AL$1", values: [['requestId', 'draftId']] },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get: vi.fn(), batchUpdate: vi.fn(),
+            values: { batchGet, append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.batchGet('sheet-1', ["'MINI_APP_REQUESTS'!1:1"])).resolves.toEqual({
+      "'MINI_APP_REQUESTS'!1:1": [['requestId', 'draftId']],
+    })
+  })
+
+  it('fails closed when a row-only header response belongs to another tab or row', async () => {
+    const batchGet = vi.fn(async () => ({ data: { valueRanges: [
+      { range: "'$OTHER'!$A$1:$AL$1", values: [['wrong-tab']] },
+      { range: "'$MINI_APP_REQUESTS'!$A$2:$AL$2", values: [['wrong-row']] },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get: vi.fn(), batchUpdate: vi.fn(),
+            values: { batchGet, append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.batchGet('sheet-1', ["'MINI_APP_REQUESTS'!1:1"])).resolves.toEqual({
+      "'MINI_APP_REQUESTS'!1:1": [],
+    })
+  })
+
+  it('returns grid column capacity with workbook metadata', async () => {
+    const get = vi.fn(async () => ({ data: { sheets: [
+      { properties: { sheetId: 7, title: 'MINI_APP_REQUESTS', gridProperties: { columnCount: 36 } } },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get, batchUpdate: vi.fn(),
+            values: { batchGet: vi.fn(), append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.getWorkbook('sheet-1')).resolves.toEqual([
+      { sheetId: 7, title: 'MINI_APP_REQUESTS', columnCount: 36 },
+    ])
+    expect(get).toHaveBeenCalledWith({
+      spreadsheetId: 'sheet-1',
+      fields: 'sheets.properties(sheetId,title,gridProperties.columnCount)',
+    })
+  })
+
   it('uploads evidence only to the intake folder with bounded app properties', async () => {
     const create = vi.fn(async () => ({ data: { id: 'file-1' } }))
     const ports = createMiniAppGooglePorts(

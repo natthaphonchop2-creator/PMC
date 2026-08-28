@@ -4,8 +4,8 @@ import { ensureMiniAppWorkbook, MANAGED_TAB_HEADERS, migrateMiniAppAsyncRequestC
 import { MINI_APP_REQUEST_HEADERS } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App managed Sheet setup', () => {
-  it('appends exactly the asynchronous request headers to the valid legacy header', async () => {
-    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+  it('atomically grows the grid and appends every asynchronous header to the valid legacy header', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 36 }])
     const legacyHeaders = MINI_APP_REQUEST_HEADERS.slice(0, 28)
     sheets.headers.set('MINI_APP_REQUESTS', [...legacyHeaders])
 
@@ -18,7 +18,17 @@ describe('PMC Mini App managed Sheet setup', () => {
     })
 
     expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
-    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AC1:AL1"])
+    expect(sheets.workbookRequests).toEqual([[
+      { appendDimension: { sheetId: 1, dimension: 'COLUMNS', length: 2 } },
+      {
+        updateCells: {
+          range: { sheetId: 1, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 28, endColumnIndex: 38 },
+          rows: [{ values: MINI_APP_REQUEST_HEADERS.slice(28).map((stringValue) => ({ userEnteredValue: { stringValue } })) }],
+          fields: 'userEnteredValue',
+        },
+      },
+    ]])
+    expect(sheets.workbook.find(({ title }) => title === 'MINI_APP_REQUESTS')?.columnCount).toBe(38)
   })
 
   it('rejects a changed legacy request header without writes', async () => {
@@ -31,28 +41,61 @@ describe('PMC Mini App managed Sheet setup', () => {
 
     expect(sheets.headerWrites).toEqual([])
     expect(sheets.headerWriteRanges).toEqual([])
+    expect(sheets.workbookRequests).toEqual([])
   })
 
-  it('appends only evidenceProjectionHash to the current processing-owner header', async () => {
-    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
-    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -1))
-
-    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
-      appendedColumns: ['evidenceProjectionHash'],
-    })
-    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
-    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AL1:AL1"])
-  })
-
-  it('appends processingOwnerToken and evidenceProjectionHash to the first async header', async () => {
-    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+  it('grows the grid for the two current asynchronous headers missing from a 36-column sheet', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 36 }])
     sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -2))
 
     await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
       appendedColumns: ['processingOwnerToken', 'evidenceProjectionHash'],
     })
     expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
-    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AK1:AL1"])
+    expect(sheets.workbookRequests).toEqual([[
+      { appendDimension: { sheetId: 1, dimension: 'COLUMNS', length: 2 } },
+      {
+        updateCells: {
+          range: { sheetId: 1, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 36, endColumnIndex: 38 },
+          rows: [{ values: [
+            { userEnteredValue: { stringValue: 'processingOwnerToken' } },
+            { userEnteredValue: { stringValue: 'evidenceProjectionHash' } },
+          ] }],
+          fields: 'userEnteredValue',
+        },
+      },
+    ]])
+  })
+
+  it('appends only the final asynchronous header when spare grid capacity exists', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 38 }])
+    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -1))
+
+    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
+      appendedColumns: ['evidenceProjectionHash'],
+    })
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
+    expect(sheets.workbookRequests).toEqual([[
+      {
+        updateCells: {
+          range: { sheetId: 1, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 37, endColumnIndex: 38 },
+          rows: [{ values: [{ userEnteredValue: { stringValue: 'evidenceProjectionHash' } }] }],
+          fields: 'userEnteredValue',
+        },
+      },
+    ]])
+  })
+
+  it('makes no additional workbook requests on a second migration call', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 38 }])
+    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -1))
+
+    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
+      appendedColumns: ['evidenceProjectionHash'],
+    })
+    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({ appendedColumns: [] })
+
+    expect(sheets.workbookRequests).toHaveLength(1)
   })
 
   it('adds only missing managed tabs with exact headers and frozen first rows', async () => {
@@ -124,15 +167,16 @@ describe('PMC Mini App managed Sheet setup', () => {
 })
 
 class SetupSheets implements MiniAppSheetsPort {
-  readonly workbook: Array<{ sheetId: number; title: string }>
+  readonly workbook: Array<{ sheetId: number; title: string; columnCount?: number }>
   readonly headers = new Map<string, unknown[]>()
   readonly frozenTabs: string[] = []
   readonly deletedTabs: string[] = []
   readonly headerWrites: string[] = []
   readonly headerWriteRanges: string[] = []
+  readonly workbookRequests: Array<Array<Record<string, unknown>>> = []
   private nextSheetId: number
 
-  constructor(workbook: Array<{ sheetId: number; title: string }>) {
+  constructor(workbook: Array<{ sheetId: number; title: string; columnCount?: number }>) {
     this.workbook = structuredClone(workbook)
     this.nextSheetId = Math.max(0, ...workbook.map(({ sheetId }) => sheetId)) + 1
   }
@@ -158,11 +202,12 @@ class SetupSheets implements MiniAppSheetsPort {
 
   async batchUpdate(): Promise<void> { return undefined }
 
-  async getWorkbook(): Promise<Array<{ sheetId: number; title: string }>> {
+  async getWorkbook(): Promise<Array<{ sheetId: number; title: string; columnCount?: number }>> {
     return structuredClone(this.workbook)
   }
 
   async applyWorkbookRequests(_spreadsheetId: string, requests: Array<Record<string, unknown>>): Promise<void> {
+    this.workbookRequests.push(structuredClone(requests))
     for (const request of requests) {
       const addSheet = request.addSheet as { properties?: { title?: string } } | undefined
       if (addSheet?.properties?.title) {
@@ -179,6 +224,25 @@ class SetupSheets implements MiniAppSheetsPort {
       if (typeof deletion?.sheetId === 'number') {
         const tab = this.workbook.find(({ sheetId }) => sheetId === deletion.sheetId)?.title
         if (tab) this.deletedTabs.push(tab)
+      }
+      const appendDimension = request.appendDimension as { sheetId?: number; dimension?: string; length?: number } | undefined
+      if (appendDimension?.dimension === 'COLUMNS' && typeof appendDimension.sheetId === 'number' && typeof appendDimension.length === 'number') {
+        const sheet = this.workbook.find(({ sheetId }) => sheetId === appendDimension.sheetId)
+        if (sheet) sheet.columnCount = (sheet.columnCount ?? 0) + appendDimension.length
+        continue
+      }
+      const updateCells = request.updateCells as {
+        range?: { sheetId?: number; startColumnIndex?: number }
+        rows?: Array<{ values?: Array<{ userEnteredValue?: { stringValue?: string } }> }>
+      } | undefined
+      if (updateCells?.range && typeof updateCells.range.sheetId === 'number' && typeof updateCells.range.startColumnIndex === 'number') {
+        const tab = this.workbook.find(({ sheetId }) => sheetId === updateCells.range?.sheetId)?.title
+        const values = updateCells.rows?.[0]?.values?.map(({ userEnteredValue }) => userEnteredValue?.stringValue ?? '') ?? []
+        if (tab) {
+          const header = [...(this.headers.get(tab) ?? [])]
+          header.splice(updateCells.range.startColumnIndex, values.length, ...values)
+          this.headers.set(tab, header)
+        }
       }
     }
   }
