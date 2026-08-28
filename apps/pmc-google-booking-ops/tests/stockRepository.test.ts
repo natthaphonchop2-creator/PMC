@@ -152,6 +152,57 @@ describe('stock repository', () => {
 
   it.each([
     [
+      'an empty request ID associated with a reused document',
+      ledgerFixture({ requestId: '' }),
+      ledgerFixture({
+        transactionId: 'TX-2',
+        requestId: 'request-stock-2',
+        balanceBeforeMilli: 1_000,
+        balanceAfterMilli: 2_000,
+      }),
+    ],
+    [
+      'an empty document ID associated with a reused request',
+      ledgerFixture({ documentId: '' }),
+      ledgerFixture({
+        transactionId: 'TX-2',
+        documentId: 'ISS-202608-0002',
+        balanceBeforeMilli: 1_000,
+        balanceAfterMilli: 2_000,
+      }),
+    ],
+  ])('rejects an incoming row when existing ledger has %s', (_description, corruptRow, incomingRow) => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_LEDGER', [corruptRow] as unknown as SheetRow[])
+    const repository = createStockRepository(store)
+
+    expect(() => repository.appendLedgerBatch([incomingRow])).toThrow('stock ledger invalid ID')
+  })
+
+  it.each([
+    'transactionId',
+    'requestId',
+    'documentId',
+    'productId',
+    'actorStaffId',
+    'idempotencyKey',
+  ] as const)('rejects an incoming empty %s', (field) => {
+    const repository = createStockRepository(createMemorySheetStore())
+    const entry = ledgerFixture({ [field]: '' })
+
+    expect(() => repository.appendLedgerBatch([entry])).toThrow('stock ledger invalid ID')
+  })
+
+  it('rejects unsafe required ledger IDs', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+
+    expect(() => repository.appendLedgerBatch([ledgerFixture({ idempotencyKey: 'unsafe/key' })])).toThrow(
+      'stock ledger invalid ID',
+    )
+  })
+
+  it.each([
+    [
       'duplicate transaction IDs',
       [
         ledgerFixture(),

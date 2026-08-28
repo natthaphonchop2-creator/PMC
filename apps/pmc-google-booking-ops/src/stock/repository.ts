@@ -40,6 +40,23 @@ function asLedgerEntry(row: SheetRow): StockLedgerEntry {
   return clonePlain(row as unknown as StockLedgerEntry)
 }
 
+function isSafeId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,124}$/.test(value)
+}
+
+function validateLedgerIds(entry: StockLedgerEntry): void {
+  if (
+    !isSafeId(entry.transactionId) ||
+    !isSafeId(entry.requestId) ||
+    !isSafeId(entry.documentId) ||
+    !isSafeId(entry.productId) ||
+    !isSafeId(entry.actorStaffId) ||
+    !isSafeId(entry.idempotencyKey)
+  ) {
+    throw new Error('stock ledger invalid ID')
+  }
+}
+
 interface LedgerValidationState {
   transactionIds: Set<string>
   documentsByRequest: Map<string, string>
@@ -57,17 +74,16 @@ function validateLedgerEntries(
   },
 ): LedgerValidationState {
   for (const entry of entries) {
+    validateLedgerIds(entry)
     if (state.transactionIds.has(entry.transactionId)) throw new Error('stock transaction already exists')
     state.transactionIds.add(entry.transactionId)
 
-    const existingDocumentId = state.documentsByRequest.get(entry.requestId)
-    if (existingDocumentId && existingDocumentId !== entry.documentId) {
+    if (state.documentsByRequest.has(entry.requestId) && state.documentsByRequest.get(entry.requestId) !== entry.documentId) {
       throw new Error('stock request conflicts with document')
     }
     state.documentsByRequest.set(entry.requestId, entry.documentId)
 
-    const existingRequestId = state.requestsByDocument.get(entry.documentId)
-    if (existingRequestId && existingRequestId !== entry.requestId) {
+    if (state.requestsByDocument.has(entry.documentId) && state.requestsByDocument.get(entry.documentId) !== entry.requestId) {
       throw new Error('stock document conflicts with request')
     }
     state.requestsByDocument.set(entry.documentId, entry.requestId)
