@@ -424,7 +424,7 @@ async function handleBookingDraftRoute(
     && asyncOwner
     && isBoundAsyncConfirmation(draft)
   ) {
-    respond(res, 202, { requestId: draft.requestId, status: 'QUEUED' })
+    respond(res, 202, queuedAcknowledgement(draft))
     return
   }
   const retryingConfirmation = route.action === 'CONFIRM' && version < draft.version
@@ -548,7 +548,7 @@ async function handleBookingDraftRoute(
     if (persisted && validQueuedPersistence(draft, persisted, payloadHash)) {
       const terminal = confirmedWithRetryResult(persisted)
       if (terminal) respond(res, 200, terminal)
-      else respond(res, 202, { requestId: persisted.requestId, status: 'QUEUED' })
+      else respond(res, 202, queuedAcknowledgement(persisted))
     } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return
   }
@@ -675,6 +675,14 @@ function safeActiveDraftProjection(draft: MiniAppRequestRecord): Record<string, 
     safeErrorCode: draft.safeErrorCode,
     queuedAt: draft.queuedAt,
     lastProgressAt: draft.lastProgressAt,
+  }
+}
+
+function queuedAcknowledgement(draft: MiniAppRequestRecord): Record<string, unknown> {
+  return {
+    requestId: draft.requestId,
+    status: 'QUEUED',
+    projection: safeActiveDraftProjection(draft),
   }
 }
 

@@ -47,13 +47,33 @@ describe('PMC Mini App browser API', () => {
   })
 
   it('parses a 202 confirmation acknowledgement without treating it as a completed booking', async () => {
-    const fetch = vi.fn(async () => jsonResponse(202, { requestId: 'request-1', status: 'QUEUED' }))
+    const projection = queuedProjection()
+    const fetch = vi.fn(async () => jsonResponse(202, { requestId: 'request-1', status: 'QUEUED', projection }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
 
-    await expect(api.confirm('raw-id-token', 'draft-1', 4)).resolves.toEqual({ requestId: 'request-1', status: 'QUEUED' })
+    await expect(api.confirm('raw-id-token', 'draft-1', 4)).resolves.toEqual({ requestId: 'request-1', status: 'QUEUED', projection })
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/confirm', expect.objectContaining({
       method: 'POST', headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' }, body: JSON.stringify({ version: 4 }),
     }))
+  })
+
+  it('rejects a queued acknowledgement without the exact persisted safe projection', async () => {
+    const fetch = vi.fn(async () => jsonResponse(202, { requestId: 'request-1', status: 'QUEUED' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.confirm('raw-id-token', 'draft-1', 4)).rejects.toMatchObject({
+      code: 'MINI_APP_INVALID_RESPONSE', status: 202,
+    })
+  })
+
+  it('rejects a queued acknowledgement that leaks input or evidence identifiers', async () => {
+    const projection = { ...queuedProjection(), input: { customerName: 'ลูกค้าทดสอบ' }, paymentEvidenceIds: ['drive-file-1'] }
+    const fetch = vi.fn(async () => jsonResponse(202, { requestId: 'request-1', status: 'QUEUED', projection }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.confirm('raw-id-token', 'draft-1', 4)).rejects.toMatchObject({
+      code: 'MINI_APP_INVALID_RESPONSE', status: 202,
+    })
   })
 
   it('loads only the current staff active draft with bearer authentication', async () => {
@@ -161,6 +181,14 @@ describe('PMC Mini App browser API', () => {
 
 function inertLiff() {
   return { init: vi.fn(async () => undefined), isLoggedIn: () => true, login: vi.fn(), getIDToken: () => 'token' }
+}
+
+function queuedProjection() {
+  return {
+    draftId: 'draft-1', requestId: 'request-1', state: 'QUEUED', retentionState: '', version: 5,
+    input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+    caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: null,
+  }
 }
 
 function jsonResponse(status: number, body: unknown): Response {

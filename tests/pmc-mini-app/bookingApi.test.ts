@@ -202,7 +202,7 @@ describe('PMC Mini App booking draft API', () => {
     const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])), events })
     const response = await createReadyDraftAndConfirm(deps)
 
-    expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(response).toEqual({ status: 202, body: queuedBody(deps.storeFixture.read('draft-1')!) })
     expect(events).toEqual(['enqueue', 'stateIngress', 'queueDraft'])
     const persisted = deps.storeFixture.read('draft-1')!
     expect(deps.taskQueue.enqueue).toHaveBeenCalledWith({
@@ -240,7 +240,7 @@ describe('PMC Mini App booking draft API', () => {
         stateIngress,
       }, Number(ready.body.version))
 
-      expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+      expect(response).toEqual({ status: 202, body: queuedBody(deps.storeFixture.read('draft-1')!) })
       expect(stateIngress.mutate).toHaveBeenCalledOnce()
       expect(deps.storeFixture.queueWriteCount()).toBe(0)
       expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED', version: Number(ready.body.version) + 1 })
@@ -277,7 +277,7 @@ describe('PMC Mini App booking draft API', () => {
 
     const response = await createReadyDraftAndConfirm(deps)
 
-    expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(response).toEqual({ status: 202, body: queuedBody(deps.storeFixture.read('draft-1')!) })
     expect(deps.storeFixture.queueWriteCount()).toBe(1)
     expect(deps.ingress.send).not.toHaveBeenCalled()
   })
@@ -290,7 +290,7 @@ describe('PMC Mini App booking draft API', () => {
     const retry = await confirmReadyDraft(deps)
 
     expect(first).toEqual({ status: 503, body: { error: 'MINI_APP_STORAGE_UNAVAILABLE' } })
-    expect(retry).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(retry).toEqual({ status: 202, body: queuedBody(deps.storeFixture.read('draft-1')!) })
     expect(deps.taskQueue.enqueue).toHaveBeenCalledTimes(2)
     expect(deps.storeFixture.queueWriteCount()).toBe(1)
     expect(deps.ingress.send).not.toHaveBeenCalled()
@@ -306,8 +306,8 @@ describe('PMC Mini App booking draft API', () => {
     const committed = deps.storeFixture.read('draft-1')!
     const retry = await confirmDraft(deps, clientVersion)
 
-    expect(first).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
-    expect(retry).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(first).toEqual({ status: 202, body: queuedBody(committed) })
+    expect(retry).toEqual({ status: 202, body: queuedBody(committed) })
     expect(deps.storeFixture.read('draft-1')).toEqual(committed)
     expect(committed).toMatchObject({ state: 'QUEUED', version: clientVersion + 1, taskName: 'task/request-1' })
     expect(deps.taskQueue.enqueue).toHaveBeenCalledOnce()
@@ -328,7 +328,7 @@ describe('PMC Mini App booking draft API', () => {
       const retry = await confirmDraft(deps, current.version)
       const futureVersion = await confirmDraft(deps, current.version + 1)
 
-      expect(retry).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+      expect(retry).toEqual({ status: 202, body: queuedBody(current) })
       expect(futureVersion).toEqual({ status: 409, body: { error: 'STALE_DRAFT_VERSION' } })
       expect(deps.storeFixture.read('draft-1')).toEqual(current)
       expect(deps.taskQueue.enqueue).not.toHaveBeenCalled()
@@ -685,6 +685,19 @@ function validInput(patch: Record<string, unknown> = {}) {
     requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
     phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL',
     appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1', ...patch,
+  }
+}
+
+function queuedBody(draft: MiniAppRequestRecord) {
+  return {
+    requestId: draft.requestId,
+    status: 'QUEUED',
+    projection: {
+      draftId: draft.draftId, requestId: draft.requestId, state: draft.state, retentionState: draft.retentionState,
+      version: draft.version, input: null, paymentEvidenceIds: [], chatEvidenceIds: [],
+      confirmationStatus: draft.confirmationStatus, caseId: draft.caseId, safeErrorCode: draft.safeErrorCode,
+      queuedAt: draft.queuedAt, lastProgressAt: draft.lastProgressAt,
+    },
   }
 }
 

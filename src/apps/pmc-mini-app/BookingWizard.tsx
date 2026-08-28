@@ -44,7 +44,7 @@ export function BookingWizard({
   adapter: BookingWizardAdapter
   initialStep?: number
   onExit?: () => void
-  onQueued?: (result: BookingQueuedResult) => void
+  onQueued?: (projection: BookingDraftProjection) => void
 }) {
   const [state, dispatch] = useReducer(reduceBooking, initialDraftState(initialDraft, initialStep))
   const [draft, setDraft] = useState(initialDraft)
@@ -143,7 +143,7 @@ export function BookingWizard({
     try {
       const confirmed = await adapter.confirm(draft.draftId, draft.version)
       if ('requestId' in confirmed) {
-        onQueued?.(confirmed)
+        onQueued?.(confirmed.projection)
         return
       }
       setResult(confirmed)

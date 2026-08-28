@@ -49,6 +49,7 @@ describe('PMC Mini App default browser API stability', () => {
       '/api/mini-app/client-config',
       '/api/mini-app/session',
       '/api/mini-app/config',
+      '/api/mini-app/booking-drafts/active',
     ])
   })
 })

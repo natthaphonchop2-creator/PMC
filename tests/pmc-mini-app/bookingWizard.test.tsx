@@ -67,6 +67,22 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(app.confirm).toHaveBeenCalledOnce()
   })
 
+  it('passes the persisted queued projection to the processing owner', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const projection: BookingDraftProjection = {
+      ...draft, state: 'QUEUED', version: 3, queuedAt: '2026-08-28T10:00:00.000Z', safeErrorCode: null,
+    }
+    vi.mocked(app.confirm).mockResolvedValueOnce({ requestId: 'request-1', status: 'QUEUED', projection })
+    const onQueued = vi.fn()
+    renderWizard({ initialStep: 4, adapter: app, onQueued })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(app.confirm).toHaveBeenCalledWith('draft-1', 1)
+    await waitFor(() => expect(onQueued).toHaveBeenCalledWith(projection))
+  })
+
   it('cancels the server draft before leaving the first step', async () => {
     const user = userEvent.setup()
     const app = adapter()
@@ -165,6 +181,7 @@ function renderWizard(options: {
   adapter?: BookingWizardAdapter
   draft?: BookingDraftProjection
   onExit?: () => void
+  onQueued?: (projection: BookingDraftProjection) => void
 } = {}) {
   return render(<BookingWizard
     session={session}
@@ -173,6 +190,7 @@ function renderWizard(options: {
     adapter={options.adapter ?? adapter()}
     initialStep={options.initialStep}
     onExit={options.onExit}
+    onQueued={options.onQueued}
   />)
 }
 

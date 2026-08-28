@@ -74,6 +74,7 @@ export interface BookingConfirmationResult {
 export interface BookingQueuedResult {
   requestId: string
   status: 'QUEUED'
+  projection: BookingDraftProjection
 }
 
 export function isBookingTerminalState(state: BookingDraftState): boolean {

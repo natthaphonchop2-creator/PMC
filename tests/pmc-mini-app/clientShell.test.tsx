@@ -78,6 +78,34 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.createDraft).not.toHaveBeenCalled()
   })
 
+  it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    let resolveActive!: (draft: null) => void
+    const activeDraft = new Promise<null>((resolve) => { resolveActive = resolve })
+    api.loadLatestActiveDraft = vi.fn(async () => activeDraft)
+    api.createDraft = vi.fn(async () => ({
+      draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
+      paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    await user.click(screen.getByRole('button', { name: 'ลงนัด' }))
+
+    expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
+    expect(api.createDraft).not.toHaveBeenCalled()
+
+    resolveActive(null)
+    expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+    expect(api.createDraft).toHaveBeenCalledOnce()
+  })
+
   it('links an unknown LINE account with one short mobile PIN form', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()

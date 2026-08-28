@@ -118,7 +118,7 @@ export function createMiniAppApi(options: {
       return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticatedJson(idToken, 'PATCH', { version, input }))
     },
     confirm(idToken, draftId, version) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', { version }))
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', { version }), parseBookingConfirmationResponse)
     },
     cancel(idToken, draftId, version) {
       return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/cancel`, authenticatedJson(idToken, 'POST', { version }))
@@ -148,7 +148,12 @@ function authenticatedJson(idToken: string, method: string, body: unknown): Requ
   }
 }
 
-async function requestJson<T>(request: typeof globalThis.fetch, url: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(
+  request: typeof globalThis.fetch,
+  url: string,
+  init?: RequestInit,
+  parse?: (body: unknown, status: number) => T,
+): Promise<T> {
   let response: Response
   try { response = await request(url, init) } catch { throw new MiniAppApiError('MINI_APP_NETWORK_FAILED', 0) }
   let body: unknown
@@ -159,5 +164,62 @@ async function requestJson<T>(request: typeof globalThis.fetch, url: string, ini
       && Number.isSafeInteger(Number(body.retryAfterSeconds)) ? Number(body.retryAfterSeconds) : null
     throw new MiniAppApiError(/^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED', response.status, retryAfterSeconds)
   }
-  return body as T
+  return parse ? parse(body, response.status) : body as T
+}
+
+export function parseBookingConfirmationResponse(body: unknown, status: number): BookingQueuedResult | BookingConfirmationResult {
+  if (isRecord(body) && status === 202) {
+    const keys = Object.keys(body).sort()
+    if (keys.length === 3 && keys[0] === 'projection' && keys[1] === 'requestId' && keys[2] === 'status'
+      && body.status === 'QUEUED' && typeof body.requestId === 'string') {
+      const projection = parseSafeQueuedProjection(body.projection)
+      if (projection && projection.requestId === body.requestId) return { requestId: body.requestId, status: 'QUEUED', projection }
+    }
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  if (isRecord(body) && status === 200 && Object.keys(body).sort().join(',') === 'caseId,status'
+    && typeof body.caseId === 'string' && isConfirmationStatus(body.status)) {
+    return { caseId: body.caseId, status: body.status }
+  }
+  throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+}
+
+function parseSafeQueuedProjection(value: unknown): BookingDraftProjection | null {
+  if (!isRecord(value)) return null
+  const expectedKeys = [
+    'caseId', 'chatEvidenceIds', 'confirmationStatus', 'draftId', 'input', 'lastProgressAt',
+    'paymentEvidenceIds', 'queuedAt', 'requestId', 'retentionState', 'safeErrorCode', 'state', 'version',
+  ]
+  if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')) return null
+  if (typeof value.draftId !== 'string' || typeof value.requestId !== 'string' || !isProjectionState(value.state)
+    || (value.retentionState !== '' && value.retentionState !== 'PENDING_APPROVAL')
+    || !Number.isSafeInteger(value.version) || value.input !== null
+    || !emptyStringArray(value.paymentEvidenceIds) || !emptyStringArray(value.chatEvidenceIds)
+    || !nullableString(value.caseId) || !nullableString(value.safeErrorCode)
+    || !nullableString(value.queuedAt) || !nullableString(value.lastProgressAt)
+    || !(value.confirmationStatus === null || isConfirmationStatus(value.confirmationStatus))) return null
+  return value as BookingDraftProjection
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function emptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length === 0
+}
+
+function nullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string'
+}
+
+function isConfirmationStatus(value: unknown): value is BookingConfirmationResult['status'] {
+  return value === 'CONFIRMED' || value === 'TENTATIVE' || value === 'AWAITING_ADMIN_SLOT'
+}
+
+function isProjectionState(value: unknown): value is BookingDraftProjection['state'] {
+  return value === 'DRAFT' || value === 'UPLOADING' || value === 'READY_TO_CONFIRM' || value === 'QUEUED'
+    || value === 'PROCESSING' || value === 'RETRYING' || value === 'CONFIRMING' || value === 'CONFIRMED'
+    || value === 'CONFIRMED_WITH_RETRY' || value === 'NEEDS_REVIEW' || value === 'FAILED_RETRYABLE'
+    || value === 'CANCELLED' || value === 'EXPIRED'
 }

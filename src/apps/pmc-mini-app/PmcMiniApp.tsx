@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDays, FileChartColumn, House, UserRound } from 'lucide-react'
 import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
@@ -40,6 +40,7 @@ export function PmcMiniApp({
   const [enrollmentMessage, setEnrollmentMessage] = useState('')
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
+  const openingBookingRef = useRef<Promise<void> | null>(null)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
 
@@ -101,23 +102,31 @@ export function PmcMiniApp({
     refresh: (reportType, filters) => api.refreshReport(idToken, reportType, filters),
   }), [api, idToken])
 
-  const openBooking = async () => {
-    if (!config) {
-      setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
-      return
-    }
-    setLoading(true)
-    setMessage('')
-    try {
-      const activeDraft = await api.loadLatestActiveDraft(idToken)
-      const nextDraft = activeDraft ? await hydrateActiveDraft(api, idToken, activeDraft) : await api.createDraft(idToken)
-      setDraft(nextDraft)
-      setView('BOOKING')
-    } catch {
-      setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
-    } finally {
-      setLoading(false)
-    }
+  const openBooking = () => {
+    if (openingBookingRef.current) return openingBookingRef.current
+    const operation = (async () => {
+      if (!config) {
+        setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
+        return
+      }
+      setLoading(true)
+      setMessage('')
+      try {
+        const activeDraft = await api.loadLatestActiveDraft(idToken)
+        const nextDraft = activeDraft ? await hydrateActiveDraft(api, idToken, activeDraft) : await api.createDraft(idToken)
+        setDraft(nextDraft)
+        setView('BOOKING')
+      } catch {
+        setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
+      } finally {
+        setLoading(false)
+      }
+    })()
+    openingBookingRef.current = operation
+    operation.finally(() => {
+      if (openingBookingRef.current === operation) openingBookingRef.current = null
+    }).catch(() => undefined)
+    return operation
   }
 
   const linkAccount = async (staffId: string, pin: string) => {
@@ -168,7 +177,7 @@ export function PmcMiniApp({
       config={config}
       draft={draft}
       adapter={bookingAdapter}
-      onQueued={(queued) => setDraft((current) => current ? { ...current, state: 'QUEUED', requestId: queued.requestId } : current)}
+      onQueued={(queuedProjection) => setDraft(queuedProjection)}
       onExit={() => { setView('HOME'); setDraft(null) }}
     />
   }
