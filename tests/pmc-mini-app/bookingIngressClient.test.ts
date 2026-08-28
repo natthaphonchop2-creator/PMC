@@ -35,6 +35,20 @@ describe('PMC Mini App signed booking ingress client', () => {
     )
   })
 
+  it('accepts the persisted PROCESSING draft owned by the asynchronous worker', () => {
+    const draft = { ...confirmedDraft(), state: 'PROCESSING' as const, attemptCount: 1 }
+
+    const request = buildMiniAppIngress(draft, {
+      timestamp: 1_800_000_000,
+      nonce: 'nonce-123456',
+    }, 'server-secret')
+
+    expect(request.body.payload).toMatchObject({
+      requestId: 'request-1', payloadHash: 'payload-hash-1',
+      paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
+    })
+  })
+
   it.each([
     ['provider non-2xx', async () => response(500, { message: 'provider-secret-body' })],
     ['invalid provider response', async () => response(200, { caseId: '../../bad', status: 'UNKNOWN' })],

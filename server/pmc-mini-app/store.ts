@@ -505,7 +505,9 @@ export function createGoogleMiniAppStore(input: {
           return row.value
         }
         assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
-        const state: MiniAppRequestState = row.value.attemptCount >= ASYNC_MAX_ATTEMPTS ? 'NEEDS_REVIEW' : 'RETRYING'
+        const state: MiniAppRequestState = safeErrorCode === 'RETRY_EXHAUSTED' || row.value.attemptCount >= ASYNC_MAX_ATTEMPTS
+          ? 'NEEDS_REVIEW'
+          : 'RETRYING'
         if (!canTransitionAsyncBooking(row.value.state, state)) throw new Error('DRAFT_NOT_PROCESSING')
         const next = normalizeRequestRecord({
           ...row.value,

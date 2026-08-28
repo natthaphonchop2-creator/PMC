@@ -17,6 +17,10 @@ export interface EvidenceIngressUploadInput {
   bytes: Buffer
 }
 
+export interface EvidenceIngressPort {
+  upload(input: EvidenceIngressUploadInput): Promise<string>
+}
+
 interface IngressResponse {
   ok: boolean
   status: number
@@ -88,9 +92,7 @@ export function buildMiniAppEvidenceIngress(
   return { body: { ...unsigned, signature }, headers: { 'content-type': 'application/json' } }
 }
 
-export function createEvidenceIngressClient(options: EvidenceIngressClientOptions): {
-  upload(input: EvidenceIngressUploadInput): Promise<string>
-} {
+export function createEvidenceIngressClient(options: EvidenceIngressClientOptions): EvidenceIngressPort {
   const url = safeHttpsUrl(options.url)
   const secret = options.secret
   const timeoutMs = options.timeoutMs ?? 30_000

@@ -14,17 +14,12 @@ import type { BookingTaskQueuePort } from './taskQueue.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerAuth.js'
+import type { AsyncBookingWorker } from './asyncWorker.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
 
-export interface AsyncBookingWorkerEntrypoint {
-  finalize(input: { requestId: string; draftId: string; attempt: number }): Promise<{
-    requestId: string
-    caseId: string | null
-    state: 'CONFIRMED' | 'RETRYING' | 'NEEDS_REVIEW'
-  }>
-}
+export type AsyncBookingWorkerEntrypoint = AsyncBookingWorker
 
 export interface PmcMiniAppMiddlewareDependencies {
   config: PmcMiniAppServerConfig
@@ -34,7 +29,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   evidenceStaging?: EvidenceStagingPort
   taskQueue?: BookingTaskQueuePort
   workerIdentity?: WorkerIdentityVerifier
-  asyncWorker?: AsyncBookingWorkerEntrypoint
+  asyncWorker?: AsyncBookingWorker
   now?: () => Date
   randomId?: () => string
   requestId?: () => string

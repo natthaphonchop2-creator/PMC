@@ -275,6 +275,22 @@ describe('PMC Mini App Sheet store', () => {
     })
   })
 
+  it('honors Cloud Tasks retry exhaustion even when earlier deliveries failed before claiming a lease', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
+      processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
+    }))
+
+    await expect(store.markAsyncRetry({
+      requestId: 'request-1', safeErrorCode: 'RETRY_EXHAUSTED', nowIso: '2026-08-28T02:01:00.000Z',
+      expectedAttempt: 1, expectedVersion: 1,
+    })).resolves.toMatchObject({
+      state: 'NEEDS_REVIEW', attemptCount: 1, safeErrorCode: 'RETRY_EXHAUSTED', processingLeaseUntil: null,
+    })
+  })
+
   it('rejects retry and completion from a stale worker after another worker reclaims the lease', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })

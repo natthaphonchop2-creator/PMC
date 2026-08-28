@@ -27,6 +27,10 @@ export interface BookingIngressClientOptions {
   fetch?: IngressFetch
 }
 
+export interface BookingIngressPort {
+  send(draft: MiniAppRequestRecord): Promise<MiniAppBookingIngressResult>
+}
+
 export class BookingIngressClientError extends Error {
   readonly code: 'BOOKING_INGRESS_TIMEOUT' | 'BOOKING_INGRESS_FAILED' | 'BOOKING_INGRESS_INVALID_RESPONSE'
 
@@ -42,7 +46,9 @@ export function buildMiniAppIngress(
   context: { timestamp: number; nonce: string },
   secret: string,
 ): { body: MiniAppBookingIngressEnvelope; headers: { 'content-type': 'application/json' } } {
-  if (draft.state !== 'CONFIRMING' || !draft.payloadHash) throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
+  if ((draft.state !== 'CONFIRMING' && draft.state !== 'PROCESSING') || !draft.payloadHash) {
+    throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
+  }
   if (!Number.isSafeInteger(context.timestamp) || context.timestamp <= 0 || !safeNonce(context.nonce) || !secret) {
     throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
   }
@@ -74,9 +80,7 @@ export function buildMiniAppIngress(
   return { body: { ...unsigned, signature }, headers: { 'content-type': 'application/json' } }
 }
 
-export function createBookingIngressClient(options: BookingIngressClientOptions): {
-  send(draft: MiniAppRequestRecord): Promise<MiniAppBookingIngressResult>
-} {
+export function createBookingIngressClient(options: BookingIngressClientOptions): BookingIngressPort {
   const url = safeHttpsUrl(options.url)
   const secret = options.secret
   const timeoutMs = options.timeoutMs ?? 60_000

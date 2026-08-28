@@ -10,6 +10,7 @@ import { createEnrollmentService } from './enrollment.js'
 import { createGoogleEvidenceStagingPort } from './stagingStore.js'
 import { createGoogleBookingTaskQueue } from './taskQueue.js'
 import { createWorkerIdentityVerifier } from './workerAuth.js'
+import { createAsyncBookingWorker } from './asyncWorker.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -42,21 +43,17 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     url: config.bookingIngressUrl,
     secret: config.bookingIngressSecret,
   })
+  const now = () => new Date()
   const enrollment = config.enrollmentPin ? createEnrollmentService({
     pin: config.enrollmentPin,
     signingSecret: config.signingSecret,
     store,
   }) : undefined
   const jera = createJeraRuntime(env, { spreadsheetId: config.spreadsheetId, sheets: google.sheets })
-  return createPmcMiniAppMiddleware({
-    config,
-    store,
-    identity,
-    drive: google.drive,
-    ingress,
-    evidenceIngress,
-    ...(config.asyncBooking ? {
-      evidenceStaging: createGoogleEvidenceStagingPort({ bucketName: config.asyncBooking.bucketName }),
+  const asyncDependencies = config.asyncBooking ? (() => {
+    const evidenceStaging = createGoogleEvidenceStagingPort({ bucketName: config.asyncBooking.bucketName })
+    return {
+      evidenceStaging,
       taskQueue: createGoogleBookingTaskQueue({
         projectId: config.asyncBooking.projectId,
         location: config.asyncBooking.location,
@@ -69,9 +66,25 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
         audience: config.asyncBooking.workerAudience,
         allowedEmail: config.asyncBooking.taskInvokerEmail,
       }),
-    } : {}),
+      asyncWorker: createAsyncBookingWorker({
+        store,
+        staging: evidenceStaging,
+        evidenceIngress,
+        bookingIngress: ingress,
+        now,
+      }),
+    }
+  })() : {}
+  return createPmcMiniAppMiddleware({
+    config,
+    store,
+    identity,
+    drive: google.drive,
+    ingress,
+    evidenceIngress,
+    ...asyncDependencies,
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
-    now: () => new Date(),
+    now,
   })
 }
