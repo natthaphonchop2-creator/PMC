@@ -108,6 +108,12 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'updatedAt'
 >>
 
+export type MiniAppProcessingProjectionPatch = Partial<Pick<MiniAppRequestRecord,
+  | 'paymentEvidenceFileIds'
+  | 'chatEvidenceFileIds'
+  | 'evidenceCount'
+>>
+
 export interface MiniAppStore {
   getActiveStaffByLineUserId(lineUserId: string): Promise<MiniAppStaffRecord | null>
   getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection>
@@ -129,13 +135,28 @@ export interface AsyncMiniAppStore {
     leaseUntil: string
     nowIso: string
   }): Promise<{ claimed: boolean; draft: MiniAppRequestRecord }>
-  markAsyncRetry(requestId: string, safeErrorCode: string, nowIso: string): Promise<MiniAppRequestRecord>
+  updateProcessingProjection(input: {
+    requestId: string
+    expectedAttempt: number
+    expectedVersion: number
+    nowIso: string
+    patch: MiniAppProcessingProjectionPatch
+  }): Promise<MiniAppRequestRecord>
+  markAsyncRetry(input: {
+    requestId: string
+    safeErrorCode: string
+    nowIso: string
+    expectedAttempt: number
+    expectedVersion: number
+  }): Promise<MiniAppRequestRecord>
   completeAsyncBooking(input: {
     requestId: string
     caseId: string
     status: NonNullable<MiniAppRequestRecord['confirmationStatus']>
     projectionState: 'CONFIRMED' | 'CONFIRMED_WITH_RETRY'
     nowIso: string
+    expectedAttempt: number
+    expectedVersion: number
   }): Promise<MiniAppRequestRecord>
 }
 
@@ -234,6 +255,9 @@ export function createGoogleMiniAppStore(input: {
       const row = (await readRequestRows()).find(({ value }) => value.draftId === draftId)
       if (!row) throw new Error('DRAFT_NOT_FOUND')
       if (row.value.version !== expectedVersion) throw new Error('STALE_DRAFT_VERSION')
+      if (isDraftIdentityBound(row.value) && Object.keys(patch).some((key) => BOUND_DRAFT_MUTATION_KEYS.has(key))) {
+        throw new Error('BOUND_DRAFT_MUTATION_FORBIDDEN')
+      }
       const next = normalizeRequestRecord({ ...row.value, ...patch, version: row.value.version + 1 })
       await writeRequest(row.rowNumber, next)
       return next
@@ -447,13 +471,38 @@ export function createGoogleMiniAppStore(input: {
         return { claimed: true, draft: next }
       })
     },
-    async markAsyncRetry(requestId, safeErrorCode, nowIso) {
-      if (!safeId(requestId) || !safeError(safeErrorCode) || !validIso(nowIso)) throw new Error('INVALID_ASYNC_RETRY')
+    async updateProcessingProjection({ requestId, expectedAttempt, expectedVersion, nowIso, patch }) {
+      if (!safeId(requestId) || !validProcessingOwner(expectedAttempt, expectedVersion) || !validIso(nowIso)) {
+        throw new Error('INVALID_PROCESSING_PROJECTION')
+      }
+      if (!validProcessingProjectionPatch(patch)) throw new Error('INVALID_PROCESSING_PROJECTION_PATCH')
       return withMutex(mutexKey, async () => {
         const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
-        if (TERMINAL_REQUEST_STATES.has(row.value.state) || row.value.state === 'RETRYING') return row.value
-        assertLiveProcessingLease(row.value, nowIso)
+        assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
+        const next = normalizeRequestRecord({
+          ...row.value,
+          ...patch,
+          lastProgressAt: nowIso,
+          updatedAt: nowIso,
+          version: row.value.version + 1,
+        })
+        await writeRequest(row.rowNumber, next)
+        return next
+      })
+    },
+    async markAsyncRetry({ requestId, safeErrorCode, nowIso, expectedAttempt, expectedVersion }) {
+      if (!safeId(requestId) || !safeError(safeErrorCode) || !validIso(nowIso) || !validProcessingOwner(expectedAttempt, expectedVersion)) {
+        throw new Error('INVALID_ASYNC_RETRY')
+      }
+      return withMutex(mutexKey, async () => {
+        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
+        if (!row) throw new Error('DRAFT_NOT_FOUND')
+        if (TERMINAL_REQUEST_STATES.has(row.value.state) || row.value.state === 'RETRYING') {
+          assertIdempotentAsyncMutationOwner(row.value, expectedAttempt, expectedVersion)
+          return row.value
+        }
+        assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
         const state: MiniAppRequestState = row.value.attemptCount >= ASYNC_MAX_ATTEMPTS ? 'NEEDS_REVIEW' : 'RETRYING'
         if (!canTransitionAsyncBooking(row.value.state, state)) throw new Error('DRAFT_NOT_PROCESSING')
         const next = normalizeRequestRecord({
@@ -469,20 +518,22 @@ export function createGoogleMiniAppStore(input: {
         return next
       })
     },
-    async completeAsyncBooking({ requestId, caseId, status, projectionState, nowIso }) {
-      if (!safeId(requestId) || !safeCaseId(caseId) || !CONFIRMATION_STATUSES.has(status) || !validIso(nowIso)) {
+    async completeAsyncBooking({ requestId, caseId, status, projectionState, nowIso, expectedAttempt, expectedVersion }) {
+      if (!safeId(requestId) || !safeCaseId(caseId) || !CONFIRMATION_STATUSES.has(status) || !validIso(nowIso)
+        || !validProcessingOwner(expectedAttempt, expectedVersion) || !ASYNC_COMPLETION_STATES.has(projectionState)) {
         throw new Error('INVALID_ASYNC_COMPLETION')
       }
       return withMutex(mutexKey, async () => {
         const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
         if (TERMINAL_REQUEST_STATES.has(row.value.state)) {
+          assertIdempotentAsyncMutationOwner(row.value, expectedAttempt, expectedVersion)
           if ((row.value.state === 'CONFIRMED' || row.value.state === 'CONFIRMED_WITH_RETRY') && row.value.caseId !== caseId) {
             throw new Error('CASE_ID_CONFLICT')
           }
           return row.value
         }
-        assertLiveProcessingLease(row.value, nowIso)
+        assertCurrentProcessingLease(row.value, expectedAttempt, expectedVersion, nowIso)
         if (!canTransitionAsyncBooking(row.value.state, projectionState)) throw new Error('DRAFT_NOT_PROCESSING')
         const next = normalizeRequestRecord({
           ...row.value,
@@ -646,12 +697,26 @@ const ACTIVE_RESUMABLE_STATES = new Set<MiniAppRequestState>([
 const ASYNC_QUEUED_OR_LATER_STATES = new Set<MiniAppRequestState>([
   'PROCESSING', 'RETRYING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW',
 ])
+const IDENTITY_BOUND_STATES = new Set<MiniAppRequestState>([
+  'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW',
+  'FAILED_RETRYABLE', 'CANCELLED', 'EXPIRED',
+])
+const BOUND_DRAFT_MUTATION_KEYS = new Set<string>([
+  'state', 'payloadHash', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
+  'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIds',
+  'chatEvidenceFileIds', 'evidenceCount', 'paymentEvidenceObjectKeys', 'chatEvidenceObjectKeys', 'taskName', 'queuedAt',
+  'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'confirmedAt', 'caseId', 'safeErrorCode',
+])
+const PROCESSING_PROJECTION_KEYS = new Set<string>([
+  'paymentEvidenceFileIds', 'chatEvidenceFileIds', 'evidenceCount',
+])
 const TERMINAL_REQUEST_STATES = new Set<MiniAppRequestState>([
   'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED',
 ])
 const CONFIRMATION_STATUSES = new Set<NonNullable<MiniAppRequestRecord['confirmationStatus']>>([
   'CONFIRMED', 'TENTATIVE', 'AWAITING_ADMIN_SLOT',
 ])
+const ASYNC_COMPLETION_STATES = new Set<MiniAppRequestState>(['CONFIRMED', 'CONFIRMED_WITH_RETRY'])
 const ASYNC_MAX_ATTEMPTS = 8
 
 function text(value: unknown): string { return value === null || value === undefined ? '' : String(value) }
@@ -675,6 +740,40 @@ function safeCaseId(value: string): boolean { return /^PMC-\d{6}-\d{4,}$/.test(v
 function safeError(value: string): boolean { return /^[A-Z0-9_]{1,80}$/.test(value) }
 function validIso(value: string): boolean { return Boolean(value) && Number.isFinite(Date.parse(value)) }
 function safeTaskName(value: string): boolean { return /^[A-Za-z0-9._:/-]{1,512}$/.test(value) }
+
+function isDraftIdentityBound(draft: MiniAppRequestRecord): boolean {
+  return draft.payloadHash !== null || IDENTITY_BOUND_STATES.has(draft.state)
+}
+
+function validProcessingOwner(expectedAttempt: number, expectedVersion: number): boolean {
+  return Number.isSafeInteger(expectedAttempt) && expectedAttempt >= 1
+    && Number.isSafeInteger(expectedVersion) && expectedVersion >= 1
+}
+
+function validProcessingProjectionPatch(patch: MiniAppProcessingProjectionPatch): boolean {
+  return typeof patch === 'object' && patch !== null && !Array.isArray(patch)
+    && Object.keys(patch).every((key) => PROCESSING_PROJECTION_KEYS.has(key))
+}
+
+function assertCurrentProcessingLease(
+  draft: MiniAppRequestRecord,
+  expectedAttempt: number,
+  expectedVersion: number,
+  nowIso: string,
+): void {
+  if (draft.state !== 'PROCESSING') throw new Error('DRAFT_NOT_PROCESSING')
+  if (draft.attemptCount !== expectedAttempt || draft.version !== expectedVersion) throw new Error('STALE_PROCESSING_LEASE')
+  assertLiveProcessingLease(draft, nowIso)
+}
+
+function assertIdempotentAsyncMutationOwner(
+  draft: MiniAppRequestRecord,
+  expectedAttempt: number,
+  expectedVersion: number,
+): void {
+  const matchesCurrentOrJustCompletedVersion = draft.version === expectedVersion || draft.version === expectedVersion + 1
+  if (draft.attemptCount !== expectedAttempt || !matchesCurrentOrJustCompletedVersion) throw new Error('STALE_PROCESSING_LEASE')
+}
 
 function assertLiveProcessingLease(draft: MiniAppRequestRecord, nowIso: string): void {
   if (draft.state !== 'PROCESSING') throw new Error('DRAFT_NOT_PROCESSING')

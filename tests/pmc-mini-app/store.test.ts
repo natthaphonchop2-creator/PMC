@@ -182,8 +182,9 @@ describe('PMC Mini App Sheet store', () => {
     const claimed = await store.claimProcessing({
       requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:00:01.000Z', leaseUntil: '2026-08-28T02:05:01.000Z',
     })
-    await store.updateDraft('draft-1', claimed.draft.version, {
-      paymentEvidenceFileIds: ['verified-drive-payment'], updatedAt: '2026-08-28T02:00:02.000Z',
+    await store.updateProcessingProjection({
+      requestId: 'request-1', expectedAttempt: claimed.draft.attemptCount, expectedVersion: claimed.draft.version,
+      nowIso: '2026-08-28T02:00:02.000Z', patch: { paymentEvidenceFileIds: ['verified-drive-payment'] },
     })
 
     await expect(store.queueDraft('request-1', payloadHash, taskName, '2026-08-28T02:00:00.000Z')).resolves.toMatchObject({
@@ -253,7 +254,10 @@ describe('PMC Mini App Sheet store', () => {
       processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
     }))
 
-    const retrying = await store.markAsyncRetry('request-1', 'EVIDENCE_COPY_RETRY', '2026-08-28T02:01:00.000Z')
+    const retrying = await store.markAsyncRetry({
+      requestId: 'request-1', safeErrorCode: 'EVIDENCE_COPY_RETRY', nowIso: '2026-08-28T02:01:00.000Z',
+      expectedAttempt: 1, expectedVersion: 1,
+    })
     expect(retrying).toMatchObject({
       state: 'RETRYING', safeErrorCode: 'EVIDENCE_COPY_RETRY', processingLeaseUntil: null,
       lastProgressAt: '2026-08-28T02:01:00.000Z', updatedAt: '2026-08-28T02:01:00.000Z', attemptCount: 1, version: 2,
@@ -263,9 +267,116 @@ describe('PMC Mini App Sheet store', () => {
       requestId: 'request-8', draftId: 'draft-8', state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
       processingLeaseUntil: '2026-08-28T02:06:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 8,
     }))
-    await expect(store.markAsyncRetry('request-8', 'RETRY_EXHAUSTED', '2026-08-28T02:01:00.000Z')).resolves.toMatchObject({
+    await expect(store.markAsyncRetry({
+      requestId: 'request-8', safeErrorCode: 'RETRY_EXHAUSTED', nowIso: '2026-08-28T02:01:00.000Z',
+      expectedAttempt: 8, expectedVersion: 1,
+    })).resolves.toMatchObject({
       state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED', processingLeaseUntil: null,
     })
+  })
+
+  it('rejects retry and completion from a stale worker after another worker reclaims the lease', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      state: 'PROCESSING', processingStartedAt: '2026-08-28T02:00:00.000Z',
+      processingLeaseUntil: '2026-08-28T02:05:00.000Z', lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
+    }))
+    const reclaimed = await store.claimProcessing({
+      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:05:00.000Z', leaseUntil: '2026-08-28T02:10:00.000Z',
+    })
+
+    await expect(store.markAsyncRetry({
+      requestId: 'request-1', safeErrorCode: 'STALE_WORKER_RETRY', nowIso: '2026-08-28T02:06:00.000Z',
+      expectedAttempt: 1, expectedVersion: 1,
+    })).rejects.toThrow('STALE_PROCESSING_LEASE')
+    await expect(store.completeAsyncBooking({
+      requestId: 'request-1', caseId: 'PMC-202608-0001', status: 'CONFIRMED', projectionState: 'CONFIRMED',
+      nowIso: '2026-08-28T02:06:00.000Z', expectedAttempt: 1, expectedVersion: 1,
+    })).rejects.toThrow('STALE_PROCESSING_LEASE')
+    expect(await store.getDraft('draft-1')).toEqual(reclaimed.draft)
+
+    const retried = await store.markAsyncRetry({
+      requestId: 'request-1', safeErrorCode: 'CURRENT_WORKER_RETRY', nowIso: '2026-08-28T02:06:00.000Z',
+      expectedAttempt: reclaimed.draft.attemptCount, expectedVersion: reclaimed.draft.version,
+    })
+    await expect(store.markAsyncRetry({
+      requestId: 'request-1', safeErrorCode: 'STALE_WORKER_RETRY', nowIso: '2026-08-28T02:06:01.000Z',
+      expectedAttempt: 1, expectedVersion: 1,
+    })).rejects.toThrow('STALE_PROCESSING_LEASE')
+    expect(await store.getDraft('draft-1')).toEqual(retried)
+  })
+
+  it.each([
+    ['state', { state: 'DRAFT' }],
+    ['customer identity', { customerName: 'ลูกค้าอื่น' }],
+    ['ordered evidence', { paymentEvidenceObjectKeys: ['drafts/draft-1/PAYMENT/other.jpg'] }],
+  ] as const)('rejects generic %s mutation after processing identity is bound', async (_label, patch) => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const original = validDraft({
+      state: 'PROCESSING', payloadHash: bookingPayloadHash(validDraft()),
+      processingStartedAt: '2026-08-28T02:00:00.000Z', processingLeaseUntil: '2026-08-28T02:05:00.000Z',
+      lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 1,
+    })
+    await store.createDraft(original)
+
+    await expect(store.updateDraft('draft-1', 1, patch)).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
+    expect(await store.getDraft('draft-1')).toEqual(original)
+  })
+
+  it('rejects generic terminal-state regression without a no-op write', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const terminal = validDraft({
+      state: 'CONFIRMED', payloadHash: bookingPayloadHash(validDraft()), version: 4,
+      confirmedAt: '2026-08-28T02:01:00.000Z', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+    })
+    await store.createDraft(terminal)
+
+    await expect(store.updateDraft('draft-1', 4, { state: 'READY_TO_CONFIRM' })).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
+    expect(await store.getDraft('draft-1')).toEqual(terminal)
+  })
+
+  it('updates processing projections only for the current attempt and version', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      state: 'PROCESSING', payloadHash: bookingPayloadHash(validDraft()),
+      processingStartedAt: '2026-08-28T02:00:00.000Z', processingLeaseUntil: '2026-08-28T02:05:00.000Z',
+      lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 2,
+    }))
+
+    await expect(store.updateProcessingProjection({
+      requestId: 'request-1', expectedAttempt: 2, expectedVersion: 1, nowIso: '2026-08-28T02:01:00.000Z',
+      patch: { paymentEvidenceFileIds: ['drive-payment'], chatEvidenceFileIds: ['drive-chat'], evidenceCount: 2 },
+    })).resolves.toMatchObject({
+      state: 'PROCESSING', paymentEvidenceFileIds: ['drive-payment'], chatEvidenceFileIds: ['drive-chat'], evidenceCount: 2,
+      attemptCount: 2, lastProgressAt: '2026-08-28T02:01:00.000Z', updatedAt: '2026-08-28T02:01:00.000Z', version: 2,
+    })
+  })
+
+  it('rejects stale or unknown processing projection mutations without a write', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const original = validDraft({
+      state: 'PROCESSING', payloadHash: bookingPayloadHash(validDraft()), version: 3,
+      processingStartedAt: '2026-08-28T02:00:00.000Z', processingLeaseUntil: '2026-08-28T02:05:00.000Z',
+      lastProgressAt: '2026-08-28T02:00:00.000Z', attemptCount: 2,
+    })
+    await store.createDraft(original)
+
+    await expect(store.updateProcessingProjection({
+      requestId: 'request-1', expectedAttempt: 1, expectedVersion: 3, nowIso: '2026-08-28T02:01:00.000Z', patch: {},
+    })).rejects.toThrow('STALE_PROCESSING_LEASE')
+    await expect(store.updateProcessingProjection({
+      requestId: 'request-1', expectedAttempt: 2, expectedVersion: 2, nowIso: '2026-08-28T02:01:00.000Z', patch: {},
+    })).rejects.toThrow('STALE_PROCESSING_LEASE')
+    await expect(store.updateProcessingProjection({
+      requestId: 'request-1', expectedAttempt: 2, expectedVersion: 3, nowIso: '2026-08-28T02:01:00.000Z',
+      patch: { customerName: 'ห้ามแก้' } as never,
+    })).rejects.toThrow('INVALID_PROCESSING_PROJECTION_PATCH')
+    expect(await store.getDraft('draft-1')).toEqual(original)
   })
 
   it('completes once and never regresses a terminal async state', async () => {
@@ -277,12 +388,15 @@ describe('PMC Mini App Sheet store', () => {
     }))
     const completion = {
       requestId: 'request-1', caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const,
-      projectionState: 'CONFIRMED_WITH_RETRY' as const, nowIso: '2026-08-28T02:01:00.000Z',
+      projectionState: 'CONFIRMED_WITH_RETRY' as const, nowIso: '2026-08-28T02:01:00.000Z', expectedAttempt: 1, expectedVersion: 1,
     }
 
     const completed = await store.completeAsyncBooking(completion)
     const replayed = await store.completeAsyncBooking({ ...completion, nowIso: '2026-08-28T02:02:00.000Z' })
-    const lateRetry = await store.markAsyncRetry('request-1', 'LATE_RETRY', '2026-08-28T02:03:00.000Z')
+    const lateRetry = await store.markAsyncRetry({
+      requestId: 'request-1', safeErrorCode: 'LATE_RETRY', nowIso: '2026-08-28T02:03:00.000Z',
+      expectedAttempt: completed.attemptCount, expectedVersion: completed.version,
+    })
 
     expect(completed).toMatchObject({
       state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
