@@ -15,12 +15,13 @@ async function previewProps(): Promise<ComponentProps<typeof PmcMiniApp>> {
   const preview = await import(/* @vite-ignore */ previewModulePath)
   if (previewMode === 'unknown') return { api: preview.createPreviewMiniAppApi({ staffAllowed: false }) }
   const search = new URLSearchParams(window.location.search)
+  const reportingEnabled = search.get('reports') === 'enabled'
   const stockEnabled = search.get('stock') === 'enabled'
   const canManageStock = search.get('role') === 'manager'
   return {
     initialSession: preview.PREVIEW_SESSION,
-    initialConfig: preview.createPreviewMiniAppConfig({ stockEnabled, canManageStock }),
-    api: preview.createPreviewMiniAppApi({ stockEnabled, canManageStock }),
+    initialConfig: preview.createPreviewMiniAppConfig({ reportingEnabled, stockEnabled, canManageStock }),
+    api: preview.createPreviewMiniAppApi({ reportingEnabled, stockEnabled, canManageStock }),
   }
 }
 

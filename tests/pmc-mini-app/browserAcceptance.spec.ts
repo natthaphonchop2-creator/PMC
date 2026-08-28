@@ -97,6 +97,17 @@ test('booking-only V1 hides JERA navigation while reporting is paused', async ({
   await expect(page.getByText('จัดการงานจองของคลินิก')).toBeVisible()
 })
 
+test('active staff opens renamed clinic reports without provider branding', async ({ page }) => {
+  await page.goto('/mini-app/?preview=1&reports=enabled&stock=enabled&role=staff')
+  await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+  await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+  await page.getByRole('button', { name: 'ยอดรับชำระ' }).click()
+  await expect(page.getByText('CLINIC REPORT')).toBeVisible()
+  await expect(page.locator('body')).not.toContainText(/JERA/i)
+  await page.getByRole('button', { name: 'รีเฟรชข้อมูล' }).click()
+  await expect(page.getByText(/อัปเดตล่าสุดเมื่อ|ข้อมูลอาจล่าช้า/)).toBeVisible()
+})
+
 test.describe('Stock Android acceptance', () => {
   test.use({ viewport: { width: 412, height: 915 } })
 

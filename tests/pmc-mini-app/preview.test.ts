@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createPreviewMiniAppApi } from '../../src/apps/pmc-mini-app/preview'
+import { createPreviewMiniAppApi, createPreviewMiniAppConfig } from '../../src/apps/pmc-mini-app/preview'
 
 describe('PMC Mini App local visual preview adapter', () => {
   it('creates a deterministic draft and confirmation without network access', async () => {
@@ -13,6 +13,11 @@ describe('PMC Mini App local visual preview adapter', () => {
 
     expect(saved.state).toBe('READY_TO_CONFIRM')
     await expect(api.confirm('preview-token', saved.draftId, saved.version)).resolves.toEqual({ caseId: 'PMC-PREVIEW-0001', status: 'CONFIRMED' })
+  })
+
+  it('keeps reporting disabled by default and enables it only for an explicit preview option', () => {
+    expect(createPreviewMiniAppConfig().reportingEnabled).toBe(false)
+    expect(createPreviewMiniAppConfig({ reportingEnabled: true }).reportingEnabled).toBe(true)
   })
 
   it('rejects an invalid multi-line ISSUE without mutating an earlier valid product', async () => {

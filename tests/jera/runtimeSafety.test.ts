@@ -99,8 +99,13 @@ describe('JERA Production read-only runtime gates', () => {
       'JERA_REPORTING_ENABLED=false', 'no traffic', 'Secret Manager', 'one-day',
       'JERA count', 'cache total satang', 'Cloud Scheduler', 'owner approval', 'rollback',
     ]) expect(runbook.toLowerCase()).toContain(required.toLowerCase())
+    expect(runbook).toContain('discover-clinic-report-branch.mjs')
+    expect(runbook).toContain('seed-clinic-report-cache.mjs')
+    expect(runbook).toContain('13 source report types')
+    expect(runbook).toContain('Scheduler')
+    expect(runbook).toContain('owner approval')
     expect(runbook).toContain('ห้ามเก็บข้อมูลผู้ป่วย')
-    expect(runbook).not.toMatch(/JERA_API_PASSWORD\s*=\s*\S+/)
+    expect(runbook).not.toMatch(/JERA_API_(?:USERNAME|PASSWORD)\s*=\s*\S+/)
   })
 })
 

@@ -11,21 +11,23 @@
 - ห้ามเก็บข้อมูลผู้ป่วย, credential, bearer token หรือ raw API body ในหลักฐาน rollout
 - Render และระบบ Google Form/Calendar/LINE เดิมต้องไม่เปลี่ยน
 
-## ลำดับ gate ที่ต้องทำตาม
+## ลำดับ operator gate ที่ต้องทำตาม
 
-1. Deploy Cloud Run revision แบบ **no traffic** โดยตั้ง `JERA_REPORTING_ENABLED=false` และยังไม่สร้าง Scheduler
-2. ขอ owner approval ก่อนทุกขั้นตอนที่แตะ Production
-3. เจ้าของระบบเพิ่ม Production base URL, username และ password เข้า Secret Manager ด้วยตนเอง ห้ามส่งค่าให้ Codex หรือบันทึกในไฟล์
-4. ผูก secret เฉพาะกับ Cloud Run runtime service identity ที่กำหนด ห้ามให้สิทธิ์ระดับ Owner/Editor
-5. ตรวจ token endpoint โดยไม่พิมพ์หรือบันทึก token
-6. อ่าน clinic/branch metadata ด้วย GET เพื่อยืนยันสาขา
-7. ทำ one-day shadow read เฉพาะ PAYMENT, DEPOSIT, REFUND และ APPOINTMENT ทีละรายงาน
-8. เปรียบเทียบ count และยอดรวมกับหน้า JERA และ CSV ในวันเดียวกัน
-9. ตรวจ audit ว่าไม่มี non-token POST, PATCH, PUT หรือ DELETE
-10. อนุญาต cache write หลังผล comparison ผ่านและได้รับ owner approval รอบใหม่เท่านั้น
-11. เปิด pilot UI หลัง cache/report ผ่านการตรวจเท่านั้น
-12. สร้าง Cloud Scheduler หลัง manual sync ผ่านและได้รับ owner approval แยกต่างหาก
-13. Rollback โดยปิด reporting flag และ Scheduler พร้อมเก็บ cache/audit เดิมไว้ตรวจสอบ
+ทุกขั้นตอนที่แตะ Production ต้องมี **owner approval** ก่อนทำ และ operator เป็นผู้รันคำสั่งด้วยตนเองเท่านั้น
+
+1. **Copy/local verification** — ตรวจ commit, build และ safety check ใน local copy ก่อน ไม่ deploy และไม่เรียก Production API.
+2. **Disabled no-traffic revision** — Deploy Cloud Run revision แบบ **no traffic** โดยตั้ง `JERA_REPORTING_ENABLED=false`; ห้ามเปิด UI รายงานและห้ามสร้าง Scheduler ในขั้นนี้.
+3. **Secret binding presence check without values** — เจ้าของระบบผูก Production base URL และ secret bindings กับ Cloud Run runtime identity ที่กำหนด แล้วตรวจเฉพาะ “มี/ไม่มี” ของ binding; ห้ามพิมพ์, ส่งต่อ หรือบันทึกค่า secret/token.
+4. **Branch discovery through the owner-operated script** — หลัง owner approval ให้ operator รัน `node scripts/discover-clinic-report-branch.mjs --allow-readonly-production --project <approved-project>` เพื่ออ่าน branch metadata แบบ bounded แล้ว owner เลือก/ยืนยัน branch UUID.
+5. **Sequential one-day core probes** — รัน one-day shadow read ทีละรายงานสำหรับ PAYMENT, DEPOSIT, REFUND และ APPOINTMENT; วันเริ่มและสิ้นสุดต้องเป็นวันเดียวกัน และห้ามรันพร้อมกัน.
+6. **Owner comparison approval** — owner เปรียบเทียบ count และ total กับหน้า source/CSV ของวันเดียวกัน, ตรวจ audit ว่าไม่มี non-token POST, PATCH, PUT หรือ DELETE แล้วอนุมัติเป็นลายลักษณ์อักษรก่อนเขียน cache.
+7. **Sequential 13-source cache seed** — หลัง owner approval ให้ operator รัน `node scripts/seed-clinic-report-cache.mjs --allow-readonly-production --project <approved-project> --date YYYY-MM-DD`; script จะ seed **13 source report types** แบบ sequential เท่านั้น.
+8. **Cache/sync/audit safe readback** — อ่านกลับเฉพาะ count, total satang, sync state, audit metadata และ safe warning code; ห้ามอ่าน/export raw patient rows.
+9. **Reporting-enabled no-traffic revision** — Deploy revision ที่ `JERA_REPORTING_ENABLED=true` แบบ **no traffic** เพื่อยืนยัน config/cache read path โดยยังไม่รับ traffic.
+10. **Authenticated LINE pilot and owner approval** — เปิด pilot ให้บัญชี LINE ที่ authenticated ตามขอบเขตที่ owner อนุมัติ, ตรวจการแสดงข้อมูลจาก cache และการ refresh แบบปลอดภัย แล้วรับ owner approval ก่อนเปิด traffic.
+11. **Production traffic** — ส่ง traffic ไป revision ที่ผ่าน gate แล้ว พร้อมเก็บเฉพาะ audit metadata ตาม register ด้านล่าง.
+12. **Scheduler remains paused until separate approval** — Scheduler ต้อง remain paused จนกว่า manual sync จะผ่านและได้รับ owner approval แยกต่างหาก; ห้ามสร้างหรือ unpause จากขั้นตอน rollout นี้.
+13. **Reporting-disabled rollback without deleting cache/audit rows** — หาก rollback ให้ส่ง traffic กลับ revision ที่ `JERA_REPORTING_ENABLED=false`, pause Scheduler (ถ้ามีจากการอนุมัติภายหลัง) และเก็บ cache/audit rows เดิมไว้ตรวจสอบ.
 
 ## Configuration names
 

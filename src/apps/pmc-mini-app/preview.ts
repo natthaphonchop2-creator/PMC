@@ -32,9 +32,14 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
 }
 
-export function createPreviewMiniAppConfig(options: { stockEnabled?: boolean; canManageStock?: boolean } = {}): MiniAppConfig {
+export function createPreviewMiniAppConfig(options: {
+  reportingEnabled?: boolean
+  stockEnabled?: boolean
+  canManageStock?: boolean
+} = {}): MiniAppConfig {
   return {
     ...PREVIEW_CONFIG,
+    reportingEnabled: options.reportingEnabled === true,
     stockEnabled: options.stockEnabled === true,
     canManageStock: options.stockEnabled === true && options.canManageStock === true,
   }
@@ -42,6 +47,7 @@ export function createPreviewMiniAppConfig(options: { stockEnabled?: boolean; ca
 
 export function createPreviewMiniAppApi(options: {
   staffAllowed?: boolean
+  reportingEnabled?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean
 } = {}): MiniAppBrowserApi {
