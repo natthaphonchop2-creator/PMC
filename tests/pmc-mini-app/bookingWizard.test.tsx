@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
 import { BookingWizard, type BookingWizardAdapter } from '../../src/apps/pmc-mini-app/BookingWizard'
 import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
 
@@ -106,6 +107,21 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
     await waitFor(() => expect(app.save).toHaveBeenCalledTimes(2))
     expect(app.upload).toHaveBeenCalledTimes(2)
+  })
+
+  it('explains how to replace an unsupported iPhone evidence image', async () => {
+    const user = userEvent.setup()
+    const current = { ...draft, input: completeInput() }
+    const app = adapter()
+    vi.mocked(app.upload).mockRejectedValueOnce(new MiniAppApiError('UNSUPPORTED_EVIDENCE', 415))
+    renderWizard({ initialStep: 3, adapter: app, draft: current })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('รองรับเฉพาะรูป JPG หรือ PNG')
+    expect(screen.getByRole('alert')).toHaveTextContent('จับภาพหน้าจอแล้วแนบใหม่')
   })
 })
 

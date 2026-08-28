@@ -108,8 +108,8 @@ export function BookingWizard({
         current = await adapter.save(current.draftId, current.version, bookingInput(state))
         setDraft(current)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
-      } catch {
-        setFailure('บันทึกร่างไม่สำเร็จ กรุณาลองอีกครั้ง')
+      } catch (error) {
+        setFailure(draftSaveFailureMessage(error))
       } finally {
         setBusy(false)
       }
@@ -299,6 +299,14 @@ function statusLabel(status: BookingConfirmationResult['status']): string {
   if (status === 'CONFIRMED') return 'ยืนยันวันนัดแล้ว'
   if (status === 'TENTATIVE') return 'ได้วันนัดชั่วคราว'
   return 'รอ Admin จัดวันนัด'
+}
+
+function draftSaveFailureMessage(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  if (code === 'UNSUPPORTED_EVIDENCE') {
+    return 'รูปหลักฐานบางรูปไม่รองรับ รองรับเฉพาะรูป JPG หรือ PNG กรุณาจับภาพหน้าจอแล้วแนบใหม่'
+  }
+  return 'บันทึกร่างไม่สำเร็จ กรุณาลองอีกครั้ง'
 }
 
 function replaceUploadedEvidence(

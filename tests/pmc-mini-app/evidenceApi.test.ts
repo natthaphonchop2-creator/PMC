@@ -53,6 +53,21 @@ describe('PMC Mini App evidence API', () => {
     expect(deps.drive.uploadEvidence).not.toHaveBeenCalled()
   })
 
+  it('uploads a real JPEG when the mobile browser advertises a generic MIME type', async () => {
+    const deps = dependencies()
+    const form = new FormData()
+    form.append('files', new Blob([jpegBytes()], { type: 'application/octet-stream' }), 'slip.jpg')
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/booking-drafts/draft-1/evidence?kind=PAYMENT', {
+      method: 'POST', headers: { authorization: 'Bearer valid-token' }, body: form,
+    })
+
+    expect(response.status).toBe(200)
+    expect(deps.drive.uploadEvidence).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'payment-upload-1.jpg', mimeType: 'image/jpeg', bytes: jpegBytes(),
+    }))
+  })
+
   it('does not reveal or modify a draft owned by another staff member', async () => {
     const deps = dependencies()
     const form = new FormData()
@@ -147,4 +162,8 @@ async function invoke(
 
 function pngBytes(): Buffer {
   return Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01])
+}
+
+function jpegBytes(): Buffer {
+  return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])
 }

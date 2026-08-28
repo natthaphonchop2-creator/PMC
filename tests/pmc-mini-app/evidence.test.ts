@@ -10,7 +10,9 @@ import {
 describe('PMC Mini App evidence validation', () => {
   it.each([
     ['JPEG', Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'image/jpeg', 'image/jpeg'],
+    ['JPEG with generic mobile MIME', Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'application/octet-stream', 'image/jpeg'],
     ['PNG', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png', 'image/png'],
+    ['PNG with mismatched mobile MIME', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/jpeg', 'image/png'],
   ] as const)('accepts a real %s signature', (_name, bytes, advertised, expected) => {
     expect(validateEvidence(bytes, advertised)).toBe(expected)
   })
@@ -18,7 +20,6 @@ describe('PMC Mini App evidence validation', () => {
   it.each([
     ['GIF masquerading as PNG', Buffer.from('GIF89a'), 'image/png'],
     ['empty body', Buffer.alloc(0), 'image/png'],
-    ['mismatched JPEG advertisement', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/jpeg'],
   ])('rejects %s', (_name, bytes, advertised) => {
     expect(() => validateEvidence(bytes, advertised)).toThrow('UNSUPPORTED_EVIDENCE')
   })
