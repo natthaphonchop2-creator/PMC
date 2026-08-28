@@ -374,7 +374,8 @@ export function createGoogleMiniAppStore(input: {
       return withMutex(mutexKey, async () => {
         const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
-        if (bookingPayloadHash(row.value) !== payloadHash || (row.value.payloadHash && row.value.payloadHash !== payloadHash)) {
+        const boundPayloadHash = row.value.payloadHash ?? bookingPayloadHash(row.value)
+        if (boundPayloadHash !== payloadHash) {
           throw new Error('PAYLOAD_HASH_CONFLICT')
         }
         if (row.value.taskName && row.value.taskName !== taskName) throw new Error('TASK_NAME_CONFLICT')
@@ -423,8 +424,11 @@ export function createGoogleMiniAppStore(input: {
           if (row.value.state === 'READY_TO_CONFIRM' && (row.value.payloadHash !== null || row.value.taskName !== null)) {
             throw new Error('ASYNC_TASK_IDENTITY_CONFLICT')
           }
-          if ((row.value.state === 'QUEUED' || row.value.state === 'RETRYING') && row.value.payloadHash !== bookingPayloadHash(row.value)) {
-            throw new Error('PAYLOAD_HASH_CONFLICT')
+          if (row.value.state === 'QUEUED' || row.value.state === 'RETRYING') {
+            if (!row.value.payloadHash) throw new Error('PAYLOAD_HASH_CONFLICT')
+            if ((row.value.state === 'QUEUED' && !row.value.taskName) || (row.value.taskName && !safeTaskName(row.value.taskName))) {
+              throw new Error('ASYNC_TASK_IDENTITY_CONFLICT')
+            }
           }
         }
         const next = normalizeRequestRecord({

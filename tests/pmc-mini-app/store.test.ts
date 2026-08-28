@@ -172,6 +172,25 @@ describe('PMC Mini App Sheet store', () => {
     })
   })
 
+  it('keeps the bound submission hash when queue reconciliation follows processing progress', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const draft = validDraft()
+    const payloadHash = bookingPayloadHash(draft)
+    const taskName = 'projects/project-1/locations/asia-southeast1/queues/queue-1/tasks/request-1'
+    await store.createDraft(draft)
+    const claimed = await store.claimProcessing({
+      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:00:01.000Z', leaseUntil: '2026-08-28T02:05:01.000Z',
+    })
+    await store.updateDraft('draft-1', claimed.draft.version, {
+      paymentEvidenceFileIds: ['verified-drive-payment'], updatedAt: '2026-08-28T02:00:02.000Z',
+    })
+
+    await expect(store.queueDraft('request-1', payloadHash, taskName, '2026-08-28T02:00:00.000Z')).resolves.toMatchObject({
+      state: 'PROCESSING', payloadHash, taskName, paymentEvidenceFileIds: ['verified-drive-payment'],
+    })
+  })
+
   it('blocks a live lease and reclaims only after expiry while preserving the first processing time', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
@@ -195,6 +214,21 @@ describe('PMC Mini App Sheet store', () => {
         lastProgressAt: '2026-08-28T02:05:00.000Z', attemptCount: 2, version: 2,
       },
     })
+  })
+
+  it('reclaims a retry using its persisted submission hash after projection fields changed', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const payloadHash = bookingPayloadHash(validDraft())
+    await store.createDraft(validDraft({
+      state: 'RETRYING', payloadHash, taskName: 'projects/p/tasks/request-1',
+      paymentEvidenceFileIds: ['verified-drive-payment'], processingStartedAt: '2026-08-28T02:00:00.000Z',
+      processingLeaseUntil: null, lastProgressAt: '2026-08-28T02:01:00.000Z', attemptCount: 1,
+    }))
+
+    await expect(store.claimProcessing({
+      requestId: 'request-1', draftId: 'draft-1', nowIso: '2026-08-28T02:02:00.000Z', leaseUntil: '2026-08-28T02:07:00.000Z',
+    })).resolves.toMatchObject({ claimed: true, draft: { state: 'PROCESSING', payloadHash, attemptCount: 2 } })
   })
 
   it('serializes concurrent claims so only one worker obtains the live lease', async () => {
