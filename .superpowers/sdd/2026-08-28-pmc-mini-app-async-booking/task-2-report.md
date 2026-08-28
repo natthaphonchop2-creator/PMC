@@ -62,3 +62,49 @@ The OCR job test was run standalone because its freshly-built-job harness can ti
 ## Concerns
 
 None for this scoped migration. Invocation against a production spreadsheet remains intentionally outside this task.
+
+## Fix round 1: complete test request fixtures
+
+### Finding and scope
+
+Review identified an incomplete `MiniAppRequestRecord` fixture in `tests/pmc-mini-app/evidenceApi.test.ts`. Before editing, a focused TypeScript check reported the missing required asynchronous field at line 123:
+
+```bash
+npx tsc --ignoreConfig --noEmit --strict --target ES2022 --module esnext --moduleResolution bundler --skipLibCheck --types node,vitest/globals tests/pmc-mini-app/evidenceApi.test.ts
+```
+
+The focused command also reports pre-existing `BlobPart` compatibility diagnostics, but the relevant diagnostic was:
+
+```text
+TS2322: ... paymentEvidenceObjectKeys ... string[] | undefined is not assignable to string[]
+```
+
+Scoped search of every `MiniAppRequestRecord` use under `tests/pmc-mini-app` found one additional real object fixture in `tests/pmc-mini-app/bookingIngressClient.test.ts`; its focused TypeScript check also reported all eight required fields missing. No other direct request-record fixture was incomplete.
+
+### Implementation
+
+- Added the exact legacy defaults to `evidenceApi.test.ts`:
+  `paymentEvidenceObjectKeys: []`, `chatEvidenceObjectKeys: []`, all five nullable async fields as `null`, and `attemptCount: 0`.
+- Added the same defaults to `bookingIngressClient.test.ts`.
+
+### GREEN verification
+
+```bash
+npx vitest run tests/pmc-mini-app/evidenceApi.test.ts tests/pmc-mini-app/store.test.ts
+# 16/16 passed
+
+npx tsc -p tsconfig.server.json --noEmit
+# exited 0
+
+npm run lint
+# exited 0
+
+git diff --check
+# exited 0
+```
+
+### Self-review
+
+- Confirmed the two changed values are test-only record factories.
+- Confirmed both use the exact legacy normalization defaults required by Task 2.
+- Confirmed scoped search found no additional direct incomplete `MiniAppRequestRecord` fixtures.
