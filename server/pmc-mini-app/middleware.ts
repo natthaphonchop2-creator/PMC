@@ -200,6 +200,8 @@ async function handleBookingDraftRoute(
       state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
       phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
       depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null, processingStartedAt: null,
+      processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
       createdAt: now, confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null, updatedAt: now,
     }
     try {

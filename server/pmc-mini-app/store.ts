@@ -35,6 +35,14 @@ export interface MiniAppRequestRecord {
   paymentEvidenceFileIds: string[]
   chatEvidenceFileIds: string[]
   evidenceCount: number
+  paymentEvidenceObjectKeys: string[]
+  chatEvidenceObjectKeys: string[]
+  taskName: string | null
+  queuedAt: string | null
+  processingStartedAt: string | null
+  processingLeaseUntil: string | null
+  lastProgressAt: string | null
+  attemptCount: number
   createdAt: string
   confirmedAt: string | null
   caseId: string | null
@@ -79,6 +87,14 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'paymentEvidenceFileIds'
   | 'chatEvidenceFileIds'
   | 'evidenceCount'
+  | 'paymentEvidenceObjectKeys'
+  | 'chatEvidenceObjectKeys'
+  | 'taskName'
+  | 'queuedAt'
+  | 'processingStartedAt'
+  | 'processingLeaseUntil'
+  | 'lastProgressAt'
+  | 'attemptCount'
   | 'confirmedAt'
   | 'caseId'
   | 'safeErrorCode'
@@ -112,6 +128,8 @@ export const MINI_APP_REQUEST_HEADERS = [
   'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
   'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
   'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode', 'updatedAt',
+  'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt', 'processingStartedAt',
+  'processingLeaseUntil', 'lastProgressAt', 'attemptCount',
 ] as const
 
 export const MINI_APP_LINK_ATTEMPT_HEADERS = [
@@ -370,6 +388,8 @@ function requestToRow(value: MiniAppRequestRecord): unknown[] {
     value.serviceId, value.queueType, value.appointmentDate ?? '', value.appointmentTime ?? '', value.depositAmount,
     value.channelId, JSON.stringify(value.paymentEvidenceFileIds), JSON.stringify(value.chatEvidenceFileIds),
     value.evidenceCount, value.createdAt, value.confirmedAt ?? '', value.caseId ?? '', value.confirmationStatus ?? '', value.safeErrorCode ?? '', value.updatedAt,
+    JSON.stringify(value.paymentEvidenceObjectKeys), JSON.stringify(value.chatEvidenceObjectKeys), value.taskName ?? '',
+    value.queuedAt ?? '', value.processingStartedAt ?? '', value.processingLeaseUntil ?? '', value.lastProgressAt ?? '', value.attemptCount,
   ]
 }
 
@@ -386,6 +406,9 @@ function requestFromRow(row: unknown[]): MiniAppRequestRecord {
     confirmedAt: nullableText(row[23]), caseId: nullableText(row[24]),
     confirmationStatus: nullableText(row[25]) as MiniAppRequestRecord['confirmationStatus'],
     safeErrorCode: nullableText(row[26]), updatedAt: text(row[27]),
+    paymentEvidenceObjectKeys: stringArray(row[28], safeObjectKey), chatEvidenceObjectKeys: stringArray(row[29], safeObjectKey),
+    taskName: nullableText(row[30]), queuedAt: nullableText(row[31]), processingStartedAt: nullableText(row[32]),
+    processingLeaseUntil: nullableText(row[33]), lastProgressAt: nullableText(row[34]), attemptCount: row[35] === undefined ? 0 : numberValue(row[35]),
   })
 }
 
@@ -402,7 +425,13 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
   if (value.queueType !== 'NORMAL' && value.queueType !== 'AUTO') throw new Error('INVALID_QUEUE_TYPE')
   if (!Number.isFinite(value.depositAmount) || value.depositAmount < 0) throw new Error('INVALID_DEPOSIT_AMOUNT')
   if (!Number.isSafeInteger(value.evidenceCount) || value.evidenceCount < 0 || value.evidenceCount > 20) throw new Error('INVALID_EVIDENCE_COUNT')
-  if (value.paymentEvidenceFileIds.length > 10 || value.chatEvidenceFileIds.length > 10) throw new Error('INVALID_EVIDENCE_COUNT')
+  if (value.paymentEvidenceFileIds.length > 10 || value.chatEvidenceFileIds.length > 10 || value.paymentEvidenceObjectKeys.length > 10 || value.chatEvidenceObjectKeys.length > 10) {
+    throw new Error('INVALID_EVIDENCE_COUNT')
+  }
+  if (!Number.isSafeInteger(value.attemptCount) || value.attemptCount < 0) throw new Error('INVALID_ATTEMPT_COUNT')
+  for (const field of [value.taskName, value.queuedAt, value.processingStartedAt, value.processingLeaseUntil, value.lastProgressAt]) {
+    if (field !== null && (typeof field !== 'string' || field.length > 512)) throw new Error('INVALID_DRAFT_FIELD')
+  }
   for (const field of [value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId, value.serviceId, value.channelId, value.createdAt, value.updatedAt]) {
     if (typeof field !== 'string' || field.length > 512) throw new Error('INVALID_DRAFT_FIELD')
   }
@@ -465,11 +494,13 @@ function safeCaseId(value: string): boolean { return /^PMC-\d{6}-\d{4,}$/.test(v
 function safeError(value: string): boolean { return /^[A-Z0-9_]{1,80}$/.test(value) }
 function validIso(value: string): boolean { return Boolean(value) && Number.isFinite(Date.parse(value)) }
 
-function stringArray(value: unknown): string[] {
+function safeObjectKey(value: string): boolean { return /^[A-Za-z0-9._/-]{1,512}$/.test(value) }
+
+function stringArray(value: unknown, validItem: (item: string) => boolean = safeId): string[] {
   if (Array.isArray(value)) return value.map(text)
   try {
     const parsed: unknown = JSON.parse(text(value) || '[]')
-    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string' || !safeId(item))) throw new Error('invalid')
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string' || !validItem(item))) throw new Error('invalid')
     return parsed
   } catch {
     throw new Error('MINI_APP_STORE_CORRUPT_ROW')

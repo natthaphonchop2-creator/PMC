@@ -6,6 +6,51 @@ import {
 } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App Sheet store', () => {
+  it('round-trips asynchronous booking request fields', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const draft = validDraft({
+      paymentEvidenceObjectKeys: ['payments/request-1/payment-1.jpg'],
+      chatEvidenceObjectKeys: ['chats/request-1/chat-1.jpg'],
+      taskName: 'projects/p/tasks/123',
+      queuedAt: '2026-08-28T02:00:00.000Z',
+      processingStartedAt: '2026-08-28T02:01:00.000Z',
+      processingLeaseUntil: '2026-08-28T02:06:00.000Z',
+      lastProgressAt: '2026-08-28T02:02:00.000Z',
+      attemptCount: 2,
+    })
+
+    await store.createDraft(draft)
+
+    expect(await createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getDraft('draft-1')).toMatchObject({
+      paymentEvidenceObjectKeys: ['payments/request-1/payment-1.jpg'],
+      chatEvidenceObjectKeys: ['chats/request-1/chat-1.jpg'],
+      taskName: 'projects/p/tasks/123',
+      queuedAt: '2026-08-28T02:00:00.000Z',
+      processingStartedAt: '2026-08-28T02:01:00.000Z',
+      processingLeaseUntil: '2026-08-28T02:06:00.000Z',
+      lastProgressAt: '2026-08-28T02:02:00.000Z',
+      attemptCount: 2,
+    })
+  })
+
+  it('normalizes missing asynchronous fields from a legacy request row', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('MINI_APP_REQUESTS', [[
+      'request-1', 'draft-1', 'staff-active', 'line-user-hash', 'READY_TO_CONFIRM', '', 1, '',
+      'ไม่ระบุ', 'ลูกค้า ทดสอบ', 'Facebook Test', '0812345678', 'doctor-1', 'service-1', 'NORMAL',
+      '2026-09-01', '13:00', 900, 'channel-1', '["payment-1"]', '["chat-1"]', 2,
+      '2026-08-27T10:00:00.000Z', '', '', '', '', '2026-08-27T10:00:00.000Z',
+    ]])
+
+    const draft = await createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getDraft('draft-1')
+
+    expect(draft).toMatchObject({
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
+      processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
+    })
+  })
+
   it('claims one confirmation and returns the persisted case after a restart', async () => {
     const sheets = new MemorySheets()
     const firstStore = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
@@ -154,6 +199,8 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
     doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01',
     appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'], evidenceCount: 2,
+    paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
+    processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
     createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
     updatedAt: '2026-08-27T10:00:00.000Z',
     ...patch,

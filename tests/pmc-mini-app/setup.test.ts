@@ -1,8 +1,37 @@
 import { describe, expect, it } from 'vitest'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
-import { ensureMiniAppWorkbook, MANAGED_TAB_HEADERS } from '../../server/pmc-mini-app/setup'
+import { ensureMiniAppWorkbook, MANAGED_TAB_HEADERS, migrateMiniAppAsyncRequestColumns } from '../../server/pmc-mini-app/setup'
+import { MINI_APP_REQUEST_HEADERS } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App managed Sheet setup', () => {
+  it('appends exactly the asynchronous request headers to the valid legacy header', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+    const legacyHeaders = MINI_APP_REQUEST_HEADERS.slice(0, 28)
+    sheets.headers.set('MINI_APP_REQUESTS', [...legacyHeaders])
+
+    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
+      appendedColumns: [
+        'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt',
+        'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount',
+      ],
+    })
+
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
+    expect(sheets.headerWriteRanges).toEqual(["'MINI_APP_REQUESTS'!AC1:AJ1"])
+  })
+
+  it('rejects a changed legacy request header without writes', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+    const legacyHeaders = MINI_APP_REQUEST_HEADERS.slice(0, 28)
+    legacyHeaders[4] = 'changedState'
+    sheets.headers.set('MINI_APP_REQUESTS', legacyHeaders)
+
+    await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).rejects.toThrow('incompatible header: MINI_APP_REQUESTS')
+
+    expect(sheets.headerWrites).toEqual([])
+    expect(sheets.headerWriteRanges).toEqual([])
+  })
+
   it('adds only missing managed tabs with exact headers and frozen first rows', async () => {
     const sheets = new SetupSheets([{ sheetId: 1, title: 'BOOKING_MASTER' }])
 
@@ -57,6 +86,7 @@ class SetupSheets implements MiniAppSheetsPort {
   readonly frozenTabs: string[] = []
   readonly deletedTabs: string[] = []
   readonly headerWrites: string[] = []
+  readonly headerWriteRanges: string[] = []
   private nextSheetId: number
 
   constructor(workbook: Array<{ sheetId: number; title: string }>) {
@@ -75,8 +105,12 @@ class SetupSheets implements MiniAppSheetsPort {
 
   async update(_spreadsheetId: string, range: string, rows: unknown[][]): Promise<void> {
     const tab = tabName(range)
-    this.headers.set(tab, structuredClone(rows[0] ?? []))
+    const startColumn = columnNumber(range.match(/!([A-Z]+)\d+/)?.[1] ?? 'A')
+    const next = [...(this.headers.get(tab) ?? [])]
+    next.splice(startColumn - 1, (rows[0] ?? []).length, ...structuredClone(rows[0] ?? []))
+    this.headers.set(tab, next)
     this.headerWrites.push(tab)
+    this.headerWriteRanges.push(range)
   }
 
   async batchUpdate(): Promise<void> { return undefined }
@@ -109,4 +143,8 @@ class SetupSheets implements MiniAppSheetsPort {
 
 function tabName(range: string): string {
   return range.split('!', 1)[0]!.replaceAll("'", '')
+}
+
+function columnNumber(value: string): number {
+  return [...value].reduce((result, character) => result * 26 + character.charCodeAt(0) - 64, 0)
 }

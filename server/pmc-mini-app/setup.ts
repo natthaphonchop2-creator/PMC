@@ -27,6 +27,37 @@ export const MANAGED_TAB_HEADERS = {
   JERA_SYNC_AUDIT: JERA_SYNC_AUDIT_HEADERS,
 } as const
 
+const ASYNC_REQUEST_HEADERS = [
+  'paymentEvidenceObjectKeysJson',
+  'chatEvidenceObjectKeysJson',
+  'taskName',
+  'queuedAt',
+  'processingStartedAt',
+  'processingLeaseUntil',
+  'lastProgressAt',
+  'attemptCount',
+] as const
+
+const LEGACY_REQUEST_HEADERS = MINI_APP_REQUEST_HEADERS.slice(0, -ASYNC_REQUEST_HEADERS.length)
+
+export async function migrateMiniAppAsyncRequestColumns(input: {
+  spreadsheetId: string
+  sheets: MiniAppSheetsPort
+}): Promise<{ appendedColumns: string[] }> {
+  const { spreadsheetId, sheets } = input
+  const range = "'MINI_APP_REQUESTS'!1:1"
+  const current = ((await sheets.batchGet(spreadsheetId, [range]))[range]?.[0] ?? []).map(String)
+  const expected = [...MINI_APP_REQUEST_HEADERS]
+
+  if (sameHeader(current, expected)) return { appendedColumns: [] }
+  if (!sameHeader(current, [...LEGACY_REQUEST_HEADERS])) throw new Error('incompatible header: MINI_APP_REQUESTS')
+
+  const start = LEGACY_REQUEST_HEADERS.length + 1
+  const end = LEGACY_REQUEST_HEADERS.length + ASYNC_REQUEST_HEADERS.length
+  await sheets.update(spreadsheetId, `'MINI_APP_REQUESTS'!${columnName(start)}1:${columnName(end)}1`, [[...ASYNC_REQUEST_HEADERS]])
+  return { appendedColumns: [...ASYNC_REQUEST_HEADERS] }
+}
+
 export async function ensureMiniAppWorkbook(input: {
   spreadsheetId: string
   sheets: MiniAppSheetsPort
