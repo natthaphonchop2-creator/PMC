@@ -406,7 +406,7 @@ async function handleBookingDraftRoute(
     return
   }
   const retryingConfirmation = route.action === 'CONFIRM' && version < draft.version
-    && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED')
+    && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED' || confirmedWithRetryResult(draft) !== null)
   if (version !== draft.version && !retryingConfirmation) {
     if (
       route.action === 'CANCEL' && version < draft.version && hasExactKeys(body, ['version'])
@@ -474,6 +474,11 @@ async function handleBookingDraftRoute(
     respond(res, 200, { caseId: draft.caseId, status: draft.confirmationStatus })
     return
   }
+  const retryTerminal = confirmedWithRetryResult(draft)
+  if (retryTerminal) {
+    respond(res, 200, retryTerminal)
+    return
+  }
   if (draft.state !== 'READY_TO_CONFIRM' && draft.state !== 'FAILED_RETRYABLE') {
     respond(res, 409, { error: 'DRAFT_NOT_READY' })
     return
@@ -519,7 +524,9 @@ async function handleBookingDraftRoute(
     let persisted: MiniAppRequestRecord | null
     try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
     if (persisted && validQueuedPersistence(draft, persisted, payloadHash)) {
-      respond(res, 202, { requestId: persisted.requestId, status: 'QUEUED' })
+      const terminal = confirmedWithRetryResult(persisted)
+      if (terminal) respond(res, 200, terminal)
+      else respond(res, 202, { requestId: persisted.requestId, status: 'QUEUED' })
     } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return
   }
@@ -566,7 +573,22 @@ function validQueuedPersistence(
     && persisted.depositAmount === before.depositAmount && persisted.channelId === before.channelId
     && sameStringArray(persisted.paymentEvidenceObjectKeys, before.paymentEvidenceObjectKeys)
     && sameStringArray(persisted.chatEvidenceObjectKeys, before.chatEvidenceObjectKeys)
-    && ['QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMED', 'NEEDS_REVIEW'].includes(persisted.state)
+    && (
+      ['QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMED', 'NEEDS_REVIEW'].includes(persisted.state)
+      || confirmedWithRetryResult(persisted) !== null
+    )
+}
+
+function confirmedWithRetryResult(draft: MiniAppRequestRecord): { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> } | null {
+  if (draft.state !== 'CONFIRMED_WITH_RETRY'
+    || !/^PMC-\d{6}-\d{4,}$/.test(draft.caseId ?? '')
+    || !isConfirmationStatus(draft.confirmationStatus)
+    || draft.safeErrorCode !== 'DOWNSTREAM_RETRY') return null
+  return { caseId: draft.caseId!, status: draft.confirmationStatus }
+}
+
+function isConfirmationStatus(value: unknown): value is NonNullable<MiniAppRequestRecord['confirmationStatus']> {
+  return value === 'CONFIRMED' || value === 'TENTATIVE' || value === 'AWAITING_ADMIN_SLOT'
 }
 
 function sameStringArray(left: readonly string[], right: readonly string[]): boolean {

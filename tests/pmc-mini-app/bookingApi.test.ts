@@ -388,6 +388,65 @@ describe('PMC Mini App booking draft API', () => {
     expect(deps.taskQueue.enqueue).not.toHaveBeenCalled()
     expect(deps.ingress.send).not.toHaveBeenCalled()
   })
+
+  it('returns the Case ID when a queued owner task reaches CONFIRMED_WITH_RETRY before the confirm reread', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    const ready = await createReadyDraft(deps)
+    const stateIngress: AsyncStateIngressPort = {
+      mutate: vi.fn(async (mutation) => {
+        await deps.storeFixture.queueDraft(mutation.requestId, mutation.payloadHash, mutation.taskName!, mutation.nowIso)
+        const queued = deps.storeFixture.read('draft-1')!
+        deps.storeFixture.replace({
+          state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+          safeErrorCode: 'DOWNSTREAM_RETRY', version: queued.version + 1,
+        })
+        return asyncIngressResult(deps.storeFixture.read('draft-1')!)
+      }),
+    }
+
+    const response = await confirmDraft({ ...deps, stateIngress }, Number(ready.body.version))
+
+    expect(response).toEqual({ status: 200, body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' } })
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({
+      state: 'CONFIRMED_WITH_RETRY', safeErrorCode: 'DOWNSTREAM_RETRY',
+    })
+  })
+
+  it('returns the original Case ID when CONFIRMED_WITH_RETRY confirmation is replayed with a stale version', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    await createReadyDraftAndConfirm(deps)
+    const queued = deps.storeFixture.read('draft-1')!
+    deps.storeFixture.replace({
+      state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+      safeErrorCode: 'DOWNSTREAM_RETRY', version: queued.version + 1,
+    })
+    deps.taskQueue.enqueue.mockClear()
+
+    const replay = await confirmDraft(deps, queued.version)
+
+    expect(replay).toEqual({ status: 200, body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' } })
+    expect(deps.taskQueue.enqueue).not.toHaveBeenCalled()
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['missing Case ID', { caseId: null }],
+    ['malformed Case ID', { caseId: 'not-a-case' }],
+    ['missing status', { confirmationStatus: null }],
+    ['wrong safe error', { safeErrorCode: 'BOOKING_INGRESS_RETRY' }],
+  ])('does not treat CONFIRMED_WITH_RETRY with %s as terminal', async (_label, patch) => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    await createReadyDraftAndConfirm(deps)
+    const queued = deps.storeFixture.read('draft-1')!
+    deps.storeFixture.replace({
+      state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+      safeErrorCode: 'DOWNSTREAM_RETRY', version: queued.version + 1, ...patch,
+    })
+
+    await expect(confirmDraft(deps, queued.version)).resolves.toEqual({
+      status: 409, body: { error: 'STALE_DRAFT_VERSION' },
+    })
+  })
 })
 
 function dependencies(options: {
@@ -418,11 +477,7 @@ function dependencies(options: {
       const persisted = await storeFixture.queueDraft(
         mutation.requestId, mutation.payloadHash, mutation.taskName!, mutation.nowIso,
       )
-      return {
-        requestId: persisted.requestId, draftId: persisted.draftId, state: persisted.state,
-        version: persisted.version, attemptCount: persisted.attemptCount, caseId: persisted.caseId,
-        confirmationStatus: persisted.confirmationStatus, outcome: 'APPLIED' as const,
-      }
+      return asyncIngressResult(persisted)
     }),
   }
   const config: PmcMiniAppServerConfig = {
@@ -438,6 +493,14 @@ function dependencies(options: {
     now: () => new Date('2026-08-27T10:00:00.000Z'),
     requestId: () => 'request-1', draftId: () => 'draft-1',
     storeFixture,
+  }
+}
+
+function asyncIngressResult(persisted: MiniAppRequestRecord) {
+  return {
+    requestId: persisted.requestId, draftId: persisted.draftId, state: persisted.state,
+    version: persisted.version, attemptCount: persisted.attemptCount, caseId: persisted.caseId,
+    confirmationStatus: persisted.confirmationStatus, outcome: 'APPLIED' as const,
   }
 }
 
