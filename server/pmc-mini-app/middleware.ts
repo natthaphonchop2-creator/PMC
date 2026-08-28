@@ -246,6 +246,17 @@ async function handleBookingDraftRoute(
   if (!draft) return
   const version = body.version
   if (typeof version !== 'number' || !Number.isSafeInteger(version)) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+  const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
+  if (
+    route.action === 'CONFIRM'
+    && version <= draft.version
+    && hasExactKeys(body, ['version'])
+    && asyncOwner
+    && isBoundAsyncConfirmation(draft)
+  ) {
+    respond(res, 202, { requestId: draft.requestId, status: 'QUEUED' })
+    return
+  }
   const retryingConfirmation = route.action === 'CONFIRM' && version < draft.version
     && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED')
   if (version !== draft.version && !retryingConfirmation) {
@@ -324,7 +335,6 @@ async function handleBookingDraftRoute(
     return
   }
   const payloadHash = bookingPayloadHash(draft)
-  const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
   if (asyncOwner) {
     if (!deps.taskQueue || !hasAsyncQueueStore(deps.store)) {
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_NOT_CONFIGURED' })
@@ -378,6 +388,14 @@ async function handleBookingDraftRoute(
 
 function hasAsyncQueueStore(store: MiniAppStore): store is MiniAppStore & Pick<AsyncMiniAppStore, 'queueDraft'> {
   return typeof (store as Partial<AsyncMiniAppStore>).queueDraft === 'function'
+}
+
+function isBoundAsyncConfirmation(draft: MiniAppRequestRecord): boolean {
+  return (draft.state === 'QUEUED' || draft.state === 'PROCESSING' || draft.state === 'RETRYING')
+    && typeof draft.payloadHash === 'string'
+    && /^[A-Za-z0-9_-]{4,128}$/.test(draft.payloadHash)
+    && typeof draft.taskName === 'string'
+    && /^[A-Za-z0-9._:/-]{1,512}$/.test(draft.taskName)
 }
 
 async function ownedDraft(
