@@ -59,6 +59,51 @@ describe('safe clinic branch discovery', () => {
     ])
   })
 
+  it('rejects a token redirect without making a follow-up request', async () => {
+    const secretAccessor = createSecretAccessor()
+    const fetch = vi.fn(async (_url: string, init: { redirect?: string }) => {
+      if (init.redirect === 'error') throw new Error('redirect rejected')
+      return jsonResponse(200, { access_token: 'synthetic-read-token', expires_in: 3600, token_type: 'Bearer' })
+    })
+
+    await expect(discoverClinicBranches(['--allow-readonly-production', '--project', PROJECT], { secretAccessor, fetch }))
+      .rejects.toThrow('Clinic branch discovery failed')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a clinic redirect without making a follow-up request', async () => {
+    const secretAccessor = createSecretAccessor()
+    const fetch = vi.fn(async (url: string, init: { method: string; redirect?: string }) => {
+      if (String(url).endsWith('/openapi/v1/token/')) {
+        return jsonResponse(200, { access_token: 'synthetic-read-token', expires_in: 3600, token_type: 'Bearer' })
+      }
+      if (init.redirect === 'error') throw new Error('redirect rejected')
+      return jsonResponse(200, [{ branches: [{ uuid: BRANCH_UUID, name: 'สาขาหลัก' }] }])
+    })
+
+    await expect(discoverClinicBranches(['--allow-readonly-production', '--project', PROJECT], { secretAccessor, fetch }))
+      .rejects.toThrow('Clinic branch discovery failed')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch.mock.calls.map(([, init]) => init.redirect)).toEqual(['error', 'error'])
+  })
+
+  it('cancels an oversized chunked clinic response before unbounded buffering', async () => {
+    const oversized = chunkedResponse([
+      new Uint8Array(2_000_000),
+      new Uint8Array([0]),
+    ])
+    const secretAccessor = createSecretAccessor()
+    const fetch = vi.fn(async (url: string) => String(url).endsWith('/openapi/v1/token/')
+      ? jsonResponse(200, { access_token: 'synthetic-read-token', expires_in: 3600, token_type: 'Bearer' })
+      : oversized.response)
+
+    await expect(discoverClinicBranches(['--allow-readonly-production', '--project', PROJECT], { secretAccessor, fetch }))
+      .rejects.toThrow('Clinic branch discovery failed')
+    expect(oversized.read).toHaveBeenCalledTimes(2)
+    expect(oversized.cancel).toHaveBeenCalledOnce()
+    expect(oversized.arrayBuffer).not.toHaveBeenCalled()
+  })
+
   it('fails closed when the temporary token does not satisfy the existing token contract', async () => {
     const setup = dependencies({
       clinicBody: [{ branches: [{ uuid: BRANCH_UUID, name: 'สาขาหลัก' }] }],
@@ -115,4 +160,24 @@ function createSecretAccessor() {
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+function chunkedResponse(chunks: Uint8Array[]) {
+  let index = 0
+  const read = vi.fn(async () => index < chunks.length
+    ? { done: false, value: chunks[index++] }
+    : { done: true, value: undefined })
+  const cancel = vi.fn(async () => undefined)
+  const arrayBuffer = vi.fn(async () => { throw new Error('must not buffer stream') })
+  return {
+    read,
+    cancel,
+    arrayBuffer,
+    response: {
+      ok: true,
+      headers: { get: () => null },
+      body: { getReader: () => ({ read, cancel }) },
+      arrayBuffer,
+    },
+  }
 }

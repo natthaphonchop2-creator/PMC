@@ -20,6 +20,7 @@ export async function discoverClinicBranches(args, dependencies = {}) {
       method: 'GET',
       headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
       signal: AbortSignal.timeout(30_000),
+      redirect: 'error',
     })
     if (!response?.ok) throw new Error('provider failed')
     return sanitizeClinicBranches(await boundedJson(response, MAX_RESPONSE_BYTES))
@@ -55,6 +56,7 @@ async function obtainTemporaryToken(request, secrets) {
     },
     body: 'grant_type=client_credentials',
     signal: AbortSignal.timeout(30_000),
+    redirect: 'error',
   })
   if (!response?.ok) throw new Error('token request failed')
   const body = await boundedJson(response, TOKEN_RESPONSE_BYTES)
@@ -77,13 +79,49 @@ function validTokenPayload(value) {
 async function boundedJson(response, maxBytes) {
   const advertisedLength = Number(response.headers?.get?.('content-length'))
   if (Number.isFinite(advertisedLength) && advertisedLength > maxBytes) throw new Error('response too large')
-  const bytes = Buffer.from(await response.arrayBuffer())
+  const bytes = await boundedBytes(response, maxBytes)
   if (bytes.length === 0 || bytes.length > maxBytes) throw new Error('response invalid')
   try {
     return JSON.parse(bytes.toString('utf8'))
   } catch {
     throw new Error('response invalid')
   }
+}
+
+async function boundedBytes(response, maxBytes) {
+  const body = response.body
+  if (!body || typeof body.getReader !== 'function') {
+    if (typeof response.arrayBuffer !== 'function') throw new Error('response invalid')
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length > maxBytes) throw new Error('response too large')
+    return bytes
+  }
+
+  const reader = body.getReader()
+  const chunks = []
+  let length = 0
+  let cancelled = false
+  const cancel = async () => {
+    if (cancelled) return
+    cancelled = true
+    try { await reader.cancel() } catch { /* cancellation cannot make oversized data valid */ }
+  }
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      if (!(chunk.value instanceof Uint8Array) || chunk.value.byteLength > maxBytes - length) {
+        await cancel()
+        throw new Error('response too large')
+      }
+      chunks.push(chunk.value)
+      length += chunk.value.byteLength
+    }
+  } catch (error) {
+    await cancel()
+    throw error
+  }
+  return Buffer.concat(chunks, length)
 }
 
 function sanitizeClinicBranches(value) {
