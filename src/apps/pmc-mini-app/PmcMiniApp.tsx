@@ -8,6 +8,7 @@ import { Home } from './Home'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
 import { StockHome } from './stock/StockHome'
+import { StockIssueFlow, type StockIssueFlowAdapter } from './stock/StockIssueFlow'
 import {
   loadReportFilterPreferences,
   saveReportFilterPreferences,
@@ -41,6 +42,7 @@ export function PmcMiniApp({
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
+  const [stockView, setStockView] = useState<'HOME' | 'ISSUE'>('HOME')
   const navigationEpochRef = useRef(0)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
@@ -92,6 +94,11 @@ export function PmcMiniApp({
     refresh: (reportType, filters) => api.refreshReport(idToken, reportType, filters),
   }), [api, idToken])
 
+  const stockIssueAdapter = useMemo<StockIssueFlowAdapter>(() => ({
+    issue: (command) => api.submitStockCommand(idToken, command),
+    loadProducts: () => api.loadStockProducts(idToken),
+  }), [api, idToken])
+
   const openBooking = async () => {
     const requestEpoch = ++navigationEpochRef.current
     setLoading(true)
@@ -125,6 +132,7 @@ export function PmcMiniApp({
       const result = await api.loadStockProducts(idToken)
       if (requestEpoch !== navigationEpochRef.current) return
       setStockProducts(result.products)
+      setStockView('HOME')
       setView('STOCK')
     } catch {
       if (requestEpoch !== navigationEpochRef.current) return
@@ -183,6 +191,17 @@ export function PmcMiniApp({
   if (view === 'BOOKING' && config && draft) {
     return <BookingWizard session={session} config={config} draft={draft} adapter={bookingAdapter} onExit={() => { navigateTo('HOME'); setDraft(null) }} />
   }
+  if (view === 'STOCK' && stockView === 'ISSUE') {
+    return <StockIssueFlow
+      initialProducts={stockProducts}
+      adapter={stockIssueAdapter}
+      onCancel={() => setStockView('HOME')}
+      onReturnToStock={(products) => {
+        setStockProducts(products)
+        setStockView('HOME')
+      }}
+    />
+  }
 
   return (
     <div className="pmc-mini-app-shell">
@@ -211,7 +230,7 @@ export function PmcMiniApp({
       {view === 'STOCK' && <StockHome
         products={stockProducts}
         canManageStock={Boolean(config?.canManageStock)}
-        onIssue={() => setMessage('ขั้นตอนเบิกสินค้าจะเปิดใช้งานในลำดับถัดไป')}
+        onIssue={() => { setMessage(''); setStockView('ISSUE') }}
         onManagerAction={(action) => setMessage(action === 'RECEIVE'
           ? 'ขั้นตอนรับเข้าจะเปิดใช้งานในลำดับถัดไป'
           : 'หน้าจัดการสินค้าจะเปิดใช้งานในลำดับถัดไป')}

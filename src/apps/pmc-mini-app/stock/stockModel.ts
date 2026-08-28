@@ -1,7 +1,45 @@
-import { formatQuantityMilli } from '../../../../shared/pmcStock'
+import {
+  formatQuantityMilli,
+  parseQuantityToMilli,
+  type StockClientCommand,
+} from '../../../../shared/pmcStock'
 import type { StockProductProjection } from '../contracts'
 
 export type StockFilter = 'ALL' | 'CLINIC' | 'RETAIL' | 'LOW'
+
+export interface StockLineDraft {
+  lineId: string
+  productId: string
+  quantity: string
+}
+
+export interface StockIssueState {
+  requestId: string
+  products: StockProductProjection[]
+  lines: StockLineDraft[]
+}
+
+export type StockIssueCommand = Extract<StockClientCommand, { commandType: 'RECEIVE' | 'ISSUE' }> & {
+  commandType: 'ISSUE'
+}
+
+export function issueLines(state: StockIssueState): Array<{ productId: string; quantityMilli: number }> {
+  if (state.lines.length === 0) throw new Error('STOCK_EMPTY_LINES')
+  const seen = new Set<string>()
+  return state.lines.map((line) => {
+    if (seen.has(line.productId)) throw new Error('STOCK_DUPLICATE_LINE')
+    seen.add(line.productId)
+    const quantityMilli = parseQuantityToMilli(line.quantity)
+    const product = state.products.find((item) => item.productId === line.productId && item.active)
+    if (!product) throw new Error('STOCK_PRODUCT_INACTIVE')
+    if (quantityMilli > product.onHandMilli) throw new Error(`STOCK_INSUFFICIENT_BALANCE:${line.productId}`)
+    return { productId: line.productId, quantityMilli }
+  })
+}
+
+export function createIssueCommand(state: StockIssueState): StockIssueCommand {
+  return { requestId: state.requestId, commandType: 'ISSUE', payload: { lines: issueLines(state) } }
+}
 
 export function filterStockProducts(
   products: StockProductProjection[],
