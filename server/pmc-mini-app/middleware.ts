@@ -54,6 +54,11 @@ export interface PmcMiniAppMiddlewareDependencies {
 export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencies): ProductionMiddleware {
   return async (req, res) => {
     applySecurityHeaders(res)
+    if (req.url === ASYNC_WORKER_PATH) {
+      await handleAsyncWorkerRoute(req, res, deps)
+      return
+    }
+
     let url: URL
     try {
       url = new URL(req.url ?? '/', 'http://localhost')
@@ -63,14 +68,6 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     }
 
     const pathname = url.pathname
-    if (pathname === ASYNC_WORKER_PATH) {
-      if (url.search) {
-        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
-        return
-      }
-      await handleAsyncWorkerRoute(req, res, deps)
-      return
-    }
     if (pathname === '/internal/mini-app/jera-sync') {
       if (!deps.jera) {
         respond(res, 503, { error: 'JERA_SCHEDULER_UNAVAILABLE' })

@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
@@ -90,20 +90,51 @@ describe('PMC async worker route', () => {
   })
 
   it.each([
-    ['wrong method', route, 'GET', 405],
-    ['query-bearing route', `${route}?debug=1`, 'POST', 404],
-    ['route suffix', `${route}/retry`, 'POST', 404],
-    ['route prefix', '/internal/mini-app/finalize', 'POST', 404],
-  ])('fails closed for a %s', async (_label, path, method, status) => {
+    ['dot segment', '/internal/mini-app/x/../finalize-booking'],
+    ['encoded dot segment', '/internal/mini-app/%2e/finalize-booking'],
+    ['encoded parent segment', '/internal/mini-app/x/%2e%2e/finalize-booking'],
+    ['encoded slash', `${route}%2fretry`],
+    ['duplicate slash', '/internal/mini-app//finalize-booking'],
+    ['bare query marker', `${route}?`],
+    ['query', `${route}?x=1`],
+    ['suffix', `${route}/retry`],
+    ['prefix', `/prefix${route}`],
+    ['absolute-form target', `http://localhost${route}`],
+    ['bare fragment-like marker', `${route}#`],
+    ['fragment-like suffix', `${route}#x`],
+  ])('rejects a non-exact raw worker target with a %s', async (_label, path) => {
     const deps = dependencies()
-    const response = await invoke(createPmcMiniAppMiddleware(deps), path, {
-      method,
+    const response = await invokeRaw(createPmcMiniAppMiddleware(deps), path, {
+      method: 'POST',
       headers: { authorization: 'Bearer valid-worker-token', 'x-cloudtasks-taskretrycount': '0', 'content-type': 'application/json' },
-      ...(method === 'POST' ? { body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1' }) } : {}),
+      body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1' }),
     })
 
-    expect(response.status).toBe(status)
+    expect(response.status).toBe(404)
+    expect(deps.workerIdentity.verify).not.toHaveBeenCalled()
     expect(deps.asyncWorker.finalize).not.toHaveBeenCalled()
+  })
+
+  it('delegates the exact raw target while rejecting the wrong method before OIDC', async () => {
+    const exactDeps = dependencies()
+    const exact = await invokeRaw(createPmcMiniAppMiddleware(exactDeps), route, {
+      method: 'POST',
+      headers: { authorization: 'Bearer rejected-token', 'x-cloudtasks-taskretrycount': '0', 'content-type': 'application/json' },
+      body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1' }),
+    })
+    const wrongMethodDeps = dependencies()
+    const wrongMethod = await invokeRaw(createPmcMiniAppMiddleware(wrongMethodDeps), route, { method: 'GET' })
+
+    expect({ status: exact.status, body: await exact.json() }).toEqual({
+      status: 401,
+      body: { error: 'ASYNC_WORKER_UNAUTHORIZED' },
+    })
+    expect(exactDeps.workerIdentity.verify).toHaveBeenCalledWith('rejected-token')
+    expect({ status: wrongMethod.status, body: await wrongMethod.json() }).toEqual({
+      status: 405,
+      body: { error: 'MINI_APP_METHOD_NOT_ALLOWED' },
+    })
+    expect(wrongMethodDeps.workerIdentity.verify).not.toHaveBeenCalled()
   })
 
   it('passes retry count plus one to the worker and claims the first queued lease through the real store', async () => {
@@ -325,6 +356,38 @@ async function invoke(
   const address = server.address() as AddressInfo
   try {
     return await fetch(`http://127.0.0.1:${address.port}${path}`, init)
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+}
+
+async function invokeRaw(
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  path: string,
+  init: { method: string; headers?: Record<string, string>; body?: string },
+): Promise<Response> {
+  const server = createServer(handler)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  try {
+    return await new Promise<Response>((resolve, reject) => {
+      const request = httpRequest({
+        host: '127.0.0.1',
+        port: address.port,
+        method: init.method,
+        path,
+        headers: init.headers,
+      }, (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        response.on('end', () => resolve(new Response(Buffer.concat(chunks), {
+          status: response.statusCode,
+          headers: response.headers as Record<string, string>,
+        })))
+      })
+      request.on('error', reject)
+      request.end(init.body)
+    })
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }

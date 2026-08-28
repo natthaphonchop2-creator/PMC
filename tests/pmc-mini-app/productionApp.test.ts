@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -75,6 +75,55 @@ describe('production PMC Mini App route isolation', () => {
     expect(health.status).toBe(200)
   })
 
+  it.each([
+    ['dot segment', '/internal/mini-app/x/../finalize-booking'],
+    ['encoded dot segment', '/internal/mini-app/%2e/finalize-booking'],
+    ['encoded parent segment', '/internal/mini-app/x/%2e%2e/finalize-booking'],
+    ['encoded slash', '/internal/mini-app/finalize-booking%2fretry'],
+    ['duplicate slash', '/internal/mini-app//finalize-booking'],
+    ['bare query marker', '/internal/mini-app/finalize-booking?'],
+    ['query', '/internal/mini-app/finalize-booking?x=1'],
+    ['suffix', '/internal/mini-app/finalize-booking/retry'],
+    ['prefix', '/prefix/internal/mini-app/finalize-booking'],
+    ['absolute-form target', 'http://localhost/internal/mini-app/finalize-booking'],
+    ['bare fragment-like marker', '/internal/mini-app/finalize-booking#'],
+    ['fragment-like suffix', '/internal/mini-app/finalize-booking#x'],
+  ])('keeps a non-exact raw worker target with a %s behind legacy Basic Auth', async (_label, path) => {
+    const pmcMiniApp = vi.fn<Middleware>(async (_req, res) => { res.statusCode = 204; res.end() })
+    const response = await invokeRaw(handler({ pmcMiniApp }), path, {
+      method: 'POST',
+      headers: { authorization: 'Bearer valid-worker-token' },
+    })
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('www-authenticate')).toBe('Basic realm="PMC Ads Agent", charset="UTF-8"')
+    expect(pmcMiniApp).not.toHaveBeenCalled()
+  })
+
+  it('delegates only the exact raw worker target, including wrong methods, without legacy Basic Auth', async () => {
+    const pmcMiniApp = vi.fn<Middleware>(async (req, res) => {
+      res.statusCode = req.method === 'POST' ? 401 : 405
+      res.end(JSON.stringify({ error: req.method === 'POST' ? 'ASYNC_WORKER_UNAUTHORIZED' : 'MINI_APP_METHOD_NOT_ALLOWED' }))
+    })
+    const app = handler({ pmcMiniApp })
+    const exact = await invokeRaw(app, '/internal/mini-app/finalize-booking', {
+      method: 'POST', headers: { authorization: 'Bearer rejected-token' },
+    })
+    const wrongMethod = await invokeRaw(app, '/internal/mini-app/finalize-booking', { method: 'GET' })
+
+    expect({ status: exact.status, body: await exact.json() }).toEqual({
+      status: 401,
+      body: { error: 'ASYNC_WORKER_UNAUTHORIZED' },
+    })
+    expect(exact.headers.get('www-authenticate')).toBeNull()
+    expect({ status: wrongMethod.status, body: await wrongMethod.json() }).toEqual({
+      status: 405,
+      body: { error: 'MINI_APP_METHOD_NOT_ALLOWED' },
+    })
+    expect(wrongMethod.headers.get('www-authenticate')).toBeNull()
+    expect(pmcMiniApp).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects Mini App static mutations and traversal without exposing other bundles', async () => {
     const app = handler()
 
@@ -124,6 +173,41 @@ async function invoke(
     const response = await fetch(`http://127.0.0.1:${address.port}${path}`, init)
     const body = await response.arrayBuffer()
     return new Response(response.status === 204 || response.status === 304 ? null : body, { status: response.status, headers: response.headers })
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+}
+
+async function invokeRaw(
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  path: string,
+  init: { method: string; headers?: Record<string, string> },
+): Promise<Response> {
+  const server = createServer(handler)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  try {
+    return await new Promise<Response>((resolve, reject) => {
+      const request = httpRequest({
+        host: '127.0.0.1',
+        port: address.port,
+        method: init.method,
+        path,
+        headers: init.headers,
+      }, (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        response.on('end', () => {
+          const status = response.statusCode ?? 500
+          resolve(new Response(status === 204 || status === 304 ? null : Buffer.concat(chunks), {
+            status,
+            headers: response.headers as Record<string, string>,
+          }))
+        })
+      })
+      request.on('error', reject)
+      request.end()
+    })
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }

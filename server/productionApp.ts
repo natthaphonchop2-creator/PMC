@@ -25,6 +25,7 @@ const OCR_API_PATHS = new Set([
   '/api/ocr-ledger/review',
   '/api/ocr-ledger/image',
 ])
+const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -64,6 +65,19 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
         res.statusCode = 500
         res.setHeader('content-type', 'application/json; charset=utf-8')
         res.end(JSON.stringify({ error: 'Booking LINE webhook failed' }))
+      }
+      return
+    }
+
+    if (req.url === ASYNC_WORKER_PATH) {
+      if (!deps.pmcMiniApp) {
+        jsonError(res, 503, 'Mini App is not configured')
+        return
+      }
+      try {
+        await deps.pmcMiniApp(req, res)
+      } catch {
+        jsonError(res, 500, 'Mini App route failed')
       }
       return
     }
@@ -302,7 +316,6 @@ function isOcrReviewPath(pathname: string): boolean {
 function isMiniAppApiPath(pathname: string): boolean {
   return pathname === '/api/mini-app' || pathname.startsWith('/api/mini-app/')
     || pathname === '/internal/mini-app/jera-sync'
-    || pathname === '/internal/mini-app/finalize-booking'
 }
 
 function isMiniAppPath(pathname: string): boolean {
