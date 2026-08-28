@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StockAuditEvent, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
-import { createStockRepository } from '../src/repositories'
+import { createStockRepository, type SheetRow } from '../src/repositories'
 import { createMemorySheetStore } from './helpers/fakes'
 
 function productFixture(patch: Partial<StockProduct> = {}): StockProduct {
@@ -133,5 +133,59 @@ describe('stock repository', () => {
         balanceAfterMilli: 8_001,
       }),
     ])).toThrow('stock balance chain mismatch')
+  })
+
+  it('rejects a document ID reused by a different request', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.insertProduct(productFixture())
+    repository.appendLedgerBatch([ledgerFixture()])
+
+    expect(() => repository.appendLedgerBatch([
+      ledgerFixture({
+        transactionId: 'TX-2',
+        requestId: 'request-stock-2',
+        balanceBeforeMilli: 1_000,
+        balanceAfterMilli: 2_000,
+      }),
+    ])).toThrow('stock document conflicts with request')
+  })
+
+  it.each([
+    [
+      'duplicate transaction IDs',
+      [
+        ledgerFixture(),
+        ledgerFixture({ transactionId: 'TX-1', lineNumber: 2, balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000 }),
+      ],
+      'stock transaction already exists',
+    ],
+    [
+      'request IDs associated with different documents',
+      [
+        ledgerFixture(),
+        ledgerFixture({ transactionId: 'TX-2', documentId: 'ISS-202608-0002', lineNumber: 2, balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000 }),
+      ],
+      'stock request conflicts with document',
+    ],
+    [
+      'mismatched stored balance chains',
+      [ledgerFixture({ balanceBeforeMilli: 1, balanceAfterMilli: 1_001 })],
+      'stock balance chain mismatch',
+    ],
+  ])('rejects an unrelated append when existing ledger has %s', (_description, corruptRows, expectedError) => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_LEDGER', corruptRows as unknown as SheetRow[])
+    const repository = createStockRepository(store)
+    const balanceBeforeMilli = corruptRows.reduce((balance, entry) => balance + entry.quantityDeltaMilli, 0)
+
+    expect(() => repository.appendLedgerBatch([
+      ledgerFixture({
+        transactionId: 'TX-3',
+        requestId: 'request-stock-3',
+        documentId: 'ISS-202608-0003',
+        balanceBeforeMilli,
+        balanceAfterMilli: balanceBeforeMilli + 1_000,
+      }),
+    ])).toThrow(expectedError)
   })
 })

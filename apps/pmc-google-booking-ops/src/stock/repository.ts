@@ -40,24 +40,39 @@ function asLedgerEntry(row: SheetRow): StockLedgerEntry {
   return clonePlain(row as unknown as StockLedgerEntry)
 }
 
-function validateLedgerBatch(existing: StockLedgerEntry[], entries: StockLedgerEntry[]): void {
-  const transactionIds = new Set(existing.map((entry) => entry.transactionId))
-  const documentsByRequest = new Map<string, string>()
-  const balances = aggregateStockBalances(existing)
+interface LedgerValidationState {
+  transactionIds: Set<string>
+  documentsByRequest: Map<string, string>
+  requestsByDocument: Map<string, string>
+  balances: Map<string, number>
+}
 
-  for (const entry of existing) documentsByRequest.set(entry.requestId, entry.documentId)
-
+function validateLedgerEntries(
+  entries: StockLedgerEntry[],
+  state: LedgerValidationState = {
+    transactionIds: new Set(),
+    documentsByRequest: new Map(),
+    requestsByDocument: new Map(),
+    balances: new Map(),
+  },
+): LedgerValidationState {
   for (const entry of entries) {
-    if (transactionIds.has(entry.transactionId)) throw new Error('stock transaction already exists')
-    transactionIds.add(entry.transactionId)
+    if (state.transactionIds.has(entry.transactionId)) throw new Error('stock transaction already exists')
+    state.transactionIds.add(entry.transactionId)
 
-    const existingDocumentId = documentsByRequest.get(entry.requestId)
+    const existingDocumentId = state.documentsByRequest.get(entry.requestId)
     if (existingDocumentId && existingDocumentId !== entry.documentId) {
       throw new Error('stock request conflicts with document')
     }
-    documentsByRequest.set(entry.requestId, entry.documentId)
+    state.documentsByRequest.set(entry.requestId, entry.documentId)
 
-    const balanceBeforeMilli = balances.get(entry.productId) ?? 0
+    const existingRequestId = state.requestsByDocument.get(entry.documentId)
+    if (existingRequestId && existingRequestId !== entry.requestId) {
+      throw new Error('stock document conflicts with request')
+    }
+    state.requestsByDocument.set(entry.documentId, entry.requestId)
+
+    const balanceBeforeMilli = state.balances.get(entry.productId) ?? 0
     const balanceAfterMilli = balanceBeforeMilli + entry.quantityDeltaMilli
     if (
       !Number.isSafeInteger(balanceAfterMilli) ||
@@ -66,8 +81,9 @@ function validateLedgerBatch(existing: StockLedgerEntry[], entries: StockLedgerE
     ) {
       throw new Error('stock balance chain mismatch')
     }
-    balances.set(entry.productId, balanceAfterMilli)
+    state.balances.set(entry.productId, balanceAfterMilli)
   }
+  return state
 }
 
 export function createStockRepository(store: SheetStore): StockRepository {
@@ -109,7 +125,8 @@ export function createStockRepository(store: SheetStore): StockRepository {
       if (entries.length === 0) return
       const rows = store.read('STOCK_LEDGER')
       const existing = rows.map(asLedgerEntry)
-      validateLedgerBatch(existing, entries)
+      const state = validateLedgerEntries(existing)
+      validateLedgerEntries(entries, state)
       store.replace('STOCK_LEDGER', [...rows, ...entries.map((entry) => toSheetRow(entry, STOCK_LEDGER_HEADERS))])
     },
     balanceByProduct(): Map<string, number> {
