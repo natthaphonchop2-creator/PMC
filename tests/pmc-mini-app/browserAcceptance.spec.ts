@@ -97,15 +97,30 @@ test('booking-only V1 hides JERA navigation while reporting is paused', async ({
   await expect(page.getByText('จัดการงานจองของคลินิก')).toBeVisible()
 })
 
-test('active staff opens renamed clinic reports without provider branding', async ({ page }) => {
-  await page.goto('/mini-app/?preview=1&reports=enabled&stock=enabled&role=staff')
-  await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
-  await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
-  await page.getByRole('button', { name: 'ยอดรับชำระ' }).click()
-  await expect(page.getByText('CLINIC REPORT')).toBeVisible()
-  await expect(page.locator('body')).not.toContainText(/JERA/i)
-  await page.getByRole('button', { name: 'รีเฟรชข้อมูล' }).click()
-  await expect(page.getByText(/อัปเดตล่าสุดเมื่อ|ข้อมูลอาจล่าช้า/)).toBeVisible()
+test.describe('Clinic report Android acceptance', () => {
+  test.use({ viewport: { width: 412, height: 915 } })
+
+  test('active staff opens renamed clinic reports without provider branding', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&reports=enabled&stock=enabled&role=staff')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    await page.getByRole('button', { name: 'ยอดรับชำระ' }).click()
+    await expect(page.getByText('CLINIC REPORT')).toBeVisible()
+
+    const today = await page.locator('.pmc-report-filters .pmc-report-section-heading span').innerText()
+    const yesterday = new Date(`${today}T00:00:00Z`)
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1)
+    const expectedDate = yesterday.toISOString().slice(0, 10)
+    await page.getByText('เมื่อวาน', { exact: true }).click()
+    await expect(page.getByRole('radio', { name: 'เมื่อวาน' })).toBeChecked()
+    await expect(page.getByText(expectedDate, { exact: true })).toBeVisible()
+
+    await expect(page.locator('body')).not.toContainText(/JERA/i)
+    await page.getByRole('button', { name: 'รีเฟรชข้อมูล' }).click()
+    await expect(page.getByText(/อัปเดตล่าสุดเมื่อ|ข้อมูลอาจล่าช้า/)).toBeVisible()
+    await page.getByRole('button', { name: 'กลับไปรายงาน' }).click()
+    await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+  })
 })
 
 test.describe('Stock Android acceptance', () => {
