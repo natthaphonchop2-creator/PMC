@@ -44,7 +44,7 @@ import {
   uploadMiniAppEvidence,
 } from './domain/miniAppEvidenceIngress'
 import type { BookingPorts } from './ports'
-import { processStockIngress, type StockIngressPorts } from './stock/ingress'
+import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -73,7 +73,7 @@ export function processBookingDoPost(
   const evidenceCandidate = event.postData?.contents.startsWith('{"kind":"MINI_APP_EVIDENCE"')
   const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_STOCK') {
-    return processStockIngress(parsed, requireStockIngressPorts(ports))
+    return processStockIngressResponse(parsed, requireStockIngressPorts(ports))
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EVIDENCE') {
     return uploadMiniAppEvidence(parsed, ports)

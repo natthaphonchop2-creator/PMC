@@ -2,13 +2,14 @@ import { createHmac, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ProductionMiddleware } from '../productionApp.js'
 import type { PmcMiniAppServerConfig } from './config.js'
-import type { AuthenticatedMiniAppContext, LineIdentityPort } from './contracts.js'
+import type { AuthenticatedMiniAppContext, LineIdentityPort, StockServerDependencies } from './contracts.js'
 import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
+import { handleStockMiniAppApi, isStockMiniAppApiPath } from './stock/middleware.js'
 
 export interface PmcMiniAppMiddlewareDependencies {
   config: PmcMiniAppServerConfig
@@ -29,6 +30,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   }): Promise<string> }
   enrollment?: EnrollmentService
   jera?: JeraMiniAppApi
+  stock?: StockServerDependencies
 }
 
 export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencies): ProductionMiddleware {
@@ -112,6 +114,21 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       return
     }
 
+    if (isStockMiniAppApiPath(pathname)) {
+      if (!deps.stock?.enabled) {
+        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+        return
+      }
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      if (deps.stock.managerPilotOnly && !authenticated.canManageStock) {
+        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+        return
+      }
+      await handleStockMiniAppApi(req, res, url, authenticated, deps.stock)
+      return
+    }
+
     const evidenceRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/evidence$/.exec(pathname)
     if (evidenceRoute) {
       if (req.method !== 'POST') {
@@ -155,6 +172,8 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       respond(res, 200, {
         fallbackFormUrl: deps.config.fallbackFormUrl,
         reportingEnabled: Boolean(deps.jera),
+        stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
+        canManageStock: authenticated.canManageStock,
         doctors: bookingConfig.doctors,
         services: bookingConfig.services,
         channels: bookingConfig.channels,
@@ -559,7 +578,7 @@ async function authenticate(
       respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
       return null
     }
-    return { staffId: staff.id, displayName: staff.name, lineUserId, canManageStock: staff.canManageStock }
+    return { staffId: staff.id, displayName: staff.name, lineUserId, canManageStock: staff.canManageStock === true }
   } catch {
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return null

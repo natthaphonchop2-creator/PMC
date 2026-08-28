@@ -17,6 +17,7 @@ import { SHEET_SCHEMAS, STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
 import {
   configureStockManagers,
   processStockIngress,
+  processStockIngressResponse,
   type StockIngressPorts,
 } from '../src/stock/ingress'
 import { createMemorySheetStore, createTestPorts } from './helpers/fakes'
@@ -52,8 +53,55 @@ describe('Apps Script Mini App Stock ingress', () => {
       { nonce: 'nonce-routed-123' },
     )
     expect(processBookingDoPost(event(routedEnvelope), routed)).toMatchObject({
-      requestId: 'issue-stock-1',
-      commandType: 'ISSUE',
+      ok: true,
+      result: { requestId: 'issue-stock-1', commandType: 'ISSUE' },
+    })
+  })
+
+  it.each([
+    ['insufficient balance', issueCommand({
+      requestId: 'issue-insufficient', payload: { lines: [{ productId: 'STK-000001', quantityMilli: 6_000 }] },
+    }), 'STOCK_INSUFFICIENT_BALANCE'],
+    ['manager required', receiveCommand({ requestId: 'receive-staff', staffId: 'ADMIN_01' }), 'STOCK_MANAGER_REQUIRED'],
+    ['stale product', updateCommand({ requestId: 'update-stale', payload: {
+      productId: 'STK-000001', expectedVersion: 0, name: 'ถุงมือ', category: 'CLINIC_SUPPLY',
+      unit: 'กล่อง', minimumQuantityMilli: 1_000,
+    } }), 'STOCK_STALE_PRODUCT'],
+  ])('returns one strict safe envelope for %s', (_name, command, error) => {
+    expect(processStockIngressResponse(signedEnvelope(command, {
+      nonce: `nonce-${command.requestId}`,
+    }), createStockIngressPorts())).toEqual({ ok: false, error })
+  })
+
+  it('returns recovery-required and idempotency-conflict without internal details', () => {
+    const recoveryPorts = createStockIngressPorts()
+    recoveryPorts.stock.appendAudit({
+      eventId: 'AUDIT:pending:P', requestId: 'pending-request', actorStaffId: 'ADMIN_01', action: 'ISSUE',
+      status: 'PREPARED', safeErrorCode: '', targetProductIdsJson: '["STK-000001"]',
+      correlationId: `ISS-pending|${'a'.repeat(64)}`, createdAt: NOW_ISO,
+    })
+    expect(processStockIngressResponse(signedEnvelope(issueCommand({ requestId: 'issue-blocked' }), {
+      nonce: 'nonce-recovery-blocked',
+    }), recoveryPorts)).toEqual({ ok: false, error: 'STOCK_RECOVERY_REQUIRED' })
+
+    const retryPorts = createStockIngressPorts()
+    const original = issueCommand({ requestId: 'issue-conflict' })
+    expect(processStockIngressResponse(signedEnvelope(original, { nonce: 'nonce-conflict-first' }), retryPorts))
+      .toMatchObject({ ok: true })
+    expect(processStockIngressResponse(signedEnvelope(issueCommand({
+      requestId: 'issue-conflict', payload: { lines: [{ productId: 'STK-000001', quantityMilli: 2_000 }] },
+    }), { nonce: 'nonce-conflict-second' }), retryPorts)).toEqual({
+      ok: false, error: 'STOCK_IDEMPOTENCY_CONFLICT',
+    })
+  })
+
+  it('redacts unrecognized internal failures to Stock storage unavailable', () => {
+    const invalid = signedEnvelope(issueCommand(), { nonce: 'nonce-private-failure' })
+    invalid.signature = '0'.repeat(64)
+
+    expect(processStockIngressResponse(invalid, createStockIngressPorts())).toEqual({
+      ok: false,
+      error: 'STOCK_STORAGE_UNAVAILABLE',
     })
   })
 
@@ -298,6 +346,21 @@ function receiveCommand(patch: Partial<ReceiveCommand> = {}): ReceiveCommand {
     staffId: 'ADMIN_03',
     commandType: 'RECEIVE',
     payload: { lines: [{ productId: 'STK-000001', quantityMilli: 1_000 }] },
+    ...patch,
+  }
+}
+
+function updateCommand(
+  patch: Partial<Extract<MiniAppStockCommand, { commandType: 'UPDATE_PRODUCT' }>> = {},
+): Extract<MiniAppStockCommand, { commandType: 'UPDATE_PRODUCT' }> {
+  return {
+    requestId: 'update-stock-1',
+    staffId: 'ADMIN_03',
+    commandType: 'UPDATE_PRODUCT',
+    payload: {
+      productId: 'STK-000001', expectedVersion: 1, name: 'ถุงมือ', category: 'CLINIC_SUPPLY',
+      unit: 'กล่อง', minimumQuantityMilli: 1_000,
+    },
     ...patch,
   }
 }

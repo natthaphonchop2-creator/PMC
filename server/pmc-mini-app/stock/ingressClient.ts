@@ -2,8 +2,10 @@ import { createHmac, randomUUID } from 'node:crypto'
 import type { MiniAppStockCommand, StockCommandResult } from '../../../shared/pmcStock.js'
 import {
   canonicalMiniAppStockIngress,
+  isMiniAppStockSafeErrorCode,
   type MiniAppStockIngressEnvelope,
   type MiniAppStockCommandType,
+  type MiniAppStockSafeErrorCode,
   type UnsignedMiniAppStockIngressEnvelope,
 } from '../../../shared/pmcMiniAppStockIngress.js'
 
@@ -33,11 +35,7 @@ export interface StockIngressClientOptions {
 }
 
 export class StockIngressClientError extends Error {
-  readonly code:
-    | 'STOCK_INGRESS_INVALID_INPUT'
-    | 'STOCK_INGRESS_TIMEOUT'
-    | 'STOCK_INGRESS_FAILED'
-    | 'STOCK_INGRESS_INVALID_RESPONSE'
+  readonly code: MiniAppStockSafeErrorCode
 
   constructor(code: StockIngressClientError['code']) {
     super(`Stock ingress failed: ${code}`)
@@ -57,7 +55,7 @@ export function buildMiniAppStockIngress(
     !safeNonce(context.nonce) ||
     !secret
   ) {
-    throw new StockIngressClientError('STOCK_INGRESS_INVALID_INPUT')
+    throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
   }
   const unsigned: UnsignedMiniAppStockIngressEnvelope = {
     kind: 'MINI_APP_STOCK',
@@ -70,7 +68,7 @@ export function buildMiniAppStockIngress(
   try {
     canonical = canonicalMiniAppStockIngress(unsigned)
   } catch {
-    throw new StockIngressClientError('STOCK_INGRESS_INVALID_INPUT')
+    throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
   }
   const signature = createHmac('sha256', secret).update(canonical, 'utf8').digest('hex')
   return {
@@ -115,25 +113,32 @@ export function createStockIngressClient(options: StockIngressClientOptions): {
           body: JSON.stringify(built.body),
           signal: controller.signal,
         })
-        if (!response.ok) throw new StockIngressClientError('STOCK_INGRESS_FAILED')
+        if (!response.ok) throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
         let body: unknown
         try {
           body = await response.json()
         } catch {
-          throw new StockIngressClientError('STOCK_INGRESS_INVALID_RESPONSE')
+          throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
         }
-        if (
-          !isStockCommandResult(body) ||
-          body.requestId !== command.requestId ||
-          body.commandType !== command.commandType
-        ) {
-          throw new StockIngressClientError('STOCK_INGRESS_INVALID_RESPONSE')
+        if (hasExactKeys(body, ['ok', 'result']) && body.ok === true) {
+          const result = body.result
+          if (
+            !isStockCommandResult(result) ||
+            result.requestId !== command.requestId ||
+            result.commandType !== command.commandType
+          ) {
+            throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
+          }
+          return result
         }
-        return body
+        if (hasExactKeys(body, ['ok', 'error']) && body.ok === false && isMiniAppStockSafeErrorCode(body.error)) {
+          throw new StockIngressClientError(body.error)
+        }
+        throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
       } catch (error) {
-        if (timedOut) throw new StockIngressClientError('STOCK_INGRESS_TIMEOUT')
+        if (timedOut) throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
         if (error instanceof StockIngressClientError) throw error
-        throw new StockIngressClientError('STOCK_INGRESS_FAILED')
+        throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
       } finally {
         clearTimeout(timeout)
       }

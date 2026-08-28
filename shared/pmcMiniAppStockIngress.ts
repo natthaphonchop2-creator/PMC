@@ -1,4 +1,4 @@
-import type { MiniAppStockCommand, StockCategory } from './pmcStock'
+import type { MiniAppStockCommand, StockCategory, StockCommandResult } from './pmcStock'
 
 export type MiniAppStockCommandType =
   | 'CREATE_PRODUCT'
@@ -19,6 +19,41 @@ export interface UnsignedMiniAppStockIngressEnvelope {
 
 export interface MiniAppStockIngressEnvelope extends UnsignedMiniAppStockIngressEnvelope {
   signature: string
+}
+
+export const MINI_APP_STOCK_SAFE_ERROR_CODES = [
+  'STOCK_INVALID_ID',
+  'STOCK_INVALID_FINGERPRINT',
+  'STOCK_STAFF_REQUIRED',
+  'STOCK_MANAGER_REQUIRED',
+  'STOCK_IDEMPOTENCY_CONFLICT',
+  'STOCK_INVALID_LINES',
+  'STOCK_INVALID_QUANTITY',
+  'STOCK_DUPLICATE_PRODUCT',
+  'STOCK_PRODUCT_NOT_FOUND',
+  'STOCK_PRODUCT_INACTIVE',
+  'STOCK_BALANCE_OVERFLOW',
+  'STOCK_INSUFFICIENT_BALANCE',
+  'STOCK_INVALID_PRODUCT',
+  'STOCK_PRODUCT_NAME_EXISTS',
+  'STOCK_ADJUST_REASON_REQUIRED',
+  'STOCK_UNIT_LOCKED',
+  'STOCK_RECOVERY_REQUIRED',
+  'STOCK_UNKNOWN_COMMAND',
+  'STOCK_STALE_PRODUCT',
+  'STOCK_STORAGE_UNAVAILABLE',
+] as const
+
+export type MiniAppStockSafeErrorCode = typeof MINI_APP_STOCK_SAFE_ERROR_CODES[number]
+
+export type MiniAppStockIngressResponse =
+  | { ok: true; result: StockCommandResult }
+  | { ok: false; error: MiniAppStockSafeErrorCode }
+
+const SAFE_ERROR_CODES = new Set<string>(MINI_APP_STOCK_SAFE_ERROR_CODES)
+
+export function isMiniAppStockSafeErrorCode(value: unknown): value is MiniAppStockSafeErrorCode {
+  return typeof value === 'string' && SAFE_ERROR_CODES.has(value)
 }
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'command'] as const

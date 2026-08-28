@@ -30,7 +30,7 @@ describe('PMC Mini App signed Stock ingress client', () => {
 
   it('posts the server-injected staff command and accepts an exact result', async () => {
     const result = resultFixture()
-    const request = vi.fn(async () => response(200, result))
+    const request = vi.fn(async () => response(200, { ok: true, result }))
     const client = createStockIngressClient({
       url: 'https://script.google.com/macros/s/deployment/exec',
       secret: 'stock-ingress-secret',
@@ -54,10 +54,35 @@ describe('PMC Mini App signed Stock ingress client', () => {
   })
 
   it.each([
+    'STOCK_INSUFFICIENT_BALANCE',
+    'STOCK_MANAGER_REQUIRED',
+    'STOCK_STALE_PRODUCT',
+    'STOCK_RECOVERY_REQUIRED',
+    'STOCK_IDEMPOTENCY_CONFLICT',
+  ])('propagates the exact allowlisted business error %s', async (error) => {
+    const client = createStockIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec',
+      secret: 'stock-ingress-secret',
+      now: () => 1_800_000_000,
+      nonce: () => 'nonce-stock-123',
+      fetch: vi.fn(async () => response(200, { ok: false, error })),
+    })
+
+    await expect(client.send(commandFixture())).rejects.toMatchObject({
+      code: error,
+      message: `Stock ingress failed: ${error}`,
+    })
+  })
+
+  it.each([
     ['provider failure', async () => response(500, { detail: 'private-provider-detail' })],
-    ['malformed result', async () => response(200, { ...resultFixture(), extra: true })],
-    ['mismatched request result', async () => response(200, {
+    ['malformed success envelope', async () => response(200, { ok: true, result: resultFixture(), extra: true })],
+    ['mismatched request result', async () => response(200, { ok: true, result: {
       ...resultFixture(), requestId: 'different-request',
+    } })],
+    ['unknown error code', async () => response(200, { ok: false, error: 'STOCK_PRIVATE_INTERNAL' })],
+    ['error envelope with private detail', async () => response(200, {
+      ok: false, error: 'STOCK_INSUFFICIENT_BALANCE', detail: 'private-provider-detail',
     })],
     ['transport failure', async () => { throw new Error('private-transport-detail') }],
   ])('returns a bounded safe error for %s', async (_name, fetchImplementation) => {
@@ -70,7 +95,7 @@ describe('PMC Mini App signed Stock ingress client', () => {
     })
 
     await expect(client.send(commandFixture())).rejects.toMatchObject({
-      code: expect.stringMatching(/^STOCK_INGRESS_/),
+      code: 'STOCK_STORAGE_UNAVAILABLE',
       message: expect.not.stringMatching(/private-provider-detail|private-transport-detail/),
     })
   })

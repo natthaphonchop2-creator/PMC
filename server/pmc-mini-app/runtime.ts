@@ -7,6 +7,8 @@ import { createPmcMiniAppMiddleware } from './middleware.js'
 import { createGoogleMiniAppStore } from './store.js'
 import { createJeraRuntime } from '../jera/runtime.js'
 import { createEnrollmentService } from './enrollment.js'
+import { createStockIngressClient } from './stock/ingressClient.js'
+import { createStockReadStore } from './stock/readStore.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -39,6 +41,15 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     url: config.bookingIngressUrl,
     secret: config.bookingIngressSecret,
   })
+  const stock = {
+    enabled: config.stockEnabled,
+    managerPilotOnly: config.stockManagerPilotOnly,
+    readStore: createStockReadStore({ spreadsheetId: config.spreadsheetId, sheets: google.sheets }),
+    ingress: createStockIngressClient({
+      url: config.bookingIngressUrl,
+      secret: config.bookingIngressSecret,
+    }),
+  }
   const enrollment = config.enrollmentPin ? createEnrollmentService({
     pin: config.enrollmentPin,
     signingSecret: config.signingSecret,
@@ -54,6 +65,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     evidenceIngress,
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
+    stock,
     now: () => new Date(),
   })
 }

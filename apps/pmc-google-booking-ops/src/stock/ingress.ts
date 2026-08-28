@@ -1,7 +1,10 @@
 import type { MiniAppStockCommand, StockCommandResult } from '../../../../shared/pmcStock'
 import {
   canonicalMiniAppStockIngress,
+  isMiniAppStockSafeErrorCode,
   type MiniAppStockIngressEnvelope,
+  type MiniAppStockIngressResponse,
+  type MiniAppStockSafeErrorCode,
   type UnsignedMiniAppStockIngressEnvelope,
 } from '../../../../shared/pmcMiniAppStockIngress'
 import type { SheetStore } from '../repositories'
@@ -61,6 +64,23 @@ export function processStockIngress(
       allocateId: ports.allocateId,
     })
   })
+}
+
+export function processStockIngressResponse(
+  input: unknown,
+  ports: StockIngressPorts,
+): MiniAppStockIngressResponse {
+  try {
+    return { ok: true, result: processStockIngress(input, ports) }
+  } catch (error) {
+    return { ok: false, error: safeStockIngressError(error) }
+  }
+}
+
+function safeStockIngressError(error: unknown): MiniAppStockSafeErrorCode {
+  const message = error instanceof Error ? error.message : ''
+  if (message === 'version conflict') return 'STOCK_STALE_PRODUCT'
+  return isMiniAppStockSafeErrorCode(message) ? message : 'STOCK_STORAGE_UNAVAILABLE'
 }
 
 export function configureStockManagers(store: SheetStore): {
