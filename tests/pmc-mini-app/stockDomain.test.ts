@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   aggregateStockBalances,
   formatQuantityMilli,
+  normalizeStockProductName,
   parseNonNegativeQuantityToMilli,
   parseQuantityToMilli,
 } from '../../shared/pmcStock'
@@ -17,6 +18,10 @@ describe('PMC Stock shared domain', () => {
 
   it('allows an exact zero only for physical-count reconciliation', () => {
     expect(parseNonNegativeQuantityToMilli('0')).toBe(0)
+  })
+
+  it('uses one canonical whitespace and case normalization for product names', () => {
+    expect(normalizeStockProductName('  ถุงมือ   NITRILE  ')).toBe('ถุงมือ nitrile')
   })
 
   it.each(['0', '-1', '1.0001', 'NaN', ''])('rejects unsafe quantity %s', (input) => {

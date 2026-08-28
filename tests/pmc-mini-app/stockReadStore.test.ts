@@ -148,7 +148,7 @@ describe('PMC Stock Cloud Run read store', () => {
       }))
     }],
   ])('rejects %s as a data-integrity failure', async (_name, corrupt) => {
-    const tabs = validTabs({ audit: true })
+    const tabs = validTabs()
     corrupt(tabs)
 
     await expect(createStore(new MemoryStockSheets(tabs)).listHistory(null, 25)).rejects.toBeInstanceOf(
@@ -157,6 +157,98 @@ describe('PMC Stock Cloud Run read store', () => {
     await expect(createStore(new MemoryStockSheets(tabs)).listHistory(null, 25)).rejects.toMatchObject({
       code: 'STOCK_DATA_INTEGRITY_ERROR',
     })
+  })
+
+  it.each([
+    ['ledger without a journal', (tabs: StockTabs) => { tabs[AUDIT_RANGE].splice(1) }],
+    ['journal document mismatch', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE][1]![7] = `RCV-other|${'a'.repeat(64)}`
+      tabs[AUDIT_RANGE][2]![7] = `RCV-other|${'a'.repeat(64)}`
+    }],
+    ['journal target order mismatch', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE][1]![6] = '["STK-000002","STK-000001"]'
+      tabs[AUDIT_RANGE][2]![6] = '["STK-000002","STK-000001"]'
+    }],
+    ['journal actor mismatch', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE][1]![2] = 'ADMIN_03'
+      tabs[AUDIT_RANGE][2]![2] = 'ADMIN_03'
+    }],
+    ['journal creation time mismatch', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE][1]![8] = '2026-08-28T12:00:00.000Z'
+      tabs[AUDIT_RANGE][2]![8] = '2026-08-28T12:00:00.000Z'
+    }],
+    ['journal action mismatch', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE][1]![3] = 'ISSUE'
+      tabs[AUDIT_RANGE][2]![3] = 'ISSUE'
+    }],
+    ['non-contiguous line numbers', (tabs: StockTabs) => { tabs[LEDGER_RANGE][2]![3] = 3 }],
+    ['partial PREPARED receive', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE].splice(2, 1)
+      tabs[LEDGER_RANGE].splice(2, 1)
+    }],
+    ['partial ACCEPTED receive', (tabs: StockTabs) => { tabs[LEDGER_RANGE].splice(2, 1) }],
+    ['product-only action with ledger', (tabs: StockTabs) => {
+      tabs[AUDIT_RANGE][1]![3] = 'UPDATE_PRODUCT'
+      tabs[AUDIT_RANGE][2]![3] = 'UPDATE_PRODUCT'
+    }],
+    ['accepted receive without ledger', (tabs: StockTabs) => { tabs[LEDGER_RANGE].splice(1) }],
+    ['accepted issue without ledger', (tabs: StockTabs) => {
+      tabs[LEDGER_RANGE].splice(1)
+      tabs[AUDIT_RANGE][1]![3] = 'ISSUE'
+      tabs[AUDIT_RANGE][2]![3] = 'ISSUE'
+    }],
+  ])('rejects bidirectional journal-ledger corruption: %s', async (_name, corrupt) => {
+    const tabs = multiLineTabs()
+    corrupt(tabs)
+
+    await expect(createStore(new MemoryStockSheets(tabs)).listProducts()).rejects.toMatchObject({
+      code: 'STOCK_DATA_INTEGRITY_ERROR',
+    })
+  })
+
+  it('allows crash-safe no-ledger journals only for valid command states', async () => {
+    const preparedReceive = journalOnlyTabs({ action: 'RECEIVE', status: 'PREPARED', target: 'STK-000001' })
+    const preparedIssue = journalOnlyTabs({ action: 'ISSUE', status: 'PREPARED', target: 'STK-000001' })
+    const acceptedCreate = journalOnlyTabs({ action: 'CREATE_PRODUCT', status: 'ACCEPTED', target: 'STK-000001' })
+    const acceptedAdjust = journalOnlyTabs({ action: 'ADJUST', status: 'ACCEPTED', target: 'STK-000001' })
+    const historicalUpdate = journalOnlyTabs({ action: 'UPDATE_PRODUCT', status: 'ACCEPTED', target: 'STK-missing' })
+
+    await expect(createStore(new MemoryStockSheets(preparedReceive)).listProducts()).resolves.toHaveLength(1)
+    await expect(createStore(new MemoryStockSheets(preparedIssue)).listProducts()).resolves.toHaveLength(1)
+    await expect(createStore(new MemoryStockSheets(acceptedCreate)).listProducts()).resolves.toHaveLength(1)
+    await expect(createStore(new MemoryStockSheets(acceptedAdjust)).listProducts()).resolves.toHaveLength(1)
+    await expect(createStore(new MemoryStockSheets(historicalUpdate)).listProducts()).resolves.toHaveLength(1)
+  })
+
+  it('requires an accepted CREATE_PRODUCT journal target to exist', async () => {
+    const tabs = journalOnlyTabs({ action: 'CREATE_PRODUCT', status: 'ACCEPTED', target: 'STK-missing' })
+
+    await expect(createStore(new MemoryStockSheets(tabs)).listProducts()).rejects.toMatchObject({
+      code: 'STOCK_DATA_INTEGRITY_ERROR',
+    })
+  })
+
+  it.each([
+    ['normalized-name mismatch', [productRow({ name: 'ถุงมือ NITRILE', normalizedName: 'ถุงมือ' })]],
+    ['duplicate active normalized names', [
+      productRow({ name: 'ถุงมือ NITRILE', normalizedName: 'ถุงมือ nitrile' }),
+      productRow({ productId: 'STK-000002', name: 'ถุงมือ nitrile', normalizedName: 'ถุงมือ nitrile' }),
+    ]],
+  ])('rejects invalid product-name semantics: %s', async (_name, products) => {
+    await expect(createStore(stockSheets({ products })).listProducts()).rejects.toMatchObject({
+      code: 'STOCK_DATA_INTEGRITY_ERROR',
+    })
+  })
+
+  it('allows an inactive product to retain a duplicate normalized historical name', async () => {
+    const sheets = stockSheets({ products: [
+      productRow({ name: 'ถุงมือ NITRILE', normalizedName: 'ถุงมือ nitrile' }),
+      productRow({
+        productId: 'STK-000002', name: 'ถุงมือ nitrile', normalizedName: 'ถุงมือ nitrile', active: false,
+      }),
+    ] })
+
+    await expect(createStore(sheets).listProducts()).resolves.toHaveLength(2)
   })
 
   it('maps Google read failures to one safe storage code', async () => {
@@ -176,21 +268,90 @@ function createStore(sheets: MiniAppSheetsPort) {
 
 type StockTabs = Record<typeof PRODUCT_RANGE | typeof LEDGER_RANGE | typeof AUDIT_RANGE, unknown[][]>
 
-function validTabs(options: { audit?: boolean } = {}): StockTabs {
+function validTabs(): StockTabs {
   return {
     [PRODUCT_RANGE]: [[...STOCK_PRODUCT_HEADERS], productRow()],
     [LEDGER_RANGE]: [[...STOCK_LEDGER_HEADERS], ledgerRow()],
-    [AUDIT_RANGE]: options.audit
-      ? [[...STOCK_AUDIT_HEADERS], auditRow(), auditRow({ eventId: 'AUDIT:issue:A', status: 'ACCEPTED' })]
-      : [[...STOCK_AUDIT_HEADERS]],
+    [AUDIT_RANGE]: [[...STOCK_AUDIT_HEADERS], auditRow(), auditRow({ eventId: 'AUDIT:receive:A', status: 'ACCEPTED' })],
   }
 }
 
 function stockSheets(input: { products?: unknown[][]; ledger?: unknown[][]; audit?: unknown[][] } = {}) {
+  const ledger = input.ledger ?? []
   return new MemoryStockSheets({
     [PRODUCT_RANGE]: [[...STOCK_PRODUCT_HEADERS], ...(input.products ?? [])],
-    [LEDGER_RANGE]: [[...STOCK_LEDGER_HEADERS], ...(input.ledger ?? [])],
-    [AUDIT_RANGE]: [[...STOCK_AUDIT_HEADERS], ...(input.audit ?? [])],
+    [LEDGER_RANGE]: [[...STOCK_LEDGER_HEADERS], ...ledger],
+    [AUDIT_RANGE]: [[...STOCK_AUDIT_HEADERS], ...(input.audit ?? auditRowsForLedger(ledger))],
+  })
+}
+
+function multiLineTabs(): StockTabs {
+  const ledger = [
+    ledgerRow(),
+    ledgerRow({
+      transactionId: 'RCV-000001:TX:2', lineNumber: 2, productId: 'STK-000002',
+      quantityDeltaMilli: 2_000, balanceBeforeMilli: 0, balanceAfterMilli: 2_000,
+      idempotencyKey: 'receive-0:2',
+    }),
+  ]
+  return {
+    [PRODUCT_RANGE]: [[...STOCK_PRODUCT_HEADERS], productRow(), productRow({
+      productId: 'STK-000002', name: 'เข็ม', normalizedName: 'เข็ม',
+    })],
+    [LEDGER_RANGE]: [[...STOCK_LEDGER_HEADERS], ...ledger],
+    [AUDIT_RANGE]: [[...STOCK_AUDIT_HEADERS],
+      auditRow({ targetProductIdsJson: '["STK-000001","STK-000002"]' }),
+      auditRow({ eventId: 'AUDIT:receive:A', status: 'ACCEPTED', targetProductIdsJson: '["STK-000001","STK-000002"]' }),
+    ],
+  }
+}
+
+function journalOnlyTabs(input: {
+  action: string
+  status: 'PREPARED' | 'ACCEPTED'
+  target: string
+}): StockTabs {
+  const prepared = auditRow({
+    eventId: `AUDIT:${input.action}:P`, requestId: `${input.action}-request`, action: input.action,
+    targetProductIdsJson: JSON.stringify([input.target]), correlationId: `DOC-${input.action}|${'d'.repeat(64)}`,
+  })
+  return {
+    [PRODUCT_RANGE]: [[...STOCK_PRODUCT_HEADERS], productRow()],
+    [LEDGER_RANGE]: [[...STOCK_LEDGER_HEADERS]],
+    [AUDIT_RANGE]: [[...STOCK_AUDIT_HEADERS], prepared,
+      ...(input.status === 'ACCEPTED' ? [auditRow({
+        eventId: `AUDIT:${input.action}:A`, requestId: `${input.action}-request`, action: input.action,
+        status: 'ACCEPTED', targetProductIdsJson: JSON.stringify([input.target]),
+        correlationId: `DOC-${input.action}|${'d'.repeat(64)}`,
+      })] : []),
+    ],
+  }
+}
+
+function auditRowsForLedger(rows: unknown[][]): unknown[][] {
+  const byRequest = new Map<string, unknown[][]>()
+  for (const row of rows) {
+    const requestId = String(row[2])
+    const group = byRequest.get(requestId) ?? []
+    group.push(row)
+    byRequest.set(requestId, group)
+  }
+  return [...byRequest.entries()].flatMap(([requestId, group], groupIndex) => {
+    const ordered = [...group].sort((left, right) => Number(left[3]) - Number(right[3]))
+    const first = ordered[0]!
+    const action = first[5] === 'OPENING' ? 'CREATE_PRODUCT' : String(first[5])
+    const common = {
+      requestId,
+      actorStaffId: first[9],
+      action,
+      targetProductIdsJson: JSON.stringify(ordered.map((row) => row[4])),
+      correlationId: `${String(first[1])}|${String(groupIndex + 1).repeat(64).slice(0, 64)}`,
+      createdAt: first[13],
+    }
+    return [
+      auditRow({ ...common, eventId: `AUDIT:${requestId}:P` }),
+      auditRow({ ...common, eventId: `AUDIT:${requestId}:A`, status: 'ACCEPTED' }),
+    ]
   })
 }
 

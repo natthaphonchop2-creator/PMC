@@ -1,3 +1,6 @@
+import {
+  normalizeStockProductName,
+} from '../../../shared/pmcStock.js'
 import type {
   StockAuditEvent,
   StockDocumentSummary,
@@ -96,9 +99,10 @@ function validateSnapshot(ranges: Record<string, unknown[][]>): StockSnapshot {
     const auditRows = requireRows(ranges[AUDIT_RANGE], STOCK_AUDIT_HEADERS)
     const products = productRows.map(parseProduct)
     const productIds = uniqueIds(products.map(({ productId }) => productId))
+    validateProductNames(products)
     const ledger = ledgerRows.map(parseLedgerEntry)
     const balances = validateLedger(ledger, productIds)
-    validateAudit(auditRows.map(parseAuditEvent), ledger)
+    validateAudit(auditRows.map(parseAuditEvent), ledger, productIds)
 
     const productsById = new Map(products.map((product) => [product.productId, product]))
     const activity = new Set(ledger.map(({ productId }) => productId))
@@ -121,6 +125,16 @@ function validateSnapshot(ranges: Record<string, unknown[][]>): StockSnapshot {
   } catch (error) {
     if (error instanceof StockReadStoreError) throw error
     throw new StockReadStoreError('STOCK_DATA_INTEGRITY_ERROR')
+  }
+}
+
+function validateProductNames(products: StockProduct[]): void {
+  const activeNames = new Set<string>()
+  for (const product of products) {
+    if (product.normalizedName !== normalizeStockProductName(product.name)) integrity()
+    if (!product.active) continue
+    if (activeNames.has(product.normalizedName)) integrity()
+    activeNames.add(product.normalizedName)
   }
 }
 
@@ -266,9 +280,19 @@ function parseAuditEvent(row: unknown[]): StockAuditEvent {
   }
 }
 
-function validateAudit(events: StockAuditEvent[], ledger: StockLedgerEntry[]): void {
+function validateAudit(
+  events: StockAuditEvent[],
+  ledger: StockLedgerEntry[],
+  productIds: Set<string>,
+): void {
   uniqueIds(events.map(({ eventId }) => eventId))
   const journals = new Map<string, { prepared: StockAuditEvent[]; accepted: StockAuditEvent[] }>()
+  const ledgerByRequest = new Map<string, StockLedgerEntry[]>()
+  for (const entry of ledger) {
+    const entries = ledgerByRequest.get(entry.requestId) ?? []
+    entries.push(entry)
+    ledgerByRequest.set(entry.requestId, entries)
+  }
   for (const event of events) {
     if (event.status !== 'PREPARED' && event.status !== 'ACCEPTED') continue
     validateJournalEvent(event)
@@ -285,17 +309,45 @@ function validateAudit(events: StockAuditEvent[], ledger: StockLedgerEntry[]): v
     const accepted = journal.accepted[0]
     if (!accepted) unresolved += 1
     else if (!sameJournalIntent(prepared, accepted)) integrity()
-
-    const requestEntries = ledger.filter((entry) => entry.requestId === requestId)
-    if (requestEntries.length > 0) {
-      const documentId = journalDocumentId(prepared)
-      if (
-        requestEntries.some((entry) => entry.documentId !== documentId) ||
-        !journalActionMatchesTransaction(prepared.action, requestEntries[0]!.transactionType)
-      ) integrity()
-    }
+    validateJournalLedger(prepared, accepted ?? null, ledgerByRequest.get(requestId) ?? [], productIds)
   }
+  for (const requestId of ledgerByRequest.keys()) if (!journals.has(requestId)) integrity()
   if (unresolved > 1) integrity()
+}
+
+function validateJournalLedger(
+  prepared: StockAuditEvent,
+  accepted: StockAuditEvent | null,
+  entries: StockLedgerEntry[],
+  productIds: Set<string>,
+): void {
+  const targets = parseTargets(prepared.targetProductIdsJson)
+  const documentId = journalDocumentId(prepared)
+  const productOnly = prepared.action === 'UPDATE_PRODUCT' ||
+    prepared.action === 'DEACTIVATE_PRODUCT' ||
+    prepared.action === 'REACTIVATE_PRODUCT'
+  if ((productOnly || prepared.action === 'CREATE_PRODUCT' || prepared.action === 'ADJUST') && targets.length !== 1) {
+    integrity()
+  }
+  if (accepted && prepared.action === 'CREATE_PRODUCT' && !productIds.has(targets[0]!)) integrity()
+  if (productOnly && entries.length > 0) integrity()
+  if (entries.length === 0) {
+    if (accepted && (prepared.action === 'RECEIVE' || prepared.action === 'ISSUE')) integrity()
+    return
+  }
+
+  const ordered = [...entries].sort((left, right) => left.lineNumber - right.lineNumber)
+  if (
+    ordered.length !== targets.length ||
+    ordered.some((entry, index) => (
+      entry.documentId !== documentId ||
+      entry.lineNumber !== index + 1 ||
+      entry.productId !== targets[index] ||
+      entry.actorStaffId !== prepared.actorStaffId ||
+      entry.createdAt !== prepared.createdAt ||
+      !journalActionMatchesTransaction(prepared.action, entry.transactionType)
+    ))
+  ) integrity()
 }
 
 function validateJournalEvent(event: StockAuditEvent): void {

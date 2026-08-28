@@ -1,3 +1,7 @@
+import {
+  normalizeStockProductName,
+  normalizeStockProductText,
+} from '../../../../shared/pmcStock'
 import type {
   MiniAppStockCommand,
   StockAuditEvent,
@@ -335,22 +339,14 @@ function executeStockDocument(
   return resultFromEntries(input, context, intended)
 }
 
-function normalizeProductText(value: string): string {
-  return value.trim().replace(/\s+/g, ' ')
-}
-
-function normalizeProductName(value: string): string {
-  return normalizeProductText(value).toLowerCase()
-}
-
 function requireProductFields(input: {
   name: string
   category: unknown
   unit: string
   minimumQuantityMilli: number
 }): { name: string; normalizedName: string; category: StockProduct['category']; unit: string; minimumQuantityMilli: number } {
-  const name = normalizeProductText(input.name)
-  const unit = normalizeProductText(input.unit)
+  const name = normalizeStockProductText(input.name)
+  const unit = normalizeStockProductText(input.unit)
   if (!name || !unit) throw new Error('STOCK_INVALID_PRODUCT')
   if (input.category !== 'CLINIC_SUPPLY' && input.category !== 'RETAIL_PRODUCT') {
     throw new Error('STOCK_INVALID_PRODUCT')
@@ -360,7 +356,7 @@ function requireProductFields(input: {
   }
   return {
     name,
-    normalizedName: normalizeProductName(name),
+    normalizedName: normalizeStockProductName(name),
     category: input.category,
     unit,
     minimumQuantityMilli: input.minimumQuantityMilli,

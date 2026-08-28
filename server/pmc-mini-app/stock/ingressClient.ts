@@ -124,8 +124,7 @@ export function createStockIngressClient(options: StockIngressClientOptions): {
           const result = body.result
           if (
             !isStockCommandResult(result) ||
-            result.requestId !== command.requestId ||
-            result.commandType !== command.commandType
+            !isStockCommandResultForCommand(command, result)
           ) {
             throw new StockIngressClientError('STOCK_STORAGE_UNAVAILABLE')
           }
@@ -144,6 +143,45 @@ export function createStockIngressClient(options: StockIngressClientOptions): {
       }
     },
   }
+}
+
+function isStockCommandResultForCommand(
+  command: MiniAppStockCommand,
+  result: StockCommandResult,
+): boolean {
+  if (
+    result.requestId !== command.requestId ||
+    result.commandType !== command.commandType ||
+    result.lines.some(({ balanceAfterMilli }) => balanceAfterMilli < 0)
+  ) return false
+
+  if (command.commandType === 'ISSUE' || command.commandType === 'RECEIVE') {
+    const inputProductIds = command.payload.lines.map(({ productId }) => productId)
+    if (new Set(inputProductIds).size !== inputProductIds.length || result.lines.length !== command.payload.lines.length) {
+      return false
+    }
+    const direction = command.commandType === 'ISSUE' ? -1 : 1
+    return result.lines.every((line, index) => {
+      const requested = command.payload.lines[index]!
+      return line.productId === requested.productId &&
+        line.quantityDeltaMilli === direction * requested.quantityMilli
+    })
+  }
+
+  if (command.commandType === 'CREATE_PRODUCT') {
+    if (command.payload.openingQuantityMilli === 0) return result.lines.length === 0
+    return result.lines.length === 1 &&
+      result.lines[0]!.quantityDeltaMilli === command.payload.openingQuantityMilli &&
+      result.lines[0]!.balanceAfterMilli === command.payload.openingQuantityMilli
+  }
+
+  if (command.commandType === 'ADJUST') {
+    return result.lines.length === 0 || (result.lines.length === 1 &&
+      result.lines[0]!.productId === command.payload.productId &&
+      result.lines[0]!.balanceAfterMilli === command.payload.countedQuantityMilli)
+  }
+
+  return result.lines.length === 0
 }
 
 function isStockCommandResult(value: unknown): value is StockCommandResult {

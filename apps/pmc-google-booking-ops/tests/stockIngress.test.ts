@@ -11,6 +11,7 @@ import {
   type MiniAppStockIngressEnvelope,
 } from '../../../shared/pmcMiniAppStockIngress'
 import { processBookingDoPost } from '../src/entrypoints'
+import { createStockIngressClient } from '../../../server/pmc-mini-app/stock/ingressClient'
 import { createStockRepository, type SheetRow, type SheetStore } from '../src/repositories'
 import { configureStockManagersWorkflow } from '../src/runtime'
 import { SHEET_SCHEMAS, STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
@@ -188,6 +189,32 @@ describe('Apps Script Mini App Stock ingress', () => {
     })
   })
 
+  it.each([
+    ['ISSUE', () => issueCommand()],
+    ['RECEIVE', () => receiveCommand()],
+    ['CREATE_PRODUCT zero opening', () => createProductCommand(0)],
+    ['CREATE_PRODUCT with opening', () => createProductCommand(2_000)],
+    ['ADJUST', () => adjustProductCommand()],
+    ['UPDATE_PRODUCT', () => updateCommand()],
+    ['DEACTIVATE_PRODUCT', () => lifecycleCommand('DEACTIVATE_PRODUCT')],
+    ['REACTIVATE_PRODUCT', () => lifecycleCommand('REACTIVATE_PRODUCT')],
+  ])('produces a %s envelope accepted by the Cloud Run semantic validator', async (_name, buildCommand) => {
+    const command = buildCommand()
+    const envelope = processStockIngressResponse(signedEnvelope(command, {
+      nonce: `nonce-cross-${command.requestId}`,
+    }), createStockIngressPorts())
+    const client = createStockIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec',
+      secret: SECRET,
+      now: () => NOW_SECONDS,
+      nonce: () => 'nonce-cloud-run-cross-layer',
+      fetch: async () => ({ ok: true, status: 200, json: async () => envelope }),
+    })
+
+    if (!envelope.ok) throw new Error(`unexpected cross-layer error: ${envelope.error}`)
+    await expect(client.send(command)).resolves.toEqual(envelope.result)
+  })
+
   it('uses the same stable canonical command JSON for the Task 4 fingerprint', () => {
     const ports = createStockIngressPorts()
     const command = issueCommand()
@@ -287,7 +314,7 @@ function createStockIngressPorts(): TestStockIngressPorts {
     ...MANAGER_IDS.map((id) => [id, { id, name: id, active: true, canManageStock: true }] as const),
   ])
   const nonces = new Set<string>()
-  const sequences = new Map<string, number>()
+  const sequences = new Map<string, number>([['STK', 1]])
   let hmacCalls = 0
   return {
     clock: { nowIso: () => NOW_ISO },
@@ -362,6 +389,32 @@ function updateCommand(
       unit: 'กล่อง', minimumQuantityMilli: 1_000,
     },
     ...patch,
+  }
+}
+
+function createProductCommand(openingQuantityMilli: number): MiniAppStockCommand {
+  return {
+    requestId: `create-stock-${openingQuantityMilli}`, staffId: 'ADMIN_03', commandType: 'CREATE_PRODUCT',
+    payload: {
+      name: `สินค้าใหม่ ${openingQuantityMilli}`, category: 'CLINIC_SUPPLY', unit: 'ชิ้น',
+      openingQuantityMilli, minimumQuantityMilli: 1_000,
+    },
+  }
+}
+
+function adjustProductCommand(): MiniAppStockCommand {
+  return {
+    requestId: 'adjust-stock-1', staffId: 'ADMIN_03', commandType: 'ADJUST',
+    payload: { productId: 'STK-000001', countedQuantityMilli: 3_000, reason: 'ตรวจนับ' },
+  }
+}
+
+function lifecycleCommand(
+  commandType: 'DEACTIVATE_PRODUCT' | 'REACTIVATE_PRODUCT',
+): MiniAppStockCommand {
+  return {
+    requestId: `lifecycle-${commandType}`, staffId: 'ADMIN_03', commandType,
+    payload: { productId: 'STK-000001', expectedVersion: 1 },
   }
 }
 

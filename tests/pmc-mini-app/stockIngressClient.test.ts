@@ -54,6 +54,88 @@ describe('PMC Mini App signed Stock ingress client', () => {
   })
 
   it.each([
+    ['RECEIVE', receiveCommand(), commandResult('receive-stock-1', 'RECEIVE', [
+      { productId: 'STK-000001', quantityDeltaMilli: 1_250, balanceAfterMilli: 11_250 },
+      { productId: 'STK-000002', quantityDeltaMilli: 2_000, balanceAfterMilli: 7_000 },
+    ])],
+    ['CREATE_PRODUCT with opening', createCommand(2_000), commandResult('create-stock-1', 'CREATE_PRODUCT', [
+      { productId: 'STK-000003', quantityDeltaMilli: 2_000, balanceAfterMilli: 2_000 },
+    ])],
+    ['CREATE_PRODUCT without opening', createCommand(0), commandResult('create-stock-1', 'CREATE_PRODUCT', [])],
+    ['ADJUST with ledger delta', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
+      { productId: 'STK-000001', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+    ])],
+    ['ADJUST without ledger delta', adjustCommand(5_000), commandResult('adjust-stock-1', 'ADJUST', [])],
+    ['UPDATE_PRODUCT', updateCommand(), commandResult('update-stock-1', 'UPDATE_PRODUCT', [])],
+    ['DEACTIVATE_PRODUCT', lifecycleCommand('DEACTIVATE_PRODUCT'), commandResult('lifecycle-stock-1', 'DEACTIVATE_PRODUCT', [])],
+    ['REACTIVATE_PRODUCT', lifecycleCommand('REACTIVATE_PRODUCT'), commandResult('lifecycle-stock-1', 'REACTIVATE_PRODUCT', [])],
+  ])('accepts the exact %s result semantics', async (_name, command, result) => {
+    await expect(clientWithResult(result).send(command)).resolves.toEqual(result)
+  })
+
+  it.each([
+    ['ISSUE positive delta', commandFixture(), commandResult('issue-stock-1', 'ISSUE', [
+      { productId: 'STK-000001', quantityDeltaMilli: 1_250, balanceAfterMilli: 8_750 },
+      { productId: 'STK-000002', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+    ])],
+    ['ISSUE negative balance', commandFixture(), commandResult('issue-stock-1', 'ISSUE', [
+      { productId: 'STK-000001', quantityDeltaMilli: -1_250, balanceAfterMilli: -1 },
+      { productId: 'STK-000002', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+    ])],
+    ['ISSUE missing line', commandFixture(), commandResult('issue-stock-1', 'ISSUE', [
+      { productId: 'STK-000001', quantityDeltaMilli: -1_250, balanceAfterMilli: 8_750 },
+    ])],
+    ['ISSUE wrong delta magnitude', commandFixture(), commandResult('issue-stock-1', 'ISSUE', [
+      { productId: 'STK-000001', quantityDeltaMilli: -1_000, balanceAfterMilli: 9_000 },
+      { productId: 'STK-000002', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+    ])],
+    ['RECEIVE wrong product order', receiveCommand(), commandResult('receive-stock-1', 'RECEIVE', [
+      { productId: 'STK-000002', quantityDeltaMilli: 2_000, balanceAfterMilli: 7_000 },
+      { productId: 'STK-000001', quantityDeltaMilli: 1_250, balanceAfterMilli: 11_250 },
+    ])],
+    ['RECEIVE duplicate result product', receiveCommand(), commandResult('receive-stock-1', 'RECEIVE', [
+      { productId: 'STK-000001', quantityDeltaMilli: 1_250, balanceAfterMilli: 11_250 },
+      { productId: 'STK-000001', quantityDeltaMilli: 2_000, balanceAfterMilli: 13_250 },
+    ])],
+    ['RECEIVE wrong delta magnitude', receiveCommand(), commandResult('receive-stock-1', 'RECEIVE', [
+      { productId: 'STK-000001', quantityDeltaMilli: 1_000, balanceAfterMilli: 11_000 },
+      { productId: 'STK-000002', quantityDeltaMilli: 2_000, balanceAfterMilli: 7_000 },
+    ])],
+    ['CREATE_PRODUCT missing opening line', createCommand(2_000), commandResult('create-stock-1', 'CREATE_PRODUCT', [])],
+    ['CREATE_PRODUCT unexpected zero-opening line', createCommand(0), commandResult('create-stock-1', 'CREATE_PRODUCT', [
+      { productId: 'STK-000003', quantityDeltaMilli: 1, balanceAfterMilli: 1 },
+    ])],
+    ['CREATE_PRODUCT unsafe product ID', createCommand(2_000), commandResult('create-stock-1', 'CREATE_PRODUCT', [
+      { productId: 'unsafe/product', quantityDeltaMilli: 2_000, balanceAfterMilli: 2_000 },
+    ])],
+    ['ADJUST wrong product', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
+      { productId: 'STK-000002', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+    ])],
+    ['ADJUST wrong counted balance', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
+      { productId: 'STK-000001', quantityDeltaMilli: -2_000, balanceAfterMilli: 4_000 },
+    ])],
+    ['ADJUST multiple lines', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
+      { productId: 'STK-000001', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+      { productId: 'STK-000001', quantityDeltaMilli: 0, balanceAfterMilli: 3_000 },
+    ])],
+    ['ADJUST unsafe delta', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
+      { productId: 'STK-000001', quantityDeltaMilli: Number.MAX_SAFE_INTEGER + 1, balanceAfterMilli: 3_000 },
+    ])],
+    ['UPDATE_PRODUCT ledger line', updateCommand(), commandResult('update-stock-1', 'UPDATE_PRODUCT', [
+      { productId: 'STK-000001', quantityDeltaMilli: 0, balanceAfterMilli: 5_000 },
+    ])],
+    ['DEACTIVATE_PRODUCT ledger line', lifecycleCommand('DEACTIVATE_PRODUCT'), commandResult(
+      'lifecycle-stock-1', 'DEACTIVATE_PRODUCT', [
+        { productId: 'STK-000001', quantityDeltaMilli: 0, balanceAfterMilli: 5_000 },
+      ],
+    )],
+  ])('rejects semantically malformed success: %s', async (_name, command, result) => {
+    await expect(clientWithResult(result).send(command)).rejects.toMatchObject({
+      code: 'STOCK_STORAGE_UNAVAILABLE',
+    })
+  })
+
+  it.each([
     'STOCK_INSUFFICIENT_BALANCE',
     'STOCK_MANAGER_REQUIRED',
     'STOCK_STALE_PRODUCT',
@@ -138,6 +220,68 @@ function resultFixture(): StockCommandResult {
       { productId: 'STK-000002', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
     ],
   }
+}
+
+function receiveCommand(): MiniAppStockCommand {
+  return {
+    requestId: 'receive-stock-1', staffId: 'ADMIN_07', commandType: 'RECEIVE',
+    payload: { lines: [
+      { productId: 'STK-000001', quantityMilli: 1_250 },
+      { productId: 'STK-000002', quantityMilli: 2_000 },
+    ] },
+  }
+}
+
+function createCommand(openingQuantityMilli: number): MiniAppStockCommand {
+  return {
+    requestId: 'create-stock-1', staffId: 'ADMIN_07', commandType: 'CREATE_PRODUCT',
+    payload: {
+      name: 'สินค้าใหม่', category: 'CLINIC_SUPPLY', unit: 'ชิ้น',
+      openingQuantityMilli, minimumQuantityMilli: 1_000,
+    },
+  }
+}
+
+function adjustCommand(countedQuantityMilli: number): MiniAppStockCommand {
+  return {
+    requestId: 'adjust-stock-1', staffId: 'ADMIN_07', commandType: 'ADJUST',
+    payload: { productId: 'STK-000001', countedQuantityMilli, reason: 'ตรวจนับ' },
+  }
+}
+
+function updateCommand(): MiniAppStockCommand {
+  return {
+    requestId: 'update-stock-1', staffId: 'ADMIN_07', commandType: 'UPDATE_PRODUCT',
+    payload: {
+      productId: 'STK-000001', expectedVersion: 1, name: 'ถุงมือ', category: 'CLINIC_SUPPLY',
+      unit: 'กล่อง', minimumQuantityMilli: 1_000,
+    },
+  }
+}
+
+function lifecycleCommand(commandType: 'DEACTIVATE_PRODUCT' | 'REACTIVATE_PRODUCT'): MiniAppStockCommand {
+  return {
+    requestId: 'lifecycle-stock-1', staffId: 'ADMIN_07', commandType,
+    payload: { productId: 'STK-000001', expectedVersion: 1 },
+  }
+}
+
+function commandResult(
+  requestId: string,
+  commandType: MiniAppStockCommand['commandType'],
+  lines: StockCommandResult['lines'],
+): StockCommandResult {
+  return { requestId, documentId: 'DOC-000001', commandType, createdAt: '2027-01-15T08:00:00.000Z', lines }
+}
+
+function clientWithResult(result: StockCommandResult) {
+  return createStockIngressClient({
+    url: 'https://script.google.com/macros/s/deployment/exec',
+    secret: 'stock-ingress-secret',
+    now: () => 1_800_000_000,
+    nonce: () => 'nonce-stock-123',
+    fetch: vi.fn(async () => response(200, { ok: true, result })),
+  })
 }
 
 function response(status: number, body: unknown) {

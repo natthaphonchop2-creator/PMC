@@ -100,6 +100,14 @@ export interface StockCommandResult {
   lines: Array<{ productId: string; quantityDeltaMilli: number; balanceAfterMilli: number }>
 }
 
+export function normalizeStockProductText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+export function normalizeStockProductName(value: string): string {
+  return normalizeStockProductText(value).toLowerCase()
+}
+
 export function parseNonNegativeQuantityToMilli(value: string): number {
   const normalized = value.trim()
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,3})?$/.test(normalized)) throw new Error('STOCK_INVALID_QUANTITY')
