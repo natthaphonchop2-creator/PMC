@@ -21,8 +21,8 @@ export function parseAndVerifyMiniAppIngress(
   return verifyMiniAppIngressPayload(parseAppsScriptDoPostBody(event), ports)
 }
 
-export function parseAppsScriptDoPostBody(event: AppsScriptDoPostEvent): unknown {
-  if (!event.postData || event.postData.length <= 0 || event.postData.length > 262_144 || event.postData.type !== 'application/json') {
+export function parseAppsScriptDoPostBody(event: AppsScriptDoPostEvent, maxLength = 262_144): unknown {
+  if (!event.postData || event.postData.length <= 0 || event.postData.length > maxLength || event.postData.type !== 'application/json') {
     throw new Error('invalid mini app ingress event')
   }
   try { return JSON.parse(event.postData.contents) } catch { throw new Error('invalid mini app ingress JSON') }

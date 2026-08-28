@@ -98,6 +98,11 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
       created.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
       return { id: created.getId(), name }
     },
+    createEvidenceFile(folderId, name, mimeType, bytes) {
+      const created = folder(folderId).createFile(Utilities.newBlob(bytes, mimeType, name))
+      created.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
+      return created.getId()
+    },
     fileName: (fileId) => DriveApp.getFileById(fileId).getName(),
     findFileByName(folderId, name) {
       const files = folder(folderId).getFilesByName(name)

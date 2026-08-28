@@ -153,6 +153,7 @@ export interface BookingRepositories {
 export interface DrivePort {
   rootFolderId(): string
   ensureChildFolder(parentId: string, name: string, marker: string): { id: string; name: string }
+  createEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', bytes: number[]): string
   fileName(fileId: string): string
   findFileByName(folderId: string, name: string): string | null
   moveAndRenameFile(fileId: string, folderId: string, name: string): string
@@ -253,6 +254,7 @@ export interface CryptoPort {
   hmacSha256Hex(value: string, secret: string): string
   sha256Hex(value: string): string
   base64UrlUtf8(value: string): string
+  base64Decode(value: string): number[]
 }
 
 export interface DashboardPort {

@@ -5,7 +5,7 @@ import type { PmcMiniAppServerConfig } from './config.js'
 import type { AuthenticatedMiniAppContext, LineIdentityPort } from './contracts.js'
 import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
-import type { MiniAppDrivePort, MiniAppEvidenceKind } from './googleClient.js'
+import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
@@ -20,6 +20,13 @@ export interface PmcMiniAppMiddlewareDependencies {
   requestId?: () => string
   draftId?: () => string
   ingress?: { send(draft: MiniAppRequestRecord): Promise<{ caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> }> }
+  evidenceIngress?: { upload(input: {
+    draftId: string
+    requestId: string
+    kind: MiniAppEvidenceKind
+    mimeType: MiniAppEvidenceMime
+    bytes: Buffer
+  }): Promise<string> }
   enrollment?: EnrollmentService
   jera?: JeraMiniAppApi
 }
@@ -443,16 +450,23 @@ async function handleEvidenceUpload(
       const existing = evidenceIdsFor(current, kind)
       if (existing.length >= deps.config.maxFilesPerKind) throw new MiniAppEvidenceError(`${kind}_EVIDENCE_LIMIT`)
       const mimeType = validateEvidence(file.bytes, file.advertisedMime)
-      const name = serverEvidenceName(kind, mimeType, (deps.randomId ?? randomUUID)())
-      const fileId = await deps.drive!.uploadEvidence({
-        parentId: deps.config.intakeFolderId,
-        draftId: current.draftId,
-        requestId: current.requestId,
-        kind,
-        name,
-        mimeType,
-        bytes: file.bytes,
-      })
+      const fileId = deps.evidenceIngress
+        ? await deps.evidenceIngress.upload({
+          draftId: current.draftId,
+          requestId: current.requestId,
+          kind,
+          mimeType,
+          bytes: file.bytes,
+        })
+        : await deps.drive!.uploadEvidence({
+          parentId: deps.config.intakeFolderId,
+          draftId: current.draftId,
+          requestId: current.requestId,
+          kind,
+          name: serverEvidenceName(kind, mimeType, (deps.randomId ?? randomUUID)()),
+          mimeType,
+          bytes: file.bytes,
+        })
       const paymentEvidenceFileIds = kind === 'PAYMENT' ? [...current.paymentEvidenceFileIds, fileId] : current.paymentEvidenceFileIds
       const chatEvidenceFileIds = kind === 'CHAT' ? [...current.chatEvidenceFileIds, fileId] : current.chatEvidenceFileIds
       current = await deps.store.updateDraft(current.draftId, current.version, {

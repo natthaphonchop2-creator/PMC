@@ -313,6 +313,7 @@ export function createAppsScriptCryptoPort(): CryptoPort {
     sha256Hex: (value) => hex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value)),
     base64UrlUtf8: (value) =>
       Utilities.base64EncodeWebSafe(value, Utilities.Charset.UTF_8).replace(/=+$/, ''),
+    base64Decode: (value) => Utilities.base64Decode(value),
   }
 }
 

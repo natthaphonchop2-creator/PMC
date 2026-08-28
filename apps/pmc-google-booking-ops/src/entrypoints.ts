@@ -38,6 +38,10 @@ import { submitBookingIntake } from './workflows/formSubmit'
 import { pollJeraIncoming as pollJeraIncomingWorkflow } from './workflows/jeraImport'
 import { parseAppsScriptDoPostBody, verifyMiniAppIngressPayload } from './domain/miniAppIngress'
 import { submitMiniAppBooking } from './workflows/miniAppSubmit'
+import {
+  MAX_EVIDENCE_INGRESS_LENGTH,
+  uploadMiniAppEvidence,
+} from './domain/miniAppEvidenceIngress'
 import type { BookingPorts } from './ports'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
@@ -61,7 +65,11 @@ export function doPost(event: AppsScriptDoPostEvent) {
 }
 
 export function processBookingDoPost(event: AppsScriptDoPostEvent, ports: BookingPorts) {
-  const parsed = parseAppsScriptDoPostBody(event)
+  const evidenceCandidate = event.postData?.contents.startsWith('{"kind":"MINI_APP_EVIDENCE"')
+  const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_EVIDENCE') {
+    return uploadMiniAppEvidence(parsed, ports)
+  }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_BOOKING') {
     const booking = submitMiniAppBooking(verifyMiniAppIngressPayload(parsed, ports), ports)
     return { caseId: booking.caseId, status: booking.appointmentStatus }

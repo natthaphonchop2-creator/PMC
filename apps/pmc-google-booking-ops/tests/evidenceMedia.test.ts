@@ -15,6 +15,9 @@ const crypto = {
   base64UrlUtf8(value: string) {
     return Buffer.from(value, 'utf8').toString('base64url')
   },
+  base64Decode(value: string) {
+    return [...Buffer.from(value, 'base64')]
+  },
 }
 
 describe('Apps Script evidence media signer', () => {

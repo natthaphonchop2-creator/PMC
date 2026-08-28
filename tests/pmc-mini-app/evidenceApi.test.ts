@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import type { MiniAppDrivePort } from '../../server/pmc-mini-app/googleClient'
-import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
+import { createPmcMiniAppMiddleware, type PmcMiniAppMiddlewareDependencies } from '../../server/pmc-mini-app/middleware'
 import type { MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App evidence API', () => {
@@ -66,6 +66,29 @@ describe('PMC Mini App evidence API', () => {
     expect(deps.drive.uploadEvidence).toHaveBeenCalledWith(expect.objectContaining({
       name: 'payment-upload-1.jpg', mimeType: 'image/jpeg', bytes: jpegBytes(),
     }))
+  })
+
+  it('routes evidence through the owner ingress when the runtime service account cannot create My Drive files', async () => {
+    const deps = dependencies()
+    vi.mocked(deps.drive.uploadEvidence).mockRejectedValue(new Error('service account has no storage quota'))
+    const form = new FormData()
+    form.append('files', new Blob([jpegBytes()], { type: 'image/jpeg' }), 'slip.jpg')
+
+    const response = await invoke(createPmcMiniAppMiddleware({
+      ...deps,
+      evidenceIngress: { upload: vi.fn(async () => 'owner-drive-file-1') },
+    } as PmcMiniAppMiddlewareDependencies), '/api/mini-app/booking-drafts/draft-1/evidence?kind=PAYMENT', {
+      method: 'POST', headers: { authorization: 'Bearer valid-token' }, body: form,
+    })
+
+    expect({ status: response.status, body: await response.json() }).toEqual({
+      status: 200,
+      body: {
+        draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 4,
+        input: null, paymentEvidenceIds: ['owner-drive-file-1'], chatEvidenceIds: [], confirmationStatus: null,
+      },
+    })
+    expect(deps.currentDraft.paymentEvidenceFileIds).toEqual(['owner-drive-file-1'])
   })
 
   it('does not reveal or modify a draft owned by another staff member', async () => {

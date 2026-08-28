@@ -337,6 +337,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
       hmacSha256Hex: (value, secret) => createHmac('sha256', secret).update(value).digest('hex'),
       sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
       base64UrlUtf8: (value) => Buffer.from(value, 'utf8').toString('base64url'),
+      base64Decode: (value) => [...Buffer.from(value, 'base64')],
     },
     media: (() => {
       let shouldFail = options.mediaSigningFailsOnce ?? false
@@ -587,6 +588,7 @@ export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingI
 
 export interface FakeDrivePort extends DrivePort {
   createdFolderCount(): number
+  createdEvidenceFileIds(): string[]
   movedFileCount(): number
   publicLinks(): string[]
   trashedFolderIds(): string[]
@@ -610,6 +612,7 @@ export function createFakeDrive(
   let moved = 0
   let moveFails = initiallyFailing
   const trashed: string[] = []
+  const createdEvidence: string[] = []
 
   return {
     rootFolderId: () => 'drive-root',
@@ -621,6 +624,14 @@ export function createFakeDrive(
       const id = `folder-${folders.size + 1}`
       folders.set(id, { parentId, name, marker })
       return { id, name }
+    },
+    createEvidenceFile(folderId, name, mimeType, bytes) {
+      void mimeType
+      void bytes
+      const id = `uploaded-evidence-${createdEvidence.length + 1}`
+      files.set(id, { name, folderId })
+      createdEvidence.push(id)
+      return id
     },
     fileName(fileId) {
       const file = files.get(fileId)
@@ -644,6 +655,7 @@ export function createFakeDrive(
       if (!trashed.includes(folderId)) trashed.push(folderId)
     },
     createdFolderCount: () => folders.size,
+    createdEvidenceFileIds: () => [...createdEvidence],
     movedFileCount: () => moved,
     publicLinks: () => [],
     trashedFolderIds: () => [...trashed],

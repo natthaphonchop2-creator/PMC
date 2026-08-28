@@ -1,4 +1,5 @@
 import { createBookingIngressClient } from './bookingIngressClient.js'
+import { createEvidenceIngressClient } from './evidenceIngressClient.js'
 import { readPmcMiniAppConfig, type PmcMiniAppServerConfig } from './config.js'
 import { createMiniAppGooglePorts } from './googleClient.js'
 import { createLineIdentityClient } from './lineIdentity.js'
@@ -34,6 +35,10 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     url: config.bookingIngressUrl,
     secret: config.bookingIngressSecret,
   })
+  const evidenceIngress = createEvidenceIngressClient({
+    url: config.bookingIngressUrl,
+    secret: config.bookingIngressSecret,
+  })
   const enrollment = config.enrollmentPin ? createEnrollmentService({
     pin: config.enrollmentPin,
     signingSecret: config.signingSecret,
@@ -46,6 +51,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     identity,
     drive: google.drive,
     ingress,
+    evidenceIngress,
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
     now: () => new Date(),
