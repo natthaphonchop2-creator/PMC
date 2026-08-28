@@ -6,6 +6,11 @@ import {
 import type { BookingIngressPort } from '../../server/pmc-mini-app/bookingIngressClient'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
 import type { EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
+import {
+  WorkerLeaseError,
+  type WorkerLeaseHandle,
+  type WorkerLeasePort,
+} from '../../server/pmc-mini-app/workerLease'
 import type {
   AsyncMiniAppStore,
   MiniAppRequestRecord,
@@ -190,7 +195,7 @@ describe('PMC asynchronous booking worker', () => {
       requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED',
     })
 
-    expect(fixture.events).toEqual(['claim'])
+    expect(fixture.events).toEqual([])
     expect(fixture.staging.get).not.toHaveBeenCalled()
     expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
     expect(fixture.evidenceIngress.upload).not.toHaveBeenCalled()
@@ -210,7 +215,7 @@ describe('PMC asynchronous booking worker', () => {
     await expect(fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 2 })).resolves.toEqual({
       requestId: 'request-1', caseId, state: expectedState,
     })
-    expect(fixture.events).toEqual(['claim'])
+    expect(fixture.events).toEqual([])
     expect(fixture.store.projectionCalls).toHaveLength(0)
     expect(fixture.store.retryCalls).toHaveLength(0)
     expect(fixture.store.completionCalls).toHaveLength(0)
@@ -232,6 +237,139 @@ describe('PMC asynchronous booking worker', () => {
     expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
   })
 
+  it('blocks booking when updateProcessingProjection returns a value that was not persisted', async () => {
+    const fixture = workerFixture({ projectionWriteLost: true })
+
+    await expect(
+      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+    ).rejects.toMatchObject({ code: 'EVIDENCE_COPY_RETRY' })
+
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+    expect(fixture.store.read()).toMatchObject({ state: 'RETRYING', paymentEvidenceFileIds: [] })
+  })
+
+  it('blocks booking when the persisted projection has the wrong ordered Drive IDs', async () => {
+    const fixture = workerFixture({ wrongPersistedProjection: true })
+
+    await expect(
+      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+    ).rejects.toMatchObject({ code: 'EVIDENCE_COPY_RETRY' })
+
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+    expect(fixture.store.read()).toMatchObject({ state: 'RETRYING' })
+  })
+
+  it('blocks cleanup when completeAsyncBooking returns a terminal value that was not persisted', async () => {
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        paymentEvidenceFileIds: ['owner-drive-payment-1', 'owner-drive-payment-2'],
+        chatEvidenceFileIds: ['owner-drive-chat-3'],
+      }),
+      completionWriteLost: true,
+    })
+
+    await expect(
+      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+    ).rejects.toMatchObject({ code: 'BOOKING_COMPLETION_RETRY' })
+
+    expect(fixture.bookingIngress.send).toHaveBeenCalledOnce()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+    expect(fixture.store.read()).toMatchObject({ state: 'RETRYING', caseId: null })
+  })
+
+  it('allows only one of two independent worker processes to claim or mutate through the shared coordination lease', async () => {
+    const lease = new MemoryWorkerLease()
+    let releaseUpload: (() => void) | undefined
+    let uploadStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => { uploadStarted = resolve })
+    const blockedUpload = new Promise<void>((resolve) => { releaseUpload = resolve })
+    const first = workerFixture({
+      lease,
+      evidenceUploadWait: async () => {
+        uploadStarted?.()
+        await blockedUpload
+      },
+    })
+    const second = workerFixture({ lease })
+
+    const firstRun = first.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 })
+    await started
+    await expect(
+      second.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 2 }),
+    ).rejects.toMatchObject({ code: 'WORKER_LEASE_RETRY' })
+    releaseUpload?.()
+    await expect(firstRun).resolves.toMatchObject({ caseId: 'PMC-202608-0001', state: 'CONFIRMED' })
+
+    expect(first.store.claimCalls + second.store.claimCalls).toBe(1)
+    expect(first.store.completionCalls.length + second.store.completionCalls.length).toBe(1)
+    expect(first.bookingIngress.send.mock.calls.length + second.bookingIngress.send.mock.calls.length).toBe(1)
+  })
+
+  it('stops a stale coordination owner before it can overwrite another worker terminal result', async () => {
+    const lease = new MemoryWorkerLease()
+    const fixtureRef: { current?: ReturnType<typeof workerFixture> } = {}
+    const fixture = workerFixture({
+      lease,
+      evidenceUploadWait: async () => {
+        lease.replaceOwner('request-1', fixedNow, 'other-owner-token1')
+        fixtureRef.current?.store.forceConfirmed()
+      },
+    })
+    fixtureRef.current = fixture
+
+    await expect(
+      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+    ).rejects.toMatchObject({ code: 'WORKER_LEASE_RETRY' })
+
+    expect(fixture.store.read()).toMatchObject({ state: 'CONFIRMED', caseId: 'PMC-202608-0001' })
+    expect(fixture.store.projectionCalls).toHaveLength(0)
+    expect(fixture.store.retryCalls).toHaveLength(0)
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+  })
+
+  it('waits on the eighth delivery until a busy coordination owner records a terminal result', async () => {
+    const lease = new MemoryWorkerLease()
+    lease.hold('request-1', fixedNow, 2_000, 'other-owner-token1')
+    const fixtureRef: { current?: ReturnType<typeof workerFixture> } = {}
+    const fixture = workerFixture({
+      lease,
+      onWait: () => { fixtureRef.current?.store.forceConfirmed() },
+    })
+    fixtureRef.current = fixture
+
+    await expect(
+      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 8 }),
+    ).resolves.toEqual({ requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED' })
+
+    expect(fixture.clock.waits).toEqual([1_000])
+    expect(fixture.store.claimCalls).toBe(0)
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+  })
+
+  it('waits on the eighth delivery, reclaims expired coordination and Sheet leases, and completes without attempt nine', async () => {
+    const lease = new MemoryWorkerLease()
+    lease.hold('request-1', fixedNow, 2_000, 'other-owner-token1')
+    const fixture = workerFixture({
+      lease,
+      draft: queuedDraft({
+        state: 'PROCESSING', attemptCount: 1,
+        processingStartedAt: fixedNow.toISOString(),
+        processingLeaseUntil: new Date(fixedNow.getTime() + 2_000).toISOString(),
+        lastProgressAt: fixedNow.toISOString(),
+      }),
+    })
+
+    await expect(
+      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 8 }),
+    ).resolves.toEqual({ requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED' })
+
+    expect(fixture.clock.waits).toEqual([1_000, 1_000])
+    expect(fixture.store.claimCalls).toBe(1)
+    expect(fixture.store.read()).toMatchObject({ state: 'CONFIRMED', attemptCount: 2 })
+  })
+
   it.each([0, 9, 1.5])('rejects invalid attempt %s before claiming or touching external ports', async (attempt) => {
     const fixture = workerFixture()
 
@@ -249,11 +387,21 @@ function workerFixture(options: {
   deleteFailure?: Error
   corruptProjection?: boolean
   staleDuringProjection?: boolean
+  projectionWriteLost?: boolean
+  wrongPersistedProjection?: boolean
+  completionWriteLost?: boolean
+  evidenceUploadWait?: () => Promise<void>
+  lease?: MemoryWorkerLease
+  onWait?: (milliseconds: number) => void
 } = {}) {
   const events: string[] = []
+  const clock = new WorkerClock(fixedNow, options.onWait)
   const store = new WorkerStoreFixture(options.draft ?? queuedDraft(), events, {
     corruptProjection: options.corruptProjection,
     staleDuringProjection: options.staleDuringProjection,
+    projectionWriteLost: options.projectionWriteLost,
+    wrongPersistedProjection: options.wrongPersistedProjection,
+    completionWriteLost: options.completionWriteLost,
   })
   const staging: EvidenceStagingPort & {
     get: ReturnType<typeof vi.fn>
@@ -276,6 +424,7 @@ function workerFixture(options: {
     upload: vi.fn(async (input: Parameters<EvidenceIngressPort['upload']>[0]) => {
       const marker = input.bytes.at(-1)
       events.push(`upload:${input.kind}:${marker}`)
+      await options.evidenceUploadWait?.()
       return input.kind === 'CHAT' ? `owner-drive-chat-${marker}` : `owner-drive-payment-${marker}`
     }),
   }
@@ -289,20 +438,36 @@ function workerFixture(options: {
       return result
     }),
   }
-  const worker = createAsyncBookingWorker({ store, staging, evidenceIngress, bookingIngress, now: () => fixedNow })
-  return { worker, store, staging, evidenceIngress, bookingIngress, events }
+  const lease = options.lease ?? new MemoryWorkerLease()
+  const worker = createAsyncBookingWorker({
+    store,
+    staging,
+    evidenceIngress,
+    bookingIngress,
+    now: () => clock.now,
+    lease,
+    wait: (milliseconds: number) => clock.wait(milliseconds),
+  })
+  return { worker, store, staging, evidenceIngress, bookingIngress, events, lease, clock }
 }
 
 class WorkerStoreFixture implements MiniAppStore, AsyncMiniAppStore {
   readonly projectionCalls: Array<Parameters<AsyncMiniAppStore['updateProcessingProjection']>[0]> = []
   readonly retryCalls: Array<Parameters<AsyncMiniAppStore['markAsyncRetry']>[0]> = []
   readonly completionCalls: Array<Parameters<AsyncMiniAppStore['completeAsyncBooking']>[0]> = []
+  claimCalls = 0
   private draft: MiniAppRequestRecord
 
   constructor(
     draft: MiniAppRequestRecord,
     private readonly events: string[],
-    private readonly behavior: { corruptProjection?: boolean; staleDuringProjection?: boolean },
+    private readonly behavior: {
+      corruptProjection?: boolean
+      staleDuringProjection?: boolean
+      projectionWriteLost?: boolean
+      wrongPersistedProjection?: boolean
+      completionWriteLost?: boolean
+    },
   ) {
     this.draft = structuredClone(draft)
   }
@@ -311,11 +476,16 @@ class WorkerStoreFixture implements MiniAppStore, AsyncMiniAppStore {
 
   async claimProcessing(input: Parameters<AsyncMiniAppStore['claimProcessing']>[0]) {
     this.events.push('claim')
+    this.claimCalls += 1
     if (input.requestId !== this.draft.requestId || input.draftId !== this.draft.draftId) throw new Error('ASYNC_TASK_IDENTITY_CONFLICT')
     if (this.draft.state === 'CONFIRMED' || this.draft.state === 'NEEDS_REVIEW') {
       return { claimed: false, draft: this.read() }
     }
-    if (this.draft.state === 'PROCESSING') return { claimed: false, draft: this.read() }
+    if (this.draft.state === 'PROCESSING'
+      && this.draft.processingLeaseUntil
+      && Date.parse(this.draft.processingLeaseUntil) > Date.parse(input.nowIso)) {
+      return { claimed: false, draft: this.read() }
+    }
     this.draft = {
       ...this.draft,
       state: 'PROCESSING',
@@ -346,14 +516,18 @@ class WorkerStoreFixture implements MiniAppStore, AsyncMiniAppStore {
     const patch = this.behavior.corruptProjection
       ? { ...input.patch, chatEvidenceFileIds: [] }
       : input.patch
-    this.draft = {
+    const correct = {
       ...this.draft,
-      ...structuredClone(patch),
+      ...structuredClone(input.patch),
       lastProgressAt: input.nowIso,
       updatedAt: input.nowIso,
       version: this.draft.version + 1,
     }
-    return this.read()
+    if (this.behavior.projectionWriteLost) return structuredClone(correct)
+    this.draft = this.behavior.wrongPersistedProjection
+      ? { ...correct, chatEvidenceFileIds: [] }
+      : { ...correct, ...structuredClone(patch) }
+    return structuredClone(correct)
   }
 
   async markAsyncRetry(input: Parameters<AsyncMiniAppStore['markAsyncRetry']>[0]) {
@@ -376,7 +550,7 @@ class WorkerStoreFixture implements MiniAppStore, AsyncMiniAppStore {
     this.events.push('complete')
     this.completionCalls.push(structuredClone(input))
     this.assertOwner(input.expectedAttempt, input.expectedVersion)
-    this.draft = {
+    const completed: MiniAppRequestRecord = {
       ...this.draft,
       state: input.projectionState,
       caseId: input.caseId,
@@ -388,7 +562,21 @@ class WorkerStoreFixture implements MiniAppStore, AsyncMiniAppStore {
       updatedAt: input.nowIso,
       version: this.draft.version + 1,
     }
+    if (this.behavior.completionWriteLost) return structuredClone(completed)
+    this.draft = completed
     return this.read()
+  }
+
+  forceConfirmed(): void {
+    this.draft = {
+      ...this.draft,
+      state: 'CONFIRMED',
+      caseId: 'PMC-202608-0001',
+      confirmationStatus: 'CONFIRMED',
+      confirmedAt: fixedNow.toISOString(),
+      processingLeaseUntil: null,
+      version: this.draft.version + 1,
+    }
   }
 
   private assertOwner(expectedAttempt: number, expectedVersion: number): void {
@@ -408,6 +596,74 @@ class WorkerStoreFixture implements MiniAppStore, AsyncMiniAppStore {
   async completeConfirmation(): Promise<never> { throw new Error('not used') }
   async failConfirmation(): Promise<never> { throw new Error('not used') }
   async queueDraft(): Promise<never> { throw new Error('not used') }
+}
+
+class WorkerClock {
+  readonly waits: number[] = []
+  now: Date
+
+  constructor(initial: Date, private readonly onWait?: (milliseconds: number) => void) {
+    this.now = new Date(initial)
+  }
+
+  async wait(milliseconds: number): Promise<void> {
+    this.waits.push(milliseconds)
+    this.now = new Date(this.now.getTime() + milliseconds)
+    this.onWait?.(milliseconds)
+  }
+}
+
+class MemoryWorkerLease implements WorkerLeasePort {
+  private generation = 0
+  private current = new Map<string, WorkerLeaseHandle>()
+
+  async acquire(input: Parameters<WorkerLeasePort['acquire']>[0]) {
+    const existing = this.current.get(input.requestId)
+    if (existing && Date.parse(existing.expiresAt) > Date.parse(input.nowIso)) {
+      return { acquired: false as const, expiresAt: existing.expiresAt }
+    }
+    this.generation += 1
+    const lease = {
+      lockKey: `locks/${input.requestId}`,
+      ownerToken: `owner-token-${this.generation.toString().padStart(4, '0')}`,
+      expiresAt: input.leaseUntil,
+      generation: String(this.generation),
+    }
+    this.current.set(input.requestId, lease)
+    return { acquired: true as const, lease: structuredClone(lease) }
+  }
+
+  async renew(input: Parameters<WorkerLeasePort['renew']>[0]) {
+    const requestId = input.lease.lockKey.slice('locks/'.length)
+    const existing = this.current.get(requestId)
+    if (!existing || existing.ownerToken !== input.lease.ownerToken || existing.generation !== input.lease.generation) {
+      throw new WorkerLeaseError('WORKER_LEASE_LOST')
+    }
+    this.generation += 1
+    const renewed = { ...existing, expiresAt: input.leaseUntil, generation: String(this.generation) }
+    this.current.set(requestId, renewed)
+    return structuredClone(renewed)
+  }
+
+  async release(lease: WorkerLeaseHandle): Promise<void> {
+    const requestId = lease.lockKey.slice('locks/'.length)
+    const existing = this.current.get(requestId)
+    if (existing?.ownerToken === lease.ownerToken && existing.generation === lease.generation) this.current.delete(requestId)
+  }
+
+  hold(requestId: string, now: Date, milliseconds: number, ownerToken: string): void {
+    this.generation += 1
+    this.current.set(requestId, {
+      lockKey: `locks/${requestId}`,
+      ownerToken,
+      expiresAt: new Date(now.getTime() + milliseconds).toISOString(),
+      generation: String(this.generation),
+    })
+  }
+
+  replaceOwner(requestId: string, now: Date, ownerToken: string): void {
+    this.hold(requestId, now, 4 * 60_000, ownerToken)
+  }
 }
 
 function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {

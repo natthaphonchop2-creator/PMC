@@ -14,6 +14,7 @@ import {
   type MiniAppStore,
 } from '../../server/pmc-mini-app/store'
 import type { WorkerIdentityVerifier } from '../../server/pmc-mini-app/workerAuth'
+import type { AsyncBookingWorker } from '../../server/pmc-mini-app/asyncWorker'
 
 const route = '/internal/mini-app/finalize-booking'
 const fixedNow = new Date('2026-08-28T02:01:00.000Z')
@@ -137,6 +138,37 @@ describe('PMC async worker route', () => {
     expect(wrongMethodDeps.workerIdentity.verify).not.toHaveBeenCalled()
   })
 
+  it.each(['0', '1', '2', '3', '4', '5', '6'])(
+    'returns 503 when worker delivery attempt %s persists RETRYING and throws',
+    async (retryCount) => {
+      const finalize = vi.fn<AsyncBookingWorker['finalize']>(async () => { throw new Error('safe retry') })
+      const deps = dependencies({ asyncWorker: { finalize } })
+
+      const response = await invoke(createPmcMiniAppMiddleware(deps), route, workerRequest(retryCount))
+
+      expect({ status: response.status, body: await response.json() }).toEqual({
+        status: 503, body: { error: 'ASYNC_WORKER_FAILED' },
+      })
+      expect(finalize).toHaveBeenCalledWith({
+        requestId: 'request-1', draftId: 'draft-1', attempt: Number(retryCount) + 1,
+      })
+    },
+  )
+
+  it.each([
+    [{ requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED' as const }],
+    [{ requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW' as const }],
+  ])('returns 200 only for a resolved terminal worker result', async (terminal) => {
+    const finalize = vi.fn<AsyncBookingWorker['finalize']>(async () => terminal)
+    const response = await invoke(
+      createPmcMiniAppMiddleware(dependencies({ asyncWorker: { finalize } })),
+      route,
+      workerRequest('7'),
+    )
+
+    expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: terminal })
+  })
+
   it('passes retry count plus one to the worker and claims the first queued lease through the real store', async () => {
     const draft = validDraft()
     const fixture = await leaseFixture(draft)
@@ -153,7 +185,7 @@ describe('PMC async worker route', () => {
     expect(fixture.finalize).toHaveBeenCalledWith({ requestId: 'request-1', draftId: 'draft-1', attempt: 3 })
     await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({
       state: 'PROCESSING', processingStartedAt: fixedNow.toISOString(),
-      processingLeaseUntil: '2026-08-28T02:06:00.000Z', attemptCount: 1,
+      processingLeaseUntil: '2026-08-28T02:05:00.000Z', attemptCount: 1,
     })
   })
 
@@ -193,7 +225,7 @@ describe('PMC async worker route', () => {
     expect(reclaimed.status).toBe(200)
     await expect(fixture.store.getDraft('draft-1')).resolves.toMatchObject({
       processingStartedAt: '2026-08-28T02:00:00.000Z',
-      processingLeaseUntil: '2026-08-28T02:06:01.000Z', attemptCount: 2, version: 2,
+      processingLeaseUntil: '2026-08-28T02:05:01.000Z', attemptCount: 2, version: 2,
     })
   })
 })
@@ -205,7 +237,9 @@ function dependencies(overrides: Partial<PmcMiniAppMiddlewareDependencies> = {})
       return { email: asyncConfig.taskInvokerEmail, subject: 'google-subject-1' }
     }),
   }
-  const asyncWorker = { finalize: vi.fn(async ({ requestId }: { requestId: string }) => ({ requestId, caseId: null, state: 'RETRYING' as const })) }
+  const asyncWorker: AsyncBookingWorker = {
+    finalize: vi.fn(async ({ requestId }) => ({ requestId, caseId: null, state: 'NEEDS_REVIEW' as const })),
+  }
   return {
     config,
     identity: { verify: vi.fn(async () => { throw new Error('LINE identity must not run') }) },
@@ -224,13 +258,13 @@ async function leaseFixture(draft: MiniAppRequestRecord) {
   const clock = { now: new Date(fixedNow), setTime(value: string) { this.now = new Date(value) } }
   const finalize = vi.fn(async (input: { requestId: string; draftId: string; attempt: number }) => {
     const now = clock.now
-    const result = await store.claimProcessing({
+    await store.claimProcessing({
       requestId: input.requestId,
       draftId: input.draftId,
       nowIso: now.toISOString(),
-      leaseUntil: new Date(now.getTime() + 5 * 60_000).toISOString(),
+      leaseUntil: new Date(now.getTime() + 4 * 60_000).toISOString(),
     })
-    return { requestId: input.requestId, caseId: null, state: result.claimed ? 'RETRYING' as const : 'RETRYING' as const }
+    return { requestId: input.requestId, caseId: null, state: 'NEEDS_REVIEW' as const }
   })
   return {
     store,

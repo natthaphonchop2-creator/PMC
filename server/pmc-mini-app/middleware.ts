@@ -15,9 +15,11 @@ import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerAuth.js'
 import type { AsyncBookingWorker } from './asyncWorker.js'
+import type { WorkerLeasePort } from './workerLease.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
+const ASYNC_COORDINATION_LEASE_MS = 4 * 60_000
 
 export type AsyncBookingWorkerEntrypoint = AsyncBookingWorker
 
@@ -30,6 +32,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   taskQueue?: BookingTaskQueuePort
   workerIdentity?: WorkerIdentityVerifier
   asyncWorker?: AsyncBookingWorker
+  workerLease?: WorkerLeasePort
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -473,7 +476,7 @@ async function handleBookingDraftRoute(
   }
   const payloadHash = bookingPayloadHash(draft)
   if (asyncOwner) {
-    if (!deps.taskQueue || !hasAsyncQueueStore(deps.store)) {
+    if (!deps.taskQueue || !deps.workerLease || !hasAsyncQueueStore(deps.store)) {
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_NOT_CONFIGURED' })
       return
     }
@@ -490,11 +493,34 @@ async function handleBookingDraftRoute(
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
       return
     }
+    let coordination: Awaited<ReturnType<WorkerLeasePort['acquire']>>
     try {
-      const queued = await deps.store.queueDraft(draft.requestId, payloadHash, task.taskName, nowIso)
-      respond(res, 202, { requestId: queued.requestId, status: 'QUEUED' })
+      coordination = await deps.workerLease.acquire({
+        requestId: draft.requestId,
+        nowIso,
+        leaseUntil: new Date(now.getTime() + ASYNC_COORDINATION_LEASE_MS).toISOString(),
+      })
+    } catch {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      return
+    }
+    if (!coordination.acquired) {
+      respond(res, 202, { requestId: draft.requestId, status: 'QUEUED' })
+      return
+    }
+    let queued: MiniAppRequestRecord | null = null
+    let queueError: unknown
+    try {
+      queued = await deps.store.queueDraft(draft.requestId, payloadHash, task.taskName, nowIso)
     } catch (error) {
-      const code = safeBookingError(error)
+      queueError = error
+    } finally {
+      try { await deps.workerLease.release(coordination.lease) } catch { /* expiry is the safe fallback */ }
+    }
+    if (queued) {
+      respond(res, 202, { requestId: queued.requestId, status: 'QUEUED' })
+    } else {
+      const code = safeBookingError(queueError)
       if (code === 'PAYLOAD_HASH_CONFLICT' || code === 'TASK_NAME_CONFLICT' || code === 'DRAFT_NOT_READY') {
         respond(res, 409, { error: code })
       } else {
@@ -531,8 +557,8 @@ function isBoundAsyncConfirmation(draft: MiniAppRequestRecord): boolean {
   return (draft.state === 'QUEUED' || draft.state === 'PROCESSING' || draft.state === 'RETRYING')
     && typeof draft.payloadHash === 'string'
     && /^[A-Za-z0-9_-]{4,128}$/.test(draft.payloadHash)
-    && typeof draft.taskName === 'string'
-    && /^[A-Za-z0-9._:/-]{1,512}$/.test(draft.taskName)
+    && (typeof draft.taskName === 'string' && /^[A-Za-z0-9._:/-]{1,512}$/.test(draft.taskName)
+      || draft.taskName === null && draft.state !== 'QUEUED')
 }
 
 async function ownedDraft(

@@ -11,6 +11,7 @@ import { createGoogleEvidenceStagingPort } from './stagingStore.js'
 import { createGoogleBookingTaskQueue } from './taskQueue.js'
 import { createWorkerIdentityVerifier } from './workerAuth.js'
 import { createAsyncBookingWorker } from './asyncWorker.js'
+import { createGoogleWorkerLeasePort } from './workerLease.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -52,8 +53,10 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
   const jera = createJeraRuntime(env, { spreadsheetId: config.spreadsheetId, sheets: google.sheets })
   const asyncDependencies = config.asyncBooking ? (() => {
     const evidenceStaging = createGoogleEvidenceStagingPort({ bucketName: config.asyncBooking.bucketName })
+    const workerLease = createGoogleWorkerLeasePort({ bucketName: config.asyncBooking.bucketName })
     return {
       evidenceStaging,
+      workerLease,
       taskQueue: createGoogleBookingTaskQueue({
         projectId: config.asyncBooking.projectId,
         location: config.asyncBooking.location,
@@ -71,7 +74,9 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
         staging: evidenceStaging,
         evidenceIngress,
         bookingIngress: ingress,
+        lease: workerLease,
         now,
+        wait: (milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
       }),
     }
   })() : {}
