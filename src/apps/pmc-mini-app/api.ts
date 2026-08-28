@@ -193,12 +193,26 @@ function parseSafeQueuedProjection(value: unknown): BookingDraftProjection | nul
   if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')) return null
   if (typeof value.draftId !== 'string' || typeof value.requestId !== 'string' || !isProjectionState(value.state)
     || (value.retentionState !== '' && value.retentionState !== 'PENDING_APPROVAL')
-    || !Number.isSafeInteger(value.version) || value.input !== null
+    || !isSafeInteger(value.version) || value.input !== null
     || !emptyStringArray(value.paymentEvidenceIds) || !emptyStringArray(value.chatEvidenceIds)
     || !nullableString(value.caseId) || !nullableString(value.safeErrorCode)
     || !nullableString(value.queuedAt) || !nullableString(value.lastProgressAt)
     || !(value.confirmationStatus === null || isConfirmationStatus(value.confirmationStatus))) return null
-  return value as BookingDraftProjection
+  return {
+    draftId: value.draftId,
+    requestId: value.requestId,
+    state: value.state,
+    retentionState: value.retentionState,
+    version: value.version,
+    input: null,
+    paymentEvidenceIds: value.paymentEvidenceIds,
+    chatEvidenceIds: value.chatEvidenceIds,
+    confirmationStatus: value.confirmationStatus,
+    caseId: value.caseId,
+    safeErrorCode: value.safeErrorCode,
+    queuedAt: value.queuedAt,
+    lastProgressAt: value.lastProgressAt,
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -211,6 +225,10 @@ function emptyStringArray(value: unknown): value is string[] {
 
 function nullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string'
+}
+
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value)
 }
 
 function isConfirmationStatus(value: unknown): value is BookingConfirmationResult['status'] {
