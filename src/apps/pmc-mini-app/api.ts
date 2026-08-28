@@ -3,6 +3,7 @@ import type {
   BookingConfirmationResult,
   BookingDraftInput,
   BookingDraftProjection,
+  BookingQueuedResult,
   MiniAppConfig,
   MiniAppEnrollmentOptions,
   MiniAppSession,
@@ -23,10 +24,12 @@ export interface MiniAppBrowserApi {
   enroll(idToken: string, staffId: string, pin: string): Promise<MiniAppSession>
   loadConfig(idToken: string): Promise<MiniAppConfig>
   createDraft(idToken: string): Promise<BookingDraftProjection>
-  loadDraft(idToken: string, draftId: string): Promise<BookingDraftProjection>
+  loadLatestActiveDraft(idToken: string): Promise<BookingDraftProjection | null>
+  loadDraft(idToken: string, draftId: string, signal?: AbortSignal): Promise<BookingDraftProjection>
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
+  uploadEvidenceBatch(idToken: string, draftId: string, input: { paymentFiles: File[]; chatFiles: File[] }): Promise<BookingDraftProjection>
   save(idToken: string, draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
-  confirm(idToken: string, draftId: string, version: number): Promise<BookingConfirmationResult>
+  confirm(idToken: string, draftId: string, version: number): Promise<BookingQueuedResult | BookingConfirmationResult>
   cancel(idToken: string, draftId: string, version: number): Promise<BookingDraftProjection>
   loadReport<T = unknown>(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<JeraClientEnvelope<T>>
   refreshReport(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<{ accepted: true; correlationId: string }>
@@ -85,13 +88,29 @@ export function createMiniAppApi(options: {
     createDraft(idToken) {
       return requestJson(request, '/api/mini-app/booking-drafts', authenticatedJson(idToken, 'POST', {}))
     },
-    loadDraft(idToken, draftId) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticated(idToken))
+    async loadLatestActiveDraft(idToken) {
+      try {
+        return await requestJson(request, '/api/mini-app/booking-drafts/active', authenticated(idToken))
+      } catch (error) {
+        if (error instanceof MiniAppApiError && error.code === 'MINI_APP_ROUTE_NOT_FOUND') return null
+        throw error
+      }
+    },
+    loadDraft(idToken, draftId, signal) {
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, { ...authenticated(idToken), signal })
     },
     upload(idToken, draftId, kind, files) {
       const body = new FormData()
       for (const file of files) body.append('files', file)
       return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/evidence?kind=${kind}`, {
+        method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
+      })
+    },
+    uploadEvidenceBatch(idToken, draftId, input) {
+      const body = new FormData()
+      for (const file of input.paymentFiles) body.append('paymentFiles', file)
+      for (const file of input.chatFiles) body.append('chatFiles', file)
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/evidence-batch`, {
         method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
       })
     },

@@ -62,6 +62,22 @@ describe('PMC LINE Mini App shell', () => {
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
   })
 
+  it('opens the latest active request instead of creating another draft', async () => {
+    const api = miniAppApi()
+    api.initialize = vi.fn(async () => 'raw-id-token')
+    api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'มัส', active: true }))
+    api.loadConfig = vi.fn(async () => config)
+    api.loadLatestActiveDraft = vi.fn(async () => ({
+      draftId: 'draft-queued', requestId: 'request-queued', state: 'QUEUED', retentionState: '', version: 5, input: null,
+      paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: null,
+    }))
+    render(<PmcMiniApp api={api} />)
+
+    expect(await screen.findByText('รับรายการแล้ว')).toBeVisible()
+    expect(api.createDraft).not.toHaveBeenCalled()
+  })
+
   it('links an unknown LINE account with one short mobile PIN form', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -96,6 +112,7 @@ function miniAppApi(): PmcMiniAppApi {
   return {
     initialize: vi.fn(async () => 'token'),
     loadSession: vi.fn(), loadEnrollmentOptions: vi.fn(), enroll: vi.fn(), loadConfig: vi.fn(),
+    loadLatestActiveDraft: vi.fn(async () => null),
     createDraft: vi.fn(async () => ({
       draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
       paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,

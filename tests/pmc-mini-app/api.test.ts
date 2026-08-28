@@ -26,21 +26,48 @@ describe('PMC Mini App browser API', () => {
     expect(fetch.mock.calls.map(([url]) => String(url)).join(' ')).not.toContain('raw-id-token')
   })
 
-  it('uploads every selected file in one multipart request', async () => {
+  it('uploads payment and chat evidence together through one async batch request', async () => {
     const fetch = vi.fn(async () => jsonResponse(200, {
       draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 2,
       input: null, paymentEvidenceIds: [], chatEvidenceIds: ['chat-1', 'chat-2'], confirmationStatus: null,
       caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
-    const files = [new File(['one'], 'one.png', { type: 'image/png' }), new File(['two'], 'two.png', { type: 'image/png' })]
+    const payment = [new File(['one'], 'payment.png', { type: 'image/png' })]
+    const chat = [new File(['two'], 'chat.png', { type: 'image/png' })]
 
-    await api.upload('raw-id-token', 'draft-1', 'CHAT', files)
+    await api.uploadEvidenceBatch('raw-id-token', 'draft-1', { paymentFiles: payment, chatFiles: chat })
 
     const [, init] = fetch.mock.calls[0]!
     expect(init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer raw-id-token' } })
     expect(init?.body).toBeInstanceOf(FormData)
-    expect((init?.body as FormData).getAll('files')).toHaveLength(2)
+    expect((init?.body as FormData).getAll('paymentFiles')).toEqual(payment)
+    expect((init?.body as FormData).getAll('chatFiles')).toEqual(chat)
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/evidence-batch', expect.anything())
+  })
+
+  it('parses a 202 confirmation acknowledgement without treating it as a completed booking', async () => {
+    const fetch = vi.fn(async () => jsonResponse(202, { requestId: 'request-1', status: 'QUEUED' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.confirm('raw-id-token', 'draft-1', 4)).resolves.toEqual({ requestId: 'request-1', status: 'QUEUED' })
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/confirm', expect.objectContaining({
+      method: 'POST', headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' }, body: JSON.stringify({ version: 4 }),
+    }))
+  })
+
+  it('loads only the current staff active draft with bearer authentication', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      draftId: 'draft-1', requestId: 'request-1', state: 'QUEUED', retentionState: '', version: 5,
+      input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: null,
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadLatestActiveDraft('raw-id-token')).resolves.toMatchObject({ draftId: 'draft-1', state: 'QUEUED' })
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/active', expect.objectContaining({
+      headers: { authorization: 'Bearer raw-id-token' },
+    }))
   })
 
   it('cancels a draft with its current version and bearer auth', async () => {
@@ -73,6 +100,19 @@ describe('PMC Mini App browser API', () => {
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1', expect.objectContaining({
       headers: { authorization: 'Bearer raw-id-token' },
     }))
+  })
+
+  it('keeps the terminal retry marker and Case ID from the persisted server projection', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      draftId: 'draft-1', requestId: 'request-1', state: 'CONFIRMED_WITH_RETRY', retentionState: '', version: 12,
+      input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: 'CONFIRMED',
+      caseId: 'PMC-260828-0001', safeErrorCode: 'DOWNSTREAM_RETRY', queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: '2026-08-28T10:01:00.000Z',
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadDraft('raw-id-token', 'draft-1')).resolves.toMatchObject({
+      state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-260828-0001', safeErrorCode: 'DOWNSTREAM_RETRY',
+    })
   })
 
   it('keeps first-time linking PIN in the authenticated POST body only', async () => {

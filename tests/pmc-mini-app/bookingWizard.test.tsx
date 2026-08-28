@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
@@ -56,6 +56,17 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(await screen.findByText('PMC-202608-0001')).toBeVisible()
   })
 
+  it('does not send the same valid confirmation twice before React disables the submit button', () => {
+    const app = adapter()
+    renderWizard({ initialStep: 4, adapter: app })
+    const confirmButton = screen.getByRole('button', { name: 'ยืนยันบันทึก' })
+
+    fireEvent.click(confirmButton)
+    fireEvent.click(confirmButton)
+
+    expect(app.confirm).toHaveBeenCalledOnce()
+  })
+
   it('cancels the server draft before leaving the first step', async () => {
     const user = userEvent.setup()
     const app = adapter()
@@ -86,13 +97,13 @@ describe('PMC Mini App mobile booking wizard', () => {
     const current = { ...draft, input: completeInput() }
     let version = current.version
     const app = adapter()
-    vi.mocked(app.upload).mockImplementation(async (_draftId, kind) => {
+    vi.mocked(app.uploadEvidenceBatch).mockImplementation(async () => {
       version += 1
       return {
         ...current,
         version,
-        paymentEvidenceIds: kind === 'PAYMENT' ? ['payment-drive-1'] : ['payment-drive-1'],
-        chatEvidenceIds: kind === 'CHAT' ? ['chat-drive-1'] : [],
+        paymentEvidenceIds: ['payment-drive-1'],
+        chatEvidenceIds: ['chat-drive-1'],
       }
     })
     vi.mocked(app.save).mockRejectedValue(new Error('save failed'))
@@ -102,18 +113,18 @@ describe('PMC Mini App mobile booking wizard', () => {
 
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
     await screen.findByText('บันทึกร่างไม่สำเร็จ กรุณาลองอีกครั้ง')
-    expect(app.upload).toHaveBeenCalledTimes(2)
+    expect(app.uploadEvidenceBatch).toHaveBeenCalledOnce()
 
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
     await waitFor(() => expect(app.save).toHaveBeenCalledTimes(2))
-    expect(app.upload).toHaveBeenCalledTimes(2)
+    expect(app.uploadEvidenceBatch).toHaveBeenCalledOnce()
   })
 
   it('explains how to replace an unsupported iPhone evidence image', async () => {
     const user = userEvent.setup()
     const current = { ...draft, input: completeInput() }
     const app = adapter()
-    vi.mocked(app.upload).mockRejectedValueOnce(new MiniAppApiError('UNSUPPORTED_EVIDENCE', 415))
+    vi.mocked(app.uploadEvidenceBatch).mockRejectedValueOnce(new MiniAppApiError('UNSUPPORTED_EVIDENCE', 415))
     renderWizard({ initialStep: 3, adapter: app, draft: current })
     await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
     await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
@@ -181,6 +192,7 @@ function adapter(): BookingWizardAdapter {
   return {
     load: vi.fn(async () => draft),
     upload: vi.fn(async () => draft),
+    uploadEvidenceBatch: vi.fn(async () => draft),
     save: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),
     confirm: vi.fn(async () => ({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })),
     cancel: vi.fn(async () => ({ ...draft, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2 })),

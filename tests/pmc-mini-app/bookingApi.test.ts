@@ -27,6 +27,21 @@ describe('PMC Mini App booking draft API', () => {
     })
   })
 
+  it('authenticates and returns a PII-free projection of the current owner latest async draft', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    await createReadyDraftAndConfirm(deps)
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/booking-drafts/active', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const body = await response.json() as Record<string, unknown>
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ draftId: 'draft-1', requestId: 'request-1', state: 'QUEUED', input: null, paymentEvidenceIds: [], chatEvidenceIds: [] })
+    expect(body).not.toHaveProperty('customerName')
+    expect(JSON.stringify(body)).not.toContain('ลูกค้าทดสอบ')
+    expect(JSON.stringify(body)).not.toContain('drafts/draft-1')
+  })
+
   it('does not call Apps Script before explicit confirmation', async () => {
     const deps = dependencies()
     const middleware = createPmcMiniAppMiddleware(deps)
@@ -555,6 +570,11 @@ class TestStore implements MiniAppStore {
   }
   async createDraft(draft: MiniAppRequestRecord) { this.drafts.set(draft.draftId, structuredClone(draft)); return structuredClone(draft) }
   async getDraft(draftId: string) { return this.read(draftId) }
+  async getLatestActiveDraftByStaff(staffId: string) {
+    return [...this.drafts.values()]
+      .filter((draft) => draft.staffId === staffId && ['DRAFT', 'READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'NEEDS_REVIEW'].includes(draft.state))
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null
+  }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {
     const draft = this.drafts.get(draftId)
     if (!draft) throw new Error('DRAFT_NOT_FOUND')

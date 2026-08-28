@@ -8,7 +8,7 @@ import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, val
 import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBatch.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { EvidenceStagingPort } from './stagingStore.js'
-import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
+import type { MiniAppRequestRecord, MiniAppResumeStore, MiniAppStore } from './store.js'
 import type { BookingTaskQueuePort } from './taskQueue.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
@@ -143,6 +143,28 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
       await handleEvidenceBatchUpload(req, res, evidenceBatchRoute[1]!, authenticated, deps)
+      return
+    }
+
+    if (pathname === '/api/mini-app/booking-drafts/active') {
+      if (!requireGet(req, res)) return
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      if (!deps.config.asyncBooking || !deps.config.asyncBooking.ownerStaffIds.has(authenticated.staffId)) {
+        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+        return
+      }
+      const store = deps.store as MiniAppStore & Partial<MiniAppResumeStore>
+      if (!store.getLatestActiveDraftByStaff) {
+        respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+        return
+      }
+      try {
+        const draft = await store.getLatestActiveDraftByStaff(authenticated.staffId)
+        respond(res, 200, draft ? safeActiveDraftProjection(draft) : null)
+      } catch {
+        respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      }
       return
     }
 
@@ -630,6 +652,24 @@ function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
     } : null,
     paymentEvidenceIds: [...draft.paymentEvidenceFileIds],
     chatEvidenceIds: [...draft.chatEvidenceFileIds],
+    confirmationStatus: draft.confirmationStatus,
+    caseId: draft.caseId,
+    safeErrorCode: draft.safeErrorCode,
+    queuedAt: draft.queuedAt,
+    lastProgressAt: draft.lastProgressAt,
+  }
+}
+
+function safeActiveDraftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
+  return {
+    draftId: draft.draftId,
+    requestId: draft.requestId,
+    state: draft.state,
+    retentionState: draft.retentionState,
+    version: draft.version,
+    input: null,
+    paymentEvidenceIds: [],
+    chatEvidenceIds: [],
     confirmationStatus: draft.confirmationStatus,
     caseId: draft.caseId,
     safeErrorCode: draft.safeErrorCode,

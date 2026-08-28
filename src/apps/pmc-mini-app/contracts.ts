@@ -75,3 +75,7 @@ export interface BookingQueuedResult {
   requestId: string
   status: 'QUEUED'
 }
+
+export function isBookingTerminalState(state: BookingDraftState): boolean {
+  return ['CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED'].includes(state)
+}

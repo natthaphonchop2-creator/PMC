@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { CalendarDays, FileChartColumn, House, UserRound } from 'lucide-react'
 import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
-import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
+import { BookingProcessing, type BookingProcessingAdapter } from './BookingProcessing'
+import { isBookingTerminalState, type BookingDraftProjection, type MiniAppConfig, type MiniAppSession } from './contracts'
 import { EnrollmentPage } from './EnrollmentPage'
 import { Home } from './Home'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
@@ -65,6 +66,12 @@ export function PmcMiniApp({
         if (!active) return
         setSession(nextSession)
         setConfig(nextConfig)
+        const activeDraft = await api.loadLatestActiveDraft(token)
+        if (!active || !activeDraft) return
+        const resumedDraft = await hydrateActiveDraft(api, token, activeDraft)
+        if (!active) return
+        setDraft(resumedDraft)
+        setView('BOOKING')
       } catch (error) {
         if (!active) return
         const code = safeErrorCode(error)
@@ -79,9 +86,14 @@ export function PmcMiniApp({
   const bookingAdapter = useMemo<BookingWizardAdapter>(() => ({
     load: (draftId) => api.loadDraft(idToken, draftId),
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
+    uploadEvidenceBatch: (draftId, input) => api.uploadEvidenceBatch(idToken, draftId, input),
     save: (draftId, version, input) => api.save(idToken, draftId, version, input),
     confirm: (draftId, version) => api.confirm(idToken, draftId, version),
     cancel: (draftId, version) => api.cancel(idToken, draftId, version),
+  }), [api, idToken])
+
+  const processingAdapter = useMemo<BookingProcessingAdapter>(() => ({
+    load: (draftId, signal) => api.loadDraft(idToken, draftId, signal),
   }), [api, idToken])
 
   const reportAdapter = useMemo<ReportPageAdapter>(() => ({
@@ -97,7 +109,8 @@ export function PmcMiniApp({
     setLoading(true)
     setMessage('')
     try {
-      const nextDraft = await api.createDraft(idToken)
+      const activeDraft = await api.loadLatestActiveDraft(idToken)
+      const nextDraft = activeDraft ? await hydrateActiveDraft(api, idToken, activeDraft) : await api.createDraft(idToken)
       setDraft(nextDraft)
       setView('BOOKING')
     } catch {
@@ -142,7 +155,22 @@ export function PmcMiniApp({
   />
   if (!session) return <Notice>{message || 'รอผู้ดูแลอนุมัติ'}</Notice>
   if (view === 'BOOKING' && config && draft) {
-    return <BookingWizard session={session} config={config} draft={draft} adapter={bookingAdapter} onExit={() => { setView('HOME'); setDraft(null) }} />
+    if (isAsyncBookingState(draft.state) || isBookingTerminalState(draft.state)) {
+      return <BookingProcessing
+        draft={draft}
+        adapter={processingAdapter}
+        onProjection={setDraft}
+        onExit={() => { setView('HOME'); setDraft(null) }}
+      />
+    }
+    return <BookingWizard
+      session={session}
+      config={config}
+      draft={draft}
+      adapter={bookingAdapter}
+      onQueued={(queued) => setDraft((current) => current ? { ...current, state: 'QUEUED', requestId: queued.requestId } : current)}
+      onExit={() => { setView('HOME'); setDraft(null) }}
+    />
   }
 
   return (
@@ -211,6 +239,19 @@ function Notice({ children }: { children: string }) {
 
 function isAdditionalReport(value: ReportSelection): boolean {
   return !['TODAY_SUMMARY', 'PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'].includes(value)
+}
+
+function isAsyncBookingState(state: BookingDraftProjection['state']): boolean {
+  return state === 'QUEUED' || state === 'PROCESSING' || state === 'RETRYING' || state === 'CONFIRMING'
+}
+
+async function hydrateActiveDraft(
+  api: MiniAppBrowserApi,
+  idToken: string,
+  draft: BookingDraftProjection,
+): Promise<BookingDraftProjection> {
+  if (draft.state !== 'DRAFT' && draft.state !== 'READY_TO_CONFIRM') return draft
+  return api.loadDraft(idToken, draft.draftId)
 }
 
 function safeErrorCode(error: unknown): string {

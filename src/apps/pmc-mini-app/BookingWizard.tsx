@@ -15,6 +15,7 @@ import type {
   BookingConfirmationResult,
   BookingDraftInput,
   BookingDraftProjection,
+  BookingQueuedResult,
   MiniAppConfig,
   MiniAppSession,
 } from './contracts'
@@ -22,8 +23,9 @@ import type {
 export interface BookingWizardAdapter {
   load(draftId: string): Promise<BookingDraftProjection>
   upload(draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
+  uploadEvidenceBatch(draftId: string, input: { paymentFiles: File[]; chatFiles: File[] }): Promise<BookingDraftProjection>
   save(draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
-  confirm(draftId: string, version: number): Promise<BookingConfirmationResult>
+  confirm(draftId: string, version: number): Promise<BookingQueuedResult | BookingConfirmationResult>
   cancel(draftId: string, version: number): Promise<BookingDraftProjection>
 }
 
@@ -34,6 +36,7 @@ export function BookingWizard({
   adapter,
   initialStep = 0,
   onExit,
+  onQueued,
 }: {
   session: MiniAppSession
   config: MiniAppConfig
@@ -41,6 +44,7 @@ export function BookingWizard({
   adapter: BookingWizardAdapter
   initialStep?: number
   onExit?: () => void
+  onQueued?: (result: BookingQueuedResult) => void
 }) {
   const [state, dispatch] = useReducer(reduceBooking, initialDraftState(initialDraft, initialStep))
   const [draft, setDraft] = useState(initialDraft)
@@ -97,14 +101,16 @@ export function BookingWizard({
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
         const newChats = state.evidence.CHAT.flatMap(({ file }) => file ? [file] : [])
-        if (newPayments.length > 0) {
-          current = await adapter.upload(current.draftId, 'PAYMENT', newPayments)
+        if (newPayments.length > 0 || newChats.length > 0) {
+          try {
+            current = await adapter.uploadEvidenceBatch(current.draftId, { paymentFiles: newPayments, chatFiles: newChats })
+          } catch (error) {
+            if (errorCode(error) !== 'MINI_APP_ROUTE_NOT_FOUND') throw error
+            if (newPayments.length > 0) current = await adapter.upload(current.draftId, 'PAYMENT', newPayments)
+            if (newChats.length > 0) current = await adapter.upload(current.draftId, 'CHAT', newChats)
+          }
           setDraft(current)
           replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, dispatch)
-        }
-        if (newChats.length > 0) {
-          current = await adapter.upload(current.draftId, 'CHAT', newChats)
-          setDraft(current)
           replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, dispatch)
         }
         current = await adapter.save(current.draftId, current.version, input)
@@ -136,6 +142,10 @@ export function BookingWizard({
     setFailure('')
     try {
       const confirmed = await adapter.confirm(draft.draftId, draft.version)
+      if ('requestId' in confirmed) {
+        onQueued?.(confirmed)
+        return
+      }
       setResult(confirmed)
       dispatch({ type: 'GO_TO_STEP', step: 5 })
     } catch {

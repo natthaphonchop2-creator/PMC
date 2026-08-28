@@ -36,6 +36,7 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
       return PREVIEW_SESSION
     },
     async loadConfig() { return PREVIEW_CONFIG },
+    async loadLatestActiveDraft() { return null },
     async createDraft() {
       current = {
         draftId: 'draft-preview-1', requestId: 'request-preview-1', state: 'DRAFT', retentionState: '', version: 1,
@@ -56,6 +57,17 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
         version: current!.version + 1,
         paymentEvidenceIds: kind === 'PAYMENT' ? [...current!.paymentEvidenceIds, ...ids] : current!.paymentEvidenceIds,
         chatEvidenceIds: kind === 'CHAT' ? [...current!.chatEvidenceIds, ...ids] : current!.chatEvidenceIds,
+      }
+      return structuredClone(current)
+    },
+    async uploadEvidenceBatch(_token, draftId, input) {
+      requireDraft(current, draftId)
+      const paymentEvidenceIds = input.paymentFiles.map((file, index) => `preview-payment-${index + 1}-${file.name}`)
+      const chatEvidenceIds = input.chatFiles.map((file, index) => `preview-chat-${index + 1}-${file.name}`)
+      current = {
+        ...current!, version: current!.version + 1,
+        paymentEvidenceIds: [...current!.paymentEvidenceIds, ...paymentEvidenceIds],
+        chatEvidenceIds: [...current!.chatEvidenceIds, ...chatEvidenceIds],
       }
       return structuredClone(current)
     },

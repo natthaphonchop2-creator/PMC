@@ -410,6 +410,18 @@ button:focus-visible {
 .pmc-booking-success > span { margin-block-start: 6px; color: var(--pmc-gold-dark); font-weight: 650; }
 .pmc-booking-success > button { min-height: 50px; margin-block-start: 32px; padding: 10px 24px; border: 1px solid #cccccc; border-radius: 9px; background: #fff; font-weight: 650; }
 
+.pmc-booking-processing { display: grid; width: min(100%, 560px); min-height: 100dvh; margin-inline: auto; padding: 36px 24px; place-content: center; justify-items: center; background: #fff; text-align: center; }
+.pmc-processing-icon { display: grid; width: 68px; height: 68px; place-items: center; border-radius: 50%; }
+.pmc-processing-icon svg { width: 31px; height: 31px; }
+.pmc-processing-icon.waiting { color: var(--pmc-gold-dark); background: var(--pmc-gold-soft); }
+.pmc-processing-icon.confirmed { color: #fff; background: var(--pmc-gold-dark); }
+.pmc-processing-icon.review { color: #8d5310; background: #fff4db; }
+.pmc-processing-kicker { margin: 22px 0 3px; color: var(--pmc-muted); font-weight: 650; }
+.pmc-booking-processing h1 { margin: 0; font-size: 1.65rem; line-height: var(--lh-heading); letter-spacing: normal; overflow-wrap: anywhere; }
+.pmc-booking-processing > p:not(.pmc-processing-kicker):not(.pmc-processing-case) { margin: 8px 0 0; color: var(--pmc-muted); line-height: var(--lh-body); }
+.pmc-processing-case { margin: 20px 0 0; color: var(--pmc-muted); font-size: .8rem; overflow-wrap: anywhere; }
+.pmc-booking-processing > button { min-width: 180px; min-height: 52px; margin-block-start: 28px; }
+
 @media (hover: hover) {
   .pmc-home-quick-card:not(:disabled):hover,
   .pmc-home-account-card:hover { border-color: #d7c39f; transform: translateY(-2px); box-shadow: 0 12px 28px rgba(64, 45, 14, .09); }
