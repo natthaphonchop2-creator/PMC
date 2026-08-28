@@ -35,6 +35,9 @@ export interface MiniAppBookingIngressEnvelope extends UnsignedMiniAppBookingIng
 export interface MiniAppBookingIngressResult {
   caseId: string
   status: MiniAppIngressStatus
+  driveState: 'OK' | 'RETRY'
+  calendarState: 'PENDING' | 'OK' | 'RETRY' | 'CONFLICT'
+  lineState: 'PENDING' | 'OK' | 'RETRY'
 }
 
 export function canonicalMiniAppBookingIngress(envelope: UnsignedMiniAppBookingIngressEnvelope): string {

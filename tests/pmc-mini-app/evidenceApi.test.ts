@@ -30,6 +30,10 @@ describe('PMC Mini App evidence API', () => {
         paymentEvidenceIds: [],
         chatEvidenceIds: ['drive-file-1', 'drive-file-2'],
         confirmationStatus: null,
+        caseId: null,
+        safeErrorCode: null,
+        queuedAt: null,
+        lastProgressAt: null,
       },
     })
     expect(deps.drive.uploadEvidence).toHaveBeenNthCalledWith(1, expect.objectContaining({
@@ -86,6 +90,7 @@ describe('PMC Mini App evidence API', () => {
       body: {
         draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 4,
         input: null, paymentEvidenceIds: ['owner-drive-file-1'], chatEvidenceIds: [], confirmationStatus: null,
+        caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
       },
     })
     expect(deps.currentDraft.paymentEvidenceFileIds).toEqual(['owner-drive-file-1'])

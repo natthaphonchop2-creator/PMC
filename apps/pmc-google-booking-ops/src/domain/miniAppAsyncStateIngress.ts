@@ -190,7 +190,11 @@ function applyRetry(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
 
 function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   if (!payload.caseId || !payload.confirmationStatus) throw new Error('mini app async completion rejected')
-  if (current.state === 'CONFIRMED' && current.version === payload.expectedVersion + 1
+  if (payload.safeErrorCode !== null && payload.safeErrorCode !== 'DOWNSTREAM_RETRY') {
+    throw new Error('mini app async completion rejected')
+  }
+  const state = payload.safeErrorCode === 'DOWNSTREAM_RETRY' ? 'CONFIRMED_WITH_RETRY' : 'CONFIRMED'
+  if (current.state === state && current.version === payload.expectedVersion + 1
     && current.caseId === payload.caseId && current.confirmationStatus === payload.confirmationStatus) return unchanged(current)
   requireOwnedProcessing(current, payload)
   if (current.paymentEvidenceFileIds.length !== current.paymentEvidenceObjectKeys.length
@@ -203,9 +207,9 @@ function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsync
     throw new Error('mini app async completion projection hash rejected')
   }
   return changed(current, {
-    state: 'CONFIRMED', caseId: payload.caseId, confirmationStatus: payload.confirmationStatus,
+    state, caseId: payload.caseId, confirmationStatus: payload.confirmationStatus,
     confirmedAt: payload.nowIso, processingLeaseUntil: null, processingOwnerToken: null,
-    lastProgressAt: payload.nowIso, safeErrorCode: null, updatedAt: payload.nowIso,
+    lastProgressAt: payload.nowIso, safeErrorCode: payload.safeErrorCode, updatedAt: payload.nowIso,
   })
 }
 

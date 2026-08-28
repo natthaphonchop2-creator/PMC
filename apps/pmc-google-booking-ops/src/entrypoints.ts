@@ -44,6 +44,8 @@ import {
 } from './domain/miniAppEvidenceIngress'
 import type { BookingPorts } from './ports'
 import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
+import type { BookingCase } from './domain/types'
+import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -76,13 +78,36 @@ export function processBookingDoPost(event: AppsScriptDoPostEvent, ports: Bookin
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_BOOKING') {
     const booking = submitMiniAppBooking(verifyMiniAppIngressPayload(parsed, ports), ports)
-    return { caseId: booking.caseId, status: booking.appointmentStatus }
+    return bookingIngressResult(booking)
   }
   if (isRecord(parsed) && !Object.prototype.hasOwnProperty.call(parsed, 'kind')) {
     handleLineDirectoryIngress(parseBookingIngressPayload(parsed), ports)
     return { ok: true as const }
   }
   throw new Error('unsupported ingress kind')
+}
+
+function bookingIngressResult(booking: BookingCase): MiniAppBookingIngressResult {
+  if ((booking.driveState !== 'OK' && booking.driveState !== 'RETRY')
+    || !isCalendarProjectionState(booking.calendarState)
+    || !isLineProjectionState(booking.lineState)) {
+    throw new Error('mini app booking projection state rejected')
+  }
+  return {
+    caseId: booking.caseId,
+    status: booking.appointmentStatus,
+    driveState: booking.driveState,
+    calendarState: booking.calendarState,
+    lineState: booking.lineState,
+  }
+}
+
+function isCalendarProjectionState(value: BookingCase['calendarState']): value is MiniAppBookingIngressResult['calendarState'] {
+  return value === 'PENDING' || value === 'OK' || value === 'RETRY' || value === 'CONFLICT'
+}
+
+function isLineProjectionState(value: BookingCase['lineState']): value is MiniAppBookingIngressResult['lineState'] {
+  return value === 'PENDING' || value === 'OK' || value === 'RETRY'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

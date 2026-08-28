@@ -609,6 +609,10 @@ function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
     paymentEvidenceIds: [...draft.paymentEvidenceFileIds],
     chatEvidenceIds: [...draft.chatEvidenceFileIds],
     confirmationStatus: draft.confirmationStatus,
+    caseId: draft.caseId,
+    safeErrorCode: draft.safeErrorCode,
+    queuedAt: draft.queuedAt,
+    lastProgressAt: draft.lastProgressAt,
   }
 }
 

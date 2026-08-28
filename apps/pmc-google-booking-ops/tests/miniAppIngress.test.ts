@@ -18,13 +18,22 @@ describe('Apps Script Mini App booking ingress', () => {
     expect(ports.repositories.lineDirectory.hasNonce('nonce-123456')).toBe(true)
   })
 
-  it('routes Mini App and legacy LINE directory payloads without changing the legacy contract', () => {
+  it('returns the exact safe booking projection for an initial submission and verified duplicate', () => {
     const miniPorts = createTestPorts()
-    expect(processBookingDoPost(event(envelope()), miniPorts)).toEqual({
-      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
-    })
-    expect(miniPorts.bookings.list()).toHaveLength(1)
+    const first = processBookingDoPost(event(envelope()), miniPorts)
+    const duplicate = processBookingDoPost(event(signedEnvelope({ nonce: 'nonce-654321' })), miniPorts)
 
+    expect(first).toEqual({
+      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+      driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+    })
+    expect(duplicate).toEqual(first)
+    expect(Object.keys(first)).toEqual(['caseId', 'status', 'driveState', 'calendarState', 'lineState'])
+    expect(JSON.stringify(first)).not.toMatch(/ลูกค้าทดสอบ|Facebook Test|0812345678|payment-file-1|chat-file-1/i)
+    expect(miniPorts.bookings.list()).toHaveLength(1)
+  })
+
+  it('routes legacy LINE directory payloads without changing the legacy contract', () => {
     const legacyPorts = createTestPorts({ lineDirectoryCaptureEnabled: true })
     const legacyPayload = legacyPorts.signedBookingIngressFixture('group', 'group-source-1')
     expect(processBookingDoPost(event(legacyPayload), legacyPorts)).toEqual({ ok: true })

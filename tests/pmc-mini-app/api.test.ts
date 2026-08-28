@@ -30,6 +30,7 @@ describe('PMC Mini App browser API', () => {
     const fetch = vi.fn(async () => jsonResponse(200, {
       draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 2,
       input: null, paymentEvidenceIds: [], chatEvidenceIds: ['chat-1', 'chat-2'], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
     const files = [new File(['one'], 'one.png', { type: 'image/png' }), new File(['two'], 'two.png', { type: 'image/png' })]
@@ -46,6 +47,7 @@ describe('PMC Mini App browser API', () => {
     const fetch = vi.fn(async () => jsonResponse(200, {
       draftId: 'draft-1', requestId: 'request-1', state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2,
       input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
 
@@ -62,6 +64,7 @@ describe('PMC Mini App browser API', () => {
     const fetch = vi.fn(async () => jsonResponse(200, {
       draftId: 'draft-1', requestId: 'request-1', state: 'READY_TO_CONFIRM', retentionState: '', version: 10,
       input: null, paymentEvidenceIds: ['payment-1'], chatEvidenceIds: ['chat-1'], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
 

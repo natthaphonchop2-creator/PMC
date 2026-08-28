@@ -60,6 +60,10 @@ export interface BookingDraftProjection {
   paymentEvidenceIds: string[]
   chatEvidenceIds: string[]
   confirmationStatus: BookingConfirmationResult['status'] | null
+  caseId: string | null
+  safeErrorCode: string | null
+  queuedAt: string | null
+  lastProgressAt: string | null
 }
 
 export interface BookingConfirmationResult {

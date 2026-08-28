@@ -16,6 +16,17 @@ import type {
 } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App booking draft API', () => {
+  it('projects only the persisted async resume fields for polling', async () => {
+    const deps = dependencies()
+    const middleware = createPmcMiniAppMiddleware(deps)
+
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+
+    expect(created.body).toMatchObject({
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    })
+  })
+
   it('does not call Apps Script before explicit confirmation', async () => {
     const deps = dependencies()
     const middleware = createPmcMiniAppMiddleware(deps)

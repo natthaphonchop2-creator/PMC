@@ -174,6 +174,7 @@ const config: MiniAppConfig = {
 const draft: BookingDraftProjection = {
   draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
   paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+  caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
 }
 
 function adapter(): BookingWizardAdapter {

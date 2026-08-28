@@ -120,9 +120,20 @@ export function createBookingIngressClient(options: BookingIngressClientOptions)
 function isIngressResult(value: unknown): value is MiniAppBookingIngressResult {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const result = value as Record<string, unknown>
-  return typeof result.caseId === 'string'
+  return hasExactKeys(result, ['caseId', 'status', 'driveState', 'calendarState', 'lineState'])
+    && typeof result.caseId === 'string'
     && /^PMC-\d{6}-\d{4,}$/.test(result.caseId)
     && (result.status === 'CONFIRMED' || result.status === 'TENTATIVE' || result.status === 'AWAITING_ADMIN_SLOT')
+    && (result.driveState === 'OK' || result.driveState === 'RETRY')
+    && (result.calendarState === 'PENDING' || result.calendarState === 'OK'
+      || result.calendarState === 'RETRY' || result.calendarState === 'CONFLICT')
+    && (result.lineState === 'PENDING' || result.lineState === 'OK' || result.lineState === 'RETRY')
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
 }
 
 function safeNonce(value: string): boolean { return /^[A-Za-z0-9_-]{8,128}$/.test(value) }

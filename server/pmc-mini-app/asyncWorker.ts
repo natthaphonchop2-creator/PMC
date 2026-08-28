@@ -30,7 +30,7 @@ type WorkerSafeErrorCode =
 type AsyncBookingWorkerResult = {
   requestId: string
   caseId: string | null
-  state: 'CONFIRMED' | 'NEEDS_REVIEW'
+  state: 'CONFIRMED' | 'CONFIRMED_WITH_RETRY' | 'NEEDS_REVIEW'
 }
 
 type WorkerContext = {
@@ -264,7 +264,7 @@ export function createAsyncBookingWorker(input: {
   async function submitBooking(context: WorkerContext): Promise<MiniAppBookingIngressResult> {
     assertEvidenceLayout(context.bound, context.draft, true)
     const result = await fencedAwait(context, () => input.bookingIngress.send(context.draft))
-    if (!SAFE_CASE_ID.test(result.caseId) || !isConfirmationStatus(result.status)) {
+    if (!SAFE_CASE_ID.test(result.caseId) || !isConfirmationStatus(result.status) || !validResultProjection(result)) {
       throw new AsyncBookingWorkerError('BOOKING_INGRESS_RETRY')
     }
     return result
@@ -276,6 +276,7 @@ export function createAsyncBookingWorker(input: {
     const completion = mutation('COMPLETE', previous, context.taskAttempt, context.ownerToken, {
       caseId: result.caseId,
       confirmationStatus: result.status,
+      safeErrorCode: requiresRetryState(result) ? 'DOWNSTREAM_RETRY' : null,
     })
     context.draft = await sendAndRead(completion, (persisted) =>
       validExpectedCompletion(context.snapshot, context.bound, previous, persisted, result),
@@ -605,7 +606,7 @@ function validTerminal(snapshot: TaskSnapshot, draft: MiniAppRequestRecord): boo
       && draft.safeErrorCode === 'RETRY_EXHAUSTED'
       && draft.processingOwnerToken === null && draft.processingLeaseUntil === null
   }
-  return draft.state === 'CONFIRMED' && credibleVersionAndAttempt && draft.attemptCount >= 1
+  return (draft.state === 'CONFIRMED' || draft.state === 'CONFIRMED_WITH_RETRY') && credibleVersionAndAttempt && draft.attemptCount >= 1
     && Boolean(draft.caseId && SAFE_CASE_ID.test(draft.caseId)) && isConfirmationStatus(draft.confirmationStatus ?? '')
     && draft.processingOwnerToken === null && draft.processingLeaseUntil === null
     && draft.paymentEvidenceFileIds.length === draft.paymentEvidenceObjectKeys.length
@@ -614,6 +615,7 @@ function validTerminal(snapshot: TaskSnapshot, draft: MiniAppRequestRecord): boo
     && draft.chatEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
     && draft.evidenceCount === draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
     && validProjectionHash(snapshot, draft)
+    && (draft.state === 'CONFIRMED' ? draft.safeErrorCode === null : draft.safeErrorCode === 'DOWNSTREAM_RETRY')
 }
 
 function validExpectedCompletion(
@@ -628,14 +630,16 @@ function validExpectedCompletion(
     && persisted.version === previous.version + 1
     && persisted.caseId === result.caseId
     && persisted.confirmationStatus === result.status
+    && persisted.state === (requiresRetryState(result) ? 'CONFIRMED_WITH_RETRY' : 'CONFIRMED')
+    && persisted.safeErrorCode === (requiresRetryState(result) ? 'DOWNSTREAM_RETRY' : null)
     && sameStrings(persisted.paymentEvidenceFileIds, previous.paymentEvidenceFileIds)
     && sameStrings(persisted.chatEvidenceFileIds, previous.chatEvidenceFileIds)
     && persisted.evidenceCount === previous.evidenceCount
 }
 
 function terminalResult(draft: MiniAppRequestRecord): AsyncBookingWorkerResult | null {
-  if (draft.state === 'CONFIRMED' && draft.caseId) {
-    return { requestId: draft.requestId, caseId: draft.caseId, state: 'CONFIRMED' }
+  if ((draft.state === 'CONFIRMED' || draft.state === 'CONFIRMED_WITH_RETRY') && draft.caseId) {
+    return { requestId: draft.requestId, caseId: draft.caseId, state: draft.state }
   }
   if (draft.state === 'NEEDS_REVIEW') {
     return { requestId: draft.requestId, caseId: draft.caseId, state: 'NEEDS_REVIEW' }
@@ -694,4 +698,15 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 
 function isConfirmationStatus(value: string): value is NonNullable<MiniAppRequestRecord['confirmationStatus']> {
   return value === 'CONFIRMED' || value === 'TENTATIVE' || value === 'AWAITING_ADMIN_SLOT'
+}
+
+function validResultProjection(result: MiniAppBookingIngressResult): boolean {
+  return (result.driveState === 'OK' || result.driveState === 'RETRY')
+    && (result.calendarState === 'PENDING' || result.calendarState === 'OK'
+      || result.calendarState === 'RETRY' || result.calendarState === 'CONFLICT')
+    && (result.lineState === 'PENDING' || result.lineState === 'OK' || result.lineState === 'RETRY')
+}
+
+function requiresRetryState(result: MiniAppBookingIngressResult): boolean {
+  return result.driveState !== 'OK' || result.calendarState !== 'OK' || result.lineState !== 'OK'
 }

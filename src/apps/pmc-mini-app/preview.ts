@@ -40,6 +40,7 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
       current = {
         draftId: 'draft-preview-1', requestId: 'request-preview-1', state: 'DRAFT', retentionState: '', version: 1,
         input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+        caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
       }
       return structuredClone(current)
     },

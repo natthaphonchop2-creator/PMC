@@ -54,6 +54,25 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.bookingIngress.send).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['Drive retry', { driveState: 'RETRY', calendarState: 'OK', lineState: 'OK' }],
+    ['Calendar conflict', { driveState: 'OK', calendarState: 'CONFLICT', lineState: 'OK' }],
+    ['LINE retry', { driveState: 'OK', calendarState: 'OK', lineState: 'RETRY' }],
+  ])('persists CONFIRMED_WITH_RETRY while preserving the Case ID for %s', async (_label, projection) => {
+    const fixture = workerFixture({
+      bookingResults: [{
+        caseId: 'PMC-202608-0001', status: 'CONFIRMED', ...projection,
+      } as never],
+    })
+
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toEqual({
+      requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED_WITH_RETRY',
+    })
+    expect(fixture.state.read()).toMatchObject({
+      state: 'CONFIRMED_WITH_RETRY', caseId: 'PMC-202608-0001', safeErrorCode: 'DOWNSTREAM_RETRY',
+    })
+  })
+
   it.each([1, 2, 3, 4, 5, 6, 7])('persists RETRYING and throws safely for evidence failure on attempt %i', async (attempt) => {
     const fixture = workerFixture({
       draft: queuedDraft({ state: attempt === 1 ? 'QUEUED' : 'RETRYING', attemptCount: attempt - 1 }),
@@ -74,7 +93,10 @@ describe('PMC async worker through Apps Script state ingress', () => {
         paymentEvidenceFileIds: ['owner-drive-payment-1'],
         chatEvidenceFileIds: ['owner-drive-chat-1'],
       }),
-      bookingResults: [new Error('private timeout body'), { caseId: 'PMC-202608-0001', status: 'CONFIRMED' }],
+      bookingResults: [new Error('private timeout body'), {
+        caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+        driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+      }],
     })
 
     await expect(
@@ -451,7 +473,10 @@ function workerFixture(options: {
       return kind === 'PAYMENT' ? 'owner-drive-payment-1' : 'owner-drive-chat-1'
     }),
   }
-  const bookingResults = [...(options.bookingResults ?? [{ caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const }])]
+  const bookingResults = [...(options.bookingResults ?? [{
+    caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const,
+    driveState: 'OK' as const, calendarState: 'OK' as const, lineState: 'OK' as const,
+  }])]
   const bookingIngress: BookingIngressPort & { send: ReturnType<typeof vi.fn> } = {
     send: vi.fn(async () => {
       const result = bookingResults.shift()
@@ -564,9 +589,10 @@ class StateIngressFixture implements AsyncStateIngressPort {
         }
       } else if (input.operation === 'COMPLETE') {
         this.draft = {
-          ...this.draft, state: 'CONFIRMED', version: this.draft.version + 1,
+          ...this.draft, state: input.safeErrorCode === 'DOWNSTREAM_RETRY' ? 'CONFIRMED_WITH_RETRY' : 'CONFIRMED',
+          version: this.draft.version + 1,
           caseId: input.caseId, confirmationStatus: input.confirmationStatus,
-          processingOwnerToken: null, processingLeaseUntil: null,
+          safeErrorCode: input.safeErrorCode, processingOwnerToken: null, processingLeaseUntil: null,
           ...(this.options.corruptAfterComplete ?? {}),
         }
       }

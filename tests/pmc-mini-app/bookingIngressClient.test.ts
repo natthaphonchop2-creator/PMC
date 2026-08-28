@@ -21,18 +21,39 @@ describe('PMC Mini App signed booking ingress client', () => {
     expect(signature).toBe(createHmac('sha256', 'server-secret').update(canonicalMiniAppBookingIngress(unsigned)).digest('hex'))
   })
 
-  it('posts a signed envelope and accepts only a bounded success response', async () => {
-    const fetch = vi.fn(async () => response(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' }))
+  it('posts a signed envelope and accepts only the exact safe result projection', async () => {
+    const fetch = vi.fn(async () => response(200, {
+      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+      driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+    }))
     const client = createBookingIngressClient({
       url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
       now: () => 1_800_000_000, nonce: () => 'nonce-123456', fetch,
     })
 
-    await expect(client.send(confirmedDraft())).resolves.toEqual({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+    await expect(client.send(confirmedDraft())).resolves.toEqual({
+      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+      driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+    })
     expect(fetch).toHaveBeenCalledWith(
       'https://script.google.com/macros/s/deployment/exec',
       expect.objectContaining({ method: 'POST', headers: { 'content-type': 'application/json' } }),
     )
+  })
+
+  it.each([
+    ['missing projection field', { caseId: 'PMC-202608-0001', status: 'CONFIRMED', driveState: 'OK', calendarState: 'OK' }],
+    ['unknown result field', { caseId: 'PMC-202608-0001', status: 'CONFIRMED', driveState: 'OK', calendarState: 'OK', lineState: 'OK', providerDetail: 'private' }],
+    ['unknown Drive state', { caseId: 'PMC-202608-0001', status: 'CONFIRMED', driveState: 'PENDING', calendarState: 'OK', lineState: 'OK' }],
+    ['unknown Calendar state', { caseId: 'PMC-202608-0001', status: 'CONFIRMED', driveState: 'OK', calendarState: 'FAILED', lineState: 'OK' }],
+    ['unknown LINE state', { caseId: 'PMC-202608-0001', status: 'CONFIRMED', driveState: 'OK', calendarState: 'OK', lineState: 'CONFLICT' }],
+  ])('rejects a %s result projection', async (_name, body) => {
+    const client = createBookingIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+      now: () => 1_800_000_000, nonce: () => 'nonce-123456', fetch: vi.fn(async () => response(200, body)),
+    })
+
+    await expect(client.send(confirmedDraft())).rejects.toMatchObject({ code: 'BOOKING_INGRESS_INVALID_RESPONSE' })
   })
 
   it('accepts the persisted PROCESSING draft owned by the asynchronous worker', () => {
@@ -85,7 +106,10 @@ describe('PMC Mini App signed booking ingress client', () => {
         now: () => 1_800_000_000, nonce: () => 'nonce-123456',
         fetch: vi.fn(async (_url, init) => new Promise((resolve, reject) => {
           const completion = setTimeout(
-            () => resolve(response(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' })),
+            () => resolve(response(200, {
+              caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+              driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+            })),
             34_000,
           )
           init.signal.addEventListener('abort', () => {
@@ -98,7 +122,10 @@ describe('PMC Mini App signed booking ingress client', () => {
       const pending = client.send(confirmedDraft())
       await vi.advanceTimersByTimeAsync(34_000)
 
-      await expect(pending).resolves.toEqual({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+      await expect(pending).resolves.toEqual({
+        caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+        driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+      })
     } finally {
       vi.useRealTimers()
     }
