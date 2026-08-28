@@ -262,14 +262,14 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
   })
 
-  it('bounds attempt-eight waiting to 30 injected seconds then atomically persists NEEDS_REVIEW despite transient reads', async () => {
+  it('keeps transient final-attempt reads inside one injected deadline and atomically persists NEEDS_REVIEW', async () => {
     const fixture = workerFixture({ alwaysBusyClaim: true, transientReadFailures: 4 })
 
     await expect(
       fixture.worker.finalize(taskInput(8)),
     ).resolves.toEqual({ requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW' })
 
-    expect(fixture.clock.totalWait).toBe(30_000)
+    expect(fixture.clock.totalWait).toBe(4_000)
     expect(fixture.clock.waits.every((milliseconds) => milliseconds <= 1_000)).toBe(true)
     expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
     expect(fixture.state.read()).toMatchObject({ state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED' })
@@ -313,8 +313,53 @@ describe('PMC async worker through Apps Script state ingress', () => {
     await expect(fixture.worker.finalize(taskInput(8))).resolves.toEqual({
       requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW',
     })
-    expect(fixture.clock.totalWait).toBe(30_000)
+    expect(fixture.clock.totalWait).toBe(6_000)
     expect(fixture.state.operations().filter((operation) => operation === 'EXHAUST')).toHaveLength(1)
+  })
+
+  it('begins no new final-attempt I/O after a claim send consumes the absolute deadline', async () => {
+    const fixture = workerFixture({ alwaysBusyClaim: true, advanceOnClaimSendMs: 30_000 })
+
+    await expect(fixture.worker.finalize(taskInput(8))).rejects.toMatchObject({ code: 'ASYNC_STATE_RETRY' })
+
+    expect(fixture.state.operations()).toEqual(['CLAIM'])
+    expect(fixture.getDraft).toHaveBeenCalledTimes(1)
+    expect(fixture.clock.waits).toEqual([])
+  })
+
+  it('bounds EXHAUST sends, persisted rereads, and waits when their fakes consume the deadline', async () => {
+    const fixture = workerFixture({
+      stagingFailure: new Error('private storage detail'),
+      transientReadFailuresAfterExternalError: 1,
+      advanceOnExhaustSendMs: 7_000,
+      exhaustFailure: new Error('private Apps Script outage'),
+      advanceOnReadAfterExhaustMs: 7_000,
+      failReadsAfterExhaust: true,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8))).rejects.toMatchObject({ code: 'ASYNC_STATE_RETRY' })
+
+    expect(fixture.state.operations().filter((operation) => operation === 'EXHAUST')).toHaveLength(1)
+    expect(fixture.readsAfterExhaust()).toBe(3)
+    expect(fixture.clock.waits).toEqual([1_000, 1_000])
+    expect(fixture.clock.now.getTime() - fixedNow.getTime()).toBe(30_000)
+  })
+
+  it('uses an exact terminal reread started before the deadline even when that call resolves after it', async () => {
+    const fixture = workerFixture({
+      stagingFailure: new Error('private storage detail'),
+      transientReadFailuresAfterExternalError: 1,
+      responseLossOperation: 'EXHAUST',
+      advanceOnExhaustSendMs: 20_000,
+      advanceOnReadAfterExhaustMs: 15_000,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toEqual({
+      requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW',
+    })
+    expect(fixture.state.operations().filter((operation) => operation === 'EXHAUST')).toHaveLength(1)
+    expect(fixture.readsAfterExhaust()).toBe(1)
+    expect(fixture.clock.waits).toEqual([])
   })
 })
 
@@ -328,6 +373,11 @@ function workerFixture(options: {
   transientReadFailures?: number
   transientReadFailuresAfterExternalError?: number
   transientReadFailuresAfterExhaust?: number
+  advanceOnClaimSendMs?: number
+  advanceOnExhaustSendMs?: number
+  exhaustFailure?: Error
+  advanceOnReadAfterExhaustMs?: number
+  failReadsAfterExhaust?: boolean
   stagingFailure?: Error
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
@@ -339,15 +389,22 @@ function workerFixture(options: {
     afterExhaust: () => { remainingReadFailures += options.transientReadFailuresAfterExhaust ?? 0 },
   })
   const unavailable = vi.fn(async () => { throw new Error('direct async Sheet mutation forbidden') })
+  let readsAfterExhaust = 0
+  const getDraft = vi.fn(async (draftId: string) => {
+    if (state.didAttemptExhaust()) {
+      readsAfterExhaust += 1
+      clock.advance(options.advanceOnReadAfterExhaustMs ?? 0)
+      if (options.failReadsAfterExhaust) throw new Error('transient Sheet read')
+    }
+    if (remainingReadFailures > 0) {
+      remainingReadFailures -= 1
+      throw new Error('transient Sheet read')
+    }
+    const current = state.read()
+    return current.draftId === draftId ? current : null
+  })
   const store: MiniAppStore = {
-    async getDraft(draftId) {
-      if (remainingReadFailures > 0) {
-        remainingReadFailures -= 1
-        throw new Error('transient Sheet read')
-      }
-      const current = state.read()
-      return current.draftId === draftId ? current : null
-    },
+    getDraft,
     getActiveStaffByLineUserId: unavailable,
     getActiveBookingConfig: unavailable,
     createDraft: unavailable,
@@ -398,13 +455,17 @@ function workerFixture(options: {
     now: () => clock.now,
     wait: (milliseconds: number) => clock.wait(milliseconds),
   } as never)
-  return { worker, state, store, staging, evidenceIngress, bookingIngress, clock }
+  return {
+    worker, state, store, staging, evidenceIngress, bookingIngress, clock, getDraft,
+    readsAfterExhaust: () => readsAfterExhaust,
+  }
 }
 
 class StateIngressFixture implements AsyncStateIngressPort {
   private draft: MiniAppRequestRecord
   private readonly calls: MiniAppAsyncStateMutation[] = []
   private lostResponse = false
+  private exhaustAttempted = false
 
   constructor(
     draft: MiniAppRequestRecord,
@@ -415,11 +476,15 @@ class StateIngressFixture implements AsyncStateIngressPort {
       corruptAfterComplete?: Partial<MiniAppRequestRecord>
       alwaysBusyClaim?: boolean
       afterExhaust?: () => void
+      advanceOnClaimSendMs?: number
+      advanceOnExhaustSendMs?: number
+      exhaustFailure?: Error
     },
   ) { this.draft = structuredClone(draft) }
 
   read(): MiniAppRequestRecord { return structuredClone(this.draft) }
   operations() { return this.calls.map(({ operation }) => operation) }
+  didAttemptExhaust() { return this.exhaustAttempted }
 
   reclaim(ownerToken: string): void {
     this.draft = {
@@ -431,10 +496,14 @@ class StateIngressFixture implements AsyncStateIngressPort {
 
   async mutate(input: MiniAppAsyncStateMutation) {
     this.calls.push(structuredClone(input))
+    if (input.operation === 'CLAIM') this.clock.advance(this.options.advanceOnClaimSendMs ?? 0)
     if (input.operation === 'CLAIM' && this.options.alwaysBusyClaim) {
       return result(this.draft, 'BUSY')
     }
     if (input.operation === 'EXHAUST') {
+      this.exhaustAttempted = true
+      this.clock.advance(this.options.advanceOnExhaustSendMs ?? 0)
+      if (this.options.exhaustFailure) throw this.options.exhaustFailure
       this.draft = {
         ...this.draft, state: 'NEEDS_REVIEW', version: this.draft.version + 1,
         safeErrorCode: 'RETRY_EXHAUSTED', processingOwnerToken: null, processingLeaseUntil: null,

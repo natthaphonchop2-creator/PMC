@@ -49,6 +49,8 @@ type TaskSnapshot = {
   taskAttempt: number
 }
 
+type FinalAttemptDeadline = number
+
 export interface AsyncBookingWorker {
   finalize(input: {
     requestId: string
@@ -88,12 +90,42 @@ export function createAsyncBookingWorker(input: {
     return new Date(value)
   }
 
+  const remainingFinalTime = (deadline: FinalAttemptDeadline): number => deadline - nowDate().getTime()
+
+  function requireFinalTime(deadline: FinalAttemptDeadline): void {
+    if (remainingFinalTime(deadline) <= 0) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
+  }
+
   async function readDraft(draftId: string, requestId: string): Promise<MiniAppRequestRecord> {
     const draft = await input.store.getDraft(draftId)
     if (!draft || draft.requestId !== requestId || draft.draftId !== draftId) {
       throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
     }
     return draft
+  }
+
+  async function readDraftBeforeDeadline(
+    deadline: FinalAttemptDeadline,
+    draftId: string,
+    requestId: string,
+  ): Promise<MiniAppRequestRecord> {
+    requireFinalTime(deadline)
+    return readDraft(draftId, requestId)
+  }
+
+  async function mutateBeforeDeadline(
+    deadline: FinalAttemptDeadline,
+    stateMutation: MiniAppAsyncStateMutation,
+  ): Promise<void> {
+    requireFinalTime(deadline)
+    await input.stateIngress.mutate(stateMutation)
+  }
+
+  async function waitBeforeDeadline(deadline: FinalAttemptDeadline, milliseconds: number): Promise<boolean> {
+    const remaining = remainingFinalTime(deadline)
+    if (remaining <= 0) return false
+    await input.wait(Math.min(milliseconds, remaining))
+    return true
   }
 
   function mutation(
@@ -261,12 +293,14 @@ export function createAsyncBookingWorker(input: {
   async function exhaust(
     draft: MiniAppRequestRecord,
     snapshot: TaskSnapshot,
-    startedAt: number,
+    deadline: FinalAttemptDeadline,
     expectedEvidence?: MiniAppRequestRecord,
   ): Promise<AsyncBookingWorkerResult> {
     let current = draft
     let lastSendFailed = false
+    let sent = false
     for (let sendAttempt = 0; sendAttempt < 8; sendAttempt += 1) {
+      if (remainingFinalTime(deadline) <= 0) break
       const exhaustMutation = mutation('EXHAUST', current, 8, null, {
         payloadHash: snapshot.payloadHash,
         safeErrorCode: 'RETRY_EXHAUSTED',
@@ -277,54 +311,59 @@ export function createAsyncBookingWorker(input: {
         } : {}),
       })
       lastSendFailed = false
-      try { await input.stateIngress.mutate(exhaustMutation) } catch { lastSendFailed = true }
+      sent = true
+      try { await mutateBeforeDeadline(deadline, exhaustMutation) } catch { lastSendFailed = true }
 
       for (let readAttempt = 0; readAttempt < 16; readAttempt += 1) {
+        if (remainingFinalTime(deadline) <= 0) break
         try {
-          const persisted = await readDraft(snapshot.draftId, snapshot.requestId)
+          const persisted = await readDraftBeforeDeadline(deadline, snapshot.draftId, snapshot.requestId)
           current = persisted
           const terminal = terminalResult(persisted)
           if (terminal && validTerminal(snapshot, persisted)) return terminal
           break
         } catch {
-          const remaining = FINAL_WAIT_MS - (nowDate().getTime() - startedAt)
-          if (remaining > 0) await input.wait(Math.min(POLL_MS, remaining))
+          if (!await waitBeforeDeadline(deadline, POLL_MS)) break
         }
       }
     }
-    throw new AsyncBookingWorkerError(lastSendFailed ? 'ASYNC_STATE_RETRY' : 'INVALID_PERSISTED_ASYNC_STATE')
+    throw new AsyncBookingWorkerError(!sent || lastSendFailed ? 'ASYNC_STATE_RETRY' : 'INVALID_PERSISTED_ASYNC_STATE')
   }
 
   async function convergeFinalAttempt(
     draft: MiniAppRequestRecord,
     snapshot: TaskSnapshot,
-    startedAt: number,
+    deadline: FinalAttemptDeadline,
     ownerToken: string,
     expectedEvidence?: MiniAppRequestRecord,
   ): Promise<AsyncBookingWorkerResult> {
     let current = draft
-    while (true) {
-      let liveOtherLeaseUntil = 0
+    if (remainingFinalTime(deadline) > 0) {
       try {
-        current = await readDraft(snapshot.draftId, snapshot.requestId)
-        const terminal = terminalResult(current)
-        if (terminal) {
-          if (validTerminal(snapshot, current)) return terminal
-          break
-        }
-        if (current.state === 'PROCESSING' && current.processingOwnerToken
-          && current.processingOwnerToken !== ownerToken && current.processingLeaseUntil) {
-          liveOtherLeaseUntil = Date.parse(current.processingLeaseUntil)
-        }
-        if (!Number.isFinite(liveOtherLeaseUntil) || liveOtherLeaseUntil <= nowDate().getTime()) break
-      } catch { /* transient rereads stay inside the bounded final-attempt loop */ }
-
-      const elapsed = nowDate().getTime() - startedAt
-      if (elapsed >= FINAL_WAIT_MS) break
-      const leaseRemaining = liveOtherLeaseUntil > 0 ? liveOtherLeaseUntil - nowDate().getTime() : POLL_MS
-      await input.wait(Math.min(POLL_MS, FINAL_WAIT_MS - elapsed, Math.max(1, leaseRemaining)))
+        current = await readDraftBeforeDeadline(deadline, snapshot.draftId, snapshot.requestId)
+      } catch { /* the supplied exact row remains the fallback for atomic exhaustion */ }
     }
-    return exhaust(current, snapshot, startedAt, expectedEvidence)
+    while (true) {
+      const terminal = terminalResult(current)
+      if (terminal) {
+        if (validTerminal(snapshot, current)) return terminal
+        break
+      }
+      const liveOtherLeaseUntil = current.state === 'PROCESSING' && current.processingOwnerToken
+        && current.processingOwnerToken !== ownerToken && current.processingLeaseUntil
+        ? Date.parse(current.processingLeaseUntil)
+        : 0
+      const nowMs = nowDate().getTime()
+      if (!Number.isFinite(liveOtherLeaseUntil) || liveOtherLeaseUntil <= nowMs) break
+
+      const leaseRemaining = liveOtherLeaseUntil - nowMs
+      if (!await waitBeforeDeadline(deadline, Math.min(POLL_MS, Math.max(1, leaseRemaining)))) break
+      if (remainingFinalTime(deadline) <= 0) break
+      try {
+        current = await readDraftBeforeDeadline(deadline, snapshot.draftId, snapshot.requestId)
+      } catch { /* the last exact row remains authoritative while bounded rereads recover */ }
+    }
+    return exhaust(current, snapshot, deadline, expectedEvidence)
   }
 
   async function cleanupVerifiedStaging(draft: MiniAppRequestRecord, snapshot: TaskSnapshot): Promise<void> {
@@ -345,6 +384,7 @@ export function createAsyncBookingWorker(input: {
         taskAttempt: finalizeInput.attempt,
       }
       const startedAt = nowDate().getTime()
+      const finalAttemptDeadline: FinalAttemptDeadline = startedAt + FINAL_WAIT_MS
       let lastDraft: MiniAppRequestRecord | null = null
       let bound: MiniAppRequestRecord | null = null
       const ownerToken = nextOwnerToken()
@@ -352,7 +392,9 @@ export function createAsyncBookingWorker(input: {
 
       while (true) {
         try {
-          lastDraft = await readDraft(finalizeInput.draftId, finalizeInput.requestId)
+          lastDraft = finalizeInput.attempt === MAX_TASK_ATTEMPTS
+            ? await readDraftBeforeDeadline(finalAttemptDeadline, finalizeInput.draftId, finalizeInput.requestId)
+            : await readDraft(finalizeInput.draftId, finalizeInput.requestId)
           bound ??= bindDraft(lastDraft, snapshot)
           const terminal = terminalResult(lastDraft)
           if (terminal) {
@@ -362,8 +404,16 @@ export function createAsyncBookingWorker(input: {
 
           const previous = lastDraft
           const claim = mutation('CLAIM', previous, finalizeInput.attempt, ownerToken)
-          try { await input.stateIngress.mutate(claim) } catch { /* persisted reread decides response loss */ }
-          lastDraft = await readDraft(finalizeInput.draftId, finalizeInput.requestId)
+          try {
+            if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
+              await mutateBeforeDeadline(finalAttemptDeadline, claim)
+            } else {
+              await input.stateIngress.mutate(claim)
+            }
+          } catch { /* persisted reread decides response loss */ }
+          lastDraft = finalizeInput.attempt === MAX_TASK_ATTEMPTS
+            ? await readDraftBeforeDeadline(finalAttemptDeadline, finalizeInput.draftId, finalizeInput.requestId)
+            : await readDraft(finalizeInput.draftId, finalizeInput.requestId)
           const claimed = validOwnedProcessing(bound, lastDraft, ownerToken, nowDate().getTime())
             && lastDraft.attemptCount === previous.attemptCount + 1
             && lastDraft.version === previous.version + 1
@@ -371,6 +421,9 @@ export function createAsyncBookingWorker(input: {
           if (claimed) break
           const claimedTerminal = terminalResult(lastDraft)
           if (claimedTerminal && validTerminal(snapshot, lastDraft)) return claimedTerminal
+          if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
+            return convergeFinalAttempt(lastDraft, snapshot, finalAttemptDeadline, ownerToken)
+          }
         } catch (error) {
           if (error instanceof AsyncBookingWorkerError && error.code === 'INVALID_PERSISTED_ASYNC_STATE') throw error
           if (finalizeInput.attempt < MAX_TASK_ATTEMPTS) {
@@ -380,12 +433,12 @@ export function createAsyncBookingWorker(input: {
         }
 
         if (finalizeInput.attempt < MAX_TASK_ATTEMPTS) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
-        const elapsed = nowDate().getTime() - startedAt
-        if (elapsed >= FINAL_WAIT_MS) {
-          if (!lastDraft || !bound) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
-          return exhaust(lastDraft, snapshot, startedAt)
+        if (lastDraft && bound) {
+          return convergeFinalAttempt(lastDraft, snapshot, finalAttemptDeadline, ownerToken)
         }
-        await input.wait(Math.min(POLL_MS, FINAL_WAIT_MS - elapsed))
+        if (!await waitBeforeDeadline(finalAttemptDeadline, POLL_MS)) {
+          throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
+        }
       }
 
       if (!lastDraft || !bound) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
@@ -409,7 +462,7 @@ export function createAsyncBookingWorker(input: {
         if (error instanceof AsyncBookingWorkerError && error.code === 'ASYNC_STATE_FENCE_LOST') {
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
             return convergeFinalAttempt(
-              context.draft, snapshot, startedAt, ownerToken, bookingResult ? context.draft : undefined,
+              context.draft, snapshot, finalAttemptDeadline, ownerToken, bookingResult ? context.draft : undefined,
             )
           }
           throw error
@@ -418,7 +471,7 @@ export function createAsyncBookingWorker(input: {
         try { current = await readDraft(context.draft.draftId, context.draft.requestId) } catch {
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
             return convergeFinalAttempt(
-              context.draft, snapshot, startedAt, ownerToken, bookingResult ? context.draft : undefined,
+              context.draft, snapshot, finalAttemptDeadline, ownerToken, bookingResult ? context.draft : undefined,
             )
           }
           throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
@@ -431,7 +484,7 @@ export function createAsyncBookingWorker(input: {
           if (exactTerminal) return terminal
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
             return convergeFinalAttempt(
-              current, snapshot, startedAt, ownerToken, bookingResult ? context.draft : undefined,
+              current, snapshot, finalAttemptDeadline, ownerToken, bookingResult ? context.draft : undefined,
             )
           }
           throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
@@ -439,7 +492,7 @@ export function createAsyncBookingWorker(input: {
         if (!validOwnedProcessing(bound, current, ownerToken, nowDate().getTime())) {
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
             return convergeFinalAttempt(
-              current, snapshot, startedAt, ownerToken, bookingResult ? context.draft : undefined,
+              current, snapshot, finalAttemptDeadline, ownerToken, bookingResult ? context.draft : undefined,
             )
           }
           throw new AsyncBookingWorkerError('ASYNC_STATE_FENCE_LOST')
@@ -449,7 +502,7 @@ export function createAsyncBookingWorker(input: {
         try { reviewed = await recordRetry(context, stage) } catch (retryError) {
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
             return convergeFinalAttempt(
-              context.draft, snapshot, startedAt, ownerToken, bookingResult ? context.draft : undefined,
+              context.draft, snapshot, finalAttemptDeadline, ownerToken, bookingResult ? context.draft : undefined,
             )
           }
           throw retryError

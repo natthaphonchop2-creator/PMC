@@ -25,7 +25,12 @@ export function createGoogleBookingTaskQueue(input: {
 
   return {
     async enqueue(taskInput) {
-      const taskId = `booking-${createHash('sha256').update(taskInput.requestId, 'utf8').digest('hex')}`
+      const snapshotIdentity = JSON.stringify([
+        taskInput.requestId,
+        taskInput.payloadHash,
+        taskInput.baseVersion,
+      ])
+      const taskId = `booking-${createHash('sha256').update(snapshotIdentity, 'utf8').digest('hex')}`
       const taskName = client.taskPath(input.projectId, input.location, input.queueName, taskId)
       const scheduleTime = timestamp(taskInput.scheduleAt)
 

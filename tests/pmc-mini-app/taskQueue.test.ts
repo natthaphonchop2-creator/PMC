@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { protos, type CloudTasksClient } from '@google-cloud/tasks'
 import { describe, expect, it, vi } from 'vitest'
 import { createGoogleBookingTaskQueue } from '../../server/pmc-mini-app/taskQueue'
@@ -74,11 +73,59 @@ describe('PMC Mini App booking task queue', () => {
       expect(failure).not.toHaveProperty('providerBody')
     }
   })
+
+  it('uses the same deterministic task name only for the same immutable snapshot', async () => {
+    const createTask = vi.fn(async () => [{}])
+    const queue = createGoogleBookingTaskQueue({
+      projectId: 'pmc-project', location: 'asia-southeast1', queueName: 'pmc-booking-finalize',
+      workerUrl: 'https://pmc-worker.example.com/internal/mini-app/booking-worker',
+      workerAudience: 'https://pmc-worker.example.com',
+      taskInvokerEmail: 'worker@pmc-project.iam.gserviceaccount.com',
+      client: fakeClient(createTask),
+    })
+    const snapshot = {
+      requestId: 'request-1', draftId: 'draft-1', payloadHash: 'payload-hash-1', baseVersion: 3,
+      scheduleAt: new Date('2026-08-28T02:00:02.000Z'),
+    }
+
+    const first = await queue.enqueue(snapshot)
+    const replay = await queue.enqueue({ ...snapshot, scheduleAt: new Date('2026-08-28T02:00:03.000Z') })
+    const changedPayload = await queue.enqueue({ ...snapshot, payloadHash: 'payload-hash-2' })
+    const changedVersion = await queue.enqueue({ ...snapshot, baseVersion: 4 })
+
+    expect(first.taskName).toBe(expectedTaskName())
+    expect(replay.taskName).toBe(first.taskName)
+    expect(changedPayload.taskName).not.toBe(first.taskName)
+    expect(changedVersion.taskName).not.toBe(first.taskName)
+    expect(changedVersion.taskName).not.toBe(changedPayload.taskName)
+  })
+
+  it('keeps raw snapshot identifiers and PII out of the valid Cloud Task name', async () => {
+    const createTask = vi.fn(async () => [{}])
+    const queue = createGoogleBookingTaskQueue({
+      projectId: 'pmc-project', location: 'asia-southeast1', queueName: 'pmc-booking-finalize',
+      workerUrl: 'https://pmc-worker.example.com/internal/mini-app/booking-worker',
+      workerAudience: 'https://pmc-worker.example.com',
+      taskInvokerEmail: 'worker@pmc-project.iam.gserviceaccount.com',
+      client: fakeClient(createTask),
+    })
+
+    const result = await queue.enqueue({
+      requestId: 'customer-0812345678', draftId: 'draft-private', payloadHash: 'payload-private-hash', baseVersion: 37,
+      scheduleAt: new Date('2026-08-28T02:00:02.000Z'),
+    })
+    const taskId = result.taskName.split('/').at(-1)!
+
+    expect(taskId).toMatch(/^booking-[0-9a-f]{64}$/)
+    expect(taskId).not.toContain('customer-0812345678')
+    expect(taskId).not.toContain('payload-private-hash')
+    expect(taskId).not.toContain('draft-private')
+  })
 })
 
 function expectedTaskName(): string {
-  const id = createHash('sha256').update('request-1', 'utf8').digest('hex')
-  return `projects/pmc-project/locations/asia-southeast1/queues/pmc-booking-finalize/tasks/booking-${id}`
+  return 'projects/pmc-project/locations/asia-southeast1/queues/pmc-booking-finalize/tasks/'
+    + 'booking-e908137db837eb42af0a563d21bf38497930653c217d110f54b1198da48c8dcb'
 }
 
 function fakeClient(createTask: ReturnType<typeof vi.fn>): CloudTasksClient {
