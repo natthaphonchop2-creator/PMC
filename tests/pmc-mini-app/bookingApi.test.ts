@@ -178,8 +178,10 @@ describe('PMC Mini App booking draft API', () => {
 
     expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
     expect(events).toEqual(['enqueue', 'stateIngress', 'queueDraft'])
+    const persisted = deps.storeFixture.read('draft-1')!
     expect(deps.taskQueue.enqueue).toHaveBeenCalledWith({
-      requestId: 'request-1', draftId: 'draft-1', scheduleAt: new Date('2026-08-27T10:00:02.000Z'),
+      requestId: 'request-1', draftId: 'draft-1', payloadHash: persisted.payloadHash!, baseVersion: persisted.version - 1,
+      scheduleAt: new Date('2026-08-27T10:00:02.000Z'),
     })
     expect(deps.ingress.send).not.toHaveBeenCalled()
     expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED', taskName: 'task/request-1' })

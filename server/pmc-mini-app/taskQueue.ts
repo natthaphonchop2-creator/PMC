@@ -5,6 +5,8 @@ export interface BookingTaskQueuePort {
   enqueue(input: {
     requestId: string
     draftId: string
+    payloadHash: string
+    baseVersion: number
     scheduleAt: Date
   }): Promise<{ taskName: string; alreadyExists: boolean }>
 }
@@ -36,7 +38,12 @@ export function createGoogleBookingTaskQueue(input: {
               httpMethod: protos.google.cloud.tasks.v2.HttpMethod.POST,
               url: input.workerUrl,
               headers: { 'Content-Type': 'application/json' },
-              body: Buffer.from(JSON.stringify({ requestId: taskInput.requestId, draftId: taskInput.draftId }), 'utf8'),
+              body: Buffer.from(JSON.stringify({
+                requestId: taskInput.requestId,
+                draftId: taskInput.draftId,
+                payloadHash: taskInput.payloadHash,
+                baseVersion: taskInput.baseVersion,
+              }), 'utf8'),
               oidcToken: {
                 serviceAccountEmail: input.taskInvokerEmail,
                 audience: input.workerAudience,

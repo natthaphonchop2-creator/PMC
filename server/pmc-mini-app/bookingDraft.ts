@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts.js'
 import type { MiniAppRequestRecord, MiniAppRequestState } from './store.js'
-import { canonicalMiniAppAsyncIdentity } from '../../shared/pmcMiniAppAsyncState.js'
+import {
+  canonicalMiniAppAsyncIdentity,
+  canonicalMiniAppEvidenceProjection,
+  type MiniAppEvidenceProjectionBinding,
+} from '../../shared/pmcMiniAppAsyncState.js'
 
 export interface BookingDraftContext {
   draftId: string
@@ -113,6 +117,7 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
     lastProgressAt: null,
     attemptCount: 0,
     processingOwnerToken: null,
+    evidenceProjectionHash: null,
     createdAt: now,
     confirmedAt: null,
     caseId: null,
@@ -124,6 +129,10 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
 
 export function bookingPayloadHash(draft: MiniAppRequestRecord): string {
   return createHash('sha256').update(canonicalMiniAppAsyncIdentity(draft), 'utf8').digest('base64url')
+}
+
+export function evidenceProjectionHash(binding: MiniAppEvidenceProjectionBinding): string {
+  return createHash('sha256').update(canonicalMiniAppEvidenceProjection(binding), 'utf8').digest('base64url')
 }
 
 export function transitionDraft(draft: MiniAppRequestRecord, action: BookingDraftAction): MiniAppRequestRecord {

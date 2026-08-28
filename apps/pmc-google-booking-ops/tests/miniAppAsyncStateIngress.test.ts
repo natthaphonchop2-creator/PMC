@@ -110,7 +110,24 @@ describe('Apps Script Mini App async-state ingress', () => {
     expect(fixture.requests.read('request-1')).toMatchObject({
       state: 'CONFIRMED', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
       processingOwnerToken: null, processingLeaseUntil: null,
+      evidenceProjectionHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
     })
+  })
+
+  it('rejects completion when the persisted projection hash does not match the exact ordered evidence', () => {
+    const fixture = stateFixture(queuedRequest({
+      state: 'PROCESSING', version: 5, attemptCount: 1, processingOwnerToken: 'worker-owner-token-1',
+      processingStartedAt: '2026-08-20T09:00:00+07:00', processingLeaseUntil: '2026-08-20T09:00:15+07:00',
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'],
+      evidenceProjectionHash: 'wrong-projection-hash',
+    }))
+
+    expect(() => processBookingDoPost(event(envelope(mutation({
+      operation: 'COMPLETE', expectedVersion: 5, expectedAttempt: 1,
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'],
+      caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+    }))), fixture.ports)).toThrow(/projection hash/i)
+    expect(fixture.requests.read('request-1')).toMatchObject({ state: 'PROCESSING', version: 5 })
   })
 
   it('atomically fences a live nonterminal row to NEEDS_REVIEW only for task attempt eight', () => {
@@ -256,6 +273,7 @@ function queuedRequest(patch: Partial<MiniAppAsyncRequestRecord> = {}): MiniAppA
     chatEvidenceObjectKeys: [`drafts/draft-1/CHAT/${'b'.repeat(64)}.png`],
     taskName: 'task/request-1', queuedAt: '2026-08-20T08:59:00+07:00', processingStartedAt: null,
     processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0, processingOwnerToken: null,
+    evidenceProjectionHash: null,
     createdAt: '2026-08-20T08:58:00+07:00', confirmedAt: null, caseId: null,
     confirmationStatus: null, safeErrorCode: null, updatedAt: '2026-08-20T08:59:00+07:00',
   }

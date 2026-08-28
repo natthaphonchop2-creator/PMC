@@ -37,6 +37,7 @@ const ASYNC_REQUEST_HEADERS = [
   'lastProgressAt',
   'attemptCount',
   'processingOwnerToken',
+  'evidenceProjectionHash',
 ] as const
 
 const LEGACY_REQUEST_HEADERS = MINI_APP_REQUEST_HEADERS.slice(0, -ASYNC_REQUEST_HEADERS.length)
@@ -51,11 +52,16 @@ export async function migrateMiniAppAsyncRequestColumns(input: {
   const expected = [...MINI_APP_REQUEST_HEADERS]
 
   if (sameHeader(current, expected)) return { appendedColumns: [] }
-  const previousAsync = expected.slice(0, -1)
-  if (sameHeader(current, previousAsync)) {
-    const column = columnName(expected.length)
-    await sheets.update(spreadsheetId, `'MINI_APP_REQUESTS'!${column}1:${column}1`, [['processingOwnerToken']])
-    return { appendedColumns: ['processingOwnerToken'] }
+  for (const missingCount of [1, 2]) {
+    if (!sameHeader(current, expected.slice(0, -missingCount))) continue
+    const appendedColumns = expected.slice(-missingCount)
+    const start = current.length + 1
+    await sheets.update(
+      spreadsheetId,
+      `'MINI_APP_REQUESTS'!${columnName(start)}1:${columnName(expected.length)}1`,
+      [appendedColumns],
+    )
+    return { appendedColumns }
   }
   if (!sameHeader(current, [...LEGACY_REQUEST_HEADERS])) throw new Error('incompatible header: MINI_APP_REQUESTS')
 

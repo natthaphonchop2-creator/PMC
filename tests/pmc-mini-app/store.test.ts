@@ -20,6 +20,7 @@ describe('PMC Mini App Sheet store', () => {
       lastProgressAt: '2026-08-28T02:02:00.000Z',
       attemptCount: 2,
       processingOwnerToken: 'worker-owner-token-1',
+      evidenceProjectionHash: 'a'.repeat(43),
     })
 
     await store.createDraft(draft)
@@ -34,6 +35,7 @@ describe('PMC Mini App Sheet store', () => {
       lastProgressAt: '2026-08-28T02:02:00.000Z',
       attemptCount: 2,
       processingOwnerToken: 'worker-owner-token-1',
+      evidenceProjectionHash: 'a'.repeat(43),
     })
   })
 
@@ -52,6 +54,7 @@ describe('PMC Mini App Sheet store', () => {
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
       processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
       processingOwnerToken: null,
+      evidenceProjectionHash: null,
     })
   })
 
@@ -334,6 +337,7 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
     paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
     processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
     processingOwnerToken: null,
+    evidenceProjectionHash: null,
     createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
     updatedAt: '2026-08-27T10:00:00.000Z',
     ...patch,

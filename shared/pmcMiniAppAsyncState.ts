@@ -37,6 +37,7 @@ export interface MiniAppAsyncRequestRecord {
   lastProgressAt: string | null
   attemptCount: number
   processingOwnerToken: string | null
+  evidenceProjectionHash: string | null
   createdAt: string
   confirmedAt: string | null
   caseId: string | null
@@ -51,8 +52,19 @@ export const MINI_APP_ASYNC_REQUEST_HEADERS = [
   'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
   'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode', 'updatedAt',
   'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt', 'processingStartedAt',
-  'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken',
+  'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken', 'evidenceProjectionHash',
 ] as const
+
+export interface MiniAppEvidenceProjectionBinding {
+  requestId: string
+  draftId: string
+  payloadHash: string
+  paymentEvidenceObjectKeys: string[]
+  chatEvidenceObjectKeys: string[]
+  paymentEvidenceFileIds: string[]
+  chatEvidenceFileIds: string[]
+  evidenceCount: number
+}
 
 export interface MiniAppAsyncStateMutation {
   operation: MiniAppAsyncStateOperation
@@ -154,5 +166,18 @@ export function canonicalMiniAppAsyncIdentity(record: Pick<MiniAppAsyncRequestRe
     chatEvidenceFileIds: stagedEvidence ? [] : record.chatEvidenceFileIds,
     paymentEvidenceObjectKeys: record.paymentEvidenceObjectKeys,
     chatEvidenceObjectKeys: record.chatEvidenceObjectKeys,
+  })
+}
+
+export function canonicalMiniAppEvidenceProjection(binding: MiniAppEvidenceProjectionBinding): string {
+  return JSON.stringify({
+    requestId: binding.requestId,
+    draftId: binding.draftId,
+    payloadHash: binding.payloadHash,
+    paymentEvidenceObjectKeys: binding.paymentEvidenceObjectKeys,
+    chatEvidenceObjectKeys: binding.chatEvidenceObjectKeys,
+    paymentEvidenceFileIds: binding.paymentEvidenceFileIds,
+    chatEvidenceFileIds: binding.chatEvidenceFileIds,
+    evidenceCount: binding.evidenceCount,
   })
 }

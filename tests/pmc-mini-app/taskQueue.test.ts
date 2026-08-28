@@ -20,6 +20,8 @@ describe('PMC Mini App booking task queue', () => {
     const result = await queue.enqueue({
       requestId: 'request-1',
       draftId: 'draft-1',
+      payloadHash: 'payload-hash-1',
+      baseVersion: 3,
       scheduleAt: new Date('2026-08-28T02:00:02.123Z'),
     })
 
@@ -31,7 +33,7 @@ describe('PMC Mini App booking task queue', () => {
           httpMethod: protos.google.cloud.tasks.v2.HttpMethod.POST,
           url: 'https://pmc-worker.example.com/internal/mini-app/booking-worker',
           headers: { 'Content-Type': 'application/json' },
-          body: Buffer.from('{"requestId":"request-1","draftId":"draft-1"}'),
+          body: Buffer.from('{"requestId":"request-1","draftId":"draft-1","payloadHash":"payload-hash-1","baseVersion":3}'),
           oidcToken: {
             serviceAccountEmail: 'worker@pmc-project.iam.gserviceaccount.com',
             audience: 'https://pmc-worker.example.com',
@@ -56,14 +58,16 @@ describe('PMC Mini App booking task queue', () => {
     })
 
     await expect(queue.enqueue({
-      requestId: 'request-1', draftId: 'draft-1', scheduleAt: new Date('2026-08-28T02:00:02.000Z'),
+      requestId: 'request-1', draftId: 'draft-1', payloadHash: 'payload-hash-1', baseVersion: 3,
+      scheduleAt: new Date('2026-08-28T02:00:02.000Z'),
     })).resolves.toEqual({ taskName: expectedTaskName(), alreadyExists: true })
 
     for (const code of [5, '6', undefined]) {
       const providerError = Object.assign(new Error('provider details'), { code, providerBody: 'secret' })
       createTask.mockRejectedValueOnce(providerError)
       const failure = await queue.enqueue({
-        requestId: 'request-1', draftId: 'draft-1', scheduleAt: new Date('2026-08-28T02:00:02.000Z'),
+        requestId: 'request-1', draftId: 'draft-1', payloadHash: 'payload-hash-1', baseVersion: 3,
+        scheduleAt: new Date('2026-08-28T02:00:02.000Z'),
       }).catch((error: unknown) => error)
       expect(failure).toMatchObject({ message: 'BOOKING_TASK_QUEUE_FAILED' })
       expect(failure).not.toHaveProperty('cause')

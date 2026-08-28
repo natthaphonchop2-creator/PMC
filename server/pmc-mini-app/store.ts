@@ -50,6 +50,7 @@ export interface MiniAppRequestRecord {
   lastProgressAt: string | null
   attemptCount: number
   processingOwnerToken: string | null
+  evidenceProjectionHash: string | null
   createdAt: string
   confirmedAt: string | null
   caseId: string | null
@@ -406,7 +407,7 @@ function requestToRow(value: MiniAppRequestRecord): unknown[] {
     value.evidenceCount, value.createdAt, value.confirmedAt ?? '', value.caseId ?? '', value.confirmationStatus ?? '', value.safeErrorCode ?? '', value.updatedAt,
     JSON.stringify(value.paymentEvidenceObjectKeys), JSON.stringify(value.chatEvidenceObjectKeys), value.taskName ?? '',
     value.queuedAt ?? '', value.processingStartedAt ?? '', value.processingLeaseUntil ?? '', value.lastProgressAt ?? '', value.attemptCount,
-    value.processingOwnerToken ?? '',
+    value.processingOwnerToken ?? '', value.evidenceProjectionHash ?? '',
   ]
 }
 
@@ -427,6 +428,7 @@ function requestFromRow(row: unknown[]): MiniAppRequestRecord {
     taskName: nullableText(row[30]), queuedAt: nullableText(row[31]), processingStartedAt: nullableText(row[32]),
     processingLeaseUntil: nullableText(row[33]), lastProgressAt: nullableText(row[34]), attemptCount: row[35] === undefined ? 0 : numberValue(row[35]),
     processingOwnerToken: nullableText(row[36]),
+    evidenceProjectionHash: nullableText(row[37]),
   })
 }
 
@@ -449,13 +451,19 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
   if (!Number.isSafeInteger(value.attemptCount) || value.attemptCount < 0) throw new Error('INVALID_ATTEMPT_COUNT')
   if (value.processingOwnerToken !== null && value.processingOwnerToken !== undefined
     && !/^[A-Za-z0-9_-]{16,128}$/.test(value.processingOwnerToken)) throw new Error('INVALID_PROCESSING_OWNER')
+  if (value.evidenceProjectionHash !== null && value.evidenceProjectionHash !== undefined
+    && !/^[A-Za-z0-9_-]{43}$/.test(value.evidenceProjectionHash)) throw new Error('INVALID_EVIDENCE_PROJECTION_HASH')
   for (const field of [value.taskName, value.queuedAt, value.processingStartedAt, value.processingLeaseUntil, value.lastProgressAt]) {
     if (field !== null && (typeof field !== 'string' || field.length > 512)) throw new Error('INVALID_DRAFT_FIELD')
   }
   for (const field of [value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId, value.serviceId, value.channelId, value.createdAt, value.updatedAt]) {
     if (typeof field !== 'string' || field.length > 512) throw new Error('INVALID_DRAFT_FIELD')
   }
-  return structuredClone({ ...value, processingOwnerToken: value.processingOwnerToken ?? null })
+  return structuredClone({
+    ...value,
+    processingOwnerToken: value.processingOwnerToken ?? null,
+    evidenceProjectionHash: value.evidenceProjectionHash ?? null,
+  })
 }
 
 function staffFromRow(row: unknown[]): MiniAppStaffRecord | null {
@@ -506,6 +514,7 @@ const BOUND_DRAFT_MUTATION_KEYS = new Set<string>([
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIds',
   'chatEvidenceFileIds', 'evidenceCount', 'paymentEvidenceObjectKeys', 'chatEvidenceObjectKeys', 'taskName', 'queuedAt',
   'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken',
+  'evidenceProjectionHash',
   'confirmedAt', 'caseId', 'safeErrorCode',
 ])
 

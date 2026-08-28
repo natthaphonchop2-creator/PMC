@@ -74,6 +74,7 @@ function fromRow(row: unknown[]): MiniAppAsyncRequestRecord {
     queuedAt: nullable(value.queuedAt), processingStartedAt: nullable(value.processingStartedAt),
     processingLeaseUntil: nullable(value.processingLeaseUntil), lastProgressAt: nullable(value.lastProgressAt),
     attemptCount: numberValue(value.attemptCount), processingOwnerToken: nullable(value.processingOwnerToken),
+    evidenceProjectionHash: nullable(value.evidenceProjectionHash),
   }
 }
 

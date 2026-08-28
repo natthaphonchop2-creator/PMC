@@ -14,6 +14,9 @@ import type { AsyncBookingWorker } from '../../server/pmc-mini-app/asyncWorker'
 
 const route = '/internal/mini-app/finalize-booking'
 const fixedNow = new Date('2026-08-28T02:01:00.000Z')
+const validWorkerBody = {
+  requestId: 'request-1', draftId: 'draft-1', payloadHash: 'payload-hash-1', baseVersion: 3,
+}
 
 describe('PMC async worker route', () => {
   it('authenticates OIDC before validating the task header, parsing the body, or touching the store', async () => {
@@ -52,7 +55,7 @@ describe('PMC async worker route', () => {
     if (retryCount !== undefined) headers['x-cloudtasks-taskretrycount'] = retryCount
 
     const response = await invoke(createPmcMiniAppMiddleware(deps), route, {
-      method: 'POST', headers, body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1' }),
+      method: 'POST', headers, body: JSON.stringify(validWorkerBody),
     })
 
     expect({ status: response.status, body: await response.json() }).toEqual({
@@ -66,9 +69,13 @@ describe('PMC async worker route', () => {
   it.each([
     ['wrong content type', { headers: { 'content-type': 'text/plain' }, body: '{}' }, 415, 'ASYNC_WORKER_JSON_REQUIRED'],
     ['malformed JSON', { headers: { 'content-type': 'application/json' }, body: '{' }, 400, 'ASYNC_WORKER_INVALID_JSON'],
-    ['extra key', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1', customerName: 'private' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
-    ['unsafe request ID', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: '../request', draftId: 'draft-1' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
-    ['oversized ID', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: `request-${'x'.repeat(125)}`, draftId: 'draft-1' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['missing payload hash', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1', baseVersion: 3 }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['missing base version', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1', payloadHash: 'payload-hash-1' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['extra key', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validWorkerBody, customerName: 'private' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['unsafe request ID', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validWorkerBody, requestId: '../request' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['unsafe payload hash', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validWorkerBody, payloadHash: 'bad hash' }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['invalid base version', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validWorkerBody, baseVersion: 0 }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
+    ['oversized ID', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...validWorkerBody, requestId: `request-${'x'.repeat(125)}` }) }, 400, 'ASYNC_WORKER_INVALID_BODY'],
     ['oversized body', { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1', padding: 'x'.repeat(1_100) }) }, 413, 'ASYNC_WORKER_PAYLOAD_TOO_LARGE'],
   ] as const)('rejects a %s task body without calling the worker', async (_label, request, status, error) => {
     const deps = dependencies()
@@ -104,7 +111,7 @@ describe('PMC async worker route', () => {
     const response = await invokeRaw(createPmcMiniAppMiddleware(deps), path, {
       method: 'POST',
       headers: { authorization: 'Bearer valid-worker-token', 'x-cloudtasks-taskretrycount': '0', 'content-type': 'application/json' },
-      body: JSON.stringify({ requestId: 'request-1', draftId: 'draft-1' }),
+      body: JSON.stringify(validWorkerBody),
     })
 
     expect(response.status).toBe(404)
@@ -146,7 +153,8 @@ describe('PMC async worker route', () => {
         status: 503, body: { error: 'ASYNC_WORKER_FAILED' },
       })
       expect(finalize).toHaveBeenCalledWith({
-        requestId: 'request-1', draftId: 'draft-1', attempt: Number(retryCount) + 1,
+        requestId: 'request-1', draftId: 'draft-1', payloadHash: 'payload-hash-1', baseVersion: 3,
+        attempt: Number(retryCount) + 1,
       })
     },
   )
@@ -188,7 +196,7 @@ function dependencies(overrides: Partial<PmcMiniAppMiddlewareDependencies> = {})
   }
 }
 
-function workerRequest(retryCount: string, body: Record<string, unknown> = { requestId: 'request-1', draftId: 'draft-1' }): RequestInit {
+function workerRequest(retryCount: string, body: Record<string, unknown> = validWorkerBody): RequestInit {
   return {
     method: 'POST',
     headers: {

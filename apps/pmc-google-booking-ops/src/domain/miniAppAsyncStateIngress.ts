@@ -1,6 +1,7 @@
 import {
   canonicalMiniAppAsyncIdentity,
   canonicalMiniAppAsyncStateIngress,
+  canonicalMiniAppEvidenceProjection,
   type MiniAppAsyncRequestRecord,
   type MiniAppAsyncStateIngressEnvelope,
   type MiniAppAsyncStateIngressResult,
@@ -25,7 +26,7 @@ export function mutateMiniAppAsyncState(input: unknown, ports: BookingPorts): Mi
     const current = ports.miniAppRequests.getByRequestId(envelope.payload.requestId)
     if (!current || current.draftId !== envelope.payload.draftId) throw new Error('mini app async request not found')
     validateImmutableBindings(current, envelope.payload, ports)
-    const mutation = applyMutation(current, envelope.payload)
+    const mutation = applyMutation(current, envelope.payload, ports)
     const persisted = mutation.write
       ? ports.miniAppRequests.updateByRequestId(current.requestId, current.version, mutation.next)
       : current
@@ -94,15 +95,16 @@ function validateImmutableBindings(
 function applyMutation(
   current: MiniAppAsyncRequestRecord,
   payload: MiniAppAsyncStateMutation,
+  ports: BookingPorts,
 ): { write: boolean; next: MiniAppAsyncRequestRecord; outcome: MiniAppAsyncStateIngressResult['outcome'] } {
-  if (payload.operation === 'EXHAUST') return applyExhaust(current, payload)
+  if (payload.operation === 'EXHAUST') return applyExhaust(current, payload, ports)
   if (TERMINAL_STATES.has(current.state)) return { write: false, next: current, outcome: 'TERMINAL' }
   if (payload.operation === 'QUEUE') return applyQueue(current, payload)
   if (payload.operation === 'CLAIM') return applyClaim(current, payload)
   if (payload.operation === 'RENEW') return applyRenew(current, payload)
-  if (payload.operation === 'PROJECT') return applyProject(current, payload)
+  if (payload.operation === 'PROJECT') return applyProject(current, payload, ports)
   if (payload.operation === 'RETRY') return applyRetry(current, payload)
-  return applyComplete(current, payload)
+  return applyComplete(current, payload, ports)
 }
 
 function applyQueue(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
@@ -154,19 +156,22 @@ function applyRenew(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
   })
 }
 
-function applyProject(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyProject(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   const completeEvidence = payload.paymentEvidenceFileIds.length === payload.paymentEvidenceObjectKeys.length
     && payload.chatEvidenceFileIds.length === payload.chatEvidenceObjectKeys.length
     && payload.evidenceCount === payload.paymentEvidenceFileIds.length + payload.chatEvidenceFileIds.length
   if (!completeEvidence) throw new Error('mini app async evidence projection rejected')
+  const projectionHash = ports.crypto.sha256Base64Url(canonicalMiniAppEvidenceProjection(projectionBinding(current, payload)))
   if (current.state === 'PROCESSING' && current.processingOwnerToken === payload.leaseOwnerToken
     && current.version === payload.expectedVersion + 1 && current.attemptCount === payload.expectedAttempt
     && sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
-    && sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)) return unchanged(current)
+    && sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
+    && current.evidenceProjectionHash === projectionHash) return unchanged(current)
   requireOwnedProcessing(current, payload)
   return changed(current, {
     paymentEvidenceFileIds: [...payload.paymentEvidenceFileIds],
     chatEvidenceFileIds: [...payload.chatEvidenceFileIds], evidenceCount: payload.evidenceCount,
+    evidenceProjectionHash: projectionHash,
     lastProgressAt: payload.nowIso, updatedAt: payload.nowIso,
   })
 }
@@ -183,7 +188,7 @@ function applyRetry(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
   })
 }
 
-function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   if (!payload.caseId || !payload.confirmationStatus) throw new Error('mini app async completion rejected')
   if (current.state === 'CONFIRMED' && current.version === payload.expectedVersion + 1
     && current.caseId === payload.caseId && current.confirmationStatus === payload.confirmationStatus) return unchanged(current)
@@ -194,6 +199,9 @@ function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsync
     || !sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)) {
     throw new Error('mini app async completion evidence rejected')
   }
+  if (current.evidenceProjectionHash !== projectionHash(current, ports)) {
+    throw new Error('mini app async completion projection hash rejected')
+  }
   return changed(current, {
     state: 'CONFIRMED', caseId: payload.caseId, confirmationStatus: payload.confirmationStatus,
     confirmedAt: payload.nowIso, processingLeaseUntil: null, processingOwnerToken: null,
@@ -201,7 +209,7 @@ function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsync
   })
 }
 
-function applyExhaust(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyExhaust(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   if (payload.taskAttempt !== 8 || payload.safeErrorCode !== 'RETRY_EXHAUSTED') {
     throw new Error('mini app async exhaustion rejected')
   }
@@ -216,7 +224,8 @@ function applyExhaust(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncS
     && sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
     && sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
     && current.evidenceCount === payload.evidenceCount
-    && current.evidenceCount === current.paymentEvidenceFileIds.length + current.chatEvidenceFileIds.length) {
+    && current.evidenceCount === current.paymentEvidenceFileIds.length + current.chatEvidenceFileIds.length
+    && current.evidenceProjectionHash === projectionHash(current, ports)) {
     return { write: false as const, next: current, outcome: 'TERMINAL' as const }
   }
   if (!['READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY'].includes(current.state)) {
@@ -226,6 +235,36 @@ function applyExhaust(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncS
     state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED', processingLeaseUntil: null,
     processingOwnerToken: null, lastProgressAt: payload.nowIso, updatedAt: payload.nowIso,
   })
+}
+
+function projectionHash(current: MiniAppAsyncRequestRecord, ports: BookingPorts): string | null {
+  if (!current.payloadHash) return null
+  return ports.crypto.sha256Base64Url(canonicalMiniAppEvidenceProjection({
+    requestId: current.requestId,
+    draftId: current.draftId,
+    payloadHash: current.payloadHash,
+    paymentEvidenceObjectKeys: [...current.paymentEvidenceObjectKeys],
+    chatEvidenceObjectKeys: [...current.chatEvidenceObjectKeys],
+    paymentEvidenceFileIds: [...current.paymentEvidenceFileIds],
+    chatEvidenceFileIds: [...current.chatEvidenceFileIds],
+    evidenceCount: current.evidenceCount,
+  }))
+}
+
+function projectionBinding(
+  current: MiniAppAsyncRequestRecord,
+  payload: MiniAppAsyncStateMutation,
+) {
+  return {
+    requestId: current.requestId,
+    draftId: current.draftId,
+    payloadHash: payload.payloadHash,
+    paymentEvidenceObjectKeys: [...current.paymentEvidenceObjectKeys],
+    chatEvidenceObjectKeys: [...current.chatEvidenceObjectKeys],
+    paymentEvidenceFileIds: [...payload.paymentEvidenceFileIds],
+    chatEvidenceFileIds: [...payload.chatEvidenceFileIds],
+    evidenceCount: payload.evidenceCount,
+  }
 }
 
 function requireExpected(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation): void {

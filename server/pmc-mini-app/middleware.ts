@@ -241,11 +241,16 @@ async function handleAsyncWorkerRoute(
   }
   const body = await readWorkerJson(req, res)
   if (!body) return
-  if (!hasExactKeys(body, ['requestId', 'draftId'])
+  if (!hasExactKeys(body, ['requestId', 'draftId', 'payloadHash', 'baseVersion'])
     || typeof body.requestId !== 'string'
     || typeof body.draftId !== 'string'
+    || typeof body.payloadHash !== 'string'
+    || typeof body.baseVersion !== 'number'
     || !safeWorkerId(body.requestId)
-    || !safeWorkerId(body.draftId)) {
+    || !safeWorkerId(body.draftId)
+    || !safeWorkerId(body.payloadHash)
+    || !Number.isSafeInteger(body.baseVersion)
+    || body.baseVersion < 1) {
     respond(res, 400, { error: 'ASYNC_WORKER_INVALID_BODY' })
     return
   }
@@ -254,6 +259,8 @@ async function handleAsyncWorkerRoute(
     const result = await deps.asyncWorker.finalize({
       requestId: body.requestId,
       draftId: body.draftId,
+      payloadHash: body.payloadHash,
+      baseVersion: body.baseVersion,
       attempt: retryCount + 1,
     })
     respond(res, 200, { ...result })
@@ -360,6 +367,7 @@ async function handleBookingDraftRoute(
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null, processingStartedAt: null,
       processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
       processingOwnerToken: null,
+      evidenceProjectionHash: null,
       createdAt: now, confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null, updatedAt: now,
     }
     try {
@@ -487,6 +495,8 @@ async function handleBookingDraftRoute(
       task = await deps.taskQueue.enqueue({
         requestId: draft.requestId,
         draftId: draft.draftId,
+        payloadHash,
+        baseVersion: draft.version,
         scheduleAt: new Date(now.getTime() + 2_000),
       })
     } catch {

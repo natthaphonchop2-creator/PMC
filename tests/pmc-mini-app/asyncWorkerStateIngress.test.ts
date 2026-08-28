@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createAsyncBookingWorker } from '../../server/pmc-mini-app/asyncWorker'
+import { evidenceProjectionHash } from '../../server/pmc-mini-app/bookingDraft'
 import type { AsyncStateIngressPort } from '../../server/pmc-mini-app/asyncStateIngressClient'
 import type { BookingIngressPort } from '../../server/pmc-mini-app/bookingIngressClient'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
@@ -19,7 +20,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
   it('uses state ingress exclusively and validates reread state before booking and cleanup', async () => {
     const fixture = workerFixture()
 
-    await expect(fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 })).resolves.toEqual({
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toEqual({
       requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED',
     })
 
@@ -45,7 +46,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
       }),
     })
 
-    await expect(fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 })).resolves.toMatchObject({
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({
       state: 'CONFIRMED',
     })
     expect(fixture.staging.get).not.toHaveBeenCalled()
@@ -60,7 +61,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     })
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt }),
+      fixture.worker.finalize(taskInput(attempt)),
     ).rejects.toMatchObject({ code: 'EVIDENCE_COPY_RETRY', message: 'EVIDENCE_COPY_RETRY' })
     expect(fixture.state.read()).toMatchObject({ state: 'RETRYING', safeErrorCode: 'EVIDENCE_COPY_RETRY' })
     expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
@@ -77,10 +78,10 @@ describe('PMC async worker through Apps Script state ingress', () => {
     })
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+      fixture.worker.finalize(taskInput(1)),
     ).rejects.toMatchObject({ code: 'BOOKING_INGRESS_RETRY' })
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 2 }),
+      fixture.worker.finalize(taskInput(2)),
     ).resolves.toMatchObject({ caseId: 'PMC-202608-0001', state: 'CONFIRMED' })
 
     const submissions = fixture.bookingIngress.send.mock.calls.map(([draft]) => ({
@@ -94,12 +95,12 @@ describe('PMC async worker through Apps Script state ingress', () => {
   it('keeps the persisted Case ID terminal when staging cleanup fails and terminal replay has no side effect', async () => {
     const fixture = workerFixture({ deleteFailure: new Error('private storage detail') })
 
-    await expect(fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 })).resolves.toMatchObject({
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({
       caseId: 'PMC-202608-0001', state: 'CONFIRMED',
     })
     const operationCount = fixture.state.operations().length
     vi.clearAllMocks()
-    await expect(fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 2 })).resolves.toMatchObject({
+    await expect(fixture.worker.finalize(taskInput(2))).resolves.toMatchObject({
       caseId: 'PMC-202608-0001', state: 'CONFIRMED',
     })
     expect(fixture.state.operations()).toHaveLength(operationCount)
@@ -110,7 +111,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
   it('recovers a timed-out applied PROJECT mutation from the exact persisted reread without downgrading', async () => {
     const fixture = workerFixture({ responseLossOperation: 'PROJECT' })
 
-    await expect(fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 })).resolves.toMatchObject({
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({
       caseId: 'PMC-202608-0001', state: 'CONFIRMED',
     })
 
@@ -127,7 +128,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     fixtureRef.current = fixture
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+      fixture.worker.finalize(taskInput(1)),
     ).rejects.toMatchObject({ code: expect.stringMatching(/ASYNC_STATE|STALE|OWNER|LEASE/) })
 
     expect(fixture.state.operations()).toContain('CLAIM')
@@ -146,7 +147,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     fixtureRef.current = fixture
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+      fixture.worker.finalize(taskInput(1)),
     ).rejects.toBeDefined()
     expect(fixture.state.operations()).not.toContain('PROJECT')
     expect(fixture.state.operations()).not.toContain('RETRY')
@@ -160,17 +161,83 @@ describe('PMC async worker through Apps Script state ingress', () => {
     ['Drive IDs', { paymentEvidenceFileIds: [] }],
     ['evidence count', { evidenceCount: 1 }],
   ])('fails closed on terminal replay with invalid %s and retains all staging', async (_label, corruption) => {
-    const valid = queuedDraft({
+    const valid = withProjectionHash(queuedDraft({
       state: 'CONFIRMED', version: 9, attemptCount: 1, caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
       paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'], evidenceCount: 2,
       processingLeaseUntil: null, processingOwnerToken: null,
-    })
+    }))
     const invalid = { ...valid, ...structuredClone(corruption) }
     const fixture = workerFixture({ draft: invalid })
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 2 }),
+      fixture.worker.finalize(taskInput(2)),
     ).rejects.toBeDefined()
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+  })
+
+  it('returns an exact independently anchored terminal replay without any mutation or cleanup', async () => {
+    const terminal = withProjectionHash(queuedDraft({
+      state: 'CONFIRMED', version: 9, attemptCount: 1,
+      caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'], evidenceCount: 2,
+      processingLeaseUntil: null, processingOwnerToken: null,
+    }))
+    const fixture = workerFixture({ draft: terminal })
+
+    await expect(fixture.worker.finalize({
+      requestId: terminal.requestId, draftId: terminal.draftId, payloadHash: terminal.payloadHash!, baseVersion: 3, attempt: 2,
+    })).resolves.toEqual({ requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED' })
+    expect(fixture.state.operations()).toEqual([])
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+  })
+
+  it('rejects safe-looking reordered Drive IDs when the persisted projection hash still binds the original order', async () => {
+    const extraPaymentKey = `drafts/draft-1/PAYMENT/${'c'.repeat(64)}.png`
+    const projected = withProjectionHash(queuedDraft({
+      state: 'CONFIRMED', version: 9, attemptCount: 1,
+      caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+      paymentEvidenceObjectKeys: [paymentKey, extraPaymentKey],
+      paymentEvidenceFileIds: ['owner-drive-payment-1', 'owner-drive-payment-2'],
+      chatEvidenceFileIds: ['owner-drive-chat-1'], evidenceCount: 3,
+      processingLeaseUntil: null, processingOwnerToken: null,
+    }))
+    const corrupted = { ...projected, paymentEvidenceFileIds: [...projected.paymentEvidenceFileIds].reverse() }
+    const fixture = workerFixture({ draft: corrupted })
+
+    await expect(fixture.worker.finalize({
+      requestId: corrupted.requestId, draftId: corrupted.draftId, payloadHash: corrupted.payloadHash!, baseVersion: 3, attempt: 2,
+    })).rejects.toMatchObject({ code: 'INVALID_PERSISTED_ASYNC_STATE' })
+    expect(fixture.state.operations()).toEqual([])
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['task payload hash mismatch', { taskPayloadHash: 'different-payload-hash', baseVersion: 3, attemptCount: 1, version: 9, projection: 'VALID' }],
+    ['regressed terminal version', { taskPayloadHash: 'USE_ROW', baseVersion: 9, attemptCount: 1, version: 9, projection: 'VALID' }],
+    ['impossible attempt monotonicity', { taskPayloadHash: 'USE_ROW', baseVersion: 3, attemptCount: 5, version: 9, projection: 'VALID' }],
+    ['missing projection hash', { taskPayloadHash: 'USE_ROW', baseVersion: 3, attemptCount: 1, version: 9, projection: 'MISSING' }],
+    ['wrong projection hash', { taskPayloadHash: 'USE_ROW', baseVersion: 3, attemptCount: 1, version: 9, projection: 'WRONG' }],
+  ])('rejects terminal replay with %s against the independent task snapshot', async (_label, scenario) => {
+    const projected = withProjectionHash(queuedDraft({
+      state: 'CONFIRMED', version: scenario.version, attemptCount: scenario.attemptCount,
+      caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'], evidenceCount: 2,
+      processingLeaseUntil: null, processingOwnerToken: null,
+    } as Partial<MiniAppRequestRecord>))
+    const terminal = {
+      ...projected,
+      evidenceProjectionHash: scenario.projection === 'MISSING' ? null
+        : scenario.projection === 'WRONG' ? 'a'.repeat(43) : projected.evidenceProjectionHash,
+    }
+    const fixture = workerFixture({ draft: terminal })
+    const taskPayloadHash = scenario.taskPayloadHash === 'USE_ROW' ? terminal.payloadHash! : scenario.taskPayloadHash
+
+    await expect(fixture.worker.finalize({
+      requestId: 'request-1', draftId: 'draft-1', attempt: 2,
+      payloadHash: taskPayloadHash, baseVersion: scenario.baseVersion,
+    } as never)).rejects.toBeDefined()
     expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
     expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
   })
@@ -179,7 +246,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     const fixture = workerFixture({ corruptAfterComplete: { chatEvidenceFileIds: ['other-drive-chat-1'] } })
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 1 }),
+      fixture.worker.finalize(taskInput(1)),
     ).rejects.toBeDefined()
     expect(fixture.bookingIngress.send).toHaveBeenCalledOnce()
     expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
@@ -189,7 +256,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     const fixture = workerFixture({ corruptAfterComplete: { chatEvidenceFileIds: ['other-drive-chat-1'] } })
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 8 }),
+      fixture.worker.finalize(taskInput(8)),
     ).resolves.toEqual({ requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'NEEDS_REVIEW' })
     expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
     expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
@@ -199,13 +266,55 @@ describe('PMC async worker through Apps Script state ingress', () => {
     const fixture = workerFixture({ alwaysBusyClaim: true, transientReadFailures: 4 })
 
     await expect(
-      fixture.worker.finalize({ requestId: 'request-1', draftId: 'draft-1', attempt: 8 }),
+      fixture.worker.finalize(taskInput(8)),
     ).resolves.toEqual({ requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW' })
 
     expect(fixture.clock.totalWait).toBe(30_000)
     expect(fixture.clock.waits.every((milliseconds) => milliseconds <= 1_000)).toBe(true)
     expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
     expect(fixture.state.read()).toMatchObject({ state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED' })
+  })
+
+  it('converges through EXHAUST when an attempt-eight post-claim reread transiently fails after an external error', async () => {
+    const fixture = workerFixture({
+      stagingFailure: new Error('private storage detail'),
+      transientReadFailuresAfterExternalError: 2,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toEqual({
+      requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW',
+    })
+    expect(fixture.clock.totalWait).toBeLessThanOrEqual(30_000)
+    expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
+    expect(fixture.state.read()).toMatchObject({ state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED' })
+  })
+
+  it('waits for a reclaimed live post-claim owner to expire before attempt eight atomically exhausts', async () => {
+    const fixtureRef: { current?: ReturnType<typeof workerFixture> } = {}
+    const fixture = workerFixture({
+      afterEvidenceUpload: () => fixtureRef.current?.state.reclaim('worker-owner-token-2'),
+    })
+    fixtureRef.current = fixture
+
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toEqual({
+      requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW',
+    })
+    expect(fixture.clock.totalWait).toBe(15_000)
+    expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
+  })
+
+  it('recovers exact persisted NEEDS_REVIEW after EXHAUST response loss and transient rereads', async () => {
+    const fixture = workerFixture({
+      alwaysBusyClaim: true,
+      responseLossOperation: 'EXHAUST',
+      transientReadFailuresAfterExhaust: 6,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toEqual({
+      requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW',
+    })
+    expect(fixture.clock.totalWait).toBe(30_000)
+    expect(fixture.state.operations().filter((operation) => operation === 'EXHAUST')).toHaveLength(1)
   })
 })
 
@@ -217,13 +326,18 @@ function workerFixture(options: {
   corruptAfterComplete?: Partial<MiniAppRequestRecord>
   alwaysBusyClaim?: boolean
   transientReadFailures?: number
+  transientReadFailuresAfterExternalError?: number
+  transientReadFailuresAfterExhaust?: number
   stagingFailure?: Error
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
 } = {}) {
   const clock = new TestClock(fixedNow)
-  const state = new StateIngressFixture(options.draft ?? queuedDraft(), clock, options)
   let remainingReadFailures = options.transientReadFailures ?? 0
+  const state = new StateIngressFixture(options.draft ?? queuedDraft(), clock, {
+    ...options,
+    afterExhaust: () => { remainingReadFailures += options.transientReadFailuresAfterExhaust ?? 0 },
+  })
   const unavailable = vi.fn(async () => { throw new Error('direct async Sheet mutation forbidden') })
   const store: MiniAppStore = {
     async getDraft(draftId) {
@@ -246,7 +360,10 @@ function workerFixture(options: {
   const staging: EvidenceStagingPort & { deleteVerified: ReturnType<typeof vi.fn> } = {
     put: vi.fn(async () => { throw new Error('not used') }),
     get: vi.fn(async (key: string) => {
-      if (options.stagingFailure) throw options.stagingFailure
+      if (options.stagingFailure) {
+        remainingReadFailures += options.transientReadFailuresAfterExternalError ?? 0
+        throw options.stagingFailure
+      }
       return {
         bytes: Buffer.from(key === paymentKey ? [0x89, 0x50, 0x4e, 0x47, 1] : [0x89, 0x50, 0x4e, 0x47, 2]),
         mimeType: 'image/png' as const,
@@ -297,6 +414,7 @@ class StateIngressFixture implements AsyncStateIngressPort {
       corruptAfterProject?: Partial<MiniAppRequestRecord>
       corruptAfterComplete?: Partial<MiniAppRequestRecord>
       alwaysBusyClaim?: boolean
+      afterExhaust?: () => void
     },
   ) { this.draft = structuredClone(draft) }
 
@@ -321,6 +439,11 @@ class StateIngressFixture implements AsyncStateIngressPort {
         ...this.draft, state: 'NEEDS_REVIEW', version: this.draft.version + 1,
         safeErrorCode: 'RETRY_EXHAUSTED', processingOwnerToken: null, processingLeaseUntil: null,
       }
+      this.options.afterExhaust?.()
+      if (this.options.responseLossOperation === input.operation && !this.lostResponse) {
+        this.lostResponse = true
+        throw new Error('simulated state response loss')
+      }
       return result(this.draft, 'APPLIED')
     }
     if (input.operation === 'CLAIM') {
@@ -335,10 +458,18 @@ class StateIngressFixture implements AsyncStateIngressPort {
       if (input.operation === 'RENEW') {
         this.draft = { ...this.draft, version: this.draft.version + 1, processingLeaseUntil: input.leaseUntil }
       } else if (input.operation === 'PROJECT') {
+        const projectionHash = evidenceProjectionHash({
+          requestId: this.draft.requestId, draftId: this.draft.draftId, payloadHash: input.payloadHash,
+          paymentEvidenceObjectKeys: [...this.draft.paymentEvidenceObjectKeys],
+          chatEvidenceObjectKeys: [...this.draft.chatEvidenceObjectKeys],
+          paymentEvidenceFileIds: [...input.paymentEvidenceFileIds],
+          chatEvidenceFileIds: [...input.chatEvidenceFileIds], evidenceCount: input.evidenceCount,
+        })
         this.draft = {
           ...this.draft, version: this.draft.version + 1,
           paymentEvidenceFileIds: [...input.paymentEvidenceFileIds],
           chatEvidenceFileIds: [...input.chatEvidenceFileIds], evidenceCount: input.evidenceCount,
+          evidenceProjectionHash: projectionHash,
           ...(this.options.corruptAfterProject ?? {}),
         }
       } else if (input.operation === 'RETRY') {
@@ -400,6 +531,7 @@ function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestR
     chatEvidenceObjectKeys: [chatKey], taskName: 'task/request-1', queuedAt: fixedNow.toISOString(),
     processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
     processingOwnerToken: null, createdAt: fixedNow.toISOString(), confirmedAt: null, caseId: null,
+    evidenceProjectionHash: null,
     confirmationStatus: null, safeErrorCode: null, updatedAt: fixedNow.toISOString(), ...patch,
   }
   return {
@@ -407,6 +539,30 @@ function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestR
     payloadHash: patch.payloadHash === undefined
       ? createHash('sha256').update(canonicalMiniAppAsyncIdentity(draft)).digest('base64url')
       : patch.payloadHash,
+  }
+}
+
+function taskInput(attempt: number) {
+  const draft = queuedDraft()
+  return {
+    requestId: draft.requestId,
+    draftId: draft.draftId,
+    payloadHash: draft.payloadHash!,
+    baseVersion: 3,
+    attempt,
+  }
+}
+
+function withProjectionHash(draft: MiniAppRequestRecord): MiniAppRequestRecord {
+  return {
+    ...draft,
+    evidenceProjectionHash: evidenceProjectionHash({
+      requestId: draft.requestId, draftId: draft.draftId, payloadHash: draft.payloadHash!,
+      paymentEvidenceObjectKeys: [...draft.paymentEvidenceObjectKeys],
+      chatEvidenceObjectKeys: [...draft.chatEvidenceObjectKeys],
+      paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds],
+      chatEvidenceFileIds: [...draft.chatEvidenceFileIds], evidenceCount: draft.evidenceCount,
+    }),
   }
 }
 

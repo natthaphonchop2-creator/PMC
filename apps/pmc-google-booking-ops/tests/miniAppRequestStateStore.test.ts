@@ -67,6 +67,7 @@ function requestRecord(patch: Partial<MiniAppAsyncRequestRecord> = {}): MiniAppA
     chatEvidenceObjectKeys: [`drafts/${patch.draftId ?? 'draft-1'}/CHAT/${'b'.repeat(64)}.png`],
     taskName: null, queuedAt: null, processingStartedAt: null, processingLeaseUntil: null,
     lastProgressAt: null, attemptCount: 0, processingOwnerToken: null,
+    evidenceProjectionHash: null,
     createdAt: '2026-08-20T08:58:00+07:00', confirmedAt: null, caseId: null,
     confirmationStatus: null, safeErrorCode: null, updatedAt: '2026-08-20T08:58:00+07:00',
     ...patch,
