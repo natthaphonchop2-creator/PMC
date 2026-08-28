@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-28
 
-**Status:** Approved in chat; pending written specification review
+**Status:** Approved by owner; ready for implementation planning
 
 **Project:** PMC Web
 
