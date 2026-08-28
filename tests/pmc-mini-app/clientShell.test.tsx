@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
@@ -80,6 +80,121 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.getByText('4 กล่อง')).toBeVisible()
   })
 
+  it('does not let a stale Stock success pull the user back from Account', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<Awaited<ReturnType<PmcMiniAppApi['loadStockProducts']>>>()
+    const api = miniAppApi()
+    api.loadStockProducts = vi.fn(() => pending.promise)
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+    await user.click(screen.getByRole('button', { name: 'บัญชี' }))
+    expect(screen.getByRole('heading', { name: 'บัญชี' })).toBeVisible()
+
+    await act(async () => pending.resolve({ products: [stockProduct('ถุงมือจากคำขอเก่า', 'STK-OLD')] }))
+
+    expect(screen.getByRole('heading', { name: 'บัญชี' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Stock' })).not.toBeInTheDocument()
+    expect(screen.queryByText('ถุงมือจากคำขอเก่า')).not.toBeInTheDocument()
+  })
+
+  it('does not show an error from a rejected Stock request after navigation away', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<Awaited<ReturnType<PmcMiniAppApi['loadStockProducts']>>>()
+    const api = miniAppApi()
+    api.loadStockProducts = vi.fn(() => pending.promise)
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+    await user.click(screen.getByRole('button', { name: 'บัญชี' }))
+    await act(async () => pending.reject(new Error('stale Stock failure')))
+
+    expect(screen.getByRole('heading', { name: 'บัญชี' })).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('keeps the second Stock open result when the first request settles later', async () => {
+    const user = userEvent.setup()
+    const first = deferred<Awaited<ReturnType<PmcMiniAppApi['loadStockProducts']>>>()
+    const second = deferred<Awaited<ReturnType<PmcMiniAppApi['loadStockProducts']>>>()
+    const api = miniAppApi()
+    api.loadStockProducts = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+    await user.click(screen.getByRole('button', { name: 'สต็อก' }))
+    await act(async () => second.resolve({ products: [stockProduct('ผลล่าสุด', 'STK-NEW')] }))
+    expect(screen.getByText('ผลล่าสุด')).toBeVisible()
+
+    await act(async () => first.resolve({ products: [stockProduct('ผลเก่า', 'STK-OLD')] }))
+
+    expect(screen.getByRole('heading', { name: 'Stock' })).toBeVisible()
+    expect(screen.getByText('ผลล่าสุด')).toBeVisible()
+    expect(screen.queryByText('ผลเก่า')).not.toBeInTheDocument()
+    expect(screen.queryByText('กำลังเตรียมรายการ')).not.toBeInTheDocument()
+  })
+
+  it('shows one current Stock failure and remains on the page that initiated it', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<Awaited<ReturnType<PmcMiniAppApi['loadStockProducts']>>>()
+    const api = miniAppApi()
+    api.loadStockProducts = vi.fn(() => pending.promise)
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+    await act(async () => pending.reject(new Error('current Stock failure')))
+
+    expect(screen.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert')).toHaveTextContent('โหลดรายการสต็อกไม่สำเร็จ กรุณาลองอีกครั้ง')
+  })
+
+  it('clears Stock messages through Home cards and bottom navigation', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    api.loadStockProducts = vi.fn()
+      .mockRejectedValueOnce(new Error('current Stock failure'))
+      .mockResolvedValue({ products: [stockProduct('ถุงมือ', 'STK-1')] })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true, reportingEnabled: true }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+    expect(await screen.findByRole('alert')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'รายงาน JERA' }))
+    expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'หน้าหลัก' }))
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+    expect(await screen.findByRole('heading', { name: 'Stock' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ประวัติ' }))
+    expect(screen.getByRole('alert')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'บัญชี' }))
+    expect(screen.getByRole('heading', { name: 'บัญชี' })).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('links an unknown LINE account with one short mobile PIN form', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -129,4 +244,22 @@ function miniAppApi(): PmcMiniAppApi {
     }] })),
     loadStockHistory: vi.fn(), submitStockCommand: vi.fn(),
   }
+}
+
+function stockProduct(name: string, productId: string) {
+  return {
+    productId, name, category: 'CLINIC_SUPPLY' as const, unit: 'กล่อง',
+    minimumQuantityMilli: 5_000, onHandMilli: 4_000, lowStock: true, active: true,
+    hasLedgerActivity: true, version: 2,
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve
+    reject = nextReject
+  })
+  return { promise, resolve, reject }
 }

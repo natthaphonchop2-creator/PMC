@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDays, FileChartColumn, House, PackageOpen, UserRound } from 'lucide-react'
 import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
@@ -41,6 +41,7 @@ export function PmcMiniApp({
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
+  const navigationEpochRef = useRef(0)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
 
@@ -92,36 +93,57 @@ export function PmcMiniApp({
   }), [api, idToken])
 
   const openBooking = async () => {
-    if (!config) {
-      setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
-      return
-    }
+    const requestEpoch = ++navigationEpochRef.current
     setLoading(true)
     setMessage('')
+    if (!config) {
+      if (requestEpoch === navigationEpochRef.current) {
+        setLoading(false)
+        setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
+      }
+      return
+    }
     try {
       const nextDraft = await api.createDraft(idToken)
+      if (requestEpoch !== navigationEpochRef.current) return
       setDraft(nextDraft)
       setView('BOOKING')
     } catch {
+      if (requestEpoch !== navigationEpochRef.current) return
       setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
-      setLoading(false)
+      if (requestEpoch === navigationEpochRef.current) setLoading(false)
     }
   }
 
   const openStock = async () => {
     if (!config?.stockEnabled) return
+    const requestEpoch = ++navigationEpochRef.current
     setLoading(true)
     setMessage('')
     try {
       const result = await api.loadStockProducts(idToken)
+      if (requestEpoch !== navigationEpochRef.current) return
       setStockProducts(result.products)
       setView('STOCK')
     } catch {
+      if (requestEpoch !== navigationEpochRef.current) return
       setMessage('โหลดรายการสต็อกไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
-      setLoading(false)
+      if (requestEpoch === navigationEpochRef.current) setLoading(false)
     }
+  }
+
+  const navigateTo = (next: MiniAppView) => {
+    navigationEpochRef.current += 1
+    setLoading(false)
+    setMessage('')
+    if (next === 'REPORTS' && view === 'REPORTS') {
+      setSelectedReport(null)
+      return
+    }
+    setView(next)
+    if (next !== 'REPORTS') setSelectedReport(null)
   }
 
   const linkAccount = async (staffId: string, pin: string) => {
@@ -159,7 +181,7 @@ export function PmcMiniApp({
   />
   if (!session) return <Notice>{message || 'รอผู้ดูแลอนุมัติ'}</Notice>
   if (view === 'BOOKING' && config && draft) {
-    return <BookingWizard session={session} config={config} draft={draft} adapter={bookingAdapter} onExit={() => { setView('HOME'); setDraft(null) }} />
+    return <BookingWizard session={session} config={config} draft={draft} adapter={bookingAdapter} onExit={() => { navigateTo('HOME'); setDraft(null) }} />
   }
 
   return (
@@ -171,7 +193,7 @@ export function PmcMiniApp({
         onAction={(action) => {
           if (action === 'BOOKING') void openBooking()
           else if (action === 'STOCK') void openStock()
-          else setView(action)
+          else navigateTo(action)
         }}
       />}
       {view === 'REPORTS' && (selectedReport === 'ADDITIONAL'
@@ -204,11 +226,7 @@ export function PmcMiniApp({
         onChange={(next) => {
         if (next === 'BOOKING') void openBooking()
         else if (next === 'STOCK') void openStock()
-        else {
-          setMessage('')
-          if (next === 'REPORTS' && view === 'REPORTS') setSelectedReport(null)
-          else { setView(next); if (next !== 'REPORTS') setSelectedReport(null) }
-        }
+        else navigateTo(next)
       }} />
     </div>
   )
