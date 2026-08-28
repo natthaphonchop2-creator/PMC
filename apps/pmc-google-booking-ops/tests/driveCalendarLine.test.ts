@@ -5,6 +5,7 @@ import {
   adminBookingMessage,
   adminBookingMessageBatches,
   doctorBookingMessage,
+  deterministicLineRetryUuid,
   formatLinePushError,
   handleLineDirectoryIngress,
   isLinePushAcceptedStatus,
@@ -329,6 +330,16 @@ describe('LINE routing', () => {
     expect(isLinePushAcceptedStatus(409)).toBe(true)
     expect(isLinePushAcceptedStatus(400)).toBe(false)
     expect(isLinePushAcceptedStatus(500)).toBe(false)
+  })
+
+  it('derives one stable UUID-shaped LINE retry key without Script Properties', () => {
+    const digest = '0123456789abcdef'.repeat(4)
+    const first = deterministicLineRetryUuid('PMC-202608-0001:ADMIN:1', () => digest)
+    const second = deterministicLineRetryUuid('PMC-202608-0001:ADMIN:1', () => digest)
+
+    expect(first).toBe('01234567-89ab-4def-8123-456789abcdef')
+    expect(second).toBe(first)
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   })
 
   it('keeps bounded LINE validation details in a failed push error', () => {

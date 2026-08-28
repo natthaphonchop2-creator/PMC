@@ -325,8 +325,25 @@ export function formatLinePushError(status: number, responseBody: unknown): stri
   return `LINE push failed with status ${status}${detail ? `: ${detail}` : ''}`
 }
 
+export function deterministicLineRetryUuid(
+  retryKey: string,
+  sha256Hex: (value: string) => string,
+): string {
+  if (!retryKey || retryKey.length > 1_024) throw new Error('invalid LINE retry key')
+  const digest = sha256Hex(`LINE_RETRY:${retryKey}`).toLowerCase()
+  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('invalid LINE retry digest')
+  const variant = ((Number.parseInt(digest[16], 16) & 0x3) | 0x8).toString(16)
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `4${digest.slice(13, 16)}`,
+    `${variant}${digest.slice(17, 20)}`,
+    digest.slice(20, 32),
+  ].join('-')
+}
+
 export function createGoogleLinePort(accessToken: string): LinePort {
-  const properties = PropertiesService.getScriptProperties()
+  const crypto = createAppsScriptCryptoPort()
   return {
     push(message) {
       const messages = message.apiMessages ?? [
@@ -335,9 +352,7 @@ export function createGoogleLinePort(accessToken: string): LinePort {
       if (messages.length < 1 || messages.length > 5) {
         throw new Error('LINE push requires 1-5 messages')
       }
-      const propertyKey = `LINE_RETRY_${message.retryKey}`
-      const retryUuid = properties.getProperty(propertyKey) ?? Utilities.getUuid()
-      properties.setProperty(propertyKey, retryUuid)
+      const retryUuid = deterministicLineRetryUuid(message.retryKey, crypto.sha256Hex)
       const response = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
         method: 'post',
         contentType: 'application/json',
