@@ -511,8 +511,8 @@ button:focus-visible {
 .pmc-stock-manager-actions button svg { flex: 0 0 auto; width: 17px; height: 17px; }
 .pmc-stock-manager-actions button.danger { color: var(--pmc-error); background: #fff8f7; }
 
-.pmc-stock-confirm-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; padding: 20px; place-items: center; background: rgba(24, 24, 24, .42); }
-.pmc-stock-confirm { width: min(100%, 430px); padding: 20px; border: 0; border-radius: 18px; background: #fff; box-shadow: 0 22px 60px rgba(0, 0, 0, .2); }
+.pmc-stock-confirm { position: fixed; z-index: 20; inset: 0; width: min(calc(100% - 40px), 430px); margin: auto; padding: 20px; border: 0; border-radius: 18px; color: var(--pmc-text); background: #fff; box-shadow: 0 22px 60px rgba(0, 0, 0, .2); }
+.pmc-stock-confirm::backdrop { background: rgba(24, 24, 24, .42); }
 .pmc-stock-confirm h2 { margin: 0; font-size: 1.25rem; line-height: var(--lh-heading); }
 .pmc-stock-confirm > p:not(.pmc-stock-flow-alert) { margin: 7px 0 0; color: var(--pmc-muted); line-height: var(--lh-body); }
 .pmc-stock-confirm .pmc-stock-flow-alert { margin-block-start: 13px; }

@@ -77,6 +77,30 @@ describe('PMC Stock manager flows', () => {
     expect(adapter.loadProducts).toHaveBeenCalledOnce()
   })
 
+  it('rotates the CREATE request ID after an ambiguous failure when the product intent changes', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
+      .mockResolvedValueOnce(commandResult('CREATE_PRODUCT', 'STK-000003'))
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit })
+    await user.click(screen.getByRole('button', { name: 'เพิ่มสินค้า' }))
+    await user.type(screen.getByRole('textbox', { name: 'ชื่อสินค้า' }), 'เข็ม')
+    await user.type(screen.getByRole('textbox', { name: 'หน่วย' }), 'กล่อง')
+    await user.type(screen.getByRole('textbox', { name: 'จำนวนเริ่มต้น' }), '0')
+    await user.type(screen.getByRole('textbox', { name: 'จำนวนขั้นต่ำ' }), '1')
+    await user.click(screen.getByRole('button', { name: 'บันทึกสินค้า' }))
+
+    const name = screen.getByRole('textbox', { name: 'ชื่อสินค้า' })
+    await user.clear(name)
+    await user.type(name, 'เข็มเด็ก')
+    await user.click(screen.getByRole('button', { name: 'บันทึกสินค้า' }))
+
+    expect(vi.mocked(adapter.submit).mock.calls[0]![0].requestId).toBe('manager-request-1')
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toMatchObject({
+      requestId: 'manager-request-2',
+      payload: { name: 'เข็มเด็ก' },
+    })
+  })
+
   it('reuses the line editor for one positive multi-product RECEIVE command with receive-specific copy', async () => {
     const { adapter, user } = renderManager({
       mode: 'RECEIVE',
@@ -120,8 +144,9 @@ describe('PMC Stock manager flows', () => {
     expect(await screen.findByRole('heading', { name: 'รับเข้าสำเร็จ' })).toBeVisible()
   })
 
-  it('preserves the RECEIVE cart and stable request ID across a storage retry', async () => {
+  it('reuses the RECEIVE request ID for an exact retry and rotates it after the cart intent changes', async () => {
     const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
       .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
       .mockResolvedValueOnce(commandResult('RECEIVE', 'REC-000001'))
     const { adapter, user } = renderManager({ mode: 'RECEIVE', submit })
@@ -135,6 +160,42 @@ describe('PMC Stock manager flows', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันรับเข้า' }))
     expect(adapter.submit).toHaveBeenCalledTimes(2)
     expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual(vi.mocked(adapter.submit).mock.calls[0]![0])
+
+    const quantity = screen.getByRole('textbox', { name: 'จำนวนรับเข้า 1' })
+    await user.clear(quantity)
+    await user.type(quantity, '3')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันรับเข้า' }))
+    expect(vi.mocked(adapter.submit).mock.calls[2]![0]).toMatchObject({
+      requestId: 'manager-request-2',
+      payload: { lines: [{ productId: 'A', quantityMilli: 3_000 }] },
+    })
+  })
+
+  it('reloads active products after RECEIVE inactive conflict, removes only inactive rows, and rotates the changed retry', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_PRODUCT_INACTIVE'))
+      .mockResolvedValueOnce(commandResult('RECEIVE', 'REC-000001'))
+    const initialProducts = [product('A', 5_000), product('B', 3_000)]
+    const refreshedProducts = [product('A', 5_000), product('B', 3_000, { active: false, version: 2 })]
+    const { adapter, user } = renderManager({ mode: 'RECEIVE', submit, initialProducts, refreshedProducts })
+    await addReceiveLine(user, 1, 'A', '2')
+    await user.click(screen.getByRole('button', { name: 'เพิ่มสินค้า' }))
+    await addReceiveLine(user, 2, 'B', '1')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันรับเข้า' }))
+
+    expect(adapter.loadProducts).toHaveBeenCalledOnce()
+    expect(await screen.findByRole('alert')).toHaveTextContent('นำสินค้า B ออกจากรายการรับเข้า')
+    expect(screen.getAllByRole('combobox', { name: /สินค้า/ })).toHaveLength(1)
+    expect(screen.getByRole('combobox', { name: 'สินค้า 1' })).toHaveValue('A')
+    expect(screen.getByRole('textbox', { name: 'จำนวนรับเข้า 1' })).toHaveValue('2')
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันรับเข้า' }))
+    expect(vi.mocked(adapter.submit).mock.calls[0]![0].requestId).toBe('manager-request-1')
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual({
+      requestId: 'manager-request-2',
+      commandType: 'RECEIVE',
+      payload: { lines: [{ productId: 'A', quantityMilli: 2_000 }] },
+    })
   })
 
   it('requires an adjustment reason, previews the signed delta, and accepts an exact zero count', async () => {
@@ -161,6 +222,29 @@ describe('PMC Stock manager flows', () => {
       requestId: 'manager-request-1',
       commandType: 'ADJUST',
       payload: { productId: 'A', countedQuantityMilli: 0, reason: 'ตรวจนับจริง' },
+    })
+  })
+
+  it('reuses the ADJUST request ID for an exact retry and rotates it after the reason changes', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
+      .mockResolvedValueOnce(commandResult('ADJUST', 'A'))
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit })
+    await user.click(screen.getByRole('button', { name: 'ปรับยอด A' }))
+    await user.type(screen.getByRole('textbox', { name: 'จำนวนที่นับจริง' }), '3')
+    const reason = screen.getByRole('textbox', { name: 'เหตุผล' })
+    await user.type(reason, 'ตรวจรอบเช้า')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปรับยอด' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปรับยอด' }))
+
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual(vi.mocked(adapter.submit).mock.calls[0]![0])
+    await user.clear(reason)
+    await user.type(reason, 'ตรวจรอบเย็น')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปรับยอด' }))
+    expect(vi.mocked(adapter.submit).mock.calls[2]![0]).toMatchObject({
+      requestId: 'manager-request-2',
+      payload: { reason: 'ตรวจรอบเย็น' },
     })
   })
 
@@ -195,12 +279,92 @@ describe('PMC Stock manager flows', () => {
       payload: { productId: 'A', expectedVersion: 1, unit: 'กล่อง' },
     })
     expect(submit.mock.calls[1]![0]).toEqual({
-      requestId: 'manager-request-1',
+      requestId: 'manager-request-2',
       commandType: 'UPDATE_PRODUCT',
       payload: {
         productId: 'A', expectedVersion: 3, name: 'A รุ่นใหม่', category: 'CLINIC_SUPPLY',
         unit: 'กล่อง', minimumQuantityMilli: 2_000,
       },
+    })
+  })
+
+  it('reloads and locks the authoritative unit after STOCK_UNIT_LOCKED without discarding other edits', async () => {
+    const editable = product('C', 0, { hasLedgerActivity: false, unit: 'ชิ้น', minimumQuantityMilli: 0 })
+    const locked = product('C', 0, { hasLedgerActivity: true, unit: 'ชิ้น', minimumQuantityMilli: 0 })
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_UNIT_LOCKED'))
+      .mockResolvedValueOnce(commandResult('UPDATE_PRODUCT', 'C'))
+    const { adapter, user } = renderManager({
+      mode: 'MANAGE', initialProducts: [editable], refreshedProducts: [locked], submit,
+    })
+    await user.click(screen.getByRole('button', { name: 'แก้ไข C' }))
+    const name = screen.getByRole('textbox', { name: 'ชื่อสินค้า' })
+    await user.clear(name)
+    await user.type(name, 'C ใหม่')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'หมวดหมู่' }), 'RETAIL_PRODUCT')
+    const unit = screen.getByRole('textbox', { name: 'หน่วย' })
+    await user.clear(unit)
+    await user.type(unit, 'แพ็ก')
+    const minimum = screen.getByRole('textbox', { name: 'จำนวนขั้นต่ำ' })
+    await user.clear(minimum)
+    await user.type(minimum, '2')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }))
+
+    expect(adapter.loadProducts).toHaveBeenCalledOnce()
+    expect(await screen.findByRole('alert')).toHaveTextContent('หน่วยถูกล็อกแล้ว')
+    expect(name).toHaveValue('C ใหม่')
+    expect(screen.getByRole('combobox', { name: 'หมวดหมู่' })).toHaveValue('RETAIL_PRODUCT')
+    expect(minimum).toHaveValue('2')
+    expect(unit).toBeDisabled()
+    expect(unit).toHaveValue('ชิ้น')
+
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }))
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual({
+      requestId: 'manager-request-2',
+      commandType: 'UPDATE_PRODUCT',
+      payload: {
+        productId: 'C', expectedVersion: 1, name: 'C ใหม่', category: 'RETAIL_PRODUCT',
+        unit: 'ชิ้น', minimumQuantityMilli: 2_000,
+      },
+    })
+  })
+
+  it('fails safely when a stale or unit-locked product is missing from the refreshed projection', async () => {
+    const editable = product('C', 0, { hasLedgerActivity: false, unit: 'ชิ้น' })
+    const submit = vi.fn().mockRejectedValueOnce(safeError('STOCK_UNIT_LOCKED'))
+    const { adapter, user } = renderManager({ mode: 'MANAGE', initialProducts: [editable], refreshedProducts: [], submit })
+    await user.click(screen.getByRole('button', { name: 'แก้ไข C' }))
+    await user.clear(screen.getByRole('textbox', { name: 'หน่วย' }))
+    await user.type(screen.getByRole('textbox', { name: 'หน่วย' }), 'แพ็ก')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }))
+
+    expect(adapter.loadProducts).toHaveBeenCalledOnce()
+    expect(await screen.findByRole('alert')).toHaveTextContent('ไม่พบสินค้านี้ในรายการล่าสุด')
+    expect(screen.getByRole('textbox', { name: 'หน่วย' })).toHaveValue('แพ็ก')
+    expect(adapter.submit).toHaveBeenCalledOnce()
+  })
+
+  it('reuses the UPDATE request ID for an exact storage retry and rotates it after an edit', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
+      .mockResolvedValueOnce(commandResult('UPDATE_PRODUCT', 'A'))
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit })
+    await user.click(screen.getByRole('button', { name: 'แก้ไข A' }))
+    const name = screen.getByRole('textbox', { name: 'ชื่อสินค้า' })
+    await user.clear(name)
+    await user.type(name, 'A ใหม่')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }))
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }))
+
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual(vi.mocked(adapter.submit).mock.calls[0]![0])
+    const minimum = screen.getByRole('textbox', { name: 'จำนวนขั้นต่ำ' })
+    await user.clear(minimum)
+    await user.type(minimum, '2')
+    await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }))
+    expect(vi.mocked(adapter.submit).mock.calls[2]![0]).toMatchObject({
+      requestId: 'manager-request-2',
+      payload: { name: 'A ใหม่', minimumQuantityMilli: 2_000 },
     })
   })
 
@@ -248,6 +412,99 @@ describe('PMC Stock manager flows', () => {
       requestId: 'manager-request-1', commandType: 'REACTIVATE_PRODUCT',
       payload: { productId: 'B', expectedVersion: 4 },
     })
+  })
+
+  it('keeps immutable deactivate intent when a stale reload changes the projection version', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STALE_PRODUCT'))
+      .mockResolvedValueOnce(commandResult('DEACTIVATE_PRODUCT', 'A'))
+    const latest = product('A', 5_000, { active: true, version: 2 })
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit, refreshedProducts: [latest, products[1]!] })
+    await user.click(screen.getByRole('button', { name: 'ปิดใช้งาน A' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปิดใช้งาน' }))
+
+    expect(await screen.findByRole('dialog', { name: 'ยืนยันปิดใช้งานสินค้า' })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'ยืนยันเปิดใช้งานสินค้า' })).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('โหลดสถานะล่าสุดแล้ว')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปิดใช้งาน' }))
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual({
+      requestId: 'manager-request-2', commandType: 'DEACTIVATE_PRODUCT',
+      payload: { productId: 'A', expectedVersion: 2 },
+    })
+  })
+
+  it('closes stale lifecycle confirmation without an opposite command when latest state already matches intent', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STALE_PRODUCT'))
+      .mockResolvedValueOnce(commandResult('REACTIVATE_PRODUCT', 'A'))
+    const latest = product('A', 5_000, { active: false, version: 2 })
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit, refreshedProducts: [latest, products[1]!] })
+    await user.click(screen.getByRole('button', { name: 'ปิดใช้งาน A' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันปิดใช้งาน' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('สถานะล่าสุดตรงกับรายการที่ต้องการแล้ว')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'เปิดใช้งาน A' })).toBeVisible()
+    expect(adapter.submit).toHaveBeenCalledOnce()
+
+    await user.click(screen.getByRole('button', { name: 'เปิดใช้งาน A' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปิดใช้งาน' }))
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual({
+      requestId: 'manager-request-2', commandType: 'REACTIVATE_PRODUCT',
+      payload: { productId: 'A', expectedVersion: 2 },
+    })
+  })
+
+  it('keeps immutable reactivate intent across a stale reload and fails safely when the product disappears', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STALE_PRODUCT'))
+      .mockRejectedValueOnce(safeError('STOCK_STALE_PRODUCT'))
+      .mockRejectedValueOnce(safeError('STOCK_STALE_PRODUCT'))
+    const latest = product('B', 3_000, { active: false, version: 5 })
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit, refreshedProducts: [products[0]!, latest] })
+    await user.click(screen.getByRole('button', { name: 'เปิดใช้งาน B' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปิดใช้งาน' }))
+    expect(screen.getByRole('dialog', { name: 'ยืนยันเปิดใช้งานสินค้า' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปิดใช้งาน' }))
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual({
+      requestId: 'manager-request-2', commandType: 'REACTIVATE_PRODUCT',
+      payload: { productId: 'B', expectedVersion: 5 },
+    })
+
+    vi.mocked(adapter.loadProducts).mockResolvedValueOnce({ products: [] })
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปิดใช้งาน' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('ไม่พบสินค้านี้ในรายการล่าสุด')
+    expect(screen.getByRole('dialog', { name: 'ยืนยันเปิดใช้งานสินค้า' })).toBeVisible()
+  })
+
+  it('reuses lifecycle request ID for an exact storage retry', async () => {
+    const submit = vi.fn()
+      .mockRejectedValueOnce(safeError('STOCK_STORAGE_UNAVAILABLE'))
+      .mockResolvedValueOnce(commandResult('REACTIVATE_PRODUCT', 'B'))
+    const { adapter, user } = renderManager({ mode: 'MANAGE', submit })
+    await user.click(screen.getByRole('button', { name: 'เปิดใช้งาน B' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปิดใช้งาน' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเปิดใช้งาน' }))
+    expect(vi.mocked(adapter.submit).mock.calls[1]![0]).toEqual(vi.mocked(adapter.submit).mock.calls[0]![0])
+  })
+
+  it('opens a native lifecycle dialog, focuses inside, closes on Escape, and restores trigger focus', async () => {
+    const { user } = renderManager({ mode: 'MANAGE' })
+    const trigger = screen.getByRole('button', { name: 'ปิดใช้งาน A' })
+    trigger.focus()
+    await user.click(trigger)
+
+    const dialog = screen.getByRole('dialog', { name: 'ยืนยันปิดใช้งานสินค้า' })
+    expect(dialog.tagName).toBe('DIALOG')
+    expect(within(dialog).getByRole('button', { name: 'ยืนยันปิดใช้งาน' })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+
+    await user.click(trigger)
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'ยกเลิก' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 
   it('renders receive-specific empty copy while preserving the ISSUE empty and quantity copy', async () => {
@@ -317,13 +574,14 @@ function renderManager({
     submit: vi.fn(submit),
     loadProducts: vi.fn(async () => ({ products: refreshedProducts })),
   }
+  let requestNumber = 0
   render(<StockManager
     initialProducts={initialProducts}
     initialMode={mode}
     adapter={adapter}
     onCancel={vi.fn()}
     onReturnToStock={vi.fn()}
-    requestIdFactory={() => 'manager-request-1'}
+    requestIdFactory={() => `manager-request-${++requestNumber}`}
   />)
   return { adapter, user }
 }

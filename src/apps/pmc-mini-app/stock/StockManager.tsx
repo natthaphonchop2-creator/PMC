@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Check,
@@ -33,6 +33,14 @@ import {
 export type StockManagerMode = 'RECEIVE' | 'MANAGE'
 
 type StockManagerScreen = StockManagerMode | 'CREATE' | 'ADJUST' | 'EDIT'
+type LifecycleCommandType = 'DEACTIVATE_PRODUCT' | 'REACTIVATE_PRODUCT'
+
+interface LifecycleIntent {
+  commandType: LifecycleCommandType
+  finalActive: boolean
+  product: StockProductProjection
+  trigger: HTMLButtonElement
+}
 
 export interface StockManagerAdapter {
   submit(command: StockClientCommand): Promise<StockCommandResult>
@@ -159,7 +167,8 @@ function ReceiveFlow({ products, adapter, requestIdFactory, onCancel, onSuccess 
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const [requestId] = useState(requestIdFactory)
+  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const [availableProducts, setAvailableProducts] = useState(products)
   const [lines, setLines] = useState<StockLineDraft[]>([{ lineId: 'line-1', productId: '', quantity: '' }])
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
@@ -174,29 +183,52 @@ function ReceiveFlow({ products, adapter, requestIdFactory, onCancel, onSuccess 
 
   const submit = async () => {
     if (pending) return
-    const validation = validateReceiveDraft(products, lines)
+    const validation = validateReceiveDraft(availableProducts, lines)
     if (validation) {
       setMessage(validation.message)
       setFieldErrors(validation.fieldErrors)
       return
     }
-    const command: StockClientCommand = {
-      requestId,
+    const command = commandForAttempt({
+      requestId: '',
       commandType: 'RECEIVE',
       payload: { lines: lines.map((line) => ({
         productId: line.productId,
         quantityMilli: parseQuantityToMilli(line.quantity),
       })) },
-    }
+    })
     setPending(true)
     setMessage('')
     setFieldErrors({})
     try {
       await onSuccess(await adapter.submit(command))
     } catch (error) {
-      setMessage(managerFailureMessage(error, 'บันทึกรับเข้าไม่สำเร็จ กรุณาลองอีกครั้ง รายการรับเข้ายังอยู่ครบ'))
+      if (safeErrorCode(error) === 'STOCK_PRODUCT_INACTIVE') {
+        await reloadAfterInactiveConflict()
+      } else {
+        setMessage(managerFailureMessage(error, 'บันทึกรับเข้าไม่สำเร็จ กรุณาลองอีกครั้ง รายการรับเข้ายังอยู่ครบ'))
+      }
     } finally {
       setPending(false)
+    }
+  }
+
+  const reloadAfterInactiveConflict = async () => {
+    try {
+      const response = await adapter.loadProducts()
+      const activeIds = new Set(response.products.filter((product) => product.active).map((product) => product.productId))
+      const removed = lines.filter((line) => line.productId && !activeIds.has(line.productId))
+      setAvailableProducts(response.products)
+      setLines((current) => current.filter((line) => !line.productId || activeIds.has(line.productId)))
+      setFieldErrors({})
+      if (removed.length > 0) {
+        const names = removed.map((line) => productName(availableProducts, line.productId))
+        setMessage(`อัปเดตรายการสินค้าล่าสุดแล้ว และนำสินค้า ${names.join(', ')} ออกจากรายการรับเข้าเพราะปิดใช้งาน`)
+      } else {
+        setMessage('อัปเดตรายการสินค้าล่าสุดแล้ว กรุณาตรวจสอบรายการรับเข้าอีกครั้ง')
+      }
+    } catch {
+      setMessage('โหลดรายการสินค้าล่าสุดไม่สำเร็จ รายการรับเข้ายังอยู่ครบ')
     }
   }
 
@@ -212,7 +244,7 @@ function ReceiveFlow({ products, adapter, requestIdFactory, onCancel, onSuccess 
     <form noValidate onSubmit={(event) => { event.preventDefault(); void submit() }}>
       <FlowAlert message={message} />
       <StockLineEditor
-        products={products}
+        products={availableProducts}
         lines={lines}
         disabled={pending}
         helpText="เลือกสินค้ารับเข้าได้หลายรายการ โดยไม่เลือกซ้ำ"
@@ -244,7 +276,7 @@ function CreateProductFlow({ adapter, requestIdFactory, onCancel, onSuccess }: {
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const [requestId] = useState(requestIdFactory)
+  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
   const [form, setForm] = useState({
     name: '', category: 'CLINIC_SUPPLY' as StockCategory, unit: '', openingQuantity: '', minimumQuantity: '',
   })
@@ -257,8 +289,8 @@ function CreateProductFlow({ adapter, requestIdFactory, onCancel, onSuccess }: {
     try {
       const name = requiredText(form.name, 300)
       const unit = requiredText(form.unit, 100)
-      command = {
-        requestId,
+      command = commandForAttempt({
+        requestId: '',
         commandType: 'CREATE_PRODUCT',
         payload: {
           name,
@@ -267,7 +299,7 @@ function CreateProductFlow({ adapter, requestIdFactory, onCancel, onSuccess }: {
           openingQuantityMilli: parseNonNegativeQuantityToMilli(form.openingQuantity),
           minimumQuantityMilli: parseNonNegativeQuantityToMilli(form.minimumQuantity),
         },
-      }
+      })
     } catch {
       setMessage('กรุณากรอกชื่อ หน่วย จำนวนเริ่มต้น และจำนวนขั้นต่ำให้ถูกต้อง')
       return
@@ -319,7 +351,7 @@ function AdjustmentFlow({ products, initialProductId, adapter, requestIdFactory,
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const [requestId] = useState(requestIdFactory)
+  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
   const [productId, setProductId] = useState(initialProductId)
   const [countedQuantity, setCountedQuantity] = useState('')
   const [reason, setReason] = useState('')
@@ -336,7 +368,7 @@ function AdjustmentFlow({ products, initialProductId, adapter, requestIdFactory,
     }
     let command: StockClientCommand
     try {
-      command = createAdjustmentCommand({ requestId, product, countedQuantity, reason })
+      command = commandForAttempt(createAdjustmentCommand({ requestId: '', product, countedQuantity, reason }))
     } catch (error) {
       setMessage(error instanceof Error && error.message === 'STOCK_ADJUST_REASON_REQUIRED'
         ? 'กรุณาระบุเหตุผล 1-300 ตัวอักษร'
@@ -409,7 +441,7 @@ function EditProductFlow({ product, adapter, requestIdFactory, onProductsReloade
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const [requestId] = useState(requestIdFactory)
+  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
   const [latestProduct, setLatestProduct] = useState(product)
   const [form, setForm] = useState({
     name: product.name,
@@ -425,8 +457,8 @@ function EditProductFlow({ product, adapter, requestIdFactory, onProductsReloade
     if (pending) return
     let command: StockClientCommand
     try {
-      command = {
-        requestId,
+      command = commandForAttempt({
+        requestId: '',
         commandType: 'UPDATE_PRODUCT',
         payload: {
           productId: latestProduct.productId,
@@ -436,7 +468,7 @@ function EditProductFlow({ product, adapter, requestIdFactory, onProductsReloade
           unit: requiredText(unitEditable ? form.unit : latestProduct.unit, 100),
           minimumQuantityMilli: parseNonNegativeQuantityToMilli(form.minimumQuantity),
         },
-      }
+      })
     } catch {
       setMessage('กรุณากรอกชื่อ หน่วย และจำนวนขั้นต่ำให้ถูกต้อง')
       return
@@ -446,7 +478,8 @@ function EditProductFlow({ product, adapter, requestIdFactory, onProductsReloade
     try {
       await onSuccess(await adapter.submit(command))
     } catch (error) {
-      if (safeErrorCode(error) === 'STOCK_STALE_PRODUCT') {
+      const code = safeErrorCode(error)
+      if (code === 'STOCK_STALE_PRODUCT' || code === 'STOCK_UNIT_LOCKED') {
         try {
           const response = await adapter.loadProducts()
           const latest = response.products.find((item) => item.productId === product.productId)
@@ -454,9 +487,12 @@ function EditProductFlow({ product, adapter, requestIdFactory, onProductsReloade
             setMessage('ไม่พบสินค้านี้ในรายการล่าสุด ข้อมูลที่แก้ยังอยู่ครบ')
           } else {
             onProductsReloaded(response.products)
-            setLatestProduct(latest)
-            setForm((current) => ({ ...current, unit: latest.hasLedgerActivity ? latest.unit : current.unit }))
-            setMessage('โหลดข้อมูลล่าสุดแล้ว กรุณาตรวจสอบอีกครั้ง ข้อมูลที่แก้ยังอยู่ครบ')
+            const authoritative = code === 'STOCK_UNIT_LOCKED' ? { ...latest, hasLedgerActivity: true } : latest
+            setLatestProduct(authoritative)
+            setForm((current) => ({ ...current, unit: authoritative.hasLedgerActivity ? authoritative.unit : current.unit }))
+            setMessage(code === 'STOCK_UNIT_LOCKED'
+              ? 'โหลดข้อมูลล่าสุดแล้ว หน่วยถูกล็อกแล้ว กรุณาตรวจสอบอีกครั้ง ข้อมูลที่แก้ส่วนอื่นยังอยู่ครบ'
+              : 'โหลดข้อมูลล่าสุดแล้ว กรุณาตรวจสอบอีกครั้ง ข้อมูลที่แก้ยังอยู่ครบ')
           }
         } catch {
           setMessage('โหลดข้อมูลสินค้าล่าสุดไม่สำเร็จ ข้อมูลที่แก้ยังอยู่ครบ')
@@ -526,7 +562,8 @@ function ManageProducts({
   onSuccess: (result: StockCommandResult, title: string) => Promise<void>
 }) {
   const [query, setQuery] = useState('')
-  const [lifecycleProduct, setLifecycleProduct] = useState<StockProductProjection | null>(null)
+  const [lifecycleIntent, setLifecycleIntent] = useState<LifecycleIntent | null>(null)
+  const [message, setMessage] = useState('')
   const visibleProducts = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('th')
     return products.filter((product) => !normalized || `${product.name} ${product.productId} ${product.unit}`
@@ -542,6 +579,7 @@ function ManageProducts({
     pending={false}
     onCancel={onCancel}
   >
+    <FlowAlert message={message} />
     <section className="pmc-stock-manager-toolbar" aria-label="เครื่องมือจัดการสินค้า">
       <button type="button" className="pmc-primary-button" onClick={onCreate}><PackagePlus aria-hidden="true" />เพิ่มสินค้า</button>
       <label className="pmc-stock-manager-search">
@@ -576,7 +614,15 @@ function ManageProducts({
             <button type="button" onClick={() => onEdit(product.productId)}>
               <Pencil aria-hidden="true" />แก้ไข <span className="pmc-visually-hidden">{product.name}</span>
             </button>
-            <button type="button" className="danger" onClick={() => setLifecycleProduct(product)}>
+            <button type="button" className="danger" onClick={(event) => {
+              setMessage('')
+              setLifecycleIntent({
+                commandType: product.active ? 'DEACTIVATE_PRODUCT' : 'REACTIVATE_PRODUCT',
+                finalActive: !product.active,
+                product,
+                trigger: event.currentTarget,
+              })
+            }}>
               {product.active ? <PowerOff aria-hidden="true" /> : <Power aria-hidden="true" />}
               {product.active ? 'ปิดใช้งาน' : 'เปิดใช้งาน'} <span className="pmc-visually-hidden">{product.name}</span>
             </button>
@@ -585,44 +631,65 @@ function ManageProducts({
       </li>)}
     </ul> : <p className="pmc-stock-empty">ไม่พบสินค้าที่ตรงกับการค้นหา</p>}
 
-    {lifecycleProduct && <LifecycleConfirm
-      key={`${lifecycleProduct.productId}:${lifecycleProduct.active}`}
-      product={lifecycleProduct}
+    {lifecycleIntent && <LifecycleConfirm
+      intent={lifecycleIntent}
       adapter={adapter}
       requestIdFactory={requestIdFactory}
-      onProductsReloaded={(nextProducts) => {
+      onProductsReloaded={onProductsReloaded}
+      onAlreadyCompleted={(nextProducts) => {
         onProductsReloaded(nextProducts)
-        const latest = nextProducts.find((item) => item.productId === lifecycleProduct.productId)
-        if (latest) setLifecycleProduct(latest)
+        setLifecycleIntent(null)
+        setMessage('สถานะล่าสุดตรงกับรายการที่ต้องการแล้ว อัปเดตรายการสินค้าเรียบร้อย')
       }}
-      onCancel={() => setLifecycleProduct(null)}
+      onCancel={() => setLifecycleIntent(null)}
       onSuccess={onSuccess}
     />}
   </ManagerPage>
 }
 
-function LifecycleConfirm({ product, adapter, requestIdFactory, onProductsReloaded, onCancel, onSuccess }: {
-  product: StockProductProjection
+function LifecycleConfirm({ intent, adapter, requestIdFactory, onProductsReloaded, onAlreadyCompleted, onCancel, onSuccess }: {
+  intent: LifecycleIntent
   adapter: StockManagerAdapter
   requestIdFactory: () => string
   onProductsReloaded: (products: StockProductProjection[]) => void
+  onAlreadyCompleted: (products: StockProductProjection[]) => void
   onCancel: () => void
   onSuccess: (result: StockCommandResult, title: string) => Promise<void>
 }) {
-  const [requestId] = useState(requestIdFactory)
-  const [latestProduct, setLatestProduct] = useState(product)
+  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const [latestProduct, setLatestProduct] = useState(intent.product)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
-  const isDeactivating = product.active
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
+  const isDeactivating = intent.commandType === 'DEACTIVATE_PRODUCT'
   const actionLabel = isDeactivating ? 'ปิดใช้งาน' : 'เปิดใช้งาน'
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    if (typeof dialog.showModal === 'function') {
+      if (!dialog.open) dialog.showModal()
+    } else {
+      dialog.setAttribute('open', '')
+    }
+    confirmRef.current?.focus()
+    return () => {
+      if (dialog.open) {
+        if (typeof dialog.close === 'function') dialog.close()
+        else dialog.removeAttribute('open')
+      }
+      if (intent.trigger.isConnected) intent.trigger.focus()
+    }
+  }, [intent.trigger])
 
   const submit = async () => {
     if (pending) return
-    const command: StockClientCommand = {
-      requestId,
-      commandType: isDeactivating ? 'DEACTIVATE_PRODUCT' : 'REACTIVATE_PRODUCT',
+    const command = commandForAttempt({
+      requestId: '',
+      commandType: intent.commandType,
       payload: { productId: latestProduct.productId, expectedVersion: latestProduct.version },
-    }
+    })
     setPending(true)
     setMessage('')
     try {
@@ -632,8 +699,11 @@ function LifecycleConfirm({ product, adapter, requestIdFactory, onProductsReload
       if (safeErrorCode(error) === 'STOCK_STALE_PRODUCT') {
         try {
           const response = await adapter.loadProducts()
-          const latest = response.products.find((item) => item.productId === product.productId)
+          const latest = response.products.find((item) => item.productId === intent.product.productId)
           if (!latest) setMessage('ไม่พบสินค้านี้ในรายการล่าสุด')
+          else if (latest.active === intent.finalActive) {
+            onAlreadyCompleted(response.products)
+          }
           else {
             setLatestProduct(latest)
             onProductsReloaded(response.products)
@@ -650,19 +720,28 @@ function LifecycleConfirm({ product, adapter, requestIdFactory, onProductsReload
     }
   }
 
-  return <div className="pmc-stock-confirm-backdrop">
-    <section className="pmc-stock-confirm" role="dialog" aria-modal="true" aria-labelledby="pmc-stock-confirm-title">
+  return <dialog
+    ref={dialogRef}
+    className="pmc-stock-confirm"
+    aria-labelledby="pmc-stock-confirm-title"
+    onCancel={(event) => { event.preventDefault(); onCancel() }}
+    onKeyDown={(event) => {
+      if (event.key === 'Escape' && typeof dialogRef.current?.showModal !== 'function') {
+        event.preventDefault()
+        onCancel()
+      }
+    }}
+  >
       <h2 id="pmc-stock-confirm-title">ยืนยัน{actionLabel}สินค้า</h2>
-      <p>ต้องการ{actionLabel} “{product.name}” ใช่หรือไม่</p>
+      <p>ต้องการ{actionLabel} “{latestProduct.name}” ใช่หรือไม่</p>
       <FlowAlert message={message} />
       <div>
         <button type="button" className="pmc-secondary-button" disabled={pending} onClick={onCancel}>ยกเลิก</button>
-        <button type="button" className="pmc-primary-button" disabled={pending} onClick={() => void submit()}>
+        <button ref={confirmRef} type="button" className="pmc-primary-button" disabled={pending} onClick={() => void submit()}>
           {pending ? 'กำลังบันทึก' : `ยืนยัน${actionLabel}`}
         </button>
       </div>
-    </section>
-  </div>
+  </dialog>
 }
 
 function ManagerPage({ eyebrow, title, description, icon, cancelLabel, pending, onCancel, children }: {
@@ -836,6 +915,22 @@ function managerFailureMessage(error: unknown, fallback: string): string {
   if (code === 'STOCK_PRODUCT_INACTIVE') return 'สินค้านี้ถูกปิดใช้งาน ข้อมูลที่กรอกยังอยู่ครบ'
   if (code === 'STOCK_UNIT_LOCKED') return 'เปลี่ยนหน่วยไม่ได้เพราะสินค้านี้มีประวัติ Stock แล้ว'
   return fallback
+}
+
+function useCommandAttemptTracker(requestIdFactory: () => string): (command: StockClientCommand) => StockClientCommand {
+  const tracker = useRef<{ requestId: string | null; intent: string | null }>({ requestId: null, intent: null })
+  return (command) => {
+    const intent = JSON.stringify({ commandType: command.commandType, payload: command.payload })
+    if (!tracker.current.requestId || (tracker.current.intent !== null && tracker.current.intent !== intent)) {
+      tracker.current.requestId = requestIdFactory()
+    }
+    tracker.current.intent = intent
+    return { ...command, requestId: tracker.current.requestId } as StockClientCommand
+  }
+}
+
+function productName(products: StockProductProjection[], productId: string): string {
+  return products.find((product) => product.productId === productId)?.name ?? productId
 }
 
 function safeErrorCode(error: unknown): string {
