@@ -17,6 +17,17 @@ const paymentKey = `drafts/draft-1/PAYMENT/${'a'.repeat(64)}.png`
 const chatKey = `drafts/draft-1/CHAT/${'b'.repeat(64)}.png`
 
 describe('PMC async worker through Apps Script state ingress', () => {
+  it('emits one terminal event with finalize-entry elapsed time', async () => {
+    const telemetry = vi.fn()
+    const fixture = workerFixture({ telemetry, advanceOnStagingGetMs: 1_250 })
+
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({ state: 'CONFIRMED' })
+
+    const terminalEvents = telemetry.mock.calls.filter(([name]) => name === 'booking_worker_completed')
+    expect(terminalEvents).toHaveLength(1)
+    expect(terminalEvents[0]![1]).toMatchObject({ elapsedMs: 2_500, state: 'CONFIRMED' })
+  })
+
   it('uses state ingress exclusively and validates reread state before booking and cleanup', async () => {
     const fixture = workerFixture()
 
@@ -417,6 +428,7 @@ function workerFixture(options: {
   stagingFailure?: Error
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
+  telemetry?: ReturnType<typeof vi.fn>
 } = {}) {
   const clock = new TestClock(fixedNow)
   let remainingReadFailures = options.transientReadFailures ?? 0
@@ -491,6 +503,7 @@ function workerFixture(options: {
     evidenceIngress,
     bookingIngress,
     stateIngress: state,
+    telemetry: options.telemetry,
     ownerToken: () => 'worker-owner-token-1',
     now: () => clock.now,
     wait: (milliseconds: number) => clock.wait(milliseconds),

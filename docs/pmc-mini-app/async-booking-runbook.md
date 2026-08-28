@@ -68,6 +68,21 @@ evidenceProjectionHash
 
 Do not print spreadsheet IDs, rows, evidence keys, customer data, or values. Keep the Apps Script state-ingress deployment separate from this gate.
 
+After owner approval and `npm run build:server`, use this documentation-only ADC migration template. It prints only the append result:
+
+```bash
+node --input-type=module -e '
+import { createMiniAppGooglePorts } from "./dist-server/server/pmc-mini-app/googleClient.js";
+import { migrateMiniAppAsyncRequestColumns } from "./dist-server/server/pmc-mini-app/setup.js";
+const spreadsheetId = process.env.PMC_SPREADSHEET_ID;
+const intakeFolderId = process.env.PMC_DRIVE_INTAKE_FOLDER_ID;
+if (!spreadsheetId || !intakeFolderId) throw new Error("Required bindings are absent");
+const { sheets } = createMiniAppGooglePorts({ spreadsheetId, intakeFolderId });
+const { appendedColumns } = await migrateMiniAppAsyncRequestColumns({ spreadsheetId, sheets });
+console.log(JSON.stringify({ appendedColumns }));
+'
+```
+
 ## Owner gate D — Apps Script version and deployment
 
 **Stop for owner approval.** Confirm the active account and intended Apps Script project, review the generated diff, push only after approval, create an immutable version, and update only the deployment used by the configured ingress endpoint. Use a synthetic signed state mutation to verify the projection response. Do not display the endpoint, signature, secret, or deployment identifier.
@@ -80,7 +95,7 @@ npm run booking:typecheck
 npm run booking:build
 npm run booking:push
 clasp version "PMC async state ingress"
-clasp deploy --versionNumber="$PMC_APPS_SCRIPT_VERSION" --description="PMC async state ingress"
+clasp deploy --deploymentId="$PMC_BOOKING_EXISTING_DEPLOYMENT_ID" --versionNumber="$PMC_APPS_SCRIPT_VERSION" --description="PMC async state ingress"
 ```
 
 The Cloud Task body is the authenticated immutable snapshot `{ requestId, draftId, payloadHash, baseVersion }`; task names are non-PII snapshot digests. Preserve fencing, deadline, and idempotency behavior. Polling stays read-only and the client HTTP 202 response contains only the persisted safe projection.
@@ -126,18 +141,31 @@ Use Logs Explorer filters by event name and numeric `elapsedMs` only. Deduplicat
 Documentation-only Log Analytics templates (the result must retain only aggregate values and time window):
 
 ```sql
-SELECT APPROX_QUANTILES(CAST(jsonPayload.elapsedMs AS INT64), 100)[OFFSET(50)] AS ack_p50_ms, APPROX_QUANTILES(CAST(jsonPayload.elapsedMs AS INT64), 100)[OFFSET(95)] AS ack_p95_ms
-FROM `LOG_TABLE`
-WHERE jsonPayload.event = 'booking_task_enqueued'
-QUALIFY ROW_NUMBER() OVER (PARTITION BY jsonPayload.event, jsonPayload.requestId, jsonPayload.draftId, jsonPayload.attempt, jsonPayload.state ORDER BY timestamp DESC) = 1
+WITH deduped AS (
+  SELECT CAST(jsonPayload.elapsedMs AS INT64) AS elapsed_ms,
+    ROW_NUMBER() OVER (PARTITION BY jsonPayload.event, jsonPayload.requestId, jsonPayload.draftId, jsonPayload.attempt, jsonPayload.state ORDER BY timestamp DESC) AS rn
+  FROM `LOG_TABLE`
+  WHERE jsonPayload.event = 'booking_task_enqueued'
+)
+SELECT APPROX_QUANTILES(elapsed_ms, 100)[OFFSET(50)] AS ack_p50_ms,
+  APPROX_QUANTILES(elapsed_ms, 100)[OFFSET(95)] AS ack_p95_ms
+FROM deduped
+WHERE rn = 1
 ```
 
 ```sql
-SELECT APPROX_QUANTILES(CAST(jsonPayload.elapsedMs AS INT64), 100)[OFFSET(50)] AS background_p50_ms, APPROX_QUANTILES(CAST(jsonPayload.elapsedMs AS INT64), 100)[OFFSET(95)] AS background_p95_ms,
-COUNTIF(jsonPayload.event = 'booking_worker_retrying') AS retry_count,
-COUNTIF(jsonPayload.event = 'booking_worker_needs_review') AS needs_review_count
-FROM `LOG_TABLE`
-WHERE jsonPayload.event IN ('booking_worker_completed', 'booking_worker_retrying', 'booking_worker_needs_review')
+WITH deduped AS (
+  SELECT jsonPayload.event AS event, CAST(jsonPayload.elapsedMs AS INT64) AS elapsed_ms,
+    ROW_NUMBER() OVER (PARTITION BY jsonPayload.event, jsonPayload.requestId, jsonPayload.draftId, jsonPayload.attempt, jsonPayload.state ORDER BY timestamp DESC) AS rn
+  FROM `LOG_TABLE`
+  WHERE jsonPayload.event IN ('booking_worker_completed', 'booking_worker_retrying', 'booking_worker_needs_review')
+)
+SELECT APPROX_QUANTILES(IF(event = 'booking_worker_completed', elapsed_ms, NULL), 100)[OFFSET(50)] AS background_p50_ms,
+  APPROX_QUANTILES(IF(event = 'booking_worker_completed', elapsed_ms, NULL), 100)[OFFSET(95)] AS background_p95_ms,
+  COUNTIF(event = 'booking_worker_retrying') AS retry_count,
+  COUNTIF(event = 'booking_worker_needs_review') AS needs_review_count
+FROM deduped
+WHERE rn = 1
 ```
 
 ## Monthly cost check

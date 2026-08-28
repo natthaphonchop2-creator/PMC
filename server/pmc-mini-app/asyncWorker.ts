@@ -415,6 +415,7 @@ export function createAsyncBookingWorker(input: {
 
   return {
     async finalize(finalizeInput) {
+      const finalizeStartedAt = nowDate().getTime()
       const terminalEvents = new Set<string>()
       const emitTerminal = (result: AsyncBookingWorkerResult): void => {
         const name = result.state === 'NEEDS_REVIEW' ? 'booking_worker_needs_review' : 'booking_worker_completed'
@@ -425,6 +426,7 @@ export function createAsyncBookingWorker(input: {
           requestId: result.requestId, draftId: finalizeInput.draftId, attempt: finalizeInput.attempt,
           state: result.state, ...(result.caseId ? { caseId: result.caseId } : {}),
           ...(result.state === 'NEEDS_REVIEW' ? { safeErrorCode: 'RETRY_EXHAUSTED' as const } : {}),
+          elapsedMs: Math.max(0, nowDate().getTime() - finalizeStartedAt),
         })
       }
       const result = await (async () => {
@@ -436,7 +438,7 @@ export function createAsyncBookingWorker(input: {
         baseVersion: finalizeInput.baseVersion,
         taskAttempt: finalizeInput.attempt,
       }
-      const startedAt = nowDate().getTime()
+      const startedAt = finalizeStartedAt
       const finalAttemptDeadline: FinalAttemptDeadline = startedAt + FINAL_WAIT_MS
       let lastDraft: MiniAppRequestRecord | null = null
       let bound: MiniAppRequestRecord | null = null
