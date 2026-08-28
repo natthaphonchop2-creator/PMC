@@ -975,6 +975,7 @@ export function applyAutoQueueMigrationWorkflow(): {
   )
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
   migrateBookingMasterStaffColumns(spreadsheet)
+  migrateConfigStaffProfileColumn(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const store = createGoogleSheetStore(spreadsheet)
   const before = store.read('BOOKING_MASTER')
@@ -1029,6 +1030,7 @@ export function configureFacebookNameFieldWorkflow(): {
   )
 
   migrateBookingMasterStaffColumns(spreadsheet)
+  migrateConfigStaffProfileColumn(spreadsheet)
   ensureSheetTopology(spreadsheet)
   runtime.forms.ensureFacebookNameField()
   if (!runtime.forms.bookingHasFacebookNameField()) {
