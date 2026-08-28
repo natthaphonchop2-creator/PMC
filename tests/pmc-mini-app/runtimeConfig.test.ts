@@ -117,11 +117,13 @@ describe('PMC Mini App runtime configuration checker', () => {
     const runbook = await readFile(resolve('docs/pmc-mini-app/pilot-runbook.md'), 'utf8')
 
     expect(runbook).toContain('inactive/revoked actor leaves `PREPARED` unresolved and requires explicit developer repair')
+    expect(runbook).toContain('automatic recovery must not proceed while that actor is inactive or revoked')
     expect(runbook).not.toContain('PMC_STOCK_INGRESS_URL')
     expect(runbook).not.toContain('PMC_STOCK_INGRESS_SECRET')
     expect(runbook).toContain('PMC_BOOKING_INGRESS_URL')
     expect(runbook).toContain('PMC_BOOKING_INGRESS_SECRET')
     expect(runbook).toContain('Stock reuses the established `PMC_BOOKING_INGRESS_URL` and `PMC_BOOKING_INGRESS_SECRET`')
+    expect(runbook).toContain('readiness checks only their existing presence and must not print values')
   })
 })
 
