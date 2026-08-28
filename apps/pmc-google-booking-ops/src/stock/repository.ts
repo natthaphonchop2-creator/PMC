@@ -44,6 +44,83 @@ function asAuditEvent(row: SheetRow): StockAuditEvent {
   return clonePlain(row as unknown as StockAuditEvent)
 }
 
+function sameAuditJournalIntent(left: StockAuditEvent, right: StockAuditEvent): boolean {
+  return (
+    left.requestId === right.requestId &&
+    left.actorStaffId === right.actorStaffId &&
+    left.action === right.action &&
+    left.targetProductIdsJson === right.targetProductIdsJson &&
+    left.correlationId === right.correlationId &&
+    left.createdAt === right.createdAt
+  )
+}
+
+const STOCK_COMMAND_ACTIONS = new Set([
+  'CREATE_PRODUCT',
+  'RECEIVE',
+  'ISSUE',
+  'ADJUST',
+  'UPDATE_PRODUCT',
+  'DEACTIVATE_PRODUCT',
+  'REACTIVATE_PRODUCT',
+])
+
+function validateJournalEvent(event: StockAuditEvent): void {
+  if (
+    typeof event.correlationId !== 'string' ||
+    typeof event.targetProductIdsJson !== 'string' ||
+    typeof event.createdAt !== 'string'
+  ) {
+    throw new Error('stock audit journal invalid')
+  }
+  const separator = event.correlationId.indexOf('|')
+  const documentId = separator > 0 ? event.correlationId.slice(0, separator) : ''
+  const fingerprint = separator > 0 ? event.correlationId.slice(separator + 1) : ''
+  let targets: unknown
+  try {
+    targets = JSON.parse(event.targetProductIdsJson)
+  } catch {
+    throw new Error('stock audit journal invalid')
+  }
+  if (
+    !isSafeId(event.eventId) ||
+    !isSafeId(event.requestId) ||
+    !isSafeId(event.actorStaffId) ||
+    !STOCK_COMMAND_ACTIONS.has(event.action) ||
+    !event.createdAt ||
+    !Number.isFinite(Date.parse(event.createdAt)) ||
+    event.safeErrorCode !== '' ||
+    separator <= 0 ||
+    event.correlationId.indexOf('|', separator + 1) !== -1 ||
+    !isSafeId(documentId) ||
+    !/^[a-f0-9]{64}$/.test(fingerprint) ||
+    !Array.isArray(targets) ||
+    targets.length === 0 ||
+    targets.some((target) => !isSafeId(target)) ||
+    new Set(targets).size !== targets.length ||
+    JSON.stringify(targets) !== event.targetProductIdsJson
+  ) {
+    throw new Error('stock audit journal invalid')
+  }
+}
+
+function auditJournalByRequest(
+  events: StockAuditEvent[],
+  requestId: string,
+): { prepared: StockAuditEvent | null; accepted: StockAuditEvent | null } {
+  const preparedEvents = events.filter((event) => event.requestId === requestId && event.status === 'PREPARED')
+  const acceptedEvents = events.filter((event) => event.requestId === requestId && event.status === 'ACCEPTED')
+  for (const event of [...preparedEvents, ...acceptedEvents]) validateJournalEvent(event)
+  if (preparedEvents.length > 1) throw new Error('stock prepared audit conflict')
+  if (acceptedEvents.length > 1) throw new Error('stock accepted audit conflict')
+  const prepared = preparedEvents[0] ?? null
+  const accepted = acceptedEvents[0] ?? null
+  if (prepared && accepted && !sameAuditJournalIntent(prepared, accepted)) {
+    throw new Error('stock audit journal mismatch')
+  }
+  return { prepared, accepted }
+}
+
 function isSafeId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,124}$/.test(value)
 }
@@ -184,23 +261,50 @@ export function createStockRepository(store: SheetStore): StockRepository {
         }),
       }
     },
+    findAuditJournalByRequestId(requestId: string) {
+      return auditJournalByRequest(store.read('STOCK_AUDIT').map(asAuditEvent), requestId)
+    },
+    listUnresolvedPrepared(): StockAuditEvent[] {
+      const events = store.read('STOCK_AUDIT').map(asAuditEvent)
+      const requestIds = new Set(
+        events
+          .filter((event) => event.status === 'PREPARED' || event.status === 'ACCEPTED')
+          .map((event) => event.requestId),
+      )
+      const unresolved: StockAuditEvent[] = []
+      for (const requestId of requestIds) {
+        const journal = auditJournalByRequest(events, requestId)
+        if (journal.accepted && !journal.prepared) throw new Error('stock audit journal missing prepared')
+        if (journal.prepared && !journal.accepted) unresolved.push(journal.prepared)
+      }
+      if (unresolved.length > 1) throw new Error('stock multiple unresolved prepared audits')
+      return unresolved
+    },
     findAcceptedAuditByRequestId(requestId: string): StockAuditEvent | null {
-      const accepted = store
-        .read('STOCK_AUDIT')
-        .map(asAuditEvent)
-        .filter((event) => event.requestId === requestId && event.status === 'ACCEPTED')
-      if (accepted.length > 1) throw new Error('stock accepted audit conflict')
-      return accepted[0] ?? null
+      return this.findAuditJournalByRequestId(requestId).accepted
     },
     appendAudit(event: StockAuditEvent): void {
       const rows = store.read('STOCK_AUDIT')
+      const existing = rows.map(asAuditEvent)
+      if (event.status === 'PREPARED' || event.status === 'ACCEPTED') validateJournalEvent(event)
+      if (
+        event.status === 'PREPARED' &&
+        existing.some((row) => row.requestId === event.requestId && row.status === 'PREPARED')
+      ) {
+        throw new Error('stock prepared audit already exists')
+      }
       if (
         event.status === 'ACCEPTED' &&
-        rows.some((row) => row.requestId === event.requestId && row.status === 'ACCEPTED')
+        existing.some((row) => row.requestId === event.requestId && row.status === 'ACCEPTED')
       ) {
         throw new Error('stock accepted audit already exists')
       }
-      store.replace('STOCK_AUDIT', [...rows, toSheetRow(clonePlain(event), STOCK_AUDIT_HEADERS)])
+      const candidate = [...existing, clonePlain(event)]
+      const journal = auditJournalByRequest(candidate, event.requestId)
+      if (event.status === 'ACCEPTED' && !journal.prepared) {
+        throw new Error('stock audit journal missing prepared')
+      }
+      store.replace('STOCK_AUDIT', [...rows, toSheetRow(event, STOCK_AUDIT_HEADERS)])
     },
   }
 }

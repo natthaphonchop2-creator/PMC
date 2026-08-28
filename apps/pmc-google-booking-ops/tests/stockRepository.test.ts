@@ -50,10 +50,24 @@ function auditFixture(patch: Partial<StockAuditEvent> = {}): StockAuditEvent {
     status: 'ACCEPTED',
     safeErrorCode: '',
     targetProductIdsJson: '["STK-000001"]',
-    correlationId: 'correlation-1',
+    correlationId: 'ISS-1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     createdAt: '2026-08-28T09:00:00+07:00',
     ...patch,
   }
+}
+
+function preparedAuditFixture(patch: Partial<StockAuditEvent> = {}): StockAuditEvent {
+  return auditFixture({
+    eventId: 'AUD-STOCK-PREPARED-1',
+    status: 'PREPARED' as StockAuditEvent['status'],
+    correlationId: 'ISS-1|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    targetProductIdsJson: '["STK-000001"]',
+    ...patch,
+  })
+}
+
+function acceptedAuditFixture(patch: Partial<StockAuditEvent> = {}): StockAuditEvent {
+  return preparedAuditFixture({ eventId: 'AUD-STOCK-ACCEPTED-1', status: 'ACCEPTED', ...patch })
 }
 
 describe('stock repository', () => {
@@ -87,18 +101,95 @@ describe('stock repository', () => {
   it('finds the single accepted audit event for durable command idempotency', () => {
     const repository = createStockRepository(createMemorySheetStore())
     repository.appendAudit(auditFixture({ status: 'REJECTED', safeErrorCode: 'STOCK_MANAGER_REQUIRED' }))
-    const accepted = auditFixture({ eventId: 'AUD-STOCK-2', status: 'ACCEPTED', correlationId: 'ISS-1|abc123' })
+    const prepared = preparedAuditFixture()
+    const accepted = acceptedAuditFixture()
+    repository.appendAudit(prepared)
     repository.appendAudit(accepted)
 
     expect(repository.findAcceptedAuditByRequestId('request-stock-1')).toEqual(accepted)
     expect(repository.findAcceptedAuditByRequestId('missing-request')).toBeNull()
   })
 
+  it('returns one coherent prepared and accepted journal pair', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    const prepared = preparedAuditFixture()
+    const accepted = acceptedAuditFixture()
+    repository.appendAudit(prepared)
+    repository.appendAudit(accepted)
+
+    expect(repository.findAuditJournalByRequestId('request-stock-1')).toEqual({ prepared, accepted })
+    expect(repository.findAuditJournalByRequestId('missing-request')).toEqual({ prepared: null, accepted: null })
+  })
+
+  it('lists only prepared requests that have not reached accepted', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    const unresolved = preparedAuditFixture({ requestId: 'request-unresolved' })
+    const completedPrepared = preparedAuditFixture({ requestId: 'request-completed', eventId: 'AUD-PREP-COMPLETE' })
+    const completedAccepted = acceptedAuditFixture({ requestId: 'request-completed', eventId: 'AUD-ACCEPT-COMPLETE' })
+    repository.appendAudit(unresolved)
+    repository.appendAudit(completedPrepared)
+    repository.appendAudit(completedAccepted)
+
+    expect(repository.listUnresolvedPrepared()).toEqual([unresolved])
+  })
+
+  it('fails closed on malformed or multiple unresolved prepared journals', () => {
+    const malformedStore = createMemorySheetStore()
+    malformedStore.replace('STOCK_AUDIT', [
+      preparedAuditFixture({ correlationId: 'malformed' }),
+    ] as unknown as SheetRow[])
+    expect(() => createStockRepository(malformedStore).listUnresolvedPrepared()).toThrow(
+      'stock audit journal invalid',
+    )
+
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.appendAudit(preparedAuditFixture({ requestId: 'pending-one' }))
+    repository.appendAudit(preparedAuditFixture({
+      requestId: 'pending-two', eventId: 'AUD-PENDING-2',
+      correlationId: 'ISS-2|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    }))
+    expect(() => repository.listUnresolvedPrepared()).toThrow('stock multiple unresolved prepared audits')
+  })
+
+  it.each([
+    ['non-string correlation', { correlationId: 42 as unknown as string }],
+    ['non-string target JSON', { targetProductIdsJson: 42 as unknown as string }],
+    ['invalid created time', { createdAt: 'not-a-time' }],
+  ])('rejects a persisted pending journal with %s using the safe integrity error', (_case, patch) => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_AUDIT', [preparedAuditFixture(patch)] as unknown as SheetRow[])
+
+    expect(() => createStockRepository(store).listUnresolvedPrepared()).toThrow('stock audit journal invalid')
+  })
+
+  it.each([
+    ['action', { action: 'RECEIVE' }],
+    ['actor', { actorStaffId: 'staff-2' }],
+    ['targets', { targetProductIdsJson: '["STK-000002"]' }],
+    ['correlation', { correlationId: 'ISS-2|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+    ['created time', { createdAt: '2026-08-28T09:01:00+07:00' }],
+  ])('rejects prepared and accepted audit rows that disagree on %s', (_field, patch) => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.appendAudit(preparedAuditFixture())
+
+    expect(() => repository.appendAudit(acceptedAuditFixture(patch))).toThrow('stock audit journal mismatch')
+  })
+
+  it('rejects a second prepared audit for one request ID', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.appendAudit(preparedAuditFixture())
+
+    expect(() => repository.appendAudit(preparedAuditFixture({ eventId: 'AUD-STOCK-PREPARED-2' }))).toThrow(
+      'stock prepared audit already exists',
+    )
+  })
+
   it('rejects a second accepted audit for one request ID', () => {
     const repository = createStockRepository(createMemorySheetStore())
-    repository.appendAudit(auditFixture())
+    repository.appendAudit(preparedAuditFixture())
+    repository.appendAudit(acceptedAuditFixture())
 
-    expect(() => repository.appendAudit(auditFixture({ eventId: 'AUD-STOCK-2' }))).toThrow(
+    expect(() => repository.appendAudit(acceptedAuditFixture({ eventId: 'AUD-STOCK-2' }))).toThrow(
       'stock accepted audit already exists',
     )
   })
@@ -121,7 +212,7 @@ describe('stock repository', () => {
     const repository = createStockRepository(store)
     repository.insertProduct(productFixture())
     repository.appendLedgerBatch([ledgerFixture()])
-    repository.appendAudit(auditFixture())
+    repository.appendAudit(preparedAuditFixture())
 
     expect(Object.keys(store.read('STOCK_PRODUCTS')[0])).toEqual([
       'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',

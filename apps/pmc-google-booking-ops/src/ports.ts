@@ -161,6 +161,11 @@ export interface StockRepository {
   appendLedgerBatch(entries: StockLedgerEntry[]): void
   balanceByProduct(): Map<string, number>
   findDocumentByRequestId(requestId: string): StockDocumentSummary | null
+  findAuditJournalByRequestId(requestId: string): {
+    prepared: StockAuditEvent | null
+    accepted: StockAuditEvent | null
+  }
+  listUnresolvedPrepared(): StockAuditEvent[]
   findAcceptedAuditByRequestId(requestId: string): StockAuditEvent | null
   appendAudit(event: StockAuditEvent): void
 }

@@ -40,7 +40,7 @@ export interface StockAuditEvent {
   requestId: string
   actorStaffId: string
   action: string
-  status: 'ACCEPTED' | 'REJECTED' | 'RECOVERED'
+  status: 'PREPARED' | 'ACCEPTED' | 'REJECTED' | 'RECOVERED'
   safeErrorCode: string
   targetProductIdsJson: string
   correlationId: string

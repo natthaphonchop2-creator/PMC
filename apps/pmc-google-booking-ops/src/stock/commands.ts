@@ -21,6 +21,19 @@ export interface StockCommandPorts {
 
 type StockActor = NonNullable<ReturnType<StockCommandPorts['staff']['findById']>>
 type StockDocumentCommand = Extract<MiniAppStockCommand, { commandType: 'RECEIVE' | 'ISSUE' }>
+type ProductLifecycleCommand = Extract<
+  MiniAppStockCommand,
+  { commandType: 'DEACTIVATE_PRODUCT' | 'REACTIVATE_PRODUCT' }
+>
+
+interface JournalContext {
+  documentId: string
+  fingerprint: string
+  createdAt: string
+  targetProductIds: string[]
+  prepared: StockAuditEvent
+  accepted: StockAuditEvent
+}
 
 function requireSafeId(value: string): string {
   if (!/^[A-Za-z0-9._:-]{1,124}$/.test(value)) throw new Error('STOCK_INVALID_ID')
@@ -29,6 +42,10 @@ function requireSafeId(value: string): string {
 
 function lineIdempotencyKey(requestId: string, lineNumber: number): string {
   return requireSafeId(`${requestId}:${lineNumber}`)
+}
+
+function deterministicTransactionId(documentId: string, lineNumber: number): string {
+  return requireSafeId(`${documentId}:TX:${lineNumber}`)
 }
 
 function requireFingerprint(input: MiniAppStockCommand, ports: StockCommandPorts): string {
@@ -43,85 +60,35 @@ function requireAuthorizedActor(input: MiniAppStockCommand, ports: StockCommandP
   return actor
 }
 
+function requireRecoveryActor(input: MiniAppStockCommand, ports: StockCommandPorts): StockActor {
+  const actor = ports.staff.findById(input.staffId)
+  if (!actor) throw new Error('STOCK_STAFF_REQUIRED')
+  return actor
+}
+
 function requireManager(actor: StockActor): void {
   if (!actor.canManageStock) throw new Error('STOCK_MANAGER_REQUIRED')
 }
 
-function resultFromAcceptedAudit(
-  input: MiniAppStockCommand,
-  fingerprint: string,
-  audit: StockAuditEvent,
-  ports: StockCommandPorts,
-): StockCommandResult {
-  const separator = audit.correlationId.indexOf('|')
-  if (separator <= 0 || audit.correlationId.indexOf('|', separator + 1) !== -1) {
-    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
-  }
-  const documentId = audit.correlationId.slice(0, separator)
-  const priorFingerprint = audit.correlationId.slice(separator + 1)
-  if (
-    !/^[A-Za-z0-9._:-]{1,124}$/.test(documentId) ||
-    audit.action !== input.commandType ||
-    priorFingerprint !== fingerprint
-  ) {
-    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
-  }
-
-  const document = ports.stock.findDocumentByRequestId(input.requestId)
-  const expectedTransactionType: StockTransactionType | null =
-    input.commandType === 'CREATE_PRODUCT' ? 'OPENING'
-      : input.commandType === 'RECEIVE' ? 'RECEIVE'
-        : input.commandType === 'ISSUE' ? 'ISSUE'
-          : input.commandType === 'ADJUST' ? 'ADJUST'
-            : null
-  const documentRequired =
-    input.commandType === 'RECEIVE' ||
-    input.commandType === 'ISSUE' ||
-    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli > 0)
-  const documentForbidden =
-    expectedTransactionType === null ||
-    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli === 0)
-  if (
-    (!document && documentRequired) ||
-    (document && (
-      documentForbidden ||
-      document.documentId !== documentId ||
-      document.transactionType !== expectedTransactionType ||
-      document.actorStaffId !== audit.actorStaffId ||
-      document.createdAt !== audit.createdAt
-    ))
-  ) {
-    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
-  }
-  return {
-    requestId: input.requestId,
-    documentId,
-    commandType: input.commandType,
-    createdAt: audit.createdAt,
-    lines: document?.lines.map((line) => ({
-      productId: line.productId,
-      quantityDeltaMilli: line.quantityDeltaMilli,
-      balanceAfterMilli: line.balanceAfterMilli,
-    })) ?? [],
-  }
+function auditEventId(fingerprint: string, status: 'PREPARED' | 'ACCEPTED'): string {
+  return requireSafeId(`AUDIT:${fingerprint}:${status === 'PREPARED' ? 'P' : 'A'}`)
 }
 
-function acceptedAudit(
+function journalAudit(
   input: MiniAppStockCommand,
-  actor: StockActor,
+  actorStaffId: string,
   documentId: string,
   fingerprint: string,
   targetProductIds: string[],
   createdAt: string,
-  ports: StockCommandPorts,
+  status: 'PREPARED' | 'ACCEPTED',
 ): StockAuditEvent {
-  if (documentId.includes('|')) throw new Error('STOCK_INVALID_ID')
   return {
-    eventId: requireSafeId(ports.allocateId('AUDIT')),
+    eventId: auditEventId(fingerprint, status),
     requestId: input.requestId,
-    actorStaffId: actor.id,
+    actorStaffId,
     action: input.commandType,
-    status: 'ACCEPTED',
+    status,
     safeErrorCode: '',
     targetProductIdsJson: JSON.stringify(targetProductIds),
     correlationId: `${documentId}|${fingerprint}`,
@@ -129,17 +96,83 @@ function acceptedAudit(
   }
 }
 
+function newJournalContext(
+  input: MiniAppStockCommand,
+  actor: StockActor,
+  documentId: string,
+  fingerprint: string,
+  targetProductIds: string[],
+  createdAt: string,
+): JournalContext {
+  requireSafeId(documentId)
+  const prepared = journalAudit(
+    input, actor.id, documentId, fingerprint, targetProductIds, createdAt, 'PREPARED',
+  )
+  return {
+    documentId,
+    fingerprint,
+    createdAt,
+    targetProductIds,
+    prepared,
+    accepted: journalAudit(
+      input, actor.id, documentId, fingerprint, targetProductIds, createdAt, 'ACCEPTED',
+    ),
+  }
+}
+
+function targetProductIds(input: MiniAppStockCommand, documentId: string): string[] {
+  if (input.commandType === 'CREATE_PRODUCT') return [documentId]
+  if ('lines' in input.payload) {
+    return input.payload.lines.map((line) => line.productId)
+  }
+  return [input.payload.productId]
+}
+
+function contextFromPrepared(
+  input: MiniAppStockCommand,
+  fingerprint: string,
+  prepared: StockAuditEvent,
+): JournalContext {
+  const separator = prepared.correlationId.indexOf('|')
+  if (separator <= 0 || prepared.correlationId.indexOf('|', separator + 1) !== -1) {
+    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  }
+  const documentId = prepared.correlationId.slice(0, separator)
+  const storedFingerprint = prepared.correlationId.slice(separator + 1)
+  const targets = targetProductIds(input, documentId)
+  if (
+    !/^[A-Za-z0-9._:-]{1,124}$/.test(documentId) ||
+    prepared.status !== 'PREPARED' ||
+    prepared.requestId !== input.requestId ||
+    prepared.action !== input.commandType ||
+    prepared.actorStaffId !== input.staffId ||
+    storedFingerprint !== fingerprint ||
+    prepared.targetProductIdsJson !== JSON.stringify(targets)
+  ) {
+    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  }
+  return {
+    documentId,
+    fingerprint,
+    createdAt: prepared.createdAt,
+    targetProductIds: targets,
+    prepared,
+    accepted: journalAudit(
+      input, prepared.actorStaffId, documentId, fingerprint, targets, prepared.createdAt, 'ACCEPTED',
+    ),
+  }
+}
+
 function resultFromEntries(
   input: MiniAppStockCommand,
-  documentId: string,
-  createdAt: string,
+  context: JournalContext,
   entries: StockLedgerEntry[],
 ): StockCommandResult {
   return {
     requestId: input.requestId,
-    documentId,
+    documentId: context.documentId,
     commandType: input.commandType,
-    createdAt,
+    createdAt: context.createdAt,
     lines: entries.map((entry) => ({
       productId: entry.productId,
       quantityDeltaMilli: entry.quantityDeltaMilli,
@@ -148,23 +181,80 @@ function resultFromEntries(
   }
 }
 
-function appendSuccessfulCommand(
-  input: MiniAppStockCommand,
-  actor: StockActor,
-  documentId: string,
-  fingerprint: string,
-  entries: StockLedgerEntry[],
-  targetProductIds: string[],
-  createdAt: string,
-  ports: StockCommandPorts,
-): StockCommandResult {
-  const audit = acceptedAudit(input, actor, documentId, fingerprint, targetProductIds, createdAt, ports)
-  ports.stock.appendLedgerBatch(entries)
-  ports.stock.appendAudit(audit)
-  return resultFromEntries(input, documentId, createdAt, entries)
+function existingDocumentEntries(requestId: string, ports: StockCommandPorts): StockLedgerEntry[] {
+  return ports.stock
+    .listLedger()
+    .filter((entry) => entry.requestId === requestId)
+    .sort((left, right) => left.lineNumber - right.lineNumber)
 }
 
-function requireDocumentLines(input: StockDocumentCommand) {
+function sameLedgerEntry(left: StockLedgerEntry, right: StockLedgerEntry): boolean {
+  return (
+    left.transactionId === right.transactionId &&
+    left.documentId === right.documentId &&
+    left.requestId === right.requestId &&
+    left.lineNumber === right.lineNumber &&
+    left.productId === right.productId &&
+    left.transactionType === right.transactionType &&
+    left.quantityDeltaMilli === right.quantityDeltaMilli &&
+    left.balanceBeforeMilli === right.balanceBeforeMilli &&
+    left.balanceAfterMilli === right.balanceAfterMilli &&
+    left.actorStaffId === right.actorStaffId &&
+    left.actorDisplayName === right.actorDisplayName &&
+    left.reason === right.reason &&
+    left.idempotencyKey === right.idempotencyKey &&
+    left.createdAt === right.createdAt
+  )
+}
+
+function requireMatchingEntries(actual: StockLedgerEntry[], expected: StockLedgerEntry[]): void {
+  if (
+    actual.length !== expected.length ||
+    actual.some((entry, index) => !sameLedgerEntry(entry, expected[index]))
+  ) {
+    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  }
+}
+
+function ledgerEntry(
+  input: MiniAppStockCommand,
+  context: JournalContext,
+  actor: StockActor,
+  lineNumber: number,
+  productId: string,
+  transactionType: StockTransactionType,
+  quantityDeltaMilli: number,
+  balanceBeforeMilli: number,
+  balanceAfterMilli: number,
+  reason: string,
+): StockLedgerEntry {
+  return {
+    transactionId: deterministicTransactionId(context.documentId, lineNumber),
+    documentId: context.documentId,
+    requestId: input.requestId,
+    lineNumber,
+    productId,
+    transactionType,
+    quantityDeltaMilli,
+    balanceBeforeMilli,
+    balanceAfterMilli,
+    actorStaffId: actor.id,
+    actorDisplayName: actor.name,
+    reason,
+    idempotencyKey: lineIdempotencyKey(input.requestId, lineNumber),
+    createdAt: context.createdAt,
+  }
+}
+
+function prepare(context: JournalContext, ports: StockCommandPorts): void {
+  ports.stock.appendAudit(context.prepared)
+}
+
+function finalize(context: JournalContext, ports: StockCommandPorts): void {
+  ports.stock.appendAudit(context.accepted)
+}
+
+function requireDocumentLines(input: StockDocumentCommand): void {
   if (input.payload.lines.length === 0) throw new Error('STOCK_INVALID_LINES')
   const seen = new Set<string>()
   for (const line of input.payload.lines) {
@@ -177,83 +267,72 @@ function requireDocumentLines(input: StockDocumentCommand) {
   }
 }
 
-function issueProducts(
-  input: StockDocumentCommand,
-  actor: StockActor,
-  fingerprint: string,
+function requireProducts(
+  productIds: string[],
   ports: StockCommandPorts,
-): StockCommandResult {
-  requireDocumentLines(input)
-  const balances = ports.stock.balanceByProduct()
-  const createdAt = ports.clock.nowIso()
-  const documentId = requireSafeId(ports.allocateId('ISS'))
-  const entries: StockLedgerEntry[] = input.payload.lines.map((line, index) => {
-    const product = ports.stock.getProduct(line.productId)
+  requireActive: boolean,
+): Map<string, StockProduct> {
+  const products = new Map<string, StockProduct>()
+  for (const productId of productIds) {
+    const product = ports.stock.getProduct(productId)
     if (!product) throw new Error('STOCK_PRODUCT_NOT_FOUND')
-    if (!product.active) throw new Error('STOCK_PRODUCT_INACTIVE')
-    const balanceBeforeMilli = balances.get(line.productId) ?? 0
-    const balanceAfterMilli = balanceBeforeMilli - line.quantityMilli
-    if (!Number.isSafeInteger(balanceAfterMilli)) throw new Error('STOCK_BALANCE_OVERFLOW')
-    if (balanceAfterMilli < 0) throw new Error('STOCK_INSUFFICIENT_BALANCE')
-    return {
-      transactionId: requireSafeId(ports.allocateId('TX')),
-      documentId,
-      requestId: input.requestId,
-      lineNumber: index + 1,
-      productId: line.productId,
-      transactionType: 'ISSUE',
-      quantityDeltaMilli: -line.quantityMilli,
-      balanceBeforeMilli,
-      balanceAfterMilli,
-      actorStaffId: actor.id,
-      actorDisplayName: actor.name,
-      reason: '',
-      idempotencyKey: lineIdempotencyKey(input.requestId, index + 1),
-      createdAt,
-    }
-  })
-  return appendSuccessfulCommand(
-    input, actor, documentId, fingerprint, entries, entries.map((entry) => entry.productId), createdAt, ports,
-  )
+    if (requireActive && !product.active) throw new Error('STOCK_PRODUCT_INACTIVE')
+    products.set(productId, product)
+  }
+  return products
 }
 
-function receiveProducts(
+function intendedDocumentEntries(
+  input: StockDocumentCommand,
+  actor: StockActor,
+  context: JournalContext,
+  transactionType: 'RECEIVE' | 'ISSUE',
+  ports: StockCommandPorts,
+  existing: StockLedgerEntry[],
+): StockLedgerEntry[] {
+  const balances = ports.stock.balanceByProduct()
+  return input.payload.lines.map((line, index) => {
+    const quantityDeltaMilli = transactionType === 'ISSUE' ? -line.quantityMilli : line.quantityMilli
+    const balanceBeforeMilli = existing[index]?.balanceBeforeMilli ?? balances.get(line.productId) ?? 0
+    const balanceAfterMilli = balanceBeforeMilli + quantityDeltaMilli
+    if (!Number.isSafeInteger(balanceAfterMilli)) throw new Error('STOCK_BALANCE_OVERFLOW')
+    if (balanceAfterMilli < 0) throw new Error('STOCK_INSUFFICIENT_BALANCE')
+    return ledgerEntry(
+      input, context, actor, index + 1, line.productId, transactionType,
+      quantityDeltaMilli, balanceBeforeMilli, balanceAfterMilli, '',
+    )
+  })
+}
+
+function executeStockDocument(
   input: StockDocumentCommand,
   actor: StockActor,
   fingerprint: string,
+  preparedContext: JournalContext | null,
   ports: StockCommandPorts,
 ): StockCommandResult {
   requireDocumentLines(input)
-  const balances = ports.stock.balanceByProduct()
-  const createdAt = ports.clock.nowIso()
-  const documentId = requireSafeId(ports.allocateId('RCV'))
-  const entries: StockLedgerEntry[] = input.payload.lines.map((line, index) => {
-    const product = ports.stock.getProduct(line.productId)
-    if (!product) throw new Error('STOCK_PRODUCT_NOT_FOUND')
-    if (!product.active) throw new Error('STOCK_PRODUCT_INACTIVE')
-    const balanceBeforeMilli = balances.get(line.productId) ?? 0
-    const balanceAfterMilli = balanceBeforeMilli + line.quantityMilli
-    if (!Number.isSafeInteger(balanceAfterMilli)) throw new Error('STOCK_BALANCE_OVERFLOW')
-    return {
-      transactionId: requireSafeId(ports.allocateId('TX')),
-      documentId,
-      requestId: input.requestId,
-      lineNumber: index + 1,
-      productId: line.productId,
-      transactionType: 'RECEIVE',
-      quantityDeltaMilli: line.quantityMilli,
-      balanceBeforeMilli,
-      balanceAfterMilli,
-      actorStaffId: actor.id,
-      actorDisplayName: actor.name,
-      reason: '',
-      idempotencyKey: lineIdempotencyKey(input.requestId, index + 1),
-      createdAt,
-    }
-  })
-  return appendSuccessfulCommand(
-    input, actor, documentId, fingerprint, entries, entries.map((entry) => entry.productId), createdAt, ports,
+  const transactionType = input.commandType
+  requireProducts(input.payload.lines.map((line) => line.productId), ports, preparedContext === null)
+  const existing = existingDocumentEntries(input.requestId, ports)
+  if (!preparedContext && existing.length > 0) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  const context = preparedContext ?? newJournalContext(
+    input,
+    actor,
+    requireSafeId(ports.allocateId(transactionType === 'ISSUE' ? 'ISS' : 'RCV')),
+    fingerprint,
+    input.payload.lines.map((line) => line.productId),
+    ports.clock.nowIso(),
   )
+  const intended = intendedDocumentEntries(input, actor, context, transactionType, ports, existing)
+  if (!preparedContext) prepare(context, ports)
+  if (existing.length > 0) {
+    requireMatchingEntries(existing, intended)
+  } else {
+    ports.stock.appendLedgerBatch(intended)
+  }
+  finalize(context, ports)
+  return resultFromEntries(input, context, intended)
 }
 
 function normalizeProductText(value: string): string {
@@ -300,89 +379,121 @@ function requireUniqueActiveName(
   }
 }
 
+function sameProduct(left: StockProduct, right: StockProduct): boolean {
+  return (
+    left.productId === right.productId &&
+    left.name === right.name &&
+    left.normalizedName === right.normalizedName &&
+    left.category === right.category &&
+    left.unit === right.unit &&
+    left.minimumQuantityMilli === right.minimumQuantityMilli &&
+    left.active === right.active &&
+    left.createdAt === right.createdAt &&
+    left.createdByStaffId === right.createdByStaffId &&
+    left.updatedAt === right.updatedAt &&
+    left.updatedByStaffId === right.updatedByStaffId &&
+    left.version === right.version
+  )
+}
+
 function createProduct(
   input: Extract<MiniAppStockCommand, { commandType: 'CREATE_PRODUCT' }>,
   actor: StockActor,
   fingerprint: string,
+  preparedContext: JournalContext | null,
   ports: StockCommandPorts,
 ): StockCommandResult {
   const fields = requireProductFields(input.payload)
   if (!Number.isSafeInteger(input.payload.openingQuantityMilli) || input.payload.openingQuantityMilli < 0) {
     throw new Error('STOCK_INVALID_QUANTITY')
   }
-  requireUniqueActiveName(fields.normalizedName, ports)
-  const createdAt = ports.clock.nowIso()
-  const productId = requireSafeId(ports.allocateId('STK'))
-  const product: StockProduct = {
+  if (!preparedContext) requireUniqueActiveName(fields.normalizedName, ports)
+  const productId = preparedContext?.documentId ?? requireSafeId(ports.allocateId('STK'))
+  const existingProduct = ports.stock.getProduct(productId)
+  if (!preparedContext && existingProduct) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  if (preparedContext) requireUniqueActiveName(fields.normalizedName, ports, productId)
+  const existingEntries = existingDocumentEntries(input.requestId, ports)
+  if (!preparedContext && existingEntries.length > 0) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  const context = preparedContext ?? newJournalContext(
+    input, actor, productId, fingerprint, [productId], ports.clock.nowIso(),
+  )
+  const intendedProduct: StockProduct = {
     productId,
     ...fields,
     active: true,
-    createdAt,
+    createdAt: context.createdAt,
     createdByStaffId: actor.id,
-    updatedAt: createdAt,
+    updatedAt: context.createdAt,
     updatedByStaffId: actor.id,
     version: 1,
   }
-  const entries: StockLedgerEntry[] = input.payload.openingQuantityMilli > 0 ? [{
-    transactionId: requireSafeId(ports.allocateId('TX')),
-    documentId: productId,
-    requestId: input.requestId,
-    lineNumber: 1,
-    productId,
-    transactionType: 'OPENING',
-    quantityDeltaMilli: input.payload.openingQuantityMilli,
-    balanceBeforeMilli: 0,
-    balanceAfterMilli: input.payload.openingQuantityMilli,
-    actorStaffId: actor.id,
-    actorDisplayName: actor.name,
-    reason: '',
-    idempotencyKey: lineIdempotencyKey(input.requestId, 1),
-    createdAt,
-  }] : []
-  const audit = acceptedAudit(input, actor, productId, fingerprint, [productId], createdAt, ports)
-  ports.stock.insertProduct(product)
-  ports.stock.appendLedgerBatch(entries)
-  ports.stock.appendAudit(audit)
-  return resultFromEntries(input, productId, createdAt, entries)
+  const openingEntries = input.payload.openingQuantityMilli > 0 ? [ledgerEntry(
+    input, context, actor, 1, productId, 'OPENING', input.payload.openingQuantityMilli,
+    0, input.payload.openingQuantityMilli, '',
+  )] : []
+
+  if (!preparedContext) prepare(context, ports)
+  if (existingProduct) {
+    if (!sameProduct(existingProduct, intendedProduct)) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  } else {
+    ports.stock.insertProduct(intendedProduct)
+  }
+  if (existingEntries.length > 0) {
+    requireMatchingEntries(existingEntries, openingEntries)
+  } else if (openingEntries.length > 0) {
+    if ((ports.stock.balanceByProduct().get(productId) ?? 0) !== 0) {
+      throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+    }
+    ports.stock.appendLedgerBatch(openingEntries)
+  }
+  finalize(context, ports)
+  return resultFromEntries(input, context, openingEntries)
 }
 
-function adjustProduct(
+function requireAdjustmentInput(
   input: Extract<MiniAppStockCommand, { commandType: 'ADJUST' }>,
-  actor: StockActor,
-  fingerprint: string,
-  ports: StockCommandPorts,
-): StockCommandResult {
+): string {
   requireSafeId(input.payload.productId)
   if (!Number.isSafeInteger(input.payload.countedQuantityMilli) || input.payload.countedQuantityMilli < 0) {
     throw new Error('STOCK_INVALID_QUANTITY')
   }
   const reason = input.payload.reason.trim()
   if (!reason || reason.length > 300) throw new Error('STOCK_ADJUST_REASON_REQUIRED')
-  const product = ports.stock.getProduct(input.payload.productId)
-  if (!product) throw new Error('STOCK_PRODUCT_NOT_FOUND')
-  if (!product.active) throw new Error('STOCK_PRODUCT_INACTIVE')
-  const balanceBeforeMilli = ports.stock.balanceByProduct().get(product.productId) ?? 0
+  return reason
+}
+
+function adjustProduct(
+  input: Extract<MiniAppStockCommand, { commandType: 'ADJUST' }>,
+  actor: StockActor,
+  fingerprint: string,
+  preparedContext: JournalContext | null,
+  ports: StockCommandPorts,
+): StockCommandResult {
+  const reason = requireAdjustmentInput(input)
+  requireProducts([input.payload.productId], ports, preparedContext === null)
+  const existing = existingDocumentEntries(input.requestId, ports)
+  if (!preparedContext && existing.length > 0) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  const context = preparedContext ?? newJournalContext(
+    input, actor, requireSafeId(ports.allocateId('ADJ')), fingerprint,
+    [input.payload.productId], ports.clock.nowIso(),
+  )
+  const balanceBeforeMilli = existing[0]?.balanceBeforeMilli ??
+    ports.stock.balanceByProduct().get(input.payload.productId) ?? 0
   const quantityDeltaMilli = input.payload.countedQuantityMilli - balanceBeforeMilli
   if (!Number.isSafeInteger(quantityDeltaMilli)) throw new Error('STOCK_BALANCE_OVERFLOW')
-  const createdAt = ports.clock.nowIso()
-  const documentId = requireSafeId(ports.allocateId('ADJ'))
-  const entries: StockLedgerEntry[] = quantityDeltaMilli === 0 ? [] : [{
-    transactionId: requireSafeId(ports.allocateId('TX')),
-    documentId,
-    requestId: input.requestId,
-    lineNumber: 1,
-    productId: product.productId,
-    transactionType: 'ADJUST',
-    quantityDeltaMilli,
-    balanceBeforeMilli,
-    balanceAfterMilli: input.payload.countedQuantityMilli,
-    actorStaffId: actor.id,
-    actorDisplayName: actor.name,
-    reason,
-    idempotencyKey: lineIdempotencyKey(input.requestId, 1),
-    createdAt,
-  }]
-  return appendSuccessfulCommand(input, actor, documentId, fingerprint, entries, [product.productId], createdAt, ports)
+  const intended = quantityDeltaMilli === 0 ? [] : [ledgerEntry(
+    input, context, actor, 1, input.payload.productId, 'ADJUST', quantityDeltaMilli,
+    balanceBeforeMilli, input.payload.countedQuantityMilli, reason,
+  )]
+
+  if (!preparedContext) prepare(context, ports)
+  if (existing.length > 0) {
+    requireMatchingEntries(existing, intended)
+  } else if (intended.length > 0) {
+    ports.stock.appendLedgerBatch(intended)
+  }
+  finalize(context, ports)
+  return resultFromEntries(input, context, intended)
 }
 
 function requireExistingProduct(productId: string, ports: StockCommandPorts): StockProduct {
@@ -392,50 +503,121 @@ function requireExistingProduct(productId: string, ports: StockCommandPorts): St
   return product
 }
 
+function matchesProductPatch(product: StockProduct, patch: Partial<StockProduct>): boolean {
+  return Object.entries(patch).every(([key, value]) => product[key as keyof StockProduct] === value)
+}
+
+function applyRecoverableProductUpdate(
+  product: StockProduct,
+  expectedVersion: number,
+  patch: Partial<StockProduct>,
+  ports: StockCommandPorts,
+): void {
+  if (product.version === expectedVersion) {
+    ports.stock.updateProduct(product.productId, expectedVersion, patch)
+    return
+  }
+  if (product.version === expectedVersion + 1 && matchesProductPatch(product, patch)) return
+  throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+}
+
 function updateProduct(
   input: Extract<MiniAppStockCommand, { commandType: 'UPDATE_PRODUCT' }>,
   actor: StockActor,
   fingerprint: string,
+  preparedContext: JournalContext | null,
   ports: StockCommandPorts,
 ): StockCommandResult {
   const before = requireExistingProduct(input.payload.productId, ports)
   const fields = requireProductFields(input.payload)
   if (before.active) requireUniqueActiveName(fields.normalizedName, ports, before.productId)
   if (
+    before.version === input.payload.expectedVersion &&
     fields.unit !== before.unit &&
     ports.stock.listLedger().some((entry) => entry.productId === before.productId)
   ) {
     throw new Error('STOCK_UNIT_LOCKED')
   }
-  const createdAt = ports.clock.nowIso()
-  const audit = acceptedAudit(input, actor, before.productId, fingerprint, [before.productId], createdAt, ports)
-  ports.stock.updateProduct(before.productId, input.payload.expectedVersion, {
+  if (!preparedContext && before.version !== input.payload.expectedVersion) throw new Error('version conflict')
+  const context = preparedContext ?? newJournalContext(
+    input, actor, before.productId, fingerprint, [before.productId], ports.clock.nowIso(),
+  )
+  const productPatch = {
     ...fields,
-    updatedAt: createdAt,
+    updatedAt: context.createdAt,
     updatedByStaffId: actor.id,
-  })
-  ports.stock.appendAudit(audit)
-  return resultFromEntries(input, before.productId, createdAt, [])
+  }
+
+  if (!preparedContext) prepare(context, ports)
+  applyRecoverableProductUpdate(before, input.payload.expectedVersion, productPatch, ports)
+  finalize(context, ports)
+  return resultFromEntries(input, context, [])
 }
 
 function setProductActive(
-  input: Extract<MiniAppStockCommand, { commandType: 'DEACTIVATE_PRODUCT' | 'REACTIVATE_PRODUCT' }>,
+  input: ProductLifecycleCommand,
   actor: StockActor,
   fingerprint: string,
+  preparedContext: JournalContext | null,
   ports: StockCommandPorts,
 ): StockCommandResult {
   const before = requireExistingProduct(input.payload.productId, ports)
   const active = input.commandType === 'REACTIVATE_PRODUCT'
   if (active) requireUniqueActiveName(before.normalizedName, ports, before.productId)
-  const createdAt = ports.clock.nowIso()
-  const audit = acceptedAudit(input, actor, before.productId, fingerprint, [before.productId], createdAt, ports)
-  ports.stock.updateProduct(before.productId, input.payload.expectedVersion, {
-    active,
-    updatedAt: createdAt,
-    updatedByStaffId: actor.id,
-  })
-  ports.stock.appendAudit(audit)
-  return resultFromEntries(input, before.productId, createdAt, [])
+  if (!preparedContext && before.version !== input.payload.expectedVersion) throw new Error('version conflict')
+  const context = preparedContext ?? newJournalContext(
+    input, actor, before.productId, fingerprint, [before.productId], ports.clock.nowIso(),
+  )
+  const productPatch = { active, updatedAt: context.createdAt, updatedByStaffId: actor.id }
+
+  if (!preparedContext) prepare(context, ports)
+  applyRecoverableProductUpdate(before, input.payload.expectedVersion, productPatch, ports)
+  finalize(context, ports)
+  return resultFromEntries(input, context, [])
+}
+
+function resultFromAcceptedJournal(
+  input: MiniAppStockCommand,
+  context: JournalContext,
+  ports: StockCommandPorts,
+): StockCommandResult {
+  const document = ports.stock.findDocumentByRequestId(input.requestId)
+  const expectedTransactionType: StockTransactionType | null =
+    input.commandType === 'CREATE_PRODUCT' ? 'OPENING'
+      : input.commandType === 'RECEIVE' ? 'RECEIVE'
+        : input.commandType === 'ISSUE' ? 'ISSUE'
+          : input.commandType === 'ADJUST' ? 'ADJUST'
+            : null
+  const documentRequired =
+    input.commandType === 'RECEIVE' ||
+    input.commandType === 'ISSUE' ||
+    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli > 0)
+  const documentForbidden =
+    expectedTransactionType === null ||
+    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli === 0)
+  if (
+    (!document && documentRequired) ||
+    (document && (
+      documentForbidden ||
+      document.documentId !== context.documentId ||
+      document.transactionType !== expectedTransactionType ||
+      document.actorStaffId !== context.prepared.actorStaffId ||
+      document.createdAt !== context.createdAt
+    ))
+  ) {
+    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  }
+  return {
+    requestId: input.requestId,
+    documentId: context.documentId,
+    commandType: input.commandType,
+    createdAt: context.createdAt,
+    lines: document?.lines.map((line) => ({
+      productId: line.productId,
+      quantityDeltaMilli: line.quantityDeltaMilli,
+      balanceAfterMilli: line.balanceAfterMilli,
+    })) ?? [],
+  }
 }
 
 export function executeStockCommand(
@@ -445,18 +627,42 @@ export function executeStockCommand(
   return ports.locks.withLock(() => {
     requireSafeId(input.requestId)
     const fingerprint = requireFingerprint(input, ports)
-    const prior = ports.stock.findAcceptedAuditByRequestId(input.requestId)
-    if (prior) return resultFromAcceptedAudit(input, fingerprint, prior, ports)
+    const unresolved = ports.stock.listUnresolvedPrepared()
+    if (unresolved[0] && unresolved[0].requestId !== input.requestId) {
+      throw new Error('STOCK_RECOVERY_REQUIRED')
+    }
+    const journal = ports.stock.findAuditJournalByRequestId(input.requestId)
+    if (journal.accepted) {
+      if (!journal.prepared) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+      return resultFromAcceptedJournal(
+        input, contextFromPrepared(input, fingerprint, journal.prepared), ports,
+      )
+    }
 
-    const actor = requireAuthorizedActor(input, ports)
-    if (input.commandType === 'ISSUE') return issueProducts(input, actor, fingerprint, ports)
-    requireManager(actor)
-    if (input.commandType === 'CREATE_PRODUCT') return createProduct(input, actor, fingerprint, ports)
-    if (input.commandType === 'RECEIVE') return receiveProducts(input, actor, fingerprint, ports)
-    if (input.commandType === 'ADJUST') return adjustProduct(input, actor, fingerprint, ports)
-    if (input.commandType === 'UPDATE_PRODUCT') return updateProduct(input, actor, fingerprint, ports)
+    const preparedContext = journal.prepared
+      ? contextFromPrepared(input, fingerprint, journal.prepared)
+      : null
+    const actor = preparedContext
+      ? requireRecoveryActor(input, ports)
+      : requireAuthorizedActor(input, ports)
+    if (input.commandType === 'ISSUE') {
+      return executeStockDocument(input, actor, fingerprint, preparedContext, ports)
+    }
+    if (!preparedContext) requireManager(actor)
+    if (input.commandType === 'CREATE_PRODUCT') {
+      return createProduct(input, actor, fingerprint, preparedContext, ports)
+    }
+    if (input.commandType === 'RECEIVE') {
+      return executeStockDocument(input, actor, fingerprint, preparedContext, ports)
+    }
+    if (input.commandType === 'ADJUST') {
+      return adjustProduct(input, actor, fingerprint, preparedContext, ports)
+    }
+    if (input.commandType === 'UPDATE_PRODUCT') {
+      return updateProduct(input, actor, fingerprint, preparedContext, ports)
+    }
     if (input.commandType === 'DEACTIVATE_PRODUCT' || input.commandType === 'REACTIVATE_PRODUCT') {
-      return setProductActive(input, actor, fingerprint, ports)
+      return setProductActive(input, actor, fingerprint, preparedContext, ports)
     }
     throw new Error('STOCK_UNKNOWN_COMMAND')
   })

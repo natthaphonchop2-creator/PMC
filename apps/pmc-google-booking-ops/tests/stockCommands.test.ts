@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { MiniAppStockCommand, StockAuditEvent, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
+import type { StockRepository } from '../src/ports'
 import { createStockRepository } from '../src/repositories'
 import { executeStockCommand, type StockCommandPorts } from '../src/stock/commands'
 import { createMemorySheetStore } from './helpers/fakes'
 
 const NOW = '2026-08-28T09:00:00+07:00'
+type FaultBoundary = 'PREPARED' | 'PRODUCT' | 'LEDGER' | 'ACCEPTED'
 
 function productFixture(productId: string, patch: Partial<StockProduct> = {}): StockProduct {
   return {
@@ -44,19 +46,69 @@ function openingEntry(productId: string, quantityMilli: number, lineNumber: numb
   }
 }
 
-function stockPortsWithBalances(seed: Record<string, number>) {
+function stockPortsWithBalances(seed: Record<string, number>, failAfter?: FaultBoundary) {
   const store = createMemorySheetStore()
-  const stock = createStockRepository(store)
+  const baseStock = createStockRepository(store)
   const products = Object.entries(seed).map(([productId]) => productFixture(productId))
-  for (const product of products) stock.insertProduct(product)
-  stock.appendLedgerBatch(
+  for (const product of products) baseStock.insertProduct(product)
+  baseStock.appendLedgerBatch(
     Object.entries(seed).map(([productId, quantityMilli], index) => openingEntry(productId, quantityMilli, index + 1)),
   )
 
+  let faultInjected = false
+  function failOnce(boundary: FaultBoundary): void {
+    if (failAfter === boundary && !faultInjected) {
+      faultInjected = true
+      throw new Error(`FAULT_AFTER_${boundary}`)
+    }
+  }
+  const stock: StockRepository = {
+    listProducts: () => baseStock.listProducts(),
+    getProduct: (productId) => baseStock.getProduct(productId),
+    insertProduct(product) {
+      const result = baseStock.insertProduct(product)
+      failOnce('PRODUCT')
+      return result
+    },
+    updateProduct(productId, expectedVersion, patch) {
+      const result = baseStock.updateProduct(productId, expectedVersion, patch)
+      failOnce('PRODUCT')
+      return result
+    },
+    listLedger: () => baseStock.listLedger(),
+    appendLedgerBatch(entries) {
+      baseStock.appendLedgerBatch(entries)
+      if (entries.length > 0) failOnce('LEDGER')
+    },
+    balanceByProduct: () => baseStock.balanceByProduct(),
+    findDocumentByRequestId: (requestId) => baseStock.findDocumentByRequestId(requestId),
+    findAuditJournalByRequestId: (requestId) => baseStock.findAuditJournalByRequestId(requestId),
+    listUnresolvedPrepared: () => baseStock.listUnresolvedPrepared(),
+    findAcceptedAuditByRequestId: (requestId) => baseStock.findAcceptedAuditByRequestId(requestId),
+    appendAudit(event) {
+      baseStock.appendAudit(event)
+      if (event.status === 'PREPARED') failOnce('PREPARED')
+      if (event.status === 'ACCEPTED') failOnce('ACCEPTED')
+    },
+  }
+
   let lockCalls = 0
+  let now = NOW
+  const staffRows = new Map([
+    ['ADMIN_01', { id: 'ADMIN_01', name: 'พนักงาน', active: true, canManageStock: false }],
+    ['ADMIN_03', { id: 'ADMIN_03', name: 'ผู้จัดการสต็อก', active: true, canManageStock: true }],
+    ['INACTIVE_01', { id: 'INACTIVE_01', name: 'พนักงานเก่า', active: false, canManageStock: true }],
+  ])
   const sequences = new Map<string, number>()
-  const ports: StockCommandPorts & { lockCalls(): number; auditRows(): StockAuditEvent[] } = {
-    clock: { nowIso: () => NOW },
+  const ports: StockCommandPorts & {
+    lockCalls(): number
+    auditRows(): StockAuditEvent[]
+    baseStock: StockRepository
+    setNow(value: string): void
+    replaceAuditRows(rows: StockAuditEvent[]): void
+    setStaff(staffId: string, patch: Partial<{ active: boolean; canManageStock: boolean }>): void
+  } = {
+    clock: { nowIso: () => now },
     locks: {
       withLock<T>(operation: () => T): T {
         lockCalls += 1
@@ -65,16 +117,7 @@ function stockPortsWithBalances(seed: Record<string, number>) {
     },
     staff: {
       findById(staffId) {
-        if (staffId === 'ADMIN_01') {
-          return { id: 'ADMIN_01', name: 'พนักงาน', active: true, canManageStock: false }
-        }
-        if (staffId === 'ADMIN_03') {
-          return { id: 'ADMIN_03', name: 'ผู้จัดการสต็อก', active: true, canManageStock: true }
-        }
-        if (staffId === 'INACTIVE_01') {
-          return { id: 'INACTIVE_01', name: 'พนักงานเก่า', active: false, canManageStock: true }
-        }
-        return null
+        return staffRows.get(staffId) ?? null
       },
     },
     stock,
@@ -88,6 +131,18 @@ function stockPortsWithBalances(seed: Record<string, number>) {
     },
     lockCalls: () => lockCalls,
     auditRows: () => store.read('STOCK_AUDIT') as unknown as StockAuditEvent[],
+    baseStock,
+    setNow(value) {
+      now = value
+    },
+    replaceAuditRows(rows) {
+      store.replace('STOCK_AUDIT', rows as unknown as Array<Record<string, unknown>>)
+    },
+    setStaff(staffId, patch) {
+      const before = staffRows.get(staffId)
+      if (!before) throw new Error('test staff not found')
+      staffRows.set(staffId, { ...before, ...patch })
+    },
   }
   return ports
 }
@@ -117,6 +172,7 @@ describe('stock commands', () => {
       },
     }, ports)).toThrow('STOCK_INSUFFICIENT_BALANCE')
     expect(ports.stock.listLedger()).toHaveLength(2)
+    expect(ports.auditRows()).toHaveLength(0)
   })
 
   it('allows an active non-manager to issue stock', () => {
@@ -475,17 +531,17 @@ describe('stock commands', () => {
   it('rejects an accepted ledger-backed journal whose original document is missing', () => {
     const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
     const command = issueCommand('missing-ledger-document', 'STK-000001', 1_000)
-    ports.stock.appendAudit({
-      eventId: 'AUDIT-MISSING-LEDGER',
+    const journalBase = {
       requestId: command.requestId,
       actorStaffId: command.staffId,
       action: command.commandType,
-      status: 'ACCEPTED',
       safeErrorCode: '',
       targetProductIdsJson: '["STK-000001"]',
       correlationId: `ISS-MISSING|${ports.commandFingerprint(command)}`,
       createdAt: NOW,
-    })
+    }
+    ports.stock.appendAudit({ eventId: 'AUDIT-MISSING-PREPARED', status: 'PREPARED', ...journalBase })
+    ports.stock.appendAudit({ eventId: 'AUDIT-MISSING-ACCEPTED', status: 'ACCEPTED', ...journalBase })
 
     expect(() => executeStockCommand(command, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
   })
@@ -494,10 +550,337 @@ describe('stock commands', () => {
     const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
     executeStockCommand(issueCommand('audit-success', 'STK-000001', 1_000), ports)
 
-    expect(ports.auditRows().filter((row) => row.requestId === 'audit-success')).toEqual([
+    expect(ports.auditRows().filter((row) => (
+      row.requestId === 'audit-success' && row.status === 'ACCEPTED'
+    ))).toEqual([
       expect.objectContaining({
         action: 'ISSUE', status: 'ACCEPTED', correlationId: expect.stringMatching(/^ISS-\d+\|[a-f0-9]{64}$/),
       }),
     ])
+  })
+
+  describe('prepared journal crash recovery', () => {
+    it.each(['PREPARED', 'LEDGER', 'ACCEPTED'] as const)(
+      'recovers ISSUE after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, boundary)
+        const command = issueCommand('recover-issue', 'STK-000001', 2_000)
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        const recovered = executeStockCommand(command, ports)
+
+        expect(recovered.lines).toEqual([
+          { productId: 'STK-000001', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
+        ])
+        expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(3_000)
+        const documentRows = ports.stock.listLedger().filter((row) => row.requestId === command.requestId)
+        expect(documentRows).toHaveLength(1)
+        expect(documentRows[0]?.transactionId).toBe(`${recovered.documentId}:TX:1`)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each(['PREPARED', 'LEDGER', 'ACCEPTED'] as const)(
+      'recovers RECEIVE after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, boundary)
+        const command: MiniAppStockCommand = {
+          requestId: 'recover-receive', staffId: 'ADMIN_03', commandType: 'RECEIVE',
+          payload: { lines: [{ productId: 'STK-000001', quantityMilli: 2_000 }] },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        executeStockCommand(command, ports)
+
+        expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(7_000)
+        expect(ports.stock.listLedger().filter((row) => row.requestId === command.requestId)).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each(['PREPARED', 'PRODUCT', 'LEDGER', 'ACCEPTED'] as const)(
+      'recovers CREATE_PRODUCT with opening stock after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({}, boundary)
+        const command: MiniAppStockCommand = {
+          requestId: 'recover-create-opening', staffId: 'ADMIN_03', commandType: 'CREATE_PRODUCT',
+          payload: {
+            name: 'ผ้าก๊อซ', category: 'CLINIC_SUPPLY', unit: 'ห่อ',
+            openingQuantityMilli: 4_000, minimumQuantityMilli: 1_000,
+          },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        const recovered = executeStockCommand(command, ports)
+
+        expect(recovered).toMatchObject({ documentId: 'STK-000001' })
+        expect(ports.stock.listProducts()).toHaveLength(1)
+        expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(4_000)
+        expect(ports.stock.listLedger().filter((row) => row.requestId === command.requestId)).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each(['PREPARED', 'PRODUCT', 'ACCEPTED'] as const)(
+      'recovers zero-opening CREATE_PRODUCT after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({}, boundary)
+        const command: MiniAppStockCommand = {
+          requestId: 'recover-create-zero', staffId: 'ADMIN_03', commandType: 'CREATE_PRODUCT',
+          payload: {
+            name: 'สำลีแผ่น', category: 'CLINIC_SUPPLY', unit: 'ห่อ',
+            openingQuantityMilli: 0, minimumQuantityMilli: 500,
+          },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        expect(executeStockCommand(command, ports).lines).toEqual([])
+
+        expect(ports.stock.listProducts()).toHaveLength(1)
+        expect(ports.stock.listLedger()).toHaveLength(0)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each(['PREPARED', 'LEDGER', 'ACCEPTED'] as const)(
+      'recovers nonzero ADJUST after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, boundary)
+        const command: MiniAppStockCommand = {
+          requestId: 'recover-adjust-nonzero', staffId: 'ADMIN_03', commandType: 'ADJUST',
+          payload: { productId: 'STK-000001', countedQuantityMilli: 3_000, reason: 'ตรวจนับ' },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        executeStockCommand(command, ports)
+
+        expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(3_000)
+        expect(ports.stock.listLedger().filter((row) => row.requestId === command.requestId)).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each(['PREPARED', 'ACCEPTED'] as const)(
+      'recovers zero-delta ADJUST after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, boundary)
+        const command: MiniAppStockCommand = {
+          requestId: 'recover-adjust-zero', staffId: 'ADMIN_03', commandType: 'ADJUST',
+          payload: { productId: 'STK-000001', countedQuantityMilli: 5_000, reason: 'ยอดตรง' },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        expect(executeStockCommand(command, ports).lines).toEqual([])
+
+        expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
+        expect(ports.stock.listLedger().filter((row) => row.requestId === command.requestId)).toHaveLength(0)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each(['PREPARED', 'PRODUCT', 'ACCEPTED'] as const)(
+      'recovers UPDATE_PRODUCT after a crash following the %s write',
+      (boundary) => {
+        const ports = stockPortsWithBalances({ 'STK-000001': 0 }, boundary)
+        const command: MiniAppStockCommand = {
+          requestId: 'recover-update', staffId: 'ADMIN_03', commandType: 'UPDATE_PRODUCT',
+          payload: {
+            productId: 'STK-000001', expectedVersion: 1, name: 'ชื่อหลังแก้', category: 'RETAIL_PRODUCT',
+            unit: 'ชิ้น', minimumQuantityMilli: 2_000,
+          },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        executeStockCommand(command, ports)
+
+        expect(ports.stock.getProduct('STK-000001')).toMatchObject({
+          name: 'ชื่อหลังแก้', category: 'RETAIL_PRODUCT', minimumQuantityMilli: 2_000, version: 2,
+        })
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      },
+    )
+
+    it.each([
+      ['DEACTIVATE_PRODUCT', true, false],
+      ['REACTIVATE_PRODUCT', false, true],
+    ] as const)('recovers %s exactly once across every product write boundary', (commandType, initialActive, wantedActive) => {
+      for (const boundary of ['PREPARED', 'PRODUCT', 'ACCEPTED'] as const) {
+        const ports = stockPortsWithBalances({ 'STK-000001': 0 }, boundary)
+        if (!initialActive) ports.baseStock.updateProduct('STK-000001', 1, { active: false })
+        const expectedVersion = initialActive ? 1 : 2
+        const command: MiniAppStockCommand = {
+          requestId: `recover-${commandType}-${boundary}`,
+          staffId: 'ADMIN_03',
+          commandType,
+          payload: { productId: 'STK-000001', expectedVersion },
+        }
+
+        expect(() => executeStockCommand(command, ports)).toThrow(`FAULT_AFTER_${boundary}`)
+        executeStockCommand(command, ports)
+
+        expect(ports.stock.getProduct('STK-000001')).toMatchObject({
+          active: wantedActive,
+          version: expectedVersion + 1,
+        })
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+        expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(1)
+      }
+    })
+
+    it('returns the PREPARED timestamp after the retry clock advances', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, 'PREPARED')
+      const command = issueCommand('recover-original-time', 'STK-000001', 1_000)
+      expect(() => executeStockCommand(command, ports)).toThrow('FAULT_AFTER_PREPARED')
+      ports.setNow('2026-08-28T10:00:00+07:00')
+
+      expect(executeStockCommand(command, ports).createdAt).toBe(NOW)
+    })
+
+    it('reconciles an exact PREPARED manager command after the actor is deactivated', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, 'PREPARED')
+      const command: MiniAppStockCommand = {
+        requestId: 'recover-deactivated-manager', staffId: 'ADMIN_03', commandType: 'RECEIVE',
+        payload: { lines: [{ productId: 'STK-000001', quantityMilli: 1_000 }] },
+      }
+      expect(() => executeStockCommand(command, ports)).toThrow('FAULT_AFTER_PREPARED')
+      ports.setStaff('ADMIN_03', { active: false, canManageStock: false })
+
+      expect(executeStockCommand(command, ports).lines).toEqual([
+        { productId: 'STK-000001', quantityDeltaMilli: 1_000, balanceAfterMilli: 6_000 },
+      ])
+    })
+
+    it('blocks an unrelated command until the unresolved PREPARED request reconciles', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, 'PREPARED')
+      const interrupted = issueCommand('recover-first', 'STK-000001', 1_000)
+      const unrelatedIssue = issueCommand('unrelated-issue', 'STK-000001', 1_000)
+      const blockedCommands: MiniAppStockCommand[] = [
+        unrelatedIssue,
+        {
+          requestId: 'unrelated-receive', staffId: 'ADMIN_03', commandType: 'RECEIVE',
+          payload: { lines: [{ productId: 'STK-000001', quantityMilli: 1_000 }] },
+        },
+        {
+          requestId: 'unrelated-manager', staffId: 'ADMIN_03', commandType: 'CREATE_PRODUCT',
+          payload: {
+            name: 'คำสั่งที่ต้องถูกบล็อก', category: 'CLINIC_SUPPLY', unit: 'ชิ้น',
+            openingQuantityMilli: 0, minimumQuantityMilli: 0,
+          },
+        },
+      ]
+      expect(() => executeStockCommand(interrupted, ports)).toThrow('FAULT_AFTER_PREPARED')
+
+      for (const command of blockedCommands) {
+        expect(() => executeStockCommand(command, ports)).toThrow('STOCK_RECOVERY_REQUIRED')
+      }
+      expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
+      expect(ports.stock.listProducts()).toHaveLength(1)
+      expect(ports.stock.listLedger()).toHaveLength(1)
+      expect(ports.auditRows()).toHaveLength(1)
+
+      executeStockCommand(interrupted, ports)
+      executeStockCommand(unrelatedIssue, ports)
+      expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(3_000)
+    })
+
+    it('fails closed when a pending journal is malformed', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
+      ports.replaceAuditRows([{
+        eventId: 'AUDIT-MALFORMED', requestId: 'malformed-pending', actorStaffId: 'ADMIN_01',
+        action: 'ISSUE', status: 'PREPARED', safeErrorCode: '', targetProductIdsJson: '["STK-000001"]',
+        correlationId: 'missing-fingerprint', createdAt: NOW,
+      }])
+
+      expect(() => executeStockCommand(
+        issueCommand('unrelated-after-malformed', 'STK-000001', 1_000),
+        ports,
+      )).toThrow('stock audit journal invalid')
+      expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
+    })
+
+    it('fails closed when multiple requests are pending recovery', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
+      const pending = (requestId: string, documentId: string, fingerprint: string): StockAuditEvent => ({
+        eventId: `AUDIT-${requestId}`, requestId, actorStaffId: 'ADMIN_01', action: 'ISSUE',
+        status: 'PREPARED', safeErrorCode: '', targetProductIdsJson: '["STK-000001"]',
+        correlationId: `${documentId}|${fingerprint}`, createdAt: NOW,
+      })
+      ports.replaceAuditRows([
+        pending('pending-one', 'ISS-PENDING-1', 'a'.repeat(64)),
+        pending('pending-two', 'ISS-PENDING-2', 'b'.repeat(64)),
+      ])
+
+      expect(() => executeStockCommand(
+        issueCommand('unrelated-after-multiple', 'STK-000001', 1_000),
+        ports,
+      )).toThrow('stock multiple unresolved prepared audits')
+      expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
+    })
+
+    it.each<[string, MiniAppStockCommand]>([
+      [
+        'payload fingerprint',
+        issueCommand('prepared-conflict', 'STK-000001', 2_000),
+      ],
+      [
+        'actor',
+        { ...issueCommand('prepared-conflict', 'STK-000001', 1_000), staffId: 'ADMIN_03' },
+      ],
+      [
+        'target IDs',
+        issueCommand('prepared-conflict', 'STK-000002', 1_000),
+      ],
+      [
+        'action',
+        {
+          requestId: 'prepared-conflict', staffId: 'ADMIN_01', commandType: 'RECEIVE',
+          payload: { lines: [{ productId: 'STK-000001', quantityMilli: 1_000 }] },
+        },
+      ],
+    ])('rejects PREPARED retry with changed %s', (_case, changed) => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000, 'STK-000002': 5_000 }, 'PREPARED')
+      expect(() => executeStockCommand(
+        issueCommand('prepared-conflict', 'STK-000001', 1_000),
+        ports,
+      )).toThrow('FAULT_AFTER_PREPARED')
+
+      expect(() => executeStockCommand(changed, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+    })
+
+    it('rejects an orphan ledger document before writing PREPARED', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
+      ports.baseStock.appendLedgerBatch([{
+        transactionId: 'ISS-ORPHAN:TX:1', documentId: 'ISS-ORPHAN', requestId: 'orphan-ledger', lineNumber: 1,
+        productId: 'STK-000001', transactionType: 'ISSUE', quantityDeltaMilli: -1_000,
+        balanceBeforeMilli: 5_000, balanceAfterMilli: 4_000, actorStaffId: 'ADMIN_01',
+        actorDisplayName: 'พนักงาน', reason: '', idempotencyKey: 'orphan-ledger:1', createdAt: NOW,
+      }])
+
+      expect(() => executeStockCommand(
+        issueCommand('orphan-ledger', 'STK-000001', 1_000),
+        ports,
+      )).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+      expect(ports.auditRows().filter((row) => row.requestId === 'orphan-ledger')).toHaveLength(0)
+    })
+
+    it('rejects an allocated product ID collision before writing PREPARED', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 0 })
+
+      expect(() => executeStockCommand({
+        requestId: 'create-id-collision', staffId: 'ADMIN_03', commandType: 'CREATE_PRODUCT',
+        payload: {
+          name: 'ชื่อไม่ซ้ำ', category: 'CLINIC_SUPPLY', unit: 'ชิ้น',
+          openingQuantityMilli: 0, minimumQuantityMilli: 0,
+        },
+      }, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+      expect(ports.auditRows().filter((row) => row.requestId === 'create-id-collision')).toHaveLength(0)
+    })
   })
 })
