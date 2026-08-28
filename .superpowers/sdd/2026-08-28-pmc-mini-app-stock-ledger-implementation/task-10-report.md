@@ -67,4 +67,4 @@ Modern-web guidance was used for native semantic form/disclosure behavior, visib
 
 ## Commit
 
-Implementation commit SHA is recorded in the final Task 10 handoff after the primary commit is created.
+Implementation commit: `42b85fa199ebff4023d97de065c6b9f6dfc33286` (`test: verify PMC Stock rollout`).
