@@ -361,6 +361,19 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.readsAfterExhaust()).toBe(1)
     expect(fixture.clock.waits).toEqual([])
   })
+
+  it('begins no new state I/O after an in-flight staging read consumes the final deadline', async () => {
+    const fixture = workerFixture({
+      stagingFailure: new Error('private storage detail'),
+      advanceOnStagingGetMs: 30_000,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8))).rejects.toMatchObject({ code: 'ASYNC_STATE_RETRY' })
+
+    expect(fixture.state.operations()).toEqual(['CLAIM', 'RENEW'])
+    expect(fixture.getDraft).toHaveBeenCalledTimes(3)
+    expect(fixture.clock.waits).toEqual([])
+  })
 })
 
 function workerFixture(options: {
@@ -378,6 +391,7 @@ function workerFixture(options: {
   exhaustFailure?: Error
   advanceOnReadAfterExhaustMs?: number
   failReadsAfterExhaust?: boolean
+  advanceOnStagingGetMs?: number
   stagingFailure?: Error
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
@@ -417,6 +431,7 @@ function workerFixture(options: {
   const staging: EvidenceStagingPort & { deleteVerified: ReturnType<typeof vi.fn> } = {
     put: vi.fn(async () => { throw new Error('not used') }),
     get: vi.fn(async (key: string) => {
+      clock.advance(options.advanceOnStagingGetMs ?? 0)
       if (options.stagingFailure) {
         remainingReadFailures += options.transientReadFailuresAfterExternalError ?? 0
         throw options.stagingFailure

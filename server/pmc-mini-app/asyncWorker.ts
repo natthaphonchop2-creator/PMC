@@ -37,6 +37,7 @@ type WorkerContext = {
   draft: MiniAppRequestRecord
   bound: MiniAppRequestRecord
   snapshot: TaskSnapshot
+  deadline: FinalAttemptDeadline | null
   ownerToken: string
   taskAttempt: number
 }
@@ -163,11 +164,19 @@ export function createAsyncBookingWorker(input: {
   async function sendAndRead(
     stateMutation: MiniAppAsyncStateMutation,
     validate: (draft: MiniAppRequestRecord) => boolean,
+    deadline: FinalAttemptDeadline | null = null,
   ): Promise<MiniAppRequestRecord> {
     let sendFailed = false
-    try { await input.stateIngress.mutate(stateMutation) } catch { sendFailed = true }
+    try {
+      if (deadline === null) await input.stateIngress.mutate(stateMutation)
+      else await mutateBeforeDeadline(deadline, stateMutation)
+    } catch { sendFailed = true }
     let persisted: MiniAppRequestRecord
-    try { persisted = await readDraft(stateMutation.draftId, stateMutation.requestId) } catch (error) {
+    try {
+      persisted = deadline === null
+        ? await readDraft(stateMutation.draftId, stateMutation.requestId)
+        : await readDraftBeforeDeadline(deadline, stateMutation.draftId, stateMutation.requestId)
+    } catch (error) {
       if (sendFailed) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
       throw error
     }
@@ -184,12 +193,14 @@ export function createAsyncBookingWorker(input: {
       && persisted.attemptCount === previous.attemptCount
       && persisted.version === previous.version + 1
       && persisted.processingLeaseUntil === renewMutation.leaseUntil,
+      context.deadline,
     )
   }
 
   async function fencedAwait<T>(context: WorkerContext, operation: () => Promise<T>): Promise<T> {
     await renew(context)
     try {
+      if (context.deadline !== null) requireFinalTime(context.deadline)
       const result = await operation()
       await renew(context)
       return result
@@ -223,6 +234,7 @@ export function createAsyncBookingWorker(input: {
       && sameStrings(persisted.chatEvidenceFileIds, chatEvidenceFileIds)
       && persisted.evidenceCount === paymentEvidenceFileIds.length + chatEvidenceFileIds.length
       && persisted.evidenceProjectionHash === expectedProjectionHash,
+      context.deadline,
     )
     assertEvidenceLayout(context.bound, context.draft, true)
   }
@@ -267,6 +279,7 @@ export function createAsyncBookingWorker(input: {
     })
     context.draft = await sendAndRead(completion, (persisted) =>
       validExpectedCompletion(context.snapshot, context.bound, previous, persisted, result),
+      context.deadline,
     )
   }
 
@@ -285,6 +298,7 @@ export function createAsyncBookingWorker(input: {
       && draft.processingOwnerToken === null
       && draft.processingLeaseUntil === null
       && (targetState !== 'NEEDS_REVIEW' || validTerminal(context.snapshot, draft)),
+      context.deadline,
     )
     context.draft = persisted
     return targetState === 'NEEDS_REVIEW' ? terminalResult(persisted) : null
@@ -366,9 +380,14 @@ export function createAsyncBookingWorker(input: {
     return exhaust(current, snapshot, deadline, expectedEvidence)
   }
 
-  async function cleanupVerifiedStaging(draft: MiniAppRequestRecord, snapshot: TaskSnapshot): Promise<void> {
+  async function cleanupVerifiedStaging(
+    draft: MiniAppRequestRecord,
+    snapshot: TaskSnapshot,
+    deadline: FinalAttemptDeadline | null,
+  ): Promise<void> {
     if (!validTerminal(snapshot, draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
     for (const objectKey of [...draft.paymentEvidenceObjectKeys, ...draft.chatEvidenceObjectKeys]) {
+      if (deadline !== null) requireFinalTime(deadline)
       await input.staging.deleteVerified(objectKey)
     }
   }
@@ -442,7 +461,14 @@ export function createAsyncBookingWorker(input: {
       }
 
       if (!lastDraft || !bound) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
-      const context: WorkerContext = { draft: lastDraft, bound, snapshot, ownerToken, taskAttempt: finalizeInput.attempt }
+      const context: WorkerContext = {
+        draft: lastDraft,
+        bound,
+        snapshot,
+        deadline: finalizeInput.attempt === MAX_TASK_ATTEMPTS ? finalAttemptDeadline : null,
+        ownerToken,
+        taskAttempt: finalizeInput.attempt,
+      }
       let stage: WorkerSafeErrorCode = 'EVIDENCE_COPY_RETRY'
       let bookingResult: MiniAppBookingIngressResult | null = null
       try {
@@ -456,7 +482,9 @@ export function createAsyncBookingWorker(input: {
         if (!terminal || !validTerminal(snapshot, context.draft)) {
           throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
         }
-        try { await cleanupVerifiedStaging(context.draft, snapshot) } catch { /* retain staging after terminal */ }
+        try {
+          await cleanupVerifiedStaging(context.draft, snapshot, context.deadline)
+        } catch { /* retain staging after terminal */ }
         return terminal
       } catch (error) {
         if (error instanceof AsyncBookingWorkerError && error.code === 'ASYNC_STATE_FENCE_LOST') {
@@ -468,7 +496,11 @@ export function createAsyncBookingWorker(input: {
           throw error
         }
         let current: MiniAppRequestRecord
-        try { current = await readDraft(context.draft.draftId, context.draft.requestId) } catch {
+        try {
+          current = context.deadline === null
+            ? await readDraft(context.draft.draftId, context.draft.requestId)
+            : await readDraftBeforeDeadline(context.deadline, context.draft.draftId, context.draft.requestId)
+        } catch {
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
             return convergeFinalAttempt(
               context.draft, snapshot, finalAttemptDeadline, ownerToken, bookingResult ? context.draft : undefined,
