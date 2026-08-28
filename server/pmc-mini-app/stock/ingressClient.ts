@@ -171,6 +171,7 @@ function isStockCommandResultForCommand(
   if (command.commandType === 'CREATE_PRODUCT') {
     if (command.payload.openingQuantityMilli === 0) return result.lines.length === 0
     return result.lines.length === 1 &&
+      result.lines[0]!.productId === result.documentId &&
       result.lines[0]!.quantityDeltaMilli === command.payload.openingQuantityMilli &&
       result.lines[0]!.balanceAfterMilli === command.payload.openingQuantityMilli
   }
@@ -178,10 +179,17 @@ function isStockCommandResultForCommand(
   if (command.commandType === 'ADJUST') {
     return result.lines.length === 0 || (result.lines.length === 1 &&
       result.lines[0]!.productId === command.payload.productId &&
+      result.lines[0]!.quantityDeltaMilli !== 0 &&
       result.lines[0]!.balanceAfterMilli === command.payload.countedQuantityMilli)
   }
 
-  return result.lines.length === 0
+  if (
+    command.commandType === 'UPDATE_PRODUCT' ||
+    command.commandType === 'DEACTIVATE_PRODUCT' ||
+    command.commandType === 'REACTIVATE_PRODUCT'
+  ) return result.lines.length === 0 && result.documentId === command.payload.productId
+
+  return false
 }
 
 function isStockCommandResult(value: unknown): value is StockCommandResult {

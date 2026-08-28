@@ -60,15 +60,21 @@ describe('PMC Mini App signed Stock ingress client', () => {
     ])],
     ['CREATE_PRODUCT with opening', createCommand(2_000), commandResult('create-stock-1', 'CREATE_PRODUCT', [
       { productId: 'STK-000003', quantityDeltaMilli: 2_000, balanceAfterMilli: 2_000 },
-    ])],
-    ['CREATE_PRODUCT without opening', createCommand(0), commandResult('create-stock-1', 'CREATE_PRODUCT', [])],
+    ], 'STK-000003')],
+    ['CREATE_PRODUCT without opening', createCommand(0), commandResult(
+      'create-stock-1', 'CREATE_PRODUCT', [], 'STK-000004',
+    )],
     ['ADJUST with ledger delta', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
       { productId: 'STK-000001', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
-    ])],
-    ['ADJUST without ledger delta', adjustCommand(5_000), commandResult('adjust-stock-1', 'ADJUST', [])],
-    ['UPDATE_PRODUCT', updateCommand(), commandResult('update-stock-1', 'UPDATE_PRODUCT', [])],
-    ['DEACTIVATE_PRODUCT', lifecycleCommand('DEACTIVATE_PRODUCT'), commandResult('lifecycle-stock-1', 'DEACTIVATE_PRODUCT', [])],
-    ['REACTIVATE_PRODUCT', lifecycleCommand('REACTIVATE_PRODUCT'), commandResult('lifecycle-stock-1', 'REACTIVATE_PRODUCT', [])],
+    ], 'ADJ-000001')],
+    ['ADJUST without ledger delta', adjustCommand(5_000), commandResult('adjust-stock-1', 'ADJUST', [], 'ADJ-000002')],
+    ['UPDATE_PRODUCT', updateCommand(), commandResult('update-stock-1', 'UPDATE_PRODUCT', [], 'STK-000001')],
+    ['DEACTIVATE_PRODUCT', lifecycleCommand('DEACTIVATE_PRODUCT'), commandResult(
+      'lifecycle-stock-1', 'DEACTIVATE_PRODUCT', [], 'STK-000001',
+    )],
+    ['REACTIVATE_PRODUCT', lifecycleCommand('REACTIVATE_PRODUCT'), commandResult(
+      'lifecycle-stock-1', 'REACTIVATE_PRODUCT', [], 'STK-000001',
+    )],
   ])('accepts the exact %s result semantics', async (_name, command, result) => {
     await expect(clientWithResult(result).send(command)).resolves.toEqual(result)
   })
@@ -108,6 +114,12 @@ describe('PMC Mini App signed Stock ingress client', () => {
     ['CREATE_PRODUCT unsafe product ID', createCommand(2_000), commandResult('create-stock-1', 'CREATE_PRODUCT', [
       { productId: 'unsafe/product', quantityDeltaMilli: 2_000, balanceAfterMilli: 2_000 },
     ])],
+    ['CREATE_PRODUCT line/document mismatch', createCommand(2_000), commandResult('create-stock-1', 'CREATE_PRODUCT', [
+      { productId: 'STK-000003', quantityDeltaMilli: 2_000, balanceAfterMilli: 2_000 },
+    ], 'STK-000004')],
+    ['CREATE_PRODUCT zero-opening unsafe document ID', createCommand(0), commandResult(
+      'create-stock-1', 'CREATE_PRODUCT', [], 'unsafe/product',
+    )],
     ['ADJUST wrong product', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
       { productId: 'STK-000002', quantityDeltaMilli: -2_000, balanceAfterMilli: 3_000 },
     ])],
@@ -121,6 +133,9 @@ describe('PMC Mini App signed Stock ingress client', () => {
     ['ADJUST unsafe delta', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
       { productId: 'STK-000001', quantityDeltaMilli: Number.MAX_SAFE_INTEGER + 1, balanceAfterMilli: 3_000 },
     ])],
+    ['ADJUST zero delta ledger line', adjustCommand(3_000), commandResult('adjust-stock-1', 'ADJUST', [
+      { productId: 'STK-000001', quantityDeltaMilli: 0, balanceAfterMilli: 3_000 },
+    ], 'ADJ-000001')],
     ['UPDATE_PRODUCT ledger line', updateCommand(), commandResult('update-stock-1', 'UPDATE_PRODUCT', [
       { productId: 'STK-000001', quantityDeltaMilli: 0, balanceAfterMilli: 5_000 },
     ])],
@@ -128,6 +143,15 @@ describe('PMC Mini App signed Stock ingress client', () => {
       'lifecycle-stock-1', 'DEACTIVATE_PRODUCT', [
         { productId: 'STK-000001', quantityDeltaMilli: 0, balanceAfterMilli: 5_000 },
       ],
+    )],
+    ['UPDATE_PRODUCT document mismatch', updateCommand(), commandResult(
+      'update-stock-1', 'UPDATE_PRODUCT', [], 'STK-000002',
+    )],
+    ['DEACTIVATE_PRODUCT document mismatch', lifecycleCommand('DEACTIVATE_PRODUCT'), commandResult(
+      'lifecycle-stock-1', 'DEACTIVATE_PRODUCT', [], 'STK-000002',
+    )],
+    ['REACTIVATE_PRODUCT document mismatch', lifecycleCommand('REACTIVATE_PRODUCT'), commandResult(
+      'lifecycle-stock-1', 'REACTIVATE_PRODUCT', [], 'STK-000002',
     )],
   ])('rejects semantically malformed success: %s', async (_name, command, result) => {
     await expect(clientWithResult(result).send(command)).rejects.toMatchObject({
@@ -270,8 +294,9 @@ function commandResult(
   requestId: string,
   commandType: MiniAppStockCommand['commandType'],
   lines: StockCommandResult['lines'],
+  documentId = 'DOC-000001',
 ): StockCommandResult {
-  return { requestId, documentId: 'DOC-000001', commandType, createdAt: '2027-01-15T08:00:00.000Z', lines }
+  return { requestId, documentId, commandType, createdAt: '2027-01-15T08:00:00.000Z', lines }
 }
 
 function clientWithResult(result: StockCommandResult) {
