@@ -324,6 +324,66 @@ button:focus-visible {
 @keyframes pmc-report-spin { to { transform: rotate(1turn); } }
 .pmc-report-status .spinning { animation: pmc-report-spin .8s linear infinite; }
 
+.pmc-stock-page {
+  width: min(100%, 560px);
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding: max(24px, env(safe-area-inset-top)) 18px calc(112px + env(safe-area-inset-bottom));
+  background: #f6f7f9;
+  container-type: inline-size;
+  letter-spacing: normal;
+}
+
+.pmc-stock-header { padding: 0 5px 20px; }
+.pmc-stock-header > p { margin: 0; color: var(--pmc-gold-dark); font-size: .7rem; font-weight: 750; line-height: 1.4; letter-spacing: .09em; }
+.pmc-stock-header h1 { margin: 3px 0 0; font-size: 2rem; line-height: var(--lh-heading); text-wrap: balance; }
+.pmc-stock-header > span { display: block; margin-block-start: 5px; color: var(--pmc-muted); font-size: .88rem; line-height: var(--lh-body); }
+
+.pmc-stock-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.pmc-stock-actions button {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid #dfcfb2;
+  border-radius: 12px;
+  color: var(--pmc-gold-dark);
+  background: #fffaf2;
+  font-size: .82rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.pmc-stock-actions svg { flex: 0 0 auto; width: 19px; height: 19px; stroke-width: 1.8; }
+
+.pmc-stock-browser { margin-block-start: 14px; padding: 17px; border: 1px solid #e6e7e9; border-radius: 18px; background: #fff; box-shadow: 0 7px 20px rgba(24, 32, 46, .045); }
+.pmc-stock-browser > h2 { margin: 0 0 12px; font-size: 1.05rem; line-height: var(--lh-heading); }
+.pmc-stock-search > span:first-child { display: block; margin-block-end: 6px; color: var(--pmc-muted); font-size: .76rem; line-height: 1.5; }
+.pmc-stock-search-control { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; min-height: 50px; gap: 8px; padding-inline: 12px; border: 1px solid #d3d3d3; border-radius: 12px; background: #fff; }
+.pmc-stock-search-control:focus-within { border-color: var(--pmc-gold); box-shadow: 0 0 0 3px rgba(168, 117, 32, .14); }
+.pmc-stock-search-control > svg { width: 20px; height: 20px; color: #858585; stroke-width: 1.8; }
+.pmc-stock-search-control input { width: 100%; min-height: 48px; padding: 8px 0; border: 0; outline: 0; color: var(--pmc-text); background: transparent; line-height: var(--lh-body); }
+.pmc-stock-search-control input::placeholder { color: #9a9a9a; opacity: 1; }
+
+.pmc-stock-filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; margin-block-start: 10px; }
+.pmc-stock-filters button { min-width: 0; min-height: 48px; padding: 6px 3px; border: 1px solid #e2e2e2; border-radius: 10px; color: #626262; background: #fafafa; font-size: .7rem; font-weight: 650; line-height: 1.4; }
+.pmc-stock-filters button[aria-pressed="true"] { border-color: #c89b51; color: var(--pmc-gold-dark); background: var(--pmc-gold-soft); }
+.pmc-stock-result-count { margin: 12px 0 7px; color: var(--pmc-muted); font-size: .74rem; line-height: 1.5; }
+
+.pmc-stock-product-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 9px; margin: 0; padding: 0; list-style: none; }
+.pmc-stock-product-list article { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; min-height: 86px; gap: 11px; padding: 12px; border: 1px solid #e6e7e9; border-radius: 14px; background: #fff; }
+.pmc-stock-product-list article.low { border-color: #edc2bd; background: #fffafa; }
+.pmc-stock-product-icon { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 12px; color: var(--pmc-gold-dark); background: var(--pmc-gold-soft); }
+.pmc-stock-product-icon svg { width: 23px; height: 23px; stroke-width: 1.75; }
+.pmc-stock-product-copy { min-width: 0; }
+.pmc-stock-product-copy h3 { margin: 0; font-size: .92rem; line-height: var(--lh-heading); }
+.pmc-stock-product-copy p { margin: 2px 0 0; overflow: hidden; color: var(--pmc-muted); font-size: .68rem; line-height: 1.55; text-overflow: ellipsis; white-space: nowrap; }
+.pmc-stock-low-badge { display: inline-flex; min-height: 24px; align-items: center; margin-block-start: 5px; padding: 2px 8px; border: 1px solid #edc2bd; border-radius: 999px; color: var(--pmc-error); background: #fff1ef; font-size: .68rem; font-weight: 700; line-height: 1.4; }
+.pmc-stock-product-list article > strong { color: var(--pmc-text); font-size: .9rem; font-variant-numeric: tabular-nums; line-height: 1.45; text-align: end; }
+.pmc-stock-empty { margin: 8px 0 0; padding: 22px 12px; border: 1px dashed #d7d7d7; border-radius: 12px; color: var(--pmc-muted); font-size: .82rem; line-height: var(--lh-body); text-align: center; }
+
 .pmc-booking-page {
   width: min(100%, 560px);
   min-height: 100dvh;
@@ -414,6 +474,7 @@ button:focus-visible {
   .pmc-home-quick-card:not(:disabled):hover,
   .pmc-home-account-card:hover { border-color: #d7c39f; transform: translateY(-2px); box-shadow: 0 12px 28px rgba(64, 45, 14, .09); }
   .pmc-primary-card-copy button:hover { background: #fffaf1; }
+  .pmc-stock-actions button:hover { border-color: #c89b51; background: var(--pmc-gold-soft); }
 }
 
 @media (prefers-reduced-motion: no-preference) {

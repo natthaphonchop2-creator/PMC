@@ -1,3 +1,5 @@
+import type { StockCategory } from '../../../shared/pmcStock'
+
 export interface MiniAppSession {
   staffId: string
   displayName: string
@@ -8,10 +10,25 @@ export interface MiniAppConfig {
   miniAppId: string
   fallbackFormUrl: string
   reportingEnabled: boolean
+  stockEnabled: boolean
+  canManageStock: boolean
   doctors: Array<{ id: string; name: string }>
   services: Array<{ id: string; name: string; durationMinutes: number }>
   channels: Array<{ id: string; name: string }>
   aes: Array<{ id: string; name: string }>
+}
+
+export interface StockProductProjection {
+  productId: string
+  name: string
+  category: StockCategory
+  unit: string
+  minimumQuantityMilli: number
+  onHandMilli: number
+  lowStock: boolean
+  active: boolean
+  hasLedgerActivity: boolean
+  version: number
 }
 
 export interface MiniAppEnrollmentOptions {

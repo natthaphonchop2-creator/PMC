@@ -1,6 +1,7 @@
 import type { MiniAppBrowserApi } from './api'
 import type { BookingDraftInput, BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
 import type { JeraClientEnvelope, JeraReportType } from './reports'
+import type { StockClientCommand } from '../../../shared/pmcStock'
 
 export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displayName: 'มัส', active: true }
 
@@ -8,6 +9,8 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   miniAppId: 'preview-mini-app',
   fallbackFormUrl: 'https://docs.google.com/forms/',
   reportingEnabled: false,
+  stockEnabled: false,
+  canManageStock: false,
   doctors: [{ id: 'doctor-benz', name: 'หมอ Benz' }, { id: 'doctor-jam', name: 'หมอ Jam' }],
   services: [
     { id: 'fat-transfer', name: 'เติมไขมัน', durationMinutes: 60 },
@@ -75,6 +78,23 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
     },
     async loadReport<T>(_token: string, reportType: JeraReportType): Promise<JeraClientEnvelope<T>> { return previewReport<T>(reportType) },
     async refreshReport() { return { accepted: true, correlationId: 'preview-refresh-1' } },
+    async loadStockProducts() {
+      return { products: [{
+        productId: 'STK-PREVIEW-1', name: 'ถุงมือ', category: 'CLINIC_SUPPLY' as const, unit: 'กล่อง',
+        minimumQuantityMilli: 5_000, onHandMilli: 4_000, lowStock: true, active: true,
+        hasLedgerActivity: true, version: 1,
+      }] }
+    },
+    async loadStockHistory() { return { documents: [], nextCursor: null } },
+    async submitStockCommand(_token: string, command: StockClientCommand) {
+      return {
+        requestId: command.requestId,
+        documentId: `PREVIEW-${command.requestId}`,
+        commandType: command.commandType,
+        createdAt: '2026-08-28T00:00:00.000Z',
+        lines: [],
+      }
+    },
   }
 }
 

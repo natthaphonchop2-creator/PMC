@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, FileChartColumn, House, UserRound } from 'lucide-react'
+import { CalendarDays, FileChartColumn, House, PackageOpen, UserRound } from 'lucide-react'
 import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
-import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from './contracts'
+import type { BookingDraftProjection, MiniAppConfig, MiniAppSession, StockProductProjection } from './contracts'
 import { EnrollmentPage } from './EnrollmentPage'
 import { Home } from './Home'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
+import { StockHome } from './stock/StockHome'
 import {
   loadReportFilterPreferences,
   saveReportFilterPreferences,
@@ -15,7 +16,7 @@ import {
 } from './reports'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
-type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'ACCOUNT'
+type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
 
 export function PmcMiniApp({
   initialSession,
@@ -39,6 +40,7 @@ export function PmcMiniApp({
   const [enrollmentMessage, setEnrollmentMessage] = useState('')
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
+  const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
 
@@ -107,6 +109,21 @@ export function PmcMiniApp({
     }
   }
 
+  const openStock = async () => {
+    if (!config?.stockEnabled) return
+    setLoading(true)
+    setMessage('')
+    try {
+      const result = await api.loadStockProducts(idToken)
+      setStockProducts(result.products)
+      setView('STOCK')
+    } catch {
+      setMessage('โหลดรายการสต็อกไม่สำเร็จ กรุณาลองอีกครั้ง')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const linkAccount = async (staffId: string, pin: string) => {
     setEnrollmentBusy(true)
     setEnrollmentMessage('')
@@ -150,8 +167,10 @@ export function PmcMiniApp({
       {view === 'HOME' && <Home
         session={session}
         reportingEnabled={Boolean(config?.reportingEnabled)}
+        stockEnabled={Boolean(config?.stockEnabled)}
         onAction={(action) => {
           if (action === 'BOOKING') void openBooking()
+          else if (action === 'STOCK') void openStock()
           else setView(action)
         }}
       />}
@@ -167,11 +186,26 @@ export function PmcMiniApp({
           />
           : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
+      {view === 'STOCK' && <StockHome
+        products={stockProducts}
+        canManageStock={Boolean(config?.canManageStock)}
+        onIssue={() => setMessage('ขั้นตอนเบิกสินค้าจะเปิดใช้งานในลำดับถัดไป')}
+        onManagerAction={(action) => setMessage(action === 'RECEIVE'
+          ? 'ขั้นตอนรับเข้าจะเปิดใช้งานในลำดับถัดไป'
+          : 'หน้าจัดการสินค้าจะเปิดใช้งานในลำดับถัดไป')}
+        onHistory={() => setMessage('ประวัติสต็อกจะเปิดใช้งานในลำดับถัดไป')}
+      />}
       {message && <p className="pmc-shell-alert" role="alert">{message}</p>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
-      <BottomNavigation view={view} reportingEnabled={Boolean(config?.reportingEnabled)} onChange={(next) => {
+      <BottomNavigation
+        view={view}
+        reportingEnabled={Boolean(config?.reportingEnabled)}
+        stockEnabled={Boolean(config?.stockEnabled)}
+        onChange={(next) => {
         if (next === 'BOOKING') void openBooking()
+        else if (next === 'STOCK') void openStock()
         else {
+          setMessage('')
           if (next === 'REPORTS' && view === 'REPORTS') setSelectedReport(null)
           else { setView(next); if (next !== 'REPORTS') setSelectedReport(null) }
         }
@@ -180,14 +214,16 @@ export function PmcMiniApp({
   )
 }
 
-function BottomNavigation({ view, reportingEnabled, onChange }: {
+function BottomNavigation({ view, reportingEnabled, stockEnabled, onChange }: {
   view: MiniAppView
   reportingEnabled: boolean
+  stockEnabled: boolean
   onChange: (view: MiniAppView) => void
 }) {
   const items = [
     { view: 'HOME' as const, label: 'หน้าหลัก', icon: House },
     { view: 'BOOKING' as const, label: 'ลงนัด', icon: CalendarDays },
+    ...(stockEnabled ? [{ view: 'STOCK' as const, label: 'สต็อก', icon: PackageOpen }] : []),
     ...(reportingEnabled ? [{ view: 'REPORTS' as const, label: 'รายงาน', icon: FileChartColumn }] : []),
     { view: 'ACCOUNT' as const, label: 'บัญชี', icon: UserRound },
   ]

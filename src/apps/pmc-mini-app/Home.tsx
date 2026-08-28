@@ -2,11 +2,12 @@ import { CalendarDays, ChartNoAxesCombined, ChevronRight, PackageOpen, Plus, Use
 import { BrandMark } from './BrandMark'
 import type { MiniAppSession } from './contracts'
 
-export type MiniAppHomeAction = 'BOOKING' | 'REPORTS' | 'ACCOUNT'
+export type MiniAppHomeAction = 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
 
-export function Home({ session, reportingEnabled, onAction }: {
+export function Home({ session, reportingEnabled, stockEnabled, onAction }: {
   session: MiniAppSession
   reportingEnabled: boolean
+  stockEnabled: boolean
   onAction?: (action: MiniAppHomeAction) => void
 }) {
   return (
@@ -14,7 +15,7 @@ export function Home({ session, reportingEnabled, onAction }: {
       <header className="pmc-mini-app-header">
         <BrandMark />
         <h1>สวัสดี, {session.displayName}</h1>
-        <p>{reportingEnabled ? 'จัดการงานจองและรายงานของคลินิก' : 'จัดการงานจองของคลินิก'}</p>
+        <p>{homeDescription(reportingEnabled, stockEnabled)}</p>
       </header>
 
       <section className="pmc-home-primary-card" aria-labelledby="booking-card-title">
@@ -33,11 +34,18 @@ export function Home({ session, reportingEnabled, onAction }: {
           <small>ดูข้อมูลรายงานของคลินิก</small>
           <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
         </button>}
-        <button type="button" className="pmc-home-quick-card unavailable" aria-label="Stock" disabled>
-          <span className="pmc-card-icon"><PackageOpen aria-hidden="true" /></span>
-          <strong>Stock</strong>
-          <small>ยังไม่เปิดใช้งาน</small>
-        </button>
+        {stockEnabled
+          ? <button type="button" className="pmc-home-quick-card" aria-label="Stock" onClick={() => onAction?.('STOCK')}>
+            <span className="pmc-card-icon"><PackageOpen aria-hidden="true" /></span>
+            <strong>Stock</strong>
+            <small>ตรวจยอดและเบิกสินค้า</small>
+            <ChevronRight className="pmc-card-chevron" aria-hidden="true" />
+          </button>
+          : <button type="button" className="pmc-home-quick-card unavailable" aria-label="Stock" disabled>
+            <span className="pmc-card-icon"><PackageOpen aria-hidden="true" /></span>
+            <strong>Stock</strong>
+            <small>ยังไม่เปิดใช้งาน</small>
+          </button>}
       </section>
 
       <button type="button" className="pmc-home-account-card" aria-label="บัญชีผู้ใช้" onClick={() => onAction?.('ACCOUNT')}>
@@ -47,4 +55,11 @@ export function Home({ session, reportingEnabled, onAction }: {
       </button>
     </main>
   )
+}
+
+function homeDescription(reportingEnabled: boolean, stockEnabled: boolean): string {
+  if (reportingEnabled && stockEnabled) return 'จัดการงานจอง รายงาน และสต็อกของคลินิก'
+  if (reportingEnabled) return 'จัดการงานจองและรายงานของคลินิก'
+  if (stockEnabled) return 'จัดการงานจองและสต็อกของคลินิก'
+  return 'จัดการงานจองของคลินิก'
 }

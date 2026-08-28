@@ -62,6 +62,24 @@ describe('PMC LINE Mini App shell', () => {
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
   })
 
+  it('opens Stock only when role-filtered Stock configuration enables it', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true, canManageStock: false }}
+      api={api}
+    />)
+
+    expect(screen.getByRole('button', { name: 'Stock' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'สต็อก' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Stock' }))
+
+    expect(api.loadStockProducts).toHaveBeenCalledWith('preview-token')
+    expect(await screen.findByRole('heading', { name: 'Stock' })).toBeVisible()
+    expect(screen.getByText('4 กล่อง')).toBeVisible()
+  })
+
   it('links an unknown LINE account with one short mobile PIN form', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -88,6 +106,7 @@ describe('PMC LINE Mini App shell', () => {
 
 const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
+  stockEnabled: false, canManageStock: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
 }
@@ -103,5 +122,11 @@ function miniAppApi(): PmcMiniAppApi {
     loadDraft: vi.fn(),
     upload: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
     loadReport: vi.fn(), refreshReport: vi.fn(),
+    loadStockProducts: vi.fn(async () => ({ products: [{
+      productId: 'STK-000001', name: 'ถุงมือ', category: 'CLINIC_SUPPLY', unit: 'กล่อง',
+      minimumQuantityMilli: 5_000, onHandMilli: 4_000, lowStock: true, active: true,
+      hasLedgerActivity: true, version: 2,
+    }] })),
+    loadStockHistory: vi.fn(), submitStockCommand: vi.fn(),
   }
 }
