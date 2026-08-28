@@ -384,6 +384,33 @@ button:focus-visible {
 .pmc-stock-product-list article > strong { color: var(--pmc-text); font-size: .9rem; font-variant-numeric: tabular-nums; line-height: 1.45; text-align: end; }
 .pmc-stock-empty { margin: 8px 0 0; padding: 22px 12px; border: 1px dashed #d7d7d7; border-radius: 12px; color: var(--pmc-muted); font-size: .82rem; line-height: var(--lh-body); text-align: center; }
 
+.pmc-stock-history {
+  width: min(100%, 560px);
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding: max(20px, env(safe-area-inset-top)) 18px calc(28px + env(safe-area-inset-bottom));
+  background: #f6f7f9;
+  letter-spacing: normal;
+}
+.pmc-stock-history-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.pmc-stock-history-document { overflow: clip; border: 1px solid #e0e1e3; border-radius: 15px; background: #fff; box-shadow: 0 7px 20px rgba(24, 32, 46, .04); }
+.pmc-stock-history-document summary { min-height: 82px; padding: 14px 15px; color: var(--pmc-text); cursor: pointer; }
+.pmc-stock-history-document summary::marker { color: var(--pmc-gold-dark); }
+.pmc-stock-history-document summary:focus-visible { outline: 3px solid #8b641f; outline-offset: -3px; }
+.pmc-stock-history-summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; padding-inline-start: 4px; }
+.pmc-stock-history-summary > span:first-child { display: flex; min-width: 0; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pmc-stock-history-summary strong { overflow-wrap: anywhere; font-size: .91rem; font-variant-numeric: tabular-nums; line-height: 1.5; }
+.pmc-stock-history-summary small { flex: 0 0 auto; color: var(--pmc-gold-dark); font-size: .7rem; line-height: 1.55; }
+.pmc-stock-history-summary > span:last-child { color: var(--pmc-muted); font-size: .74rem; line-height: 1.65; }
+.pmc-stock-history-details { padding: 0 15px 15px; border-block-start: 1px solid #ededed; }
+.pmc-stock-history-details ul { margin: 0; padding: 5px 0 0; list-style: none; }
+.pmc-stock-history-details li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-block: 10px; border-block-end: 1px solid #efefef; font-size: .8rem; line-height: var(--lh-body); }
+.pmc-stock-history-details li > span { min-width: 0; overflow-wrap: anywhere; }
+.pmc-stock-history-details li > strong { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.pmc-stock-history-reason { margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; color: #5e4930; background: var(--pmc-gold-soft); font-size: .76rem; line-height: var(--lh-body); }
+.pmc-stock-history-more { width: 100%; min-height: 50px; margin-block-start: 14px; border: 1px solid #d4b985; border-radius: 11px; color: var(--pmc-gold-dark); background: #fffaf2; font-weight: 700; }
+.pmc-stock-history-more:disabled { cursor: wait; opacity: .62; }
+
 .pmc-stock-issue-page {
   width: min(100%, 560px);
   min-height: 100dvh;

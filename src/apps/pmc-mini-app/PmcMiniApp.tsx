@@ -8,6 +8,7 @@ import { Home } from './Home'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
 import { StockHome } from './stock/StockHome'
+import { StockHistory } from './stock/StockHistory'
 import { StockIssueFlow, type StockIssueFlowAdapter } from './stock/StockIssueFlow'
 import { StockManager, type StockManagerAdapter } from './stock/StockManager'
 import {
@@ -16,6 +17,7 @@ import {
   type ReportFilterState,
   type ReportSelection,
 } from './reports'
+import type { StockHistoryPage } from '../../../shared/pmcStock'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
@@ -43,7 +45,10 @@ export function PmcMiniApp({
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
-  const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE'>('HOME')
+  const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
+  const [stockHistoryPage, setStockHistoryPage] = useState<StockHistoryPage | null>(null)
+  const [stockHistoryLoadingMore, setStockHistoryLoadingMore] = useState(false)
+  const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
@@ -148,6 +153,44 @@ export function PmcMiniApp({
     }
   }
 
+  const openStockHistory = async () => {
+    const requestEpoch = ++navigationEpochRef.current
+    setStockHistoryPage(null)
+    setStockHistoryMessage('')
+    setLoading(true)
+    setMessage('')
+    try {
+      const page = await api.loadStockHistory(idToken)
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockHistoryPage(page)
+      setStockView('HISTORY')
+    } catch {
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockView('HOME')
+      setMessage('โหลดประวัติ Stock ไม่สำเร็จ กรุณาลองอีกครั้ง')
+    } finally {
+      if (requestEpoch === navigationEpochRef.current) setLoading(false)
+    }
+  }
+
+  const loadMoreStockHistory = async (cursor: string) => {
+    if (stockHistoryLoadingMore) return
+    const requestEpoch = navigationEpochRef.current
+    setStockHistoryLoadingMore(true)
+    setStockHistoryMessage('')
+    try {
+      const next = await api.loadStockHistory(idToken, cursor)
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockHistoryPage((current) => current ? appendHistoryPage(current, next) : next)
+    } catch {
+      if (requestEpoch === navigationEpochRef.current) {
+        setStockHistoryMessage('โหลดประวัติเพิ่มเติมไม่สำเร็จ กรุณาลองอีกครั้ง')
+      }
+    } finally {
+      if (requestEpoch === navigationEpochRef.current) setStockHistoryLoadingMore(false)
+    }
+  }
+
   const navigateTo = (next: MiniAppView) => {
     navigationEpochRef.current += 1
     setLoading(false)
@@ -208,6 +251,23 @@ export function PmcMiniApp({
       }}
     />
   }
+  if (view === 'STOCK' && stockView === 'HISTORY') {
+    if (!stockHistoryPage) return <Notice>กำลังโหลดประวัติ Stock</Notice>
+    return <StockHistory
+      page={stockHistoryPage}
+      canManageStock={Boolean(config?.canManageStock)}
+      loadingMore={stockHistoryLoadingMore}
+      message={stockHistoryMessage}
+      onLoadMore={(cursor) => { void loadMoreStockHistory(cursor) }}
+      onBack={() => {
+        navigationEpochRef.current += 1
+        setStockHistoryPage(null)
+        setStockHistoryMessage('')
+        setStockHistoryLoadingMore(false)
+        setStockView('HOME')
+      }}
+    />
+  }
   if (view === 'STOCK' && (stockView === 'RECEIVE' || stockView === 'MANAGE') && config?.canManageStock) {
     return <StockManager
       initialProducts={stockProducts}
@@ -245,7 +305,7 @@ export function PmcMiniApp({
           />
           : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
-      {view === 'STOCK' && <StockHome
+      {view === 'STOCK' && stockView === 'HOME' && <StockHome
         products={stockProducts}
         canManageStock={Boolean(config?.canManageStock)}
         onIssue={() => { setMessage(''); setStockView('ISSUE') }}
@@ -254,7 +314,7 @@ export function PmcMiniApp({
           setMessage('')
           setStockView(action)
         }}
-        onHistory={() => setMessage('ประวัติสต็อกจะเปิดใช้งานในลำดับถัดไป')}
+        onHistory={() => { void openStockHistory() }}
       />}
       {message && <p className="pmc-shell-alert" role="alert">{message}</p>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
@@ -314,4 +374,12 @@ function safeRetryAfterSeconds(error: unknown): number {
   if (!error || typeof error !== 'object' || !('retryAfterSeconds' in error)) return 0
   const value = Number(error.retryAfterSeconds)
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function appendHistoryPage(current: StockHistoryPage, next: StockHistoryPage): StockHistoryPage {
+  const known = new Set(current.documents.map((document) => document.documentId))
+  return {
+    documents: [...current.documents, ...next.documents.filter((document) => !known.has(document.documentId))],
+    nextCursor: next.nextCursor,
+  }
 }

@@ -71,6 +71,38 @@ describe('PMC Mini App runtime configuration checker', () => {
     }
   })
 
+  it('reports Stock rollout flag readiness without exposing configured values', async () => {
+    const checker = await import('../../scripts/check-pmc-mini-app-runtime.mjs')
+    const environment = {
+      ...validEnvironment(),
+      PMC_STOCK_ENABLED: 'true',
+      PMC_STOCK_MANAGER_PILOT_ONLY: 'true',
+      PMC_STOCK_INGRESS_URL: 'https://stock-ingress.private.example/exec',
+      PMC_STOCK_INGRESS_SECRET: 'stock-secret-sentinel',
+    }
+
+    const report = checker.inspectMiniAppRuntime(environment)
+    const serialized = JSON.stringify(report)
+
+    expect(report).toMatchObject({
+      ready: true,
+      stockEnabled: true,
+      stockManagerPilotOnly: true,
+      stockFlags: {
+        present: ['PMC_STOCK_ENABLED', 'PMC_STOCK_MANAGER_PILOT_ONLY'],
+        missing: [],
+      },
+    })
+    expect(report.stockBindings.present).toEqual(['PMC_STOCK_INGRESS_URL', 'PMC_STOCK_INGRESS_SECRET'])
+    expect(serialized).not.toContain(environment.PMC_STOCK_INGRESS_URL)
+    expect(serialized).not.toContain(environment.PMC_STOCK_INGRESS_SECRET)
+
+    expect(checker.inspectMiniAppRuntime({
+      ...environment,
+      PMC_STOCK_MANAGER_PILOT_ONLY: 'not-a-boolean-private-value',
+    })).toMatchObject({ ready: false, stockManagerPilotOnly: false, stockFlagsValid: false })
+  })
+
   it('keeps Render unchanged and documents Cloud Run disabled-first rollout', async () => {
     const [runbook, render] = await Promise.all([
       readFile(resolve('docs/pmc-mini-app/pilot-runbook.md'), 'utf8'),
@@ -92,6 +124,9 @@ function validEnvironment(): Record<string, string> {
     PMC_BOOKING_INGRESS_URL: 'https://script.google.com/macros/s/deployment/exec',
     PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
     PMC_MINI_APP_ENROLLMENT_ENABLED: 'false',
+    PMC_STOCK_ENABLED: 'false', PMC_STOCK_MANAGER_PILOT_ONLY: 'false',
+    PMC_STOCK_INGRESS_URL: 'https://script.google.com/macros/s/stock-deployment/exec',
+    PMC_STOCK_INGRESS_SECRET: 'stock-secret-sentinel',
     PMC_BOOKING_INGRESS_SECRET: 'booking-secret-sentinel', PMC_MINI_APP_SIGNING_SECRET: 'signing-secret-sentinel',
   }
 }

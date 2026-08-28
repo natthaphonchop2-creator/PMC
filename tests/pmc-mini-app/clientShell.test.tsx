@@ -167,7 +167,7 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('โหลดรายการสต็อกไม่สำเร็จ กรุณาลองอีกครั้ง')
   })
 
-  it('clears Stock messages through Home cards and bottom navigation', async () => {
+  it('clears completed Stock errors through Home cards and bottom navigation', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
     api.loadStockProducts = vi.fn()
@@ -184,15 +184,30 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: 'รายงาน JERA' }))
     expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 
-    await user.click(screen.getByRole('button', { name: 'หน้าหลัก' }))
+  it('keeps Stock navigation active while the initial history page is loading', async () => {
+    const user = userEvent.setup()
+    const pendingHistory = deferred<Awaited<ReturnType<PmcMiniAppApi['loadStockHistory']>>>()
+    const api = miniAppApi()
+    api.loadStockHistory = vi.fn(() => pendingHistory.promise)
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, stockEnabled: true, reportingEnabled: true }}
+      api={api}
+    />)
+
     await user.click(screen.getByRole('button', { name: 'Stock' }))
     expect(await screen.findByRole('heading', { name: 'Stock' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'ประวัติ' }))
-    expect(screen.getByRole('alert')).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Stock' })).toBeVisible()
+    expect(screen.getByText('กำลังเตรียมรายการ')).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'บัญชี' }))
     expect(screen.getByRole('heading', { name: 'บัญชี' })).toBeVisible()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await act(async () => pendingHistory.resolve({ documents: [], nextCursor: null }))
+    expect(screen.getByRole('heading', { name: 'บัญชี' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'ประวัติ Stock' })).not.toBeInTheDocument()
   })
 
   it('links an unknown LINE account with one short mobile PIN form', async () => {

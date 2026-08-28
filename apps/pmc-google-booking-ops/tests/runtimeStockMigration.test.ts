@@ -81,6 +81,7 @@ class FakeSheet {
     setValues: (values: unknown[][]) => void
     setValue: (value: unknown) => void
   } {
+    void _rows
     return {
       getValues: () => [[...this.headers.slice(column - 1, column - 1 + columns)]],
       setValues: (values) => this.headers.splice(column - 1, values[0]?.length ?? 0, ...(values[0] ?? []).map(String)),
