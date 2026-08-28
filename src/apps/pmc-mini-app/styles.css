@@ -393,6 +393,15 @@ button:focus-visible {
   letter-spacing: normal;
 }
 
+.pmc-stock-manager-page {
+  width: min(100%, 560px);
+  min-height: 100dvh;
+  margin-inline: auto;
+  padding: max(20px, env(safe-area-inset-top)) 18px 0;
+  background: #f6f7f9;
+  letter-spacing: normal;
+}
+
 .pmc-stock-flow-header { display: grid; grid-template-columns: 48px minmax(0, 1fr) 42px; align-items: center; gap: 12px; padding: 0 2px 20px; }
 .pmc-stock-flow-header > button { display: grid; width: 48px; min-height: 48px; place-items: center; padding: 0; border: 1px solid #dedede; border-radius: 50%; color: var(--pmc-text); background: #fff; }
 .pmc-stock-flow-header > button svg { width: 22px; height: 22px; }
@@ -441,6 +450,74 @@ button:focus-visible {
 .pmc-stock-success .pmc-stock-flow-alert { width: min(100%, 360px); margin-block-start: 14px; text-align: start; }
 .pmc-stock-success > button { min-height: 50px; margin-block-start: 28px; padding: 10px 24px; border: 1px solid var(--pmc-gold-dark); border-radius: 10px; color: #fff; background: var(--pmc-gold-dark); font-weight: 700; }
 .pmc-stock-success > button:disabled { cursor: wait; opacity: .62; }
+
+.pmc-stock-manager-card,
+.pmc-stock-manager-toolbar {
+  padding: 17px;
+  border: 1px solid #e6e7e9;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 7px 20px rgba(24, 32, 46, .045);
+}
+.pmc-stock-manager-field { display: block; margin-block-start: 14px; }
+.pmc-stock-manager-field:first-child { margin-block-start: 0; }
+.pmc-stock-manager-field > :is(span, label) { display: block; margin-block-end: 5px; font-size: .8rem; font-weight: 650; line-height: 1.55; }
+.pmc-stock-manager-field :is(input, select, textarea) {
+  width: 100%;
+  min-height: 50px;
+  padding: 10px 12px;
+  border: 1px solid #cfcfcf;
+  border-radius: 10px;
+  outline: 0;
+  color: var(--pmc-text);
+  background: #fff;
+  line-height: 1.65;
+  resize: vertical;
+}
+.pmc-stock-manager-field textarea { min-height: 96px; }
+.pmc-stock-manager-field :is(input, select, textarea):focus-visible,
+.pmc-stock-manager-search input:focus-visible { border-color: var(--pmc-gold); box-shadow: 0 0 0 3px rgba(168, 117, 32, .14); }
+.pmc-stock-manager-field :is(input, select, textarea):disabled { cursor: not-allowed; color: #606060; background: #f1f1f1; opacity: 1; }
+.pmc-stock-manager-field > small { display: block; margin-block-start: 4px; color: var(--pmc-muted); font-size: .7rem; line-height: 1.55; text-align: end; }
+.pmc-stock-manager-help { margin: 6px 0 0; color: var(--pmc-muted); font-size: .74rem; line-height: 1.65; }
+
+.pmc-stock-manager-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 15px 0 0; }
+.pmc-stock-manager-summary > div { min-width: 0; padding: 11px; border-radius: 10px; background: #f7f7f7; }
+.pmc-stock-manager-summary dt { color: var(--pmc-muted); font-size: .7rem; line-height: 1.5; }
+.pmc-stock-manager-summary dd { margin: 3px 0 0; font-size: .86rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.55; }
+.pmc-stock-manager-toolbar > button { display: inline-flex; width: 100%; min-height: 50px; align-items: center; justify-content: center; gap: 7px; border-radius: 11px; }
+.pmc-stock-manager-toolbar > button svg { width: 19px; height: 19px; }
+.pmc-stock-manager-search { display: block; margin-block-start: 14px; }
+.pmc-stock-manager-search > span:first-child { display: block; margin-block-end: 5px; color: var(--pmc-muted); font-size: .76rem; line-height: 1.55; }
+.pmc-stock-manager-search > span:last-child { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 8px; }
+.pmc-stock-manager-search svg { width: 19px; height: 19px; color: var(--pmc-muted); }
+.pmc-stock-manager-search input { width: 100%; min-height: 50px; padding: 9px 11px; border: 1px solid #cfcfcf; border-radius: 10px; outline: 0; line-height: 1.65; }
+
+.pmc-stock-manager-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 13px 0 22px; padding: 0; list-style: none; }
+.pmc-stock-manager-list article { padding: 15px; border: 1px solid #e2e2e2; border-radius: 15px; background: #fff; }
+.pmc-stock-manager-list header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.pmc-stock-manager-list header > div { min-width: 0; }
+.pmc-stock-manager-list h2 { margin: 0; font-size: 1rem; line-height: var(--lh-heading); }
+.pmc-stock-manager-list header p { margin: 3px 0 0; color: var(--pmc-muted); font-size: .7rem; line-height: 1.55; }
+.pmc-stock-manager-list header > span { flex: 0 0 auto; min-height: 27px; padding: 3px 9px; border-radius: 999px; font-size: .68rem; font-weight: 700; line-height: 1.5; }
+.pmc-stock-manager-list header > span.active { color: #176b43; background: #eaf7f0; }
+.pmc-stock-manager-list header > span.inactive { color: #666; background: #eeeeee; }
+.pmc-stock-manager-list dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; }
+.pmc-stock-manager-list dl > div { padding: 8px 9px; border-radius: 9px; background: #f7f7f7; }
+.pmc-stock-manager-list dt { color: var(--pmc-muted); font-size: .67rem; line-height: 1.5; }
+.pmc-stock-manager-list dd { margin: 2px 0 0; font-size: .78rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.55; }
+.pmc-stock-manager-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-block-start: 12px; }
+.pmc-stock-manager-actions button { display: inline-flex; min-width: 0; min-height: 48px; align-items: center; justify-content: center; gap: 5px; padding: 7px 8px; border: 1px solid #d9d9d9; border-radius: 10px; color: var(--pmc-text); background: #fff; font-size: .74rem; font-weight: 650; line-height: 1.45; }
+.pmc-stock-manager-actions button svg { flex: 0 0 auto; width: 17px; height: 17px; }
+.pmc-stock-manager-actions button.danger { color: var(--pmc-error); background: #fff8f7; }
+
+.pmc-stock-confirm-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; padding: 20px; place-items: center; background: rgba(24, 24, 24, .42); }
+.pmc-stock-confirm { width: min(100%, 430px); padding: 20px; border: 0; border-radius: 18px; background: #fff; box-shadow: 0 22px 60px rgba(0, 0, 0, .2); }
+.pmc-stock-confirm h2 { margin: 0; font-size: 1.25rem; line-height: var(--lh-heading); }
+.pmc-stock-confirm > p:not(.pmc-stock-flow-alert) { margin: 7px 0 0; color: var(--pmc-muted); line-height: var(--lh-body); }
+.pmc-stock-confirm .pmc-stock-flow-alert { margin-block-start: 13px; }
+.pmc-stock-confirm > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-block-start: 18px; }
+.pmc-stock-confirm > div button { min-height: 50px; border-radius: 10px; font-weight: 700; }
 
 .pmc-booking-page {
   width: min(100%, 560px);

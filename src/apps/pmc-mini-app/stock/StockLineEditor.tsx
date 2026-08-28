@@ -7,6 +7,9 @@ export function StockLineEditor({
   products,
   lines,
   disabled,
+  helpText,
+  quantityLabel,
+  emptyText,
   projectedLabel,
   projectBalance,
   errors = {},
@@ -17,6 +20,9 @@ export function StockLineEditor({
   products: StockProductProjection[]
   lines: StockLineDraft[]
   disabled: boolean
+  helpText: string
+  quantityLabel: string
+  emptyText: string
   projectedLabel: string
   projectBalance: (currentMilli: number, quantityMilli: number) => number
   errors?: Record<string, string>
@@ -32,7 +38,7 @@ export function StockLineEditor({
     <div className="pmc-stock-line-heading">
       <div>
         <h2 id="stock-lines-heading">รายการสินค้า</h2>
-        <p>เลือกสินค้าได้หลายรายการ โดยไม่เลือกซ้ำ</p>
+        <p>{helpText}</p>
       </div>
       <button type="button" onClick={onAdd} disabled={disabled || !canAdd}>
         <Plus aria-hidden="true" />เพิ่มสินค้า
@@ -74,7 +80,7 @@ export function StockLineEditor({
           </label>
 
           <label className="pmc-stock-line-field">
-            <span>จำนวน {index + 1}</span>
+            <span>{quantityLabel} {index + 1}</span>
             <input
               name={`quantity-${line.lineId}`}
               type="text"
@@ -97,7 +103,7 @@ export function StockLineEditor({
           </dl>
         </fieldset>
       })}
-    </div> : <p className="pmc-stock-line-empty">ยังไม่มีสินค้าในรายการเบิก</p>}
+    </div> : <p className="pmc-stock-line-empty">{emptyText}</p>}
   </section>
 }
 

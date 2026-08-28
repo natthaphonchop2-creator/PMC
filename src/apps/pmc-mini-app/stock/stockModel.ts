@@ -1,5 +1,6 @@
 import {
   formatQuantityMilli,
+  parseNonNegativeQuantityToMilli,
   parseQuantityToMilli,
   type StockClientCommand,
 } from '../../../../shared/pmcStock'
@@ -65,4 +66,24 @@ export function formatStockQuantity(product: Pick<StockProductProjection, 'onHan
 
 export function stockCategoryLabel(category: StockProductProjection['category']): string {
   return category === 'CLINIC_SUPPLY' ? 'ของใช้คลินิก' : 'สินค้าขาย'
+}
+
+export function createAdjustmentCommand(input: {
+  requestId: string
+  product: StockProductProjection
+  countedQuantity: string
+  reason: string
+}): StockClientCommand {
+  const countedQuantityMilli = parseNonNegativeQuantityToMilli(input.countedQuantity)
+  const reason = input.reason.trim()
+  if (!reason || reason.length > 300) throw new Error('STOCK_ADJUST_REASON_REQUIRED')
+  return {
+    requestId: input.requestId,
+    commandType: 'ADJUST',
+    payload: { productId: input.product.productId, countedQuantityMilli, reason },
+  }
+}
+
+export function canEditProductUnit(product: StockProductProjection): boolean {
+  return !product.hasLedgerActivity
 }

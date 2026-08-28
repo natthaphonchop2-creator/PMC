@@ -158,6 +158,9 @@ export function StockIssueFlow({
         products={products}
         lines={lines}
         disabled={pending}
+        helpText="เลือกสินค้าได้หลายรายการ โดยไม่เลือกซ้ำ"
+        quantityLabel="จำนวน"
+        emptyText="ยังไม่มีสินค้าในรายการเบิก"
         projectedLabel="หลังเบิก"
         projectBalance={(currentMilli, quantityMilli) => currentMilli - quantityMilli}
         errors={fieldErrors}
