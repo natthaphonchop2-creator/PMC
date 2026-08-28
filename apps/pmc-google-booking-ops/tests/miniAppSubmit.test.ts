@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MiniAppBookingIngressPayload } from '../../../shared/pmcMiniAppBooking'
+import type { BookingCase } from '../src/domain/types'
 import { submitMiniAppBooking } from '../src/workflows/miniAppSubmit'
 import { createTestPorts } from './helpers/fakes'
 
@@ -277,6 +278,88 @@ describe('Mini App canonical booking submission', () => {
     expect(submitMiniAppBooking(input, ports).caseId).toBe(persisted.caseId)
   })
 
+  it('accepts the exact evidence-only retry produced for an automatic queue', () => {
+    const input = validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+    const { ports, booking } = recoverableLineRetry(input, 'ADMIN_EVIDENCE_LINE')
+
+    expect(submitMiniAppBooking(input, ports).caseId).toBe(booking.caseId)
+  })
+
+  it.each(['ADMIN_BOOKING_LINE_BATCH', 'DOCTOR_LINE'] as const)(
+    'rejects the normal-only %s retry as durability for an automatic queue',
+    (operation) => {
+      const input = validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+      const { ports } = recoverableLineRetry(input, operation)
+
+      expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+    },
+  )
+
+  it('rejects the automatic-only retry as durability for a normal queue', () => {
+    const input = validMiniAppInput()
+    const { ports } = recoverableLineRetry(input, 'ADMIN_AUTOMATIC_LINE_BATCH')
+
+    expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+  })
+
+  it.each(['ADMIN_BOOKING_LINE_BATCH', 'DOCTOR_LINE', 'ADMIN_EVIDENCE_LINE'] as const)(
+    'rejects %s outside the normal producer booking state',
+    (operation) => {
+      const input = validMiniAppInput()
+      const { ports } = recoverableLineRetry(input, operation, {}, { status: 'FORM_SUBMITTED' })
+
+      expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+    },
+  )
+
+  it.each(['ADMIN_BOOKING_LINE_BATCH', 'DOCTOR_LINE', 'ADMIN_EVIDENCE_LINE'] as const)(
+    'rejects %s for a normal queue without a confirmed appointment',
+    (operation) => {
+      const input = validMiniAppInput()
+      const { ports } = recoverableLineRetry(input, operation, {}, { appointmentStatus: 'TENTATIVE' })
+
+      expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+    },
+  )
+
+  it.each(['ADMIN_AUTOMATIC_LINE_BATCH', 'ADMIN_EVIDENCE_LINE'] as const)(
+    'rejects %s outside the automatic producer booking state',
+    (operation) => {
+      const input = validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+      const { ports } = recoverableLineRetry(input, operation, {}, { status: 'FORM_SUBMITTED' })
+
+      expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+    },
+  )
+
+  it.each(['ADMIN_AUTOMATIC_LINE_BATCH', 'ADMIN_EVIDENCE_LINE'] as const)(
+    'rejects %s for an impossible automatic awaiting-slot projection',
+    (operation) => {
+      const input = validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+      const { ports } = recoverableLineRetry(input, operation, {}, {
+        appointmentStatus: 'AWAITING_ADMIN_SLOT',
+        appointmentStart: '2026-08-20T13:00:00+07:00',
+        appointmentEnd: '2026-08-20T14:00:00+07:00',
+      })
+
+      expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+    },
+  )
+
+  it.each([
+    ['wrong evidence', { payload: {
+      paymentEvidenceFileIds: ['wrong-payment'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 6,
+    } }],
+    ['wrong message version', { idempotencyKey: 'PMC-202608-0001:ADMIN_EVIDENCE_READY:5', payload: {
+      paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 5,
+    } }],
+  ])('rejects the evidence-only LINE retry with %s', (_label, patch) => {
+    const input = validMiniAppInput()
+    const { ports } = recoverableLineRetry(input, 'ADMIN_EVIDENCE_LINE', patch)
+
+    expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+  })
+
   it.each([
     ['wrong retry ID', { id: 'RETRY-PMC-202608-0001-OTHER' }],
     ['wrong operation', { operation: 'DOCTOR_LINE' }],
@@ -375,12 +458,14 @@ function recoverableLineRetry(
   input: MiniAppBookingIngressPayload,
   operation: 'ADMIN_BOOKING_LINE_BATCH' | 'DOCTOR_LINE' | 'ADMIN_EVIDENCE_LINE' | 'ADMIN_AUTOMATIC_LINE_BATCH',
   patch: Record<string, unknown> = {},
+  bookingPatch: Partial<BookingCase> = {},
 ) {
   const ports = createTestPorts()
   const formResponseId = `mini:v2:cmVxdWVzdC0x:${input.payloadHash}`
   const automatic = input.queueType === 'AUTO'
   const booking = ports.repositories.bookings.insert(ports.bookingFixture({
-    formResponseId, version: 7, adminIdentityStatus: 'SELECTED_ADMIN', aeId: 'admin-1', aeName: 'Admin A',
+    formResponseId, version: 7, status: 'BOOKING_CONFIRMED',
+    adminIdentityStatus: 'SELECTED_ADMIN', aeId: 'admin-1', aeName: 'Admin A',
     channelId: 'เพจหลัก', queueType: input.queueType,
     appointmentStatus: automatic ? 'AWAITING_ADMIN_SLOT' : 'CONFIRMED',
     appointmentStart: automatic ? null : '2026-08-20T13:00:00+07:00',
@@ -388,6 +473,7 @@ function recoverableLineRetry(
     driveFolderId: 'drive-folder-1', driveFolderUrl: 'https://drive.test/folder-1',
     driveState: 'OK', calendarState: 'OK', calendarEventId: automatic ? null : 'calendar-event-1',
     lineState: 'RETRY', paymentEvidenceCount: 1, chatEvidenceCount: 1,
+    ...bookingPatch,
   }))
   ports.repositories.bookings.rememberFormResponse(formResponseId, booking.caseId)
   appendCreationAudit(ports, booking.caseId, formResponseId)

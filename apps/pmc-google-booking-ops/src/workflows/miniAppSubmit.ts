@@ -232,26 +232,28 @@ function exactLineRetry(
   if (!Number.isSafeInteger(messageVersion) || messageVersion < 1 || payload.messageVersion !== messageVersion) return false
 
   if (retry.operation === 'ADMIN_BOOKING_LINE_BATCH') {
-    if (!hasExactKeys(payload, ['paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion', 'batchIndex'])
+    if (!normalLineProducerState(booking)
+      || !hasExactKeys(payload, ['paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion', 'batchIndex'])
       || !validBatchIndex(payload.batchIndex)
       || retry.id !== `RETRY-${booking.caseId}-ADMIN-LINE-BATCH-${Number(payload.batchIndex) + 1}`
       || retry.idempotencyKey !== `${booking.caseId}:ADMIN_BOOKING_LINE_BATCH:${messageVersion}:${Number(payload.batchIndex) + 1}`) return false
     return exactEvidencePayload(payload, input)
   }
   if (retry.operation === 'DOCTOR_LINE') {
-    return hasExactKeys(payload, ['messageVersion'])
+    return normalLineProducerState(booking)
+      && hasExactKeys(payload, ['messageVersion'])
       && retry.id === `RETRY-${booking.caseId}-DOCTOR-LINE`
       && retry.idempotencyKey === `${booking.caseId}:DOCTOR_LINE:${messageVersion}`
   }
   if (retry.operation === 'ADMIN_EVIDENCE_LINE') {
-    return hasExactKeys(payload, ['paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion'])
+    return evidenceLineProducerState(booking)
+      && hasExactKeys(payload, ['paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion'])
       && retry.id === `RETRY-${booking.caseId}-ADMIN-EVIDENCE`
       && retry.idempotencyKey === `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`
       && exactEvidencePayload(payload, input)
   }
   if (retry.operation === 'ADMIN_AUTOMATIC_LINE_BATCH') {
-    if (booking.queueType !== 'AUTO'
-      || !['TENTATIVE', 'AWAITING_ADMIN_SLOT'].includes(booking.appointmentStatus)
+    if (!automaticLineProducerState(booking)
       || payload.appointmentStatus !== booking.appointmentStatus
       || !hasExactKeys(payload, [
         'paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion', 'batchIndex', 'appointmentStatus',
@@ -262,6 +264,27 @@ function exactLineRetry(
     return exactEvidencePayload(payload, input)
   }
   return false
+}
+
+function normalLineProducerState(booking: BookingCase): boolean {
+  return booking.queueType === 'NORMAL'
+    && booking.status === 'BOOKING_CONFIRMED'
+    && booking.appointmentStatus === 'CONFIRMED'
+    && Boolean(booking.appointmentStart && booking.appointmentEnd)
+}
+
+function automaticLineProducerState(booking: BookingCase): boolean {
+  if (booking.queueType !== 'AUTO' || booking.status !== 'BOOKING_CONFIRMED') return false
+  if (booking.appointmentStatus === 'TENTATIVE') {
+    return Boolean(booking.appointmentStart && booking.appointmentEnd)
+  }
+  return booking.appointmentStatus === 'AWAITING_ADMIN_SLOT'
+    && booking.appointmentStart === null
+    && booking.appointmentEnd === null
+}
+
+function evidenceLineProducerState(booking: BookingCase): boolean {
+  return normalLineProducerState(booking) || automaticLineProducerState(booking)
 }
 
 function exactEvidencePayload(payload: Record<string, unknown>, input: MiniAppBookingIngressPayload): boolean {
