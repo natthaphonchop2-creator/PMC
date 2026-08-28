@@ -108,3 +108,11 @@ git diff --check
 - Confirmed the two changed values are test-only record factories.
 - Confirmed both use the exact legacy normalization defaults required by Task 2.
 - Confirmed scoped search found no additional direct incomplete `MiniAppRequestRecord` fixtures.
+
+### Additional focused fixture verification
+
+```bash
+npx vitest run tests/pmc-mini-app/bookingIngressClient.test.ts
+```
+
+Result: 1/1 test file and 7/7 tests passed (136ms total duration).
