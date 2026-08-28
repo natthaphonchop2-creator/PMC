@@ -60,6 +60,35 @@ describe('PMC Mini App booking draft validation', () => {
     expect(() => parseBookingDraft(validInput(), context({ chatEvidenceFileIds: Array.from({ length: 11 }, (_, index) => `chat-${index}`) }))).toThrow('CHAT_EVIDENCE_LIMIT')
   })
 
+  it('requires ordered staging object keys in async mode while keeping Drive IDs optional', () => {
+    const paymentKeys = [stagingKey('PAYMENT', 'a'), stagingKey('PAYMENT', 'b')]
+    const chatKeys = [stagingKey('CHAT', 'c')]
+    const draft = parseBookingDraft(validInput(), context({
+      asyncEvidence: true,
+      paymentEvidenceFileIds: [],
+      chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: paymentKeys,
+      chatEvidenceObjectKeys: chatKeys,
+    }))
+
+    expect(draft.paymentEvidenceObjectKeys).toEqual(paymentKeys)
+    expect(draft.chatEvidenceObjectKeys).toEqual(chatKeys)
+    expect(draft.evidenceCount).toBe(3)
+    expect(() => parseBookingDraft(validInput(), context({
+      asyncEvidence: true,
+      paymentEvidenceObjectKeys: [],
+      chatEvidenceObjectKeys: chatKeys,
+    }))).toThrow('PAYMENT_EVIDENCE_REQUIRED')
+  })
+
+  it('still requires Drive file IDs in synchronous mode even when staging keys exist', () => {
+    expect(() => parseBookingDraft(validInput(), context({
+      paymentEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [stagingKey('PAYMENT', 'a')],
+      chatEvidenceObjectKeys: [stagingKey('CHAT', 'b')],
+    }))).toThrow('PAYMENT_EVIDENCE_REQUIRED')
+  })
+
   it('hashes normalized fields and ordered evidence while excluding transient timestamps', () => {
     const first = parseBookingDraft(validInput(), context())
     const later = { ...first, updatedAt: '2026-08-27T12:00:00.000Z' }
@@ -93,7 +122,13 @@ function context(patch: Partial<BookingDraftContext> = {}): BookingDraftContext 
   return {
     draftId: 'draft-1', staffId: 'staff-1', lineUserIdHash: 'line-user-hash',
     doctorIds: ['doctor-1'], serviceIds: ['service-1'], channelIds: ['channel-1'], eligibleAeNames: ['ไม่ระบุ', 'มัส'],
-    paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'], now: '2026-08-27T10:00:00.000Z',
+    paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
+    paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], asyncEvidence: false,
+    now: '2026-08-27T10:00:00.000Z',
     ...patch,
   }
+}
+
+function stagingKey(kind: 'PAYMENT' | 'CHAT', marker: string): string {
+  return `drafts/draft-1/${kind}/${marker.repeat(64)}.png`
 }

@@ -7,6 +7,7 @@ import { createPmcMiniAppMiddleware } from './middleware.js'
 import { createGoogleMiniAppStore } from './store.js'
 import { createJeraRuntime } from '../jera/runtime.js'
 import { createEnrollmentService } from './enrollment.js'
+import { createGoogleEvidenceStagingPort } from './stagingStore.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -52,6 +53,9 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     drive: google.drive,
     ingress,
     evidenceIngress,
+    ...(config.asyncBooking ? {
+      evidenceStaging: createGoogleEvidenceStagingPort({ bucketName: config.asyncBooking.bucketName }),
+    } : {}),
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
     now: () => new Date(),

@@ -5,7 +5,9 @@ import type { PmcMiniAppServerConfig } from './config.js'
 import type { AuthenticatedMiniAppContext, LineIdentityPort } from './contracts.js'
 import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
+import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBatch.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
+import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
@@ -15,6 +17,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   identity: LineIdentityPort
   store: MiniAppStore
   drive?: MiniAppDrivePort
+  evidenceStaging?: EvidenceStagingPort
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -109,6 +112,18 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         return
       }
       if (!await deps.jera.handle(req, res, url, authenticated)) respond(res, 404, { error: 'JERA_REPORT_NOT_FOUND' })
+      return
+    }
+
+    const evidenceBatchRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/evidence-batch$/.exec(pathname)
+    if (evidenceBatchRoute) {
+      if (req.method !== 'POST') {
+        respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+        return
+      }
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      await handleEvidenceBatchUpload(req, res, evidenceBatchRoute[1]!, authenticated, deps)
       return
     }
 
@@ -251,6 +266,8 @@ async function handleBookingDraftRoute(
         doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
         channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
         paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
+        paymentEvidenceObjectKeys: draft.paymentEvidenceObjectKeys, chatEvidenceObjectKeys: draft.chatEvidenceObjectKeys,
+        asyncEvidence: Boolean(deps.config.asyncBooking?.ownerStaffIds.has(draft.staffId)),
         now: currentIso(deps),
       })
       if (parsed.requestId !== draft.requestId) throw new Error('REQUEST_ID_MISMATCH')
@@ -435,6 +452,89 @@ function safeIngressError(error: unknown): string {
   return /^BOOKING_INGRESS_[A-Z_]{1,60}$/.test(code) ? code : 'BOOKING_INGRESS_FAILED'
 }
 
+async function handleEvidenceBatchUpload(
+  req: IncomingMessage,
+  res: ServerResponse,
+  draftId: string,
+  authenticated: AuthenticatedMiniAppContext,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  const asyncConfig = deps.config.asyncBooking
+  if (!asyncConfig || !asyncConfig.ownerStaffIds.has(authenticated.staffId)) {
+    respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+    return
+  }
+  if (!deps.evidenceStaging) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+
+  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
+  if (!draft) return
+  if (draft.state !== 'DRAFT') {
+    respond(res, 409, { error: 'DRAFT_NOT_UPLOADABLE' })
+    return
+  }
+
+  try {
+    const batch = await consumeEvidenceBatchMultipart(req, {
+      maxFilesPerKind: deps.config.maxFilesPerKind,
+      maxFileBytes: deps.config.maxImageBytes,
+      maxTotalBytes: asyncConfig.maxBatchBytes,
+    })
+    const staged = await stageEvidenceBatch(draft.draftId, batch, deps.evidenceStaging)
+    const updated = await deps.store.updateDraft(draft.draftId, draft.version, {
+      state: 'DRAFT',
+      paymentEvidenceObjectKeys: staged.paymentObjectKeys,
+      chatEvidenceObjectKeys: staged.chatObjectKeys,
+      evidenceCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length,
+      updatedAt: currentIso(deps),
+    })
+    respond(res, 200, draftProjection(updated))
+  } catch (error) {
+    const code = error instanceof MiniAppEvidenceError ? error.code : safeBookingError(error) === 'STALE_DRAFT_VERSION'
+      ? 'STALE_DRAFT_VERSION'
+      : 'EVIDENCE_UPLOAD_FAILED'
+    respond(res, code === 'STALE_DRAFT_VERSION' ? 409 : evidenceStatus(code), { error: code })
+  }
+}
+
+async function stageEvidenceBatch(
+  draftId: string,
+  batch: EvidenceBatch,
+  staging: EvidenceStagingPort,
+): Promise<{ paymentObjectKeys: string[]; chatObjectKeys: string[] }> {
+  const paymentObjectKeys = Array<string>(batch.paymentFiles.length)
+  const chatObjectKeys = Array<string>(batch.chatFiles.length)
+  const items = [
+    ...batch.paymentFiles.map((file, index) => ({ file, index, kind: 'PAYMENT' as const })),
+    ...batch.chatFiles.map((file, index) => ({ file, index, kind: 'CHAT' as const })),
+  ]
+  let nextIndex = 0
+  let firstFailure: unknown
+
+  const worker = async () => {
+    while (firstFailure === undefined) {
+      const itemIndex = nextIndex
+      nextIndex += 1
+      const item = items[itemIndex]
+      if (!item) return
+      try {
+        const mimeType = validateEvidence(item.file.bytes, item.file.advertisedMime)
+        const staged = await staging.put({ draftId, kind: item.kind, mimeType, bytes: item.file.bytes })
+        if (item.kind === 'PAYMENT') paymentObjectKeys[item.index] = staged.objectKey
+        else chatObjectKeys[item.index] = staged.objectKey
+      } catch (error) {
+        firstFailure ??= error
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(4, items.length) }, worker))
+  if (firstFailure !== undefined) throw firstFailure
+  return { paymentObjectKeys, chatObjectKeys }
+}
+
 async function handleEvidenceUpload(
   req: IncomingMessage,
   res: ServerResponse,
@@ -539,7 +639,7 @@ function evidenceIdsFor(draft: MiniAppRequestRecord, kind: MiniAppEvidenceKind):
 
 function evidenceStatus(code: string): number {
   if (code === 'UNSUPPORTED_EVIDENCE') return 415
-  if (code === 'EVIDENCE_TOO_LARGE') return 413
+  if (code === 'EVIDENCE_TOO_LARGE' || code === 'EVIDENCE_BATCH_TOO_LARGE') return 413
   if (code.endsWith('_EVIDENCE_LIMIT') || code === 'EVIDENCE_FILE_LIMIT') return 409
   if (code === 'EVIDENCE_UPLOAD_FAILED') return 503
   return 400

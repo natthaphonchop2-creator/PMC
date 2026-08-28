@@ -12,6 +12,9 @@ export interface BookingDraftContext {
   eligibleAeNames: readonly string[]
   paymentEvidenceFileIds: readonly string[]
   chatEvidenceFileIds: readonly string[]
+  paymentEvidenceObjectKeys?: readonly string[]
+  chatEvidenceObjectKeys?: readonly string[]
+  asyncEvidence?: boolean
   now: string
 }
 
@@ -65,8 +68,14 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   if (typeof value.depositAmount !== 'number' || !Number.isFinite(value.depositAmount) || value.depositAmount <= 0 || value.depositAmount > 10_000_000) {
     throw new Error('DEPOSIT_AMOUNT_REQUIRED')
   }
-  const paymentEvidenceFileIds = evidenceIds(context.paymentEvidenceFileIds, 'PAYMENT')
-  const chatEvidenceFileIds = evidenceIds(context.chatEvidenceFileIds, 'CHAT')
+  const paymentEvidenceFileIds = evidenceIds(context.paymentEvidenceFileIds, 'PAYMENT', !context.asyncEvidence)
+  const chatEvidenceFileIds = evidenceIds(context.chatEvidenceFileIds, 'CHAT', !context.asyncEvidence)
+  const paymentEvidenceObjectKeys = stagingObjectKeys(
+    context.paymentEvidenceObjectKeys ?? [], context.draftId, 'PAYMENT', Boolean(context.asyncEvidence),
+  )
+  const chatEvidenceObjectKeys = stagingObjectKeys(
+    context.chatEvidenceObjectKeys ?? [], context.draftId, 'CHAT', Boolean(context.asyncEvidence),
+  )
   const now = isoTimestamp(context.now)
 
   return {
@@ -91,9 +100,11 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
     channelId,
     paymentEvidenceFileIds,
     chatEvidenceFileIds,
-    evidenceCount: paymentEvidenceFileIds.length + chatEvidenceFileIds.length,
-    paymentEvidenceObjectKeys: [],
-    chatEvidenceObjectKeys: [],
+    evidenceCount: context.asyncEvidence
+      ? paymentEvidenceObjectKeys.length + chatEvidenceObjectKeys.length
+      : paymentEvidenceFileIds.length + chatEvidenceFileIds.length,
+    paymentEvidenceObjectKeys,
+    chatEvidenceObjectKeys,
     taskName: null,
     queuedAt: null,
     processingStartedAt: null,
@@ -126,6 +137,8 @@ export function bookingPayloadHash(draft: MiniAppRequestRecord): string {
     channelId: draft.channelId,
     paymentEvidenceFileIds: draft.paymentEvidenceFileIds,
     chatEvidenceFileIds: draft.chatEvidenceFileIds,
+    paymentEvidenceObjectKeys: draft.paymentEvidenceObjectKeys,
+    chatEvidenceObjectKeys: draft.chatEvidenceObjectKeys,
   })
   return createHash('sha256').update(canonical, 'utf8').digest('base64url')
 }
@@ -170,10 +183,28 @@ function normalizeThaiPhone(value: unknown): string {
   return digits
 }
 
-function evidenceIds(values: readonly string[], kind: 'PAYMENT' | 'CHAT'): string[] {
-  if (!Array.isArray(values) || values.length === 0) throw new Error(`${kind}_EVIDENCE_REQUIRED`)
+function evidenceIds(values: readonly string[], kind: 'PAYMENT' | 'CHAT', required = true): string[] {
+  if (!Array.isArray(values) || required && values.length === 0) throw new Error(`${kind}_EVIDENCE_REQUIRED`)
   if (values.length > 10) throw new Error(`${kind}_EVIDENCE_LIMIT`)
   const result = values.map((value) => requiredId(value, `${kind}_EVIDENCE_INVALID`))
+  if (new Set(result).size !== result.length) throw new Error(`${kind}_EVIDENCE_DUPLICATE`)
+  return result
+}
+
+function stagingObjectKeys(
+  values: readonly string[],
+  draftId: string,
+  kind: 'PAYMENT' | 'CHAT',
+  required: boolean,
+): string[] {
+  if (!Array.isArray(values) || required && values.length === 0) throw new Error(`${kind}_EVIDENCE_REQUIRED`)
+  if (values.length > 10) throw new Error(`${kind}_EVIDENCE_LIMIT`)
+  const result = values.map((value) => {
+    if (typeof value !== 'string') throw new Error(`${kind}_EVIDENCE_INVALID`)
+    const match = /^drafts\/([A-Za-z0-9_-]{1,124})\/(PAYMENT|CHAT)\/[a-f0-9]{64}\.(?:jpg|png)$/.exec(value)
+    if (!match || match[1] !== draftId || match[2] !== kind) throw new Error(`${kind}_EVIDENCE_INVALID`)
+    return value
+  })
   if (new Set(result).size !== result.length) throw new Error(`${kind}_EVIDENCE_DUPLICATE`)
   return result
 }
