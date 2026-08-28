@@ -213,6 +213,16 @@ describe('PMC Mini App booking draft API', () => {
     expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED', taskName: 'task/request-1' })
   })
 
+  it('keeps the durable queue acknowledgement when telemetry throws after task creation', async () => {
+    const deps = { ...dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) }), asyncTelemetry: vi.fn(() => { throw new Error('telemetry must not block') }) }
+
+    const response = await createReadyDraftAndConfirm(deps)
+
+    expect(response.status).toBe(202)
+    expect(deps.taskQueue.enqueue).toHaveBeenCalledOnce()
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED' })
+  })
+
   it.each([false, true])(
     'queues only through Apps Script state ingress and recovers response loss=%s from persisted reread',
     async (loseResponse) => {

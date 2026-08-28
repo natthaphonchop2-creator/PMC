@@ -374,6 +374,7 @@ async function handleBookingDraftRoute(
   authenticated: AuthenticatedMiniAppContext,
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<void> {
+  const handlerStartedAt = (deps.now ?? (() => new Date()))().getTime()
   if (route.action === 'CREATE') {
     if (req.method !== 'POST') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
     const body = await readRequiredJson(req, res)
@@ -532,9 +533,6 @@ async function handleBookingDraftRoute(
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
       return
     }
-    deps.asyncTelemetry?.('booking_task_enqueued', {
-      requestId: draft.requestId, draftId: draft.draftId, attempt: 1, state: 'QUEUED', fileCount: draft.evidenceCount,
-    })
     const queueMutation: MiniAppAsyncStateMutation = {
       operation: 'QUEUE', requestId: draft.requestId, draftId: draft.draftId, payloadHash,
       expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
@@ -552,6 +550,10 @@ async function handleBookingDraftRoute(
     try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
     if (persisted && validQueuedPersistence(draft, persisted, payloadHash)) {
       const terminal = confirmedWithRetryResult(persisted)
+      emitAsyncTelemetry(deps, 'booking_task_enqueued', {
+        requestId: persisted.requestId, draftId: persisted.draftId, attempt: 1, state: persisted.state,
+        fileCount: persisted.evidenceCount, elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
+      })
       if (terminal) respond(res, 200, terminal)
       else respond(res, 202, queuedAcknowledgement(persisted))
     } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
@@ -754,6 +756,14 @@ function currentIso(deps: PmcMiniAppMiddlewareDependencies): string {
   return (deps.now ?? (() => new Date()))().toISOString()
 }
 
+function emitAsyncTelemetry(
+  deps: PmcMiniAppMiddlewareDependencies,
+  name: Parameters<AsyncBookingTelemetry>[0],
+  fields: Parameters<AsyncBookingTelemetry>[1],
+): void {
+  try { deps.asyncTelemetry?.(name, fields) } catch { /* observability cannot alter the request outcome */ }
+}
+
 function safeBookingError(error: unknown): string {
   const code = error instanceof Error ? error.message : ''
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'INVALID_BOOKING_INPUT'
@@ -778,6 +788,7 @@ async function handleEvidenceBatchUpload(
   authenticated: AuthenticatedMiniAppContext,
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<void> {
+  const handlerStartedAt = (deps.now ?? (() => new Date()))().getTime()
   const asyncConfig = deps.config.asyncBooking
   if (!asyncConfig || !asyncConfig.ownerStaffIds.has(authenticated.staffId)) {
     respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
@@ -801,12 +812,9 @@ async function handleEvidenceBatchUpload(
       maxFileBytes: deps.config.maxImageBytes,
       maxTotalBytes: asyncConfig.maxBatchBytes,
     })
-    const startedAt = (deps.now ?? (() => new Date()))().getTime()
-    const totalBytes = batch.paymentFiles.reduce((total, file) => total + file.bytes.length, 0)
-      + batch.chatFiles.reduce((total, file) => total + file.bytes.length, 0)
-    deps.asyncTelemetry?.('evidence_stage_started', {
+    emitAsyncTelemetry(deps, 'evidence_stage_started', {
       requestId: draft.requestId, draftId: draft.draftId,
-      fileCount: batch.paymentFiles.length + batch.chatFiles.length, totalBytes,
+      fileCount: batch.paymentFiles.length + batch.chatFiles.length,
     })
     const staged = await stageEvidenceBatch(draft.draftId, batch, deps.evidenceStaging)
     const updated = await deps.store.updateDraft(draft.draftId, draft.version, {
@@ -816,10 +824,10 @@ async function handleEvidenceBatchUpload(
       evidenceCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length,
       updatedAt: currentIso(deps),
     })
-    deps.asyncTelemetry?.('evidence_stage_completed', {
+    emitAsyncTelemetry(deps, 'evidence_stage_completed', {
       requestId: updated.requestId, draftId: updated.draftId, state: updated.state,
-      fileCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length, totalBytes,
-      elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - startedAt),
+      fileCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length,
+      elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
     })
     respond(res, 200, draftProjection(updated))
   } catch (error) {

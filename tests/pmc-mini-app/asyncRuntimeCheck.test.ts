@@ -42,10 +42,12 @@ describe('PMC async runtime checker', () => {
         },
       },
       iam: {
-        bindingCount: 3,
+        requiredBindingCount: 3,
+        exactBindingsReady: true,
+        forbiddenBroadBindings: false,
         roles: expect.arrayContaining(['roles/cloudtasks.enqueuer', 'roles/run.invoker', 'roles/storage.objectUser']),
       },
-      environment: { asyncEnabled: false, requiredNameCount: 8, presentNameCount: 8 },
+      deployed: { serviceExists: true, asyncDisabled: true, requiredNameCount: 10, presentNameCount: 10 },
     })
     for (const value of Object.values(privateInputs)) expect(serialized).not.toContain(value)
     expect(serialized).not.toContain('private-invoker@private-project-123.iam.gserviceaccount.com')
@@ -64,6 +66,46 @@ describe('PMC async runtime checker', () => {
     expect(code).toBe(1)
     expect(output.join('')).not.toContain(privateInputs.project)
     expect(output.join('')).not.toContain(privateInputs.bucket)
+  })
+
+  it('fails closed unless deployed Cloud Run config has the disabled async flag, required names, and exact IAM members', async () => {
+    const wrongMember = vi.fn(async (command: string[]) => {
+      if (command[1] === 'run' && command[2] === 'services' && command[3] === 'describe') return JSON.stringify({
+        spec: { template: { spec: { serviceAccountName: 'private-runtime@private-project-123.iam.gserviceaccount.com', containers: [{
+          env: [{ name: 'PMC_MINI_APP_ASYNC_ENABLED', value: 'false' }],
+        }] } } },
+      })
+      if (command[1] === 'projects' && command[2] === 'get-iam-policy') return JSON.stringify({ bindings: [] })
+      if (command[1] === 'storage' && command[3] === 'get-iam-policy') return JSON.stringify({ bindings: [
+        { role: 'roles/storage.objectUser', members: ['serviceAccount:wrong-member@private-project-123.iam.gserviceaccount.com'] },
+      ] })
+      return responseFor(command)
+    })
+
+    const report = await inspectPmcAsyncRuntime(privateInputs, wrongMember, asyncEnvironment())
+
+    expect(report.ready).toBe(false)
+    expect(report.deployed).toMatchObject({ serviceExists: true, asyncDisabled: true, requiredNameCount: 10, presentNameCount: 1 })
+    expect(report.iam).toMatchObject({ exactBindingsReady: false, forbiddenBroadBindings: false })
+    expect(wrongMember.mock.calls.map(([command]) => command.join(' ')).join('\n')).toContain('run services describe')
+    expect(wrongMember.mock.calls.map(([command]) => command.join(' ')).join('\n')).toContain('projects get-iam-policy')
+  })
+
+  it('does not treat local environment values or broad identity roles as deployed readiness', async () => {
+    const broad = vi.fn(async (command: string[]) => {
+      if (command[1] === 'run' && command[2] === 'services' && command[3] === 'describe') return JSON.stringify({
+        spec: { template: { spec: { serviceAccountName: 'private-runtime@private-project-123.iam.gserviceaccount.com', containers: [{ env: [] }] } } },
+      })
+      if (command[1] === 'projects' && command[2] === 'get-iam-policy') return JSON.stringify({ bindings: [
+        { role: 'roles/owner', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },
+      ] })
+      return responseFor(command)
+    })
+
+    const report = await inspectPmcAsyncRuntime(privateInputs, broad, { ...asyncEnvironment(), PMC_MINI_APP_ASYNC_ENABLED: 'false' })
+
+    expect(report.ready).toBe(false)
+    expect(report.iam.forbiddenBroadBindings).toBe(true)
   })
 
   it('prints help and makes no Google command call', async () => {
@@ -108,10 +150,23 @@ function responseFor(command: string[]): string {
       },
     })
   }
-  if (command[1] === 'tasks') return JSON.stringify({
+  if (command[1] === 'tasks' && command[3] === 'describe') return JSON.stringify({
     rateLimits: { maxConcurrentDispatches: 1, maxDispatchesPerSecond: 2 },
     retryConfig: { maxAttempts: 8, minBackoff: '10s', maxBackoff: '300s', maxRetryDuration: '86400s' },
   })
+  if (command[1] === 'run' && command[2] === 'services' && command[3] === 'describe') return JSON.stringify({
+    spec: { template: { spec: { serviceAccountName: 'private-runtime@private-project-123.iam.gserviceaccount.com', containers: [{ env: [
+      { name: 'PMC_MINI_APP_ASYNC_ENABLED', value: 'false' },
+      { name: 'PMC_GCP_PROJECT_ID', value: privateInputs.project }, { name: 'PMC_ASYNC_LOCATION', value: privateInputs.region },
+      { name: 'PMC_ASYNC_BUCKET', value: privateInputs.bucket }, { name: 'PMC_ASYNC_QUEUE', value: privateInputs.queue },
+      { name: 'PMC_ASYNC_WORKER_URL', value: 'https://private.example/internal/mini-app/finalize-booking' },
+      { name: 'PMC_ASYNC_WORKER_AUDIENCE', value: 'https://private.example' },
+      { name: 'PMC_ASYNC_TASK_INVOKER_EMAIL', value: 'private-invoker@private-project-123.iam.gserviceaccount.com' },
+      { name: 'PMC_ASYNC_OWNER_STAFF_IDS', value: 'staff-owner' },
+      { name: 'PMC_BOOKING_INGRESS_SECRET', valueFrom: { secretKeyRef: { name: 'private-secret', key: 'latest' } } },
+    ] }] } } },
+  })
+  if (command[1] === 'projects') return JSON.stringify({ bindings: [] })
   return JSON.stringify({ bindings: [
     { role: 'roles/storage.objectUser', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },
     { role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },

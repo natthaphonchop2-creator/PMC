@@ -25,6 +25,15 @@ describe('PMC Mini App evidence batch API', () => {
     expect(deps.stagingFixture.maxActive()).toBeLessThanOrEqual(4)
   })
 
+  it('keeps the authoritative staged evidence write when telemetry throws', async () => {
+    const deps = { ...dependencies(), asyncTelemetry: vi.fn(() => { throw new Error('telemetry must not block') }) }
+
+    const response = await uploadBatch(deps, [pngBytes(1)], [jpegBytes(2)])
+
+    expect(response).toMatchObject({ status: 200, body: { state: 'DRAFT' } })
+    expect(deps.storeFixture.read().evidenceCount).toBe(2)
+  })
+
   it('never runs more than four staging writes at once', async () => {
     const deps = dependencies()
 

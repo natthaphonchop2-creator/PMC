@@ -280,7 +280,7 @@ export function createAsyncBookingWorker(input: {
     }
     emit('booking_ingress_completed', {
       requestId: context.draft.requestId, draftId: context.draft.draftId, caseId: result.caseId,
-      attempt: context.taskAttempt, state: result.status, elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+      attempt: context.taskAttempt, state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
     })
     return result
   }
@@ -297,10 +297,6 @@ export function createAsyncBookingWorker(input: {
       validExpectedCompletion(context.snapshot, context.bound, previous, persisted, result),
       context.deadline,
     )
-    emit('booking_worker_completed', {
-      requestId: context.draft.requestId, draftId: context.draft.draftId, caseId: result.caseId,
-      attempt: context.taskAttempt, state: context.draft.state, elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
-    })
   }
 
   async function recordRetry(context: WorkerContext, safeErrorCode: string): Promise<AsyncBookingWorkerResult | null> {
@@ -321,9 +317,9 @@ export function createAsyncBookingWorker(input: {
       context.deadline,
     )
     context.draft = persisted
-    emit(targetState === 'NEEDS_REVIEW' ? 'booking_worker_needs_review' : 'booking_worker_retrying', {
+    if (targetState === 'RETRYING') emit('booking_worker_retrying', {
       requestId: persisted.requestId, draftId: persisted.draftId, attempt: context.taskAttempt,
-      state: targetState, safeErrorCode: retry.safeErrorCode ?? 'ASYNC_STATE_RETRY',
+      state: targetState, safeErrorCode: retry.safeErrorCode!,
       elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
     })
     return targetState === 'NEEDS_REVIEW' ? terminalResult(persisted) : null
@@ -419,6 +415,19 @@ export function createAsyncBookingWorker(input: {
 
   return {
     async finalize(finalizeInput) {
+      const terminalEvents = new Set<string>()
+      const emitTerminal = (result: AsyncBookingWorkerResult): void => {
+        const name = result.state === 'NEEDS_REVIEW' ? 'booking_worker_needs_review' : 'booking_worker_completed'
+        const key = `${name}:${result.requestId}:${finalizeInput.draftId}:${finalizeInput.attempt}:${result.state}`
+        if (terminalEvents.has(key)) return
+        terminalEvents.add(key)
+        emit(name, {
+          requestId: result.requestId, draftId: finalizeInput.draftId, attempt: finalizeInput.attempt,
+          state: result.state, ...(result.caseId ? { caseId: result.caseId } : {}),
+          ...(result.state === 'NEEDS_REVIEW' ? { safeErrorCode: 'RETRY_EXHAUSTED' as const } : {}),
+        })
+      }
+      const result = await (async () => {
       assertFinalizeInput(finalizeInput)
       const snapshot: TaskSnapshot = {
         requestId: finalizeInput.requestId,
@@ -572,6 +581,9 @@ export function createAsyncBookingWorker(input: {
         if (reviewed) return reviewed
         throw new AsyncBookingWorkerError(stage)
       }
+      })()
+      emitTerminal(result)
+      return result
     },
   }
 }
