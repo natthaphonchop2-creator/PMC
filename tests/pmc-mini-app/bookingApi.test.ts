@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
+import { BookingIngressClientError } from '../../server/pmc-mini-app/bookingIngressClient'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 import type {
   MiniAppBookingConfigProjection,
@@ -50,6 +51,29 @@ describe('PMC Mini App booking draft API', () => {
     expect(first.body).toEqual({ caseId: 'PMC-202608-0001', status: 'AWAITING_ADMIN_SLOT' })
     expect(duplicate.body).toEqual(first.body)
     expect(deps.ingress.send).toHaveBeenCalledOnce()
+  })
+
+  it('retries confirmation from the client version after a provider timeout finalized in the background', async () => {
+    const deps = dependencies()
+    vi.mocked(deps.ingress.send).mockRejectedValueOnce(new BookingIngressClientError('BOOKING_INGRESS_TIMEOUT'))
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+    const draftId = String(created.body.draftId)
+    deps.storeFixture.attachEvidence(draftId)
+    const patched = await jsonRequest(middleware, 'PATCH', `/api/mini-app/booking-drafts/${draftId}`, {
+      version: 1, input: validInput({ requestId: created.body.requestId }),
+    })
+
+    const timedOut = await jsonRequest(middleware, 'POST', `/api/mini-app/booking-drafts/${draftId}/confirm`, {
+      version: patched.body.version,
+    })
+    const retried = await jsonRequest(middleware, 'POST', `/api/mini-app/booking-drafts/${draftId}/confirm`, {
+      version: patched.body.version,
+    })
+
+    expect(timedOut).toEqual({ status: 504, body: { error: 'BOOKING_INGRESS_TIMEOUT' } })
+    expect(retried).toEqual({ status: 200, body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' } })
+    expect(deps.ingress.send).toHaveBeenCalledTimes(2)
   })
 
   it('rejects stale versions and hides drafts owned by another staff member', async () => {

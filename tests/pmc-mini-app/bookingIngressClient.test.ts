@@ -62,6 +62,33 @@ describe('PMC Mini App signed booking ingress client', () => {
 
     await expect(client.send(confirmedDraft())).rejects.toMatchObject({ code: 'BOOKING_INGRESS_TIMEOUT' })
   })
+
+  it('allows the default timeout to cover a 34-second Drive, Calendar, and LINE workflow', async () => {
+    vi.useFakeTimers()
+    try {
+      const client = createBookingIngressClient({
+        url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+        now: () => 1_800_000_000, nonce: () => 'nonce-123456',
+        fetch: vi.fn(async (_url, init) => new Promise((resolve, reject) => {
+          const completion = setTimeout(
+            () => resolve(response(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' })),
+            34_000,
+          )
+          init.signal.addEventListener('abort', () => {
+            clearTimeout(completion)
+            reject(new Error('aborted-before-workflow-completed'))
+          })
+        })),
+      })
+
+      const pending = client.send(confirmedDraft())
+      await vi.advanceTimersByTimeAsync(34_000)
+
+      await expect(pending).resolves.toEqual({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 function confirmedDraft(): MiniAppRequestRecord {

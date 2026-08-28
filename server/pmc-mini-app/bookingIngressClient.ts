@@ -79,7 +79,7 @@ export function createBookingIngressClient(options: BookingIngressClientOptions)
 } {
   const url = safeHttpsUrl(options.url)
   const secret = options.secret
-  const timeoutMs = options.timeoutMs ?? 15_000
+  const timeoutMs = options.timeoutMs ?? 60_000
   const now = options.now ?? (() => Math.floor(Date.now() / 1_000))
   const nonce = options.nonce ?? (() => crypto.randomUUID())
   const request = options.fetch ?? (globalThis.fetch as unknown as IngressFetch)

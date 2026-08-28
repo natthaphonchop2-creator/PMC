@@ -226,7 +226,9 @@ async function handleBookingDraftRoute(
   if (!draft) return
   const version = body.version
   if (typeof version !== 'number' || !Number.isSafeInteger(version)) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
-  if (version !== draft.version) {
+  const retryingConfirmation = route.action === 'CONFIRM' && version < draft.version
+    && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED')
+  if (version !== draft.version && !retryingConfirmation) {
     if (
       route.action === 'PATCH' && version < draft.version && hasExactKeys(body, ['version', 'input'])
       && matchesSavedDraftInput(draft, body.input)
