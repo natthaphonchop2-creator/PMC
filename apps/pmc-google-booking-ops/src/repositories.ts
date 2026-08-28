@@ -1,6 +1,8 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { BookingRepositories, Clock, LockPort, MutationContext } from './ports'
 
+export { createStockRepository } from './stock/repository'
+
 export type SheetRow = Record<string, unknown>
 
 export interface SheetStore {

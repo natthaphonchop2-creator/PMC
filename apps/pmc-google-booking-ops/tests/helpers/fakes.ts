@@ -27,9 +27,13 @@ class MemorySheetStore implements SheetStore {
   }
 }
 
+export function createMemorySheetStore(): SheetStore {
+  return new MemorySheetStore()
+}
+
 export function createMemoryRepositories(now = '2026-08-20T09:00:00+07:00') {
   return createBookingRepositories(
-    new MemorySheetStore(),
+    createMemorySheetStore(),
     { withLock: (operation) => operation() },
     { nowIso: () => now },
   )

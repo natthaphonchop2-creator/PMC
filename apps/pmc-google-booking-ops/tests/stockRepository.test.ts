@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest'
+import type { StockAuditEvent, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
+import { createStockRepository } from '../src/repositories'
+import { createMemorySheetStore } from './helpers/fakes'
+
+function productFixture(patch: Partial<StockProduct> = {}): StockProduct {
+  return {
+    productId: 'STK-000001',
+    name: 'น้ำเกลือ',
+    normalizedName: 'น้ำเกลือ',
+    category: 'CLINIC_SUPPLY',
+    unit: 'ขวด',
+    minimumQuantityMilli: 2_000,
+    active: true,
+    createdAt: '2026-08-28T09:00:00+07:00',
+    createdByStaffId: 'staff-1',
+    updatedAt: '2026-08-28T09:00:00+07:00',
+    updatedByStaffId: 'staff-1',
+    version: 1,
+    ...patch,
+  }
+}
+
+function ledgerFixture(patch: Partial<StockLedgerEntry> = {}): StockLedgerEntry {
+  return {
+    transactionId: 'TX-1',
+    documentId: 'ISS-202608-0001',
+    requestId: 'request-stock-1',
+    lineNumber: 1,
+    productId: 'STK-000001',
+    transactionType: 'OPENING',
+    quantityDeltaMilli: 1_000,
+    balanceBeforeMilli: 0,
+    balanceAfterMilli: 1_000,
+    actorStaffId: 'staff-1',
+    actorDisplayName: 'ผู้ดูแลสต็อก',
+    reason: 'ใช้ในคลินิก',
+    idempotencyKey: 'request-stock-1:1',
+    createdAt: '2026-08-28T09:00:00+07:00',
+    ...patch,
+  }
+}
+
+function auditFixture(patch: Partial<StockAuditEvent> = {}): StockAuditEvent {
+  return {
+    eventId: 'AUD-STOCK-1',
+    requestId: 'request-stock-1',
+    actorStaffId: 'staff-1',
+    action: 'ISSUE',
+    status: 'ACCEPTED',
+    safeErrorCode: '',
+    targetProductIdsJson: '["STK-000001"]',
+    correlationId: 'correlation-1',
+    createdAt: '2026-08-28T09:00:00+07:00',
+    ...patch,
+  }
+}
+
+describe('stock repository', () => {
+  it('derives current balances only from immutable ledger rows', () => {
+    const store = createMemorySheetStore()
+    const repository = createStockRepository(store)
+    repository.insertProduct(productFixture())
+    repository.appendLedgerBatch([
+      ledgerFixture({ transactionId: 'TX-1', quantityDeltaMilli: 10_000, balanceBeforeMilli: 0, balanceAfterMilli: 10_000 }),
+      ledgerFixture({
+        transactionId: 'TX-2',
+        lineNumber: 2,
+        quantityDeltaMilli: -2_000,
+        balanceBeforeMilli: 10_000,
+        balanceAfterMilli: 8_000,
+      }),
+    ])
+
+    expect(repository.balanceByProduct()).toEqual(new Map([['STK-000001', 8_000]]))
+  })
+
+  it('finds a completed document by request ID for idempotent retry', () => {
+    const store = createMemorySheetStore()
+    const repository = createStockRepository(store)
+    repository.insertProduct(productFixture())
+    repository.appendLedgerBatch([ledgerFixture({ requestId: 'request-stock-1' })])
+
+    expect(repository.findDocumentByRequestId('request-stock-1')?.documentId).toBe('ISS-202608-0001')
+  })
+
+  it('serializes stock rows in their exact Sheet header order', () => {
+    const store = createMemorySheetStore()
+    const repository = createStockRepository(store)
+    repository.insertProduct(productFixture())
+    repository.appendLedgerBatch([ledgerFixture()])
+    repository.appendAudit(auditFixture())
+
+    expect(Object.keys(store.read('STOCK_PRODUCTS')[0])).toEqual([
+      'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',
+      'createdAt', 'createdByStaffId', 'updatedAt', 'updatedByStaffId', 'version',
+    ])
+    expect(Object.keys(store.read('STOCK_LEDGER')[0])).toEqual([
+      'transactionId', 'documentId', 'requestId', 'lineNumber', 'productId', 'transactionType',
+      'quantityDeltaMilli', 'balanceBeforeMilli', 'balanceAfterMilli', 'actorStaffId', 'actorDisplayName',
+      'reason', 'idempotencyKey', 'createdAt',
+    ])
+    expect(Object.keys(store.read('STOCK_AUDIT')[0])).toEqual([
+      'eventId', 'requestId', 'actorStaffId', 'action', 'status', 'safeErrorCode',
+      'targetProductIdsJson', 'correlationId', 'createdAt',
+    ])
+  })
+
+  it('rejects duplicate product IDs and stale product updates', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.insertProduct(productFixture())
+
+    expect(() => repository.insertProduct(productFixture())).toThrow('stock product already exists')
+    expect(() => repository.updateProduct('STK-000001', 2, { name: 'ใหม่' })).toThrow('version conflict')
+    expect(repository.updateProduct('STK-000001', 1, { name: 'ใหม่' })).toMatchObject({ name: 'ใหม่', version: 2 })
+  })
+
+  it('rejects conflicting request documents, duplicate transactions, and broken balance chains', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.insertProduct(productFixture())
+    repository.appendLedgerBatch([ledgerFixture()])
+
+    expect(() => repository.appendLedgerBatch([ledgerFixture({ transactionId: 'TX-2', documentId: 'ISS-202608-0002' })])).toThrow(
+      'stock request conflicts with document',
+    )
+    expect(() => repository.appendLedgerBatch([ledgerFixture()])).toThrow('stock transaction already exists')
+    expect(() => repository.appendLedgerBatch([
+      ledgerFixture({
+        transactionId: 'TX-3',
+        requestId: 'request-stock-2',
+        documentId: 'ISS-202608-0002',
+        balanceBeforeMilli: 9_001,
+        balanceAfterMilli: 8_001,
+      }),
+    ])).toThrow('stock balance chain mismatch')
+  })
+})
