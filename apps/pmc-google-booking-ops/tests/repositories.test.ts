@@ -24,6 +24,12 @@ describe('booking repositories', () => {
     const store: SheetStore = {
       read: (tab) => structuredClone(tabs.get(tab) ?? []),
       replace: (tab, rows) => tabs.set(tab, structuredClone(rows)),
+      append: (tab, rows) => tabs.set(tab, [...(tabs.get(tab) ?? []), ...structuredClone(rows)]),
+      update: (tab, rowIndex, row) => {
+        const rows = [...(tabs.get(tab) ?? [])]
+        rows[rowIndex] = structuredClone(row)
+        tabs.set(tab, rows)
+      },
     }
     const repos = createBookingRepositories(
       store,
@@ -43,6 +49,12 @@ describe('booking repositories', () => {
     const store: SheetStore = {
       read: (tab) => structuredClone(tabs.get(tab) ?? []),
       replace: (tab, rows) => tabs.set(tab, structuredClone(rows)),
+      append: (tab, rows) => tabs.set(tab, [...(tabs.get(tab) ?? []), ...structuredClone(rows)]),
+      update: (tab, rowIndex, row) => {
+        const rows = [...(tabs.get(tab) ?? [])]
+        rows[rowIndex] = structuredClone(row)
+        tabs.set(tab, rows)
+      },
     }
     const repos = createBookingRepositories(
       store,

@@ -124,7 +124,7 @@ describe('PMC Stock multi-product issue flow', () => {
     expect(await screen.findByRole('heading', { name: 'เบิกสินค้าสำเร็จ' })).toBeVisible()
   })
 
-  it('reloads balances after a safe insufficient error, preserves the cart, and retries with the same request ID', async () => {
+  it('reloads balances after a safe insufficient error, preserves the cart, and rotates the request ID when quantity changes', async () => {
     const issue = vi.fn()
       .mockRejectedValueOnce(safeError('STOCK_INSUFFICIENT_BALANCE'))
       .mockResolvedValueOnce(issueResult())
@@ -132,6 +132,7 @@ describe('PMC Stock multi-product issue flow', () => {
       products: [product('A', 5_000)],
       refreshedProducts: [product('A', 1_000)],
       issue,
+      requestIds: ['issue-request-1', 'issue-request-2'],
     })
     await addLine(user, 1, 'A', '2')
     await user.click(screen.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }))
@@ -148,10 +149,10 @@ describe('PMC Stock multi-product issue flow', () => {
 
     expect(issue).toHaveBeenCalledTimes(2)
     expect(issue.mock.calls[0]![0].requestId).toBe('issue-request-1')
-    expect(issue.mock.calls[1]![0].requestId).toBe('issue-request-1')
+    expect(issue.mock.calls[1]![0].requestId).toBe('issue-request-2')
   })
 
-  it('removes products missing after an inactive reload with explicit feedback and preserves the remaining cart', async () => {
+  it('removes products missing after an inactive reload with explicit feedback and rotates the changed cart intent', async () => {
     const issue = vi.fn()
       .mockRejectedValueOnce(safeError('STOCK_PRODUCT_INACTIVE'))
       .mockResolvedValueOnce(issueResult())
@@ -159,6 +160,7 @@ describe('PMC Stock multi-product issue flow', () => {
       products: [product('A', 5_000), product('B', 3_000)],
       refreshedProducts: [product('A', 4_000)],
       issue,
+      requestIds: ['issue-request-1', 'issue-request-2'],
     })
     await addLine(user, 1, 'A', '1')
     await addLine(user, 2, 'B', '1')
@@ -170,7 +172,8 @@ describe('PMC Stock multi-product issue flow', () => {
     expect(screen.getByRole('textbox', { name: 'จำนวน 1' })).toHaveValue('1')
 
     await user.click(screen.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }))
-    expect(issue.mock.calls[0]![0].requestId).toBe(issue.mock.calls[1]![0].requestId)
+    expect(issue.mock.calls[0]![0].requestId).toBe('issue-request-1')
+    expect(issue.mock.calls[1]![0].requestId).toBe('issue-request-2')
   })
 
   it('keeps the entire draft after a network or storage failure and uses the same request ID on retry', async () => {
@@ -188,6 +191,25 @@ describe('PMC Stock multi-product issue flow', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }))
     expect(issue.mock.calls[0]![0].requestId).toBe('issue-request-1')
     expect(issue.mock.calls[1]![0].requestId).toBe('issue-request-1')
+  })
+
+  it('mints a new ISSUE request ID when an uncertain retry changes the cart intent', async () => {
+    const issue = vi.fn()
+      .mockRejectedValueOnce(safeError('MINI_APP_NETWORK_FAILED'))
+      .mockResolvedValueOnce(issueResult())
+    const { user } = renderIssueFlow({
+      products: [product('A', 5_000)],
+      issue,
+      requestIds: ['issue-request-1', 'issue-request-2'],
+    })
+    await addLine(user, 1, 'A', '1')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }))
+    await user.clear(screen.getByRole('textbox', { name: 'จำนวน 1' }))
+    await user.type(screen.getByRole('textbox', { name: 'จำนวน 1' }), '2')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }))
+
+    expect(issue.mock.calls[0]![0].requestId).toBe('issue-request-1')
+    expect(issue.mock.calls[1]![0].requestId).toBe('issue-request-2')
   })
 
   it('refreshes products before returning from the success document to Stock Home', async () => {
@@ -237,11 +259,13 @@ function renderIssueFlow({
   refreshedProducts = products,
   issue = vi.fn(async () => issueResult()),
   onReturnToStock = vi.fn(),
+  requestIds = ['issue-request-1'],
 }: {
   products: StockProductProjection[]
   refreshedProducts?: StockProductProjection[]
   issue?: StockIssueFlowAdapter['issue']
   onReturnToStock?: (products: StockProductProjection[]) => void
+  requestIds?: string[]
 }) {
   const user = userEvent.setup()
   const adapter: StockIssueFlowAdapter = {
@@ -251,7 +275,7 @@ function renderIssueFlow({
   render(<StockIssueFlow
     initialProducts={products}
     adapter={adapter}
-    requestIdFactory={() => 'issue-request-1'}
+    requestIdFactory={() => requestIds.shift() ?? 'issue-request-exhausted'}
     onCancel={vi.fn()}
     onReturnToStock={onReturnToStock}
   />)

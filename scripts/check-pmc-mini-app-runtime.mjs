@@ -34,11 +34,6 @@ export const MINI_APP_STOCK_FLAG_NAMES = [
   'PMC_STOCK_MANAGER_PILOT_ONLY',
 ]
 
-export const MINI_APP_STOCK_BINDING_NAMES = [
-  'PMC_STOCK_INGRESS_URL',
-  'PMC_STOCK_INGRESS_SECRET',
-]
-
 export const FUTURE_JERA_BINDING_NAMES = [
   'JERA_REPORTING_ENABLED',
   'JERA_API_BASE_URL',
@@ -69,12 +64,10 @@ export function inspectMiniAppRuntime(environment) {
   ))
   const stockEnabled = environment.PMC_STOCK_ENABLED === 'true'
   const stockManagerPilotOnly = environment.PMC_STOCK_MANAGER_PILOT_ONLY === 'true'
-  const stockBindings = presence(MINI_APP_STOCK_BINDING_NAMES, environment)
   return {
     mode: 'READ_ONLY',
     ready: featureEnabled && enrollmentFlagValid && nonSecret.missing.length === 0 &&
-      secretBindings.missing.length === 0 && stockFlagsValid && stockFlags.missing.length === 0 &&
-      stockBindings.missing.length === 0,
+      secretBindings.missing.length === 0 && stockFlagsValid && stockFlags.missing.length === 0,
     featureEnabled,
     enrollmentEnabled,
     asyncBookingEnabled,
@@ -83,7 +76,6 @@ export function inspectMiniAppRuntime(environment) {
     stockManagerPilotOnly,
     stockFlagsValid,
     stockFlags,
-    stockBindings,
     nonSecret,
     secretBindings,
     futureJeraBindings,

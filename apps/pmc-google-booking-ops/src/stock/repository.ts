@@ -149,6 +149,7 @@ function validateLedgerIds(entry: StockLedgerEntry): void {
 
 interface LedgerValidationState {
   transactionIds: Set<string>
+  idempotencyKeys: Set<string>
   documentsByRequest: Map<string, string>
   requestsByDocument: Map<string, string>
   balances: Map<string, number>
@@ -158,6 +159,7 @@ function validateLedgerEntries(
   entries: StockLedgerEntry[],
   state: LedgerValidationState = {
     transactionIds: new Set(),
+    idempotencyKeys: new Set(),
     documentsByRequest: new Map(),
     requestsByDocument: new Map(),
     balances: new Map(),
@@ -167,6 +169,8 @@ function validateLedgerEntries(
     validateLedgerIds(entry)
     if (state.transactionIds.has(entry.transactionId)) throw new Error('stock transaction already exists')
     state.transactionIds.add(entry.transactionId)
+    if (state.idempotencyKeys.has(entry.idempotencyKey)) throw new Error('stock idempotency key already exists')
+    state.idempotencyKeys.add(entry.idempotencyKey)
 
     if (state.documentsByRequest.has(entry.requestId) && state.documentsByRequest.get(entry.requestId) !== entry.documentId) {
       throw new Error('stock request conflicts with document')
@@ -204,7 +208,7 @@ export function createStockRepository(store: SheetStore): StockRepository {
     insertProduct(product: StockProduct): StockProduct {
       const rows = store.read('STOCK_PRODUCTS')
       if (rows.some((row) => row.productId === product.productId)) throw new Error('stock product already exists')
-      store.replace('STOCK_PRODUCTS', [...rows, toSheetRow(product, STOCK_PRODUCT_HEADERS)])
+      store.append('STOCK_PRODUCTS', [toSheetRow(product, STOCK_PRODUCT_HEADERS)])
       return clonePlain(product)
     },
     updateProduct(productId: string, expectedVersion: number, patch: Partial<StockProduct>): StockProduct {
@@ -219,9 +223,7 @@ export function createStockRepository(store: SheetStore): StockRepository {
         productId: before.productId,
         version: before.version + 1,
       }
-      const updated = [...rows]
-      updated[index] = toSheetRow(after, STOCK_PRODUCT_HEADERS)
-      store.replace('STOCK_PRODUCTS', updated)
+      store.update('STOCK_PRODUCTS', index, toSheetRow(after, STOCK_PRODUCT_HEADERS))
       return clonePlain(after)
     },
     listLedger(): StockLedgerEntry[] {
@@ -233,7 +235,7 @@ export function createStockRepository(store: SheetStore): StockRepository {
       const existing = rows.map(asLedgerEntry)
       const state = validateLedgerEntries(existing)
       validateLedgerEntries(entries, state)
-      store.replace('STOCK_LEDGER', [...rows, ...entries.map((entry) => toSheetRow(entry, STOCK_LEDGER_HEADERS))])
+      store.append('STOCK_LEDGER', entries.map((entry) => toSheetRow(entry, STOCK_LEDGER_HEADERS)))
     },
     balanceByProduct(): Map<string, number> {
       return aggregateStockBalances(store.read('STOCK_LEDGER').map(asLedgerEntry))
@@ -315,7 +317,7 @@ export function createStockRepository(store: SheetStore): StockRepository {
       if (event.status === 'ACCEPTED' && !journal.prepared) {
         throw new Error('stock audit journal missing prepared')
       }
-      store.replace('STOCK_AUDIT', [...rows, toSheetRow(event, STOCK_AUDIT_HEADERS)])
+      store.append('STOCK_AUDIT', [toSheetRow(event, STOCK_AUDIT_HEADERS)])
     },
   }
 }

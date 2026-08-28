@@ -269,6 +269,7 @@ describe('PMC Stock manager configuration', () => {
     vi.stubGlobal('SpreadsheetApp', {
       openById: () => ({ getSheetByName: (name: string) => name === 'CONFIG_STAFF' ? sheet : null }),
     })
+    vi.stubGlobal('LockService', { getScriptLock: () => ({ waitLock: () => undefined, releaseLock: () => undefined }) })
     try {
       expect(configureStockManagersWorkflow()).toEqual({ managerCount: 3, changedRows: 4 })
       expect(sheet.writeRanges).toEqual([{
@@ -281,6 +282,34 @@ describe('PMC Stock manager configuration', () => {
         ...row,
         canManageStock: MANAGER_IDS.includes(String(row.id) as typeof MANAGER_IDS[number]),
       })))
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('rechecks row identities under Script Lock before setting manager roles after a row reorder', () => {
+    const sheet = new TrackingGoogleSheet(staffRows())
+    sheet.reorderAfterFirstBodyRead()
+    let lockAcquired = 0
+    let lockReleased = 0
+    vi.stubGlobal('PropertiesService', {
+      getScriptProperties: () => ({ getProperty: () => 'spreadsheet-1' }),
+    })
+    vi.stubGlobal('SpreadsheetApp', {
+      openById: () => ({ getSheetByName: (name: string) => name === 'CONFIG_STAFF' ? sheet : null }),
+    })
+    vi.stubGlobal('LockService', {
+      getScriptLock: () => ({
+        waitLock: () => { lockAcquired += 1 },
+        releaseLock: () => { lockReleased += 1 },
+      }),
+    })
+    try {
+      expect(() => configureStockManagersWorkflow()).toThrow('CONFIG_STAFF changed during Stock manager cutover')
+      expect(lockAcquired).toBe(1)
+      expect(lockReleased).toBe(1)
+      expect(sheet.rows()).toEqual([staffRows()[1], staffRows()[0], staffRows()[2], staffRows()[3]])
+      expect(sheet.writeRanges).toEqual([])
     } finally {
       vi.unstubAllGlobals()
     }
@@ -510,6 +539,9 @@ class TrackingStore implements SheetStore {
     this.current = structuredClone(rows)
   }
 
+  append(): void { throw new Error('unexpected append') }
+  update(): void { throw new Error('unexpected update') }
+
   rows(): SheetRow[] {
     return structuredClone(this.current)
   }
@@ -517,6 +549,7 @@ class TrackingStore implements SheetStore {
 
 class TrackingGoogleSheet {
   private readonly values: unknown[][]
+  private reorderOnNextBodyRead = false
   readonly writeRanges: Array<{
     row: number
     column: number
@@ -534,12 +567,25 @@ class TrackingGoogleSheet {
   getLastColumn(): number { return STAFF_CONFIG_COLUMNS.length }
   getLastRow(): number { return this.values.length }
 
+  reorderAfterFirstBodyRead(): void {
+    this.reorderOnNextBodyRead = true
+  }
+
   getRange(row: number, column: number, rowCount = 1, columnCount = 1) {
-    const read = () => Array.from({ length: rowCount }, (_, rowIndex) =>
+    const read = () => {
+      const result = Array.from({ length: rowCount }, (_, rowIndex) =>
       Array.from({ length: columnCount }, (_, columnIndex) =>
         this.values[row - 1 + rowIndex]?.[column - 1 + columnIndex] ?? '',
       ),
     )
+      if (this.reorderOnNextBodyRead && row === 2 && column === 1) {
+        this.reorderOnNextBodyRead = false
+        const first = this.values[1]!
+        this.values[1] = this.values[2]!
+        this.values[2] = first
+      }
+      return result
+    }
     return {
       getValues: read,
       getDisplayValues: () => read().map((values) => values.map(String)),

@@ -27,6 +27,7 @@ import {
   createAdjustmentCommand,
   formatStockQuantity,
   stockCategoryLabel,
+  useStockCommandAttemptTracker,
   type StockLineDraft,
 } from './stockModel'
 
@@ -167,7 +168,7 @@ function ReceiveFlow({ products, adapter, requestIdFactory, onCancel, onSuccess 
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const commandForAttempt = useStockCommandAttemptTracker(requestIdFactory)
   const [availableProducts, setAvailableProducts] = useState(products)
   const [lines, setLines] = useState<StockLineDraft[]>([{ lineId: 'line-1', productId: '', quantity: '' }])
   const [pending, setPending] = useState(false)
@@ -276,7 +277,7 @@ function CreateProductFlow({ adapter, requestIdFactory, onCancel, onSuccess }: {
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const commandForAttempt = useStockCommandAttemptTracker(requestIdFactory)
   const [form, setForm] = useState({
     name: '', category: 'CLINIC_SUPPLY' as StockCategory, unit: '', openingQuantity: '', minimumQuantity: '',
   })
@@ -351,7 +352,7 @@ function AdjustmentFlow({ products, initialProductId, adapter, requestIdFactory,
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const commandForAttempt = useStockCommandAttemptTracker(requestIdFactory)
   const [productId, setProductId] = useState(initialProductId)
   const [countedQuantity, setCountedQuantity] = useState('')
   const [reason, setReason] = useState('')
@@ -441,7 +442,7 @@ function EditProductFlow({ product, adapter, requestIdFactory, onProductsReloade
   onCancel: () => void
   onSuccess: (result: StockCommandResult) => Promise<void>
 }) {
-  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const commandForAttempt = useStockCommandAttemptTracker(requestIdFactory)
   const [latestProduct, setLatestProduct] = useState(product)
   const [form, setForm] = useState({
     name: product.name,
@@ -656,7 +657,7 @@ function LifecycleConfirm({ intent, adapter, requestIdFactory, onProductsReloade
   onCancel: () => void
   onSuccess: (result: StockCommandResult, title: string) => Promise<void>
 }) {
-  const commandForAttempt = useCommandAttemptTracker(requestIdFactory)
+  const commandForAttempt = useStockCommandAttemptTracker(requestIdFactory)
   const [latestProduct, setLatestProduct] = useState(intent.product)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
@@ -915,18 +916,6 @@ function managerFailureMessage(error: unknown, fallback: string): string {
   if (code === 'STOCK_PRODUCT_INACTIVE') return 'สินค้านี้ถูกปิดใช้งาน ข้อมูลที่กรอกยังอยู่ครบ'
   if (code === 'STOCK_UNIT_LOCKED') return 'เปลี่ยนหน่วยไม่ได้เพราะสินค้านี้มีประวัติ Stock แล้ว'
   return fallback
-}
-
-function useCommandAttemptTracker(requestIdFactory: () => string): (command: StockClientCommand) => StockClientCommand {
-  const tracker = useRef<{ requestId: string | null; intent: string | null }>({ requestId: null, intent: null })
-  return (command) => {
-    const intent = JSON.stringify({ commandType: command.commandType, payload: command.payload })
-    if (!tracker.current.requestId || (tracker.current.intent !== null && tracker.current.intent !== intent)) {
-      tracker.current.requestId = requestIdFactory()
-    }
-    tracker.current.intent = intent
-    return { ...command, requestId: tracker.current.requestId } as StockClientCommand
-  }
 }
 
 function productName(products: StockProductProjection[], productId: string): string {

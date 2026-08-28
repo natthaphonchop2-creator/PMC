@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import {
   formatQuantityMilli,
   parseNonNegativeQuantityToMilli,
@@ -86,4 +87,18 @@ export function createAdjustmentCommand(input: {
 
 export function canEditProductUnit(product: StockProductProjection): boolean {
   return !product.hasLedgerActivity
+}
+
+export function useStockCommandAttemptTracker(
+  requestIdFactory: () => string,
+): (command: StockClientCommand) => StockClientCommand {
+  const tracker = useRef<{ requestId: string | null; intent: string | null }>({ requestId: null, intent: null })
+  return (command) => {
+    const intent = JSON.stringify({ commandType: command.commandType, payload: command.payload })
+    if (!tracker.current.requestId || tracker.current.intent !== intent) {
+      tracker.current.requestId = requestIdFactory()
+    }
+    tracker.current.intent = intent
+    return { ...command, requestId: tracker.current.requestId } as StockClientCommand
+  }
 }

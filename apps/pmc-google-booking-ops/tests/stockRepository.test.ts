@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { StockAuditEvent, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
-import { createStockRepository, type SheetRow } from '../src/repositories'
+import { createStockRepository, type SheetRow, type SheetStore } from '../src/repositories'
+import { createGoogleSheetStore } from '../src/adapters/googleSheets'
+import { SHEET_SCHEMAS } from '../src/sheetSchema'
 import { createMemorySheetStore } from './helpers/fakes'
 
 function productFixture(patch: Partial<StockProduct> = {}): StockProduct {
@@ -70,7 +72,127 @@ function acceptedAuditFixture(patch: Partial<StockAuditEvent> = {}): StockAuditE
   return preparedAuditFixture({ eventId: 'AUD-STOCK-ACCEPTED-1', status: 'ACCEPTED', ...patch })
 }
 
+class StockWriteTrackingStore implements SheetStore {
+  private readonly tabs = new Map<string, SheetRow[]>()
+  readonly operations: string[] = []
+  failNextAppend = false
+
+  read(tab: string): SheetRow[] {
+    return structuredClone(this.tabs.get(tab) ?? [])
+  }
+
+  replace(tab: string, rows: SheetRow[]): void {
+    this.operations.push(`replace:${tab}`)
+    this.tabs.set(tab, structuredClone(rows))
+  }
+
+  append(tab: string, rows: SheetRow[]): void {
+    this.operations.push(`append:${tab}`)
+    if (this.failNextAppend) {
+      this.failNextAppend = false
+      throw new Error('append failed')
+    }
+    this.tabs.set(tab, [...this.read(tab), ...structuredClone(rows)])
+  }
+
+  update(tab: string, rowIndex: number, row: SheetRow): void {
+    this.operations.push(`update:${tab}:${rowIndex}`)
+    const rows = this.read(tab)
+    rows[rowIndex] = structuredClone(row)
+    this.tabs.set(tab, rows)
+  }
+}
+
+class FaultingGoogleStockSheet {
+  private readonly values: unknown[][]
+  clearCalls = 0
+  failNextWrite = false
+
+  constructor(tab: keyof typeof SHEET_SCHEMAS, rows: SheetRow[]) {
+    const headers = SHEET_SCHEMAS[tab]
+    this.values = [
+      [...headers],
+      ...rows.map((row) => headers.map((header) => row[header])),
+    ]
+  }
+
+  getLastRow(): number { return this.values.length }
+  getLastColumn(): number { return this.values[0]?.length ?? 0 }
+
+  getRange(row: number, column: number, rowCount = 1, columnCount = 1) {
+    return {
+      getValues: () => Array.from({ length: rowCount }, (_, rowIndex) => Array.from(
+        { length: columnCount },
+        (_, columnIndex) => this.values[row - 1 + rowIndex]?.[column - 1 + columnIndex] ?? '',
+      )),
+      clearContent: () => { this.clearCalls += 1 },
+      setValues: (next: unknown[][]) => {
+        if (this.failNextWrite) throw new Error('Google Sheets append failed')
+        for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+          const target = this.values[row - 1 + rowIndex] ?? []
+          for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+            target[column - 1 + columnIndex] = next[rowIndex]![columnIndex]
+          }
+          this.values[row - 1 + rowIndex] = target
+        }
+      },
+    }
+  }
+
+  bodyRows(): unknown[][] { return structuredClone(this.values.slice(1)) }
+}
+
 describe('stock repository', () => {
+  it('uses the Google Sheet adapter tail append without clearing existing Stock rows when the write fails', () => {
+    const existing = ledgerFixture()
+    const sheet = new FaultingGoogleStockSheet('STOCK_LEDGER', [existing as unknown as SheetRow])
+    const store = createGoogleSheetStore({
+      getSheetByName: (tab: string) => tab === 'STOCK_LEDGER' ? sheet : null,
+    } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet)
+    const before = sheet.bodyRows()
+    sheet.failNextWrite = true
+
+    expect(() => store.append('STOCK_LEDGER', [ledgerFixture({ transactionId: 'TX-2' }) as unknown as SheetRow]))
+      .toThrow('Google Sheets append failed')
+    expect(sheet.bodyRows()).toEqual(before)
+    expect(sheet.clearCalls).toBe(0)
+  })
+
+  it('uses append-only Stock writes and preserves existing ledger history when the append fails', () => {
+    const store = new StockWriteTrackingStore()
+    const repository = createStockRepository(store)
+    repository.insertProduct(productFixture())
+    repository.appendLedgerBatch([ledgerFixture()])
+    const history = store.read('STOCK_LEDGER')
+    store.failNextAppend = true
+
+    expect(() => repository.appendLedgerBatch([
+      ledgerFixture({
+        transactionId: 'TX-2', requestId: 'request-stock-2', documentId: 'ISS-202608-0002', idempotencyKey: 'request-stock-2:1',
+        balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000,
+      }),
+    ])).toThrow('append failed')
+    expect(store.read('STOCK_LEDGER')).toEqual(history)
+    expect(store.operations).not.toContain('replace:STOCK_PRODUCTS')
+    expect(store.operations).not.toContain('replace:STOCK_LEDGER')
+  })
+
+  it('updates only the targeted Stock product row without replacing product history', () => {
+    const store = new StockWriteTrackingStore()
+    const repository = createStockRepository(store)
+    repository.insertProduct(productFixture())
+    repository.insertProduct(productFixture({ productId: 'STK-000002', name: 'สำลี', normalizedName: 'สำลี' }))
+
+    repository.updateProduct('STK-000002', 1, { name: 'สำลีแผ่น' })
+
+    expect(store.read('STOCK_PRODUCTS').map((row) => row.name)).toEqual(['น้ำเกลือ', 'สำลีแผ่น'])
+    expect(store.operations).toEqual([
+      'append:STOCK_PRODUCTS',
+      'append:STOCK_PRODUCTS',
+      'update:STOCK_PRODUCTS:1',
+    ])
+  })
+
   it('derives current balances only from immutable ledger rows', () => {
     const store = createMemorySheetStore()
     const repository = createStockRepository(store)
@@ -79,7 +201,7 @@ describe('stock repository', () => {
       ledgerFixture({ transactionId: 'TX-1', quantityDeltaMilli: 10_000, balanceBeforeMilli: 0, balanceAfterMilli: 10_000 }),
       ledgerFixture({
         transactionId: 'TX-2',
-        lineNumber: 2,
+        lineNumber: 2, idempotencyKey: 'request-stock-1:2',
         quantityDeltaMilli: -2_000,
         balanceBeforeMilli: 10_000,
         balanceAfterMilli: 8_000,
@@ -256,7 +378,7 @@ describe('stock repository', () => {
     repository.insertProduct(productFixture())
     repository.appendLedgerBatch([ledgerFixture()])
 
-    expect(() => repository.appendLedgerBatch([ledgerFixture({ transactionId: 'TX-2', documentId: 'ISS-202608-0002' })])).toThrow(
+    expect(() => repository.appendLedgerBatch([ledgerFixture({ transactionId: 'TX-2', documentId: 'ISS-202608-0002', idempotencyKey: 'request-stock-1:2' })])).toThrow(
       'stock request conflicts with document',
     )
     expect(() => repository.appendLedgerBatch([ledgerFixture()])).toThrow('stock transaction already exists')
@@ -265,6 +387,7 @@ describe('stock repository', () => {
         transactionId: 'TX-3',
         requestId: 'request-stock-2',
         documentId: 'ISS-202608-0002',
+        idempotencyKey: 'request-stock-2:1',
         balanceBeforeMilli: 9_001,
         balanceAfterMilli: 8_001,
       }),
@@ -280,6 +403,7 @@ describe('stock repository', () => {
       ledgerFixture({
         transactionId: 'TX-2',
         requestId: 'request-stock-2',
+        idempotencyKey: 'request-stock-2:1',
         balanceBeforeMilli: 1_000,
         balanceAfterMilli: 2_000,
       }),
@@ -294,6 +418,7 @@ describe('stock repository', () => {
         transactionId: 'TX-2',
         requestId: 'request-stock-2',
         lineNumber: 2,
+        idempotencyKey: 'request-stock-2:1',
         balanceBeforeMilli: 1_000,
         balanceAfterMilli: 2_000,
       }),
@@ -306,10 +431,32 @@ describe('stock repository', () => {
         requestId: 'request-stock-3',
         documentId: 'ISS-202608-0003',
         lineNumber: 3,
+        idempotencyKey: 'request-stock-3:1',
         balanceBeforeMilli: 2_000,
         balanceAfterMilli: 3_000,
       }),
     ])).toThrow('stock document conflicts with request')
+  })
+
+  it('rejects an unrelated append when persisted ledger rows reuse an idempotency key', () => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_LEDGER', [
+      ledgerFixture(),
+      ledgerFixture({
+        transactionId: 'TX-2', requestId: 'request-stock-2', documentId: 'ISS-202608-0002',
+        lineNumber: 2, idempotencyKey: 'request-stock-1:1',
+        balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000,
+      }),
+    ] as unknown as SheetRow[])
+    const repository = createStockRepository(store)
+
+    expect(() => repository.appendLedgerBatch([
+      ledgerFixture({
+        transactionId: 'TX-3', requestId: 'request-stock-3', documentId: 'ISS-202608-0003',
+        idempotencyKey: 'request-stock-3:1',
+        balanceBeforeMilli: 2_000, balanceAfterMilli: 3_000,
+      }),
+    ])).toThrow('stock idempotency key already exists')
   })
 
   it.each([
@@ -319,6 +466,7 @@ describe('stock repository', () => {
       ledgerFixture({
         transactionId: 'TX-2',
         requestId: 'request-stock-2',
+        idempotencyKey: 'request-stock-2:1',
         balanceBeforeMilli: 1_000,
         balanceAfterMilli: 2_000,
       }),
@@ -329,6 +477,7 @@ describe('stock repository', () => {
       ledgerFixture({
         transactionId: 'TX-2',
         documentId: 'ISS-202608-0002',
+        idempotencyKey: 'request-stock-2:1',
         balanceBeforeMilli: 1_000,
         balanceAfterMilli: 2_000,
       }),
@@ -368,7 +517,7 @@ describe('stock repository', () => {
       'duplicate transaction IDs',
       [
         ledgerFixture(),
-        ledgerFixture({ transactionId: 'TX-1', lineNumber: 2, balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000 }),
+        ledgerFixture({ transactionId: 'TX-1', lineNumber: 2, idempotencyKey: 'request-stock-1:2', balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000 }),
       ],
       'stock transaction already exists',
     ],
@@ -376,7 +525,7 @@ describe('stock repository', () => {
       'request IDs associated with different documents',
       [
         ledgerFixture(),
-        ledgerFixture({ transactionId: 'TX-2', documentId: 'ISS-202608-0002', lineNumber: 2, balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000 }),
+        ledgerFixture({ transactionId: 'TX-2', documentId: 'ISS-202608-0002', lineNumber: 2, idempotencyKey: 'request-stock-1:2', balanceBeforeMilli: 1_000, balanceAfterMilli: 2_000 }),
       ],
       'stock request conflicts with document',
     ],
@@ -396,6 +545,7 @@ describe('stock repository', () => {
         transactionId: 'TX-3',
         requestId: 'request-stock-3',
         documentId: 'ISS-202608-0003',
+        idempotencyKey: 'request-stock-3:1',
         balanceBeforeMilli,
         balanceAfterMilli: balanceBeforeMilli + 1_000,
       }),

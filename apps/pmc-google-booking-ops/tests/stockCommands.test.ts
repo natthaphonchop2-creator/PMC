@@ -106,6 +106,7 @@ function stockPortsWithBalances(seed: Record<string, number>, failAfter?: FaultB
     baseStock: StockRepository
     setNow(value: string): void
     replaceAuditRows(rows: StockAuditEvent[]): void
+    replaceLedgerRows(rows: StockLedgerEntry[]): void
     setStaff(staffId: string, patch: Partial<{ active: boolean; canManageStock: boolean }>): void
   } = {
     clock: { nowIso: () => now },
@@ -137,6 +138,9 @@ function stockPortsWithBalances(seed: Record<string, number>, failAfter?: FaultB
     },
     replaceAuditRows(rows) {
       store.replace('STOCK_AUDIT', rows as unknown as Array<Record<string, unknown>>)
+    },
+    replaceLedgerRows(rows) {
+      store.replace('STOCK_LEDGER', rows as unknown as Array<Record<string, unknown>>)
     },
     setStaff(staffId, patch) {
       const before = staffRows.get(staffId)
@@ -441,6 +445,18 @@ describe('stock commands', () => {
     expect(ports.auditRows().filter((row) => row.requestId === 'adjust-zero' && row.status === 'ACCEPTED')).toHaveLength(1)
   })
 
+  it('fails closed when a nonzero accepted ADJUST loses its ledger document', () => {
+    const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
+    const command: MiniAppStockCommand = {
+      requestId: 'adjust-lost-document', staffId: 'ADMIN_03', commandType: 'ADJUST',
+      payload: { productId: 'STK-000001', countedQuantityMilli: 3_000, reason: 'ตรวจนับ' },
+    }
+    executeStockCommand(command, ports)
+    ports.replaceLedgerRows(ports.stock.listLedger().filter((row) => row.requestId !== command.requestId))
+
+    expect(() => executeStockCommand(command, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+  })
+
   it('updates, deactivates, and reactivates a product with optimistic versions', () => {
     const ports = stockPortsWithBalances({ 'STK-000001': 0 })
     expect(executeStockCommand({
@@ -743,18 +759,31 @@ describe('stock commands', () => {
       expect(executeStockCommand(command, ports).createdAt).toBe(NOW)
     })
 
-    it('reconciles an exact PREPARED manager command after the actor is deactivated', () => {
+    it('leaves a PREPARED ISSUE unresolved when the staff actor becomes inactive', () => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, 'PREPARED')
+      const command = issueCommand('recover-inactive-staff', 'STK-000001', 1_000)
+      expect(() => executeStockCommand(command, ports)).toThrow('FAULT_AFTER_PREPARED')
+      ports.setStaff('ADMIN_01', { active: false })
+
+      expect(() => executeStockCommand(command, ports)).toThrow('STOCK_STAFF_REQUIRED')
+      expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
+      expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+      expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(0)
+    })
+
+    it('leaves a PREPARED manager command unresolved when manager authorization is revoked', () => {
       const ports = stockPortsWithBalances({ 'STK-000001': 5_000 }, 'PREPARED')
       const command: MiniAppStockCommand = {
-        requestId: 'recover-deactivated-manager', staffId: 'ADMIN_03', commandType: 'RECEIVE',
+        requestId: 'recover-revoked-manager', staffId: 'ADMIN_03', commandType: 'RECEIVE',
         payload: { lines: [{ productId: 'STK-000001', quantityMilli: 1_000 }] },
       }
       expect(() => executeStockCommand(command, ports)).toThrow('FAULT_AFTER_PREPARED')
-      ports.setStaff('ADMIN_03', { active: false, canManageStock: false })
+      ports.setStaff('ADMIN_03', { canManageStock: false })
 
-      expect(executeStockCommand(command, ports).lines).toEqual([
-        { productId: 'STK-000001', quantityDeltaMilli: 1_000, balanceAfterMilli: 6_000 },
-      ])
+      expect(() => executeStockCommand(command, ports)).toThrow('STOCK_MANAGER_REQUIRED')
+      expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
+      expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'PREPARED')).toHaveLength(1)
+      expect(ports.auditRows().filter((row) => row.requestId === command.requestId && row.status === 'ACCEPTED')).toHaveLength(0)
     })
 
     it('blocks an unrelated command until the unresolved PREPARED request reconciles', () => {

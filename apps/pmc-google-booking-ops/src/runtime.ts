@@ -804,29 +804,56 @@ export function configureStockManagersWorkflow(): {
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
   const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
   if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
-  const headers = sheet
-    .getRange(1, 1, 1, sheet.getLastColumn())
-    .getValues()[0]
-    .map(String)
-  if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
-    throw new Error('sheet header mismatch: CONFIG_STAFF')
-  }
-  const source = createGoogleSheetStore(spreadsheet)
-  const managerColumn = STAFF_CONFIG_COLUMNS.indexOf('canManageStock') + 1
-  return configureStockManagers({
-    read: (tab) => source.read(tab),
-    replace(tab, rows) {
-      if (tab !== 'CONFIG_STAFF') throw new Error('unexpected Stock manager tab')
-      const rowCount = sheet.getLastRow() - 1
-      if (rows.length !== rowCount) throw new Error('CONFIG_STAFF row count changed')
-      const expected = rows.map((row) => [row.canManageStock === true])
-      sheet.getRange(2, managerColumn, rowCount, 1).setValues(expected)
-      const readback = sheet.getRange(2, managerColumn, rowCount, 1).getValues()
-      if (readback.some(([value], index) => value !== expected[index][0])) {
-        throw new Error('PMC Stock manager readback mismatch')
+  const lock = LockService.getScriptLock()
+  lock.waitLock(30_000)
+  try {
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0]
+      .map(String)
+    if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
+      throw new Error('sheet header mismatch: CONFIG_STAFF')
+    }
+    const source = createGoogleSheetStore(spreadsheet)
+    const managerColumn = STAFF_CONFIG_COLUMNS.indexOf('canManageStock') + 1
+    const plan: { rows: SheetRow[] | null } = { rows: null }
+    const result = configureStockManagers({
+      read: (tab) => source.read(tab),
+      replace(tab, rows) {
+        if (tab !== 'CONFIG_STAFF') throw new Error('unexpected Stock manager tab')
+        plan.rows = rows
+      },
+      append() { throw new Error('unexpected Stock manager append') },
+      update() { throw new Error('unexpected Stock manager update') },
+    })
+    const liveRows = source.read('CONFIG_STAFF')
+    if (plan.rows) {
+      if (liveRows.length !== plan.rows.length || liveRows.some((row, index) => (
+        row.id !== plan.rows![index]?.id || isActiveStockManagerRow(row.active) !== isActiveStockManagerRow(plan.rows![index]?.active)
+      ))) {
+        throw new Error('CONFIG_STAFF changed during Stock manager cutover')
       }
-    },
-  })
+      const expected = plan.rows.map((row) => [row.canManageStock === true])
+      sheet.getRange(2, managerColumn, plan.rows.length, 1).setValues(expected)
+    }
+    const readback = source.read('CONFIG_STAFF')
+    if (!hasExactStockManagerCutover(readback)) throw new Error('PMC Stock manager readback mismatch')
+    return result
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+function isActiveStockManagerRow(value: unknown): boolean {
+  return value === true || String(value).toLowerCase() === 'true' || String(value) === '1'
+}
+
+function hasExactStockManagerCutover(rows: SheetRow[]): boolean {
+  const expected = new Set(['shared-account-test', 'ADMIN_07', 'ADMIN_03'])
+  const activeManagers = rows
+    .filter((row) => isActiveStockManagerRow(row.active) && row.canManageStock === true)
+    .map((row) => String(row.id))
+  return activeManagers.length === expected.size && activeManagers.every((id) => expected.has(id))
 }
 
 export function validateProductionFlexMessagesWorkflow(): {

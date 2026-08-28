@@ -8,6 +8,8 @@ export type SheetRow = Record<string, unknown>
 export interface SheetStore {
   read(tab: string): SheetRow[]
   replace(tab: string, rows: SheetRow[]): void
+  append(tab: string, rows: SheetRow[]): void
+  update(tab: string, rowIndex: number, row: SheetRow): void
 }
 
 function clonePlain<T>(value: T): T {

@@ -9,6 +9,7 @@ import { StockLineEditor } from './StockLineEditor'
 import {
   createIssueCommand,
   formatStockQuantity,
+  useStockCommandAttemptTracker,
   type StockIssueCommand,
   type StockLineDraft,
 } from './stockModel'
@@ -31,7 +32,7 @@ export function StockIssueFlow({
   onReturnToStock: (products: StockProductProjection[]) => void
   requestIdFactory?: () => string
 }) {
-  const [requestId] = useState(requestIdFactory)
+  const commandForAttempt = useStockCommandAttemptTracker(requestIdFactory)
   const [products, setProducts] = useState(() => initialProducts.filter((product) => product.active))
   const [lines, setLines] = useState<StockLineDraft[]>([{ lineId: 'line-1', productId: '', quantity: '' }])
   const [pending, setPending] = useState(false)
@@ -68,7 +69,7 @@ export function StockIssueFlow({
       return
     }
 
-    const command = createIssueCommand({ requestId, products, lines })
+    const command = commandForAttempt(createIssueCommand({ requestId: '', products, lines })) as StockIssueCommand
     setPending(true)
     setMessage('')
     setFieldErrors({})

@@ -64,12 +64,6 @@ function requireAuthorizedActor(input: MiniAppStockCommand, ports: StockCommandP
   return actor
 }
 
-function requireRecoveryActor(input: MiniAppStockCommand, ports: StockCommandPorts): StockActor {
-  const actor = ports.staff.findById(input.staffId)
-  if (!actor) throw new Error('STOCK_STAFF_REQUIRED')
-  return actor
-}
-
 function requireManager(actor: StockActor): void {
   if (!actor.canManageStock) throw new Error('STOCK_MANAGER_REQUIRED')
 }
@@ -587,7 +581,9 @@ function resultFromAcceptedJournal(
   const documentRequired =
     input.commandType === 'RECEIVE' ||
     input.commandType === 'ISSUE' ||
-    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli > 0)
+    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli > 0) ||
+    (input.commandType === 'ADJUST' &&
+      input.payload.countedQuantityMilli !== (ports.stock.balanceByProduct().get(input.payload.productId) ?? 0))
   const documentForbidden =
     expectedTransactionType === null ||
     (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli === 0)
@@ -638,13 +634,11 @@ export function executeStockCommand(
     const preparedContext = journal.prepared
       ? contextFromPrepared(input, fingerprint, journal.prepared)
       : null
-    const actor = preparedContext
-      ? requireRecoveryActor(input, ports)
-      : requireAuthorizedActor(input, ports)
+    const actor = requireAuthorizedActor(input, ports)
     if (input.commandType === 'ISSUE') {
       return executeStockDocument(input, actor, fingerprint, preparedContext, ports)
     }
-    if (!preparedContext) requireManager(actor)
+    requireManager(actor)
     if (input.commandType === 'CREATE_PRODUCT') {
       return createProduct(input, actor, fingerprint, preparedContext, ports)
     }

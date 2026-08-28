@@ -162,6 +162,9 @@ function createPreviewStockStore({ canManageStock }: { canManageStock: boolean }
         if (existing.fingerprint !== fingerprint) throw previewStockError('STOCK_IDEMPOTENCY_CONFLICT')
         return structuredClone(existing.result)
       }
+      if (command.commandType !== 'ISSUE' && !canManageStock) {
+        throw previewStockError('STOCK_MANAGER_REQUIRED')
+      }
       const createdAt = now()
       let result: StockCommandResult
 
@@ -188,17 +191,30 @@ function createPreviewStockStore({ canManageStock }: { canManageStock: boolean }
       } else if (command.commandType === 'RECEIVE' || command.commandType === 'ISSUE') {
         const isIssue = command.commandType === 'ISSUE'
         const documentId = nextDocumentId(isIssue ? 'ISS' : 'RCV')
-        const lineProducts = command.payload.lines.map((line) => findProduct(line.productId))
+        const selectedIds = new Set<string>()
+        const lineProducts = command.payload.lines.map((line) => {
+          if (!Number.isSafeInteger(line.quantityMilli) || line.quantityMilli <= 0) {
+            throw previewStockError('STOCK_INVALID_QUANTITY')
+          }
+          if (selectedIds.has(line.productId)) throw previewStockError('STOCK_DUPLICATE_LINE')
+          selectedIds.add(line.productId)
+          const product = findProduct(line.productId)
+          if (!product.active) throw previewStockError('STOCK_PRODUCT_INACTIVE')
+          return product
+        })
         const lines = command.payload.lines.map((line, index) => {
           const product = lineProducts[index]!
           const delta = isIssue ? -line.quantityMilli : line.quantityMilli
           const nextBalance = product.onHandMilli + delta
           if (nextBalance < 0) throw previewStockError('STOCK_INSUFFICIENT_BALANCE')
-          product.onHandMilli = nextBalance
-          product.lowStock = nextBalance <= product.minimumQuantityMilli
-          product.hasLedgerActivity = true
           return { productId: product.productId, quantityDeltaMilli: delta, balanceAfterMilli: nextBalance }
         })
+        for (const line of lines) {
+          const product = findProduct(line.productId)
+          product.onHandMilli = line.balanceAfterMilli
+          product.lowStock = product.onHandMilli <= product.minimumQuantityMilli
+          product.hasLedgerActivity = true
+        }
         result = { requestId: command.requestId, documentId, commandType: command.commandType, createdAt, lines }
         rememberDocument(documentFromResult(result, lineProducts, actor, ''))
       } else if (command.commandType === 'ADJUST') {

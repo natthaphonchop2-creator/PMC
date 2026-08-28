@@ -25,6 +25,19 @@ class MemorySheetStore implements SheetStore {
   replace(tab: string, rows: SheetRow[]): void {
     this.tabs.set(tab, structuredClone(rows))
   }
+
+  append(tab: string, rows: SheetRow[]): void {
+    this.tabs.set(tab, [...this.read(tab), ...structuredClone(rows)])
+  }
+
+  update(tab: string, rowIndex: number, row: SheetRow): void {
+    const rows = this.read(tab)
+    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) {
+      throw new Error(`row index out of range: ${tab}`)
+    }
+    rows[rowIndex] = structuredClone(row)
+    this.tabs.set(tab, rows)
+  }
 }
 
 export function createMemorySheetStore(): SheetStore {
