@@ -805,6 +805,40 @@ describe('stock commands', () => {
       expect(ports.stock.balanceByProduct().get('STK-000001')).toBe(5_000)
     })
 
+    it.each([
+      ['unknown', 'UNKNOWN'],
+      ['blank', ''],
+      ['non-string', 42],
+    ])('blocks issue and manager writes when persisted audit status is %s', (_case, status) => {
+      const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
+      ports.replaceAuditRows([{
+        eventId: 'AUDIT-CORRUPT-STATUS', requestId: 'corrupt-status', actorStaffId: 'ADMIN_01',
+        action: 'ISSUE', status: status as unknown as StockAuditEvent['status'], safeErrorCode: '',
+        targetProductIdsJson: '["STK-000001"]',
+        correlationId: `ISS-CORRUPT|${'a'.repeat(64)}`, createdAt: NOW,
+      }])
+      const productsBefore = ports.stock.listProducts()
+      const ledgerBefore = ports.stock.listLedger()
+      const auditBefore = ports.auditRows()
+      const commands: MiniAppStockCommand[] = [
+        issueCommand('blocked-corrupt-issue', 'STK-000001', 1_000),
+        {
+          requestId: 'blocked-corrupt-manager', staffId: 'ADMIN_03', commandType: 'CREATE_PRODUCT',
+          payload: {
+            name: 'ต้องไม่ถูกสร้าง', category: 'CLINIC_SUPPLY', unit: 'ชิ้น',
+            openingQuantityMilli: 0, minimumQuantityMilli: 0,
+          },
+        },
+      ]
+
+      for (const command of commands) {
+        expect(() => executeStockCommand(command, ports)).toThrow('stock audit journal invalid')
+      }
+      expect(ports.stock.listProducts()).toEqual(productsBefore)
+      expect(ports.stock.listLedger()).toEqual(ledgerBefore)
+      expect(ports.auditRows()).toEqual(auditBefore)
+    })
+
     it('fails closed when multiple requests are pending recovery', () => {
       const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
       const pending = (requestId: string, documentId: string, fingerprint: string): StockAuditEvent => ({

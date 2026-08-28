@@ -163,6 +163,19 @@ describe('stock repository', () => {
   })
 
   it.each([
+    ['unknown', 'UNKNOWN'],
+    ['blank', ''],
+    ['non-string', 42],
+  ])('rejects a persisted audit row with %s status before journal filtering', (_case, status) => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_AUDIT', [
+      preparedAuditFixture({ status: status as unknown as StockAuditEvent['status'] }),
+    ] as unknown as SheetRow[])
+
+    expect(() => createStockRepository(store).listUnresolvedPrepared()).toThrow('stock audit journal invalid')
+  })
+
+  it.each([
     ['action', { action: 'RECEIVE' }],
     ['actor', { actorStaffId: 'staff-2' }],
     ['targets', { targetProductIdsJson: '["STK-000002"]' }],

@@ -65,6 +65,14 @@ const STOCK_COMMAND_ACTIONS = new Set([
   'REACTIVATE_PRODUCT',
 ])
 
+const STOCK_AUDIT_STATUSES = new Set(['PREPARED', 'ACCEPTED', 'REJECTED', 'RECOVERED'])
+
+function validateAuditStatuses(events: StockAuditEvent[]): void {
+  if (events.some((event) => typeof event.status !== 'string' || !STOCK_AUDIT_STATUSES.has(event.status))) {
+    throw new Error('stock audit journal invalid')
+  }
+}
+
 function validateJournalEvent(event: StockAuditEvent): void {
   if (
     typeof event.correlationId !== 'string' ||
@@ -108,6 +116,7 @@ function auditJournalByRequest(
   events: StockAuditEvent[],
   requestId: string,
 ): { prepared: StockAuditEvent | null; accepted: StockAuditEvent | null } {
+  validateAuditStatuses(events)
   const preparedEvents = events.filter((event) => event.requestId === requestId && event.status === 'PREPARED')
   const acceptedEvents = events.filter((event) => event.requestId === requestId && event.status === 'ACCEPTED')
   for (const event of [...preparedEvents, ...acceptedEvents]) validateJournalEvent(event)
@@ -266,6 +275,7 @@ export function createStockRepository(store: SheetStore): StockRepository {
     },
     listUnresolvedPrepared(): StockAuditEvent[] {
       const events = store.read('STOCK_AUDIT').map(asAuditEvent)
+      validateAuditStatuses(events)
       const requestIds = new Set(
         events
           .filter((event) => event.status === 'PREPARED' || event.status === 'ACCEPTED')
@@ -286,6 +296,7 @@ export function createStockRepository(store: SheetStore): StockRepository {
     appendAudit(event: StockAuditEvent): void {
       const rows = store.read('STOCK_AUDIT')
       const existing = rows.map(asAuditEvent)
+      validateAuditStatuses([...existing, event])
       if (event.status === 'PREPARED' || event.status === 'ACCEPTED') validateJournalEvent(event)
       if (
         event.status === 'PREPARED' &&
