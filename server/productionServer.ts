@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
 import { extname, join, resolve } from 'node:path'
 import { createMetaApiMiddleware } from './metaApiPlugin.js'
@@ -33,6 +33,12 @@ const contentTypes: Record<string, string> = {
   '.webp': 'image/webp',
 }
 
+const publicLegalPages: Record<string, string> = {
+  '/privacy-policy': 'legal/privacy-policy.html',
+  '/data-deletion': 'legal/data-deletion.html',
+  '/terms': 'legal/terms.html',
+}
+
 const server = createServer(async (req, res) => {
   if (req.url === '/healthz') {
     res.statusCode = 200
@@ -50,6 +56,13 @@ const server = createServer(async (req, res) => {
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.end(JSON.stringify({ error: 'Booking LINE webhook failed' }))
     }
+    return
+  }
+
+  const pathname = requestPathname(req.url)
+  const legalPage = pathname ? publicLegalPages[pathname] : undefined
+  if (legalPage) {
+    await servePublicLegalPage(req, res, legalPage)
     return
   }
 
@@ -140,6 +153,44 @@ const server = createServer(async (req, res) => {
   }
 })
 
+async function servePublicLegalPage(req: IncomingMessage, res: ServerResponse, legalPage: string) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.statusCode = 405
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    res.end(JSON.stringify({ error: 'Method not allowed' }))
+    return
+  }
+
+  const staticPath = resolve(distDir, legalPage)
+  if (!staticPath.startsWith(`${distDir}/`)) {
+    res.statusCode = 500
+    res.end('Legal page configuration is invalid')
+    return
+  }
+
+  try {
+    const filePath = await resolveStaticFile(staticPath)
+    res.statusCode = 200
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    res.setHeader('cache-control', 'no-cache')
+
+    if (req.method === 'HEAD') {
+      res.end('')
+      return
+    }
+
+    createReadStream(filePath)
+      .on('error', () => {
+        if (!res.headersSent) res.statusCode = 500
+        res.end('Static file read failed')
+      })
+      .pipe(res)
+  } catch {
+    res.statusCode = 404
+    res.end('Not found')
+  }
+}
+
 server.listen(port, host, () => {
   console.log(`PMC Ads Agent running on http://${host}:${port}`)
 })
@@ -152,6 +203,14 @@ async function resolveStaticFile(pathname: string) {
 
 function isAssetRequest(url: string) {
   return extname(new URL(url, 'http://localhost').pathname) !== ''
+}
+
+function requestPathname(url: string | undefined): string | null {
+  try {
+    return new URL(url || '/', 'http://localhost').pathname
+  } catch {
+    return null
+  }
 }
 
 function isCacheableAsset(pathname: string) {
