@@ -79,7 +79,12 @@ function isResourceName(value: string): boolean {
 function isHttpsUrl(value: string): boolean {
   try {
     const parsed = new URL(value)
-    return parsed.protocol === 'https:' && Boolean(parsed.hostname) && !parsed.username && !parsed.password
+    return parsed.protocol === 'https:'
+      && Boolean(parsed.hostname)
+      && !parsed.username
+      && !parsed.password
+      && !parsed.search
+      && !parsed.hash
   } catch {
     return false
   }

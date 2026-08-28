@@ -59,3 +59,50 @@ Implemented locally only. No Google Cloud, Apps Script, Sheet, LINE, Render, or 
 
 - The local terminal runner truncates/detaches commands crossing roughly 30 seconds, so it did not preserve a conclusive aggregate full-suite summary despite the required suite and both prescribed partitions being initiated and their processes later observed complete. Focused tests, server typecheck, and lint have conclusive passing output.
 - Existing `npm audit` advisories were not changed, per task instruction.
+
+## Fix round 1: reject query strings and fragments in async URLs
+
+### Changes
+
+- Updated `isHttpsUrl` in `server/pmc-mini-app/asyncConfig.ts` to reject non-empty `URL.search` and `URL.hash` in addition to rejecting non-HTTPS URLs and URL credentials.
+- Added regression coverage in `tests/pmc-mini-app/asyncConfig.test.ts` for a worker URL containing `?token=secret` and a worker audience containing `#secret`.
+- `server/pmc-mini-app/runtime.ts` remains intentionally unchanged: it already receives the complete `PmcMiniAppServerConfig` and propagates it into middleware. Adding a no-op edit would not improve this task; no async consumer exists until later plan tasks.
+
+### RED
+
+Command:
+
+```bash
+npx vitest run tests/pmc-mini-app/asyncConfig.test.ts tests/pmc-mini-app/config.test.ts
+```
+
+Result: failed as expected with 2 failed assertions. The parser returned a configuration with `workerUrl` containing `?token=secret` and another with `workerAudience` containing `#secret`.
+
+### GREEN
+
+Command:
+
+```bash
+npx vitest run tests/pmc-mini-app/asyncConfig.test.ts tests/pmc-mini-app/config.test.ts
+npx tsc -p tsconfig.server.json --noEmit
+npm run lint
+git diff --check
+```
+
+Output/result:
+
+- Vitest: 2 files passed, 22 tests passed.
+- TypeScript server check: exited 0 with no diagnostics.
+- ESLint: exited 0 with no diagnostics.
+- Diff check: exited 0 with no whitespace errors.
+
+### Files
+
+- `server/pmc-mini-app/asyncConfig.ts`
+- `tests/pmc-mini-app/asyncConfig.test.ts`
+- This report
+
+### Self-review
+
+- Both worker URL and worker audience use the same strict helper, so query strings and fragments are rejected consistently.
+- The change is parser-only and does not create external clients or mutate runtime/infrastructure state.

@@ -31,6 +31,8 @@ describe('PMC Mini App asynchronous booking configuration', () => {
     ['non-Singapore location', { PMC_ASYNC_LOCATION: 'us-central1' }],
     ['non-HTTPS worker URL', { PMC_ASYNC_WORKER_URL: 'http://pmc-mini-app.example/finalize-booking' }],
     ['credentialed worker audience', { PMC_ASYNC_WORKER_AUDIENCE: 'https://user:password@pmc-mini-app.example' }],
+    ['worker URL with a query string', { PMC_ASYNC_WORKER_URL: 'https://pmc-mini-app.example/finalize-booking?token=secret' }],
+    ['worker audience with a fragment', { PMC_ASYNC_WORKER_AUDIENCE: 'https://pmc-mini-app.example#secret' }],
     ['invalid task invoker service account', { PMC_ASYNC_TASK_INVOKER_EMAIL: 'task-invoker@example.com' }],
     ['invalid owner staff ID', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner' }],
   ])('fails closed for %s', (_name, patch) => {
