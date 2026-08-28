@@ -322,7 +322,9 @@ function validateJournalLedger(
   productIds: Set<string>,
 ): void {
   const targets = parseTargets(prepared.targetProductIdsJson)
-  const documentId = journalDocumentId(prepared)
+  const correlation = parseJournalCorrelation(prepared.correlationId, prepared.action)
+  if (!correlation) integrity()
+  const documentId = correlation.documentId
   const productOnly = prepared.action === 'UPDATE_PRODUCT' ||
     prepared.action === 'DEACTIVATE_PRODUCT' ||
     prepared.action === 'REACTIVATE_PRODUCT'
@@ -332,9 +334,17 @@ function validateJournalLedger(
   if (accepted && prepared.action === 'CREATE_PRODUCT' && !productIds.has(targets[0]!)) integrity()
   if (productOnly && entries.length > 0) integrity()
   if (entries.length === 0) {
-    if (accepted && (prepared.action === 'RECEIVE' || prepared.action === 'ISSUE')) integrity()
+    if (
+      accepted && (
+        prepared.action === 'RECEIVE' ||
+        prepared.action === 'ISSUE' ||
+        (prepared.action === 'ADJUST' && correlation.adjustmentLedgerEffect === true)
+      )
+    ) integrity()
     return
   }
+
+  if (prepared.action === 'ADJUST' && correlation.adjustmentLedgerEffect === false) integrity()
 
   const ordered = [...entries].sort((left, right) => left.lineNumber - right.lineNumber)
   if (
@@ -355,8 +365,26 @@ function validateJournalEvent(event: StockAuditEvent): void {
   if (
     event.safeErrorCode !== '' ||
     targets.length === 0 ||
-    !/^([A-Za-z0-9._:-]{1,124})\|[a-f0-9]{64}$/.test(event.correlationId)
+    parseJournalCorrelation(event.correlationId, event.action) === null
   ) integrity()
+}
+
+function parseJournalCorrelation(
+  correlationId: string,
+  action: string,
+): { documentId: string; fingerprint: string; adjustmentLedgerEffect: boolean | null } | null {
+  const parts = correlationId.split('|')
+  const [documentId, fingerprint, marker] = parts
+  if (
+    !safeId(documentId) ||
+    !/^[a-f0-9]{64}$/.test(fingerprint ?? '') ||
+    (parts.length !== 2 && parts.length !== 3) ||
+    (parts.length === 3 && action !== 'ADJUST')
+  ) return null
+  if (parts.length === 2) return { documentId, fingerprint: fingerprint!, adjustmentLedgerEffect: null }
+  if (marker === 'ADJUST:LEDGER') return { documentId, fingerprint: fingerprint!, adjustmentLedgerEffect: true }
+  if (marker === 'ADJUST:NO_LEDGER') return { documentId, fingerprint: fingerprint!, adjustmentLedgerEffect: false }
+  return null
 }
 
 function sameJournalIntent(left: StockAuditEvent, right: StockAuditEvent): boolean {
@@ -367,10 +395,6 @@ function sameJournalIntent(left: StockAuditEvent, right: StockAuditEvent): boole
     left.targetProductIdsJson === right.targetProductIdsJson &&
     left.correlationId === right.correlationId &&
     left.createdAt === right.createdAt
-}
-
-function journalDocumentId(event: StockAuditEvent): string {
-  return event.correlationId.slice(0, event.correlationId.indexOf('|'))
 }
 
 function journalActionMatchesTransaction(action: string, transactionType: StockTransactionType): boolean {

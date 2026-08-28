@@ -243,6 +243,21 @@ describe('stock repository', () => {
     expect(repository.findAuditJournalByRequestId('missing-request')).toEqual({ prepared: null, accepted: null })
   })
 
+  it('accepts only known durable ADJUST ledger-effect markers', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    const correlationId = `ADJ-1|${'a'.repeat(64)}|ADJUST:LEDGER`
+    const prepared = preparedAuditFixture({ action: 'ADJUST', correlationId })
+    const accepted = acceptedAuditFixture({ action: 'ADJUST', correlationId })
+
+    repository.appendAudit(prepared)
+    repository.appendAudit(accepted)
+
+    expect(() => repository.appendAudit(preparedAuditFixture({
+      requestId: 'adjust-unknown-marker', eventId: 'AUD-ADJUST-UNKNOWN', action: 'ADJUST',
+      correlationId: `ADJ-2|${'b'.repeat(64)}|ADJUST:UNKNOWN`,
+    }))).toThrow('stock audit journal invalid')
+  })
+
   it('lists only prepared requests that have not reached accepted', () => {
     const repository = createStockRepository(createMemorySheetStore())
     const unresolved = preparedAuditFixture({ requestId: 'request-unresolved' })

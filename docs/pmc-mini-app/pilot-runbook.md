@@ -193,7 +193,7 @@ ADMIN_03             หมวย
 
 Every other `CONFIG_STAFF` row must read back `canManageStock=false`. All three named rows must exist exactly once and remain active before running `configureStockManagersWorkflow()`. The workflow writes only the `canManageStock` column, verifies the written booleans by readback, and must return `managerCount: 3`. Re-open `CONFIG_STAFF` and confirm the exact three IDs above are `TRUE` and every other row is `FALSE` before continuing.
 
-Do not delete a staff row while any Stock journal is unresolved. Recovery resolves the original actor by staff ID even if that row is now inactive; deleting the row can make deterministic recovery impossible.
+Do not delete a staff row while any Stock journal is unresolved. An inactive/revoked actor leaves `PREPARED` unresolved and requires explicit developer repair; automatic recovery must not proceed while that actor is inactive or revoked. Deleting the row can make deterministic repair impossible.
 
 ### Gate S1 — initial disabled Cloud Run revision
 
@@ -204,7 +204,7 @@ PMC_STOCK_ENABLED=false
 PMC_STOCK_MANAGER_PILOT_ONLY=true
 ```
 
-Bind `PMC_STOCK_INGRESS_URL` and `PMC_STOCK_INGRESS_SECRET`, but do not print their values. Run:
+Stock reuses the established `PMC_BOOKING_INGRESS_URL` and `PMC_BOOKING_INGRESS_SECRET`; readiness checks only their existing presence and must not print values. Run:
 
 ```bash
 node scripts/check-pmc-mini-app-runtime.mjs --env-file /path/to/operator-owned/runtime.env --strict

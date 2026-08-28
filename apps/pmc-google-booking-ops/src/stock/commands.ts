@@ -33,10 +33,40 @@ type ProductLifecycleCommand = Extract<
 interface JournalContext {
   documentId: string
   fingerprint: string
+  adjustmentLedgerEffect: boolean | null
   createdAt: string
   targetProductIds: string[]
   prepared: StockAuditEvent
   accepted: StockAuditEvent
+}
+
+function journalCorrelationId(
+  documentId: string,
+  fingerprint: string,
+  commandType: MiniAppStockCommand['commandType'],
+  adjustmentLedgerEffect: boolean | null,
+): string {
+  if (commandType !== 'ADJUST') return `${documentId}|${fingerprint}`
+  if (adjustmentLedgerEffect === null) return `${documentId}|${fingerprint}`
+  return `${documentId}|${fingerprint}|ADJUST:${adjustmentLedgerEffect ? 'LEDGER' : 'NO_LEDGER'}`
+}
+
+function parseJournalCorrelation(
+  correlationId: string,
+  commandType: MiniAppStockCommand['commandType'],
+): { documentId: string; fingerprint: string; adjustmentLedgerEffect: boolean | null } {
+  const parts = correlationId.split('|')
+  const [documentId, fingerprint, marker] = parts
+  if (
+    !/^[A-Za-z0-9._:-]{1,124}$/.test(documentId ?? '') ||
+    !/^[a-f0-9]{64}$/.test(fingerprint ?? '') ||
+    (parts.length !== 2 && parts.length !== 3) ||
+    (parts.length === 3 && commandType !== 'ADJUST')
+  ) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  if (parts.length === 2) return { documentId: documentId!, fingerprint: fingerprint!, adjustmentLedgerEffect: null }
+  if (marker === 'ADJUST:LEDGER') return { documentId: documentId!, fingerprint: fingerprint!, adjustmentLedgerEffect: true }
+  if (marker === 'ADJUST:NO_LEDGER') return { documentId: documentId!, fingerprint: fingerprint!, adjustmentLedgerEffect: false }
+  throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
 }
 
 function requireSafeId(value: string): string {
@@ -80,6 +110,7 @@ function journalAudit(
   targetProductIds: string[],
   createdAt: string,
   status: 'PREPARED' | 'ACCEPTED',
+  adjustmentLedgerEffect: boolean | null,
 ): StockAuditEvent {
   return {
     eventId: auditEventId(fingerprint, status),
@@ -89,7 +120,7 @@ function journalAudit(
     status,
     safeErrorCode: '',
     targetProductIdsJson: JSON.stringify(targetProductIds),
-    correlationId: `${documentId}|${fingerprint}`,
+    correlationId: journalCorrelationId(documentId, fingerprint, input.commandType, adjustmentLedgerEffect),
     createdAt,
   }
 }
@@ -101,19 +132,21 @@ function newJournalContext(
   fingerprint: string,
   targetProductIds: string[],
   createdAt: string,
+  adjustmentLedgerEffect: boolean | null = null,
 ): JournalContext {
   requireSafeId(documentId)
   const prepared = journalAudit(
-    input, actor.id, documentId, fingerprint, targetProductIds, createdAt, 'PREPARED',
+    input, actor.id, documentId, fingerprint, targetProductIds, createdAt, 'PREPARED', adjustmentLedgerEffect,
   )
   return {
     documentId,
     fingerprint,
+    adjustmentLedgerEffect,
     createdAt,
     targetProductIds,
     prepared,
     accepted: journalAudit(
-      input, actor.id, documentId, fingerprint, targetProductIds, createdAt, 'ACCEPTED',
+      input, actor.id, documentId, fingerprint, targetProductIds, createdAt, 'ACCEPTED', adjustmentLedgerEffect,
     ),
   }
 }
@@ -131,12 +164,9 @@ function contextFromPrepared(
   fingerprint: string,
   prepared: StockAuditEvent,
 ): JournalContext {
-  const separator = prepared.correlationId.indexOf('|')
-  if (separator <= 0 || prepared.correlationId.indexOf('|', separator + 1) !== -1) {
-    throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
-  }
-  const documentId = prepared.correlationId.slice(0, separator)
-  const storedFingerprint = prepared.correlationId.slice(separator + 1)
+  const { documentId, fingerprint: storedFingerprint, adjustmentLedgerEffect } = parseJournalCorrelation(
+    prepared.correlationId, input.commandType,
+  )
   const targets = targetProductIds(input, documentId)
   if (
     !/^[A-Za-z0-9._:-]{1,124}$/.test(documentId) ||
@@ -152,11 +182,12 @@ function contextFromPrepared(
   return {
     documentId,
     fingerprint,
+    adjustmentLedgerEffect,
     createdAt: prepared.createdAt,
     targetProductIds: targets,
     prepared,
     accepted: journalAudit(
-      input, prepared.actorStaffId, documentId, fingerprint, targets, prepared.createdAt, 'ACCEPTED',
+      input, prepared.actorStaffId, documentId, fingerprint, targets, prepared.createdAt, 'ACCEPTED', adjustmentLedgerEffect,
     ),
   }
 }
@@ -463,14 +494,20 @@ function adjustProduct(
   requireProducts([input.payload.productId], ports, preparedContext === null)
   const existing = existingDocumentEntries(input.requestId, ports)
   if (!preparedContext && existing.length > 0) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
-  const context = preparedContext ?? newJournalContext(
-    input, actor, requireSafeId(ports.allocateId('ADJ')), fingerprint,
-    [input.payload.productId], ports.clock.nowIso(),
-  )
   const balanceBeforeMilli = existing[0]?.balanceBeforeMilli ??
     ports.stock.balanceByProduct().get(input.payload.productId) ?? 0
   const quantityDeltaMilli = input.payload.countedQuantityMilli - balanceBeforeMilli
   if (!Number.isSafeInteger(quantityDeltaMilli)) throw new Error('STOCK_BALANCE_OVERFLOW')
+  const adjustmentLedgerEffect = quantityDeltaMilli !== 0
+  if (
+    preparedContext &&
+    preparedContext.adjustmentLedgerEffect !== null &&
+    preparedContext.adjustmentLedgerEffect !== adjustmentLedgerEffect
+  ) throw new Error('STOCK_IDEMPOTENCY_CONFLICT')
+  const context = preparedContext ?? newJournalContext(
+    input, actor, requireSafeId(ports.allocateId('ADJ')), fingerprint,
+    [input.payload.productId], ports.clock.nowIso(), adjustmentLedgerEffect,
+  )
   const intended = quantityDeltaMilli === 0 ? [] : [ledgerEntry(
     input, context, actor, 1, input.payload.productId, 'ADJUST', quantityDeltaMilli,
     balanceBeforeMilli, input.payload.countedQuantityMilli, reason,
@@ -572,6 +609,7 @@ function resultFromAcceptedJournal(
   ports: StockCommandPorts,
 ): StockCommandResult {
   const document = ports.stock.findDocumentByRequestId(input.requestId)
+  const documentEntries = existingDocumentEntries(input.requestId, ports)
   const expectedTransactionType: StockTransactionType | null =
     input.commandType === 'CREATE_PRODUCT' ? 'OPENING'
       : input.commandType === 'RECEIVE' ? 'RECEIVE'
@@ -582,15 +620,26 @@ function resultFromAcceptedJournal(
     input.commandType === 'RECEIVE' ||
     input.commandType === 'ISSUE' ||
     (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli > 0) ||
-    (input.commandType === 'ADJUST' &&
-      input.payload.countedQuantityMilli !== (ports.stock.balanceByProduct().get(input.payload.productId) ?? 0))
+    (input.commandType === 'ADJUST' && context.adjustmentLedgerEffect !== false)
   const documentForbidden =
     expectedTransactionType === null ||
-    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli === 0)
+    (input.commandType === 'CREATE_PRODUCT' && input.payload.openingQuantityMilli === 0) ||
+    (input.commandType === 'ADJUST' && context.adjustmentLedgerEffect === false)
+  const documentIsCoherent = document !== null &&
+    documentEntries.length > 0 &&
+    document.lineCount === documentEntries.length &&
+    documentEntries.every((entry, index) => (
+      entry.documentId === context.documentId &&
+      entry.transactionType === expectedTransactionType &&
+      entry.actorStaffId === context.prepared.actorStaffId &&
+      entry.createdAt === context.createdAt &&
+      entry.lineNumber === index + 1
+    ))
   if (
     (!document && documentRequired) ||
     (document && (
       documentForbidden ||
+      !documentIsCoherent ||
       document.documentId !== context.documentId ||
       document.transactionType !== expectedTransactionType ||
       document.actorStaffId !== context.prepared.actorStaffId ||

@@ -81,9 +81,7 @@ function validateJournalEvent(event: StockAuditEvent): void {
   ) {
     throw new Error('stock audit journal invalid')
   }
-  const separator = event.correlationId.indexOf('|')
-  const documentId = separator > 0 ? event.correlationId.slice(0, separator) : ''
-  const fingerprint = separator > 0 ? event.correlationId.slice(separator + 1) : ''
+  const correlation = parseJournalCorrelation(event.correlationId, event.action)
   let targets: unknown
   try {
     targets = JSON.parse(event.targetProductIdsJson)
@@ -98,10 +96,7 @@ function validateJournalEvent(event: StockAuditEvent): void {
     !event.createdAt ||
     !Number.isFinite(Date.parse(event.createdAt)) ||
     event.safeErrorCode !== '' ||
-    separator <= 0 ||
-    event.correlationId.indexOf('|', separator + 1) !== -1 ||
-    !isSafeId(documentId) ||
-    !/^[a-f0-9]{64}$/.test(fingerprint) ||
+    correlation === null ||
     !Array.isArray(targets) ||
     targets.length === 0 ||
     targets.some((target) => !isSafeId(target)) ||
@@ -110,6 +105,24 @@ function validateJournalEvent(event: StockAuditEvent): void {
   ) {
     throw new Error('stock audit journal invalid')
   }
+}
+
+function parseJournalCorrelation(
+  correlationId: string,
+  action: string,
+): { documentId: string; fingerprint: string; adjustmentLedgerEffect: boolean | null } | null {
+  const parts = correlationId.split('|')
+  const [documentId, fingerprint, marker] = parts
+  if (
+    !isSafeId(documentId) ||
+    !/^[a-f0-9]{64}$/.test(fingerprint ?? '') ||
+    (parts.length !== 2 && parts.length !== 3) ||
+    (parts.length === 3 && action !== 'ADJUST')
+  ) return null
+  if (parts.length === 2) return { documentId, fingerprint: fingerprint!, adjustmentLedgerEffect: null }
+  if (marker === 'ADJUST:LEDGER') return { documentId, fingerprint: fingerprint!, adjustmentLedgerEffect: true }
+  if (marker === 'ADJUST:NO_LEDGER') return { documentId, fingerprint: fingerprint!, adjustmentLedgerEffect: false }
+  return null
 }
 
 function auditJournalByRequest(

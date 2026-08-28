@@ -402,10 +402,14 @@ describe('stock commands', () => {
   it('records signed positive and negative counted adjustments', () => {
     const ports = stockPortsWithBalances({ 'STK-000001': 5_000 })
 
-    expect(executeStockCommand({
+    const increase = {
       requestId: 'adjust-up', staffId: 'ADMIN_03', commandType: 'ADJUST',
       payload: { productId: 'STK-000001', countedQuantityMilli: 7_000, reason: ' ตรวจนับรอบเช้า ' },
-    }, ports).lines).toEqual([
+    } as const
+    expect(executeStockCommand(increase, ports).lines).toEqual([
+      { productId: 'STK-000001', quantityDeltaMilli: 2_000, balanceAfterMilli: 7_000 },
+    ])
+    expect(executeStockCommand(increase, ports).lines).toEqual([
       { productId: 'STK-000001', quantityDeltaMilli: 2_000, balanceAfterMilli: 7_000 },
     ])
     expect(executeStockCommand({
@@ -418,6 +422,8 @@ describe('stock commands', () => {
       [2_000, 'ตรวจนับรอบเช้า'],
       [-3_000, 'ตรวจนับรอบเย็น'],
     ])
+    expect(ports.auditRows().filter((row) => row.requestId === 'adjust-up').map((row) => row.correlationId))
+      .toEqual([expect.stringMatching(/^ADJ-\d+\|[a-f0-9]{64}\|ADJUST:LEDGER$/), expect.stringMatching(/^ADJ-\d+\|[a-f0-9]{64}\|ADJUST:LEDGER$/)])
   })
 
   it.each(['', '   ', 'x'.repeat(301)])('rejects adjustment reason %j', (reason) => {
@@ -443,6 +449,8 @@ describe('stock commands', () => {
     expect(first.lines).toEqual([])
     expect(ports.stock.listLedger()).toHaveLength(1)
     expect(ports.auditRows().filter((row) => row.requestId === 'adjust-zero' && row.status === 'ACCEPTED')).toHaveLength(1)
+    expect(ports.auditRows().filter((row) => row.requestId === 'adjust-zero').map((row) => row.correlationId))
+      .toEqual([expect.stringMatching(/^ADJ-\d+\|[a-f0-9]{64}\|ADJUST:NO_LEDGER$/), expect.stringMatching(/^ADJ-\d+\|[a-f0-9]{64}\|ADJUST:NO_LEDGER$/)])
   })
 
   it('fails closed when a nonzero accepted ADJUST loses its ledger document', () => {
@@ -453,6 +461,78 @@ describe('stock commands', () => {
     }
     executeStockCommand(command, ports)
     ports.replaceLedgerRows(ports.stock.listLedger().filter((row) => row.requestId !== command.requestId))
+
+    expect(() => executeStockCommand(command, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+  })
+
+  it('fails closed when a later offset makes a missing nonzero ADJUST look zero-delta', () => {
+    const ports = stockPortsWithBalances({ 'STK-000001': 4_000 })
+    const adjustment: MiniAppStockCommand = {
+      requestId: 'adjust-offset-corruption', staffId: 'ADMIN_03', commandType: 'ADJUST',
+      payload: { productId: 'STK-000001', countedQuantityMilli: 5_000, reason: 'ตรวจนับ' },
+    }
+    executeStockCommand(adjustment, ports)
+    executeStockCommand({
+      requestId: 'receive-after-adjust', staffId: 'ADMIN_03', commandType: 'RECEIVE',
+      payload: { lines: [{ productId: 'STK-000001', quantityMilli: 1_000 }] },
+    }, ports)
+    ports.replaceLedgerRows(ports.stock.listLedger().filter((row) => row.requestId !== adjustment.requestId))
+
+    expect(() => executeStockCommand(adjustment, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+  })
+
+  it('fails closed when an accepted marker-backed ADJUST has more than one document', () => {
+    const ports = stockPortsWithBalances({ 'STK-000001': 4_000 })
+    const command: MiniAppStockCommand = {
+      requestId: 'adjust-multiple-documents', staffId: 'ADMIN_03', commandType: 'ADJUST',
+      payload: { productId: 'STK-000001', countedQuantityMilli: 5_000, reason: 'ตรวจนับ' },
+    }
+    executeStockCommand(command, ports)
+    const original = ports.stock.listLedger().find((row) => row.requestId === command.requestId)!
+    ports.replaceLedgerRows([...ports.stock.listLedger(), {
+      ...original,
+      transactionId: 'ADJ-CORRUPT:TX:2', documentId: 'ADJ-CORRUPT', lineNumber: 2,
+      quantityDeltaMilli: 1_000, balanceBeforeMilli: 5_000, balanceAfterMilli: 6_000,
+      idempotencyKey: 'adjust-multiple-documents:2',
+    }])
+
+    expect(() => executeStockCommand(command, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+  })
+
+  it('fails closed when an accepted no-ledger ADJUST marker has a document', () => {
+    const ports = stockPortsWithBalances({ 'STK-000001': 4_000 })
+    const command: MiniAppStockCommand = {
+      requestId: 'adjust-no-ledger-with-document', staffId: 'ADMIN_03', commandType: 'ADJUST',
+      payload: { productId: 'STK-000001', countedQuantityMilli: 4_000, reason: 'ยอดตรง' },
+    }
+    executeStockCommand(command, ports)
+    ports.replaceLedgerRows([...ports.stock.listLedger(), {
+      ...ports.stock.listLedger()[0]!,
+      transactionId: 'ADJ-CORRUPT:TX:1', documentId: 'ADJ-CORRUPT', requestId: command.requestId,
+      transactionType: 'ADJUST', quantityDeltaMilli: 1_000, balanceBeforeMilli: 4_000, balanceAfterMilli: 5_000,
+      actorStaffId: command.staffId, idempotencyKey: 'adjust-no-ledger-with-document:1',
+    }])
+
+    expect(() => executeStockCommand(command, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
+  })
+
+  it('fails closed for a legacy accepted ADJUST with no ledger document', () => {
+    const ports = stockPortsWithBalances({ 'STK-000001': 4_000 })
+    const command: MiniAppStockCommand = {
+      requestId: 'legacy-adjust-missing-document', staffId: 'ADMIN_03', commandType: 'ADJUST',
+      payload: { productId: 'STK-000001', countedQuantityMilli: 4_000, reason: 'ตรวจนับเดิม' },
+    }
+    const journal = {
+      requestId: command.requestId,
+      actorStaffId: command.staffId,
+      action: command.commandType,
+      safeErrorCode: '',
+      targetProductIdsJson: '["STK-000001"]',
+      correlationId: `ADJ-LEGACY|${ports.commandFingerprint(command)}`,
+      createdAt: NOW,
+    }
+    ports.stock.appendAudit({ eventId: 'AUDIT-LEGACY-ADJUST-P', status: 'PREPARED', ...journal })
+    ports.stock.appendAudit({ eventId: 'AUDIT-LEGACY-ADJUST-A', status: 'ACCEPTED', ...journal })
 
     expect(() => executeStockCommand(command, ports)).toThrow('STOCK_IDEMPOTENCY_CONFLICT')
   })

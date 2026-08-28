@@ -112,6 +112,17 @@ describe('PMC Mini App runtime configuration checker', () => {
     expect(render).not.toContain('PMC_MINI_APP_')
     expect(render).not.toContain('JERA_API_')
   })
+
+  it('documents Stock recovery and ingress bindings without phantom configuration', async () => {
+    const runbook = await readFile(resolve('docs/pmc-mini-app/pilot-runbook.md'), 'utf8')
+
+    expect(runbook).toContain('inactive/revoked actor leaves `PREPARED` unresolved and requires explicit developer repair')
+    expect(runbook).not.toContain('PMC_STOCK_INGRESS_URL')
+    expect(runbook).not.toContain('PMC_STOCK_INGRESS_SECRET')
+    expect(runbook).toContain('PMC_BOOKING_INGRESS_URL')
+    expect(runbook).toContain('PMC_BOOKING_INGRESS_SECRET')
+    expect(runbook).toContain('Stock reuses the established `PMC_BOOKING_INGRESS_URL` and `PMC_BOOKING_INGRESS_SECRET`')
+  })
 })
 
 function validEnvironment(): Record<string, string> {

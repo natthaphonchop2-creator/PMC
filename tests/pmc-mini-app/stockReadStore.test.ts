@@ -220,6 +220,36 @@ describe('PMC Stock Cloud Run read store', () => {
     await expect(createStore(new MemoryStockSheets(historicalUpdate)).listProducts()).resolves.toHaveLength(1)
   })
 
+  it('accepts explicit ADJUST no-ledger journals and rejects unknown markers', async () => {
+    const valid = journalOnlyTabs({ action: 'ADJUST', status: 'ACCEPTED', target: 'STK-000001' })
+    valid[AUDIT_RANGE][1]![7] = `DOC-ADJUST|${'d'.repeat(64)}|ADJUST:NO_LEDGER`
+    valid[AUDIT_RANGE][2]![7] = `DOC-ADJUST|${'d'.repeat(64)}|ADJUST:NO_LEDGER`
+
+    await expect(createStore(new MemoryStockSheets(valid)).listProducts()).resolves.toHaveLength(1)
+
+    const ledgerBacked: StockTabs = {
+      [PRODUCT_RANGE]: [[...STOCK_PRODUCT_HEADERS], productRow()],
+      [LEDGER_RANGE]: [[...STOCK_LEDGER_HEADERS], ledgerRow({
+        transactionId: 'ADJ-000001:TX:1', documentId: 'ADJ-000001', requestId: 'adjust-1',
+        transactionType: 'ADJUST', quantityDeltaMilli: 4_000, idempotencyKey: 'adjust-1:1',
+      })],
+      [AUDIT_RANGE]: [[...STOCK_AUDIT_HEADERS],
+        auditRow({ eventId: 'AUDIT:adjust:P', requestId: 'adjust-1', action: 'ADJUST',
+          correlationId: `ADJ-000001|${'e'.repeat(64)}|ADJUST:LEDGER` }),
+        auditRow({ eventId: 'AUDIT:adjust:A', requestId: 'adjust-1', action: 'ADJUST', status: 'ACCEPTED',
+          correlationId: `ADJ-000001|${'e'.repeat(64)}|ADJUST:LEDGER` }),
+      ],
+    }
+    await expect(createStore(new MemoryStockSheets(ledgerBacked)).listProducts()).resolves.toHaveLength(1)
+
+    const malformed = structuredClone(valid)
+    malformed[AUDIT_RANGE][1]![7] = `DOC-ADJUST|${'d'.repeat(64)}|ADJUST:UNKNOWN`
+    malformed[AUDIT_RANGE][2]![7] = `DOC-ADJUST|${'d'.repeat(64)}|ADJUST:UNKNOWN`
+    await expect(createStore(new MemoryStockSheets(malformed)).listProducts()).rejects.toMatchObject({
+      code: 'STOCK_DATA_INTEGRITY_ERROR',
+    })
+  })
+
   it('requires an accepted CREATE_PRODUCT journal target to exist', async () => {
     const tabs = journalOnlyTabs({ action: 'CREATE_PRODUCT', status: 'ACCEPTED', target: 'STK-missing' })
 
