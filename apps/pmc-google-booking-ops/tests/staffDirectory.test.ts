@@ -6,6 +6,7 @@ import {
   validateStaffDirectory,
 } from '../src/domain/staffDirectory'
 import type { StaffConfig } from '../src/ports'
+import { STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
 
 const staff: StaffConfig[] = [
   {
@@ -15,6 +16,7 @@ const staff: StaffConfig[] = [
     lineUserId: '',
     canCloseBooking: true,
     canBeAe: true,
+    canManageStock: false,
     active: true,
   },
   {
@@ -24,11 +26,18 @@ const staff: StaffConfig[] = [
     lineUserId: '',
     canCloseBooking: false,
     canBeAe: true,
+    canManageStock: false,
     active: true,
   },
 ]
 
 describe('staff directory', () => {
+  it('defines canManageStock as the ninth CONFIG_STAFF column', () => {
+    expect(STAFF_CONFIG_COLUMNS).toEqual([
+      'id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active', 'profileImageUrl', 'canManageStock',
+    ])
+  })
+
   it('resolves closer by normalized verified email', () => {
     expect(resolveCloserByEmail(staff, ' MUS@EXAMPLE.COM ')).toMatchObject({ id: 'staff-mus' })
   })

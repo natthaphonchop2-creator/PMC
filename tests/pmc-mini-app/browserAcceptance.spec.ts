@@ -1,4 +1,19 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+const browserErrors = new WeakMap<Page, string[]>()
+
+test.beforeEach(async ({ page }) => {
+  const errors: string[] = []
+  browserErrors.set(page, errors)
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(`console: ${message.text()}`)
+  })
+  page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`))
+})
+
+test.afterEach(async ({ page }) => {
+  expect(browserErrors.get(page) ?? []).toEqual([])
+})
 
 test('unknown staff links a LINE account once before entering the app', async ({ page }) => {
   await page.goto('/mini-app/?preview=unknown')
@@ -82,10 +97,94 @@ test('booking-only V1 hides JERA navigation while reporting is paused', async ({
   await expect(page.getByText('จัดการงานจองของคลินิก')).toBeVisible()
 })
 
+test.describe('Stock Android acceptance', () => {
+  test.use({ viewport: { width: 412, height: 915 } })
+
+  test('keeps Stock disabled until the rollout flag is enabled', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&stock=disabled&role=staff')
+    await expect(page.getByRole('button', { name: 'Stock' })).toBeDisabled()
+    await expectNoStockSheetLink(page)
+  })
+
+  test('active staff filters low Stock and issues two products without manager controls', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&stock=enabled&role=staff')
+    await page.getByRole('button', { name: 'Stock' }).click()
+    await expect(page.getByRole('heading', { name: 'Stock' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'รับเข้า' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'จัดการสินค้า' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'ใกล้หมด' }).click()
+    await expect(page.getByText('ถุงมือ')).toBeVisible()
+    await expect(page.getByText('เซรั่ม')).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'เบิกสินค้า' }).click()
+    await page.getByRole('button', { name: 'เพิ่มสินค้า' }).click()
+    await page.getByRole('combobox', { name: 'สินค้า 1' }).selectOption('STK-000001')
+    await page.getByRole('textbox', { name: 'จำนวน 1' }).fill('2')
+    await page.getByRole('combobox', { name: 'สินค้า 2' }).selectOption('STK-000002')
+    await page.getByRole('textbox', { name: 'จำนวน 2' }).fill('1')
+    await page.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }).click()
+    await expect(page.getByText(/ISS-202608-/)).toBeVisible()
+    await expectNoStockSheetLink(page)
+  })
+
+  test('manager creates, receives, and adjusts Stock through manager-only controls', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&stock=enabled&role=manager')
+    await page.getByRole('button', { name: 'Stock' }).click()
+    await expect(page.getByRole('button', { name: 'รับเข้า' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'จัดการสินค้า' })).toBeVisible()
+
+    await page.getByRole('button', { name: 'จัดการสินค้า' }).click()
+    await page.getByRole('button', { name: 'เพิ่มสินค้า' }).click()
+    await page.getByRole('textbox', { name: 'ชื่อสินค้า' }).fill('สำลีแผ่น')
+    await page.getByRole('textbox', { name: 'หน่วย' }).fill('ถุง')
+    await page.getByRole('textbox', { name: 'จำนวนเริ่มต้น' }).fill('2')
+    await page.getByRole('textbox', { name: 'จำนวนขั้นต่ำ' }).fill('1')
+    await page.getByRole('button', { name: 'บันทึกสินค้า' }).click()
+    await expect(page.getByRole('heading', { name: 'เพิ่มสินค้าสำเร็จ' })).toBeVisible()
+    await page.getByRole('button', { name: 'กลับหน้า Stock' }).click()
+
+    await page.getByRole('button', { name: 'รับเข้า' }).click()
+    await page.getByRole('combobox', { name: 'สินค้า 1' }).selectOption('STK-000001')
+    await page.getByRole('textbox', { name: 'จำนวนรับเข้า 1' }).fill('1')
+    await page.getByRole('button', { name: 'ยืนยันรับเข้า' }).click()
+    await expect(page.getByRole('heading', { name: 'รับเข้าสำเร็จ' })).toBeVisible()
+    await page.getByRole('button', { name: 'กลับหน้า Stock' }).click()
+
+    await page.getByRole('button', { name: 'จัดการสินค้า' }).click()
+    await page.getByRole('button', { name: 'ปรับยอด ถุงมือ' }).click()
+    await page.getByRole('textbox', { name: 'จำนวนที่นับจริง' }).fill('6')
+    await page.getByRole('textbox', { name: 'เหตุผล' }).fill('ตรวจนับสิ้นวัน')
+    await page.getByRole('button', { name: 'ยืนยันปรับยอด' }).click()
+    await expect(page.getByRole('heading', { name: 'ปรับยอดสำเร็จ' })).toBeVisible()
+    await expectNoStockSheetLink(page)
+  })
+
+  test('repeated issue submit returns one immutable document in history', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&stock=enabled&role=staff')
+    await page.getByRole('button', { name: 'Stock' }).click()
+    await page.getByRole('button', { name: 'เบิกสินค้า' }).click()
+    await page.getByRole('combobox', { name: 'สินค้า 1' }).selectOption('STK-000001')
+    await page.getByRole('textbox', { name: 'จำนวน 1' }).fill('1')
+    await page.getByRole('button', { name: 'ยืนยันเบิกสินค้า' }).evaluate((button: HTMLButtonElement) => {
+      button.click()
+      button.click()
+    })
+    await expect(page.getByText('ISS-202608-0001')).toBeVisible()
+    await page.getByRole('button', { name: 'กลับหน้า Stock' }).click()
+    await page.getByRole('button', { name: 'ประวัติ' }).click()
+    await expect(page.getByRole('button', { name: 'ดูรายละเอียด ISS-202608-0001' })).toHaveCount(1)
+    await expectNoStockSheetLink(page)
+  })
+})
+
 function imageFile(name: string) {
   return {
     name,
     mimeType: 'image/png',
     buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]),
   }
+}
+
+async function expectNoStockSheetLink(page: Page) {
+  await expect(page.getByRole('link', { name: /Google Sheet/i })).toHaveCount(0)
 }

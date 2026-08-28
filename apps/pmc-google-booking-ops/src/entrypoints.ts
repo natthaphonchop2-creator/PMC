@@ -13,6 +13,7 @@ import {
 import {
   createRuntime,
   configureStaffProfileImagesWorkflow,
+  configureStockManagersWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
   configureFacebookNameFieldWorkflow,
   configureQueueModeFormsWorkflow,
@@ -46,6 +47,7 @@ import type { BookingPorts } from './ports'
 import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
 import type { BookingCase } from './domain/types'
 import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
+import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -67,9 +69,15 @@ export function doPost(event: AppsScriptDoPostEvent) {
   return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON)
 }
 
-export function processBookingDoPost(event: AppsScriptDoPostEvent, ports: BookingPorts) {
+export function processBookingDoPost(
+  event: AppsScriptDoPostEvent,
+  ports: BookingPorts & Partial<Pick<StockIngressPorts, 'stock' | 'commandFingerprint' | 'allocateId'>>,
+) {
   const evidenceCandidate = event.postData?.contents.startsWith('{"kind":"MINI_APP_EVIDENCE"')
   const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_STOCK') {
+    return processStockIngressResponse(parsed, requireStockIngressPorts(ports))
+  }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EVIDENCE') {
     return uploadMiniAppEvidence(parsed, ports)
   }
@@ -112,6 +120,19 @@ function isLineProjectionState(value: BookingCase['lineState']): value is MiniAp
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function requireStockIngressPorts(
+  ports: BookingPorts & Partial<Pick<StockIngressPorts, 'stock' | 'commandFingerprint' | 'allocateId'>>,
+): StockIngressPorts {
+  if (
+    !ports.stock ||
+    typeof ports.commandFingerprint !== 'function' ||
+    typeof ports.allocateId !== 'function'
+  ) {
+    throw new Error('stock runtime is unavailable')
+  }
+  return ports as BookingPorts & StockIngressPorts
 }
 
 export function runDailyOperations() {
@@ -158,6 +179,10 @@ export function applyPmcAutoQueueMigration() {
 
 export function configurePmcStaffProfileImages() {
   return configureStaffProfileImagesWorkflow()
+}
+
+export function configurePmcStockManagers() {
+  return configureStockManagersWorkflow()
 }
 
 export function validatePmcBookingFlexMessages() {

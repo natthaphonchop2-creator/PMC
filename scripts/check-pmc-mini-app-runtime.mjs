@@ -29,6 +29,11 @@ export const MINI_APP_ASYNC_BINDING_NAMES = [
   'PMC_ASYNC_OWNER_STAFF_IDS',
 ]
 
+export const MINI_APP_STOCK_FLAG_NAMES = [
+  'PMC_STOCK_ENABLED',
+  'PMC_STOCK_MANAGER_PILOT_ONLY',
+]
+
 export const FUTURE_JERA_BINDING_NAMES = [
   'JERA_REPORTING_ENABLED',
   'JERA_API_BASE_URL',
@@ -53,13 +58,24 @@ export function inspectMiniAppRuntime(environment) {
   const featureEnabled = environment.PMC_MINI_APP_ENABLED === 'true'
   const asyncBookingEnabled = environment.PMC_MINI_APP_ASYNC_ENABLED === 'true'
   const asyncBooking = presence(MINI_APP_ASYNC_BINDING_NAMES, environment)
+  const stockFlags = presence(MINI_APP_STOCK_FLAG_NAMES, environment)
+  const stockFlagsValid = MINI_APP_STOCK_FLAG_NAMES.every((name) => (
+    environment[name] === 'true' || environment[name] === 'false'
+  ))
+  const stockEnabled = environment.PMC_STOCK_ENABLED === 'true'
+  const stockManagerPilotOnly = environment.PMC_STOCK_MANAGER_PILOT_ONLY === 'true'
   return {
     mode: 'READ_ONLY',
-    ready: featureEnabled && enrollmentFlagValid && nonSecret.missing.length === 0 && secretBindings.missing.length === 0,
+    ready: featureEnabled && enrollmentFlagValid && nonSecret.missing.length === 0 &&
+      secretBindings.missing.length === 0 && stockFlagsValid && stockFlags.missing.length === 0,
     featureEnabled,
     enrollmentEnabled,
     asyncBookingEnabled,
     asyncBooking,
+    stockEnabled,
+    stockManagerPilotOnly,
+    stockFlagsValid,
+    stockFlags,
     nonSecret,
     secretBindings,
     futureJeraBindings,

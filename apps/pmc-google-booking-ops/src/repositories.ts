@@ -1,11 +1,15 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { BookingRepositories, Clock, InitialBookingReservation, LockPort, MutationContext } from './ports'
 
+export { createStockRepository } from './stock/repository'
+
 export type SheetRow = Record<string, unknown>
 
 export interface SheetStore {
   read(tab: string): SheetRow[]
   replace(tab: string, rows: SheetRow[]): void
+  append(tab: string, rows: SheetRow[]): void
+  update(tab: string, rowIndex: number, row: SheetRow): void
 }
 
 function clonePlain<T>(value: T): T {

@@ -238,6 +238,26 @@ describe('PMC Mini App Sheet store', () => {
     await expect(store.getActiveStaffByLineUserId('Uinactive')).resolves.toBeNull()
   })
 
+  it('reads canManageStock from the ninth CONFIG_STAFF column', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-stock', 'สต็อก', 'stock@example.com', 'Ustock', true, false, true, '', true],
+    ])
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getActiveStaffByLineUserId('Ustock'))
+      .resolves.toMatchObject({ id: 'staff-stock', canManageStock: true })
+  })
+
+  it('defaults canManageStock to false for legacy eight-column CONFIG_STAFF rows', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-legacy', 'เดิม', 'legacy@example.com', 'Ulegacy', true, false, true, ''],
+    ])
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getActiveStaffByLineUserId('Ulegacy'))
+      .resolves.toMatchObject({ id: 'staff-legacy', canManageStock: false })
+  })
+
   it('lists only unlinked booking staff and links each LINE account exactly once', async () => {
     const sheets = new MemorySheets()
     sheets.setTab('CONFIG_STAFF', [

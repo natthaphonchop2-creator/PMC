@@ -1,22 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarDays, FileChartColumn, House, UserRound } from 'lucide-react'
+import { CalendarDays, FileChartColumn, House, PackageOpen, UserRound } from 'lucide-react'
 import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
 import { BookingProcessing, type BookingProcessingAdapter } from './BookingProcessing'
-import { isBookingTerminalState, type BookingDraftProjection, type MiniAppConfig, type MiniAppSession } from './contracts'
+import {
+  isBookingTerminalState,
+  type BookingDraftProjection,
+  type MiniAppConfig,
+  type MiniAppSession,
+  type StockProductProjection,
+} from './contracts'
 import { EnrollmentPage } from './EnrollmentPage'
 import { Home } from './Home'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
+import { StockHome } from './stock/StockHome'
+import { StockHistory } from './stock/StockHistory'
+import { StockIssueFlow, type StockIssueFlowAdapter } from './stock/StockIssueFlow'
+import { StockManager, type StockManagerAdapter } from './stock/StockManager'
 import {
   loadReportFilterPreferences,
   saveReportFilterPreferences,
   type ReportFilterState,
   type ReportSelection,
 } from './reports'
+import type { StockHistoryPage } from '../../../shared/pmcStock'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
-type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'ACCOUNT'
+type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
 
 export function PmcMiniApp({
   initialSession,
@@ -41,6 +52,12 @@ export function PmcMiniApp({
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
   const openingBookingRef = useRef<Promise<void> | null>(null)
+  const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
+  const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
+  const [stockHistoryPage, setStockHistoryPage] = useState<StockHistoryPage | null>(null)
+  const [stockHistoryLoadingMore, setStockHistoryLoadingMore] = useState(false)
+  const [stockHistoryMessage, setStockHistoryMessage] = useState('')
+  const navigationEpochRef = useRef(0)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
 
@@ -102,11 +119,22 @@ export function PmcMiniApp({
     refresh: (reportType, filters) => api.refreshReport(idToken, reportType, filters),
   }), [api, idToken])
 
+  const stockIssueAdapter = useMemo<StockIssueFlowAdapter>(() => ({
+    issue: (command) => api.submitStockCommand(idToken, command),
+    loadProducts: () => api.loadStockProducts(idToken),
+  }), [api, idToken])
+
+  const stockManagerAdapter = useMemo<StockManagerAdapter>(() => ({
+    submit: (command) => api.submitStockCommand(idToken, command),
+    loadProducts: () => api.loadStockProducts(idToken),
+  }), [api, idToken])
+
   const openBooking = () => {
     if (openingBookingRef.current) return openingBookingRef.current
+    const requestEpoch = ++navigationEpochRef.current
     const operation = (async () => {
       if (!config) {
-        setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
+        if (requestEpoch === navigationEpochRef.current) setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
         return
       }
       setLoading(true)
@@ -114,12 +142,15 @@ export function PmcMiniApp({
       try {
         const activeDraft = await api.loadLatestActiveDraft(idToken)
         const nextDraft = activeDraft ? await hydrateActiveDraft(api, idToken, activeDraft) : await api.createDraft(idToken)
+        if (requestEpoch !== navigationEpochRef.current) return
         setDraft(nextDraft)
         setView('BOOKING')
       } catch {
-        setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
+        if (requestEpoch === navigationEpochRef.current) {
+          setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
+        }
       } finally {
-        setLoading(false)
+        if (requestEpoch === navigationEpochRef.current) setLoading(false)
       }
     })()
     openingBookingRef.current = operation
@@ -127,6 +158,75 @@ export function PmcMiniApp({
       if (openingBookingRef.current === operation) openingBookingRef.current = null
     }).catch(() => undefined)
     return operation
+  }
+
+  const openStock = async () => {
+    if (!config?.stockEnabled) return
+    const requestEpoch = ++navigationEpochRef.current
+    setLoading(true)
+    setMessage('')
+    try {
+      const result = await api.loadStockProducts(idToken)
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockProducts(result.products)
+      setStockView('HOME')
+      setView('STOCK')
+    } catch {
+      if (requestEpoch !== navigationEpochRef.current) return
+      setMessage('โหลดรายการสต็อกไม่สำเร็จ กรุณาลองอีกครั้ง')
+    } finally {
+      if (requestEpoch === navigationEpochRef.current) setLoading(false)
+    }
+  }
+
+  const openStockHistory = async () => {
+    const requestEpoch = ++navigationEpochRef.current
+    setStockHistoryPage(null)
+    setStockHistoryMessage('')
+    setLoading(true)
+    setMessage('')
+    try {
+      const page = await api.loadStockHistory(idToken)
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockHistoryPage(page)
+      setStockView('HISTORY')
+    } catch {
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockView('HOME')
+      setMessage('โหลดประวัติ Stock ไม่สำเร็จ กรุณาลองอีกครั้ง')
+    } finally {
+      if (requestEpoch === navigationEpochRef.current) setLoading(false)
+    }
+  }
+
+  const loadMoreStockHistory = async (cursor: string) => {
+    if (stockHistoryLoadingMore) return
+    const requestEpoch = navigationEpochRef.current
+    setStockHistoryLoadingMore(true)
+    setStockHistoryMessage('')
+    try {
+      const next = await api.loadStockHistory(idToken, cursor)
+      if (requestEpoch !== navigationEpochRef.current) return
+      setStockHistoryPage((current) => current ? appendHistoryPage(current, next) : next)
+    } catch {
+      if (requestEpoch === navigationEpochRef.current) {
+        setStockHistoryMessage('โหลดประวัติเพิ่มเติมไม่สำเร็จ กรุณาลองอีกครั้ง')
+      }
+    } finally {
+      if (requestEpoch === navigationEpochRef.current) setStockHistoryLoadingMore(false)
+    }
+  }
+
+  const navigateTo = (next: MiniAppView) => {
+    navigationEpochRef.current += 1
+    setLoading(false)
+    setMessage('')
+    if (next === 'REPORTS' && view === 'REPORTS') {
+      setSelectedReport(null)
+      return
+    }
+    setView(next)
+    if (next !== 'REPORTS') setSelectedReport(null)
   }
 
   const linkAccount = async (staffId: string, pin: string) => {
@@ -169,7 +269,7 @@ export function PmcMiniApp({
         draft={draft}
         adapter={processingAdapter}
         onProjection={setDraft}
-        onExit={() => { setView('HOME'); setDraft(null) }}
+        onExit={() => { navigateTo('HOME'); setDraft(null) }}
       />
     }
     return <BookingWizard
@@ -178,7 +278,47 @@ export function PmcMiniApp({
       draft={draft}
       adapter={bookingAdapter}
       onQueued={(queuedProjection) => setDraft(queuedProjection)}
-      onExit={() => { setView('HOME'); setDraft(null) }}
+      onExit={() => { navigateTo('HOME'); setDraft(null) }}
+    />
+  }
+  if (view === 'STOCK' && stockView === 'ISSUE') {
+    return <StockIssueFlow
+      initialProducts={stockProducts}
+      adapter={stockIssueAdapter}
+      onCancel={() => setStockView('HOME')}
+      onReturnToStock={(products) => {
+        setStockProducts(products)
+        setStockView('HOME')
+      }}
+    />
+  }
+  if (view === 'STOCK' && stockView === 'HISTORY') {
+    if (!stockHistoryPage) return <Notice>กำลังโหลดประวัติ Stock</Notice>
+    return <StockHistory
+      page={stockHistoryPage}
+      canManageStock={Boolean(config?.canManageStock)}
+      loadingMore={stockHistoryLoadingMore}
+      message={stockHistoryMessage}
+      onLoadMore={(cursor) => { void loadMoreStockHistory(cursor) }}
+      onBack={() => {
+        navigationEpochRef.current += 1
+        setStockHistoryPage(null)
+        setStockHistoryMessage('')
+        setStockHistoryLoadingMore(false)
+        setStockView('HOME')
+      }}
+    />
+  }
+  if (view === 'STOCK' && (stockView === 'RECEIVE' || stockView === 'MANAGE') && config?.canManageStock) {
+    return <StockManager
+      initialProducts={stockProducts}
+      initialMode={stockView}
+      adapter={stockManagerAdapter}
+      onCancel={() => setStockView('HOME')}
+      onReturnToStock={(products) => {
+        setStockProducts(products)
+        setStockView('HOME')
+      }}
     />
   }
 
@@ -187,9 +327,11 @@ export function PmcMiniApp({
       {view === 'HOME' && <Home
         session={session}
         reportingEnabled={Boolean(config?.reportingEnabled)}
+        stockEnabled={Boolean(config?.stockEnabled)}
         onAction={(action) => {
           if (action === 'BOOKING') void openBooking()
-          else setView(action)
+          else if (action === 'STOCK') void openStock()
+          else navigateTo(action)
         }}
       />}
       {view === 'REPORTS' && (selectedReport === 'ADDITIONAL'
@@ -204,27 +346,42 @@ export function PmcMiniApp({
           />
           : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
+      {view === 'STOCK' && stockView === 'HOME' && <StockHome
+        products={stockProducts}
+        canManageStock={Boolean(config?.canManageStock)}
+        onIssue={() => { setMessage(''); setStockView('ISSUE') }}
+        onManagerAction={(action) => {
+          if (!config?.canManageStock) return
+          setMessage('')
+          setStockView(action)
+        }}
+        onHistory={() => { void openStockHistory() }}
+      />}
       {message && <p className="pmc-shell-alert" role="alert">{message}</p>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
-      <BottomNavigation view={view} reportingEnabled={Boolean(config?.reportingEnabled)} onChange={(next) => {
+      <BottomNavigation
+        view={view}
+        reportingEnabled={Boolean(config?.reportingEnabled)}
+        stockEnabled={Boolean(config?.stockEnabled)}
+        onChange={(next) => {
         if (next === 'BOOKING') void openBooking()
-        else {
-          if (next === 'REPORTS' && view === 'REPORTS') setSelectedReport(null)
-          else { setView(next); if (next !== 'REPORTS') setSelectedReport(null) }
-        }
+        else if (next === 'STOCK') void openStock()
+        else navigateTo(next)
       }} />
     </div>
   )
 }
 
-function BottomNavigation({ view, reportingEnabled, onChange }: {
+function BottomNavigation({ view, reportingEnabled, stockEnabled, onChange }: {
   view: MiniAppView
   reportingEnabled: boolean
+  stockEnabled: boolean
   onChange: (view: MiniAppView) => void
 }) {
   const items = [
     { view: 'HOME' as const, label: 'หน้าหลัก', icon: House },
     { view: 'BOOKING' as const, label: 'ลงนัด', icon: CalendarDays },
+    ...(stockEnabled ? [{ view: 'STOCK' as const, label: 'สต็อก', icon: PackageOpen }] : []),
     ...(reportingEnabled ? [{ view: 'REPORTS' as const, label: 'รายงาน', icon: FileChartColumn }] : []),
     { view: 'ACCOUNT' as const, label: 'บัญชี', icon: UserRound },
   ]
@@ -271,4 +428,12 @@ function safeRetryAfterSeconds(error: unknown): number {
   if (!error || typeof error !== 'object' || !('retryAfterSeconds' in error)) return 0
   const value = Number(error.retryAfterSeconds)
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function appendHistoryPage(current: StockHistoryPage, next: StockHistoryPage): StockHistoryPage {
+  const known = new Set(current.documents.map((document) => document.documentId))
+  return {
+    documents: [...current.documents, ...next.documents.filter((document) => !known.has(document.documentId))],
+    nextCursor: next.nextCursor,
+  }
 }

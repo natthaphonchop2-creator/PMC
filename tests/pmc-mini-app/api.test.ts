@@ -177,6 +177,63 @@ describe('PMC Mini App browser API', () => {
     expect(parsed.searchParams.has('doctorUuid')).toBe(false)
     expect(init).toMatchObject({ headers: { authorization: 'Bearer raw-id-token' } })
   })
+
+  it('loads Stock products and cursor history with bearer auth', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, { products: [] }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await api.loadStockProducts('raw-id-token')
+    await api.loadStockHistory('raw-id-token', 'opaque cursor')
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/mini-app/stock/products', expect.objectContaining({
+      headers: { authorization: 'Bearer raw-id-token' },
+    }))
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/mini-app/stock/history?cursor=opaque%20cursor', expect.objectContaining({
+      headers: { authorization: 'Bearer raw-id-token' },
+    }))
+  })
+
+  it.each([
+    ['ISSUE', { requestId: 'issue-1', commandType: 'ISSUE', payload: { lines: [{ productId: 'STK-1', quantityMilli: 1_000 }] } },
+      '/api/mini-app/stock/issues', 'POST', { requestId: 'issue-1', lines: [{ productId: 'STK-1', quantityMilli: 1_000 }] }],
+    ['RECEIVE', { requestId: 'receive-1', commandType: 'RECEIVE', payload: { lines: [{ productId: 'STK-1', quantityMilli: 2_000 }] } },
+      '/api/mini-app/stock/receipts', 'POST', { requestId: 'receive-1', lines: [{ productId: 'STK-1', quantityMilli: 2_000 }] }],
+    ['CREATE_PRODUCT', { requestId: 'create-1', commandType: 'CREATE_PRODUCT', payload: {
+      name: 'เข็ม', category: 'CLINIC_SUPPLY', unit: 'ชิ้น', openingQuantityMilli: 0, minimumQuantityMilli: 1_000,
+    } }, '/api/mini-app/stock/products', 'POST', {
+      requestId: 'create-1', name: 'เข็ม', category: 'CLINIC_SUPPLY', unit: 'ชิ้น', openingQuantityMilli: 0, minimumQuantityMilli: 1_000,
+    }],
+    ['ADJUST', { requestId: 'adjust-1', commandType: 'ADJUST', payload: {
+      productId: 'STK-1', countedQuantityMilli: 3_000, reason: 'ตรวจนับ',
+    } }, '/api/mini-app/stock/adjustments', 'POST', {
+      requestId: 'adjust-1', productId: 'STK-1', countedQuantityMilli: 3_000, reason: 'ตรวจนับ',
+    }],
+    ['UPDATE_PRODUCT', { requestId: 'update-1', commandType: 'UPDATE_PRODUCT', payload: {
+      productId: 'STK-1', expectedVersion: 2, name: 'เข็มใหม่', category: 'CLINIC_SUPPLY', unit: 'ชิ้น', minimumQuantityMilli: 2_000,
+    } }, '/api/mini-app/stock/products/STK-1', 'PATCH', {
+      requestId: 'update-1', action: 'UPDATE', expectedVersion: 2, name: 'เข็มใหม่', category: 'CLINIC_SUPPLY', unit: 'ชิ้น', minimumQuantityMilli: 2_000,
+    }],
+    ['DEACTIVATE_PRODUCT', { requestId: 'off-1', commandType: 'DEACTIVATE_PRODUCT', payload: {
+      productId: 'STK-1', expectedVersion: 3,
+    } }, '/api/mini-app/stock/products/STK-1', 'PATCH', { requestId: 'off-1', action: 'DEACTIVATE', expectedVersion: 3 }],
+    ['REACTIVATE_PRODUCT', { requestId: 'on-1', commandType: 'REACTIVATE_PRODUCT', payload: {
+      productId: 'STK-1', expectedVersion: 4,
+    } }, '/api/mini-app/stock/products/STK-1', 'PATCH', { requestId: 'on-1', action: 'REACTIVATE', expectedVersion: 4 }],
+  ] as const)('maps %s browser commands to the strict Stock API shape without staff identity', async (_name, command, url, method, body) => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      requestId: command.requestId, documentId: 'DOC-1', commandType: command.commandType, createdAt: '2026-08-28T00:00:00.000Z', lines: [],
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await api.submitStockCommand('raw-id-token', command)
+
+    expect(fetch).toHaveBeenCalledWith(url, expect.objectContaining({
+      method,
+      headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }))
+    expect(JSON.stringify(fetch.mock.calls)).not.toContain('staffId')
+  })
 })
 
 function inertLiff() {

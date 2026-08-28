@@ -1,6 +1,7 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { CalendarInterval } from './domain/automaticQueue'
 import type { MiniAppAsyncRequestRecord } from '../../../shared/pmcMiniAppAsyncState'
+import type { StockAuditEvent, StockDocumentSummary, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
 
 export interface Clock {
   nowIso(): string
@@ -17,6 +18,7 @@ export interface StaffConfig {
   lineUserId: string
   canCloseBooking: boolean
   canBeAe: boolean
+  canManageStock: boolean
   active: boolean
   profileImageUrl?: string
 }
@@ -161,6 +163,24 @@ export interface BookingRepositories {
   lineDirectory: LineDirectoryRepository
   retention: RetentionRepository
   audit: AuditRepository
+}
+
+export interface StockRepository {
+  listProducts(): StockProduct[]
+  getProduct(productId: string): StockProduct | null
+  insertProduct(product: StockProduct): StockProduct
+  updateProduct(productId: string, expectedVersion: number, patch: Partial<StockProduct>): StockProduct
+  listLedger(): StockLedgerEntry[]
+  appendLedgerBatch(entries: StockLedgerEntry[]): void
+  balanceByProduct(): Map<string, number>
+  findDocumentByRequestId(requestId: string): StockDocumentSummary | null
+  findAuditJournalByRequestId(requestId: string): {
+    prepared: StockAuditEvent | null
+    accepted: StockAuditEvent | null
+  }
+  listUnresolvedPrepared(): StockAuditEvent[]
+  findAcceptedAuditByRequestId(requestId: string): StockAuditEvent | null
+  appendAudit(event: StockAuditEvent): void
 }
 
 export interface DrivePort {

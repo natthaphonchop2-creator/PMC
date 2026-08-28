@@ -71,6 +71,35 @@ describe('PMC Mini App runtime configuration checker', () => {
     }
   })
 
+  it('reports Stock rollout flag readiness without exposing configured values', async () => {
+    const checker = await import('../../scripts/check-pmc-mini-app-runtime.mjs')
+    const environment = {
+      ...validEnvironment(),
+      PMC_STOCK_ENABLED: 'true',
+      PMC_STOCK_MANAGER_PILOT_ONLY: 'true',
+    }
+
+    const report = checker.inspectMiniAppRuntime(environment)
+    const serialized = JSON.stringify(report)
+
+    expect(report).toMatchObject({
+      ready: true,
+      stockEnabled: true,
+      stockManagerPilotOnly: true,
+      stockFlags: {
+        present: ['PMC_STOCK_ENABLED', 'PMC_STOCK_MANAGER_PILOT_ONLY'],
+        missing: [],
+      },
+    })
+    expect(serialized).not.toContain('PMC_STOCK_INGRESS_URL')
+    expect(serialized).not.toContain('PMC_STOCK_INGRESS_SECRET')
+
+    expect(checker.inspectMiniAppRuntime({
+      ...environment,
+      PMC_STOCK_MANAGER_PILOT_ONLY: 'not-a-boolean-private-value',
+    })).toMatchObject({ ready: false, stockManagerPilotOnly: false, stockFlagsValid: false })
+  })
+
   it('keeps Render unchanged and documents Cloud Run disabled-first rollout', async () => {
     const [runbook, render] = await Promise.all([
       readFile(resolve('docs/pmc-mini-app/pilot-runbook.md'), 'utf8'),
@@ -83,6 +112,19 @@ describe('PMC Mini App runtime configuration checker', () => {
     expect(render).not.toContain('PMC_MINI_APP_')
     expect(render).not.toContain('JERA_API_')
   })
+
+  it('documents Stock recovery and ingress bindings without phantom configuration', async () => {
+    const runbook = await readFile(resolve('docs/pmc-mini-app/pilot-runbook.md'), 'utf8')
+
+    expect(runbook).toContain('inactive/revoked actor leaves `PREPARED` unresolved and requires explicit developer repair')
+    expect(runbook).toContain('automatic recovery must not proceed while that actor is inactive or revoked')
+    expect(runbook).not.toContain('PMC_STOCK_INGRESS_URL')
+    expect(runbook).not.toContain('PMC_STOCK_INGRESS_SECRET')
+    expect(runbook).toContain('PMC_BOOKING_INGRESS_URL')
+    expect(runbook).toContain('PMC_BOOKING_INGRESS_SECRET')
+    expect(runbook).toContain('Stock reuses the established `PMC_BOOKING_INGRESS_URL` and `PMC_BOOKING_INGRESS_SECRET`')
+    expect(runbook).toContain('readiness checks only their existing presence and must not print values')
+  })
 })
 
 function validEnvironment(): Record<string, string> {
@@ -92,6 +134,7 @@ function validEnvironment(): Record<string, string> {
     PMC_BOOKING_INGRESS_URL: 'https://script.google.com/macros/s/deployment/exec',
     PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
     PMC_MINI_APP_ENROLLMENT_ENABLED: 'false',
+    PMC_STOCK_ENABLED: 'false', PMC_STOCK_MANAGER_PILOT_ONLY: 'false',
     PMC_BOOKING_INGRESS_SECRET: 'booking-secret-sentinel', PMC_MINI_APP_SIGNING_SECRET: 'signing-secret-sentinel',
   }
 }

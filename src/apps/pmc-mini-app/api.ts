@@ -7,8 +7,10 @@ import type {
   MiniAppConfig,
   MiniAppEnrollmentOptions,
   MiniAppSession,
+  StockProductProjection,
 } from './contracts'
 import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
+import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '../../../shared/pmcStock'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -33,6 +35,9 @@ export interface MiniAppBrowserApi {
   cancel(idToken: string, draftId: string, version: number): Promise<BookingDraftProjection>
   loadReport<T = unknown>(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<JeraClientEnvelope<T>>
   refreshReport(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<{ accepted: true; correlationId: string }>
+  loadStockProducts(idToken: string): Promise<{ products: StockProductProjection[] }>
+  loadStockHistory(idToken: string, cursor?: string): Promise<StockHistoryPage>
+  submitStockCommand(idToken: string, command: StockClientCommand): Promise<StockCommandResult>
 }
 
 export class MiniAppApiError extends Error {
@@ -133,6 +138,48 @@ export function createMiniAppApi(options: {
         method: 'POST', headers: { authorization: `Bearer ${idToken}` },
       })
     },
+    loadStockProducts(idToken) {
+      return requestJson(request, '/api/mini-app/stock/products', authenticated(idToken))
+    },
+    loadStockHistory(idToken, cursor) {
+      const query = cursor === undefined ? '' : `?cursor=${encodeURIComponent(cursor)}`
+      return requestJson(request, `/api/mini-app/stock/history${query}`, authenticated(idToken))
+    },
+    submitStockCommand(idToken, command) {
+      const mapped = stockCommandRequest(command)
+      return requestJson(request, mapped.url, authenticatedJson(idToken, mapped.method, mapped.body))
+    },
+  }
+}
+
+function stockCommandRequest(command: StockClientCommand): { url: string; method: 'POST' | 'PATCH'; body: unknown } {
+  if (command.commandType === 'ISSUE') {
+    return { url: '/api/mini-app/stock/issues', method: 'POST', body: { requestId: command.requestId, ...command.payload } }
+  }
+  if (command.commandType === 'RECEIVE') {
+    return { url: '/api/mini-app/stock/receipts', method: 'POST', body: { requestId: command.requestId, ...command.payload } }
+  }
+  if (command.commandType === 'CREATE_PRODUCT') {
+    return { url: '/api/mini-app/stock/products', method: 'POST', body: { requestId: command.requestId, ...command.payload } }
+  }
+  if (command.commandType === 'ADJUST') {
+    return { url: '/api/mini-app/stock/adjustments', method: 'POST', body: { requestId: command.requestId, ...command.payload } }
+  }
+  if (command.commandType === 'UPDATE_PRODUCT') {
+    const { productId, ...payload } = command.payload
+    return {
+      url: `/api/mini-app/stock/products/${encodeURIComponent(productId)}`,
+      method: 'PATCH',
+      body: { requestId: command.requestId, action: 'UPDATE', ...payload },
+    }
+  }
+  const action = command.commandType === 'DEACTIVATE_PRODUCT' ? 'DEACTIVATE' : 'REACTIVATE'
+  if (!('productId' in command.payload)) throw new Error('Unsupported Stock command')
+  const { productId, ...payload } = command.payload
+  return {
+    url: `/api/mini-app/stock/products/${encodeURIComponent(productId)}`,
+    method: 'PATCH',
+    body: { requestId: command.requestId, action, ...payload },
   }
 }
 

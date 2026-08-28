@@ -25,11 +25,28 @@ class MemorySheetStore implements SheetStore {
   replace(tab: string, rows: SheetRow[]): void {
     this.tabs.set(tab, structuredClone(rows))
   }
+
+  append(tab: string, rows: SheetRow[]): void {
+    this.tabs.set(tab, [...this.read(tab), ...structuredClone(rows)])
+  }
+
+  update(tab: string, rowIndex: number, row: SheetRow): void {
+    const rows = this.read(tab)
+    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0 || rowIndex >= rows.length) {
+      throw new Error(`row index out of range: ${tab}`)
+    }
+    rows[rowIndex] = structuredClone(row)
+    this.tabs.set(tab, rows)
+  }
+}
+
+export function createMemorySheetStore(): SheetStore {
+  return new MemorySheetStore()
 }
 
 export function createMemoryRepositories(now = '2026-08-20T09:00:00+07:00') {
   return createBookingRepositories(
-    new MemorySheetStore(),
+    createMemorySheetStore(),
     { withLock: (operation) => operation() },
     { nowIso: () => now },
   )
@@ -170,6 +187,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : null,
@@ -182,6 +200,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : null,
@@ -195,6 +214,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : name === 'เอม'
@@ -205,6 +225,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
                 lineUserId: '',
                 canCloseBooking: false,
                 canBeAe: true,
+                canManageStock: false,
                 active: true,
               }
             : null,
@@ -217,6 +238,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : id === 'staff-ae'
@@ -227,6 +249,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
                 lineUserId: '',
                 canCloseBooking: false,
                 canBeAe: true,
+                canManageStock: false,
                 active: true,
               }
             : null,
@@ -238,6 +261,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: 'admin-user-1',
           canCloseBooking: true,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
         {
@@ -247,6 +271,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: '',
           canCloseBooking: false,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
       ],
@@ -258,6 +283,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: 'admin-user-1',
           canCloseBooking: true,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
         {
@@ -267,6 +293,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: '',
           canCloseBooking: false,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
       ],

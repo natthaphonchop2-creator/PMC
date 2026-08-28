@@ -13,6 +13,8 @@ import { createWorkerIdentityVerifier } from './workerAuth.js'
 import { createAsyncBookingWorker } from './asyncWorker.js'
 import { createAsyncStateIngressClient } from './asyncStateIngressClient.js'
 import { createAsyncBookingTelemetry } from './asyncTelemetry.js'
+import { createStockIngressClient } from './stock/ingressClient.js'
+import { createStockReadStore } from './stock/readStore.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -47,6 +49,15 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
   })
   const now = () => new Date()
   const asyncTelemetry = createAsyncBookingTelemetry()
+  const stock = {
+    enabled: config.stockEnabled,
+    managerPilotOnly: config.stockManagerPilotOnly,
+    readStore: createStockReadStore({ spreadsheetId: config.spreadsheetId, sheets: google.sheets }),
+    ingress: createStockIngressClient({
+      url: config.bookingIngressUrl,
+      secret: config.bookingIngressSecret,
+    }),
+  }
   const enrollment = config.enrollmentPin ? createEnrollmentService({
     pin: config.enrollmentPin,
     signingSecret: config.signingSecret,
@@ -97,6 +108,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     ...asyncDependencies,
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
+    stock,
     now,
   })
 }

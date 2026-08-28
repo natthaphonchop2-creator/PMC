@@ -62,6 +62,7 @@ describe('PMC Mini App managed Sheet setup', () => {
 
     expect(sheets.workbook.map(({ title }) => title)).toEqual([
       'BOOKING_MASTER', 'MINI_APP_REQUESTS', 'MINI_APP_LINK_ATTEMPTS', 'JERA_API_CACHE', 'JERA_SYNC_STATE', 'JERA_SYNC_AUDIT',
+      'STOCK_PRODUCTS', 'STOCK_LEDGER', 'STOCK_AUDIT',
     ])
     for (const [tab, headers] of Object.entries(MANAGED_TAB_HEADERS)) {
       expect(sheets.headers.get(tab)).toEqual(headers)
@@ -100,6 +101,25 @@ describe('PMC Mini App managed Sheet setup', () => {
       'itemCode', 'itemName', 'quantity', 'remainingQuantity', 'remainingValueSatang',
     ]))
     expect(MANAGED_TAB_HEADERS.JERA_SYNC_STATE).toEqual(expect.arrayContaining(['lastManualAt', 'leaseOwner', 'leaseExpiresAt']))
+  })
+
+  it('defines the exact managed Stock tab headers', () => {
+    expect(Object.keys(MANAGED_TAB_HEADERS)).toEqual(expect.arrayContaining([
+      'STOCK_PRODUCTS', 'STOCK_LEDGER', 'STOCK_AUDIT',
+    ]))
+    expect(MANAGED_TAB_HEADERS.STOCK_PRODUCTS).toEqual([
+      'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',
+      'createdAt', 'createdByStaffId', 'updatedAt', 'updatedByStaffId', 'version',
+    ])
+    expect(MANAGED_TAB_HEADERS.STOCK_LEDGER).toEqual([
+      'transactionId', 'documentId', 'requestId', 'lineNumber', 'productId', 'transactionType',
+      'quantityDeltaMilli', 'balanceBeforeMilli', 'balanceAfterMilli', 'actorStaffId', 'actorDisplayName',
+      'reason', 'idempotencyKey', 'createdAt',
+    ])
+    expect(MANAGED_TAB_HEADERS.STOCK_AUDIT).toEqual([
+      'eventId', 'requestId', 'actorStaffId', 'action', 'status', 'safeErrorCode',
+      'targetProductIdsJson', 'correlationId', 'createdAt',
+    ])
   })
 })
 

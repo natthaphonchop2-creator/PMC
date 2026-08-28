@@ -80,17 +80,28 @@ export function bookingMasterMigrationPlan(existing: string[]): BookingMasterMig
 export type StaffProfileMigrationPlan =
   | { kind: 'NONE' }
   | { kind: 'APPEND_PROFILE_IMAGE_URL'; afterColumn: number; header: 'profileImageUrl' }
+  | { kind: 'APPEND_CAN_MANAGE_STOCK'; afterColumn: number; header: 'canManageStock' }
 
 export function staffProfileMigrationPlan(existing: string[]): StaffProfileMigrationPlan {
   if (JSON.stringify(existing) === JSON.stringify(STAFF_CONFIG_COLUMNS)) {
     return { kind: 'NONE' }
   }
-  const legacy = STAFF_CONFIG_COLUMNS.filter((column) => column !== 'profileImageUrl')
-  if (JSON.stringify(existing) === JSON.stringify(legacy)) {
+  const legacyWithoutProfile = STAFF_CONFIG_COLUMNS.filter(
+    (column) => !['profileImageUrl', 'canManageStock'].includes(column),
+  )
+  if (JSON.stringify(existing) === JSON.stringify(legacyWithoutProfile)) {
     return {
       kind: 'APPEND_PROFILE_IMAGE_URL',
-      afterColumn: legacy.length,
+      afterColumn: legacyWithoutProfile.length,
       header: 'profileImageUrl',
+    }
+  }
+  const legacyWithoutStockRole = STAFF_CONFIG_COLUMNS.filter((column) => column !== 'canManageStock')
+  if (JSON.stringify(existing) === JSON.stringify(legacyWithoutStockRole)) {
+    return {
+      kind: 'APPEND_CAN_MANAGE_STOCK',
+      afterColumn: legacyWithoutStockRole.length,
+      header: 'canManageStock',
     }
   }
   throw new Error('unsupported CONFIG_STAFF header')

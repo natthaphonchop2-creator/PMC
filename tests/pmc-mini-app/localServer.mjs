@@ -4,7 +4,12 @@ import { createServer } from 'vite'
 const port = Number(process.env.PMC_MINI_APP_TEST_PORT || 4187)
 const server = await createServer({
   configFile: resolve('vite.mini-app.config.ts'),
-  server: { host: '127.0.0.1', port, strictPort: true },
+  server: {
+    host: '127.0.0.1',
+    port,
+    strictPort: true,
+    headers: { 'Cache-Control': 'no-store' },
+  },
   logLevel: 'error',
 })
 

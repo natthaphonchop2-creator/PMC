@@ -88,6 +88,8 @@ describe('PMC Mini App session and configuration API', () => {
     expect(body).toEqual({
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
       reportingEnabled: false,
+      stockEnabled: false,
+      canManageStock: false,
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],

@@ -25,6 +25,21 @@ describe('PMC Mini App server configuration', () => {
     expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({ asyncBooking: null })
   })
 
+  it('keeps Stock disabled by default and parses only exact rollout flags', () => {
+    expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({
+      stockEnabled: false,
+      stockManagerPilotOnly: false,
+    })
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_STOCK_ENABLED: 'true',
+      PMC_STOCK_MANAGER_PILOT_ONLY: 'true',
+    })).toMatchObject({
+      stockEnabled: true,
+      stockManagerPilotOnly: true,
+    })
+  })
+
   it('fails closed when enabled async booking configuration is incomplete', () => {
     expect(readPmcMiniAppConfig({
       ...validEnvironment(),
@@ -62,6 +77,8 @@ describe('PMC Mini App server configuration', () => {
     ['oversized image limit', { PMC_MINI_APP_MAX_IMAGE_BYTES: '10000001' }],
     ['excessive file count', { PMC_MINI_APP_MAX_FILES_PER_KIND: '11' }],
     ['unknown enabled value', { PMC_MINI_APP_ENABLED: 'yes' }],
+    ['unknown Stock enabled value', { PMC_STOCK_ENABLED: 'yes' }],
+    ['unknown Stock pilot value', { PMC_STOCK_MANAGER_PILOT_ONLY: 'yes' }],
   ])('rejects %s', (_name, patch) => {
     expect(readPmcMiniAppConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })

@@ -71,6 +71,7 @@ export const STAFF_CONFIG_COLUMNS = [
   'canBeAe',
   'active',
   'profileImageUrl',
+  'canManageStock',
 ] as const
 
 export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
@@ -93,5 +94,18 @@ export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
   SYSTEM_SEQUENCES: ['month', 'sequence'],
   RETENTION_QUEUE: ['id', 'caseId', 'eligibleAt', 'status', 'approvedBy', 'approvedAt', 'reason', 'version'],
   AUDIT_LOG: ['eventId', 'caseId', 'actor', 'action', 'target', 'before', 'after', 'reason', 'timestamp', 'correlationId'],
+  STOCK_PRODUCTS: [
+    'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',
+    'createdAt', 'createdByStaffId', 'updatedAt', 'updatedByStaffId', 'version',
+  ],
+  STOCK_LEDGER: [
+    'transactionId', 'documentId', 'requestId', 'lineNumber', 'productId', 'transactionType',
+    'quantityDeltaMilli', 'balanceBeforeMilli', 'balanceAfterMilli', 'actorStaffId', 'actorDisplayName',
+    'reason', 'idempotencyKey', 'createdAt',
+  ],
+  STOCK_AUDIT: [
+    'eventId', 'requestId', 'actorStaffId', 'action', 'status', 'safeErrorCode',
+    'targetProductIdsJson', 'correlationId', 'createdAt',
+  ],
   DASHBOARD: [],
 }

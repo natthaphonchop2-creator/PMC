@@ -37,6 +37,8 @@ PMC_ASYNC_WORKER_URL
 PMC_ASYNC_WORKER_AUDIENCE
 PMC_ASYNC_TASK_INVOKER_EMAIL
 PMC_ASYNC_OWNER_STAFF_IDS
+PMC_STOCK_ENABLED
+PMC_STOCK_MANAGER_PILOT_ONLY
 ```
 
 Secret Manager bindings:
@@ -126,7 +128,7 @@ Stop for explicit approval before changing sharing.
 3. Keep the intake folder private to the clinic and runtime identity.
 4. Confirm the identity cannot list or read unrelated Drive resources.
 
-After approval and local ADC authentication, create or validate the five managed tabs with the already-built setup function:
+After approval and local ADC authentication, create or validate the eight managed tabs with the already-built setup function:
 
 ```bash
 npm run build:server
@@ -143,6 +145,16 @@ console.log(JSON.stringify({ managedTabsReady: true }));
 ```
 
 This creates only missing managed tabs, validates existing headers, and freezes row 1. It preserves every existing tab and value.
+
+For Stock, the mandatory readback is all three tabs with these exact headers and frozen row 1:
+
+```text
+STOCK_PRODUCTS: productId, name, normalizedName, category, unit, minimumQuantityMilli, active, createdAt, createdByStaffId, updatedAt, updatedByStaffId, version
+STOCK_LEDGER: transactionId, documentId, requestId, lineNumber, productId, transactionType, quantityDeltaMilli, balanceBeforeMilli, balanceAfterMilli, actorStaffId, actorDisplayName, reason, idempotencyKey, createdAt
+STOCK_AUDIT: eventId, requestId, actorStaffId, action, status, safeErrorCode, targetProductIdsJson, correlationId, createdAt
+```
+
+The setup gate fails if any existing managed header is incompatible. Do not rename a header, clear a tab, delete a tab, or replace an existing Stock row to make setup pass.
 
 ## Owner gate 4 — Apps Script ingress
 
@@ -175,6 +187,113 @@ Acceptance order for the tagged revision:
 3. `/api/mini-app/session` rejects a missing or invalid LINE token.
 4. Legacy Dashboard, Booking webhook, OCR, Calendar, LINE, retry, call queue, and Google Form continue operating.
 5. No request is sent to JERA.
+
+## Stock rollout — disabled-first, managers-only pilot
+
+Stock is a separate gate layered on top of the Booking Mini App. No step below authorizes a Production action by itself. Stop for fresh owner approval before Apps Script push/deploy, Sheet setup, Cloud Run revision changes, synthetic writes, or pilot traffic.
+
+### Gate S0 — exact manager identities
+
+The only initial Stock managers are:
+
+```text
+shared-account-test  owner/Admin
+ADMIN_07             อาย
+ADMIN_03             หมวย
+```
+
+Every other `CONFIG_STAFF` row must read back `canManageStock=false`. All three named rows must exist exactly once and remain active before running `configureStockManagersWorkflow()`. The workflow writes only the `canManageStock` column, verifies the written booleans by readback, and must return `managerCount: 3`. Re-open `CONFIG_STAFF` and confirm the exact three IDs above are `TRUE` and every other row is `FALSE` before continuing.
+
+Do not delete a staff row while any Stock journal is unresolved. An inactive/revoked actor leaves `PREPARED` unresolved and requires explicit developer repair; automatic recovery must not proceed while that actor is inactive or revoked. Deleting the row can make deterministic repair impossible.
+
+### Gate S1 — initial disabled Cloud Run revision
+
+Create a tagged/no-traffic revision with both flags explicit:
+
+```text
+PMC_STOCK_ENABLED=false
+PMC_STOCK_MANAGER_PILOT_ONLY=true
+```
+
+Stock reuses the established `PMC_BOOKING_INGRESS_URL` and `PMC_BOOKING_INGRESS_SECRET`; readiness checks only their existing presence and must not print values. Run:
+
+```bash
+node scripts/check-pmc-mini-app-runtime.mjs --env-file /path/to/operator-owned/runtime.env --strict
+```
+
+The report may show only flag booleans plus binding names/presence. It must never show ingress URLs, secret values, Sheet IDs, LINE IDs, or tokens. Verify Stock routes fail closed and the Stock Home card remains disabled while Booking, Google Form fallback, OCR, JERA read-only behavior, Calendar, LINE, and existing webhooks remain unchanged.
+
+### Gate S2 — Apps Script source and immutable deployment
+
+After a reviewed local build and explicit owner approval:
+
+1. Confirm `clasp status` targets the canonical PMC Apps Script project.
+2. Run `npm run booking:test`, `npm run booking:typecheck`, and `npm run booking:build`.
+3. Review the generated Apps Script diff and confirm no unrelated function changed.
+4. Push source with `npm run booking:push`.
+5. Create an immutable Apps Script version with `clasp version "PMC Stock pilot"`; record only the returned version number.
+6. Update the current web-app deployment with `clasp deploy -i <CURRENT_DEPLOYMENT_ID> -V <IMMUTABLE_VERSION> -d "PMC Stock pilot"`. Do not create a second public ingress deployment.
+7. Read back the current deployment and confirm it points to that immutable version before changing any Cloud Run Stock flag.
+
+Never place the deployment ID, unrestricted web-app URL, or ingress secret in this repository or rollout evidence.
+
+### Gate S3 — managed tabs and managers
+
+With separate approval for the canonical spreadsheet:
+
+1. Run the managed-tab setup from Owner gate 3.
+2. Read back the exact three Stock headers, frozen row 1, unchanged pre-existing tab count, and zero deleted tabs.
+3. Run `configureStockManagersWorkflow()` once.
+4. Read back exactly the three manager IDs from Gate S0 and confirm all other staff rows are false.
+5. Record safe evidence only: header pass/fail, frozen-row pass/fail, manager count, changed-row count, reviewer, and timestamp.
+
+### Gate S4 — synthetic ledger lifecycle
+
+Keep Cloud Run disabled. Using synthetic product names only, run this exact lifecycle through the signed command path and read projection:
+
+```text
+CREATE opening 10
+RECEIVE +5
+ISSUE   -8
+ADJUST  -1 to counted quantity 6, reason "ตรวจนับสิ้นวัน"
+final balance 6
+exact deltas [10, +5, -8, -1]
+```
+
+Then attempt an issue greater than 6. It must return `STOCK_INSUFFICIENT_BALANCE`, create no new ledger row, leave the balance at 6, and preserve the prior accepted documents. Repeat one accepted request ID with the exact same payload; it must return the original document and create no duplicate row.
+
+Journal recovery is fail-closed:
+
+- `PREPARED` without matching `ACCEPTED` may block every different write with `STOCK_RECOVERY_REQUIRED`.
+- Recover only by replaying the exact original request ID, actor ID, command type, and payload after verifying the existing Product/Ledger state.
+- Never manually append `ACCEPTED`, edit a prepared fingerprint, delete the actor staff row, or delete/replace Product, Ledger, or Audit rows to bypass recovery.
+- Recovery and rollback never delete Stock rows or Stock tabs.
+
+### Gate S5 — manager-only pilot
+
+After Gate S4 passes and the owner approves the exact revision, deploy/tag a pilot revision with:
+
+```text
+PMC_STOCK_ENABLED=true
+PMC_STOCK_MANAGER_PILOT_ONLY=true
+```
+
+Only the three managers from Gate S0 may see Stock. All other active staff must receive `stockEnabled=false`, have no Stock navigation, and remain unable to call Stock routes. Verify manager create, receive, adjust, product management, history reason visibility, and safe retry. Verify a normal staff identity cannot see or invoke manager controls.
+
+Run the complete browser acceptance on an Android-sized viewport, then manually repeat the same manager and staff paths in both Android LINE WebView and iPhone LINE WebView. Confirm Thai marks are not clipped, touch targets remain reachable, history expands in place, load-more uses the opaque cursor, no console error appears, and no Stock screen contains a Google Sheet link or edit-history action.
+
+### Gate S6 — owner approval before all-staff access
+
+Present only commit SHA, Cloud Run revision name, Apps Script immutable version number, safe synthetic document IDs, row counts, final balance, exact manager IDs, pass/fail, reviewer, and timestamps. Do not include product-sensitive notes, Sheet IDs, LINE IDs, tokens, secrets, request bodies, or unrestricted URLs.
+
+Keep manager-only mode until the owner explicitly approves all-staff enablement. Only after that approval may a new revision set:
+
+```text
+PMC_STOCK_ENABLED=true
+PMC_STOCK_MANAGER_PILOT_ONLY=false
+```
+
+Re-run active-staff issue, manager authorization, Android/iPhone LINE WebView, idempotency, insufficient-balance, history, and no-Sheet-link checks before routing all traffic.
 
 ## Owner gate 5 — Pilot enablement
 
@@ -210,6 +329,14 @@ Rollback is non-destructive:
 3. Keep Apps Script Form triggers, Booking Sheet rows, audit records, and evidence intact.
 4. Pause the later JERA scheduler if it has been created; Booking rollback must not alter JERA records.
 5. Diagnose from safe error codes and revision logs. Never print request bodies, LINE tokens, credentials, customer names, phone numbers, or unrestricted Drive URLs.
+
+Stock rollback is non-destructive and independent of Booking rollback:
+
+1. Set `PMC_STOCK_ENABLED=false` in a new revision or route traffic to the last known-good Stock-disabled revision.
+2. Keep `PMC_STOCK_MANAGER_PILOT_ONLY=true` while diagnosing.
+3. Preserve `STOCK_PRODUCTS`, `STOCK_LEDGER`, `STOCK_AUDIT`, and every `CONFIG_STAFF` row involved in an unresolved journal.
+4. Never delete, clear, replace, reorder, or hand-edit Stock rows during rollback or recovery.
+5. If a `PREPARED` journal remains unresolved, stop new writes, preserve all rows, and follow Gate S4 recovery with the exact original request.
 
 ## Render isolation
 

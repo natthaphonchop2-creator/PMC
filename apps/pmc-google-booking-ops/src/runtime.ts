@@ -41,8 +41,18 @@ import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
 import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
-import { createBookingRepositories, type SheetRow, type SheetStore } from './repositories'
+import {
+  createBookingRepositories,
+  createStockRepository,
+  type SheetRow,
+  type SheetStore,
+} from './repositories'
 import { createGoogleMiniAppRequestStatePort } from './adapters/miniAppRequestState'
+import { canonicalMiniAppStockCommand } from '../../../shared/pmcMiniAppStockIngress'
+import {
+  configureStockManagers,
+  type StockIngressPorts,
+} from './stock/ingress'
 import {
   createInitialCallTask,
   runDailyCallReminders,
@@ -99,6 +109,7 @@ function createConfigPort(
       lineUserId: String(row.lineUserId),
       canCloseBooking: isActive(row.canCloseBooking),
       canBeAe: isActive(row.canBeAe),
+      canManageStock: isActive(row.canManageStock),
       active: isActive(row.active),
       profileImageUrl: String(row.profileImageUrl ?? '').trim(),
     }))
@@ -149,7 +160,7 @@ function bangkokNow(): string {
   return Utilities.formatDate(new Date(), 'Asia/Bangkok', "yyyy-MM-dd'T'HH:mm:ssXXX")
 }
 
-export function createRuntime(): BookingPorts {
+export function createRuntime(): BookingPorts & StockIngressPorts {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
@@ -158,6 +169,7 @@ export function createRuntime(): BookingPorts {
   const store = createGoogleSheetStore(spreadsheet)
   const clock = { nowIso: bangkokNow }
   const crypto = createAppsScriptCryptoPort()
+  const stock = createStockRepository(store)
   const locks = {
     withLock<T>(operation: () => T): T {
       const lock = LockService.getScriptLock()
@@ -181,6 +193,9 @@ export function createRuntime(): BookingPorts {
     ),
     repositories: createBookingRepositories(store, locks, clock),
     miniAppRequests: createGoogleMiniAppRequestStatePort(spreadsheet),
+    stock,
+    commandFingerprint: (command) => crypto.sha256Hex(canonicalMiniAppStockCommand(command)),
+    allocateId: (prefix) => `${prefix}-${Utilities.getUuid()}`,
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
     calendar: createGoogleCalendarPort(),
     line: createGoogleLinePort(properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]),
@@ -780,6 +795,69 @@ export function configureStaffProfileImagesWorkflow(): {
   }
 }
 
+export function configureStockManagersWorkflow(): {
+  managerCount: 3
+  changedRows: number
+} {
+  const spreadsheetId = PropertiesService.getScriptProperties()
+    .getProperty(SCRIPT_PROPERTY_KEYS.spreadsheetId)
+    ?.trim()
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
+  const lock = LockService.getScriptLock()
+  lock.waitLock(30_000)
+  try {
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0]
+      .map(String)
+    if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
+      throw new Error('sheet header mismatch: CONFIG_STAFF')
+    }
+    const source = createGoogleSheetStore(spreadsheet)
+    const managerColumn = STAFF_CONFIG_COLUMNS.indexOf('canManageStock') + 1
+    const plan: { rows: SheetRow[] | null } = { rows: null }
+    const result = configureStockManagers({
+      read: (tab) => source.read(tab),
+      replace(tab, rows) {
+        if (tab !== 'CONFIG_STAFF') throw new Error('unexpected Stock manager tab')
+        plan.rows = rows
+      },
+      append() { throw new Error('unexpected Stock manager append') },
+      update() { throw new Error('unexpected Stock manager update') },
+    })
+    const liveRows = source.read('CONFIG_STAFF')
+    if (plan.rows) {
+      if (liveRows.length !== plan.rows.length || liveRows.some((row, index) => (
+        row.id !== plan.rows![index]?.id || isActiveStockManagerRow(row.active) !== isActiveStockManagerRow(plan.rows![index]?.active)
+      ))) {
+        throw new Error('CONFIG_STAFF changed during Stock manager cutover')
+      }
+      const expected = plan.rows.map((row) => [row.canManageStock === true])
+      sheet.getRange(2, managerColumn, plan.rows.length, 1).setValues(expected)
+    }
+    const readback = source.read('CONFIG_STAFF')
+    if (!hasExactStockManagerCutover(readback)) throw new Error('PMC Stock manager readback mismatch')
+    return result
+  } finally {
+    lock.releaseLock()
+  }
+}
+
+function isActiveStockManagerRow(value: unknown): boolean {
+  return value === true || String(value).toLowerCase() === 'true' || String(value) === '1'
+}
+
+function hasExactStockManagerCutover(rows: SheetRow[]): boolean {
+  const expected = new Set(['shared-account-test', 'ADMIN_07', 'ADMIN_03'])
+  const activeManagers = rows
+    .filter((row) => isActiveStockManagerRow(row.active) && row.canManageStock === true)
+    .map((row) => String(row.id))
+  return activeManagers.length === expected.size && activeManagers.every((id) => expected.has(id))
+}
+
 export function validateProductionFlexMessagesWorkflow(): {
   validatorStatus: 200
   accepted: true
@@ -976,6 +1054,7 @@ export function applyAutoQueueMigrationWorkflow(): {
   )
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
   migrateBookingMasterStaffColumns(spreadsheet)
+  migrateConfigStaffProfileColumn(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const store = createGoogleSheetStore(spreadsheet)
   const before = store.read('BOOKING_MASTER')
@@ -1030,6 +1109,7 @@ export function configureFacebookNameFieldWorkflow(): {
   )
 
   migrateBookingMasterStaffColumns(spreadsheet)
+  migrateConfigStaffProfileColumn(spreadsheet)
   ensureSheetTopology(spreadsheet)
   runtime.forms.ensureFacebookNameField()
   if (!runtime.forms.bookingHasFacebookNameField()) {

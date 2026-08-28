@@ -14,6 +14,8 @@ export interface PmcMiniAppServerConfig {
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
   asyncBooking: PmcAsyncBookingConfig | null
+  stockEnabled: boolean
+  stockManagerPilotOnly: boolean
 }
 
 const REQUIRED = [
@@ -48,6 +50,8 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   if (env.PMC_MINI_APP_ENROLLMENT_ENABLED !== undefined
     && env.PMC_MINI_APP_ENROLLMENT_ENABLED !== 'true'
     && env.PMC_MINI_APP_ENROLLMENT_ENABLED !== 'false') return null
+  if (!validOptionalFlag(env.PMC_STOCK_ENABLED)) return null
+  if (!validOptionalFlag(env.PMC_STOCK_MANAGER_PILOT_ONLY)) return null
   const enrollmentPin = env.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
     ? env.PMC_MINI_APP_ENROLLMENT_PIN?.trim() ?? ''
     : null
@@ -70,7 +74,13 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
     asyncBooking,
+    stockEnabled: env.PMC_STOCK_ENABLED === 'true',
+    stockManagerPilotOnly: env.PMC_STOCK_MANAGER_PILOT_ONLY === 'true',
   }
+}
+
+function validOptionalFlag(value: string | undefined): boolean {
+  return value === undefined || value === 'true' || value === 'false'
 }
 
 function boundedValue(value: string | undefined): boolean {

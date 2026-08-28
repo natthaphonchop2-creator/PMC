@@ -35,6 +35,7 @@ describe('Apps Script bundle', () => {
       'pauseAndCutoverPmcBookingForm',
       'resumePmcBookingFormAfterAeCutover',
       'configurePmcSharedDoctorCalendar',
+      'configurePmcStockManagers',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }

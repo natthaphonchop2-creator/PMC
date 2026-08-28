@@ -59,14 +59,17 @@ export function migrateConfigStaffProfileColumn(
 ): void {
   const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
   if (!sheet || sheet.getLastColumn() < 1) return
-  const headers = sheet
-    .getRange(1, 1, 1, sheet.getLastColumn())
-    .getValues()[0]
-    .map(String)
-  const plan = staffProfileMigrationPlan(headers)
-  if (plan.kind === 'NONE') return
-  sheet.insertColumnsAfter(plan.afterColumn, 1)
-  sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0]
+      .map(String)
+    const plan = staffProfileMigrationPlan(headers)
+    if (plan.kind === 'NONE') return
+    sheet.insertColumnsAfter(plan.afterColumn, 1)
+    sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
+  }
+  throw new Error('CONFIG_STAFF migration did not converge')
 }
 
 export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet): SheetStore {
@@ -91,6 +94,26 @@ export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet
           .getRange(2, 1, rows.length, headers.length)
           .setValues(rows.map((row) => headers.map((header) => encodeSheetCell(row[header]))))
       }
+    },
+    append(tab: string, rows: SheetRow[]): void {
+      if (rows.length === 0) return
+      const sheet = requireSheet(spreadsheet, tab)
+      const headers = SHEET_SCHEMAS[tab]
+      if (!headers?.length) throw new Error(`sheet is not repository-managed: ${tab}`)
+      sheet
+        .getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length)
+        .setValues(rows.map((row) => headers.map((header) => encodeSheetCell(row[header]))))
+    },
+    update(tab: string, rowIndex: number, row: SheetRow): void {
+      const sheet = requireSheet(spreadsheet, tab)
+      const headers = SHEET_SCHEMAS[tab]
+      if (!headers?.length) throw new Error(`sheet is not repository-managed: ${tab}`)
+      if (!Number.isSafeInteger(rowIndex) || rowIndex < 0 || rowIndex >= sheet.getLastRow() - 1) {
+        throw new Error(`sheet row index out of range: ${tab}`)
+      }
+      sheet
+        .getRange(rowIndex + 2, 1, 1, headers.length)
+        .setValues([headers.map((header) => encodeSheetCell(row[header]))])
     },
   }
 }
