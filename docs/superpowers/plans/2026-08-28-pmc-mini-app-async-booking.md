@@ -312,6 +312,11 @@ export function evidenceObjectKey(input: {
   contentSha256: string
   mimeType: 'image/jpeg' | 'image/png'
 }): string
+
+export function createGoogleEvidenceStagingPort(input: {
+  bucketName: string
+  storage?: Storage
+}): EvidenceStagingPort
 ```
 
 - [ ] **Step 1: Install the official client**
@@ -366,10 +371,12 @@ git commit -m "feat: stage Mini App evidence in Cloud Storage"
 
 **Files:**
 - Create: `server/pmc-mini-app/evidenceBatch.ts`
+- Modify: `server/pmc-mini-app/bookingDraft.ts`
 - Modify: `server/pmc-mini-app/middleware.ts`
 - Modify: `server/pmc-mini-app/runtime.ts`
 - Test: `tests/pmc-mini-app/evidenceBatch.test.ts`
 - Test: `tests/pmc-mini-app/evidenceBatchApi.test.ts`
+- Test: `tests/pmc-mini-app/bookingDraft.test.ts`
 
 **Interfaces:**
 
@@ -406,7 +413,7 @@ Cover unknown fields, eleven files in one kind, per-file limit, total limit, inc
 it('stages three payment files and one chat file with one draft write', async () => {
   const response = await uploadBatch({ paymentCount: 3, chatCount: 1 })
   expect(response.status).toBe(200)
-  expect(response.body).toMatchObject({ state: 'READY_TO_CONFIRM' })
+  expect(response.body).toMatchObject({ state: 'DRAFT' })
   expect(store.writeCount()).toBe(1)
 })
 ```
@@ -425,17 +432,19 @@ npx vitest run tests/pmc-mini-app/evidenceBatch.test.ts tests/pmc-mini-app/evide
 
 Stage at most four objects concurrently, restore original order by input index, and write all object keys to the draft once. A repeated batch must reuse deterministic objects.
 
+Update booking-draft validation so asynchronous mode treats ordered staging object keys as required evidence while synchronous mode continues to require Drive file IDs. The later PATCH that saves customer/booking input performs the `DRAFT -> READY_TO_CONFIRM` transition.
+
 - [ ] **Step 5: Verify GREEN**
 
 ```bash
-npx vitest run tests/pmc-mini-app/evidenceBatch.test.ts tests/pmc-mini-app/evidenceBatchApi.test.ts tests/pmc-mini-app/evidenceApi.test.ts tests/pmc-mini-app/bookingApi.test.ts
+npx vitest run tests/pmc-mini-app/evidenceBatch.test.ts tests/pmc-mini-app/evidenceBatchApi.test.ts tests/pmc-mini-app/bookingDraft.test.ts tests/pmc-mini-app/evidenceApi.test.ts tests/pmc-mini-app/bookingApi.test.ts
 npx tsc -p tsconfig.server.json --noEmit
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add server/pmc-mini-app/evidenceBatch.ts server/pmc-mini-app/middleware.ts server/pmc-mini-app/runtime.ts tests/pmc-mini-app/evidenceBatch.test.ts tests/pmc-mini-app/evidenceBatchApi.test.ts
+git add server/pmc-mini-app/evidenceBatch.ts server/pmc-mini-app/bookingDraft.ts server/pmc-mini-app/middleware.ts server/pmc-mini-app/runtime.ts tests/pmc-mini-app/evidenceBatch.test.ts tests/pmc-mini-app/evidenceBatchApi.test.ts tests/pmc-mini-app/bookingDraft.test.ts
 git commit -m "feat: add fast evidence batch staging"
 ```
 
@@ -447,11 +456,13 @@ git commit -m "feat: add fast evidence batch staging"
 - Modify: `package.json`
 - Modify: `package-lock.json`
 - Create: `server/pmc-mini-app/taskQueue.ts`
+- Modify: `server/pmc-mini-app/bookingDraft.ts`
 - Modify: `server/pmc-mini-app/middleware.ts`
 - Modify: `server/pmc-mini-app/runtime.ts`
 - Modify: `src/apps/pmc-mini-app/contracts.ts`
 - Test: `tests/pmc-mini-app/taskQueue.test.ts`
 - Test: `tests/pmc-mini-app/bookingApi.test.ts`
+- Test: `tests/pmc-mini-app/bookingDraft.test.ts`
 
 **Interfaces:**
 
@@ -468,6 +479,16 @@ export interface BookingQueuedResult {
   requestId: string
   status: 'QUEUED'
 }
+
+export function createGoogleBookingTaskQueue(input: {
+  projectId: string
+  location: 'asia-southeast1'
+  queueName: string
+  workerUrl: string
+  workerAudience: string
+  taskInvokerEmail: string
+  client?: CloudTasksClient
+}): BookingTaskQueuePort
 ```
 
 - [ ] **Step 1: Install the official client**
@@ -478,7 +499,7 @@ npm install @google-cloud/tasks
 
 - [ ] **Step 2: Write failing task-contract tests**
 
-Assert queue path, deterministic task name, POST method, exact worker URL, two-second delay, five-minute dispatch deadline, body containing only request/draft IDs, OIDC email/audience, and gRPC code 6 treated as idempotent success.
+Assert queue path, deterministic task name, POST method, exact worker URL, two-second delay, five-minute dispatch deadline, body containing only request/draft IDs, OIDC email/audience, and gRPC code 6 treated as idempotent success. Add a booking-draft test proving the payload hash includes the ordered staging object keys before Drive IDs exist.
 
 - [ ] **Step 3: Write failing confirmation API tests**
 
@@ -498,7 +519,7 @@ Cover feature flag off, owner-only pilot, task creation failure, `ALREADY_EXISTS
 - [ ] **Step 4: Verify RED**
 
 ```bash
-npx vitest run tests/pmc-mini-app/taskQueue.test.ts tests/pmc-mini-app/bookingApi.test.ts
+npx vitest run tests/pmc-mini-app/taskQueue.test.ts tests/pmc-mini-app/bookingApi.test.ts tests/pmc-mini-app/bookingDraft.test.ts
 ```
 
 - [ ] **Step 5: Implement enqueue-before-state ordering**
@@ -521,7 +542,7 @@ Task 8 handles the safe `READY_TO_CONFIRM` race.
 npx vitest run tests/pmc-mini-app/taskQueue.test.ts tests/pmc-mini-app/bookingApi.test.ts
 npx tsc -p tsconfig.server.json --noEmit
 npm run lint
-git add package.json package-lock.json server/pmc-mini-app/taskQueue.ts server/pmc-mini-app/middleware.ts server/pmc-mini-app/runtime.ts src/apps/pmc-mini-app/contracts.ts tests/pmc-mini-app/taskQueue.test.ts tests/pmc-mini-app/bookingApi.test.ts
+git add package.json package-lock.json server/pmc-mini-app/taskQueue.ts server/pmc-mini-app/bookingDraft.ts server/pmc-mini-app/middleware.ts server/pmc-mini-app/runtime.ts src/apps/pmc-mini-app/contracts.ts tests/pmc-mini-app/taskQueue.test.ts tests/pmc-mini-app/bookingApi.test.ts tests/pmc-mini-app/bookingDraft.test.ts
 git commit -m "feat: enqueue Mini App booking finalization"
 ```
 
@@ -616,6 +637,14 @@ export interface AsyncBookingWorker {
     state: 'CONFIRMED' | 'RETRYING' | 'NEEDS_REVIEW'
   }>
 }
+
+export function createAsyncBookingWorker(input: {
+  store: MiniAppStore & AsyncMiniAppStore
+  staging: EvidenceStagingPort
+  evidenceIngress: EvidenceIngressPort
+  bookingIngress: BookingIngressPort
+  now: () => Date
+}): AsyncBookingWorker
 ```
 
 - [ ] **Step 1: Write failing success-path test**
@@ -668,6 +697,8 @@ git commit -m "feat: finalize bookings in Cloud Tasks worker"
 - Test: `tests/pmc-mini-app/asyncWorker.test.ts`
 
 **Interfaces:**
+
+Extend `BookingDraftProjection` with `caseId`, `safeErrorCode`, `queuedAt`, and `lastProgressAt` so polling and resume render only server state.
 
 ```ts
 export interface MiniAppBookingIngressResult {
@@ -809,6 +840,9 @@ git commit -m "feat: acknowledge and resume async bookings"
 **Files:**
 - Create: `server/pmc-mini-app/asyncTelemetry.ts`
 - Create: `tests/pmc-mini-app/asyncTelemetry.test.ts`
+- Modify: `server/pmc-mini-app/middleware.ts`
+- Modify: `server/pmc-mini-app/runtime.ts`
+- Modify: `server/pmc-mini-app/asyncWorker.ts`
 - Create: `scripts/check-pmc-async-runtime.mjs`
 - Create: `tests/pmc-mini-app/asyncRuntimeCheck.test.ts`
 - Create: `docs/pmc-mini-app/async-booking-runbook.md`
@@ -862,6 +896,8 @@ npx vitest run tests/pmc-mini-app/asyncTelemetry.test.ts tests/pmc-mini-app/asyn
 
 The checker accepts `--project`, `--region`, `--service`, `--bucket`, `--queue`, and `--strict`; output booleans, counts, role names, and safe status names only.
 
+Wire telemetry into evidence staging, task enqueue, worker claim, Drive copy, booking ingress, retry, completion, and review transitions. Implement `--help` with exit 0 and no Google API calls.
+
 - [ ] **Step 5: Write gated runbook commands**
 
 Document but do not execute:
@@ -883,7 +919,7 @@ Include safe log queries for acknowledgement/background p50 and p95 latency, tas
 npx vitest run tests/pmc-mini-app/asyncTelemetry.test.ts tests/pmc-mini-app/asyncRuntimeCheck.test.ts
 node scripts/check-pmc-async-runtime.mjs --help
 git diff --check
-git add server/pmc-mini-app/asyncTelemetry.ts tests/pmc-mini-app/asyncTelemetry.test.ts scripts/check-pmc-async-runtime.mjs tests/pmc-mini-app/asyncRuntimeCheck.test.ts docs/pmc-mini-app/async-booking-runbook.md docs/pmc-mini-app/pilot-runbook.md
+git add server/pmc-mini-app/asyncTelemetry.ts server/pmc-mini-app/middleware.ts server/pmc-mini-app/runtime.ts server/pmc-mini-app/asyncWorker.ts tests/pmc-mini-app/asyncTelemetry.test.ts scripts/check-pmc-async-runtime.mjs tests/pmc-mini-app/asyncRuntimeCheck.test.ts docs/pmc-mini-app/async-booking-runbook.md docs/pmc-mini-app/pilot-runbook.md
 git commit -m "docs: add async booking operations gates"
 ```
 
