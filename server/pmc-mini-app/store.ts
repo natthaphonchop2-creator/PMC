@@ -704,7 +704,7 @@ const IDENTITY_BOUND_STATES = new Set<MiniAppRequestState>([
   'FAILED_RETRYABLE', 'CANCELLED', 'EXPIRED',
 ])
 const BOUND_DRAFT_MUTATION_KEYS = new Set<string>([
-  'state', 'payloadHash', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
+  'state', 'retentionState', 'payloadHash', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIds',
   'chatEvidenceFileIds', 'evidenceCount', 'paymentEvidenceObjectKeys', 'chatEvidenceObjectKeys', 'taskName', 'queuedAt',
   'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'confirmedAt', 'caseId', 'safeErrorCode',
@@ -751,10 +751,11 @@ function isExactFailedConfirmationCancellation(draft: MiniAppRequestRecord, patc
   const keys = Object.keys(patch)
   return draft.state === 'FAILED_RETRYABLE'
     && patch.state === 'CANCELLED'
+    && patch.retentionState === 'PENDING_APPROVAL'
     && typeof patch.updatedAt === 'string'
     && validIso(patch.updatedAt)
-    && keys.length === 2
-    && keys.every((key) => key === 'state' || key === 'updatedAt')
+    && keys.length === 3
+    && keys.every((key) => key === 'state' || key === 'retentionState' || key === 'updatedAt')
 }
 
 function validProcessingOwner(expectedAttempt: number, expectedVersion: number): boolean {

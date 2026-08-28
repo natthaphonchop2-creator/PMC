@@ -247,6 +247,13 @@ async function handleBookingDraftRoute(
     && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED')
   if (version !== draft.version && !retryingConfirmation) {
     if (
+      route.action === 'CANCEL' && version < draft.version && hasExactKeys(body, ['version'])
+      && draft.state === 'CANCELLED' && draft.retentionState === 'PENDING_APPROVAL'
+    ) {
+      respond(res, 200, draftProjection(draft))
+      return
+    }
+    if (
       route.action === 'PATCH' && version < draft.version && hasExactKeys(body, ['version', 'input'])
       && matchesSavedDraftInput(draft, body.input)
     ) {
@@ -291,9 +298,10 @@ async function handleBookingDraftRoute(
       return respond(res, 409, { error: 'INVALID_DRAFT_TRANSITION' })
     }
     try {
-      const cancelled = await deps.store.updateDraft(draft.draftId, draft.version, { state: 'CANCELLED', updatedAt: currentIso(deps) })
-      const retained = await deps.store.markRetentionPending(cancelled.draftId, cancelled.version, currentIso(deps))
-      respond(res, 200, draftProjection(retained))
+      const cancelled = await deps.store.updateDraft(draft.draftId, draft.version, {
+        state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: currentIso(deps),
+      })
+      respond(res, 200, draftProjection(cancelled))
     } catch (error) {
       respond(res, bookingErrorStatus(error), { error: safeBookingError(error) })
     }

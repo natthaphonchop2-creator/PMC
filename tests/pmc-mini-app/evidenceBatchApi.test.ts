@@ -123,9 +123,17 @@ describe('PMC Mini App evidence batch API', () => {
       '/api/mini-app/booking-drafts/draft-1/cancel',
       { version: uploaded.body.version },
     )
+    const replay = await jsonRequest(
+      createPmcMiniAppMiddleware(deps),
+      'POST',
+      '/api/mini-app/booking-drafts/draft-1/cancel',
+      { version: uploaded.body.version },
+    )
 
     expect(cancelled).toMatchObject({ status: 200, body: { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' } })
+    expect(replay).toEqual(cancelled)
     expect(deps.storeFixture.read().paymentEvidenceObjectKeys).toEqual([objectKey('PAYMENT', pngBytes(1))])
+    expect(deps.storeFixture.writeCount()).toBe(2)
     expect(deps.stagingFixture.deleteCount()).toBe(0)
   })
 })

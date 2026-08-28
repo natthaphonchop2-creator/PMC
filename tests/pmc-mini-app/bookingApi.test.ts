@@ -124,6 +124,35 @@ describe('PMC Mini App booking draft API', () => {
 
     expect(cancelled.body).toMatchObject({ state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' })
     expect(deps.storeFixture.read(draftId)?.paymentEvidenceFileIds).toEqual(['payment-1'])
+    expect(deps.storeFixture.writeCount()).toBe(1)
+  })
+
+  it('returns the current cancelled draft without writing when a stale cancellation is retried after response loss', async () => {
+    const deps = dependencies()
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+    const draftId = String(created.body.draftId)
+
+    const first = await jsonRequest(middleware, 'POST', `/api/mini-app/booking-drafts/${draftId}/cancel`, { version: 1 })
+    const replay = await jsonRequest(middleware, 'POST', `/api/mini-app/booking-drafts/${draftId}/cancel`, { version: 1 })
+
+    expect(replay).toEqual(first)
+    expect(replay).toMatchObject({ status: 200, body: { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2 } })
+    expect(deps.storeFixture.writeCount()).toBe(1)
+  })
+
+  it('cannot split cancellation when the retired retention-only write path is injected to fail', async () => {
+    const deps = dependencies()
+    deps.storeFixture.failRetentionOnlyWrite()
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+    const draftId = String(created.body.draftId)
+
+    const cancelled = await jsonRequest(middleware, 'POST', `/api/mini-app/booking-drafts/${draftId}/cancel`, { version: 1 })
+
+    expect(cancelled).toMatchObject({ status: 200, body: { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' } })
+    expect(deps.storeFixture.read(draftId)).toMatchObject({ state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' })
+    expect(deps.storeFixture.writeCount()).toBe(1)
   })
 
   it('requires JSON and rejects unknown metadata keys without mutating storage', async () => {
@@ -168,8 +197,12 @@ function dependencies(options: { ingressStatus?: 'CONFIRMED' | 'TENTATIVE' | 'AW
 
 class TestStore implements MiniAppStore {
   private readonly drafts = new Map<string, MiniAppRequestRecord>()
+  private writes = 0
+  private failRetentionOnly = false
 
   count(): number { return this.drafts.size }
+  writeCount(): number { return this.writes }
+  failRetentionOnlyWrite(): void { this.failRetentionOnly = true }
   read(draftId: string): MiniAppRequestRecord | null { return structuredClone(this.drafts.get(draftId) ?? null) }
   attachEvidence(draftId: string): void {
     const draft = this.drafts.get(draftId)!
@@ -195,8 +228,12 @@ class TestStore implements MiniAppStore {
     const draft = this.drafts.get(draftId)
     if (!draft) throw new Error('DRAFT_NOT_FOUND')
     if (draft.version !== expectedVersion) throw new Error('STALE_DRAFT_VERSION')
+    if (this.failRetentionOnly && Object.keys(patch).every((key) => key === 'retentionState' || key === 'updatedAt')) {
+      throw new Error('INJECTED_RETENTION_WRITE_FAILURE')
+    }
     const next = { ...draft, ...structuredClone(patch), version: draft.version + 1 }
     this.drafts.set(draftId, next)
+    this.writes += 1
     return structuredClone(next)
   }
   async markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string) {

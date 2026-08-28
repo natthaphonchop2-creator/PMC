@@ -338,30 +338,52 @@ describe('PMC Mini App Sheet store', () => {
     expect(await store.getDraft('draft-1')).toEqual(terminal)
   })
 
-  it('cancels a bound failed synchronous confirmation and then marks retention pending', async () => {
+  it('atomically cancels a bound failed confirmation with pending retention in one version increment', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
     await store.createDraft(validDraft())
     const claimed = await store.claimConfirmation('request-1', 'hash-1')
     if (!claimed.claimed) throw new Error('expected confirmation claim')
     const failed = await store.failConfirmation('request-1', 'BOOKING_RETRY', '2026-08-28T02:01:00.000Z')
+    const writesBeforeCancellation = sheets.updateCount()
 
     const cancelled = await store.updateDraft('draft-1', failed.version, {
-      state: 'CANCELLED', updatedAt: '2026-08-28T02:02:00.000Z',
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: '2026-08-28T02:02:00.000Z',
     })
-    const retained = await store.markRetentionPending('draft-1', cancelled.version, '2026-08-28T02:03:00.000Z')
 
     expect(cancelled).toMatchObject({
-      state: 'CANCELLED', payloadHash: 'hash-1', safeErrorCode: 'BOOKING_RETRY',
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', payloadHash: 'hash-1', safeErrorCode: 'BOOKING_RETRY',
       updatedAt: '2026-08-28T02:02:00.000Z', version: 4,
     })
-    expect(retained).toMatchObject({
-      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', payloadHash: 'hash-1',
-      updatedAt: '2026-08-28T02:03:00.000Z', version: 5,
-    })
+    expect(sheets.updateCount() - writesBeforeCancellation).toBe(1)
   })
 
-  it('rejects a failed-confirmation cancel patch that also changes customer identity', async () => {
+  it('does not persist a partial cancellation when the one atomic Sheet write fails', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft())
+    const claimed = await store.claimConfirmation('request-1', 'hash-1')
+    if (!claimed.claimed) throw new Error('expected confirmation claim')
+    const failed = await store.failConfirmation('request-1', 'BOOKING_RETRY', '2026-08-28T02:01:00.000Z')
+    sheets.failNextUpdate()
+
+    await expect(store.updateDraft('draft-1', failed.version, {
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: '2026-08-28T02:02:00.000Z',
+    })).rejects.toThrow('SHEETS_WRITE_FAILED')
+
+    expect(await store.getDraft('draft-1')).toEqual(failed)
+  })
+
+  it.each([
+    ['identity', { customerName: 'ลูกค้าอื่น' }],
+    ['evidence', { paymentEvidenceObjectKeys: ['drafts/draft-1/PAYMENT/other.jpg'] }],
+    ['payload', { payloadHash: 'other-hash' }],
+    ['task', { taskName: 'projects/p/locations/l/queues/q/tasks/t' }],
+    ['lease', { processingLeaseUntil: '2026-08-28T03:00:00.000Z' }],
+    ['attempt', { attemptCount: 2 }],
+    ['case', { caseId: 'PMC-202608-9999' }],
+    ['error', { safeErrorCode: 'OTHER_ERROR' }],
+  ] as const)('rejects an atomic failed-confirmation cancel that piggybacks %s fields', async (_label, extraPatch) => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
     await store.createDraft(validDraft())
@@ -370,13 +392,14 @@ describe('PMC Mini App Sheet store', () => {
     const failed = await store.failConfirmation('request-1', 'BOOKING_RETRY', '2026-08-28T02:01:00.000Z')
 
     await expect(store.updateDraft('draft-1', failed.version, {
-      state: 'CANCELLED', customerName: 'ลูกค้าอื่น', updatedAt: '2026-08-28T02:02:00.000Z',
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: '2026-08-28T02:02:00.000Z',
+      ...extraPatch,
     })).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
     expect(await store.getDraft('draft-1')).toEqual(failed)
   })
 
   it.each([
-    'PROCESSING', 'RETRYING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'EXPIRED',
+    'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED',
   ] as const)('keeps generic cancellation blocked from protected %s state', async (state) => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
@@ -384,7 +407,7 @@ describe('PMC Mini App Sheet store', () => {
     await store.createDraft(protectedDraft)
 
     await expect(store.updateDraft('draft-1', 3, {
-      state: 'CANCELLED', updatedAt: '2026-08-28T02:02:00.000Z',
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: '2026-08-28T02:02:00.000Z',
     })).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
     expect(await store.getDraft('draft-1')).toEqual(protectedDraft)
   })
@@ -589,8 +612,12 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
 
 class MemorySheets implements MiniAppSheetsPort {
   private readonly tabs = new Map<string, unknown[][]>()
+  private updates = 0
+  private failUpdate = false
 
   setTab(tab: string, rows: unknown[][]): void { this.tabs.set(tab, structuredClone(rows)) }
+  updateCount(): number { return this.updates }
+  failNextUpdate(): void { this.failUpdate = true }
 
   async batchGet(_spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
     return Object.fromEntries(ranges.map((range) => [range, structuredClone(this.tabs.get(tabName(range)) ?? [])]))
@@ -602,6 +629,11 @@ class MemorySheets implements MiniAppSheetsPort {
   }
 
   async update(_spreadsheetId: string, range: string, rows: unknown[][]): Promise<void> {
+    if (this.failUpdate) {
+      this.failUpdate = false
+      throw new Error('SHEETS_WRITE_FAILED')
+    }
+    this.updates += 1
     const tab = tabName(range)
     const rowNumber = Number(range.match(/!(?:[A-Z]+)(\d+)/)?.[1] ?? 2)
     const index = Math.max(0, rowNumber - 2)
