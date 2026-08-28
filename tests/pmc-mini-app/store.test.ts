@@ -338,6 +338,57 @@ describe('PMC Mini App Sheet store', () => {
     expect(await store.getDraft('draft-1')).toEqual(terminal)
   })
 
+  it('cancels a bound failed synchronous confirmation and then marks retention pending', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft())
+    const claimed = await store.claimConfirmation('request-1', 'hash-1')
+    if (!claimed.claimed) throw new Error('expected confirmation claim')
+    const failed = await store.failConfirmation('request-1', 'BOOKING_RETRY', '2026-08-28T02:01:00.000Z')
+
+    const cancelled = await store.updateDraft('draft-1', failed.version, {
+      state: 'CANCELLED', updatedAt: '2026-08-28T02:02:00.000Z',
+    })
+    const retained = await store.markRetentionPending('draft-1', cancelled.version, '2026-08-28T02:03:00.000Z')
+
+    expect(cancelled).toMatchObject({
+      state: 'CANCELLED', payloadHash: 'hash-1', safeErrorCode: 'BOOKING_RETRY',
+      updatedAt: '2026-08-28T02:02:00.000Z', version: 4,
+    })
+    expect(retained).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', payloadHash: 'hash-1',
+      updatedAt: '2026-08-28T02:03:00.000Z', version: 5,
+    })
+  })
+
+  it('rejects a failed-confirmation cancel patch that also changes customer identity', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft())
+    const claimed = await store.claimConfirmation('request-1', 'hash-1')
+    if (!claimed.claimed) throw new Error('expected confirmation claim')
+    const failed = await store.failConfirmation('request-1', 'BOOKING_RETRY', '2026-08-28T02:01:00.000Z')
+
+    await expect(store.updateDraft('draft-1', failed.version, {
+      state: 'CANCELLED', customerName: 'ลูกค้าอื่น', updatedAt: '2026-08-28T02:02:00.000Z',
+    })).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
+    expect(await store.getDraft('draft-1')).toEqual(failed)
+  })
+
+  it.each([
+    'PROCESSING', 'RETRYING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'EXPIRED',
+  ] as const)('keeps generic cancellation blocked from protected %s state', async (state) => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const protectedDraft = validDraft({ state, payloadHash: 'hash-1', version: 3 })
+    await store.createDraft(protectedDraft)
+
+    await expect(store.updateDraft('draft-1', 3, {
+      state: 'CANCELLED', updatedAt: '2026-08-28T02:02:00.000Z',
+    })).rejects.toThrow('BOUND_DRAFT_MUTATION_FORBIDDEN')
+    expect(await store.getDraft('draft-1')).toEqual(protectedDraft)
+  })
+
   it('updates processing projections only for the current attempt and version', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })

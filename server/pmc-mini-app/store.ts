@@ -255,7 +255,9 @@ export function createGoogleMiniAppStore(input: {
       const row = (await readRequestRows()).find(({ value }) => value.draftId === draftId)
       if (!row) throw new Error('DRAFT_NOT_FOUND')
       if (row.value.version !== expectedVersion) throw new Error('STALE_DRAFT_VERSION')
-      if (isDraftIdentityBound(row.value) && Object.keys(patch).some((key) => BOUND_DRAFT_MUTATION_KEYS.has(key))) {
+      if (isDraftIdentityBound(row.value)
+        && Object.keys(patch).some((key) => BOUND_DRAFT_MUTATION_KEYS.has(key))
+        && !isExactFailedConfirmationCancellation(row.value, patch)) {
         throw new Error('BOUND_DRAFT_MUTATION_FORBIDDEN')
       }
       const next = normalizeRequestRecord({ ...row.value, ...patch, version: row.value.version + 1 })
@@ -743,6 +745,16 @@ function safeTaskName(value: string): boolean { return /^[A-Za-z0-9._:/-]{1,512}
 
 function isDraftIdentityBound(draft: MiniAppRequestRecord): boolean {
   return draft.payloadHash !== null || IDENTITY_BOUND_STATES.has(draft.state)
+}
+
+function isExactFailedConfirmationCancellation(draft: MiniAppRequestRecord, patch: MiniAppDraftPatch): boolean {
+  const keys = Object.keys(patch)
+  return draft.state === 'FAILED_RETRYABLE'
+    && patch.state === 'CANCELLED'
+    && typeof patch.updatedAt === 'string'
+    && validIso(patch.updatedAt)
+    && keys.length === 2
+    && keys.every((key) => key === 'state' || key === 'updatedAt')
 }
 
 function validProcessingOwner(expectedAttempt: number, expectedVersion: number): boolean {
