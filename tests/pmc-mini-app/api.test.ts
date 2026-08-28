@@ -58,6 +58,20 @@ describe('PMC Mini App browser API', () => {
     }))
   })
 
+  it('loads the current server draft with bearer auth for stale-version recovery', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      draftId: 'draft-1', requestId: 'request-1', state: 'READY_TO_CONFIRM', retentionState: '', version: 10,
+      input: null, paymentEvidenceIds: ['payment-1'], chatEvidenceIds: ['chat-1'], confirmationStatus: null,
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await api.loadDraft('raw-id-token', 'draft-1')
+
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1', expect.objectContaining({
+      headers: { authorization: 'Bearer raw-id-token' },
+    }))
+  })
+
   it('keeps first-time linking PIN in the authenticated POST body only', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/enrollment-options')
       ? jsonResponse(200, { staff: [{ id: 'staff-1', name: 'มัส' }] })

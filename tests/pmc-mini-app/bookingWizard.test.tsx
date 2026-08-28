@@ -123,6 +123,30 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('รองรับเฉพาะรูป JPG หรือ PNG')
     expect(screen.getByRole('alert')).toHaveTextContent('จับภาพหน้าจอแล้วแนบใหม่')
   })
+
+  it('loads the saved server draft after a stale retry instead of showing a false failure', async () => {
+    const user = userEvent.setup()
+    const current: BookingDraftProjection = {
+      ...draft,
+      version: 9,
+      input: completeInput(),
+      paymentEvidenceIds: ['payment-1', 'payment-2', 'payment-3'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    const latest: BookingDraftProjection = { ...current, state: 'READY_TO_CONFIRM', version: 10 }
+    const app = {
+      ...adapter(),
+      load: vi.fn(async () => latest),
+    } as BookingWizardAdapter & { load(draftId: string): Promise<BookingDraftProjection> }
+    vi.mocked(app.save).mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+    renderWizard({ initialStep: 3, adapter: app, draft: current })
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(app.load).toHaveBeenCalledWith('draft-1')
+  })
 })
 
 function renderWizard(options: {
@@ -154,6 +178,7 @@ const draft: BookingDraftProjection = {
 
 function adapter(): BookingWizardAdapter {
   return {
+    load: vi.fn(async () => draft),
     upload: vi.fn(async () => draft),
     save: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),
     confirm: vi.fn(async () => ({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })),

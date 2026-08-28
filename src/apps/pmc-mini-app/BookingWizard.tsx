@@ -20,6 +20,7 @@ import type {
 } from './contracts'
 
 export interface BookingWizardAdapter {
+  load(draftId: string): Promise<BookingDraftProjection>
   upload(draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   save(draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(draftId: string, version: number): Promise<BookingConfirmationResult>
@@ -91,6 +92,7 @@ export function BookingWizard({
     if (state.step === 3) {
       setBusy(true)
       setFailure('')
+      const input = bookingInput(state)
       try {
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
@@ -105,10 +107,24 @@ export function BookingWizard({
           setDraft(current)
           replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, dispatch)
         }
-        current = await adapter.save(current.draftId, current.version, bookingInput(state))
+        current = await adapter.save(current.draftId, current.version, input)
         setDraft(current)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
       } catch (error) {
+        if (errorCode(error) === 'STALE_DRAFT_VERSION') {
+          try {
+            const latest = await adapter.load(draft.draftId)
+            if (latest.state === 'READY_TO_CONFIRM' && sameBookingInput(latest.input, input)) {
+              setDraft(latest)
+              replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, dispatch)
+              replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, dispatch)
+              dispatch({ type: 'GO_TO_STEP', step: 4 })
+              return
+            }
+          } catch {
+            // Fall through to the safe generic message below.
+          }
+        }
         setFailure(draftSaveFailureMessage(error))
       } finally {
         setBusy(false)
@@ -302,11 +318,24 @@ function statusLabel(status: BookingConfirmationResult['status']): string {
 }
 
 function draftSaveFailureMessage(error: unknown): string {
-  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  const code = errorCode(error)
   if (code === 'UNSUPPORTED_EVIDENCE') {
     return 'รูปหลักฐานบางรูปไม่รองรับ รองรับเฉพาะรูป JPG หรือ PNG กรุณาจับภาพหน้าจอแล้วแนบใหม่'
   }
   return 'บันทึกร่างไม่สำเร็จ กรุณาลองอีกครั้ง'
+}
+
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+}
+
+function sameBookingInput(left: BookingDraftInput | null, right: BookingDraftInput): boolean {
+  if (!left) return false
+  const keys: Array<keyof BookingDraftInput> = [
+    'requestId', 'aeName', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId', 'queueType',
+    'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
+  ]
+  return keys.every((key) => left[key] === right[key])
 }
 
 function replaceUploadedEvidence(

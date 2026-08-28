@@ -69,6 +69,26 @@ describe('PMC Mini App booking draft API', () => {
     expect(hidden.status).toBe(404)
   })
 
+  it('returns the saved draft when an Android client repeats the identical PATCH with a stale version', async () => {
+    const deps = dependencies()
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+    const draftId = String(created.body.draftId)
+    deps.storeFixture.attachEvidence(draftId)
+    const input = validInput({ requestId: created.body.requestId })
+    const saved = await jsonRequest(middleware, 'PATCH', `/api/mini-app/booking-drafts/${draftId}`, {
+      version: 1, input,
+    })
+
+    const repeated = await jsonRequest(middleware, 'PATCH', `/api/mini-app/booking-drafts/${draftId}`, {
+      version: 1, input,
+    })
+
+    expect(saved).toMatchObject({ status: 200, body: { state: 'READY_TO_CONFIRM', version: 2 } })
+    expect(repeated).toEqual(saved)
+    expect(deps.storeFixture.read(draftId)?.version).toBe(2)
+  })
+
   it('cancels a draft and marks its evidence for approval-bound retention', async () => {
     const deps = dependencies()
     const middleware = createPmcMiniAppMiddleware(deps)

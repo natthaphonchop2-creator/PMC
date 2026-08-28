@@ -100,6 +100,7 @@ function miniAppApi(): PmcMiniAppApi {
       draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
       paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
     })),
+    loadDraft: vi.fn(),
     upload: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
     loadReport: vi.fn(), refreshReport: vi.fn(),
   }

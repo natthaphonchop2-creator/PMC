@@ -225,7 +225,17 @@ async function handleBookingDraftRoute(
   const draft = await ownedDraft(route.draftId, authenticated.staffId, deps, res)
   if (!draft) return
   const version = body.version
-  if (!Number.isSafeInteger(version) || version !== draft.version) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+  if (typeof version !== 'number' || !Number.isSafeInteger(version)) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+  if (version !== draft.version) {
+    if (
+      route.action === 'PATCH' && version < draft.version && hasExactKeys(body, ['version', 'input'])
+      && matchesSavedDraftInput(draft, body.input)
+    ) {
+      respond(res, 200, draftProjection(draft))
+      return
+    }
+    return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+  }
 
   if (route.action === 'PATCH') {
     if (!hasExactKeys(body, ['version', 'input'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
@@ -377,6 +387,27 @@ function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
   return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+function matchesSavedDraftInput(draft: MiniAppRequestRecord, candidate: unknown): boolean {
+  if (draft.state !== 'READY_TO_CONFIRM' || !candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false
+  const input = candidate as Record<string, unknown>
+  const expected: Record<string, unknown> = {
+    requestId: draft.requestId,
+    aeName: draft.aeName,
+    customerName: draft.customerName,
+    facebookName: draft.facebookName,
+    phone: draft.phoneNormalized,
+    doctorId: draft.doctorId,
+    serviceId: draft.serviceId,
+    queueType: draft.queueType,
+    appointmentDate: draft.appointmentDate,
+    appointmentTime: draft.appointmentTime,
+    depositAmount: draft.depositAmount,
+    channelId: draft.channelId,
+  }
+  return hasExactKeys(input, Object.keys(expected))
+    && Object.entries(expected).every(([key, value]) => input[key] === value)
 }
 
 function currentIso(deps: PmcMiniAppMiddlewareDependencies): string {

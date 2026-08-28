@@ -77,6 +77,7 @@ export function PmcMiniApp({
   }, [api, initialSession])
 
   const bookingAdapter = useMemo<BookingWizardAdapter>(() => ({
+    load: (draftId) => api.loadDraft(idToken, draftId),
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
     save: (draftId, version, input) => api.save(idToken, draftId, version, input),
     confirm: (draftId, version) => api.confirm(idToken, draftId, version),

@@ -43,6 +43,10 @@ export function createPreviewMiniAppApi(options: { staffAllowed?: boolean } = {}
       }
       return structuredClone(current)
     },
+    async loadDraft(_token, draftId) {
+      requireDraft(current, draftId)
+      return structuredClone(current!)
+    },
     async upload(_token, draftId, kind, files) {
       requireDraft(current, draftId)
       const ids = files.map((file, index) => `preview-${kind.toLowerCase()}-${index + 1}-${file.name}`)

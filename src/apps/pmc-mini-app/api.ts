@@ -23,6 +23,7 @@ export interface MiniAppBrowserApi {
   enroll(idToken: string, staffId: string, pin: string): Promise<MiniAppSession>
   loadConfig(idToken: string): Promise<MiniAppConfig>
   createDraft(idToken: string): Promise<BookingDraftProjection>
+  loadDraft(idToken: string, draftId: string): Promise<BookingDraftProjection>
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   save(idToken: string, draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(idToken: string, draftId: string, version: number): Promise<BookingConfirmationResult>
@@ -83,6 +84,9 @@ export function createMiniAppApi(options: {
     },
     createDraft(idToken) {
       return requestJson(request, '/api/mini-app/booking-drafts', authenticatedJson(idToken, 'POST', {}))
+    },
+    loadDraft(idToken, draftId) {
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticated(idToken))
     },
     upload(idToken, draftId, kind, files) {
       const body = new FormData()
