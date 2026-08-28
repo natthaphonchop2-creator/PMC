@@ -59,14 +59,17 @@ export function migrateConfigStaffProfileColumn(
 ): void {
   const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
   if (!sheet || sheet.getLastColumn() < 1) return
-  const headers = sheet
-    .getRange(1, 1, 1, sheet.getLastColumn())
-    .getValues()[0]
-    .map(String)
-  const plan = staffProfileMigrationPlan(headers)
-  if (plan.kind === 'NONE') return
-  sheet.insertColumnsAfter(plan.afterColumn, 1)
-  sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const headers = sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .getValues()[0]
+      .map(String)
+    const plan = staffProfileMigrationPlan(headers)
+    if (plan.kind === 'NONE') return
+    sheet.insertColumnsAfter(plan.afterColumn, 1)
+    sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
+  }
+  throw new Error('CONFIG_STAFF migration did not converge')
 }
 
 export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet): SheetStore {

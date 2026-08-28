@@ -11,4 +11,5 @@ export interface AuthenticatedMiniAppContext {
   staffId: string
   displayName: string
   lineUserId: string
+  canManageStock: boolean
 }

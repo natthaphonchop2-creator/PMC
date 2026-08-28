@@ -98,6 +98,7 @@ function createConfigPort(
       lineUserId: String(row.lineUserId),
       canCloseBooking: isActive(row.canCloseBooking),
       canBeAe: isActive(row.canBeAe),
+      canManageStock: isActive(row.canManageStock),
       active: isActive(row.active),
       profileImageUrl: String(row.profileImageUrl ?? '').trim(),
     }))

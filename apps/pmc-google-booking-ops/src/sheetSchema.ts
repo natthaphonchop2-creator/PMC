@@ -71,6 +71,7 @@ export const STAFF_CONFIG_COLUMNS = [
   'canBeAe',
   'active',
   'profileImageUrl',
+  'canManageStock',
 ] as const
 
 export const SHEET_SCHEMAS: Record<string, readonly string[]> = {

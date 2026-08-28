@@ -19,12 +19,31 @@ export const JERA_SYNC_AUDIT_HEADERS = [
   'recordCount', 'safeErrorCode', 'correlationId',
 ] as const
 
+export const STOCK_PRODUCT_HEADERS = [
+  'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',
+  'createdAt', 'createdByStaffId', 'updatedAt', 'updatedByStaffId', 'version',
+] as const
+
+export const STOCK_LEDGER_HEADERS = [
+  'transactionId', 'documentId', 'requestId', 'lineNumber', 'productId', 'transactionType',
+  'quantityDeltaMilli', 'balanceBeforeMilli', 'balanceAfterMilli', 'actorStaffId', 'actorDisplayName',
+  'reason', 'idempotencyKey', 'createdAt',
+] as const
+
+export const STOCK_AUDIT_HEADERS = [
+  'eventId', 'requestId', 'actorStaffId', 'action', 'status', 'safeErrorCode',
+  'targetProductIdsJson', 'correlationId', 'createdAt',
+] as const
+
 export const MANAGED_TAB_HEADERS = {
   MINI_APP_REQUESTS: MINI_APP_REQUEST_HEADERS,
   MINI_APP_LINK_ATTEMPTS: MINI_APP_LINK_ATTEMPT_HEADERS,
   JERA_API_CACHE: JERA_API_CACHE_HEADERS,
   JERA_SYNC_STATE: JERA_SYNC_STATE_HEADERS,
   JERA_SYNC_AUDIT: JERA_SYNC_AUDIT_HEADERS,
+  STOCK_PRODUCTS: STOCK_PRODUCT_HEADERS,
+  STOCK_LEDGER: STOCK_LEDGER_HEADERS,
+  STOCK_AUDIT: STOCK_AUDIT_HEADERS,
 } as const
 
 const ASYNC_REQUEST_HEADERS = [

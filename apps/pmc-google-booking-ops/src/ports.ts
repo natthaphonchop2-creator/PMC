@@ -16,6 +16,7 @@ export interface StaffConfig {
   lineUserId: string
   canCloseBooking: boolean
   canBeAe: boolean
+  canManageStock: boolean
   active: boolean
   profileImageUrl?: string
 }

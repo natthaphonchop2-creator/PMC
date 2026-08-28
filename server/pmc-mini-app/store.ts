@@ -65,6 +65,7 @@ export interface MiniAppStaffRecord {
   lineUserId: string
   canCloseBooking: boolean
   canBeAe: boolean
+  canManageStock: boolean
   active: true
   profileImageUrl: string | null
 }
@@ -185,7 +186,7 @@ export const MINI_APP_LINK_ATTEMPT_HEADERS = [
 
 const REQUEST_TAB = 'MINI_APP_REQUESTS'
 const REQUEST_RANGE = `'${REQUEST_TAB}'!A2:${columnName(MINI_APP_REQUEST_HEADERS.length)}`
-const STAFF_RANGE = "'CONFIG_STAFF'!A2:H"
+const STAFF_RANGE = "'CONFIG_STAFF'!A2:I"
 const LINK_ATTEMPT_TAB = 'MINI_APP_LINK_ATTEMPTS'
 const LINK_ATTEMPT_RANGE = `'${LINK_ATTEMPT_TAB}'!A2:${columnName(MINI_APP_LINK_ATTEMPT_HEADERS.length)}`
 const DOCTORS_RANGE = "'CONFIG_DOCTORS'!A2:E"
@@ -321,9 +322,9 @@ export function createGoogleMiniAppStore(input: {
         if (!target) throw new Error('ENROLLMENT_STAFF_NOT_AVAILABLE')
         if (target.staff.lineUserId) throw new Error('STAFF_ALREADY_LINKED')
         const nextRow = [...target.row]
-        while (nextRow.length < 8) nextRow.push('')
+        while (nextRow.length < 9) nextRow.push('')
         nextRow[3] = lineUserId
-        await sheets.update(spreadsheetId, `'CONFIG_STAFF'!A${target.rowNumber}:H${target.rowNumber}`, [nextRow.slice(0, 8)])
+        await sheets.update(spreadsheetId, `'CONFIG_STAFF'!A${target.rowNumber}:I${target.rowNumber}`, [nextRow.slice(0, 9)])
         const linked = staffFromRow(nextRow)
         if (!linked) throw new Error('ENROLLMENT_STAFF_UPDATE_FAILED')
         return linked
@@ -663,12 +664,12 @@ function staffFromRow(row: unknown[]): MiniAppStaffRecord | null {
 }
 
 function staffCandidateFromRow(row: unknown[]): MiniAppStaffRecord | null {
-  const [id, name, email, lineUserId, canCloseBooking, canBeAe, active, profileImageUrl] = row
+  const [id, name, email, lineUserId, canCloseBooking, canBeAe, active, profileImageUrl, canManageStock] = row
   const normalizedLineUserId = text(lineUserId)
   if (!safeId(text(id)) || !text(name) || (normalizedLineUserId && !safeLineUserId(normalizedLineUserId)) || !booleanValue(active)) return null
   return {
     id: text(id), name: text(name), email: text(email), lineUserId: normalizedLineUserId,
-    canCloseBooking: booleanValue(canCloseBooking), canBeAe: booleanValue(canBeAe), active: true,
+    canCloseBooking: booleanValue(canCloseBooking), canBeAe: booleanValue(canBeAe), canManageStock: booleanValue(canManageStock), active: true,
     profileImageUrl: nullableText(profileImageUrl),
   }
 }

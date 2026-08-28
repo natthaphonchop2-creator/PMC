@@ -170,6 +170,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : null,
@@ -182,6 +183,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : null,
@@ -195,6 +197,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : name === 'เอม'
@@ -205,6 +208,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
                 lineUserId: '',
                 canCloseBooking: false,
                 canBeAe: true,
+                canManageStock: false,
                 active: true,
               }
             : null,
@@ -217,6 +221,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               lineUserId: 'admin-user-1',
               canCloseBooking: true,
               canBeAe: true,
+              canManageStock: false,
               active: true,
             }
           : id === 'staff-ae'
@@ -227,6 +232,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
                 lineUserId: '',
                 canCloseBooking: false,
                 canBeAe: true,
+                canManageStock: false,
                 active: true,
               }
             : null,
@@ -238,6 +244,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: 'admin-user-1',
           canCloseBooking: true,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
         {
@@ -247,6 +254,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: '',
           canCloseBooking: false,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
       ],
@@ -258,6 +266,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: 'admin-user-1',
           canCloseBooking: true,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
         {
@@ -267,6 +276,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           lineUserId: '',
           canCloseBooking: false,
           canBeAe: true,
+          canManageStock: false,
           active: true,
         },
       ],

@@ -26,12 +26,21 @@ describe('booking staff schema migration', () => {
 })
 
 describe('staff profile schema migration', () => {
-  it('appends profileImageUrl after the existing staff columns', () => {
-    const legacy = STAFF_CONFIG_COLUMNS.filter((column) => column !== 'profileImageUrl')
+  it('appends profileImageUrl after the original seven staff columns', () => {
+    const legacy = STAFF_CONFIG_COLUMNS.filter((column) => !['profileImageUrl', 'canManageStock'].includes(column))
     expect(staffProfileMigrationPlan([...legacy])).toEqual({
       kind: 'APPEND_PROFILE_IMAGE_URL',
       afterColumn: 7,
       header: 'profileImageUrl',
+    })
+  })
+
+  it('appends canManageStock after a legacy eight-column CONFIG_STAFF header', () => {
+    const legacy = STAFF_CONFIG_COLUMNS.filter((column) => column !== 'canManageStock')
+    expect(staffProfileMigrationPlan([...legacy])).toEqual({
+      kind: 'APPEND_CAN_MANAGE_STOCK',
+      afterColumn: 8,
+      header: 'canManageStock',
     })
   })
 

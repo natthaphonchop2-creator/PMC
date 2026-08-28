@@ -559,7 +559,7 @@ async function authenticate(
       respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
       return null
     }
-    return { staffId: staff.id, displayName: staff.name, lineUserId }
+    return { staffId: staff.id, displayName: staff.name, lineUserId, canManageStock: staff.canManageStock }
   } catch {
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return null

@@ -325,6 +325,7 @@ describe('booking Form workflow', () => {
       lineUserId: '',
       canCloseBooking: true,
       canBeAe: true,
+      canManageStock: false,
       active: true,
     })
 
