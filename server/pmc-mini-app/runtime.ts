@@ -9,6 +9,7 @@ import { createJeraRuntime } from '../jera/runtime.js'
 import { createEnrollmentService } from './enrollment.js'
 import { createGoogleEvidenceStagingPort } from './stagingStore.js'
 import { createGoogleBookingTaskQueue } from './taskQueue.js'
+import { createWorkerIdentityVerifier } from './workerAuth.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -63,6 +64,10 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
         workerUrl: config.asyncBooking.workerUrl,
         workerAudience: config.asyncBooking.workerAudience,
         taskInvokerEmail: config.asyncBooking.taskInvokerEmail,
+      }),
+      workerIdentity: createWorkerIdentityVerifier({
+        audience: config.asyncBooking.workerAudience,
+        allowedEmail: config.asyncBooking.taskInvokerEmail,
       }),
     } : {}),
     ...(enrollment ? { enrollment } : {}),

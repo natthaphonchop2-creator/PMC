@@ -13,6 +13,18 @@ import type { AsyncMiniAppStore } from './store.js'
 import type { BookingTaskQueuePort } from './taskQueue.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
+import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerAuth.js'
+
+const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
+
+export interface AsyncBookingWorkerEntrypoint {
+  finalize(input: { requestId: string; draftId: string; attempt: number }): Promise<{
+    requestId: string
+    caseId: string | null
+    state: 'CONFIRMED' | 'RETRYING' | 'NEEDS_REVIEW'
+  }>
+}
 
 export interface PmcMiniAppMiddlewareDependencies {
   config: PmcMiniAppServerConfig
@@ -21,6 +33,8 @@ export interface PmcMiniAppMiddlewareDependencies {
   drive?: MiniAppDrivePort
   evidenceStaging?: EvidenceStagingPort
   taskQueue?: BookingTaskQueuePort
+  workerIdentity?: WorkerIdentityVerifier
+  asyncWorker?: AsyncBookingWorkerEntrypoint
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -49,6 +63,14 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     }
 
     const pathname = url.pathname
+    if (pathname === ASYNC_WORKER_PATH) {
+      if (url.search) {
+        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+        return
+      }
+      await handleAsyncWorkerRoute(req, res, deps)
+      return
+    }
     if (pathname === '/internal/mini-app/jera-sync') {
       if (!deps.jera) {
         respond(res, 503, { error: 'JERA_SCHEDULER_UNAVAILABLE' })
@@ -182,6 +204,129 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     }
   }
+}
+
+async function handleAsyncWorkerRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+    return
+  }
+  if (!deps.config.asyncBooking) {
+    respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+    return
+  }
+  if (!deps.workerIdentity) {
+    respond(res, 503, { error: 'ASYNC_WORKER_UNAVAILABLE' })
+    return
+  }
+
+  const token = extractWorkerBearerToken(req.headers.authorization)
+  if (!token) {
+    respond(res, 401, { error: 'ASYNC_WORKER_UNAUTHORIZED' })
+    return
+  }
+  try {
+    await deps.workerIdentity.verify(token)
+  } catch {
+    respond(res, 401, { error: 'ASYNC_WORKER_UNAUTHORIZED' })
+    return
+  }
+
+  if (!deps.asyncWorker) {
+    respond(res, 503, { error: 'ASYNC_WORKER_UNAVAILABLE' })
+    return
+  }
+  const retryCount = taskRetryCount(req)
+  if (retryCount === null) {
+    respond(res, 400, { error: 'ASYNC_WORKER_INVALID_RETRY_COUNT' })
+    return
+  }
+  const body = await readWorkerJson(req, res)
+  if (!body) return
+  if (!hasExactKeys(body, ['requestId', 'draftId'])
+    || typeof body.requestId !== 'string'
+    || typeof body.draftId !== 'string'
+    || !safeWorkerId(body.requestId)
+    || !safeWorkerId(body.draftId)) {
+    respond(res, 400, { error: 'ASYNC_WORKER_INVALID_BODY' })
+    return
+  }
+
+  try {
+    const result = await deps.asyncWorker.finalize({
+      requestId: body.requestId,
+      draftId: body.draftId,
+      attempt: retryCount + 1,
+    })
+    respond(res, 200, { ...result })
+  } catch {
+    respond(res, 503, { error: 'ASYNC_WORKER_FAILED' })
+  }
+}
+
+function taskRetryCount(req: IncomingMessage): number | null {
+  const values: string[] = []
+  for (let index = 0; index < req.rawHeaders.length; index += 2) {
+    if (req.rawHeaders[index]?.toLowerCase() === 'x-cloudtasks-taskretrycount') {
+      values.push(req.rawHeaders[index + 1] ?? '')
+    }
+  }
+  if (values.length === 0) {
+    const normalized = req.headers['x-cloudtasks-taskretrycount']
+    if (typeof normalized === 'string') values.push(normalized)
+    else if (Array.isArray(normalized)) values.push(...normalized)
+  }
+  if (values.length !== 1 || !/^[0-7]$/.test(values[0]!)) return null
+  return Number(values[0])
+}
+
+async function readWorkerJson(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
+  const contentType = req.headers['content-type']
+  if (typeof contentType !== 'string'
+    || contentType.includes(',')
+    || contentType.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+    respond(res, 415, { error: 'ASYNC_WORKER_JSON_REQUIRED' })
+    return null
+  }
+  const contentLength = req.headers['content-length']
+  if (contentLength !== undefined) {
+    if (typeof contentLength !== 'string' || !/^(?:0|[1-9]\d*)$/.test(contentLength)) {
+      respond(res, 400, { error: 'ASYNC_WORKER_INVALID_BODY' })
+      return null
+    }
+    if (Number(contentLength) > ASYNC_WORKER_MAX_BODY_BYTES) {
+      respond(res, 413, { error: 'ASYNC_WORKER_PAYLOAD_TOO_LARGE' })
+      return null
+    }
+  }
+
+  const chunks: Buffer[] = []
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      const bytes = Buffer.from(chunk)
+      size += bytes.length
+      if (size > ASYNC_WORKER_MAX_BODY_BYTES) {
+        respond(res, 413, { error: 'ASYNC_WORKER_PAYLOAD_TOO_LARGE' })
+        return null
+      }
+      chunks.push(bytes)
+    }
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')
+    return parsed as Record<string, unknown>
+  } catch {
+    respond(res, 400, { error: 'ASYNC_WORKER_INVALID_JSON' })
+    return null
+  }
+}
+
+function safeWorkerId(value: string): boolean {
+  return /^[A-Za-z0-9._:-]{1,124}$/.test(value)
 }
 
 type BookingDraftRoute =
