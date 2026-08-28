@@ -98,6 +98,26 @@ describe('PMC Mini App booking draft validation', () => {
     expect(bookingPayloadHash(reordered)).not.toBe(bookingPayloadHash(first))
   })
 
+  it('binds ordered staging object keys before any Drive file IDs exist', () => {
+    const paymentKeys = [stagingKey('PAYMENT', 'a'), stagingKey('PAYMENT', 'b')]
+    const chatKeys = [stagingKey('CHAT', 'c'), stagingKey('CHAT', 'd')]
+    const draft = parseBookingDraft(validInput(), context({
+      asyncEvidence: true,
+      paymentEvidenceFileIds: [],
+      chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: paymentKeys,
+      chatEvidenceObjectKeys: chatKeys,
+    }))
+    const reordered = {
+      ...draft,
+      paymentEvidenceObjectKeys: [...draft.paymentEvidenceObjectKeys].reverse(),
+    }
+
+    expect(draft.paymentEvidenceFileIds).toEqual([])
+    expect(draft.chatEvidenceFileIds).toEqual([])
+    expect(bookingPayloadHash(reordered)).not.toBe(bookingPayloadHash(draft))
+  })
+
   it('allows only explicit state transitions and marks terminal evidence for retention review', () => {
     const draft = parseBookingDraft(validInput(), context())
     const confirming = transitionDraft(draft, { type: 'SET_STATE', state: 'CONFIRMING', updatedAt: '2026-08-27T10:01:00.000Z' })

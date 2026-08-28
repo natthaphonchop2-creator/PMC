@@ -2,10 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
+import type { PmcAsyncBookingConfig } from '../../server/pmc-mini-app/asyncConfig'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { BookingIngressClientError } from '../../server/pmc-mini-app/bookingIngressClient'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
+import type { BookingTaskQueuePort } from '../../server/pmc-mini-app/taskQueue'
 import type {
+  AsyncMiniAppStore,
   MiniAppBookingConfigProjection,
   MiniAppDraftPatch,
   MiniAppRequestRecord,
@@ -167,9 +170,76 @@ describe('PMC Mini App booking draft API', () => {
     expect(unknownKey).toEqual({ status: 400, body: { error: 'UNKNOWN_BOOKING_FIELD' } })
     expect(deps.storeFixture.count()).toBe(0)
   })
+
+  it('returns 202 after enqueue and Sheet state without calling Apps Script inline for an owner pilot', async () => {
+    const events: string[] = []
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])), events })
+    const response = await createReadyDraftAndConfirm(deps)
+
+    expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(events).toEqual(['enqueue', 'queueDraft'])
+    expect(deps.taskQueue.enqueue).toHaveBeenCalledWith({
+      requestId: 'request-1', draftId: 'draft-1', scheduleAt: new Date('2026-08-27T10:00:02.000Z'),
+    })
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'QUEUED', taskName: 'task/request-1' })
+  })
+
+  it('keeps synchronous confirmation unchanged when async is off or the staff member is not an owner', async () => {
+    const disabled = dependencies()
+    const nonOwner = dependencies({ asyncBooking: asyncConfig(new Set(['staff-owner'])) })
+
+    expect(await createReadyDraftAndConfirm(disabled)).toMatchObject({ status: 200, body: { caseId: 'PMC-202608-0001' } })
+    expect(await createReadyDraftAndConfirm(nonOwner)).toMatchObject({ status: 200, body: { caseId: 'PMC-202608-0001' } })
+    expect(disabled.taskQueue.enqueue).not.toHaveBeenCalled()
+    expect(nonOwner.taskQueue.enqueue).not.toHaveBeenCalled()
+    expect(disabled.ingress.send).toHaveBeenCalledOnce()
+    expect(nonOwner.ingress.send).toHaveBeenCalledOnce()
+  })
+
+  it('fails closed without a Sheet write or provider details when task creation fails', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    deps.taskQueue.enqueue.mockRejectedValueOnce(new Error('provider secret body'))
+
+    const response = await createReadyDraftAndConfirm(deps)
+
+    expect(response).toEqual({ status: 503, body: { error: 'BOOKING_TASK_QUEUE_FAILED' } })
+    expect(deps.storeFixture.queueWriteCount()).toBe(0)
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'READY_TO_CONFIRM', payloadHash: null, taskName: null })
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+  })
+
+  it('continues the Sheet write when deterministic task creation reports ALREADY_EXISTS', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    deps.taskQueue.enqueue.mockResolvedValueOnce({ taskName: 'task/request-1', alreadyExists: true })
+
+    const response = await createReadyDraftAndConfirm(deps)
+
+    expect(response).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(deps.storeFixture.queueWriteCount()).toBe(1)
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+  })
+
+  it('retries an ALREADY_EXISTS task and reconciles a Sheet update lost after task creation', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    deps.storeFixture.failNextQueueWrite()
+    const first = await createReadyDraftAndConfirm(deps)
+    deps.taskQueue.enqueue.mockResolvedValueOnce({ taskName: 'task/request-1', alreadyExists: true })
+    const retry = await confirmReadyDraft(deps)
+
+    expect(first).toEqual({ status: 503, body: { error: 'MINI_APP_STORAGE_UNAVAILABLE' } })
+    expect(retry).toEqual({ status: 202, body: { requestId: 'request-1', status: 'QUEUED' } })
+    expect(deps.taskQueue.enqueue).toHaveBeenCalledTimes(2)
+    expect(deps.storeFixture.queueWriteCount()).toBe(1)
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+  })
 })
 
-function dependencies(options: { ingressStatus?: 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT' } = {}) {
+function dependencies(options: {
+  ingressStatus?: 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT'
+  asyncBooking?: PmcAsyncBookingConfig | null
+  events?: string[]
+} = {}) {
   const storeFixture = new TestStore()
   const identity: LineIdentityPort = {
     async verify(token) {
@@ -181,14 +251,22 @@ function dependencies(options: { ingressStatus?: 'CONFIRMED' | 'TENTATIVE' | 'AW
   const ingress = {
     send: vi.fn(async () => ({ caseId: 'PMC-202608-0001', status: options.ingressStatus ?? 'CONFIRMED' })),
   }
+  const taskQueue: { enqueue: ReturnType<typeof vi.fn<BookingTaskQueuePort['enqueue']>> } = {
+    enqueue: vi.fn(async () => {
+      options.events?.push('enqueue')
+      return { taskName: 'task/request-1', alreadyExists: false }
+    }),
+  }
   const config: PmcMiniAppServerConfig = {
     enabled: true, miniAppId: '2001234567-mini-app', lineChannelId: '2001234567', spreadsheetId: 'sheet-1',
     intakeFolderId: 'folder-1', bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'ingress-secret',
-    signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10, asyncBooking: null,
+    signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
+    asyncBooking: options.asyncBooking ?? null,
   }
+  storeFixture.onQueueWrite(() => options.events?.push('queueDraft'))
   return {
-    config, identity, store: storeFixture as MiniAppStore, ingress,
+    config, identity, store: storeFixture as MiniAppStore & AsyncMiniAppStore, ingress, taskQueue,
     now: () => new Date('2026-08-27T10:00:00.000Z'),
     requestId: () => 'request-1', draftId: () => 'draft-1',
     storeFixture,
@@ -199,14 +277,29 @@ class TestStore implements MiniAppStore {
   private readonly drafts = new Map<string, MiniAppRequestRecord>()
   private writes = 0
   private failRetentionOnly = false
+  private failQueue = false
+  private queueWrites = 0
+  private queueWriteHook: () => void = () => undefined
 
   count(): number { return this.drafts.size }
   writeCount(): number { return this.writes }
+  queueWriteCount(): number { return this.queueWrites }
   failRetentionOnlyWrite(): void { this.failRetentionOnly = true }
+  failNextQueueWrite(): void { this.failQueue = true }
+  onQueueWrite(hook: () => void): void { this.queueWriteHook = hook }
   read(draftId: string): MiniAppRequestRecord | null { return structuredClone(this.drafts.get(draftId) ?? null) }
   attachEvidence(draftId: string): void {
     const draft = this.drafts.get(draftId)!
     this.drafts.set(draftId, { ...draft, paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'], evidenceCount: 2 })
+  }
+  attachStagedEvidence(draftId: string): void {
+    const draft = this.drafts.get(draftId)!
+    this.drafts.set(draftId, {
+      ...draft,
+      paymentEvidenceObjectKeys: [`drafts/${draftId}/PAYMENT/${'a'.repeat(64)}.png`],
+      chatEvidenceObjectKeys: [`drafts/${draftId}/CHAT/${'b'.repeat(64)}.png`],
+      evidenceCount: 2,
+    })
   }
   async getActiveStaffByLineUserId(lineUserId: string) {
     return {
@@ -239,6 +332,24 @@ class TestStore implements MiniAppStore {
   async markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string) {
     return this.updateDraft(draftId, expectedVersion, { retentionState: 'PENDING_APPROVAL', updatedAt })
   }
+  async queueDraft(requestId: string, payloadHash: string, taskName: string, queuedAt: string) {
+    this.queueWriteHook()
+    if (this.failQueue) {
+      this.failQueue = false
+      throw new Error('INJECTED_QUEUE_WRITE_FAILURE')
+    }
+    const draft = [...this.drafts.values()].find((candidate) => candidate.requestId === requestId)
+    if (!draft) throw new Error('DRAFT_NOT_FOUND')
+    if (draft.payloadHash && draft.payloadHash !== payloadHash) throw new Error('PAYLOAD_HASH_CONFLICT')
+    if (draft.taskName && draft.taskName !== taskName) throw new Error('TASK_NAME_CONFLICT')
+    if (draft.state === 'QUEUED') return structuredClone(draft)
+    const next = {
+      ...draft, state: 'QUEUED' as const, payloadHash, taskName, queuedAt, updatedAt: queuedAt, version: draft.version + 1,
+    }
+    this.drafts.set(next.draftId, next)
+    this.queueWrites += 1
+    return structuredClone(next)
+  }
   async claimConfirmation(requestId: string, payloadHash: string) {
     const draft = [...this.drafts.values()].find((candidate) => candidate.requestId === requestId)
     if (!draft) throw new Error('DRAFT_NOT_FOUND')
@@ -260,6 +371,32 @@ class TestStore implements MiniAppStore {
     this.drafts.set(next.draftId, next)
     return structuredClone(next)
   }
+}
+
+function asyncConfig(ownerStaffIds: ReadonlySet<string>): PmcAsyncBookingConfig {
+  return {
+    enabled: true, projectId: 'pmc-project', location: 'asia-southeast1', bucketName: 'pmc-booking-staging',
+    queueName: 'pmc-booking-finalize', workerUrl: 'https://pmc-worker.example.com/internal/mini-app/booking-worker',
+    workerAudience: 'https://pmc-worker.example.com', taskInvokerEmail: 'worker@pmc-project.iam.gserviceaccount.com',
+    ownerStaffIds, maxBatchBytes: 25_000_000,
+  }
+}
+
+async function createReadyDraftAndConfirm(deps: ReturnType<typeof dependencies>) {
+  const middleware = createPmcMiniAppMiddleware(deps)
+  const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+  if (deps.config.asyncBooking?.ownerStaffIds.has('staff-1')) deps.storeFixture.attachStagedEvidence('draft-1')
+  else deps.storeFixture.attachEvidence('draft-1')
+  const patched = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+    version: 1, input: validInput({ requestId: created.body.requestId }),
+  })
+  return jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', { version: patched.body.version })
+}
+
+async function confirmReadyDraft(deps: ReturnType<typeof dependencies>) {
+  return jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+    version: deps.storeFixture.read('draft-1')!.version,
+  })
 }
 
 function validInput(patch: Record<string, unknown> = {}) {

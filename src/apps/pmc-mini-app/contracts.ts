@@ -39,8 +39,13 @@ export type BookingDraftState =
   | 'DRAFT'
   | 'UPLOADING'
   | 'READY_TO_CONFIRM'
+  | 'QUEUED'
+  | 'PROCESSING'
+  | 'RETRYING'
   | 'CONFIRMING'
   | 'CONFIRMED'
+  | 'CONFIRMED_WITH_RETRY'
+  | 'NEEDS_REVIEW'
   | 'FAILED_RETRYABLE'
   | 'CANCELLED'
   | 'EXPIRED'
@@ -60,4 +65,9 @@ export interface BookingDraftProjection {
 export interface BookingConfirmationResult {
   caseId: string
   status: 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT'
+}
+
+export interface BookingQueuedResult {
+  requestId: string
+  status: 'QUEUED'
 }

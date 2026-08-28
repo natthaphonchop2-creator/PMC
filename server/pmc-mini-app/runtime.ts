@@ -8,6 +8,7 @@ import { createGoogleMiniAppStore } from './store.js'
 import { createJeraRuntime } from '../jera/runtime.js'
 import { createEnrollmentService } from './enrollment.js'
 import { createGoogleEvidenceStagingPort } from './stagingStore.js'
+import { createGoogleBookingTaskQueue } from './taskQueue.js'
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
@@ -55,6 +56,14 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     evidenceIngress,
     ...(config.asyncBooking ? {
       evidenceStaging: createGoogleEvidenceStagingPort({ bucketName: config.asyncBooking.bucketName }),
+      taskQueue: createGoogleBookingTaskQueue({
+        projectId: config.asyncBooking.projectId,
+        location: config.asyncBooking.location,
+        queueName: config.asyncBooking.queueName,
+        workerUrl: config.asyncBooking.workerUrl,
+        workerAudience: config.asyncBooking.workerAudience,
+        taskInvokerEmail: config.asyncBooking.taskInvokerEmail,
+      }),
     } : {}),
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,

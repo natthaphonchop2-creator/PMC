@@ -9,6 +9,8 @@ import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBat
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
+import type { AsyncMiniAppStore } from './store.js'
+import type { BookingTaskQueuePort } from './taskQueue.js'
 import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 
@@ -18,6 +20,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   store: MiniAppStore
   drive?: MiniAppDrivePort
   evidenceStaging?: EvidenceStagingPort
+  taskQueue?: BookingTaskQueuePort
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -321,6 +324,38 @@ async function handleBookingDraftRoute(
     return
   }
   const payloadHash = bookingPayloadHash(draft)
+  const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
+  if (asyncOwner) {
+    if (!deps.taskQueue || !hasAsyncQueueStore(deps.store)) {
+      respond(res, 503, { error: 'BOOKING_TASK_QUEUE_NOT_CONFIGURED' })
+      return
+    }
+    const now = (deps.now ?? (() => new Date()))()
+    const nowIso = now.toISOString()
+    let task: Awaited<ReturnType<BookingTaskQueuePort['enqueue']>>
+    try {
+      task = await deps.taskQueue.enqueue({
+        requestId: draft.requestId,
+        draftId: draft.draftId,
+        scheduleAt: new Date(now.getTime() + 2_000),
+      })
+    } catch {
+      respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
+      return
+    }
+    try {
+      const queued = await deps.store.queueDraft(draft.requestId, payloadHash, task.taskName, nowIso)
+      respond(res, 202, { requestId: queued.requestId, status: 'QUEUED' })
+    } catch (error) {
+      const code = safeBookingError(error)
+      if (code === 'PAYLOAD_HASH_CONFLICT' || code === 'TASK_NAME_CONFLICT' || code === 'DRAFT_NOT_READY') {
+        respond(res, 409, { error: code })
+      } else {
+        respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      }
+    }
+    return
+  }
   try {
     const claimed = await deps.store.claimConfirmation(draft.requestId, payloadHash)
     if (!claimed.claimed) {
@@ -339,6 +374,10 @@ async function handleBookingDraftRoute(
     }
     respond(res, code === 'BOOKING_INGRESS_TIMEOUT' ? 504 : 502, { error: code })
   }
+}
+
+function hasAsyncQueueStore(store: MiniAppStore): store is MiniAppStore & Pick<AsyncMiniAppStore, 'queueDraft'> {
+  return typeof (store as Partial<AsyncMiniAppStore>).queueDraft === 'function'
 }
 
 async function ownedDraft(
