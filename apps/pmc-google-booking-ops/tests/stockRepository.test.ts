@@ -150,6 +150,32 @@ describe('stock repository', () => {
     ])).toThrow('stock document conflicts with request')
   })
 
+  it('rejects an unrelated append when persisted rows reuse a document ID across requests', () => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_LEDGER', [
+      ledgerFixture(),
+      ledgerFixture({
+        transactionId: 'TX-2',
+        requestId: 'request-stock-2',
+        lineNumber: 2,
+        balanceBeforeMilli: 1_000,
+        balanceAfterMilli: 2_000,
+      }),
+    ] as unknown as SheetRow[])
+    const repository = createStockRepository(store)
+
+    expect(() => repository.appendLedgerBatch([
+      ledgerFixture({
+        transactionId: 'TX-3',
+        requestId: 'request-stock-3',
+        documentId: 'ISS-202608-0003',
+        lineNumber: 3,
+        balanceBeforeMilli: 2_000,
+        balanceAfterMilli: 3_000,
+      }),
+    ])).toThrow('stock document conflicts with request')
+  })
+
   it.each([
     [
       'an empty request ID associated with a reused document',
