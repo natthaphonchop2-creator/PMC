@@ -96,6 +96,6 @@ function isServiceAccountEmail(value: string): boolean {
 
 function parseOwnerStaffIds(value: string): ReadonlySet<string> | null {
   const ids = value.split(',').map((id) => id.trim())
-  if (ids.length === 0 || ids.some((id) => !/^staff-[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/.test(id))) return null
+  if (ids.length === 0 || ids.some((id) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,123}$/.test(id))) return null
   return new Set(ids)
 }

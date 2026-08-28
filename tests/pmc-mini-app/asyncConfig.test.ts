@@ -20,11 +20,11 @@ describe('PMC Mini App asynchronous booking configuration', () => {
     })
   })
 
-  it('accepts the existing short staff ID format for async owners', () => {
+  it('accepts and deduplicates CONFIG_STAFF owner IDs', () => {
     expect(readPmcAsyncBookingConfig({
       ...validEnvironment(),
-      PMC_ASYNC_OWNER_STAFF_IDS: 'staff-1, staff-owner',
-    })?.ownerStaffIds).toEqual(new Set(['staff-1', 'staff-owner']))
+      PMC_ASYNC_OWNER_STAFF_IDS: ' shared-account-test, ADMIN_07, staff-owner, ADMIN_07 ',
+    })?.ownerStaffIds).toEqual(new Set(['shared-account-test', 'ADMIN_07', 'staff-owner']))
   })
 
   it.each([
@@ -34,7 +34,12 @@ describe('PMC Mini App asynchronous booking configuration', () => {
     ['worker URL with a query string', { PMC_ASYNC_WORKER_URL: 'https://pmc-mini-app.example/finalize-booking?token=secret' }],
     ['worker audience with a fragment', { PMC_ASYNC_WORKER_AUDIENCE: 'https://pmc-mini-app.example#secret' }],
     ['invalid task invoker service account', { PMC_ASYNC_TASK_INVOKER_EMAIL: 'task-invoker@example.com' }],
-    ['invalid owner staff ID', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner' }],
+    ['owner staff ID with whitespace', { PMC_ASYNC_OWNER_STAFF_IDS: 'shared account' }],
+    ['owner staff email', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner@example.com' }],
+    ['owner staff ID with a slash', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner/admin' }],
+    ['empty owner staff ID list item', { PMC_ASYNC_OWNER_STAFF_IDS: 'shared-account-test,,ADMIN_07' }],
+    ['owner staff ID with unsafe punctuation', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner!' }],
+    ['oversized owner staff ID', { PMC_ASYNC_OWNER_STAFF_IDS: `a${'a'.repeat(124)}` }],
   ])('fails closed for %s', (_name, patch) => {
     expect(readPmcAsyncBookingConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })
