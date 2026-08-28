@@ -63,6 +63,7 @@ export interface ConfigPort {
 
 export interface BookingRepository {
   allocateMonthlySequence(month: string): number
+  reserveInitialBooking(input: InitialBookingReservation): { booking: BookingCase; created: boolean }
   findByFormResponseId(formResponseId: string): BookingCase | null
   hasFormResponseMapping(formResponseId: string, caseId: string): boolean
   rememberFormResponse(formResponseId: string, caseId: string): void
@@ -75,6 +76,15 @@ export interface BookingRepository {
     context: MutationContext,
   ): BookingCase
   list(): BookingCase[]
+}
+
+export interface InitialBookingReservation {
+  month: string
+  formResponseId: string
+  collisionPrefix: string | null
+  conflictingFormResponseIds: string[]
+  createBooking(sequence: number): BookingCase
+  createAudit(booking: BookingCase): AuditEvent
 }
 
 export interface MutationContext {

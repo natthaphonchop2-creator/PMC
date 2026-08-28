@@ -19,7 +19,17 @@ function validateEvidence(intake: BookingIntake): void {
   if (!intake.chatEvidenceFileIds.length) throw new Error('chat evidence is required')
 }
 
-export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts): BookingCase {
+export interface BookingIntakeReservationOptions {
+  collisionPrefix?: string
+  conflictingFormResponseIds?: string[]
+  convergeExact?: boolean
+}
+
+export function submitBookingIntake(
+  intake: BookingIntake,
+  ports: BookingPorts,
+  reservation: BookingIntakeReservationOptions = {},
+): BookingCase {
   validateEvidence(intake)
   if (!Number.isFinite(intake.depositAmount) || intake.depositAmount <= 0) throw new Error('deposit amount must be positive')
   if (intake.queueType === 'NORMAL' && (
@@ -34,7 +44,7 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     throw new Error('automatic queue must not contain appointment values')
   }
 
-  if (ports.repositories.bookings.findByFormResponseId(intake.formResponseId)) {
+  if (!reservation.convergeExact && ports.repositories.bookings.findByFormResponseId(intake.formResponseId)) {
     throw new Error('form response already processed')
   }
 
@@ -63,11 +73,8 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     ? addMinutesInBangkok(appointmentStart, service.durationMinutes)
     : null
   const callWindow = appointmentStart ? deriveCallWindow(appointmentStart) : null
-  const sequence = ports.repositories.bookings.allocateMonthlySequence(intake.submittedAt.slice(0, 7))
-  const caseId = formatCaseId(intake.submittedAt, sequence)
-
-  const booking: BookingCase = {
-    caseId,
+  const bookingForSequence = (sequence: number): BookingCase => ({
+    caseId: formatCaseId(intake.submittedAt, sequence),
     version: 1,
     status: 'FORM_SUBMITTED',
     formResponseId: intake.formResponseId,
@@ -128,22 +135,33 @@ export function submitBookingIntake(intake: BookingIntake, ports: BookingPorts):
     createdBy: intake.submitterEmail,
     updatedAt: intake.submittedAt,
     updatedBy: intake.submitterEmail,
-  }
-
-  const inserted = ports.repositories.bookings.insert(booking)
-  ports.repositories.bookings.rememberFormResponse(intake.formResponseId, caseId)
-  ports.repositories.audit.append({
-    eventId: `AUDIT-${intake.formResponseId}-1`,
-    caseId,
-    actor: intake.submitterEmail,
-    action: 'BOOKING_CREATED',
-    target: 'BOOKING_MASTER',
-    before: null,
-    after: { status: booking.status, adminId: closer.id, aeId: ae?.id ?? null },
-    reason: 'Google Form submission',
-    timestamp: ports.clock.nowIso(),
-    correlationId: intake.formResponseId,
   })
+
+  const reserved = ports.repositories.bookings.reserveInitialBooking({
+    month: intake.submittedAt.slice(0, 7),
+    formResponseId: intake.formResponseId,
+    collisionPrefix: reservation.collisionPrefix ?? null,
+    conflictingFormResponseIds: [...(reservation.conflictingFormResponseIds ?? [])],
+    createBooking: bookingForSequence,
+    createAudit: (booking) => ({
+      eventId: `AUDIT-${intake.formResponseId}-1`,
+      caseId: booking.caseId,
+      actor: intake.submitterEmail,
+      action: 'BOOKING_CREATED',
+      target: 'BOOKING_MASTER',
+      before: null,
+      after: { status: 'FORM_SUBMITTED', adminId: closer.id, aeId: ae?.id ?? null },
+      reason: 'Google Form submission',
+      timestamp: ports.clock.nowIso(),
+      correlationId: intake.formResponseId,
+    }),
+  })
+  if (!reserved.created) {
+    if (reservation.convergeExact) return reserved.booking
+    throw new Error('form response already processed')
+  }
+  const inserted = reserved.booking
+  const caseId = inserted.caseId
   let current: BookingCase
   try {
     const evidence = ensureCaseEvidenceFolder(inserted, intake, ports.drive)

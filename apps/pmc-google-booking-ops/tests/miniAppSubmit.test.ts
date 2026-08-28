@@ -22,6 +22,45 @@ describe('Mini App canonical booking submission', () => {
     expect(ports.bookings.list()).toHaveLength(1)
   })
 
+  it('converges two same-hash calls interleaved after lookup to one reserved Case', () => {
+    const ports = createTestPorts()
+    const reserve = ports.repositories.bookings.reserveInitialBooking.bind(ports.repositories.bookings)
+    let interleave = true
+    let nestedCaseId: string | null = null
+    ports.repositories.bookings.reserveInitialBooking = (input) => {
+      if (interleave) {
+        interleave = false
+        nestedCaseId = submitMiniAppBooking(validMiniAppInput(), ports).caseId
+      }
+      return reserve(input)
+    }
+
+    const outer = submitMiniAppBooking(validMiniAppInput(), ports)
+
+    expect(outer.caseId).toBe(nestedCaseId)
+    expect(ports.bookings.list()).toHaveLength(1)
+    expect(ports.repositories.audit.listForCase(outer.caseId)
+      .filter(({ action }) => action === 'BOOKING_CREATED')).toHaveLength(1)
+  })
+
+  it('fails a different-hash call interleaved after lookup before a second Case can be reserved', () => {
+    const ports = createTestPorts()
+    const reserve = ports.repositories.bookings.reserveInitialBooking.bind(ports.repositories.bookings)
+    let interleave = true
+    ports.repositories.bookings.reserveInitialBooking = (input) => {
+      if (interleave) {
+        interleave = false
+        submitMiniAppBooking(validMiniAppInput({ payloadHash: 'payload-hash-2' }), ports)
+      }
+      return reserve(input)
+    }
+
+    expect(() => submitMiniAppBooking(validMiniAppInput({ payloadHash: 'payload-hash-1' }), ports))
+      .toThrow('form response collision')
+    expect(ports.bookings.list()).toHaveLength(1)
+    expect(ports.bookings.list()[0]?.formResponseId).toContain('payload-hash-2')
+  })
+
   it('derives Admin identity from active Staff and supports an automatic queue', () => {
     const ports = createTestPorts()
     const result = submitMiniAppBooking(validMiniAppInput({
@@ -114,6 +153,22 @@ describe('Mini App canonical booking submission', () => {
     expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('mini app payload hash conflict')
   })
 
+  it.each([
+    ['actor', { actor: 'other@example.com' }],
+    ['after payload', { after: { status: 'FORM_SUBMITTED', adminId: 'other-admin', aeId: 'admin-1' } }],
+    ['reason', { reason: 'Other creation reason' }],
+  ])('rejects self-heal when the deterministic BOOKING_CREATED %s is corrupted', (_label, patch) => {
+    const ports = createTestPorts()
+    failMiniIngressAuditOnce(ports)
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('injected audit write failure')
+    const listByEventId = ports.repositories.audit.listByEventId.bind(ports.repositories.audit)
+    ports.repositories.audit.listByEventId = (eventId) => listByEventId(eventId)
+      .map((event) => event.action === 'BOOKING_CREATED' ? { ...event, ...patch } : event)
+
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports))
+      .toThrow('mini app duplicate booking is not durable')
+  })
+
   it('serializes repeated self-heal attempts into one deterministic ingress audit', () => {
     const ports = createTestPorts()
     failMiniIngressAuditOnce(ports)
@@ -187,6 +242,80 @@ describe('Mini App canonical booking submission', () => {
     expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('mini app duplicate booking is not durable')
   })
 
+  it.each([
+    ['Admin booking batch', 'ADMIN_BOOKING_LINE_BATCH'],
+    ['Doctor booking', 'DOCTOR_LINE'],
+    ['Admin evidence', 'ADMIN_EVIDENCE_LINE'],
+    ['automatic Admin batch', 'ADMIN_AUTOMATIC_LINE_BATCH'],
+  ] as const)('accepts an exact durable %s retry identity', (_label, operation) => {
+    const input = operation === 'ADMIN_AUTOMATIC_LINE_BATCH'
+      ? validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+      : validMiniAppInput()
+    const { ports, booking } = recoverableLineRetry(input, operation)
+
+    expect(submitMiniAppBooking(input, ports).caseId).toBe(booking.caseId)
+  })
+
+  it('self-heals from the exact current normal-booking LINE retry producer contract', () => {
+    const ports = createTestPorts({ lineFailsAtPush: 1 })
+    failMiniIngressAuditOnce(ports)
+    expect(() => submitMiniAppBooking(validMiniAppInput(), ports)).toThrow('injected audit write failure')
+    const persisted = ports.bookings.list()[0]!
+
+    expect(persisted.lineState).toBe('RETRY')
+    expect(submitMiniAppBooking(validMiniAppInput(), ports).caseId).toBe(persisted.caseId)
+  })
+
+  it('self-heals from the exact current automatic-queue LINE retry producer contract', () => {
+    const ports = createTestPorts({ lineFailsAtPush: 1 })
+    const input = validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+    failMiniIngressAuditOnce(ports)
+    expect(() => submitMiniAppBooking(input, ports)).toThrow('injected audit write failure')
+    const persisted = ports.bookings.list()[0]!
+
+    expect(persisted.lineState).toBe('RETRY')
+    expect(submitMiniAppBooking(input, ports).caseId).toBe(persisted.caseId)
+  })
+
+  it.each([
+    ['wrong retry ID', { id: 'RETRY-PMC-202608-0001-OTHER' }],
+    ['wrong operation', { operation: 'DOCTOR_LINE' }],
+    ['wrong idempotency version', { idempotencyKey: 'PMC-202608-0001:ADMIN_BOOKING_LINE_BATCH:5:1' }],
+    ['wrong payload version', { payload: { paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 5, batchIndex: 0 } }],
+    ['wrong payload batch', { payload: { paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 6, batchIndex: 1 } }],
+    ['non-produced self-consistent batch', {
+      id: 'RETRY-PMC-202608-0001-ADMIN-LINE-BATCH-2',
+      idempotencyKey: 'PMC-202608-0001:ADMIN_BOOKING_LINE_BATCH:6:2',
+      payload: { paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 6, batchIndex: 1 },
+    }],
+    ['wrong ordered payment evidence', { payload: { paymentEvidenceFileIds: ['wrong-payment'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 6, batchIndex: 0 } }],
+    ['extra payload field', { payload: { paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'], messageVersion: 6, batchIndex: 0, extra: 'unsafe' } }],
+    ['legacy BOOKING_LINE', {
+      id: 'RETRY-PMC-202608-0001-BOOKING-LINE', operation: 'BOOKING_LINE',
+      idempotencyKey: 'PMC-202608-0001:BOOKING_LINE:6', payload: { messageVersion: 6 },
+    }],
+  ])('rejects LINE durability with %s', (_label, patch) => {
+    const input = validMiniAppInput()
+    const { ports, booking } = recoverableLineRetry(input, 'ADMIN_BOOKING_LINE_BATCH', patch)
+
+    expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+    expect(ports.repositories.audit.listForCase(booking.caseId)
+      .filter(({ action }) => action === 'MINI_APP_INGRESS_ACCEPTED')).toHaveLength(0)
+  })
+
+  it.each([
+    ['wrong automatic status', { payload: {
+      paymentEvidenceFileIds: ['payment-file-1'], chatEvidenceFileIds: ['chat-file-1'],
+      messageVersion: 6, batchIndex: 0, appointmentStatus: 'CONFIRMED',
+    } }],
+    ['wrong automatic idempotency batch', { idempotencyKey: 'PMC-202608-0001:ADMIN_AUTOMATIC_LINE_BATCH:6:2' }],
+  ])('rejects automatic LINE durability with %s', (_label, patch) => {
+    const input = validMiniAppInput({ queueType: 'AUTO', appointmentDate: null, appointmentTime: null })
+    const { ports } = recoverableLineRetry(input, 'ADMIN_AUTOMATIC_LINE_BATCH', patch)
+
+    expect(() => submitMiniAppBooking(input, ports)).toThrow('mini app duplicate booking is not durable')
+  })
+
   it('fails closed on a globally corrupted deterministic ingress audit identity without appending a duplicate ID', () => {
     const ports = createTestPorts()
     failMiniIngressAuditOnce(ports)
@@ -240,6 +369,55 @@ function failMiniIngressAuditOnce(ports: ReturnType<typeof createTestPorts>): vo
     }
     append(event)
   }
+}
+
+function recoverableLineRetry(
+  input: MiniAppBookingIngressPayload,
+  operation: 'ADMIN_BOOKING_LINE_BATCH' | 'DOCTOR_LINE' | 'ADMIN_EVIDENCE_LINE' | 'ADMIN_AUTOMATIC_LINE_BATCH',
+  patch: Record<string, unknown> = {},
+) {
+  const ports = createTestPorts()
+  const formResponseId = `mini:v2:cmVxdWVzdC0x:${input.payloadHash}`
+  const automatic = input.queueType === 'AUTO'
+  const booking = ports.repositories.bookings.insert(ports.bookingFixture({
+    formResponseId, version: 7, adminIdentityStatus: 'SELECTED_ADMIN', aeId: 'admin-1', aeName: 'Admin A',
+    channelId: 'เพจหลัก', queueType: input.queueType,
+    appointmentStatus: automatic ? 'AWAITING_ADMIN_SLOT' : 'CONFIRMED',
+    appointmentStart: automatic ? null : '2026-08-20T13:00:00+07:00',
+    appointmentEnd: automatic ? null : '2026-08-20T14:00:00+07:00', depositAmount: 1000,
+    driveFolderId: 'drive-folder-1', driveFolderUrl: 'https://drive.test/folder-1',
+    driveState: 'OK', calendarState: 'OK', calendarEventId: automatic ? null : 'calendar-event-1',
+    lineState: 'RETRY', paymentEvidenceCount: 1, chatEvidenceCount: 1,
+  }))
+  ports.repositories.bookings.rememberFormResponse(formResponseId, booking.caseId)
+  appendCreationAudit(ports, booking.caseId, formResponseId)
+  const batchIndex = 0
+  const messageVersion = booking.version - 1
+  const common = {
+    caseId: booking.caseId, attempts: 0, status: 'PENDING', safeError: 'retry',
+  }
+  const retry = operation === 'ADMIN_BOOKING_LINE_BATCH' ? {
+    ...common, id: `RETRY-${booking.caseId}-ADMIN-LINE-BATCH-1`, operation,
+    idempotencyKey: `${booking.caseId}:ADMIN_BOOKING_LINE_BATCH:${messageVersion}:1`,
+    payload: { paymentEvidenceFileIds: input.paymentEvidenceFileIds, chatEvidenceFileIds: input.chatEvidenceFileIds,
+      messageVersion, batchIndex },
+  } : operation === 'DOCTOR_LINE' ? {
+    ...common, id: `RETRY-${booking.caseId}-DOCTOR-LINE`, operation,
+    idempotencyKey: `${booking.caseId}:DOCTOR_LINE:${messageVersion}`,
+    payload: { messageVersion },
+  } : operation === 'ADMIN_EVIDENCE_LINE' ? {
+    ...common, id: `RETRY-${booking.caseId}-ADMIN-EVIDENCE`, operation,
+    idempotencyKey: `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`,
+    payload: { paymentEvidenceFileIds: input.paymentEvidenceFileIds, chatEvidenceFileIds: input.chatEvidenceFileIds,
+      messageVersion },
+  } : {
+    ...common, id: `RETRY-${booking.caseId}-ADMIN-AUTO-BATCH-1`, operation,
+    idempotencyKey: `${booking.caseId}:ADMIN_AUTOMATIC_LINE_BATCH:${messageVersion}:1`,
+    payload: { paymentEvidenceFileIds: input.paymentEvidenceFileIds, chatEvidenceFileIds: input.chatEvidenceFileIds,
+      messageVersion, batchIndex, appointmentStatus: booking.appointmentStatus },
+  }
+  ports.repositories.retries.enqueue({ ...retry, ...patch })
+  return { ports, booking }
 }
 
 function appendCreationAudit(

@@ -1,5 +1,5 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
-import type { BookingRepositories, Clock, LockPort, MutationContext } from './ports'
+import type { BookingRepositories, Clock, InitialBookingReservation, LockPort, MutationContext } from './ports'
 
 export type SheetRow = Record<string, unknown>
 
@@ -66,10 +66,10 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       append(store, 'AUDIT_LOG', event as unknown as SheetRow)
     },
     listForCase(caseId: string) {
-      return store.read('AUDIT_LOG').filter((row) => row.caseId === caseId) as unknown as AuditEvent[]
+      return store.read('AUDIT_LOG').filter((row) => row.caseId === caseId).map(asAudit)
     },
     listByEventId(eventId: string) {
-      return store.read('AUDIT_LOG').filter((row) => row.eventId === eventId) as unknown as AuditEvent[]
+      return store.read('AUDIT_LOG').filter((row) => row.eventId === eventId).map(asAudit)
     },
   }
 
@@ -90,6 +90,66 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
         return next
       })
     },
+    reserveInitialBooking(input: InitialBookingReservation) {
+      return locks.withLock(() => {
+        const bookingRows = store.read('BOOKING_MASTER')
+        const mappingRows = store.read('FORM_RESPONSE_MAP')
+        const auditRows = store.read('AUDIT_LOG')
+        const aliases = new Set(input.conflictingFormResponseIds)
+        const collisionCandidates = bookingRows.filter((row) => {
+          const formResponseId = String(row.formResponseId ?? '')
+          return formResponseId === input.formResponseId
+            || input.collisionPrefix !== null && formResponseId.startsWith(input.collisionPrefix)
+            || aliases.has(formResponseId)
+        })
+        if (collisionCandidates.length > 1) throw new Error('form response collision')
+        const existingRow = collisionCandidates[0]
+        if (existingRow) {
+          if (existingRow.formResponseId !== input.formResponseId) throw new Error('form response collision')
+          const existing = asBooking(existingRow)
+          const mappings = mappingRows.filter((row) => row.formResponseId === input.formResponseId)
+          const expectedAudit = input.createAudit(existing)
+          const creationAudits = auditRows.filter((row) => row.eventId === expectedAudit.eventId)
+          if (mappings.length !== 1 || mappings[0]?.caseId !== existing.caseId
+            || creationAudits.length !== 1 || !matchesCreationAudit(creationAudits[0]!, expectedAudit)) {
+            throw new Error('form response reservation is not durable')
+          }
+          return { booking: clonePlain(existing), created: false }
+        }
+        if (mappingRows.some((row) => row.formResponseId === input.formResponseId
+          || aliases.has(String(row.formResponseId ?? ''))
+          || input.collisionPrefix !== null && String(row.formResponseId ?? '').startsWith(input.collisionPrefix))) {
+          throw new Error('form response collision')
+        }
+
+        const sequenceRows = store.read('SYSTEM_SEQUENCES')
+        const storedMaximum = sequenceRows
+          .filter((row) => bangkokMonthKey(row.month) === input.month)
+          .reduce((maximum, row) => Math.max(maximum, Number(row.sequence) || 0), 0)
+        const bookingMaximum = bookingRows
+          .reduce((maximum, row) => Math.max(maximum, caseSequence(row.caseId, input.month)), 0)
+        const sequence = Math.max(storedMaximum, bookingMaximum) + 1
+        const booking = input.createBooking(sequence)
+        if (booking.formResponseId !== input.formResponseId || caseSequence(booking.caseId, input.month) !== sequence
+          || bookingRows.some((row) => row.caseId === booking.caseId || row.formResponseId === booking.formResponseId)) {
+          throw new Error('invalid initial booking reservation')
+        }
+        const creationAudit = input.createAudit(booking)
+        if (creationAudit.caseId !== booking.caseId || creationAudit.action !== 'BOOKING_CREATED'
+          || creationAudit.correlationId !== input.formResponseId
+          || auditRows.some((row) => row.eventId === creationAudit.eventId)) {
+          throw new Error('invalid initial booking audit')
+        }
+
+        const nextSequences = sequenceRows.filter((row) => bangkokMonthKey(row.month) !== input.month)
+        nextSequences.push({ month: input.month, sequence })
+        store.replace('SYSTEM_SEQUENCES', nextSequences)
+        store.replace('BOOKING_MASTER', [...bookingRows, booking as unknown as SheetRow])
+        store.replace('FORM_RESPONSE_MAP', [...mappingRows, { formResponseId: input.formResponseId, caseId: booking.caseId }])
+        store.replace('AUDIT_LOG', [...auditRows, creationAudit as unknown as SheetRow])
+        return { booking: clonePlain(booking), created: true }
+      })
+    },
     findByFormResponseId(formResponseId: string): BookingCase | null {
       const mapped = store.read('FORM_RESPONSE_MAP').find((row) => row.formResponseId === formResponseId)
       const caseId = mapped?.caseId
@@ -99,7 +159,8 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       return row ? asBooking(row) : null
     },
     hasFormResponseMapping(formResponseId: string, caseId: string): boolean {
-      return store.read('FORM_RESPONSE_MAP').some((row) => row.formResponseId === formResponseId && row.caseId === caseId)
+      const mappings = store.read('FORM_RESPONSE_MAP').filter((row) => row.formResponseId === formResponseId)
+      return mappings.length === 1 && mappings[0]?.caseId === caseId
     },
     rememberFormResponse(formResponseId: string, caseId: string): void {
       locks.withLock(() => {
@@ -316,4 +377,32 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
     },
     audit,
   }
+}
+
+function matchesCreationAudit(actual: SheetRow, expected: AuditEvent): boolean {
+  const normalized = asAudit(actual)
+  return normalized.eventId === expected.eventId
+    && normalized.caseId === expected.caseId
+    && normalized.actor === expected.actor
+    && normalized.action === expected.action
+    && normalized.target === expected.target
+    && JSON.stringify(normalized.before ?? null) === JSON.stringify(expected.before ?? null)
+    && JSON.stringify(normalized.after ?? null) === JSON.stringify(expected.after ?? null)
+    && normalized.reason === expected.reason
+    && normalized.correlationId === expected.correlationId
+    && typeof normalized.timestamp === 'string' && normalized.timestamp.length > 0
+}
+
+function asAudit(row: SheetRow): AuditEvent {
+  return {
+    ...row,
+    before: structuredCell(row.before),
+    after: structuredCell(row.after),
+  } as unknown as AuditEvent
+}
+
+function structuredCell(value: unknown): unknown {
+  if (value === '' || value === null || value === undefined) return null
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return value }
 }

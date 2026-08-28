@@ -35,7 +35,11 @@ export function submitMiniAppBooking(input: MiniAppBookingIngressPayload, ports:
 
   let booking: BookingCase
   try {
-    booking = submitBookingIntake(intake, ports)
+    booking = submitBookingIntake(intake, ports, {
+      collisionPrefix: identity.prefix,
+      conflictingFormResponseIds: [identity.legacy],
+      convergeExact: true,
+    })
   } catch (error) {
     const raced = ports.repositories.bookings.findByFormResponseId(formResponseId)
     if (raced) return finalizeIngressAudit(raced, input, ports)
@@ -158,10 +162,18 @@ function validCreationAudit(booking: BookingCase, ports: BookingPorts): boolean 
   const audit = audits[0]
   return Boolean(audits.length === 1 && audit
     && audit.caseId === booking.caseId
+    && audit.actor === booking.submitterEmail
     && audit.action === 'BOOKING_CREATED'
     && audit.target === 'BOOKING_MASTER'
     && audit.before === null
+    && audit.reason === 'Google Form submission'
+    && Number.isFinite(Date.parse(audit.timestamp))
     && audit.correlationId === booking.formResponseId)
+    && isRecord(audit?.after)
+    && Object.keys(audit.after).length === 3
+    && audit.after.status === 'FORM_SUBMITTED'
+    && audit.after.adminId === booking.adminId
+    && audit.after.aeId === booking.aeId
 }
 
 function durableDownstream(
@@ -202,18 +214,70 @@ function durableDownstream(
   }
   if (!calendarDurable) return false
 
-  const allowedLineOperations = new Set([
-    'ADMIN_BOOKING_LINE_BATCH', 'ADMIN_AUTOMATIC_LINE_BATCH', 'ADMIN_EVIDENCE_LINE', 'DOCTOR_LINE', 'BOOKING_LINE',
-  ])
   const lineDurable = booking.lineState === 'OK'
-    || booking.lineState === 'RETRY' && pending.some((retry) =>
-      retry.caseId === booking.caseId && retry.status === 'PENDING'
-      && allowedLineOperations.has(String(retry.operation))
-      && String(retry.idempotencyKey).startsWith(`${booking.caseId}:`),
-    )
+    || booking.lineState === 'RETRY' && pending.some((retry) => exactLineRetry(retry, booking, input))
   return lineDurable
     && booking.paymentEvidenceCount === input.paymentEvidenceFileIds.length
     && booking.chatEvidenceCount === input.chatEvidenceFileIds.length
+}
+
+function exactLineRetry(
+  retry: Record<string, unknown>,
+  booking: BookingCase,
+  input: MiniAppBookingIngressPayload,
+): boolean {
+  if (retry.caseId !== booking.caseId || retry.status !== 'PENDING') return false
+  const payload = retryPayload(retry.payload)
+  const messageVersion = booking.version - 1
+  if (!Number.isSafeInteger(messageVersion) || messageVersion < 1 || payload.messageVersion !== messageVersion) return false
+
+  if (retry.operation === 'ADMIN_BOOKING_LINE_BATCH') {
+    if (!hasExactKeys(payload, ['paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion', 'batchIndex'])
+      || !validBatchIndex(payload.batchIndex)
+      || retry.id !== `RETRY-${booking.caseId}-ADMIN-LINE-BATCH-${Number(payload.batchIndex) + 1}`
+      || retry.idempotencyKey !== `${booking.caseId}:ADMIN_BOOKING_LINE_BATCH:${messageVersion}:${Number(payload.batchIndex) + 1}`) return false
+    return exactEvidencePayload(payload, input)
+  }
+  if (retry.operation === 'DOCTOR_LINE') {
+    return hasExactKeys(payload, ['messageVersion'])
+      && retry.id === `RETRY-${booking.caseId}-DOCTOR-LINE`
+      && retry.idempotencyKey === `${booking.caseId}:DOCTOR_LINE:${messageVersion}`
+  }
+  if (retry.operation === 'ADMIN_EVIDENCE_LINE') {
+    return hasExactKeys(payload, ['paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion'])
+      && retry.id === `RETRY-${booking.caseId}-ADMIN-EVIDENCE`
+      && retry.idempotencyKey === `${booking.caseId}:ADMIN_EVIDENCE_READY:${messageVersion}`
+      && exactEvidencePayload(payload, input)
+  }
+  if (retry.operation === 'ADMIN_AUTOMATIC_LINE_BATCH') {
+    if (booking.queueType !== 'AUTO'
+      || !['TENTATIVE', 'AWAITING_ADMIN_SLOT'].includes(booking.appointmentStatus)
+      || payload.appointmentStatus !== booking.appointmentStatus
+      || !hasExactKeys(payload, [
+        'paymentEvidenceFileIds', 'chatEvidenceFileIds', 'messageVersion', 'batchIndex', 'appointmentStatus',
+      ])
+      || !validBatchIndex(payload.batchIndex)
+      || retry.id !== `RETRY-${booking.caseId}-ADMIN-AUTO-BATCH-${Number(payload.batchIndex) + 1}`
+      || retry.idempotencyKey !== `${booking.caseId}:ADMIN_AUTOMATIC_LINE_BATCH:${messageVersion}:${Number(payload.batchIndex) + 1}`) return false
+    return exactEvidencePayload(payload, input)
+  }
+  return false
+}
+
+function exactEvidencePayload(payload: Record<string, unknown>, input: MiniAppBookingIngressPayload): boolean {
+  return sameStrings(payload.paymentEvidenceFileIds, input.paymentEvidenceFileIds)
+    && sameStrings(payload.chatEvidenceFileIds, input.chatEvidenceFileIds)
+}
+
+function validBatchIndex(value: unknown): boolean {
+  // Both current booking and automatic-queue producers emit one summary batch.
+  return value === 0
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const sortedExpected = [...expected].sort()
+  return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index])
 }
 
 function retryPayload(value: unknown): Record<string, unknown> {
