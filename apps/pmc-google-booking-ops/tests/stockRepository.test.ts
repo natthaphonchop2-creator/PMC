@@ -84,6 +84,38 @@ describe('stock repository', () => {
     expect(repository.findDocumentByRequestId('request-stock-1')?.documentId).toBe('ISS-202608-0001')
   })
 
+  it('finds the single accepted audit event for durable command idempotency', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.appendAudit(auditFixture({ status: 'REJECTED', safeErrorCode: 'STOCK_MANAGER_REQUIRED' }))
+    const accepted = auditFixture({ eventId: 'AUD-STOCK-2', status: 'ACCEPTED', correlationId: 'ISS-1|abc123' })
+    repository.appendAudit(accepted)
+
+    expect(repository.findAcceptedAuditByRequestId('request-stock-1')).toEqual(accepted)
+    expect(repository.findAcceptedAuditByRequestId('missing-request')).toBeNull()
+  })
+
+  it('rejects a second accepted audit for one request ID', () => {
+    const repository = createStockRepository(createMemorySheetStore())
+    repository.appendAudit(auditFixture())
+
+    expect(() => repository.appendAudit(auditFixture({ eventId: 'AUD-STOCK-2' }))).toThrow(
+      'stock accepted audit already exists',
+    )
+  })
+
+  it('rejects persisted duplicate accepted audits for one request ID', () => {
+    const store = createMemorySheetStore()
+    store.replace('STOCK_AUDIT', [
+      auditFixture(),
+      auditFixture({ eventId: 'AUD-STOCK-2' }),
+    ] as unknown as SheetRow[])
+    const repository = createStockRepository(store)
+
+    expect(() => repository.findAcceptedAuditByRequestId('request-stock-1')).toThrow(
+      'stock accepted audit conflict',
+    )
+  })
+
   it('serializes stock rows in their exact Sheet header order', () => {
     const store = createMemorySheetStore()
     const repository = createStockRepository(store)

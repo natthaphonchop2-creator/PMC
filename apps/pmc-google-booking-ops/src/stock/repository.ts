@@ -40,6 +40,10 @@ function asLedgerEntry(row: SheetRow): StockLedgerEntry {
   return clonePlain(row as unknown as StockLedgerEntry)
 }
 
+function asAuditEvent(row: SheetRow): StockAuditEvent {
+  return clonePlain(row as unknown as StockAuditEvent)
+}
+
 function isSafeId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,124}$/.test(value)
 }
@@ -180,8 +184,22 @@ export function createStockRepository(store: SheetStore): StockRepository {
         }),
       }
     },
+    findAcceptedAuditByRequestId(requestId: string): StockAuditEvent | null {
+      const accepted = store
+        .read('STOCK_AUDIT')
+        .map(asAuditEvent)
+        .filter((event) => event.requestId === requestId && event.status === 'ACCEPTED')
+      if (accepted.length > 1) throw new Error('stock accepted audit conflict')
+      return accepted[0] ?? null
+    },
     appendAudit(event: StockAuditEvent): void {
       const rows = store.read('STOCK_AUDIT')
+      if (
+        event.status === 'ACCEPTED' &&
+        rows.some((row) => row.requestId === event.requestId && row.status === 'ACCEPTED')
+      ) {
+        throw new Error('stock accepted audit already exists')
+      }
       store.replace('STOCK_AUDIT', [...rows, toSheetRow(clonePlain(event), STOCK_AUDIT_HEADERS)])
     },
   }
