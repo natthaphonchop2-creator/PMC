@@ -68,7 +68,7 @@ export function createGoogleEvidenceStagingPort(input: {
     async get(objectKey) {
       const file = bucket.file(assertStagingKey(objectKey))
       const metadata = verifiedObjectMetadata(objectKey, (await file.getMetadata())[0])
-      const [bytes] = await file.download({ validation: 'crc32c' })
+      const [bytes] = await bucket.file(objectKey, { generation: metadata.generation }).download({ validation: 'crc32c' })
       if (bytes.length !== metadata.size || validateEvidence(bytes, metadata.mimeType) !== metadata.mimeType) {
         throw new Error('UNSUPPORTED_EVIDENCE_STAGING_METADATA')
       }
@@ -77,7 +77,7 @@ export function createGoogleEvidenceStagingPort(input: {
 
     async deleteVerified(objectKey) {
       const file = bucket.file(assertStagingKey(objectKey))
-      const metadata = verifiedObjectMetadata(objectKey, (await file.getMetadata())[0], true)
+      const metadata = verifiedObjectMetadata(objectKey, (await file.getMetadata())[0])
       await file.delete({ ifGenerationMatch: metadata.generation })
     },
   }
@@ -92,16 +92,15 @@ function validatePut(input: Parameters<EvidenceStagingPort['put']>[0]): void {
 function verifiedObjectMetadata(
   objectKey: string,
   metadata: FileMetadata,
-  requireGeneration = false,
-): { mimeType: EvidenceMime; size: number; generation: string | number | undefined } {
+): { mimeType: EvidenceMime; size: number; generation: string | number } {
   const key = assertStagingKey(objectKey)
   const mimeType = metadata.contentType
   const size = Number(metadata.size)
   if (metadata.name !== undefined && metadata.name !== key
     || !safeMime(mimeType) || extensionFor(mimeType) !== key.slice(key.lastIndexOf('.') + 1)
     || !Number.isSafeInteger(size) || size < 1 || size > MAX_EVIDENCE_BYTES
-    || metadata.cacheControl !== 'no-store' || !emptyCustomMetadata(metadata.metadata)
-    || (requireGeneration && !safeGeneration(metadata.generation))) {
+    || metadata.cacheControl !== 'no-store' || metadata.contentEncoding !== undefined && metadata.contentEncoding !== ''
+    || !emptyCustomMetadata(metadata.metadata) || !safeGeneration(metadata.generation)) {
     throw new Error('UNSUPPORTED_EVIDENCE_STAGING_METADATA')
   }
   return { mimeType, size, generation: metadata.generation }

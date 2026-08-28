@@ -59,7 +59,7 @@ describe('Google evidence staging port', () => {
   it('accepts a deterministic retry only when the create-only conflict has matching private object metadata', async () => {
     const fake = fakeStorage()
     const objectKey = `drafts/draft-1/PAYMENT/${jpegSha256}.jpg`
-    fake.objects.set(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
+    fake.putObject(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
     const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
 
     await expect(port.put({ draftId: 'draft-1', kind: 'PAYMENT', mimeType: 'image/jpeg', bytes: jpeg })).resolves.toEqual({
@@ -70,7 +70,7 @@ describe('Google evidence staging port', () => {
 
   it('rejects a create-only conflict whose existing object does not match the deterministic content contract', async () => {
     const fake = fakeStorage()
-    fake.objects.set(`drafts/draft-1/PAYMENT/${jpegSha256}.jpg`, {
+    fake.putObject(`drafts/draft-1/PAYMENT/${jpegSha256}.jpg`, {
       bytes: Buffer.concat([jpeg, Buffer.from([0])]), contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4',
     })
     const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
@@ -81,23 +81,72 @@ describe('Google evidence staging port', () => {
   it('downloads only bounded private image objects inside the drafts namespace', async () => {
     const fake = fakeStorage()
     const objectKey = `drafts/draft-1/PAYMENT/${jpegSha256}.jpg`
-    fake.objects.set(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
+    fake.putObject(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
     const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
 
     await expect(port.get(objectKey)).resolves.toEqual({ bytes: jpeg, mimeType: 'image/jpeg' })
     await expect(port.get('patients/patient-1/slip.jpg')).rejects.toThrow('INVALID_EVIDENCE_STAGING_KEY')
 
-    fake.objects.set(`drafts/draft-1/CHAT/${'b'.repeat(64)}.png`, {
+    fake.putObject(`drafts/draft-1/CHAT/${'b'.repeat(64)}.png`, {
       bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       contentType: 'image/png', cacheControl: 'public, max-age=60', generation: '5',
     })
     await expect(port.get(`drafts/draft-1/CHAT/${'b'.repeat(64)}.png`)).rejects.toThrow('UNSUPPORTED_EVIDENCE_STAGING_METADATA')
   })
 
+  it('downloads the inspected generation when the latest object is replaced after metadata read', async () => {
+    const fake = fakeStorage()
+    const objectKey = `drafts/draft-1/PAYMENT/${jpegSha256}.jpg`
+    const replacement = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x02])
+    fake.putObject(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
+    fake.hooks.afterMetadataRead = () => {
+      fake.putObject(objectKey, { bytes: replacement, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '5' })
+    }
+    const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
+
+    await expect(port.get(objectKey)).resolves.toEqual({ bytes: jpeg, mimeType: 'image/jpeg' })
+    expect(fake.downloads).toEqual([{
+      objectKey, generation: '4', options: { validation: 'crc32c' },
+    }])
+  })
+
+  it('rejects an object without a valid generation before downloading it', async () => {
+    const fake = fakeStorage()
+    const objectKey = `drafts/draft-1/PAYMENT/${jpegSha256}.jpg`
+    fake.putObject(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '' })
+    const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
+
+    await expect(port.get(objectKey)).rejects.toThrow('UNSUPPORTED_EVIDENCE_STAGING_METADATA')
+    expect(fake.downloads).toEqual([])
+  })
+
+  it('rejects gzip content encoding before a potentially expanded download', async () => {
+    const fake = fakeStorage()
+    const objectKey = `drafts/draft-1/PAYMENT/${jpegSha256}.jpg`
+    fake.putObject(objectKey, {
+      bytes: jpeg, downloadBytes: Buffer.alloc(10_000_001), contentType: 'image/jpeg', cacheControl: 'no-store', contentEncoding: 'gzip', generation: '4',
+    })
+    const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
+
+    await expect(port.get(objectKey)).rejects.toThrow('UNSUPPORTED_EVIDENCE_STAGING_METADATA')
+    expect(fake.downloads).toEqual([])
+  })
+
+  it('does not accept gzip content encoding during a deterministic retry', async () => {
+    const fake = fakeStorage()
+    fake.putObject(`drafts/draft-1/PAYMENT/${jpegSha256}.jpg`, {
+      bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', contentEncoding: 'gzip', generation: '4',
+    })
+    const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
+
+    await expect(port.put({ draftId: 'draft-1', kind: 'PAYMENT', mimeType: 'image/jpeg', bytes: jpeg }))
+      .rejects.toThrow('UNSUPPORTED_EVIDENCE_STAGING_METADATA')
+  })
+
   it('deletes only verified private draft objects with their observed generation', async () => {
     const fake = fakeStorage()
     const objectKey = `drafts/draft-1/PAYMENT/${jpegSha256}.jpg`
-    fake.objects.set(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
+    fake.putObject(objectKey, { bytes: jpeg, contentType: 'image/jpeg', cacheControl: 'no-store', generation: '4' })
     const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
 
     await expect(port.deleteVerified(objectKey)).resolves.toBeUndefined()
@@ -105,7 +154,7 @@ describe('Google evidence staging port', () => {
     await expect(port.deleteVerified('not-drafts/object.jpg')).rejects.toThrow('INVALID_EVIDENCE_STAGING_KEY')
 
     const annotatedKey = `drafts/draft-1/CHAT/${'b'.repeat(64)}.png`
-    fake.objects.set(annotatedKey, {
+    fake.putObject(annotatedKey, {
       bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       contentType: 'image/png', cacheControl: 'no-store', generation: '5', metadata: { patient: 'forbidden' },
     })
@@ -115,42 +164,60 @@ describe('Google evidence staging port', () => {
 
 interface FakeObject {
   bytes: Buffer
+  downloadBytes?: Buffer
   contentType: string
   cacheControl: string
   generation: string
+  contentEncoding?: string
   metadata?: Record<string, string>
 }
 
 function fakeStorage() {
   const objects = new Map<string, FakeObject>()
+  const versions = new Map<string, Map<string, FakeObject>>()
   const uploads: Array<{ objectKey: string; bytes: Buffer; options: unknown }> = []
   const deletes: Array<{ objectKey: string; options: unknown }> = []
+  const downloads: Array<{ objectKey: string; generation: string | undefined; options: unknown }> = []
+  const hooks: { afterMetadataRead?: (objectKey: string) => void } = {}
+  const putObject = (objectKey: string, object: FakeObject) => {
+    objects.set(objectKey, object)
+    const objectVersions = versions.get(objectKey) ?? new Map<string, FakeObject>()
+    objectVersions.set(object.generation, object)
+    versions.set(objectKey, objectVersions)
+  }
   const storage = {
     bucket: () => ({
-      file: (objectKey: string) => ({
+      file: (objectKey: string, options?: { generation?: string | number }) => ({
         async save(bytes: Buffer, options: { metadata: { contentType: string; cacheControl: string } }) {
           uploads.push({ objectKey, bytes, options })
           if (objects.has(objectKey)) throw Object.assign(new Error('already exists'), { code: 412 })
-          objects.set(objectKey, {
+          putObject(objectKey, {
             bytes, contentType: options.metadata.contentType, cacheControl: options.metadata.cacheControl, generation: '1',
           })
         },
         async getMetadata() {
           const stored = objects.get(objectKey)
           if (!stored) throw Object.assign(new Error('not found'), { code: 404 })
-          return [{
+          const metadata = {
             name: objectKey,
             size: String(stored.bytes.length),
             contentType: stored.contentType,
             cacheControl: stored.cacheControl,
+            contentEncoding: stored.contentEncoding,
             generation: stored.generation,
             metadata: stored.metadata,
-          }]
+          }
+          const afterMetadataRead = hooks.afterMetadataRead
+          hooks.afterMetadataRead = undefined
+          afterMetadataRead?.(objectKey)
+          return [metadata]
         },
-        async download() {
-          const stored = objects.get(objectKey)
+        async download(downloadOptions: unknown) {
+          const generation = options?.generation === undefined ? undefined : String(options.generation)
+          downloads.push({ objectKey, generation, options: downloadOptions })
+          const stored = generation === undefined ? objects.get(objectKey) : versions.get(objectKey)?.get(generation)
           if (!stored) throw Object.assign(new Error('not found'), { code: 404 })
-          return [Buffer.from(stored.bytes)]
+          return [Buffer.from(stored.downloadBytes ?? stored.bytes)]
         },
         async delete(options: unknown) {
           deletes.push({ objectKey, options })
@@ -159,5 +226,5 @@ function fakeStorage() {
       }),
     }),
   } as unknown as Storage
-  return { storage, objects, uploads, deletes }
+  return { storage, objects, uploads, deletes, downloads, hooks, putObject }
 }
