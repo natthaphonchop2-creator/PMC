@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createJeraReadClient } from '../../server/jera/client'
+import { createJeraReadClient, parseProviderRetryAfter } from '../../server/jera/client'
 import { readJeraConfig } from '../../server/jera/config'
 import type { JeraTokenPort } from '../../server/jera/tokenClient'
 
@@ -156,6 +156,36 @@ describe('bounded JERA read client', () => {
     expect(attempts).toBe(2)
     expect(sleep).toHaveBeenCalledTimes(1)
   })
+
+  it('honors bounded Retry-After in scheduled mode before retrying a 429', async () => {
+    const sleep = vi.fn(async () => undefined)
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response(429, {}, { 'retry-after': '31' }))
+      .mockResolvedValueOnce(response(200, { payment_data: [] }))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch, mode: 'SCHEDULED', sleep })
+
+    await expect(client.request('PAYMENT', filters())).resolves.toEqual([])
+    expect(sleep).toHaveBeenCalledWith(31_000)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not sleep for an interactive rate limit response', async () => {
+    const sleep = vi.fn(async () => undefined)
+    const client = createJeraReadClient(config(), tokenPort(), {
+      fetch: vi.fn(async () => response(429, {}, { 'retry-after': '31' })), sleep,
+    })
+
+    await expect(client.request('PAYMENT', filters())).rejects.toMatchObject({ code: 'JERA_RATE_LIMITED' })
+    expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it.each(['0', '-1', '121', 'invalid'])('rejects unsafe Retry-After %s', (value) => {
+    expect(parseProviderRetryAfter(value, Date.parse('2026-08-29T00:00:00Z'))).toBeNull()
+  })
+
+  it('parses a bounded Retry-After HTTP date', () => {
+    expect(parseProviderRetryAfter('Sat, 29 Aug 2026 00:00:31 GMT', Date.parse('2026-08-29T00:00:00Z'))).toBe(31_000)
+  })
 })
 
 function config() {
@@ -185,3 +215,7 @@ function response(status: number, body: unknown, headers: Record<string, string>
 }
 
 function uuid() { return '11111111-2222-4333-8444-555555555555' }
+
+function filters() {
+  return { branchUuid: uuid(), startDate: '2026-01-01', endDate: '2026-01-01' }
+}

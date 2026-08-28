@@ -32,6 +32,28 @@ describe('JERA Production read-only runtime gates', () => {
     expect(serialized).not.toContain(environment.JERA_API_PASSWORD)
   })
 
+  it('keeps the clinic branch operator path bounded and free of raw provider metadata', async () => {
+    const discovery = await import('../../scripts/discover-clinic-report-branch.mjs')
+    const rawBodyMarker = 'private-provider-clinic-payload'
+    await expect(discovery.discoverClinicBranches([], { fetch: vi.fn() }))
+      .rejects.toThrow('Clinic branch discovery failed')
+    await expect(discovery.discoverClinicBranches(
+      ['--allow-readonly-production', '--project', 'project-2099d92f-51c8-4d2b-a8c'],
+      {
+        secretAccessor: {
+          accessSecretVersion: vi.fn(async ({ name }: { name: string }) => [{
+            payload: {
+              data: Buffer.from(name.includes('BASE_URL') ? 'https://jera.example' : name.includes('USERNAME') ? 'synthetic-user' : 'synthetic-password'),
+            },
+          }]),
+        },
+        fetch: vi.fn(async (url: string) => String(url).endsWith('/openapi/v1/token/')
+          ? jsonResponse(200, { access_token: 'synthetic-read-token', expires_in: 3600, token_type: 'Bearer' })
+          : jsonResponse(500, { detail: rawBodyMarker })),
+      },
+    )).rejects.not.toThrow(rawBodyMarker)
+  })
+
   it('never calls JERA without the explicit production flag and exact one-day range', async () => {
     const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
     const fetch = vi.fn()

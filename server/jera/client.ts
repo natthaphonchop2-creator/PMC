@@ -78,7 +78,12 @@ export function createJeraReadClient(
         continue
       }
       if (response.status === 401) throw new JeraReadError('JERA_AUTH_FAILED')
-      if ((response.status === 429 || response.status >= 500) && providerRetries > 0) {
+      if (response.status === 429 && providerRetries > 0) {
+        providerRetries -= 1
+        await sleep(parseProviderRetryAfter(response.headers.get('retry-after'), Date.now()) ?? 1_000)
+        continue
+      }
+      if (response.status >= 500 && providerRetries > 0) {
         providerRetries -= 1
         await sleep(providerRetries === 1 ? 250 : 500)
         continue
@@ -137,6 +142,18 @@ export function createJeraReadClient(
       return rows
     },
   }
+}
+
+export function parseProviderRetryAfter(value: string | null, nowMs: number): number | null {
+  if (!value) return null
+  if (/^\d+$/.test(value)) {
+    const seconds = Number(value)
+    return Number.isSafeInteger(seconds) && seconds >= 1 && seconds <= 120 ? seconds * 1_000 : null
+  }
+  const dateMs = Date.parse(value)
+  if (!Number.isFinite(dateMs)) return null
+  const delay = Math.ceil((dateMs - nowMs) / 1_000) * 1_000
+  return delay >= 1_000 && delay <= 120_000 ? delay : null
 }
 
 function validateFilters(
