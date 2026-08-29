@@ -43,7 +43,8 @@ describe('PMC Clinic Reports product language', () => {
 
     const additional = render(<AdditionalReportMenu onBack={vi.fn()} onSelect={vi.fn()} />)
     expect(screen.getByText('CLINIC REPORT')).toBeVisible()
-    expect(screen.getAllByText('ดูข้อมูลรายงาน')).toHaveLength(8)
+    expect(screen.getByRole('button', { name: 'รายการรับชำระ' })).toBeVisible()
+    expect(screen.getAllByText('ดูข้อมูลรายงาน')).toHaveLength(9)
     assertNoProviderName(additional.container)
     additional.unmount()
 

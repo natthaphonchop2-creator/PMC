@@ -103,24 +103,42 @@ export function createGoogleJeraReportStore(input: {
   if (!Number.isSafeInteger(readCacheMs) || readCacheMs < 1_000 || readCacheMs > 60_000) {
     throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
   }
-  const tableSnapshots = new Map<string, { expiresAt: number; rows: Array<{ rowNumber: number; cells: unknown[] }> }>()
+  const tableSnapshots = new Map<string, {
+    expiresAt: number
+    rows: Array<{ rowNumber: number; cells: unknown[] }>
+    timer: ReturnType<typeof setTimeout>
+    token: object
+  }>()
   const tableReads = new Map<string, Promise<Array<{ rowNumber: number; cells: unknown[] }>>>()
 
   async function readTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
+    const load = async () => {
+      const range = `'${tab}'!A1:${columnName(headers.length)}`
+      const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
+      const actualHeader = (values[0] ?? []).map(stringValue)
+      if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
+      return values.slice(1).flatMap((cells, index) => cells.every(blank)
+        ? []
+        : [{ rowNumber: index + 2, cells }])
+    }
+    if (tab !== CACHE_TAB) return load()
+
     const cached = tableSnapshots.get(tab)
     if (cached && cached.expiresAt > now()) return structuredClone(cached.rows)
     const active = tableReads.get(tab)
     if (active) return structuredClone(await active)
 
     const operation = (async () => {
-      const range = `'${tab}'!A1:${columnName(headers.length)}`
-      const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
-      const actualHeader = (values[0] ?? []).map(stringValue)
-      if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
-      const rows = values.slice(1).flatMap((cells, index) => cells.every(blank)
-        ? []
-        : [{ rowNumber: index + 2, cells }])
-      tableSnapshots.set(tab, { expiresAt: now() + readCacheMs, rows: structuredClone(rows) })
+      const rows = await load()
+      const previous = tableSnapshots.get(tab)
+      if (previous) clearTimeout(previous.timer)
+      const token = {}
+      const timer = setTimeout(() => {
+        if (tableSnapshots.get(tab)?.token === token) tableSnapshots.delete(tab)
+      }, readCacheMs)
+      timer.unref?.()
+      const snapshot = { expiresAt: now() + readCacheMs, rows: structuredClone(rows), timer, token }
+      tableSnapshots.set(tab, snapshot)
       return rows
     })()
     tableReads.set(tab, operation)
@@ -131,7 +149,11 @@ export function createGoogleJeraReportStore(input: {
     }
   }
 
-  function invalidateTable(tab: string): void { tableSnapshots.delete(tab) }
+  function invalidateTable(tab: string): void {
+    const cached = tableSnapshots.get(tab)
+    if (cached) clearTimeout(cached.timer)
+    tableSnapshots.delete(tab)
+  }
 
   async function writeExisting(tab: string, headers: readonly string[], writes: Array<{ rowNumber: number; cells: unknown[] }>): Promise<void> {
     if (writes.length === 0) return

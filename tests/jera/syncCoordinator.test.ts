@@ -15,6 +15,19 @@ import type {
 import { jeraCacheKey } from '../../server/jera/cacheKey'
 
 describe('JERA sync coordinator', () => {
+  it('serves a missing cache without implicitly refreshing the provider', async () => {
+    const store = new MemoryReportStore()
+    const client = readPort(async () => [providerPayment('120.00')])
+    const coordinator = createCoordinator(store, client)
+
+    const result = await coordinator.readAndRefresh(query())
+    await coordinator.waitForIdle()
+
+    expect(result).toMatchObject({ source: 'CACHE', refreshing: false, stale: true })
+    expect(client.request).not.toHaveBeenCalled()
+    expect(store.writeOperations).toBe(0)
+  })
+
   it('serves a fresh cache without starting another background refresh', async () => {
     const store = new MemoryReportStore([paymentRow({ paidAmountSatang: 10_000 })])
     store.states.set(cacheKey(), state({
@@ -33,29 +46,6 @@ describe('JERA sync coordinator', () => {
     expect(store.writeOperations).toBe(0)
   })
 
-  it('returns cache immediately and shares one background refresh', async () => {
-    const store = new MemoryReportStore([paymentRow({ paidAmountSatang: 10_000 })])
-    let releaseProvider = (): void => undefined
-    const providerWait = new Promise<void>((resolve) => { releaseProvider = resolve })
-    const client = readPort(async () => {
-      await providerWait
-      return [providerPayment('120.00')]
-    })
-    const coordinator = createCoordinator(store, client)
-
-    const [first, second] = await Promise.all([
-      coordinator.readAndRefresh(query()), coordinator.readAndRefresh(query()),
-    ])
-
-    expect(first.data[0]?.paidAmountSatang).toBe(10_000)
-    expect(second.source).toBe('CACHE')
-    expect(first.refreshing).toBe(true)
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce())
-    releaseProvider()
-    await coordinator.waitForIdle()
-    expect((await store.readRows('PAYMENT', { cacheKey: cacheKey() }))[0]?.paidAmountSatang).toBe(12_000)
-  })
-
   it('serializes background refreshes across different cache keys', async () => {
     const store = new MemoryReportStore()
     let active = 0
@@ -70,8 +60,8 @@ describe('JERA sync coordinator', () => {
     const coordinator = createCoordinator(store, client)
 
     await Promise.all([
-      coordinator.readAndRefresh(query()),
-      coordinator.readAndRefresh({ ...query(), reportType: 'REFUND' }),
+      coordinator.scheduledRefresh(query()),
+      coordinator.scheduledRefresh({ ...query(), reportType: 'REFUND' }),
     ])
     await coordinator.waitForIdle()
 
@@ -89,12 +79,13 @@ describe('JERA sync coordinator', () => {
     })
     const coordinator = createCoordinator(store, client, { maxPendingRefreshes: 1 })
 
-    const first = await coordinator.readAndRefresh(query())
-    const second = await coordinator.readAndRefresh({ ...query(), reportType: 'REFUND' })
+    const first = coordinator.scheduledRefresh(query())
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce())
+    const second = await coordinator.scheduledRefresh({ ...query(), reportType: 'REFUND' })
 
-    expect(first.refreshing).toBe(true)
     expect(second.refreshing).toBe(false)
     releaseProvider()
+    await first
     await coordinator.waitForIdle()
     expect(client.request).toHaveBeenCalledOnce()
   })
@@ -111,6 +102,27 @@ describe('JERA sync coordinator', () => {
     expect(first.accepted).toBe(true)
     expect(second).toMatchObject({ accepted: false, retryAfterSeconds: 300 })
     expect(client.request).toHaveBeenCalledOnce()
+  })
+
+  it('waits for an accepted manual refresh to finish before returning', async () => {
+    const store = new MemoryReportStore([paymentRow()])
+    let releaseProvider = (): void => undefined
+    const providerWait = new Promise<void>((resolve) => { releaseProvider = resolve })
+    const client = readPort(async () => { await providerWait; return [providerPayment('140.00')] })
+    const coordinator = createCoordinator(store, client)
+    let settled = false
+
+    const operation = coordinator.manualRefresh(query(), 'staff-hash').then((result) => {
+      settled = true
+      return result
+    })
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledOnce())
+    expect(settled).toBe(false)
+    releaseProvider()
+    const result = await operation
+
+    expect(result).toMatchObject({ accepted: true, envelope: { refreshing: false, source: 'CACHE' } })
+    expect((await store.readRows('PAYMENT', { cacheKey: cacheKey() }))[0]?.paidAmountSatang).toBe(14_000)
   })
 
   it('recovers an expired lease and performs a scheduled refresh', async () => {

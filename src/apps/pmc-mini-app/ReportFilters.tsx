@@ -1,5 +1,5 @@
 import type { ReportFilterOptions, ReportFilterState, JeraReportType, ReportDatePreset } from './reports'
-import { applyReportPreset, reportFilterError, reportFilterSupport } from './reports'
+import { applyReportPreset, currentBangkokDate, reportFilterError, reportFilterSupport } from './reports'
 
 const PRESETS: Array<{ value: ReportDatePreset; label: string }> = [
   { value: 'TODAY', label: 'วันนี้' },
@@ -15,7 +15,7 @@ export function ReportFilters({
   value,
   onChange,
   options = EMPTY_OPTIONS,
-  today = value.endDate,
+  today = currentBangkokDate(),
 }: {
   reportType: JeraReportType
   value: ReportFilterState

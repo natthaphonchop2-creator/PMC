@@ -97,6 +97,10 @@ export function createJeraMiniAppApi(options: {
       }
 
       if (refresh) {
+        if (reportType === 'TODAY_SUMMARY') {
+          respond(res, 409, { error: 'JERA_SUMMARY_REFRESH_UNAVAILABLE' })
+          return true
+        }
         try {
           const result = await manualRefresh(reportType, filters, authenticated.staffId, options.coordinator)
           if (!result.accepted) {
@@ -217,17 +221,9 @@ async function manualRefresh(
   actorId: string,
   coordinator: JeraSyncCoordinator,
 ): Promise<{ accepted: boolean; retryAfterSeconds: number }> {
-  if (reportType !== 'TODAY_SUMMARY') {
-    const result = await coordinator.manualRefresh({ reportType, filters }, actorId)
-    return { accepted: result.accepted, retryAfterSeconds: result.retryAfterSeconds }
-  }
-  const types = ['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'] as const
-  const results = []
-  for (const type of types) results.push(await coordinator.manualRefresh({ reportType: type, filters }, actorId))
-  return {
-    accepted: results.some(({ accepted }) => accepted),
-    retryAfterSeconds: Math.min(...results.map(({ retryAfterSeconds }) => retryAfterSeconds)),
-  }
+  if (reportType === 'TODAY_SUMMARY') throw new Error('summary refresh is unavailable')
+  const result = await coordinator.manualRefresh({ reportType, filters }, actorId)
+  return { accepted: result.accepted, retryAfterSeconds: result.retryAfterSeconds }
 }
 
 function projectEnvelope(

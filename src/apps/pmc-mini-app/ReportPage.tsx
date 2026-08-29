@@ -1,5 +1,5 @@
 import { ArrowLeft, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ReportFilters } from './ReportFilters'
 import { ReportView } from './reportViews'
 import {
@@ -22,8 +22,6 @@ export function ReportPage({
   options,
   adapter,
   onBack,
-  pollDelayMs = 1_500,
-  maxPollAttempts = 10,
 }: {
   reportType: JeraReportType
   filters: ReportFilterState
@@ -41,35 +39,6 @@ export function ReportPage({
   const requestEpochRef = useRef(0)
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
   const filterError = reportFilterError(filters)
-  const pollLimit = Number.isFinite(maxPollAttempts) ? Math.max(0, Math.min(20, Math.floor(maxPollAttempts))) : 10
-
-  const pollReport = useCallback(async (
-    requestEpoch: number,
-    onEnvelope: (value: JeraClientEnvelope<unknown>) => void,
-  ): Promise<{ cancelled: boolean; error: unknown | null }> => {
-    for (let pollAttempt = 0; pollAttempt <= pollLimit; pollAttempt += 1) {
-      if (requestEpochRef.current !== requestEpoch) return { cancelled: true, error: null }
-      let next: JeraClientEnvelope<unknown>
-      try {
-        next = await adapter.load(reportType, filters)
-      } catch (error) {
-        return requestEpochRef.current === requestEpoch
-          ? { cancelled: false, error }
-          : { cancelled: true, error: null }
-      }
-      if (requestEpochRef.current !== requestEpoch) return { cancelled: true, error: null }
-      const pollingExhausted = next.refreshing && pollAttempt >= pollLimit
-      onEnvelope(pollingExhausted ? {
-        ...next,
-        refreshing: false,
-        stale: true,
-        warningCode: next.warningCode ?? 'JERA_DATA_STALE',
-      } : next)
-      if (!next.refreshing || pollingExhausted) return { cancelled: false, error: null }
-      await new Promise((resolve) => setTimeout(resolve, Math.max(0, pollDelayMs)))
-    }
-    return { cancelled: false, error: null }
-  }, [adapter, filters, pollDelayMs, pollLimit, reportType])
 
   useEffect(() => {
     const requestEpoch = ++requestEpochRef.current
@@ -78,22 +47,19 @@ export function ReportPage({
     if (filterError) { setLoading(false); return () => undefined }
     setLoading(true)
 
-    void (async () => {
-      const result = await pollReport(requestEpoch, (next) => {
-        setEnvelope(next)
-        setLoading(false)
-      })
-      if (result.cancelled) return
-      if (result.error) {
-        const error = result.error
-        const code = safeErrorCode(error)
-        setEnvelope((current) => current ? { ...current, refreshing: false, stale: true, warningCode: code } : null)
-        setMessage(code === 'JERA_TIMEOUT' ? 'อัปเดตไม่สำเร็จ ระบบยังแสดงข้อมูลล่าสุด' : 'เปิดรายงานไม่สำเร็จ กรุณาลองอีกครั้ง')
-        setLoading(false)
-      }
-    })()
+    void adapter.load(reportType, filters).then((next) => {
+      if (requestEpochRef.current !== requestEpoch) return
+      setEnvelope(settledEnvelope(next))
+      setLoading(false)
+    }).catch((error) => {
+      if (requestEpochRef.current !== requestEpoch) return
+      const code = safeErrorCode(error)
+      setEnvelope((current) => current ? { ...current, refreshing: false, stale: true, warningCode: code } : null)
+      setMessage(code === 'JERA_TIMEOUT' ? 'อัปเดตไม่สำเร็จ ระบบยังแสดงข้อมูลล่าสุด' : 'เปิดรายงานไม่สำเร็จ กรุณาลองอีกครั้ง')
+      setLoading(false)
+    })
     return () => { if (requestEpochRef.current === requestEpoch) requestEpochRef.current += 1 }
-  }, [filterError, filterKey, pollReport])
+  }, [adapter, filterError, filterKey, filters, reportType])
 
   const refresh = async () => {
     if (filterError) return
@@ -103,9 +69,9 @@ export function ReportPage({
     try {
       await adapter.refresh(reportType, filters)
       if (requestEpochRef.current !== requestEpoch) return
-      const result = await pollReport(requestEpoch, setEnvelope)
-      if (result.cancelled) return
-      if (result.error) throw result.error
+      const next = await adapter.load(reportType, filters)
+      if (requestEpochRef.current !== requestEpoch) return
+      setEnvelope(settledEnvelope(next))
     } catch (error) {
       if (requestEpochRef.current !== requestEpoch) return
       const retry = retryAfter(error)
@@ -128,10 +94,12 @@ export function ReportPage({
           <span>{envelope?.lastSuccessAt ? `อัปเดตล่าสุดเมื่อ ${formatBangkokTime(envelope.lastSuccessAt)}` : 'ยังไม่เคยอัปเดตสำเร็จ'}</span>
           {(envelope?.stale || envelope?.warningCode) && <strong>ข้อมูลอาจล่าช้า</strong>}
         </div>
-        <button type="button" onClick={() => void refresh()} disabled={refreshing || loading || Boolean(envelope?.refreshing) || Boolean(filterError)} aria-label="รีเฟรชข้อมูล">
-          <RefreshCw className={refreshing || envelope?.refreshing ? 'spinning' : ''} aria-hidden="true" />
-          <span>รีเฟรช</span>
-        </button>
+        {reportType === 'TODAY_SUMMARY'
+          ? <span className="pmc-report-refresh-help">รีเฟรชจากรายงานย่อยแต่ละประเภท</span>
+          : <button type="button" onClick={() => void refresh()} disabled={refreshing || loading || Boolean(filterError)} aria-label="รีเฟรชข้อมูล">
+            <RefreshCw className={refreshing ? 'spinning' : ''} aria-hidden="true" />
+            <span>รีเฟรช</span>
+          </button>}
       </section>
       {message && <p className="pmc-report-message" role="alert">{message}</p>}
       {loading && !envelope && <p className="pmc-report-loading">กำลังเปิดรายงาน</p>}
@@ -141,6 +109,15 @@ export function ReportPage({
       </>}
     </main>
   )
+}
+
+function settledEnvelope(value: JeraClientEnvelope<unknown>): JeraClientEnvelope<unknown> {
+  return value.refreshing ? {
+    ...value,
+    refreshing: false,
+    stale: true,
+    warningCode: value.warningCode ?? 'JERA_DATA_STALE',
+  } : value
 }
 
 const REPORT_TITLES: Record<JeraReportType, string> = {

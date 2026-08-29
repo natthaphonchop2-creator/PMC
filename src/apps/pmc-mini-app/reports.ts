@@ -113,7 +113,10 @@ export function loadReportFilterPreferences(today = currentBangkokDate()): Repor
       ...defaultReportFilters(today),
       ...value,
     }
-    return reportFilterError(candidate) ? defaultReportFilters(today) : candidate
+    if (!['TODAY', 'YESTERDAY', 'MONTH', 'CUSTOM'].includes(candidate.preset) || reportFilterError(candidate)) {
+      return defaultReportFilters(today)
+    }
+    return candidate.preset === 'CUSTOM' ? candidate : applyReportPreset(candidate, candidate.preset, today)
   } catch {
     return defaultReportFilters(today)
   }
@@ -132,7 +135,7 @@ function parseDate(value: string): Date {
   return date
 }
 
-function currentBangkokDate(): string {
+export function currentBangkokDate(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(new Date())

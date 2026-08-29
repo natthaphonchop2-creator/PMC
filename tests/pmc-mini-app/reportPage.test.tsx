@@ -9,48 +9,59 @@ import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 afterEach(cleanup)
 
 describe('cache-first JERA report page', () => {
-  it('keeps polling until a queued refresh finishes', async () => {
-    const adapter = adapterWith([
-      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
-      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
-      () => Promise.resolve(paymentEnvelope({ refreshing: false, lastSuccessAt: '2026-08-27T03:05:00.000Z' })),
-    ])
+  it('keeps bulk refresh off the summary and points staff to source reports', async () => {
+    const adapter = adapterWith([() => Promise.resolve(paymentEnvelope({ data: {
+      totals: { paymentCount: 0, appointmentCount: 0, paidAmountSatang: 0, refundAmountSatang: 0 },
+      warnings: [],
+    } }))])
     render(<ReportPage
-      reportType="PAYMENT"
-      filters={defaultReportFilters('2026-08-27')}
-      onFiltersChange={() => undefined}
-      adapter={adapter}
-      onBack={() => undefined}
-      pollDelayMs={0}
+      reportType="TODAY_SUMMARY" filters={defaultReportFilters('2026-08-27')}
+      onFiltersChange={() => undefined} adapter={adapter} onBack={() => undefined}
     />)
 
-    await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(3))
-    expect(screen.getByText('อัปเดตล่าสุดเมื่อ 10:05')).toBeVisible()
-    expect(document.querySelector('.spinning')).toBeNull()
+    expect(await screen.findByText('รีเฟรชจากรายงานย่อยแต่ละประเภท')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'รีเฟรชข้อมูล' })).not.toBeInTheDocument()
   })
 
-  it('stops bounded polling and marks cache stale when refresh stays queued', async () => {
+  it('loads a cache envelope once without polling from a GET refresh hint', async () => {
     const adapter = adapterWith([() => Promise.resolve(paymentEnvelope({ refreshing: true }))])
     render(<ReportPage
-      reportType="PAYMENT"
-      filters={defaultReportFilters('2026-08-27')}
-      onFiltersChange={() => undefined}
-      adapter={adapter}
-      onBack={() => undefined}
+      reportType="PAYMENT" filters={defaultReportFilters('2026-08-27')}
+      onFiltersChange={() => undefined} adapter={adapter} onBack={() => undefined}
       pollDelayMs={0}
-      maxPollAttempts={2}
     />)
 
-    await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(3))
+    await screen.findAllByText('10,000 บาท')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(adapter.load).toHaveBeenCalledOnce()
     expect(screen.getByText('ข้อมูลอาจล่าช้า')).toBeVisible()
     expect(document.querySelector('.spinning')).toBeNull()
   })
 
-  it('renders cache immediately, polls once, and discloses a stale refresh failure', async () => {
+  it('reloads once after manual refresh without polling the full report endpoint', async () => {
+    const user = userEvent.setup()
     const adapter = adapterWith([
+      () => Promise.resolve(paymentEnvelope()),
       () => Promise.resolve(paymentEnvelope({ refreshing: true })),
-      () => Promise.reject(Object.assign(new Error('private provider detail'), { code: 'JERA_TIMEOUT' })),
     ])
+    render(<ReportPage
+      reportType="PAYMENT" filters={defaultReportFilters('2026-08-27')}
+      onFiltersChange={() => undefined} adapter={adapter} onBack={() => undefined}
+      pollDelayMs={0}
+    />)
+    await screen.findAllByText('10,000 บาท')
+
+    await user.click(screen.getByRole('button', { name: 'รีเฟรชข้อมูล' }))
+    await waitFor(() => expect(adapter.refresh).toHaveBeenCalledOnce())
+    await new Promise((resolve) => setTimeout(resolve, 30))
+
+    expect(adapter.load).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('ข้อมูลอาจล่าช้า')).toBeVisible()
+    expect(document.querySelector('.spinning')).toBeNull()
+  })
+
+  it('renders cache immediately and discloses a stale refresh hint without provider details', async () => {
+    const adapter = adapterWith([() => Promise.resolve(paymentEnvelope({ refreshing: true }))])
     render(<ReportPage
       reportType="PAYMENT"
       filters={defaultReportFilters('2026-08-27')}
@@ -87,31 +98,6 @@ describe('cache-first JERA report page', () => {
 
     await waitFor(() => expect(adapter.refresh).toHaveBeenCalledOnce())
     await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(2))
-  })
-
-  it('keeps bounded polling after a manual refresh until queued work finishes', async () => {
-    const user = userEvent.setup()
-    const adapter = adapterWith([
-      () => Promise.resolve(paymentEnvelope()),
-      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
-      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
-      () => Promise.resolve(paymentEnvelope({ refreshing: false, lastSuccessAt: '2026-08-27T03:06:00.000Z' })),
-    ])
-    render(<ReportPage
-      reportType="PAYMENT"
-      filters={defaultReportFilters('2026-08-27')}
-      onFiltersChange={() => undefined}
-      adapter={adapter}
-      onBack={() => undefined}
-      pollDelayMs={0}
-    />)
-    await screen.findAllByText('10,000 บาท')
-
-    await user.click(screen.getByRole('button', { name: 'รีเฟรชข้อมูล' }))
-
-    await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(4))
-    expect(screen.getByText('อัปเดตล่าสุดเมื่อ 10:06')).toBeVisible()
-    expect(document.querySelector('.spinning')).toBeNull()
   })
 
   it('does not let an older manual refresh overwrite a newly selected date', async () => {

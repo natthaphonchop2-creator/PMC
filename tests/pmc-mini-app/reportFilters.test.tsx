@@ -7,6 +7,7 @@ import { ReportFilters } from '../../src/apps/pmc-mini-app/ReportFilters'
 import {
   buildReportSearchParams,
   defaultReportFilters,
+  loadReportFilterPreferences,
   reportFilterError,
   type ReportFilterState,
 } from '../../src/apps/pmc-mini-app/reports'
@@ -18,6 +19,34 @@ afterEach(() => {
 })
 
 describe('shared JERA report filters', () => {
+  it('recomputes relative presets instead of restoring stale stored dates', () => {
+    sessionStorage.setItem('pmc-jera-report-filters-v1', JSON.stringify({
+      ...defaultReportFilters('2026-08-28'),
+      preset: 'TODAY',
+    }))
+
+    expect(loadReportFilterPreferences('2026-08-29')).toMatchObject({
+      preset: 'TODAY', startDate: '2026-08-29', endDate: '2026-08-29',
+    })
+  })
+
+  it('uses the real Bangkok date when วันนี้ is clicked without an override', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const today = defaultReportFilters().startDate
+    render(<ReportFilters
+      reportType="PAYMENT"
+      value={{ ...defaultReportFilters('2026-08-28'), preset: 'YESTERDAY' }}
+      onChange={onChange}
+    />)
+
+    await user.click(screen.getByRole('radio', { name: 'วันนี้' }))
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      preset: 'TODAY', startDate: today, endDate: today,
+    }))
+  })
+
   it('applies today, yesterday, current month, and custom date presets', async () => {
     const user = userEvent.setup()
     let value = defaultReportFilters('2026-08-27')

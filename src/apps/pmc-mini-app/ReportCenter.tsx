@@ -54,6 +54,7 @@ export function ReportCenter({
 }
 
 const ADDITIONAL_REPORTS = [
+  { type: 'PAYMENT_LIST' as const, label: 'รายการรับชำระ' },
   { type: 'PRODUCT_USE' as const, label: 'การใช้สินค้าและบริการ' },
   { type: 'PRODUCT_SALES' as const, label: 'ยอดขายสินค้าและบริการ' },
   { type: 'CANCELLED_PAYMENT' as const, label: 'รับชำระที่ยกเลิก' },

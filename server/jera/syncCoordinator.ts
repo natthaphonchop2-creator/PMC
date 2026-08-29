@@ -84,7 +84,6 @@ export function createJeraSyncCoordinator(options: {
   id?: () => string
   normalizers?: Partial<Record<JeraSourceReportType, JeraNormalizer>>
   manualRefreshSeconds?: number
-  refreshIntervalMinutes?: number
   maxPendingRefreshes?: number
   staleAfterMs?: number
   leaseTtlMs?: number
@@ -93,7 +92,6 @@ export function createJeraSyncCoordinator(options: {
   const id = options.id ?? randomUUID
   const normalizers = { ...DEFAULT_NORMALIZERS, ...options.normalizers }
   const manualRefreshSeconds = positiveInteger(options.manualRefreshSeconds ?? 300, 60, 3_600)
-  const refreshIntervalMinutes = positiveInteger(options.refreshIntervalMinutes ?? 15, 15, 60)
   const maxPendingRefreshes = positiveInteger(options.maxPendingRefreshes ?? 4, 1, 20)
   const staleAfterMs = positiveInteger(options.staleAfterMs ?? 30 * 60_000, 60_000, 24 * 60 * 60_000)
   const leaseTtlMs = positiveInteger(options.leaseTtlMs ?? 60_000, 1_000, 900_000)
@@ -191,12 +189,7 @@ export function createJeraSyncCoordinator(options: {
   return {
     async readAndRefresh(query) {
       const key = jeraCacheKey(query.reportType, query.filters)
-      const snapshot = await cachedSnapshot(query, false)
-      const refreshDue = isJeraRefreshDue(snapshot.state?.lastAttemptAt ?? null, now().toISOString(), refreshIntervalMinutes)
-      if (refreshDue && !inFlight.has(key) && inFlight.size < maxPendingRefreshes) {
-        void startRefresh(query, 'READ', 'cache-read').catch(() => undefined)
-      }
-      return { ...snapshot.envelope, refreshing: inFlight.has(key) }
+      return cachedEnvelope(query, inFlight.has(key))
     },
     async manualRefresh(query, actorId) {
       const key = jeraCacheKey(query.reportType, query.filters)
@@ -223,8 +216,15 @@ export function createJeraSyncCoordinator(options: {
       await options.store.saveSyncState({
         ...baseState(query, key, hash, current), lastManualAt: currentTime,
       })
-      void startRefresh(query, 'MANUAL', safeId(actorId)).catch(() => undefined)
-      return { accepted: true, retryAfterSeconds: manualRefreshSeconds, envelope: await cachedEnvelope(query, true) }
+      const rows = await startRefresh(query, 'MANUAL', safeId(actorId))
+      if (rows === null) {
+        return {
+          accepted: false,
+          retryAfterSeconds: Math.min(manualRefreshSeconds, 60),
+          envelope: await cachedEnvelope(query, false),
+        }
+      }
+      return { accepted: true, retryAfterSeconds: manualRefreshSeconds, envelope: await cachedEnvelope(query, false) }
     },
     async scheduledRefresh(query) {
       const rows = await startRefresh(query, 'SCHEDULED', 'cloud-scheduler')

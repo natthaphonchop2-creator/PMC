@@ -18,14 +18,15 @@ describe('Google Sheets JERA report store', () => {
       store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }),
       store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }),
     ])
-    await store.getSyncState('PAYMENT:key')
-    await store.getSyncState('PAYMENT:key')
+    expect(sheets.readCount).toBe(1)
 
-    expect(sheets.readCount).toBe(2)
+    await store.getSyncState('PAYMENT:key')
+    await store.getSyncState('PAYMENT:key')
+    expect(sheets.readCount).toBe(3)
 
     await store.upsertRows('PAYMENT', [paymentRow()])
     await store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' })
-    expect(sheets.readCount).toBe(3)
+    expect(sheets.readCount).toBe(4)
   })
 
   it('upserts the same source without duplicate rows', async () => {

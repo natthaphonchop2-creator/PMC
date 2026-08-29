@@ -62,27 +62,15 @@ describe('authenticated JERA report API', () => {
     expect(maxActive).toBe(1)
   })
 
-  it('initiates TODAY_SUMMARY manual refreshes sequentially to avoid a Sheets burst', async () => {
+  it('rejects a bulk TODAY_SUMMARY refresh before starting source refreshes', async () => {
     const deps = dependencies()
-    const order: string[] = []
-    let active = 0
-    let maxActive = 0
-    vi.mocked(deps.coordinator.manualRefresh).mockImplementation(async ({ reportType }) => {
-      active += 1
-      maxActive = Math.max(maxActive, active)
-      order.push(reportType)
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      active -= 1
-      return { accepted: true, retryAfterSeconds: 300, envelope: envelope() }
-    })
-
     const response = await invoke(createPmcMiniAppMiddleware(deps), refreshPath('TODAY_SUMMARY'), {
       method: 'POST', headers: { authorization: 'Bearer valid-token' },
     })
 
-    expect(response.status).toBe(202)
-    expect(order).toEqual(['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'])
-    expect(maxActive).toBe(1)
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: 'JERA_SUMMARY_REFRESH_UNAVAILABLE' })
+    expect(deps.coordinator.manualRefresh).not.toHaveBeenCalled()
   })
 
   it.each([

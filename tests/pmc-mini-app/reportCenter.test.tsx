@@ -33,7 +33,7 @@ describe('PMC JERA report center', () => {
     render(<AdditionalReportMenu onBack={() => undefined} onSelect={() => undefined} />)
 
     for (const label of [
-      'การใช้สินค้าและบริการ', 'ยอดขายสินค้าและบริการ', 'รับชำระที่ยกเลิก', 'รายงาน OPD',
+      'รายการรับชำระ', 'การใช้สินค้าและบริการ', 'ยอดขายสินค้าและบริการ', 'รับชำระที่ยกเลิก', 'รายงาน OPD',
       'ค้างชำระที่ยกเลิก', 'ยอดขายคอร์ส', 'คอร์สคงเหลือ', 'คอร์สคงเหลือตามวันที่',
     ]) expect(screen.getByRole('button', { name: label })).toBeVisible()
   })
