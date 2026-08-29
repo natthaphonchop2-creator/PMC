@@ -174,6 +174,7 @@ export async function createFinanceOperator(input) {
         paymentLastSuccessAt: coverage.paymentLastSuccessAt,
         productSalesLastSuccessAt: coverage.productSalesLastSuccessAt,
         lastSuccessAt: coverage.lastSuccessAt, safeErrorCode: coverage.safeErrorCode,
+        stale: allocationCoverageStale(coverage),
       } : emptyAllocationStatus()
     },
     async readSummary(date) {
@@ -223,14 +224,15 @@ function parseSeedArguments(args) {
 function safeSourceEvidence(reportType, value) {
   const lastSuccessAt = safeInstant(value?.lastSuccessAt)
   const warningCode = safeCode(value?.warningCode)
+  const count = boundedInteger(value?.count, 0, Number.MAX_SAFE_INTEGER, 0)
   return { publicEvidence: {
     reportType,
-    count: boundedInteger(value?.count, 0, Number.MAX_SAFE_INTEGER, 0),
+    count,
     totalSatang: safeMoney(value?.totalSatang),
     lastSuccessAt,
     warningCode,
   }, identity: {
-    lastSuccessAt, warningCode, stale: value?.stale !== false,
+    count, lastSuccessAt, warningCode, stale: value?.stale,
     paymentSetHash: exactHash(value?.paymentSetHash),
     metadataSnapshotHash: exactHash(value?.metadataSnapshotHash),
   } }
@@ -242,7 +244,7 @@ function safeEnvelopeEvidence(reportType, envelope, identities) {
   return {
     reportType,
     count: rows.length, totalSatang: field ? sumMoney(rows, field) : 0,
-    lastSuccessAt: envelope?.lastSuccessAt, warningCode: envelope?.warningCode, stale: envelope?.stale === true,
+    lastSuccessAt: envelope?.lastSuccessAt, warningCode: envelope?.warningCode, stale: envelope?.stale,
     paymentSetHash: identities.paymentSetHash, metadataSnapshotHash: identities.metadataSnapshotHash,
   }
 }
@@ -260,7 +262,7 @@ function safeAllocationStatus(value, sourceIdentities) {
   const sourceTimesClose = timestampsWithin(paymentLastSuccessAt, productSalesLastSuccessAt, 15 * 60_000)
   const allocationAfterSources = timestampsOrderedAfter(lastSuccessAt, paymentLastSuccessAt, productSalesLastSuccessAt)
   const complete = value?.status === 'COMPLETE'
-    && paymentCount === coveredPaymentCount
+    && paymentCount === paymentIdentity.count && coveredPaymentCount === paymentIdentity.count
     && paymentSetHash !== null && paymentSetHash === paymentIdentity.paymentSetHash
     && metadataSnapshotHash !== null && metadataSnapshotHash === productIdentity.metadataSnapshotHash
     && paymentLastSuccessAt !== null && paymentLastSuccessAt === paymentIdentity.lastSuccessAt
@@ -268,7 +270,7 @@ function safeAllocationStatus(value, sourceIdentities) {
     && lastSuccessAt !== null && sourceTimesClose && allocationAfterSources
     && paymentIdentity.stale === false && productIdentity.stale === false
     && paymentIdentity.warningCode === null && productIdentity.warningCode === null
-    && value?.safeErrorCode === null
+    && value?.safeErrorCode === null && value?.stale === false
   return {
     status: complete ? 'COMPLETE' : 'INCOMPLETE', paymentCount, coveredPaymentCount,
     metadataHashPrefix: metadataSnapshotHash?.slice(0, 12) ?? null, lastSuccessAt,
@@ -280,7 +282,7 @@ function emptyAllocationStatus() {
     status: 'INCOMPLETE', paymentCount: 0, coveredPaymentCount: 0,
     paymentSetHash: null, metadataSnapshotHash: null,
     paymentLastSuccessAt: null, productSalesLastSuccessAt: null,
-    metadataHashPrefix: null, lastSuccessAt: null, safeErrorCode: null,
+    metadataHashPrefix: null, lastSuccessAt: null, safeErrorCode: null, stale: true,
   }
 }
 function safeSummary(value) {
@@ -342,6 +344,10 @@ function timestampsWithin(left, right, limitMs) {
 function timestampsOrderedAfter(allocation, payment, product) {
   if (allocation === null || payment === null || product === null) return false
   return Date.parse(allocation) >= Math.max(Date.parse(payment), Date.parse(product))
+}
+function allocationCoverageStale(coverage, nowMs = Date.now()) {
+  const lastSuccessMs = Date.parse(coverage?.lastSuccessAt)
+  return !Number.isFinite(lastSuccessMs) || nowMs - lastSuccessMs > 24 * 60 * 60_000
 }
 function defaultSleep(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
 async function runExternal(command) { const { stdout } = await executeFile(command[0], command.slice(1), { maxBuffer: 2_000_000 }); return stdout }

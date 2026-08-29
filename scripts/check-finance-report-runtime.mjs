@@ -61,9 +61,9 @@ export async function inspectFinanceRuntime(input, options = {}) {
 
   const cloudRun = cloudRunReport(service)
   const flags = {
-    financeReportsEnabled: environment.PMC_FINANCE_REPORTS_ENABLED === 'true',
-    revenueAllocationEnabled: environment.JERA_REVENUE_ALLOCATION_ENABLED === 'true',
-    categoryMoneyEnabled: environment.JERA_FINANCE_CATEGORY_MONEY_ENABLED === 'true',
+    financeReportsEnabled: explicitBoolean(environment.PMC_FINANCE_REPORTS_ENABLED),
+    revenueAllocationEnabled: explicitBoolean(environment.JERA_REVENUE_ALLOCATION_ENABLED),
+    categoryMoneyEnabled: explicitBoolean(environment.JERA_FINANCE_CATEGORY_MONEY_ENABLED),
   }
   const allocationConfig = {
     requiredNameCount: REQUIRED_ALLOCATION_NAMES.length,
@@ -124,7 +124,8 @@ export async function inspectFinanceRuntime(input, options = {}) {
     ? cloudRun.servicePresent && flagsMatch && scheduler.enabledJobCount === 0
     : input.expectedStage === 'ALLOCATION'
       ? flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
-      : flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic && scheduler.readyMatchCount === 1
+      : flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic
+        && scheduler.enabledFinanceSeedCandidateCount === 1 && scheduler.readyMatchCount === 1
   return {
     mode: 'READ_ONLY', expectedStage: input.expectedStage, stageReady, ready: stageReady,
     safeCode: stageReady ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
@@ -225,6 +226,7 @@ function schedulerReport(value, expected) {
   const ready = invoker.filter((job) => job?.schedule === '15 2 * * *' && job?.timeZone === 'Asia/Bangkok')
   return {
     matchingJobCount: jobs.length, enabledJobCount: enabled.length,
+    enabledFinanceSeedCandidateCount: enabled.length,
     exactTarget: matching.length === 1, postMethod: post.length === 1,
     oidcAudienceMatches: audience.length === 1, oidcInvokerMatches: invoker.length === 1,
     oidcBindingPresent: invoker.length === 1, readyMatchCount: ready.length,
@@ -304,6 +306,7 @@ function stageFlags(stage) {
   if (stage === 'ALLOCATION') return { financeReportsEnabled: false, revenueAllocationEnabled: true, categoryMoneyEnabled: false }
   return { financeReportsEnabled: true, revenueAllocationEnabled: true, categoryMoneyEnabled: true }
 }
+function explicitBoolean(value) { return value === 'true' ? true : value === 'false' ? false : null }
 function taskBody(value) { try { const textValue = Buffer.from(value ?? '', 'base64').toString('utf8'); return JSON.parse(textValue) } catch { return null } }
 function safeNonnegative(value) { return Number.isFinite(value) && value >= 0 ? Number(value) : 0 }
 function safeRate(value) { return Number.isFinite(value) && value >= 0 && value <= 1000 ? Number(value) : 0 }

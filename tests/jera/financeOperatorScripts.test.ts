@@ -232,6 +232,50 @@ describe('read-only finance runtime checker', () => {
       scheduler: { exactTarget: true, postMethod: true, oidcAudienceMatches: true, oidcInvokerMatches: true },
     })
   })
+
+  it.each([
+    ['missing reports flag', { reports: undefined, allocation: false, category: false }],
+    ['missing allocation flag', { reports: false, allocation: undefined, category: false }],
+    ['missing category flag', { reports: false, allocation: false, category: undefined }],
+    ['malformed reports flag', { reports: 'FALSE', allocation: false, category: false }],
+    ['malformed allocation flag', { reports: false, allocation: '0', category: false }],
+    ['malformed category flag', { reports: false, allocation: false, category: 'yes' }],
+  ])('fails DISABLED for %s instead of coercing it to false', async (_label, flags) => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({ flags })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('DISABLED'), {
+      execute: runtimeExecute({ service, schedulerJobs: [] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({ expectedStage: 'DISABLED', stageReady: false, ready: false })
+  })
+
+  it('fails READY when a correct Scheduler has a second enabled finance-seed candidate on the wrong host', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('READY'), {
+      execute: runtimeExecute({
+        service,
+        schedulerJobs: [schedulerJob(), schedulerJob({ uri: 'https://wrong.example/internal/mini-app/finance-daily-seed' })],
+      }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'READY', stageReady: false,
+      scheduler: { enabledJobCount: 2, enabledFinanceSeedCandidateCount: 2 },
+    })
+  })
 })
 
 describe('one-day finance seed', () => {
@@ -324,11 +368,15 @@ describe('one-day finance seed', () => {
     ['payment hash mismatch', { paymentSetHash: 'c'.repeat(64) }],
     ['metadata hash mismatch', { metadataSnapshotHash: 'c'.repeat(64) }],
     ['count mismatch', { coveredPaymentCount: 1 }],
+    ['coverage counts smaller than refreshed PAYMENT', { paymentCount: 1, coveredPaymentCount: 1 }],
     ['missing payment timestamp', { paymentLastSuccessAt: null }],
     ['invalid product timestamp', { productSalesLastSuccessAt: 'not-an-instant' }],
     ['missing allocation timestamp', { lastSuccessAt: null }],
     ['stale source identity', { paymentLastSuccessAt: '2026-08-30T01:00:00.000Z' }],
     ['safe allocation error', { safeErrorCode: 'JERA_PROVIDER_FAILED' }],
+    ['missing allocation stale marker', { stale: undefined }],
+    ['malformed allocation stale marker', { stale: 'false' }],
+    ['stale allocation', { stale: true }],
   ])('treats provider COMPLETE as incomplete for %s', async (_label, patch) => {
     const [, seed] = await loadScripts()
     const operator = operatorFixture({ completeImmediately: true })
@@ -378,6 +426,25 @@ describe('one-day finance seed', () => {
       if (reportType !== 'PAYMENT') return value
       return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'stale'))
     })
+    const stdout = bufferWriter()
+
+    const code = await seed.seedFinanceReportDay([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT, '--date', APPROVED_DAY,
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined), maxStatusReads: 1, io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).allocation.status).toBe('INCOMPLETE')
+  })
+
+  it.each([null, 'false', 0, {}])('fails closed for malformed refreshed source stale value %j', async (stale) => {
+    const [, seed] = await loadScripts()
+    const operator = operatorFixture({ completeImmediately: true })
+    const refresh = operator.refreshReport
+    operator.refreshReport = vi.fn(async (reportType: string, date: string) => ({
+      ...await refresh(reportType, date), ...(reportType === 'PAYMENT' ? { stale } : {}),
+    }))
     const stdout = bufferWriter()
 
     const code = await seed.seedFinanceReportDay([
@@ -637,6 +704,29 @@ describe('bounded finance backfill', () => {
       nextDate: '2026-08-01', completedDates: [],
     })
   })
+
+  it('does not advance the resume cursor when coverage 1/1 disagrees with refreshed PAYMENT count 2', async () => {
+    const [, , backfill] = await loadScripts()
+    const operator = operatorFixture({ completeImmediately: true })
+    const readStatus = operator.readAllocationStatus
+    operator.readAllocationStatus = vi.fn(async (date: string) => ({
+      ...await readStatus(date), paymentCount: 1, coveredPaymentCount: 1,
+    }))
+    const resumeStore = resumeStoreFixture()
+
+    const code = await backfill.backfillFinanceReportDays([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT,
+      '--start-date', '2026-08-01', '--end-date', '2026-08-02', '--resume-file', '/tmp/resume.json',
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined),
+      resumeStore, io: { stdout: bufferWriter() }, maxStatusReads: 1,
+    })
+
+    expect(code).toBe(1)
+    expect(resumeStore.writeAtomic.mock.calls.at(-1)?.[1]).toMatchObject({
+      nextDate: '2026-08-01', completedDates: [],
+    })
+  })
 })
 
 async function loadScripts() {
@@ -699,10 +789,13 @@ function cloudRunService({
   allocationProject = PROJECT, queue = QUEUE, audience = AUDIENCE,
   latestReadyRevisionName = 'private-revision', trafficRevisionName = 'private-revision',
 } = {}) {
+  const flagEntries = [
+    ['PMC_FINANCE_REPORTS_ENABLED', flags.reports],
+    ['JERA_REVENUE_ALLOCATION_ENABLED', flags.allocation],
+    ['JERA_FINANCE_CATEGORY_MONEY_ENABLED', flags.category],
+  ].flatMap(([name, value]) => value === undefined ? [] : [[name, String(value)]])
   const env = [
-    ['PMC_FINANCE_REPORTS_ENABLED', String(flags.reports)],
-    ['JERA_REVENUE_ALLOCATION_ENABLED', String(flags.allocation)],
-    ['JERA_FINANCE_CATEGORY_MONEY_ENABLED', String(flags.category)],
+    ...flagEntries,
     ['JERA_ALLOCATION_PROJECT_ID', allocationProject],
     ['JERA_ALLOCATION_LOCATION', REGION],
     ['JERA_ALLOCATION_QUEUE', queue],
@@ -774,7 +867,7 @@ function operatorFixture({ completeImmediately = false } = {}) {
         coveredPaymentCount: complete ? 2 : 1,
         paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64),
         paymentLastSuccessAt: NOW, productSalesLastSuccessAt: NOW,
-        lastSuccessAt: complete ? NOW : null, safeErrorCode: null,
+        lastSuccessAt: complete ? NOW : null, safeErrorCode: null, stale: false,
       }
     },
     async readSummary(date: string) {

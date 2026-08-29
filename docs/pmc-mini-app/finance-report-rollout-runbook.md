@@ -200,7 +200,7 @@ node scripts/check-finance-report-runtime.mjs \
   --expected-oidc-audience "$OPERATOR_EXPECTED_OIDC_AUDIENCE"
 ```
 
-Require exact true/true/true flags and every `ALLOCATION` requirement, plus one enabled Scheduler with the exact HTTPS finance-seed target, POST method, `02:15 Asia/Bangkok`, OIDC audience, and OIDC invoker. A wrong project, region, queue destination, worker host/path, Scheduler host/path/method, audience, or invoker fails closed. `READY` must pass before any canary traffic.
+Require exact true/true/true flags and every `ALLOCATION` requirement, plus exactly one enabled Scheduler candidate whose URL path is the finance daily-seed path. That sole candidate must use the exact HTTPS target, POST method, `02:15 Asia/Bangkok`, OIDC audience, and OIDC invoker. A missing/malformed feature flag, duplicate finance-seed candidate, wrong project, region, queue destination, worker host/path, Scheduler host/path/method, audience, or invoker fails closed. Unrelated enabled Scheduler paths are ignored. `READY` must pass before any canary traffic.
 
 ## Gate 12 — explicit 10% traffic approval
 
