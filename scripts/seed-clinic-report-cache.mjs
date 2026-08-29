@@ -9,6 +9,8 @@ export const CLINIC_REPORT_SOURCE_TYPES = [
   'REMAINING_COURSE_BY_DATE',
 ]
 
+const GOOGLE_SHEETS_PACING_MS = 20_000
+
 export async function seedClinicReportCache(args, environment = process.env, dependencies = {}) {
   const { date } = parseArguments(args)
   const coordinator = dependencies.coordinator ?? await createCoordinator(environment, dependencies)
@@ -17,11 +19,15 @@ export async function seedClinicReportCache(args, environment = process.env, dep
     startDate: date,
     endDate: date,
   }
+  const sleep = dependencies.sleep ?? defaultSleep
+  if (typeof sleep !== 'function') throw new Error('Clinic report cache seeding configuration is invalid')
   const reports = []
 
-  for (const reportType of CLINIC_REPORT_SOURCE_TYPES) {
+  for (let index = 0; index < CLINIC_REPORT_SOURCE_TYPES.length; index += 1) {
+    const reportType = CLINIC_REPORT_SOURCE_TYPES[index]
     const envelope = await coordinator.scheduledRefresh({ reportType, filters })
     reports.push(safeEvidence(reportType, envelope))
+    if (index + 1 < CLINIC_REPORT_SOURCE_TYPES.length) await sleep(GOOGLE_SHEETS_PACING_MS)
   }
 
   return { mode: 'cache-seed', date, sequential: true, reports }
@@ -130,6 +136,10 @@ function sum(rows, field) {
     if (Number.isSafeInteger(value) && value >= 0 && total <= Number.MAX_SAFE_INTEGER - value) total += value
   }
   return total
+}
+
+function defaultSleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

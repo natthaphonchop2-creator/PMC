@@ -13,6 +13,7 @@ describe('clinic report cache seeding', () => {
     let inFlight = 0
     let maxInFlight = 0
     const order: string[] = []
+    const sleep = vi.fn(async () => undefined)
     const coordinator = {
       async scheduledRefresh(query: { reportType: string }) {
         inFlight += 1
@@ -33,11 +34,13 @@ describe('clinic report cache seeding', () => {
 
     const result = await seedClinicReportCache(
       ['--allow-readonly-production', '--project', PROJECT, '--date', '2026-08-29'],
-      environment(), dependencies({ coordinator }),
+      environment(), dependencies({ coordinator, sleep }),
     )
 
     expect(order).toEqual([...CLINIC_REPORT_SOURCE_TYPES])
     expect(maxInFlight).toBe(1)
+    expect(sleep).toHaveBeenCalledTimes(CLINIC_REPORT_SOURCE_TYPES.length - 1)
+    expect(sleep.mock.calls.every(([milliseconds]) => milliseconds === 20_000)).toBe(true)
     expect(result).toEqual({
       mode: 'cache-seed', date: '2026-08-29', sequential: true,
       reports: CLINIC_REPORT_SOURCE_TYPES.map((reportType) => ({
@@ -81,6 +84,7 @@ describe('clinic report cache seeding', () => {
       environment(),
       {
         runtime,
+        sleep: vi.fn(async () => undefined),
         loadJeraOperatorSecrets: vi.fn(async () => ({
           baseUrl: 'https://jera.example', username: 'synthetic-user', password: 'synthetic-password',
         })),
@@ -111,8 +115,11 @@ function environment() {
   }
 }
 
-function dependencies({ coordinator = { scheduledRefresh: vi.fn(async () => emptyEnvelope()) } } = {}) {
-  return { coordinator }
+function dependencies({
+  coordinator = { scheduledRefresh: vi.fn(async () => emptyEnvelope()) },
+  sleep = vi.fn(async () => undefined),
+} = {}) {
+  return { coordinator, sleep }
 }
 
 function emptyEnvelope() {
