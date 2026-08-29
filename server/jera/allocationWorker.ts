@@ -7,6 +7,7 @@ import {
   buildCachedPaymentDetail,
   jeraAllocationDayKey,
   type JeraAllocationCoverage,
+  type JeraAllocationRunSession,
   type JeraAllocationStore,
   type JeraCachedPaymentDetail,
 } from './allocationStore.js'
@@ -55,7 +56,8 @@ export function createJeraAllocationWorker(options: {
       if (!validClaim(claimed, dayKey, input.workerId)) return skipped()
       const lease = claimed
       try {
-        const existingCoverage = await options.allocationStore.getCoverage(dayKey)
+        const runSession: JeraAllocationRunSession = await options.allocationStore.openRunSession()
+        const existingCoverage = await runSession.getCoverage(dayKey)
 
         const filters = { branchUuid: input.branchUuid, startDate: input.eventDate, endDate: input.eventDate }
         let snapshots: Awaited<ReturnType<JeraReportStore['readSnapshots']>>
@@ -94,14 +96,14 @@ export function createJeraAllocationWorker(options: {
                 input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
                 metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: retryCursor, successfulDetailCount: 0,
               }), safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE' }
-          await options.allocationStore.saveCoverage(incomplete)
+          await runSession.saveCoverage(incomplete)
           await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
         if (coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash)
           && input.paymentSetHash === currentPaymentSetHash && input.metadataSnapshotHash === currentMetadataSnapshotHash
           && existingCoverage.status === 'COMPLETE') return skipped()
-        const read = await options.allocationStore.readDay({
+        const read = await runSession.readDay({
           branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: currentPaymentSetHash,
         })
 
@@ -111,7 +113,7 @@ export function createJeraAllocationWorker(options: {
             metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: 0, successfulDetailCount: matchingCount(read.details, payments),
           })
           await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, 0, 0, options.continuationDelaySeconds)
-          await options.allocationStore.saveCoverage(reset)
+          await runSession.saveCoverage(reset)
           return { status: 'CONTINUED', processed: 0, nextCursor: 0 }
         }
 
@@ -132,7 +134,7 @@ export function createJeraAllocationWorker(options: {
           if (hasCurrentDetail(details, payment)) {
             cursor += 1
             Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
-            await options.allocationStore.saveCoverage(coverage)
+            await runSession.saveCoverage(coverage)
             continue
           }
 
@@ -146,7 +148,7 @@ export function createJeraAllocationWorker(options: {
           coverage.safeErrorCode = null
           coverage.leaseOwner = lease.owner
           coverage.leaseExpiresAt = lease.expiresAt
-          await options.allocationStore.saveCoverage(coverage)
+          await runSession.saveCoverage(coverage)
           processed += 1
 
           try {
@@ -161,18 +163,17 @@ export function createJeraAllocationWorker(options: {
             })
             if (detail.sourceUuid !== payment.sourceUuid || detail.eventDate !== input.eventDate) throw new JeraReadError('JERA_SCHEMA_INVALID')
             const cached = buildCachedPaymentDetail({ branchUuid: input.branchUuid, paymentSourceHash: payment.sourceHash, detail })
-            await options.allocationStore.replacePaymentDetail(cached)
             details = [...details.filter((stored) => stored.paymentUuid !== cached.paymentUuid), cached]
             cursor += 1
             Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
-            await options.allocationStore.saveCoverage(coverage)
+            await runSession.persistPaymentDetail({ detail: cached, coverage })
           } catch (error) {
             const code = safeProviderCode(error)
             coverage.safeErrorCode = code
             coverage.status = 'INCOMPLETE'
             coverage.cursor = cursor
             coverage.successfulDetailCount = matchingCount(details, payments)
-            await options.allocationStore.saveCoverage(coverage)
+            await runSession.saveCoverage(coverage)
             const retryAfter = error instanceof JeraReadError ? error.retryAfterSeconds ?? 0 : 0
             await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, nextAttempt(input.attempt), Math.max(options.continuationDelaySeconds, retryAfter))
             return { status: 'CONTINUED', processed: processed - 1, nextCursor: cursor }
@@ -181,7 +182,7 @@ export function createJeraAllocationWorker(options: {
 
         if (cursor >= payments.length) {
           Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
-          await options.allocationStore.saveCoverage(coverage)
+          await runSession.saveCoverage(coverage)
           return { status: 'COMPLETE', processed, nextCursor: null }
         }
         await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)

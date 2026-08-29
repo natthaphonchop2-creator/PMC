@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
 import {
   JERA_ALLOCATION_COVERAGE_HEADERS,
@@ -7,7 +7,9 @@ import {
   JERA_PAYMENT_DETAIL_LINES_HEADERS,
 } from '../../server/pmc-mini-app/setup'
 import {
+  buildCachedPaymentDetail,
   createGoogleJeraAllocationStore,
+  JERA_ALLOCATION_SHEET_OPERATION_BUDGET,
   jeraAllocationDayKey,
   jeraPaymentDetailKey,
   type JeraAllocationCoverage,
@@ -57,6 +59,8 @@ describe('Google Sheets JERA allocation store', () => {
     await expect(store.replacePaymentDetail({ ...detail, lines: [{ ...detail.lines[0]!, netLineSatang: -1 }] })).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
     await expect(store.replacePaymentDetail({ ...detail, paymentSourceHash: 'bad' })).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
     await expect(store.replacePaymentDetail({ ...detail, lines: [detail.lines[0]!, { ...detail.lines[0]! }] })).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
+    await expect(store.replacePaymentDetail({ ...detail, lines: [detail.lines[0]!, { ...detail.lines[1]!, lineOrdinal: 2 }] }))
+      .rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
     await expect(store.replacePaymentDetail({ ...detail, eventDate: '2026-08-30' })).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
   })
 
@@ -122,11 +126,17 @@ describe('Google Sheets JERA allocation store', () => {
     await store.replacePaymentDetail(paymentDetail())
     sheets.batchGets.length = 0
     await expect(store.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') })).resolves.toMatchObject({ details: [paymentDetail()] })
-    expect(sheets.batchGets).toEqual([["'JERA_PAYMENT_DETAIL_CACHE'!A1:I", "'JERA_PAYMENT_DETAIL_LINES'!A1:E", "'JERA_ALLOCATION_COVERAGE'!A1:R"]])
+    expect(sheets.batchGets).toEqual([[
+      `'JERA_PAYMENT_DETAIL_CACHE'!A1:I${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxDetailRows + 2}`,
+      `'JERA_PAYMENT_DETAIL_LINES'!A1:E${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxLineRows + 2}`,
+      `'JERA_ALLOCATION_COVERAGE'!A1:R${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxCoverageRows + 2}`,
+    ]])
     const lines = sheets.tab('JERA_PAYMENT_DETAIL_LINES')
     lines[2]![1] = 3
     sheets.setTab('JERA_PAYMENT_DETAIL_LINES', lines)
-    await expect(store.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') })).rejects.toThrow('JERA_ALLOCATION_STORE_CORRUPT_ROW')
+    const freshStore = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    await expect(freshStore.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') }))
+      .rejects.toThrow('JERA_ALLOCATION_STORE_CORRUPT_ROW')
   })
 
   it('reads up to 31 exact days through one allocation snapshot and matches both source hashes', async () => {
@@ -136,12 +146,17 @@ describe('Google Sheets JERA allocation store', () => {
     await store.saveCoverage(coverageRow())
     sheets.batchGets.length = 0
 
-    const result = await store.readDays([
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    const inputs = [
       { branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p'), metadataSnapshotHash: hash('m') },
       { branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p'), metadataSnapshotHash: hash('changed-metadata') },
-    ])
+    ]
+    const [result, replay] = await Promise.all([store.readDays(inputs), store.readDays(inputs)])
 
-    expect(sheets.batchGets).toHaveLength(1)
+    expect(sheets.batchGets).toHaveLength(JERA_ALLOCATION_SHEET_OPERATION_BUDGET.repeatedFinanceGetBatchGets)
+    expect(timer).not.toHaveBeenCalled()
+    timer.mockRestore()
+    expect(replay).toEqual(result)
     expect(result[0]).toMatchObject({ coverage: coverageRow(), details: [paymentDetail()] })
     expect(result[1]).toMatchObject({ coverage: null, details: [paymentDetail()] })
     await expect(store.readDays(Array.from({ length: 32 }, () => ({
@@ -160,6 +175,73 @@ describe('Google Sheets JERA allocation store', () => {
 
     expect(sheets.usedRows('JERA_PAYMENT_DETAIL_LINES')).toBe(firstUsed)
   })
+
+  it('uses one indexed run snapshot and bounded direct batches for twenty durable details', async () => {
+    const sheets = fixture()
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    const session = await store.openRunSession()
+    const baseCoverage = coverageRow({ paymentRowCount: 20 })
+
+    for (let index = 0; index < 20; index += 1) {
+      await session.saveCoverage({ ...baseCoverage, cursor: index, successfulDetailCount: index,
+        lastAttemptAt: new Date(Date.parse('2026-08-29T10:00:00.000Z') + index * 3_000).toISOString() })
+      await session.persistPaymentDetail({
+        detail: paymentDetailFor(index + 1),
+        coverage: { ...baseCoverage, cursor: index + 1, successfulDetailCount: index + 1,
+          status: index === 19 ? 'COMPLETE' : 'INCOMPLETE',
+          lastSuccessAt: new Date(Date.parse('2026-08-29T10:00:01.000Z') + index * 3_000).toISOString() },
+      })
+    }
+
+    expect(sheets.batchGets).toHaveLength(JERA_ALLOCATION_SHEET_OPERATION_BUDGET.workerRunBatchGets)
+    expect(sheets.batchWrites).toHaveLength(JERA_ALLOCATION_SHEET_OPERATION_BUDGET.worker20DetailBatchUpdates)
+    expect(sheets.workbookMutationCount).toBe(0)
+    expect(timer).not.toHaveBeenCalled()
+    timer.mockRestore()
+    await expect(session.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') }))
+      .resolves.toMatchObject({ coverage: { cursor: 20, status: 'COMPLETE' }, details: { length: 20 } })
+  })
+
+  it('fails closed before hydrating allocation tables beyond their explicit row budgets', async () => {
+    const overflow = new Array(JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxDetailRows + 2)
+    overflow[0] = [...JERA_PAYMENT_DETAIL_CACHE_HEADERS]
+    const sheets = {
+      batchGet: vi.fn(async (_spreadsheetId: string, ranges: string[]) => Object.fromEntries(ranges.map((range) => [
+        range,
+        range.includes('JERA_PAYMENT_DETAIL_CACHE') ? overflow
+          : range.includes('JERA_PAYMENT_DETAIL_LINES') ? [[...JERA_PAYMENT_DETAIL_LINES_HEADERS]]
+            : [[...JERA_ALLOCATION_COVERAGE_HEADERS]],
+      ]))),
+    } as unknown as MiniAppSheetsPort
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await expect(store.openRunSession()).rejects.toThrow('JERA_ALLOCATION_STORE_ROW_LIMIT')
+  })
+
+  it('projects exact OPD/course weights and drops invalid values before allocation', () => {
+    const detail = buildCachedPaymentDetail({
+      branchUuid: BRANCH,
+      paymentSourceHash: PAYMENT_HASH,
+      detail: {
+        sourceUuid: PAYMENT, eventDate: DATE, sourceHash: hash('detail'), fetchedAt: '2026-08-29T10:00:00.000Z', truncated: false,
+        opds: [{ items: [
+          { code: 'SVC-1', priceSatang: 12_000, discountSatang: 2_000, quantity: 1.5 },
+          { code: 'BAD-PRICE', priceSatang: null, discountSatang: 0, quantity: 1 },
+          { code: 'BAD-QUANTITY', priceSatang: 1_000, discountSatang: 0, quantity: Number.NaN },
+        ] }],
+        courses: [
+          { code: 'COURSE-1', paidAmountSatang: 25_000, totalSatang: 30_000 },
+          { code: 'COURSE-BAD', paidAmountSatang: null, totalSatang: null },
+        ],
+      } as never,
+    })
+
+    expect(detail.lines).toEqual([
+      { lineOrdinal: 0, lineKind: 'OPD', itemCode: 'SVC-1', netLineSatang: 15_000 },
+      { lineOrdinal: 1, lineKind: 'COURSE', itemCode: 'COURSE-1', netLineSatang: 25_000 },
+    ])
+  })
 })
 
 function paymentDetail(patch: Partial<JeraCachedPaymentDetail> = {}): JeraCachedPaymentDetail {
@@ -173,6 +255,16 @@ function paymentDetail(patch: Partial<JeraCachedPaymentDetail> = {}): JeraCached
     ],
     ...patch,
   }
+}
+
+function paymentDetailFor(index: number): JeraCachedPaymentDetail {
+  const paymentUuid = `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`
+  const paymentSourceHash = hash(`payment-${index}`)
+  return paymentDetail({
+    paymentUuid,
+    paymentSourceHash,
+    detailKey: jeraPaymentDetailKey(BRANCH, DATE, paymentUuid, paymentSourceHash),
+  })
 }
 
 function coverageRow(patch: Partial<JeraAllocationCoverage> = {}): JeraAllocationCoverage {
@@ -201,6 +293,7 @@ class MemorySheets implements MiniAppSheetsPort {
   private readonly tabs = new Map<string, unknown[][]>()
   readonly batchWrites: Array<Array<{ range: string; values: unknown[][] }>> = []
   readonly batchGets: string[][] = []
+  workbookMutationCount = 0
 
   setTab(tab: string, rows: unknown[][]): void { this.tabs.set(tab, structuredClone(rows)) }
   tab(tab: string): unknown[][] { return structuredClone(this.tabs.get(tab) ?? []) }
@@ -223,7 +316,7 @@ class MemorySheets implements MiniAppSheetsPort {
     }
   }
   async getWorkbook(): Promise<Array<{ sheetId: number; title: string }>> { return [] }
-  async applyWorkbookRequests(): Promise<void> { return undefined }
+  async applyWorkbookRequests(): Promise<void> { this.workbookMutationCount += 1 }
 }
 
 function tabName(range: string): string { return range.split('!', 1)[0]!.replaceAll("'", '') }

@@ -88,12 +88,21 @@ const STATE_TAB = 'JERA_SYNC_STATE'
 const AUDIT_TAB = 'JERA_SYNC_AUDIT'
 const storeMutexes = new Map<string, Promise<void>>()
 
+export const JERA_REPORT_SHEET_OPERATION_BUDGET = Object.freeze({
+  maxCacheRows: 50_000,
+  maxSyncStateRows: 10_000,
+  maxAuditRows: 50_000,
+  repeatedFinanceGetBatchGets: 1,
+  snapshotTtlMs: 5_000,
+})
+
 export class JeraStoreError extends Error {
   readonly code:
     | 'JERA_STORE_INCOMPATIBLE_HEADER'
     | 'JERA_STORE_CORRUPT_ROW'
     | 'JERA_STORE_INVALID_INPUT'
     | 'JERA_STORE_STATE_CONFLICT'
+    | 'JERA_STORE_ROW_LIMIT'
 
   constructor(code: JeraStoreError['code']) {
     super(code)
@@ -110,22 +119,28 @@ export function createGoogleJeraReportStore(input: {
 }): JeraReportStore {
   const { spreadsheetId, sheets } = input
   const mutexKey = `jera-report-store:${spreadsheetId}`
-  const readCacheMs = input.readCacheMs ?? 5_000
+  const readCacheMs = input.readCacheMs ?? JERA_REPORT_SHEET_OPERATION_BUDGET.snapshotTtlMs
   const now = input.now ?? Date.now
   if (!Number.isSafeInteger(readCacheMs) || readCacheMs < 1_000 || readCacheMs > 60_000) {
     throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
   }
-  const tableSnapshots = new Map<string, {
-    expiresAt: number
-    rows: Array<{ rowNumber: number; cells: unknown[] }>
-    timer: ReturnType<typeof setTimeout>
-    token: object
-  }>()
+  type StoredTableRow = { rowNumber: number; cells: unknown[] }
+  const tableSnapshots = new Map<string, { expiresAt: number; rows: StoredTableRow[] }>()
   const tableReads = new Map<string, Promise<Array<{ rowNumber: number; cells: unknown[] }>>>()
+  let financeTablesRead: Promise<Map<string, StoredTableRow[]>> | null = null
 
-  async function loadTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
-    const range = `'${tab}'!A1:${columnName(headers.length)}`
-    const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
+  function rowLimit(tab: string): number {
+    if (tab === CACHE_TAB) return JERA_REPORT_SHEET_OPERATION_BUDGET.maxCacheRows
+    if (tab === STATE_TAB) return JERA_REPORT_SHEET_OPERATION_BUDGET.maxSyncStateRows
+    return JERA_REPORT_SHEET_OPERATION_BUDGET.maxAuditRows
+  }
+
+  function rangeFor(tab: string, headers: readonly string[]): string {
+    return `'${tab}'!A1:${columnName(headers.length)}${rowLimit(tab) + 2}`
+  }
+
+  function parseTable(values: unknown[][], headers: readonly string[], maxRows: number): StoredTableRow[] {
+    if (values.length > maxRows + 1) throw new JeraStoreError('JERA_STORE_ROW_LIMIT')
     const actualHeader = (values[0] ?? []).map(stringValue)
     if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
     return values.slice(1).flatMap((cells, index) => cells.every(blank)
@@ -133,9 +148,46 @@ export function createGoogleJeraReportStore(input: {
       : [{ rowNumber: index + 2, cells }])
   }
 
-  async function readTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
-    if (tab !== CACHE_TAB) return loadTable(tab, headers)
+  async function loadTable(tab: string, headers: readonly string[]): Promise<StoredTableRow[]> {
+    const range = rangeFor(tab, headers)
+    const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
+    return parseTable(values, headers, rowLimit(tab))
+  }
 
+  async function readFinanceTables(): Promise<Map<string, StoredTableRow[]>> {
+    const cache = tableSnapshots.get(CACHE_TAB)
+    const state = tableSnapshots.get(STATE_TAB)
+    if (cache && state && cache.expiresAt > now() && state.expiresAt > now()) {
+      return new Map([
+        [CACHE_TAB, structuredClone(cache.rows)],
+        [STATE_TAB, structuredClone(state.rows)],
+      ])
+    }
+    if (financeTablesRead) return structuredClone(await financeTablesRead)
+    const cacheRange = rangeFor(CACHE_TAB, JERA_API_CACHE_HEADERS)
+    const stateRange = rangeFor(STATE_TAB, JERA_SYNC_STATE_HEADERS)
+    const operation = (async () => {
+      const values = await sheets.batchGet(spreadsheetId, [cacheRange, stateRange])
+      const rows = new Map<string, StoredTableRow[]>([
+        [CACHE_TAB, parseTable(values[cacheRange] ?? [], JERA_API_CACHE_HEADERS, rowLimit(CACHE_TAB))],
+        [STATE_TAB, parseTable(values[stateRange] ?? [], JERA_SYNC_STATE_HEADERS, rowLimit(STATE_TAB))],
+      ])
+      const expiresAt = now() + readCacheMs
+      for (const [tab, tableRows] of rows) tableSnapshots.set(tab, { expiresAt, rows: structuredClone(tableRows) })
+      return rows
+    })()
+    financeTablesRead = operation
+    try {
+      return structuredClone(await operation)
+    } finally {
+      if (financeTablesRead === operation) financeTablesRead = null
+    }
+  }
+
+  async function readTable(tab: string, headers: readonly string[]): Promise<StoredTableRow[]> {
+    if (tab === CACHE_TAB || tab === STATE_TAB) {
+      return (await readFinanceTables()).get(tab) ?? []
+    }
     const cached = tableSnapshots.get(tab)
     if (cached && cached.expiresAt > now()) return structuredClone(cached.rows)
     const active = tableReads.get(tab)
@@ -143,15 +195,7 @@ export function createGoogleJeraReportStore(input: {
 
     const operation = (async () => {
       const rows = await loadTable(tab, headers)
-      const previous = tableSnapshots.get(tab)
-      if (previous) clearTimeout(previous.timer)
-      const token = {}
-      const timer = setTimeout(() => {
-        if (tableSnapshots.get(tab)?.token === token) tableSnapshots.delete(tab)
-      }, readCacheMs)
-      timer.unref?.()
-      const snapshot = { expiresAt: now() + readCacheMs, rows: structuredClone(rows), timer, token }
-      tableSnapshots.set(tab, snapshot)
+      tableSnapshots.set(tab, { expiresAt: now() + readCacheMs, rows: structuredClone(rows) })
       return rows
     })()
     tableReads.set(tab, operation)
@@ -163,8 +207,6 @@ export function createGoogleJeraReportStore(input: {
   }
 
   function invalidateTable(tab: string): void {
-    const cached = tableSnapshots.get(tab)
-    if (cached) clearTimeout(cached.timer)
     tableSnapshots.delete(tab)
   }
 
@@ -279,10 +321,10 @@ export function createGoogleJeraReportStore(input: {
         const cacheKey = jeraCacheKey(query.reportType, query.filters)
         return { query: structuredClone(query), cacheKey }
       })
-      const [cachedRows, states] = await Promise.all([
-        loadTable(CACHE_TAB, JERA_API_CACHE_HEADERS),
-        loadTable(STATE_TAB, JERA_SYNC_STATE_HEADERS).then((rows) => rows.map(({ rowNumber, cells }) => ({ rowNumber, value: stateFromCells(cells) }))),
-      ])
+      const financeTables = await readFinanceTables()
+      const cachedRows = financeTables.get(CACHE_TAB) ?? []
+      const states = (financeTables.get(STATE_TAB) ?? [])
+        .map(({ rowNumber, cells }) => ({ rowNumber, value: stateFromCells(cells) }))
       const rowsByKey = new Map<string, JeraNormalizedRow[]>()
       for (const { cells } of cachedRows) {
         const row = cacheRowFromCells(cells)

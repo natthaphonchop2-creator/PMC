@@ -7,7 +7,12 @@ import {
 } from '../../server/pmc-mini-app/setup'
 import type { JeraNormalizedRow } from '../../server/jera/contracts'
 import { jeraCacheKey } from '../../server/jera/cacheKey'
-import { createGoogleJeraReportStore, type JeraCachedSnapshotQuery, type JeraSyncAuditRecord } from '../../server/jera/store'
+import {
+  createGoogleJeraReportStore,
+  JERA_REPORT_SHEET_OPERATION_BUDGET,
+  type JeraCachedSnapshotQuery,
+  type JeraSyncAuditRecord,
+} from '../../server/jera/store'
 
 describe('Google Sheets JERA report store', () => {
   it('reuses a short-lived single-flight snapshot and invalidates it after a write', async () => {
@@ -23,11 +28,11 @@ describe('Google Sheets JERA report store', () => {
 
     await store.getSyncState('PAYMENT:key')
     await store.getSyncState('PAYMENT:key')
-    expect(sheets.readCount).toBe(3)
+    expect(sheets.readCount).toBe(1)
 
     await store.upsertRows('PAYMENT', [paymentRow()])
     await store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' })
-    expect(sheets.readCount).toBe(4)
+    expect(sheets.readCount).toBe(2)
   })
 
   it('upserts the same source without duplicate rows', async () => {
@@ -178,10 +183,14 @@ describe('Google Sheets JERA report store', () => {
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
     const timer = vi.spyOn(globalThis, 'setTimeout')
     try {
-      const snapshots = await store.readSnapshots(queries)
-      expect(sheets.readCount).toBe(2)
+      const [snapshots, replay] = await Promise.all([
+        store.readSnapshots(queries),
+        store.readSnapshots(queries),
+      ])
+      expect(sheets.readCount).toBe(JERA_REPORT_SHEET_OPERATION_BUDGET.repeatedFinanceGetBatchGets)
       expect(timer).not.toHaveBeenCalled()
       expect(snapshots).toHaveLength(93)
+      expect(replay).toEqual(snapshots)
       expect(snapshots[0]?.rows).toHaveLength(1)
       expect(snapshots[1]).toMatchObject({ rows: [], state: { status: 'SUCCESS', recordCount: 0 } })
       expect(snapshots[2]?.rows).toEqual([])
@@ -189,6 +198,22 @@ describe('Google Sheets JERA report store', () => {
     } finally {
       timer.mockRestore()
     }
+  })
+
+  it('fails closed before parsing a cache snapshot beyond the explicit row budget', async () => {
+    const overflow = new Array(JERA_REPORT_SHEET_OPERATION_BUDGET.maxCacheRows + 2)
+    overflow[0] = [...JERA_API_CACHE_HEADERS]
+    const sheets = {
+      batchGet: vi.fn(async (_spreadsheetId: string, ranges: string[]) => Object.fromEntries(ranges.map((range) => [
+        range,
+        range.includes('JERA_API_CACHE') ? overflow : [[...JERA_SYNC_STATE_HEADERS]],
+      ]))),
+    } as unknown as MiniAppSheetsPort
+    const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await expect(store.readSnapshots([{ reportType: 'PAYMENT', filters: {
+      branchUuid: '11111111-2222-4333-8444-555555555555', startDate: '2026-08-01', endDate: '2026-08-01',
+    } }])).rejects.toThrow('JERA_STORE_ROW_LIMIT')
   })
 })
 

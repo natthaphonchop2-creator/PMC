@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { JeraReadError } from '../../server/jera/client'
 import type { JeraNormalizedRow, JeraReadPort } from '../../server/jera/contracts'
 import type { JeraAllocationLease, JeraAllocationLeasePort } from '../../server/jera/allocationLeaseStore'
-import type { JeraAllocationCoverage, JeraAllocationStore, JeraCachedPaymentDetail } from '../../server/jera/allocationStore'
+import type {
+  JeraAllocationCoverage,
+  JeraAllocationRunSession,
+  JeraAllocationStore,
+  JeraCachedPaymentDetail,
+} from '../../server/jera/allocationStore'
 import { createGoogleJeraAllocationTaskQueue, type JeraAllocationTaskQueuePort } from '../../server/jera/allocationTaskQueue'
 import { createJeraAllocationWorker } from '../../server/jera/allocationWorker'
 import { jeraCacheKey } from '../../server/jera/cacheKey'
@@ -42,6 +47,24 @@ describe('resumable JERA payment-detail worker', () => {
       metadataSnapshotHash: harness.metadataSnapshotHash, cursor: 20, attempt: 0,
       scheduleAt: new Date(harness.clockMs + 60_000),
     })
+  })
+
+  it('opens one indexed allocation session and combines every new detail with its durable cursor write', async () => {
+    const harness = workerHarness(2)
+
+    await expect(harness.worker.run(task(harness.paymentSetHash))).resolves.toEqual({
+      status: 'COMPLETE', processed: 2, nextCursor: null,
+    })
+
+    expect(harness.allocationStore.openRunSession).toHaveBeenCalledOnce()
+    expect(harness.runSession.persistPaymentDetail).toHaveBeenCalledTimes(2)
+    expect(harness.allocationStore.getCoverage).not.toHaveBeenCalled()
+    expect(harness.allocationStore.readDay).not.toHaveBeenCalled()
+    expect(harness.allocationStore.replacePaymentDetail).not.toHaveBeenCalled()
+    expect(harness.allocationStore.saveCoverage).not.toHaveBeenCalled()
+    expect(harness.runSession.persistPaymentDetail).toHaveBeenLastCalledWith(expect.objectContaining({
+      coverage: expect.objectContaining({ cursor: 2, successfulDetailCount: 2, status: 'COMPLETE' }),
+    }))
   })
 
   it('skips an identical detail without a provider call and stores complete source evidence', async () => {
@@ -216,15 +239,33 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
   }
   const client = { request: vi.fn(async (_type, filters) => [detailPayload(filters.paymentUuid!)]) } as unknown as JeraReadPort & { request: ReturnType<typeof vi.fn> }
   const queue = (leasePatch.queue ?? { enqueue: vi.fn(async () => ({ taskName: 'task', alreadyExists: false })) }) as JeraAllocationTaskQueuePort & { enqueue: ReturnType<typeof vi.fn> }
-  const allocationStore: JeraAllocationStore = {
-    replacePaymentDetail: vi.fn(async (detail) => {
+  const replacePaymentDetail = vi.fn(async (detail: JeraCachedPaymentDetail) => {
       const index = details.findIndex((stored) => stored.paymentUuid === detail.paymentUuid)
       if (index >= 0) details[index] = structuredClone(detail); else details.push(structuredClone(detail))
+  })
+  const saveCoverage = vi.fn(async (value: JeraAllocationCoverage) => {
+    currentCoverage = structuredClone(value); coverageWrites.push(structuredClone(value))
+  })
+  const runSession = {
+    replacePaymentDetail,
+    persistPaymentDetail: vi.fn(async ({ detail, coverage }: { detail: JeraCachedPaymentDetail; coverage: JeraAllocationCoverage }) => {
+      await replacePaymentDetail(detail)
+      await saveCoverage(coverage)
     }),
     readDay: vi.fn(async () => ({ coverage: currentCoverage?.paymentSetHash === paymentSetHash ? structuredClone(currentCoverage) : null, details: structuredClone(details) })),
     getCoverage: vi.fn(async () => structuredClone(currentCoverage)),
-    saveCoverage: vi.fn(async (value) => { currentCoverage = structuredClone(value); coverageWrites.push(structuredClone(value)) }),
+    saveCoverage,
     listIncompleteCoverage: vi.fn(async () => []),
+    readDays: vi.fn(async () => []),
+  } satisfies JeraAllocationRunSession
+  const allocationStore = {
+    replacePaymentDetail: vi.fn(async (detail: JeraCachedPaymentDetail) => replacePaymentDetail(detail)),
+    readDay: vi.fn(async () => runSession.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash })),
+    getCoverage: vi.fn(async () => structuredClone(currentCoverage)),
+    saveCoverage: vi.fn(async (value: JeraAllocationCoverage) => saveCoverage(value)),
+    listIncompleteCoverage: vi.fn(async () => []),
+    readDays: vi.fn(async () => []),
+    openRunSession: vi.fn(async () => runSession),
   }
   const paymentState: { lastSuccessAt: string | null } = { lastSuccessAt: '2026-08-29T09:58:00.000Z' }
   const productState: { lastSuccessAt: string | null } = { lastSuccessAt: '2026-08-29T09:59:00.000Z' }
@@ -241,6 +282,7 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
   })
   return {
     worker, client, queue, lease, claimedLease, payments, paymentSetHash, metadataSnapshotHash,
+    allocationStore, runSession,
     details, coverageWrites, attemptTimes, paymentState, productState, reportStore,
     get coverage() { return currentCoverage }, set coverage(value) { currentCoverage = value }, get clockMs() { return clockMs },
   }
