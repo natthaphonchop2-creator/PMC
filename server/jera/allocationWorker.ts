@@ -20,6 +20,7 @@ export interface JeraAllocationWorker {
     branchUuid: string
     eventDate: string
     paymentSetHash: string
+    metadataSnapshotHash: string
     cursor: number
     attempt: number
     workerId: string
@@ -63,14 +64,14 @@ export function createJeraAllocationWorker(options: {
             { reportType: 'PAYMENT', filters }, { reportType: 'PRODUCT_SALES', filters },
           ])
         } catch {
-          const retryCursor = existingCoverage?.paymentSetHash === input.paymentSetHash ? existingCoverage.cursor : 0
-          await enqueue(input.paymentSetHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
+          const retryCursor = coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash) ? existingCoverage.cursor : 0
+          await enqueue(input.paymentSetHash, input.metadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
         const [paymentSnapshot, productSnapshot] = snapshots
         if (!paymentSnapshot || !productSnapshot) {
-          const retryCursor = existingCoverage?.paymentSetHash === input.paymentSetHash ? existingCoverage.cursor : 0
-          await enqueue(input.paymentSetHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
+          const retryCursor = coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash) ? existingCoverage.cursor : 0
+          await enqueue(input.paymentSetHash, input.metadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
         const payments = exactDayPayments(paymentSnapshot.rows, input.branchUuid, input.eventDate)
@@ -78,14 +79,15 @@ export function createJeraAllocationWorker(options: {
         const metadata = buildItemTypeMetadata(productSnapshot.rows.map((row) => ({
           itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
         })))
+        const currentMetadataSnapshotHash = metadata.snapshotHash
         const sourceEvidence = {
           paymentCacheKey: jeraCacheKey('PAYMENT', filters), productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', filters),
           paymentLastSuccessAt: validInstantOrNull(paymentSnapshot.state?.lastSuccessAt ?? null),
           productSalesLastSuccessAt: validInstantOrNull(productSnapshot.state?.lastSuccessAt ?? null),
         }
         if (!sourceEvidence.paymentLastSuccessAt || !sourceEvidence.productSalesLastSuccessAt) {
-          const retryCursor = existingCoverage?.paymentSetHash === currentPaymentSetHash ? existingCoverage.cursor : 0
-          const incomplete = existingCoverage?.paymentSetHash === currentPaymentSetHash
+          const retryCursor = coverageMatches(existingCoverage, currentPaymentSetHash, currentMetadataSnapshotHash) ? existingCoverage.cursor : 0
+          const incomplete = coverageMatches(existingCoverage, currentPaymentSetHash, currentMetadataSnapshotHash)
             ? { ...existingCoverage, ...sourceEvidence, metadataSnapshotHash: metadata.snapshotHash, status: 'INCOMPLETE' as const,
                 safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE', leaseOwner: lease.owner, leaseExpiresAt: lease.expiresAt }
             : { ...coverageBase({
@@ -93,26 +95,27 @@ export function createJeraAllocationWorker(options: {
                 metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: retryCursor, successfulDetailCount: 0,
               }), safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE' }
           await options.allocationStore.saveCoverage(incomplete)
-          await enqueue(currentPaymentSetHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
+          await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
-        if (existingCoverage?.paymentSetHash === input.paymentSetHash && input.paymentSetHash === currentPaymentSetHash
+        if (coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash)
+          && input.paymentSetHash === currentPaymentSetHash && input.metadataSnapshotHash === currentMetadataSnapshotHash
           && existingCoverage.status === 'COMPLETE') return skipped()
         const read = await options.allocationStore.readDay({
           branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: currentPaymentSetHash,
         })
 
-        if (currentPaymentSetHash !== input.paymentSetHash) {
+        if (currentPaymentSetHash !== input.paymentSetHash || currentMetadataSnapshotHash !== input.metadataSnapshotHash) {
           const reset = coverageBase({
             input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
             metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: 0, successfulDetailCount: matchingCount(read.details, payments),
           })
+          await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, 0, 0, options.continuationDelaySeconds)
           await options.allocationStore.saveCoverage(reset)
-          await enqueue(currentPaymentSetHash, 0, 0, options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: 0 }
         }
 
-        const coverage = read.coverage?.paymentSetHash === currentPaymentSetHash
+        const coverage = coverageMatches(read.coverage, currentPaymentSetHash, currentMetadataSnapshotHash)
           ? { ...read.coverage }
           : coverageBase({
               input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
@@ -171,7 +174,7 @@ export function createJeraAllocationWorker(options: {
             coverage.successfulDetailCount = matchingCount(details, payments)
             await options.allocationStore.saveCoverage(coverage)
             const retryAfter = error instanceof JeraReadError ? error.retryAfterSeconds ?? 0 : 0
-            await enqueue(currentPaymentSetHash, cursor, nextAttempt(input.attempt), Math.max(options.continuationDelaySeconds, retryAfter))
+            await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, nextAttempt(input.attempt), Math.max(options.continuationDelaySeconds, retryAfter))
             return { status: 'CONTINUED', processed: processed - 1, nextCursor: cursor }
           }
         }
@@ -181,12 +184,19 @@ export function createJeraAllocationWorker(options: {
           await options.allocationStore.saveCoverage(coverage)
           return { status: 'COMPLETE', processed, nextCursor: null }
         }
-        await enqueue(currentPaymentSetHash, cursor, 0, options.continuationDelaySeconds)
+        await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
         return { status: 'CONTINUED', processed, nextCursor: cursor }
 
-        async function enqueue(hash: string, nextCursor: number, attempt: number, delaySeconds: number): Promise<void> {
+        async function enqueue(
+          hash: string,
+          metadataHash: string,
+          nextCursor: number,
+          attempt: number,
+          delaySeconds: number,
+        ): Promise<void> {
           await options.queue.enqueue({
-            branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: hash, cursor: nextCursor, attempt,
+            branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: hash,
+            metadataSnapshotHash: metadataHash, cursor: nextCursor, attempt,
             scheduleAt: new Date(now().getTime() + delaySeconds * 1_000),
           })
         }
@@ -277,13 +287,25 @@ function validInstantOrNull(value: string | null): string | null {
   return value !== null && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : null
 }
 
-function validateRunInput(input: { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number; attempt: number; workerId: string }): void {
+function validateRunInput(input: {
+  branchUuid: string; eventDate: string; paymentSetHash: string; metadataSnapshotHash: string
+  cursor: number; attempt: number; workerId: string
+}): void {
   const date = new Date(`${input.eventDate}T00:00:00Z`)
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.branchUuid)
     || !/^\d{4}-\d{2}-\d{2}$/.test(input.eventDate) || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== input.eventDate
-    || !/^[a-f0-9]{64}$/.test(input.paymentSetHash) || !Number.isSafeInteger(input.cursor) || input.cursor < 0
+    || !/^[a-f0-9]{64}$/.test(input.paymentSetHash) || !/^[a-f0-9]{64}$/.test(input.metadataSnapshotHash)
+    || !Number.isSafeInteger(input.cursor) || input.cursor < 0
     || !Number.isSafeInteger(input.attempt) || input.attempt < 0 || input.attempt > MAX_JERA_ALLOCATION_ATTEMPT
     || !/^[A-Za-z0-9._:-]{1,256}$/.test(input.workerId)) throw new Error('JERA_ALLOCATION_WORKER_INVALID_INPUT')
+}
+
+function coverageMatches(
+  coverage: JeraAllocationCoverage | null | undefined,
+  paymentSetHash: string,
+  metadataSnapshotHash: string,
+): coverage is JeraAllocationCoverage {
+  return coverage?.paymentSetHash === paymentSetHash && coverage.metadataSnapshotHash === metadataSnapshotHash
 }
 
 function nextAttempt(value: number): number {

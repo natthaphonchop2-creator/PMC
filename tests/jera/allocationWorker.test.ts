@@ -38,7 +38,8 @@ describe('resumable JERA payment-detail worker', () => {
     expect([...new Set(harness.coverageWrites.filter((row) => row.cursor > 0).map((row) => row.cursor))])
       .toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
     expect(harness.queue.enqueue).toHaveBeenCalledWith({
-      branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash, cursor: 20, attempt: 0,
+      branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash,
+      metadataSnapshotHash: harness.metadataSnapshotHash, cursor: 20, attempt: 0,
       scheduleAt: new Date(harness.clockMs + 60_000),
     })
   })
@@ -80,6 +81,26 @@ describe('resumable JERA payment-detail worker', () => {
     expect(harness.details).toContainEqual(historical)
     expect(harness.coverage).toMatchObject({ paymentSetHash: harness.paymentSetHash, cursor: 0, status: 'INCOMPLETE' })
     expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ paymentSetHash: harness.paymentSetHash, cursor: 0 }))
+  })
+
+  it('verifies task metadata and resets metadata-only changes into a distinct continuation', async () => {
+    const harness = workerHarness(1)
+    harness.coverage = coverage({
+      paymentSetHash: harness.paymentSetHash, metadataSnapshotHash: 'f'.repeat(64), cursor: 1, status: 'COMPLETE',
+    })
+
+    await expect(harness.worker.run(task(harness.paymentSetHash, 0, 'f'.repeat(64))))
+      .resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
+
+    expect(harness.client.request).not.toHaveBeenCalled()
+    expect(harness.coverage).toMatchObject({
+      paymentSetHash: harness.paymentSetHash, metadataSnapshotHash: harness.metadataSnapshotHash,
+      cursor: 0, status: 'INCOMPLETE',
+    })
+    expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      paymentSetHash: harness.paymentSetHash, metadataSnapshotHash: harness.metadataSnapshotHash,
+      cursor: 0, attempt: 0,
+    }))
   })
 
   it('makes a complete task replay an idempotent zero-provider skip', async () => {
@@ -133,7 +154,10 @@ describe('resumable JERA payment-detail worker', () => {
       .mockRejectedValueOnce(new JeraReadError('JERA_PROVIDER_FAILED'))
       .mockResolvedValueOnce([detailPayload(harness.payments[0]!.sourceUuid)])
 
-    await queue.enqueue({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash, cursor: 0, attempt: 0, scheduleAt: new Date(START) })
+    await queue.enqueue({
+      branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash,
+      metadataSnapshotHash: harness.metadataSnapshotHash, cursor: 0, attempt: 0, scheduleAt: new Date(START),
+    })
     await expect(harness.worker.run(task(harness.paymentSetHash, 0))).resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
     const [current, retry] = createTask.mock.calls.map(([request]) => request.task!)
     expect(retry!.name).not.toBe(current!.name)
@@ -179,6 +203,7 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
   const attemptTimes: number[] = []
   const payments = Array.from({ length: count }, (_, index) => payment(index + 1))
   const paymentSetHash = setHash(payments)
+  const metadataSnapshotHash = metadataHash()
   const details: JeraCachedPaymentDetail[] = []
   let currentCoverage: JeraAllocationCoverage | null = null
   const coverageWrites: JeraAllocationCoverage[] = []
@@ -215,7 +240,8 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
     sleep: async (milliseconds) => { clockMs += milliseconds },
   })
   return {
-    worker, client, queue, lease, claimedLease, payments, paymentSetHash, details, coverageWrites, attemptTimes, paymentState, productState, reportStore,
+    worker, client, queue, lease, claimedLease, payments, paymentSetHash, metadataSnapshotHash,
+    details, coverageWrites, attemptTimes, paymentState, productState, reportStore,
     get coverage() { return currentCoverage }, set coverage(value) { currentCoverage = value }, get clockMs() { return clockMs },
   }
 }
@@ -256,14 +282,17 @@ function cachedDetail(row: JeraNormalizedRow): JeraCachedPaymentDetail {
 function coverage(patch: Partial<JeraAllocationCoverage>): JeraAllocationCoverage {
   return {
     dayKey: dayKey(), branchUuid: BRANCH, eventDate: DATE, paymentCacheKey: paymentCacheKey(), productSalesCacheKey: productCacheKey(),
-    paymentSetHash: hash('old'), paymentRowCount: 0, successfulDetailCount: 0, metadataSnapshotHash: hash('metadata'),
+    paymentSetHash: hash('old'), paymentRowCount: 0, successfulDetailCount: 0, metadataSnapshotHash: metadataHash(),
     paymentLastSuccessAt: null, productSalesLastSuccessAt: null, cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null,
     lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, ...patch,
   }
 }
 
-function task(paymentSetHash: string, attempt = 0) { return { branchUuid: BRANCH, eventDate: DATE, paymentSetHash, cursor: 0, attempt, workerId: 'worker-1' } }
+function task(paymentSetHash: string, attempt = 0, metadataSnapshotHash = metadataHash()) {
+  return { branchUuid: BRANCH, eventDate: DATE, paymentSetHash, metadataSnapshotHash, cursor: 0, attempt, workerId: 'worker-1' }
+}
 function setHash(rows: JeraNormalizedRow[]): string { return createHash('sha256').update(JSON.stringify(rows.map((row) => [row.sourceUuid, row.sourceHash]).sort())).digest('hex') }
+function metadataHash(): string { return createHash('sha256').update(JSON.stringify([['ITEM-1', 'SERVICE']])).digest('hex') }
 function hash(value: string): string { return createHash('sha256').update(value).digest('hex') }
 function dayKey(): string { return createHash('sha256').update(JSON.stringify([BRANCH, DATE])).digest('hex') }
 function paymentCacheKey(): string { return jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }) }

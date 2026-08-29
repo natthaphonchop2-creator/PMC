@@ -8,6 +8,7 @@ export interface JeraAllocationTaskQueuePort {
     branchUuid: string
     eventDate: string
     paymentSetHash: string
+    metadataSnapshotHash: string
     cursor: number
     attempt: number
     scheduleAt: Date
@@ -28,7 +29,10 @@ export function createGoogleJeraAllocationTaskQueue(input: {
   return {
     async enqueue(taskInput) {
       validate(taskInput)
-      const tuple = JSON.stringify([taskInput.branchUuid, taskInput.eventDate, taskInput.paymentSetHash, taskInput.cursor, taskInput.attempt])
+      const tuple = JSON.stringify([
+        taskInput.branchUuid, taskInput.eventDate, taskInput.paymentSetHash,
+        taskInput.metadataSnapshotHash, taskInput.cursor, taskInput.attempt,
+      ])
       const taskId = `finance-allocation-${createHash('sha256').update(tuple).digest('hex')}`
       const taskName = client.taskPath(input.projectId, input.location, input.queueName, taskId)
       try {
@@ -42,7 +46,8 @@ export function createGoogleJeraAllocationTaskQueue(input: {
               headers: { 'Content-Type': 'application/json' },
               body: Buffer.from(JSON.stringify({
                 branchUuid: taskInput.branchUuid, eventDate: taskInput.eventDate,
-                paymentSetHash: taskInput.paymentSetHash, cursor: taskInput.cursor, attempt: taskInput.attempt,
+                paymentSetHash: taskInput.paymentSetHash, metadataSnapshotHash: taskInput.metadataSnapshotHash,
+                cursor: taskInput.cursor, attempt: taskInput.attempt,
               })),
               oidcToken: { serviceAccountEmail: input.taskInvokerEmail, audience: input.workerAudience },
             },
@@ -59,9 +64,13 @@ export function createGoogleJeraAllocationTaskQueue(input: {
   }
 }
 
-function validate(input: { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number; attempt: number; scheduleAt: Date }): void {
+function validate(input: {
+  branchUuid: string; eventDate: string; paymentSetHash: string; metadataSnapshotHash: string
+  cursor: number; attempt: number; scheduleAt: Date
+}): void {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.branchUuid)
     || !isoDate(input.eventDate) || !/^[a-f0-9]{64}$/.test(input.paymentSetHash)
+    || !/^[a-f0-9]{64}$/.test(input.metadataSnapshotHash)
     || !Number.isSafeInteger(input.cursor) || input.cursor < 0
     || !Number.isSafeInteger(input.attempt) || input.attempt < 0 || input.attempt > MAX_JERA_ALLOCATION_ATTEMPT
     || !Number.isFinite(input.scheduleAt.getTime())) {

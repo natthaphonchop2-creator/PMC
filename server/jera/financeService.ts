@@ -123,6 +123,8 @@ export function createJeraFinanceService(options: {
       const actorId = actorIdentity(input.actor)
       const retryAfterSeconds: number[] = []
       try {
+        const dayKey = jeraAllocationDayKey(branchUuid, eventDate)
+        const existingCoverage = await options.allocationStore.getCoverage(dayKey)
         for (const reportType of FINANCE_REPORT_TYPES) {
           const result = await options.coordinator.manualRefresh(exactQuery(reportType, branchUuid, eventDate), actorId)
           retryAfterSeconds.push(safeRetry(result.retryAfterSeconds))
@@ -140,8 +142,16 @@ export function createJeraFinanceService(options: {
           itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
         })))
         const hash = paymentSetHash(payments)
+        if (existingCoverage?.paymentSetHash === hash
+          && existingCoverage.metadataSnapshotHash === metadata.snapshotHash) {
+          return {
+            accepted: true,
+            allocationQueued: false,
+            retryAfterSeconds: Math.max(...retryAfterSeconds),
+          }
+        }
         const coverage: JeraAllocationCoverage = {
-          dayKey: jeraAllocationDayKey(branchUuid, eventDate), branchUuid, eventDate,
+          dayKey, branchUuid, eventDate,
           paymentCacheKey: jeraCacheKey('PAYMENT', queries[0]!.filters),
           productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', queries[2]!.filters),
           paymentSetHash: hash, paymentRowCount: payments.length, successfulDetailCount: 0,
@@ -151,13 +161,21 @@ export function createJeraFinanceService(options: {
           cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null,
           safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
         }
-        await options.allocationStore.saveCoverage(coverage)
         const queued = await options.allocationQueue.enqueue({
-          branchUuid, eventDate, paymentSetHash: hash, cursor: 0, attempt: 0, scheduleAt: validNow(now()),
+          branchUuid, eventDate, paymentSetHash: hash, metadataSnapshotHash: metadata.snapshotHash,
+          cursor: 0, attempt: 0, scheduleAt: validNow(now()),
         })
+        if (queued.alreadyExists) {
+          return {
+            accepted: true,
+            allocationQueued: false,
+            retryAfterSeconds: Math.max(...retryAfterSeconds),
+          }
+        }
+        await options.allocationStore.saveCoverage(coverage)
         return {
           accepted: true,
-          allocationQueued: !queued.alreadyExists,
+          allocationQueued: true,
           retryAfterSeconds: Math.max(...retryAfterSeconds),
         }
       } catch (error) {

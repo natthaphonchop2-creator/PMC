@@ -16,13 +16,13 @@ describe('JERA allocation task queue', () => {
     })
 
     const result = await queue.enqueue({
-      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt: 0,
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 0,
       scheduleAt: new Date('2026-08-29T23:01:00.000Z'),
     })
 
     const task = createTask.mock.calls[0]![0].task!
     expect(task.httpRequest?.body).toEqual(Buffer.from(JSON.stringify({
-      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt: 0,
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 0,
     })))
     expect(task.httpRequest?.oidcToken).toEqual({
       serviceAccountEmail: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com',
@@ -42,7 +42,7 @@ describe('JERA allocation task queue', () => {
       workerUrl: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker', workerAudience: 'https://pmc-mini-app.example',
       taskInvokerEmail: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com', client: fakeClient(createTask),
     })
-    const input = { branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt: 1, scheduleAt: new Date(0) }
+    const input = { branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 1, scheduleAt: new Date(0) }
     createTask.mockRejectedValueOnce(Object.assign(new Error('private'), { code: 6, metadata: { private: true } }))
     await expect(queue.enqueue(input)).resolves.toMatchObject({ alreadyExists: true })
 
@@ -62,7 +62,7 @@ describe('JERA allocation task queue', () => {
       workerUrl: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker', workerAudience: 'https://pmc-mini-app.example',
       taskInvokerEmail: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com', client: fakeClient(createTask),
     })
-    const base = { branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, scheduleAt: new Date(0) }
+    const base = { branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, scheduleAt: new Date(0) }
 
     const current = await queue.enqueue({ ...base, attempt: 0 })
     const retry = await queue.enqueue({ ...base, attempt: 1 })
@@ -74,6 +74,25 @@ describe('JERA allocation task queue', () => {
       .toEqual([0, 1, 1])
   })
 
+  it('uses metadata snapshot hash in the task identity and exact worker payload', async () => {
+    const createTask = vi.fn(async () => [{}])
+    const queue = createGoogleJeraAllocationTaskQueue({
+      projectId: 'pmc-project', location: 'asia-southeast1', queueName: 'pmc-revenue-allocation',
+      workerUrl: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker', workerAudience: 'https://pmc-mini-app.example',
+      taskInvokerEmail: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com', client: fakeClient(createTask),
+    })
+    const base = {
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt: 0, scheduleAt: new Date(0),
+    }
+
+    const first = await queue.enqueue({ ...base, metadataSnapshotHash: 'b'.repeat(64) })
+    const changed = await queue.enqueue({ ...base, metadataSnapshotHash: 'c'.repeat(64) })
+
+    expect(changed.taskName).not.toBe(first.taskName)
+    expect(createTask.mock.calls.map(([request]) => JSON.parse(Buffer.from(request.task!.httpRequest!.body!).toString('utf8')).metadataSnapshotHash))
+      .toEqual(['b'.repeat(64), 'c'.repeat(64)])
+  })
+
   it.each([-1, 1_000_001, Number.MAX_SAFE_INTEGER])('rejects unsafe attempt %s before Cloud Tasks', async (attempt) => {
     const createTask = vi.fn(async () => [{}])
     const queue = createGoogleJeraAllocationTaskQueue({
@@ -81,7 +100,7 @@ describe('JERA allocation task queue', () => {
       workerUrl: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker', workerAudience: 'https://pmc-mini-app.example',
       taskInvokerEmail: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com', client: fakeClient(createTask),
     })
-    await expect(queue.enqueue({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt, scheduleAt: new Date(0) }))
+    await expect(queue.enqueue({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt, scheduleAt: new Date(0) }))
       .rejects.toThrow('JERA_ALLOCATION_TASK_FAILED')
     expect(createTask).not.toHaveBeenCalled()
   })

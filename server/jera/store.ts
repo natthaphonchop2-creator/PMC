@@ -123,17 +123,18 @@ export function createGoogleJeraReportStore(input: {
   }>()
   const tableReads = new Map<string, Promise<Array<{ rowNumber: number; cells: unknown[] }>>>()
 
+  async function loadTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
+    const range = `'${tab}'!A1:${columnName(headers.length)}`
+    const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
+    const actualHeader = (values[0] ?? []).map(stringValue)
+    if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
+    return values.slice(1).flatMap((cells, index) => cells.every(blank)
+      ? []
+      : [{ rowNumber: index + 2, cells }])
+  }
+
   async function readTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
-    const load = async () => {
-      const range = `'${tab}'!A1:${columnName(headers.length)}`
-      const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
-      const actualHeader = (values[0] ?? []).map(stringValue)
-      if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
-      return values.slice(1).flatMap((cells, index) => cells.every(blank)
-        ? []
-        : [{ rowNumber: index + 2, cells }])
-    }
-    if (tab !== CACHE_TAB) return load()
+    if (tab !== CACHE_TAB) return loadTable(tab, headers)
 
     const cached = tableSnapshots.get(tab)
     if (cached && cached.expiresAt > now()) return structuredClone(cached.rows)
@@ -141,7 +142,7 @@ export function createGoogleJeraReportStore(input: {
     if (active) return structuredClone(await active)
 
     const operation = (async () => {
-      const rows = await load()
+      const rows = await loadTable(tab, headers)
       const previous = tableSnapshots.get(tab)
       if (previous) clearTimeout(previous.timer)
       const token = {}
@@ -279,7 +280,8 @@ export function createGoogleJeraReportStore(input: {
         return { query: structuredClone(query), cacheKey }
       })
       const [cachedRows, states] = await Promise.all([
-        readTable(CACHE_TAB, JERA_API_CACHE_HEADERS), readStates(),
+        loadTable(CACHE_TAB, JERA_API_CACHE_HEADERS),
+        loadTable(STATE_TAB, JERA_SYNC_STATE_HEADERS).then((rows) => rows.map(({ rowNumber, cells }) => ({ rowNumber, value: stateFromCells(cells) }))),
       ])
       const rowsByKey = new Map<string, JeraNormalizedRow[]>()
       for (const { cells } of cachedRows) {

@@ -176,13 +176,17 @@ describe('authenticated JERA report API', () => {
     deps.jera = allocationApi(worker)
     const response = await invoke(createPmcMiniAppMiddleware(deps), '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' },
-      body: JSON.stringify({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5, attempt: 3 }),
+      body: JSON.stringify({
+        branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64),
+        metadataSnapshotHash: 'b'.repeat(64), cursor: 5, attempt: 3,
+      }),
     })
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: 'CONTINUED', processed: 7, nextCursor: 12 })
     expect(worker.run).toHaveBeenCalledWith({
-      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5, attempt: 3, workerId: 'worker-route-id',
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64),
+      metadataSnapshotHash: 'b'.repeat(64), cursor: 5, attempt: 3, workerId: 'worker-route-id',
     })
   })
 
@@ -191,7 +195,10 @@ describe('authenticated JERA report API', () => {
     const worker = { run: vi.fn(async () => { throw Object.assign(new Error('private'), { patient: 'private' }) }) } as unknown as JeraAllocationWorker
     deps.jera = allocationApi(worker)
     const middleware = createPmcMiniAppMiddleware(deps)
-    const valid = { branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt: 0 }
+    const valid = {
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64),
+      metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 0,
+    }
     const validBody = JSON.stringify(valid)
 
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', { method: 'GET' })).status).toBe(405)
@@ -205,6 +212,10 @@ describe('authenticated JERA report API', () => {
     const { attempt: _attempt, ...missingAttempt } = valid
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify(missingAttempt),
+    })).status).toBe(400)
+    const { metadataSnapshotHash: _metadataSnapshotHash, ...missingMetadata } = valid
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify(missingMetadata),
     })).status).toBe(400)
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ ...valid, attempt: 1_000_001 }),
@@ -233,6 +244,23 @@ describe('authenticated finance report API', () => {
     expect(deps.finance.readDaily).not.toHaveBeenCalled()
     expect(deps.finance.readMonthly).not.toHaveBeenCalled()
     expect(deps.finance.refreshDay).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['monthly read', '/api/mini-app/finance/monthly?year=2026&month=8', 'GET'],
+    ['manual daily refresh', '/api/mini-app/finance/daily/refresh?date=2026-08-29', 'POST'],
+  ])('returns 403 for %s before unavailable finance dependencies are checked', async (_label, path, method) => {
+    const deps = financeUnavailableDependencies()
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), path, {
+      method, headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: 'FINANCE_FORBIDDEN' })
+    expect(deps.coordinator.readCachedBatch).not.toHaveBeenCalled()
+    expect(deps.coordinator.manualRefresh).not.toHaveBeenCalled()
+    expect(deps.reportStore.listSyncStates).not.toHaveBeenCalled()
   })
 
   it('allows any active linked staff member to read a daily cache projection', async () => {
@@ -388,6 +416,7 @@ function allocationApi(worker: JeraAllocationWorker) {
 function dependencies(options: { manualAccepted?: boolean; canViewFinance?: boolean } = {}) {
   const coordinator = {
     readAndRefresh: vi.fn(async () => envelope()),
+    readCachedBatch: vi.fn(async () => []),
     manualRefresh: vi.fn(async () => ({
       accepted: options.manualAccepted ?? true,
       retryAfterSeconds: options.manualAccepted === false ? 240 : 300,
@@ -452,6 +481,15 @@ function financeDependencies(options: { canViewFinance?: boolean; internalSeed?:
     },
   } as never)
   return { ...deps, finance }
+}
+
+function financeUnavailableDependencies() {
+  const deps = dependencies({ canViewFinance: false })
+  const reportStore = { listSyncStates: vi.fn(async () => []) } as unknown as JeraReportStore & { listSyncStates: ReturnType<typeof vi.fn> }
+  deps.jera = createJeraMiniAppApi({
+    coordinator: deps.coordinator, store: reportStore, defaultBranchUuid: BRANCH,
+  })
+  return { ...deps, reportStore }
 }
 
 function dailyProjection() {

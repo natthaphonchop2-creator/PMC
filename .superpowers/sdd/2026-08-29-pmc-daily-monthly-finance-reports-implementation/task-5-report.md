@@ -164,3 +164,88 @@ Duration 28.58s
 
 - `npm run lint` is not green on the branch: it reports 9 errors and 1 warning in pre-existing unchanged lines (including prior allocation-store destructuring, allocation lease/task queue, prior report API tests, and an existing generated file warning). The Task 5 additions themselves introduced no reported lint finding. This was verified against the zero-context diff and `HEAD` source; unrelated lint cleanup was intentionally not included.
 - Runtime finance construction currently follows the approved allocation configuration gate because manual refresh must seed the existing allocation queue. Production activation still requires the separately approved environment/configuration and external rollout gates; none were changed here.
+
+## Fix Round 1 — Important review findings
+
+### Findings addressed
+
+1. Allocation identity and refresh idempotency
+   - Added exact `metadataSnapshotHash` to allocation task input, deterministic task identity, HTTP body, internal route validation, worker input, and every continuation.
+   - The worker now compares both the PAYMENT set hash and current PRODUCT_SALES metadata snapshot hash before skipping, preserving a cursor, or resetting work.
+   - `refreshDay()` reads current coverage before source refresh. Matching PAYMENT + metadata hashes preserve COMPLETE or INCOMPLETE coverage without a save or enqueue.
+   - Changed hashes enqueue cursor `0` / attempt `0` before any reset write. Queue failure or `alreadyExists` preserves working coverage; only a newly created task permits the reset write.
+
+2. Timer-free finance cache reads
+   - Split the real report-store table loader from the legacy five-second PAYMENT cache snapshot.
+   - `readSnapshots()` now performs one request-scoped cache read and one state read without creating or renewing a process timer.
+   - Legacy `readRows()` retains the existing five-second single-flight cache behavior.
+
+3. Authorization before finance dependency checks
+   - Monthly and manual-refresh finance paths now enforce `canViewFinance` before checking whether the finance service exists.
+   - An ordinary active staff member receives `403 FINANCE_FORBIDDEN` even when finance runtime construction is unavailable, without invoking JERA store/coordinator dependencies.
+   - Daily remains available to all active linked staff and may return the safe unavailable response when the finance service is absent.
+
+### Fix Round 1 RED evidence
+
+Command:
+
+```text
+npx vitest run tests/jera/financeService.test.ts tests/jera/allocationTaskQueue.test.ts tests/jera/allocationWorker.test.ts tests/jera/reportApi.test.ts tests/jera/store.test.ts
+```
+
+Pre-fix result:
+
+```text
+Test Files 5 failed
+Tests 15 failed | 78 passed
+```
+
+The failures independently showed coverage reset on same-hash replay, metadata missing from task identity/body/worker, the finance snapshot creating one timer, and unavailable finance returning 503 before the role gate.
+
+An additional enqueue-result regression was run separately:
+
+```text
+npx vitest run tests/jera/financeService.test.ts -t 'changed-hash task already exists'
+```
+
+Pre-fix result:
+
+```text
+Test Files 1 failed
+Tests 1 failed | 22 skipped
+```
+
+It proved that `alreadyExists` still caused an unsafe coverage overwrite before the final guard was added.
+
+### Fix Round 1 GREEN evidence
+
+Command:
+
+```text
+npx vitest run tests/jera/financeService.test.ts tests/jera/reportApi.test.ts tests/pmc-mini-app/security.test.ts tests/pmc-mini-app/productionApp.test.ts tests/jera/store.test.ts tests/jera/allocationStore.test.ts tests/jera/syncCoordinator.test.ts tests/jera/allocationTaskQueue.test.ts tests/jera/allocationWorker.test.ts
+```
+
+Result:
+
+```text
+Test Files 9 passed
+Tests 141 passed
+```
+
+Commands:
+
+```text
+npm run build:server
+git diff --check
+```
+
+Results: both exited 0.
+
+### Fix Round 1 self-review
+
+- Same-hash COMPLETE and INCOMPLETE refresh replays preserve cursor, state, and timestamps by performing no coverage write.
+- Metadata-only and PAYMENT-set changes produce distinct task identities containing both hashes.
+- New work is enqueued before reset coverage is persisted, and ambiguous/failed enqueue results leave working coverage untouched.
+- Worker retries and continuations retain both hashes and fail closed when the exact-day metadata snapshot differs.
+- Finance `readSnapshots()` is timer-free while legacy `readRows()` cache tests remain green.
+- Monthly/manual-refresh role denial is independent of finance service availability and occurs before JERA dependency access.

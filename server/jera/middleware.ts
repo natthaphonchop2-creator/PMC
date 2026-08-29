@@ -107,6 +107,9 @@ export function createJeraMiniAppApi(options: {
   return {
     async handle(req, res, url, authenticated) {
       if (isJeraFinanceApiPath(url.pathname)) {
+        if (financeViewRequired(url.pathname) && !authenticated.canViewFinance) {
+          respond(res, 403, { error: 'FINANCE_FORBIDDEN' }); return true
+        }
         if (!finance) { respond(res, 503, { error: 'FINANCE_CACHE_UNAVAILABLE' }); return true }
         await handleFinance(req, res, url, authenticated, defaultBranchUuid, finance.service)
         return true
@@ -246,6 +249,10 @@ export function createJeraMiniAppApi(options: {
       return true
     },
   }
+}
+
+function financeViewRequired(pathname: string): boolean {
+  return pathname === '/api/mini-app/finance/monthly' || pathname === '/api/mini-app/finance/daily/refresh'
 }
 
 async function handleFinance(
@@ -397,19 +404,22 @@ async function requestBodyIsEmpty(req: IncomingMessage, maxBytes: number): Promi
   } catch { return false }
 }
 
-function allocationBody(value: unknown): { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number; attempt: number } | null {
+function allocationBody(value: unknown): {
+  branchUuid: string; eventDate: string; paymentSetHash: string; metadataSnapshotHash: string; cursor: number; attempt: number
+} | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const body = value as Record<string, unknown>
   const keys = Object.keys(body).sort()
-  if (JSON.stringify(keys) !== JSON.stringify(['attempt', 'branchUuid', 'cursor', 'eventDate', 'paymentSetHash'])) return null
+  if (JSON.stringify(keys) !== JSON.stringify(['attempt', 'branchUuid', 'cursor', 'eventDate', 'metadataSnapshotHash', 'paymentSetHash'])) return null
   if (typeof body.branchUuid !== 'string' || typeof body.eventDate !== 'string' || typeof body.paymentSetHash !== 'string'
+    || typeof body.metadataSnapshotHash !== 'string'
     || typeof body.cursor !== 'number' || !Number.isSafeInteger(body.cursor) || body.cursor < 0
     || typeof body.attempt !== 'number' || !Number.isSafeInteger(body.attempt) || body.attempt < 0 || body.attempt > MAX_JERA_ALLOCATION_ATTEMPT) return null
   try {
-    if (!/^[a-f0-9]{64}$/.test(body.paymentSetHash)) return null
+    if (!/^[a-f0-9]{64}$/.test(body.paymentSetHash) || !/^[a-f0-9]{64}$/.test(body.metadataSnapshotHash)) return null
     return {
       branchUuid: requiredUuid(body.branchUuid), eventDate: requiredDate(body.eventDate),
-      paymentSetHash: body.paymentSetHash,
+      paymentSetHash: body.paymentSetHash, metadataSnapshotHash: body.metadataSnapshotHash,
       cursor: body.cursor, attempt: body.attempt,
     }
   } catch { return null }

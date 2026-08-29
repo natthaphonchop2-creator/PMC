@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
 import {
   JERA_API_CACHE_HEADERS,
@@ -176,9 +176,18 @@ describe('Google Sheets JERA report store', () => {
 
     sheets.readCount = 0
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
-    const snapshots = await store.readSnapshots(queries)
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    let snapshots: Awaited<ReturnType<typeof store.readSnapshots>>
+    let timerCalls = -1
+    try {
+      snapshots = await store.readSnapshots(queries)
+      timerCalls = timer.mock.calls.length
+    } finally {
+      timer.mockRestore()
+    }
 
     expect(sheets.readCount).toBe(2)
+    expect(timerCalls).toBe(0)
     expect(snapshots).toHaveLength(93)
     expect(snapshots[0]?.rows).toHaveLength(1)
     expect(snapshots[1]).toMatchObject({ rows: [], state: { status: 'SUCCESS', recordCount: 0 } })
