@@ -175,13 +175,13 @@ describe('authenticated JERA report API', () => {
     deps.jera = allocationApi(worker)
     const response = await invoke(createPmcMiniAppMiddleware(deps), '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' },
-      body: JSON.stringify({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5 }),
+      body: JSON.stringify({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5, attempt: 3 }),
     })
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: 'CONTINUED', processed: 7, nextCursor: 12 })
     expect(worker.run).toHaveBeenCalledWith({
-      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5, workerId: 'worker-route-id',
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5, attempt: 3, workerId: 'worker-route-id',
     })
   })
 
@@ -190,7 +190,8 @@ describe('authenticated JERA report API', () => {
     const worker = { run: vi.fn(async () => { throw Object.assign(new Error('private'), { patient: 'private' }) }) } as unknown as JeraAllocationWorker
     deps.jera = allocationApi(worker)
     const middleware = createPmcMiniAppMiddleware(deps)
-    const validBody = JSON.stringify({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0 })
+    const valid = { branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0, attempt: 0 }
+    const validBody = JSON.stringify(valid)
 
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', { method: 'GET' })).status).toBe(405)
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', { method: 'POST', body: validBody })).status).toBe(401)
@@ -199,6 +200,13 @@ describe('authenticated JERA report API', () => {
     })).status).toBe(403)
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ ...JSON.parse(validBody), extra: true }),
+    })).status).toBe(400)
+    const { attempt: _attempt, ...missingAttempt } = valid
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify(missingAttempt),
+    })).status).toBe(400)
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ ...valid, attempt: 1_000_001 }),
     })).status).toBe(400)
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ pad: 'x'.repeat(2_100) }),

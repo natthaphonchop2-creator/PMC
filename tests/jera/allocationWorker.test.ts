@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
+import type { CloudTasksClient } from '@google-cloud/tasks'
 import { describe, expect, it, vi } from 'vitest'
 import { JeraReadError } from '../../server/jera/client'
 import type { JeraNormalizedRow, JeraReadPort } from '../../server/jera/contracts'
 import type { JeraAllocationLease, JeraAllocationLeasePort } from '../../server/jera/allocationLeaseStore'
 import type { JeraAllocationCoverage, JeraAllocationStore, JeraCachedPaymentDetail } from '../../server/jera/allocationStore'
-import type { JeraAllocationTaskQueuePort } from '../../server/jera/allocationTaskQueue'
+import { createGoogleJeraAllocationTaskQueue, type JeraAllocationTaskQueuePort } from '../../server/jera/allocationTaskQueue'
 import { createJeraAllocationWorker } from '../../server/jera/allocationWorker'
 import { jeraCacheKey } from '../../server/jera/cacheKey'
 import type { JeraReportStore } from '../../server/jera/store'
@@ -27,7 +28,7 @@ describe('resumable JERA payment-detail worker', () => {
       return [detailPayload(filters.paymentUuid!)]
     })
 
-    const result = await harness.worker.run(task(harness.paymentSetHash))
+    const result = await harness.worker.run(task(harness.paymentSetHash, 7))
 
     expect(result).toEqual({ status: 'CONTINUED', processed: 20, nextCursor: 20 })
     expect(maxActive).toBe(1)
@@ -37,7 +38,7 @@ describe('resumable JERA payment-detail worker', () => {
     expect([...new Set(harness.coverageWrites.filter((row) => row.cursor > 0).map((row) => row.cursor))])
       .toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
     expect(harness.queue.enqueue).toHaveBeenCalledWith({
-      branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash, cursor: 20,
+      branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash, cursor: 20, attempt: 0,
       scheduleAt: new Date(harness.clockMs + 60_000),
     })
   })
@@ -64,7 +65,7 @@ describe('resumable JERA payment-detail worker', () => {
     await expect(harness.worker.run(task(harness.paymentSetHash))).resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
     expect(harness.coverage).toMatchObject({ cursor: 0, status: 'INCOMPLETE', safeErrorCode: 'JERA_RATE_LIMITED' })
     expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
-      cursor: 0, scheduleAt: new Date(harness.clockMs + 95_000),
+      cursor: 0, attempt: 1, scheduleAt: new Date(harness.clockMs + 95_000),
     }))
   })
 
@@ -119,9 +120,61 @@ describe('resumable JERA payment-detail worker', () => {
     expect(JSON.stringify(harness.coverage)).not.toContain('private-provider-detail')
     expect(JSON.stringify(harness.coverage)).not.toContain('patient')
   })
+
+  it('uses a distinct next attempt after failure and allows that successor to complete the same cursor', async () => {
+    const createTask = vi.fn(async () => [{}])
+    const queue = createGoogleJeraAllocationTaskQueue({
+      projectId: 'pmc-project', location: 'asia-southeast1', queueName: 'pmc-revenue-allocation',
+      workerUrl: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker', workerAudience: 'https://pmc-mini-app.example',
+      taskInvokerEmail: 'worker@pmc-project.iam.gserviceaccount.com', client: fakeTasksClient(createTask),
+    })
+    const harness = workerHarness(1, { queue })
+    harness.client.request
+      .mockRejectedValueOnce(new JeraReadError('JERA_PROVIDER_FAILED'))
+      .mockResolvedValueOnce([detailPayload(harness.payments[0]!.sourceUuid)])
+
+    await queue.enqueue({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash, cursor: 0, attempt: 0, scheduleAt: new Date(START) })
+    await expect(harness.worker.run(task(harness.paymentSetHash, 0))).resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
+    const [current, retry] = createTask.mock.calls.map(([request]) => request.task!)
+    expect(retry!.name).not.toBe(current!.name)
+    expect(JSON.parse(Buffer.from(retry!.httpRequest!.body!).toString('utf8'))).toMatchObject({ cursor: 0, attempt: 1 })
+    await expect(harness.worker.run(task(harness.paymentSetHash, 1))).resolves.toEqual({ status: 'COMPLETE', processed: 1, nextCursor: null })
+    expect(harness.client.request).toHaveBeenCalledTimes(2)
+    expect(harness.coverage).toMatchObject({ cursor: 1, status: 'COMPLETE', safeErrorCode: null })
+  })
+
+  it.each(['payment', 'product'] as const)('keeps coverage incomplete when %s source success evidence is missing', async (source) => {
+    const harness = workerHarness(1)
+    harness.details.push(cachedDetail(harness.payments[0]!))
+    if (source === 'payment') harness.paymentState.lastSuccessAt = null
+    else harness.productState.lastSuccessAt = null
+
+    await expect(harness.worker.run(task(harness.paymentSetHash, 2))).resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
+    expect(harness.client.request).not.toHaveBeenCalled()
+    expect(harness.coverage).toMatchObject({ status: 'INCOMPLETE', safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE' })
+    expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ cursor: 0, attempt: 3 }))
+  })
+
+  it('turns a transient source read failure into a distinct durable retry attempt', async () => {
+    const harness = workerHarness(1)
+    harness.reportStore.readSnapshots.mockRejectedValueOnce(new Error('private-sheets-failure'))
+
+    await expect(harness.worker.run(task(harness.paymentSetHash, 4))).resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
+    expect(harness.client.request).not.toHaveBeenCalled()
+    expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ cursor: 0, attempt: 5 }))
+  })
+
+  it('turns a missing source snapshot into a distinct durable retry attempt', async () => {
+    const harness = workerHarness(1)
+    harness.reportStore.readSnapshots.mockResolvedValueOnce([])
+
+    await expect(harness.worker.run(task(harness.paymentSetHash, 8))).resolves.toEqual({ status: 'CONTINUED', processed: 0, nextCursor: 0 })
+    expect(harness.client.request).not.toHaveBeenCalled()
+    expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ cursor: 0, attempt: 9 }))
+  })
 })
 
-function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease | null } = {}) {
+function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease | null; queue?: JeraAllocationTaskQueuePort } = {}) {
   let clockMs = START
   const attemptTimes: number[] = []
   const payments = Array.from({ length: count }, (_, index) => payment(index + 1))
@@ -137,7 +190,7 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
     release: vi.fn(async () => undefined),
   }
   const client = { request: vi.fn(async (_type, filters) => [detailPayload(filters.paymentUuid!)]) } as unknown as JeraReadPort & { request: ReturnType<typeof vi.fn> }
-  const queue = { enqueue: vi.fn(async () => ({ taskName: 'task', alreadyExists: false })) } as JeraAllocationTaskQueuePort & { enqueue: ReturnType<typeof vi.fn> }
+  const queue = (leasePatch.queue ?? { enqueue: vi.fn(async () => ({ taskName: 'task', alreadyExists: false })) }) as JeraAllocationTaskQueuePort & { enqueue: ReturnType<typeof vi.fn> }
   const allocationStore: JeraAllocationStore = {
     replacePaymentDetail: vi.fn(async (detail) => {
       const index = details.findIndex((stored) => stored.paymentUuid === detail.paymentUuid)
@@ -148,19 +201,21 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
     saveCoverage: vi.fn(async (value) => { currentCoverage = structuredClone(value); coverageWrites.push(structuredClone(value)) }),
     listIncompleteCoverage: vi.fn(async () => []),
   }
+  const paymentState: { lastSuccessAt: string | null } = { lastSuccessAt: '2026-08-29T09:58:00.000Z' }
+  const productState: { lastSuccessAt: string | null } = { lastSuccessAt: '2026-08-29T09:59:00.000Z' }
   const reportStore = {
     readSnapshots: vi.fn(async () => [
-      { query: {}, rows: structuredClone(payments), state: { lastSuccessAt: '2026-08-29T09:58:00.000Z' } },
-      { query: {}, rows: [productSales()], state: { lastSuccessAt: '2026-08-29T09:59:00.000Z' } },
+      { query: {}, rows: structuredClone(payments), state: structuredClone(paymentState) },
+      { query: {}, rows: [productSales()], state: structuredClone(productState) },
     ]),
-  } as unknown as JeraReportStore
+  } as unknown as JeraReportStore & { readSnapshots: ReturnType<typeof vi.fn> }
   const worker = createJeraAllocationWorker({
     client, reportStore, allocationStore, lease, queue, maxDetailsPerRun: 20, continuationDelaySeconds: 60,
     now: () => new Date(clockMs),
     sleep: async (milliseconds) => { clockMs += milliseconds },
   })
   return {
-    worker, client, queue, lease, claimedLease, payments, paymentSetHash, details, coverageWrites, attemptTimes,
+    worker, client, queue, lease, claimedLease, payments, paymentSetHash, details, coverageWrites, attemptTimes, paymentState, productState, reportStore,
     get coverage() { return currentCoverage }, set coverage(value) { currentCoverage = value }, get clockMs() { return clockMs },
   }
 }
@@ -207,9 +262,17 @@ function coverage(patch: Partial<JeraAllocationCoverage>): JeraAllocationCoverag
   }
 }
 
-function task(paymentSetHash: string) { return { branchUuid: BRANCH, eventDate: DATE, paymentSetHash, cursor: 0, workerId: 'worker-1' } }
+function task(paymentSetHash: string, attempt = 0) { return { branchUuid: BRANCH, eventDate: DATE, paymentSetHash, cursor: 0, attempt, workerId: 'worker-1' } }
 function setHash(rows: JeraNormalizedRow[]): string { return createHash('sha256').update(JSON.stringify(rows.map((row) => [row.sourceUuid, row.sourceHash]).sort())).digest('hex') }
 function hash(value: string): string { return createHash('sha256').update(value).digest('hex') }
 function dayKey(): string { return createHash('sha256').update(JSON.stringify([BRANCH, DATE])).digest('hex') }
 function paymentCacheKey(): string { return jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }) }
 function productCacheKey(): string { return jeraCacheKey('PRODUCT_SALES', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }) }
+
+function fakeTasksClient(createTask: ReturnType<typeof vi.fn>): CloudTasksClient {
+  return {
+    queuePath: (project: string, location: string, queue: string) => `projects/${project}/locations/${location}/queues/${queue}`,
+    taskPath: (project: string, location: string, queue: string, taskId: string) => `projects/${project}/locations/${location}/queues/${queue}/tasks/${taskId}`,
+    createTask,
+  } as unknown as CloudTasksClient
+}

@@ -21,6 +21,7 @@ import {
 import type { JeraSyncCoordinator } from './syncCoordinator.js'
 import type { JeraReportStore, JeraSyncStateRecord } from './store.js'
 import type { JeraAllocationWorker } from './allocationWorker.js'
+import { MAX_JERA_ALLOCATION_ATTEMPT } from './allocationTaskQueue.js'
 
 export interface JeraMiniAppApi {
   handle(
@@ -224,19 +225,20 @@ async function readBoundedJson(req: IncomingMessage, maxBytes: number): Promise<
   } catch { return null }
 }
 
-function allocationBody(value: unknown): { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number } | null {
+function allocationBody(value: unknown): { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number; attempt: number } | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const body = value as Record<string, unknown>
   const keys = Object.keys(body).sort()
-  if (JSON.stringify(keys) !== JSON.stringify(['branchUuid', 'cursor', 'eventDate', 'paymentSetHash'])) return null
+  if (JSON.stringify(keys) !== JSON.stringify(['attempt', 'branchUuid', 'cursor', 'eventDate', 'paymentSetHash'])) return null
   if (typeof body.branchUuid !== 'string' || typeof body.eventDate !== 'string' || typeof body.paymentSetHash !== 'string'
-    || typeof body.cursor !== 'number' || !Number.isSafeInteger(body.cursor) || body.cursor < 0) return null
+    || typeof body.cursor !== 'number' || !Number.isSafeInteger(body.cursor) || body.cursor < 0
+    || typeof body.attempt !== 'number' || !Number.isSafeInteger(body.attempt) || body.attempt < 0 || body.attempt > MAX_JERA_ALLOCATION_ATTEMPT) return null
   try {
     if (!/^[a-f0-9]{64}$/.test(body.paymentSetHash)) return null
     return {
       branchUuid: requiredUuid(body.branchUuid), eventDate: requiredDate(body.eventDate),
       paymentSetHash: body.paymentSetHash,
-      cursor: body.cursor,
+      cursor: body.cursor, attempt: body.attempt,
     }
   } catch { return null }
 }
