@@ -31,18 +31,21 @@ export function MonthlyFinancePage({
   onSelectionChange?: (selection: FinanceMonthSelection) => void
 }) {
   const [selection, setSelection] = useState(() => initialSelection ?? defaultFinanceMonthSelection(bangkokDate))
-  const [projection, setProjection] = useState<MonthlyIncomeProjection | null>(null)
+  const [loadedProjection, setLoadedProjection] = useState<{ key: string; value: MonthlyIncomeProjection } | null>(null)
   const [loading, setLoading] = useState(canViewFinance)
   const [error, setError] = useState('')
   const requestEpochRef = useRef(0)
+  const selectionKey = monthSelectionKey(selection)
+  const projection = loadedProjection?.key === selectionKey ? loadedProjection.value : null
 
   useEffect(() => {
     if (!canViewFinance) return
     const requestEpoch = ++requestEpochRef.current
+    const requestKey = monthSelectionKey(selection)
     onSelectionChange?.(selection)
     if (financeMonthSelectionError(selection)) return
     void adapter.load(selection).then((next) => {
-      if (requestEpoch === requestEpochRef.current) setProjection(next)
+      if (requestEpoch === requestEpochRef.current) setLoadedProjection({ key: requestKey, value: next })
     }).catch(() => {
       if (requestEpoch !== requestEpochRef.current) return
       setError(projection ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')
@@ -165,4 +168,8 @@ function MonthlyDefinition({ label, value }: { label: string; value: number }) {
 
 function MonthlyCategory({ label, value }: { label: string; value: number | null }) {
   return <article><span>{label}</span><strong className="pmc-finance-category-value">{formatBaht(value)}</strong></article>
+}
+
+function monthSelectionKey(selection: FinanceMonthSelection): string {
+  return `${selection.year}|${selection.month}`
 }

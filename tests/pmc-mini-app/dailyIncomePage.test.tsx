@@ -120,6 +120,80 @@ describe('daily income report', () => {
     expect(screen.getByRole('button', { name: 'อัปเดตวันที่เลือก' })).toBeDisabled()
   })
 
+  it('does not let a pending older load overwrite the refresh reload', async () => {
+    const user = userEvent.setup()
+    const initialAdapter = dailyAdapter()
+    const view = render(<DailyIncomePage bangkokDate="2026-08-29" adapter={initialAdapter} onBack={vi.fn()} />)
+    expect(await screen.findByText('1,000 บาท', { selector: '.pmc-finance-authority strong' })).toBeVisible()
+
+    const olderLoad = deferred<DailyIncomeProjection>()
+    const refreshReload = deferred<DailyIncomeProjection>()
+    const replacementAdapter = dailyAdapter()
+    replacementAdapter.load
+      .mockReset()
+      .mockReturnValueOnce(olderLoad.promise)
+      .mockReturnValueOnce(refreshReload.promise)
+    view.rerender(<DailyIncomePage bangkokDate="2026-08-29" adapter={replacementAdapter} onBack={vi.fn()} />)
+    await waitFor(() => expect(replacementAdapter.load).toHaveBeenCalledOnce())
+
+    await user.click(screen.getByRole('button', { name: 'อัปเดตวันที่เลือก' }))
+    await waitFor(() => expect(replacementAdapter.load).toHaveBeenCalledTimes(2))
+    refreshReload.resolve(dailyProjection({ receivedSatang: 200_000, netReceivedSatang: 190_000 }))
+    expect(await screen.findByText('2,000 บาท')).toBeVisible()
+
+    olderLoad.resolve(dailyProjection({ receivedSatang: 300_000, netReceivedSatang: 290_000 }))
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.getByText('2,000 บาท')).toBeVisible()
+    expect(screen.queryByText('3,000 บาท')).not.toBeInTheDocument()
+  })
+
+  it('disables refresh while the selected period is loading', async () => {
+    const pending = deferred<DailyIncomeProjection>()
+    const adapter = dailyAdapter()
+    adapter.load.mockReturnValueOnce(pending.promise)
+    render(<DailyIncomePage bangkokDate="2026-08-29" adapter={adapter} onBack={vi.fn()} />)
+
+    expect(screen.getByRole('button', { name: 'อัปเดตวันที่เลือก' })).toBeDisabled()
+    expect(screen.getByText('กำลังโหลดรายรับ')).toBeVisible()
+
+    pending.resolve(dailyProjection())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'อัปเดตวันที่เลือก' })).toBeEnabled())
+  })
+
+  it('hides old-period totals immediately when the daily filter changes', async () => {
+    const user = userEvent.setup()
+    const nextPeriod = deferred<DailyIncomeProjection>()
+    const adapter = dailyAdapter()
+    adapter.load
+      .mockResolvedValueOnce(dailyProjection())
+      .mockReturnValueOnce(nextPeriod.promise)
+    render(<DailyIncomePage bangkokDate="2026-08-29" adapter={adapter} onBack={vi.fn()} />)
+    expect(await screen.findByRole('region', { name: 'ยอดรายรับหลัก' })).toBeVisible()
+
+    await user.click(screen.getByRole('radio', { name: 'เมื่อวาน' }))
+
+    expect(screen.queryByRole('region', { name: 'ยอดรายรับหลัก' })).not.toBeInTheDocument()
+    expect(screen.getByText('กำลังโหลดรายรับ')).toBeVisible()
+  })
+
+  it('does not render old-period totals when a new daily filter load fails', async () => {
+    const user = userEvent.setup()
+    const nextPeriod = deferred<DailyIncomeProjection>()
+    const adapter = dailyAdapter()
+    adapter.load
+      .mockResolvedValueOnce(dailyProjection())
+      .mockReturnValueOnce(nextPeriod.promise)
+    render(<DailyIncomePage bangkokDate="2026-08-29" adapter={adapter} onBack={vi.fn()} />)
+    expect(await screen.findByRole('region', { name: 'ยอดรายรับหลัก' })).toBeVisible()
+
+    await user.click(screen.getByRole('radio', { name: 'เมื่อวาน' }))
+    nextPeriod.reject(new Error('new period failed'))
+
+    expect(await screen.findByText('โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')).toHaveAttribute('role', 'alert')
+    expect(screen.queryByRole('region', { name: 'ยอดรายรับหลัก' })).not.toBeInTheDocument()
+  })
+
   it('retains the last cache and announces a safe error after refresh failure', async () => {
     const user = userEvent.setup()
     const adapter = dailyAdapter()
@@ -195,6 +269,7 @@ function paymentRow(eventDate: string, paymentCode: string, patientName = 'ล�
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((nextResolve) => { resolve = nextResolve })
-  return { promise, resolve }
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
+  return { promise, resolve, reject }
 }

@@ -29,7 +29,7 @@ export function DailyIncomePage({
   onFilterChange?: (filter: FinanceDailyFilter) => void
 }) {
   const [filter, setFilter] = useState<FinanceDailyFilter>(() => initialFilter ?? defaultFinanceDailyFilter(bangkokDate))
-  const [projection, setProjection] = useState<DailyIncomeProjection | null>(null)
+  const [loadedProjection, setLoadedProjection] = useState<{ key: string; value: DailyIncomeProjection } | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
@@ -37,14 +37,17 @@ export function DailyIncomePage({
   const requestEpochRef = useRef(0)
   const filterError = financeDailyFilterError(filter)
   const canRefresh = filterError === null && filter.startDate === filter.endDate
+  const filterKey = dailyFilterKey(filter)
+  const projection = loadedProjection?.key === filterKey ? loadedProjection.value : null
 
   useEffect(() => {
     const requestEpoch = ++requestEpochRef.current
+    const requestKey = dailyFilterKey(filter)
     onFilterChange?.(filter)
     if (financeDailyFilterError(filter)) return
     void adapter.load(filter).then((next) => {
       if (requestEpoch !== requestEpochRef.current) return
-      setProjection(next)
+      setLoadedProjection({ key: requestKey, value: next })
     }).catch(() => {
       if (requestEpoch !== requestEpochRef.current) return
       setMessageTone('ERROR')
@@ -67,9 +70,10 @@ export function DailyIncomePage({
     updateFilter(applyFinanceDailyPreset(filter, preset, bangkokDate))
   }
   const refreshSelectedDay = async () => {
-    if (!canRefresh || refreshing) return
-    const requestEpoch = requestEpochRef.current
+    if (!canRefresh || refreshing || loading) return
+    const requestEpoch = ++requestEpochRef.current
     const selectedFilter = filter
+    const requestKey = dailyFilterKey(selectedFilter)
     setRefreshing(true)
     setMessage('')
     try {
@@ -77,7 +81,7 @@ export function DailyIncomePage({
       if (requestEpoch !== requestEpochRef.current) return
       const next = await adapter.load(selectedFilter)
       if (requestEpoch !== requestEpochRef.current) return
-      setProjection(next)
+      setLoadedProjection({ key: requestKey, value: next })
       setMessageTone('STATUS')
       setMessage('อัปเดตข้อมูลวันที่เลือกแล้ว')
     } catch {
@@ -110,7 +114,7 @@ export function DailyIncomePage({
         <label><span>วันสิ้นสุด</span><input type="date" value={filter.endDate} onChange={(event) => updateFilter({ ...filter, endDate: event.currentTarget.value })} /></label>
       </div>}
       {filterError && <p className="pmc-finance-filter-error">{filterError}</p>}
-      <button type="button" className="pmc-finance-refresh" disabled={!canRefresh || refreshing} onClick={() => { void refreshSelectedDay() }}>
+      <button type="button" className="pmc-finance-refresh" disabled={!canRefresh || refreshing || loading} onClick={() => { void refreshSelectedDay() }}>
         <RotateCw aria-hidden="true" />{refreshing ? 'กำลังอัปเดต' : 'อัปเดตวันที่เลือก'}
       </button>
       {!canRefresh && !filterError && <p className="pmc-finance-filter-help">อัปเดตได้ครั้งละ 1 วัน</p>}
@@ -222,4 +226,8 @@ function formatBangkokTimestamp(value: string): string {
   return new Intl.DateTimeFormat('th-TH', {
     timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).format(date)
+}
+
+function dailyFilterKey(filter: FinanceDailyFilter): string {
+  return `${filter.startDate}|${filter.endDate}`
 }

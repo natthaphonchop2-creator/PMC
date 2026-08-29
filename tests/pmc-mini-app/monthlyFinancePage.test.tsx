@@ -71,6 +71,41 @@ describe('monthly finance report', () => {
     expect(adapter.load).not.toHaveBeenCalled()
   })
 
+  it('hides old-month totals immediately when the month changes', async () => {
+    const nextMonth = deferred<MonthlyIncomeProjection>()
+    const adapter = monthlyAdapter()
+    adapter.load
+      .mockResolvedValueOnce(monthlyProjection())
+      .mockReturnValueOnce(nextMonth.promise)
+    render(<MonthlyFinancePage
+      canViewFinance bangkokDate="2026-08-29" adapter={adapter} onBack={vi.fn()} onDrillDown={vi.fn()}
+    />)
+    expect(await screen.findByRole('region', { name: 'ยอดรายรับหลักประจำเดือน' })).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-07' } })
+
+    expect(screen.queryByRole('region', { name: 'ยอดรายรับหลักประจำเดือน' })).not.toBeInTheDocument()
+    expect(screen.getByText('กำลังโหลดรายงานรายเดือน')).toBeVisible()
+  })
+
+  it('does not render old-month totals when the new month load fails', async () => {
+    const nextMonth = deferred<MonthlyIncomeProjection>()
+    const adapter = monthlyAdapter()
+    adapter.load
+      .mockResolvedValueOnce(monthlyProjection())
+      .mockReturnValueOnce(nextMonth.promise)
+    render(<MonthlyFinancePage
+      canViewFinance bangkokDate="2026-08-29" adapter={adapter} onBack={vi.fn()} onDrillDown={vi.fn()}
+    />)
+    expect(await screen.findByRole('region', { name: 'ยอดรายรับหลักประจำเดือน' })).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-07' } })
+    nextMonth.reject(new Error('new month failed'))
+
+    expect(await screen.findByText('โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')).toHaveAttribute('role', 'alert')
+    expect(screen.queryByRole('region', { name: 'ยอดรายรับหลักประจำเดือน' })).not.toBeInTheDocument()
+  })
+
   it('fails closed for ordinary staff without rendering financial values or calling the adapter', () => {
     const adapter = monthlyAdapter()
     const view = render(<MonthlyFinancePage
@@ -108,4 +143,11 @@ function monthlyProjection(patch: Partial<MonthlyIncomeProjection> = {}): Monthl
     warnings: [],
     ...patch,
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
+  return { promise, resolve, reject }
 }
