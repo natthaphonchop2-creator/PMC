@@ -5,7 +5,6 @@ import {
   buildDailyIncomeProjection,
   buildMonthlyIncomeProjection,
   type BuildDailyIncomeInput,
-  type FinanceDaySourceSnapshot,
 } from '../../server/jera/financeReports'
 
 describe('finance income projections', () => {

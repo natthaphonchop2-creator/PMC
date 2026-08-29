@@ -38,7 +38,7 @@ export function createGoogleJeraAllocationLeasePort(input: { bucketName: string;
       metadata = (await file.getMetadata())[0]
     } catch (error) {
       if (status(error) === 404) return null
-      throw failed(error)
+      throw failed()
     }
     const generation = verifyMetadata(objectKey, metadata)
     let bytes: Buffer
@@ -46,7 +46,7 @@ export function createGoogleJeraAllocationLeasePort(input: { bucketName: string;
       [bytes] = await bucket.file(objectKey, { generation }).download()
     } catch (error) {
       if (status(error) === 404 || status(error) === 412) return null
-      throw failed(error)
+      throw failed()
     }
     if (bytes.length > 512) corrupt()
     let parsed: unknown
@@ -64,7 +64,7 @@ export function createGoogleJeraAllocationLeasePort(input: { bucketName: string;
       })
     } catch (error) {
       if (status(error) === 412) return null
-      throw failed(error)
+      throw failed()
     }
     const persisted = await read(lease.dayKey)
     if (!persisted || persisted.owner !== lease.owner || persisted.expiresAt !== lease.expiresAt) return null
@@ -88,7 +88,7 @@ export function createGoogleJeraAllocationLeasePort(input: { bucketName: string;
         await bucket.file(objectKey).delete({ ifGenerationMatch: lease.fencingToken })
       } catch (error) {
         if (status(error) === 404 || status(error) === 412) return
-        throw failed(error)
+        throw failed()
       }
     },
   }
@@ -125,4 +125,4 @@ function instant(value: string): string { if (typeof value !== 'string' || Numbe
 function status(error: unknown): number | null { return error && typeof error === 'object' && 'code' in error && (error.code === 404 || error.code === '404' || error.code === 412 || error.code === '412') ? Number(error.code) : null }
 function invalid(): never { throw new JeraAllocationLeaseError('JERA_ALLOCATION_LEASE_INVALID_INPUT') }
 function corrupt(): never { throw new JeraAllocationLeaseError('JERA_ALLOCATION_LEASE_CORRUPT') }
-function failed(_error: unknown): JeraAllocationLeaseError { return new JeraAllocationLeaseError('JERA_ALLOCATION_LEASE_FAILED') }
+function failed(): JeraAllocationLeaseError { return new JeraAllocationLeaseError('JERA_ALLOCATION_LEASE_FAILED') }

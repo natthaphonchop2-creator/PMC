@@ -58,11 +58,14 @@ export function createGoogleJeraAllocationTaskQueue(input: {
         return { taskName, alreadyExists: false }
       } catch (error) {
         if (grpcCode(error) === 6) return { taskName, alreadyExists: true }
-        throw new Error('JERA_ALLOCATION_TASK_FAILED')
+        throw safeTaskFailure()
       }
     },
   }
 }
+
+// Cloud Tasks provider failures are deliberately replaced so response bodies and metadata cannot escape this boundary.
+function safeTaskFailure(): Error { return new Error('JERA_ALLOCATION_TASK_FAILED') }
 
 function validate(input: {
   branchUuid: string; eventDate: string; paymentSetHash: string; metadataSnapshotHash: string

@@ -138,15 +138,21 @@ export function createPreviewMiniAppApi(options: {
       reportRefreshSequence += 1
       return { accepted: true, correlationId: `preview-refresh-${reportRefreshSequence}` }
     },
-    async loadDailyIncome(_token: string, filter: FinanceDailyFilter) { return emptyDailyIncomeProjection(filter.startDate, filter.endDate) },
+    async loadDailyIncome(_token: string, filter: FinanceDailyFilter) { return previewDailyIncomeProjection(filter.startDate, filter.endDate) },
     async refreshDailyIncome() { return { accepted: true as const, allocationQueued: false, retryAfterSeconds: 0 } },
     async loadMonthlyIncome(_token: string, selection: FinanceMonthSelection) {
       const startDate = `${selection.year}-${String(selection.month).padStart(2, '0')}-01`
       const endDate = new Date(Date.UTC(selection.year, selection.month, 0)).toISOString().slice(0, 10)
+      const daily = previewDailyIncomeProjection(startDate, endDate)
       return {
-        ...emptyDailyIncomeProjection(startDate, endDate),
+        ...daily,
         monthKey: `${selection.year}-${String(selection.month).padStart(2, '0')}`,
-        dailyTrend: [],
+        dailyTrend: [...daily.payments].reverse().map((payment) => ({
+          date: payment.eventDate,
+          receivedSatang: payment.paidAmountSatang,
+          refundSatang: 1_001,
+          netReceivedSatang: payment.paidAmountSatang - 1_001,
+        })),
         expense: { state: 'NOT_IMPLEMENTED' as const, clinicExpenseSatang: null, estimatedBalanceSatang: null },
       } satisfies MonthlyIncomeProjection
     },
@@ -174,6 +180,62 @@ function emptyDailyIncomeProjection(startDate: string, endDate: string): DailyIn
       allocation: { lastSuccessAt: null, stale: true, warningCode: 'PREVIEW' },
     },
     warnings: ['PREVIEW'],
+  }
+}
+
+function previewDailyIncomeProjection(startDate: string, endDate: string): DailyIncomeProjection {
+  const start = Date.parse(`${startDate}T00:00:00.000Z`)
+  const end = Date.parse(`${endDate}T00:00:00.000Z`)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end) return emptyDailyIncomeProjection(startDate, endDate)
+  const dates = Array.from(
+    { length: Math.floor((end - start) / 86_400_000) + 1 },
+    (_, index) => new Date(start + index * 86_400_000).toISOString().slice(0, 10),
+  )
+  const payments = [...dates].reverse().map((eventDate) => {
+    const compactDate = eventDate.replaceAll('-', '')
+    return {
+      paymentUuid: `preview-payment-${compactDate}`,
+      paymentCode: `PAY-${compactDate}`,
+      eventDate,
+      patientName: 'ลูกค้าทดสอบ',
+      paidAmountSatang: 100_001,
+      transferSatang: 60_000,
+      cashSatang: 20_000,
+      creditSatang: 10_000,
+      otherSatang: 10_001,
+      serviceSatang: 66_667,
+      productSatang: 33_334,
+      unclassifiedSatang: 0,
+    }
+  })
+  const dayCount = dates.length
+  return {
+    startDate,
+    endDate,
+    receivedSatang: 100_001 * dayCount,
+    refundSatang: 1_001 * dayCount,
+    netReceivedSatang: 99_000 * dayCount,
+    channels: {
+      transferSatang: 60_000 * dayCount,
+      cashSatang: 20_000 * dayCount,
+      creditSatang: 10_000 * dayCount,
+      otherSatang: 10_001 * dayCount,
+      differenceSatang: 0,
+    },
+    categories: {
+      state: 'READY',
+      serviceSatang: 66_667 * dayCount,
+      productSatang: 33_334 * dayCount,
+      unclassifiedSatang: 0,
+      incompleteDates: [],
+    },
+    payments,
+    freshness: {
+      payment: { lastSuccessAt: `${endDate}T10:00:00.000Z`, stale: false, warningCode: null },
+      refund: { lastSuccessAt: `${endDate}T10:00:00.000Z`, stale: false, warningCode: null },
+      allocation: { lastSuccessAt: `${endDate}T10:00:00.000Z`, stale: false, warningCode: null },
+    },
+    warnings: [],
   }
 }
 

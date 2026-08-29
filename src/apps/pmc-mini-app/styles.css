@@ -462,7 +462,7 @@ button:focus-visible {
 .pmc-finance-locked-page p { margin: 6px 0 0; color: var(--pmc-muted); line-height: var(--lh-body); }
 .pmc-finance-locked-page button { min-height: 48px; margin-block-start: 22px; }
 
-@container (max-width: 359px) {
+@container (max-width: 319px) {
   .pmc-finance-primary-grid,
   .pmc-finance-deferred-grid,
   .pmc-finance-authority,

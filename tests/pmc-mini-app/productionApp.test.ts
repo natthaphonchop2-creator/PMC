@@ -81,6 +81,27 @@ describe('production PMC Mini App route isolation', () => {
     expect(health.status).toBe(200)
   })
 
+  it('delegates exact finance GETs without legacy Basic Auth and returns no unexpected 5xx', async () => {
+    const pmcMiniApp = vi.fn<Middleware>(async (req, res) => {
+      res.statusCode = req.headers.authorization === 'Bearer valid-token' ? 200 : 401
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ route: req.url }))
+    })
+    const app = handler({ pmcMiniApp })
+    const daily = await invoke(app, '/api/mini-app/finance/daily?startDate=2026-08-01&endDate=2026-08-31', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const monthly = await invoke(app, '/api/mini-app/finance/monthly?year=2026&month=8', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(daily.status).toBe(200)
+    expect(monthly.status).toBe(200)
+    expect(await daily.json()).toEqual({ route: '/api/mini-app/finance/daily?startDate=2026-08-01&endDate=2026-08-31' })
+    expect(await monthly.json()).toEqual({ route: '/api/mini-app/finance/monthly?year=2026&month=8' })
+    expect(pmcMiniApp).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps only the exact allocation worker route outside Basic Auth and static fallback', async () => {
     const pmcMiniApp = vi.fn<Middleware>(async (_req, res) => { res.statusCode = 204; res.end() })
     const app = handler({ pmcMiniApp })

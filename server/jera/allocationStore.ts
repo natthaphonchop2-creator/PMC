@@ -148,7 +148,7 @@ export function createGoogleJeraAllocationStore(input: { spreadsheetId: string; 
         const [storedDetails, storedLines] = await Promise.all([details(), lines()])
         const current = storedDetails.find((row) => row.value.detailKey === normalized.detailKey)
         const existingLines = storedLines.filter((row) => row.value.detailKey === normalized.detailKey)
-        if (current && JSON.stringify({ ...current.value, lines: existingLines.map((row) => row.value).map(({ detailKey, ...line }) => line) }) === JSON.stringify(normalized)) return
+        if (current && JSON.stringify({ ...current.value, lines: existingLines.map((row) => stripDetailKey(row.value)) }) === JSON.stringify(normalized)) return
         const obsolete = storedDetails.filter((row) => row.value.branchUuid === normalized.branchUuid && row.value.eventDate === normalized.eventDate
           && row.value.paymentUuid === normalized.paymentUuid && row.value.detailKey !== normalized.detailKey)
         const reclaimableDetails = [...(current ? [current] : []), ...obsolete].sort((left, right) => left.rowNumber - right.rowNumber)
@@ -281,8 +281,12 @@ function detailHeader(cells: unknown[]): Omit<JeraCachedPaymentDetail, 'lines'> 
     detailSourceHash: text(cells[5]), detailFetchedAt: text(cells[6]), lineCount, truncated: boolean(cells[8]),
     lines: Array.from({ length: lineCount }, (_, lineOrdinal) => ({ lineOrdinal, lineKind: 'OPD' as const, itemCode: null, netLineSatang: 0 })),
   })
-  const { lines: _lines, ...header } = value
-  return header
+  return {
+    detailKey: value.detailKey, branchUuid: value.branchUuid, eventDate: value.eventDate,
+    paymentUuid: value.paymentUuid, paymentSourceHash: value.paymentSourceHash,
+    detailSourceHash: value.detailSourceHash, detailFetchedAt: value.detailFetchedAt,
+    lineCount: value.lineCount, truncated: value.truncated,
+  }
 }
 function detailLine(cells: unknown[]): JeraCachedPaymentDetailLine & { detailKey: string } {
   const value = { detailKey: text(cells[0]), lineOrdinal: integer(cells[1]), lineKind: text(cells[2]) as 'OPD' | 'COURSE', itemCode: nullable(cells[3]), netLineSatang: integer(cells[4]) }
@@ -298,7 +302,12 @@ function coverage(cells: unknown[]): JeraAllocationCoverage { return validateCov
 function detailCells(value: JeraCachedPaymentDetail): unknown[] { return [value.detailKey, value.branchUuid, value.eventDate, value.paymentUuid, value.paymentSourceHash, value.detailSourceHash, value.detailFetchedAt, value.lineCount, value.truncated] }
 function lineCells(detailKey: string, value: JeraCachedPaymentDetailLine): unknown[] { return [detailKey, value.lineOrdinal, value.lineKind, value.itemCode ?? '', value.netLineSatang] }
 function coverageCells(value: JeraAllocationCoverage): unknown[] { return [value.dayKey, value.branchUuid, value.eventDate, value.paymentCacheKey, value.productSalesCacheKey, value.paymentSetHash, value.paymentRowCount, value.successfulDetailCount, value.metadataSnapshotHash, value.paymentLastSuccessAt ?? '', value.productSalesLastSuccessAt ?? '', value.cursor, value.status, value.lastAttemptAt ?? '', value.lastSuccessAt ?? '', value.safeErrorCode ?? '', value.leaseOwner ?? '', value.leaseExpiresAt ?? ''] }
-function stripDetailKey(value: JeraCachedPaymentDetailLine & { detailKey: string }): JeraCachedPaymentDetailLine { const { detailKey: _detailKey, ...line } = value; return line }
+function stripDetailKey(value: JeraCachedPaymentDetailLine & { detailKey: string }): JeraCachedPaymentDetailLine {
+  return {
+    lineOrdinal: value.lineOrdinal, lineKind: value.lineKind,
+    itemCode: value.itemCode, netLineSatang: value.netLineSatang,
+  }
+}
 function isMoney(value: number | null): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 }
 function isPositiveFinite(value: number | null): value is number { return typeof value === 'number' && Number.isFinite(value) && value > 0 }
 function assertHash(value: string): void { if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) invalid() }

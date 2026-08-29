@@ -26,13 +26,14 @@ afterEach(() => {
 })
 
 describe('PMC Mini App default browser API stability', () => {
-  it('loads only startup APIs once and leaves active-draft lookup for a booking action', async () => {
+  it('loads only startup APIs once even when finance navigation is enabled', async () => {
     const request = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/client-config')) return json(200, { miniAppId: 'mini-id' })
       if (url.endsWith('/session')) return json(200, { staffId: 'staff-1', displayName: 'มัส', active: true })
       if (url.endsWith('/config')) return json(200, {
         fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
+        financeReportsEnabled: true, canViewFinance: true,
         doctors: [{ id: 'หมอ Benz', name: 'หมอ Benz' }],
         services: [{ id: 'เติมไขมัน', name: 'เติมไขมัน', durationMinutes: 60 }],
         channels: [{ id: 'เพจหลัก', name: 'เพจหลัก' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],

@@ -3,10 +3,30 @@ import { readdir, readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
+import { readPmcMiniAppConfig } from '../../server/pmc-mini-app/config'
 
 const execute = promisify(execFile)
 
 describe('JERA Production read-only runtime gates', () => {
+  it('keeps finance reports disabled unless the release flag is the literal true value', () => {
+    const base = {
+      PMC_MINI_APP_ENABLED: 'true',
+      PMC_MINI_APP_ID: '2001234567-mini-app',
+      PMC_MINI_APP_LIFF_CHANNEL_ID: '2001234567',
+      PMC_SPREADSHEET_ID: 'sheet-1',
+      PMC_DRIVE_INTAKE_FOLDER_ID: 'folder-1',
+      PMC_BOOKING_INGRESS_URL: 'https://script.google.com/macros/s/deployment/exec',
+      PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
+      PMC_BOOKING_INGRESS_SECRET: 'synthetic-ingress-secret',
+      PMC_MINI_APP_SIGNING_SECRET: 'synthetic-signing-secret',
+    }
+
+    expect(readPmcMiniAppConfig(base)).toMatchObject({ financeReportsEnabled: false })
+    expect(readPmcMiniAppConfig({ ...base, PMC_FINANCE_REPORTS_ENABLED: 'true' }))
+      .toMatchObject({ financeReportsEnabled: true })
+    expect(readPmcMiniAppConfig({ ...base, PMC_FINANCE_REPORTS_ENABLED: 'yes' })).toBeNull()
+  })
+
   it('contains no JERA data mutation route and does not bundle environment secrets', async () => {
     const source = await readJeraSources()
     const registrySource = await readFile(resolve('server/jera/contracts.ts'), 'utf8')

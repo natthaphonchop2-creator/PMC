@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
+import { resolve } from 'node:path'
+
+const TASK_8_ARTIFACT_DIR = resolve('.superpowers/sdd/2026-08-29-pmc-daily-monthly-finance-reports-implementation')
 
 const browserErrors = new WeakMap<Page, string[]>()
 
@@ -97,6 +100,89 @@ test('booking-only V1 hides clinic reports navigation while reporting is paused'
   await expect(page.getByRole('button', { name: 'รายงานคลินิก' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'รายงาน', exact: true })).toHaveCount(0)
   await expect(page.getByText('จัดการงานจองของคลินิก')).toBeVisible()
+})
+
+test.describe('Finance report Android acceptance', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test('ordinary staff opens daily income, 31-day groups, and sees monthly and expense actions locked', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance=enabled&role=staff')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+
+    const primaryGrid = page.locator('.pmc-finance-primary-grid')
+    expect(await primaryGrid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2)
+    for (const card of await primaryGrid.getByRole('button').all()) {
+      const box = await card.boundingBox()
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(48)
+    }
+    await expect(page.getByRole('button', { name: /รายงานรายเดือน/ })).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByText('เตรียมระบบ')).toHaveCount(6)
+    await expect(page.getByRole('button', { name: /บันทึก|ส่งรายจ่าย|แนบ/ })).toHaveCount(0)
+    await page.screenshot({
+      path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-finance-home.png'),
+      fullPage: false,
+    })
+
+    await page.getByRole('button', { name: /รายรับรายวัน/ }).click()
+    await page.getByText('เมื่อวาน', { exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'รายละเอียดรับชำระ' })).toBeVisible()
+    await expect(page.getByText(/PAY-\d{8}/)).toBeVisible()
+    await expect(page.getByText('ลูกค้าทดสอบ')).toBeVisible()
+    await page.screenshot({
+      path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-daily-income.png'),
+      fullPage: false,
+    })
+
+    await page.getByText('เลือกช่วงวันที่', { exact: true }).click()
+    const endInput = page.getByLabel('วันสิ้นสุด')
+    const endDate = await endInput.inputValue()
+    const start = new Date(`${endDate}T00:00:00.000Z`)
+    start.setUTCDate(start.getUTCDate() - 30)
+    const startDate = start.toISOString().slice(0, 10)
+    await page.getByLabel('วันเริ่มต้น').fill(startDate)
+    await expect(page.getByRole('heading', { level: 3 })).toHaveCount(31)
+    const dayGroups = await page.getByRole('heading', { level: 3 }).allTextContents()
+    expect(dayGroups[0]).toBe(endDate)
+    expect(dayGroups.at(-1)).toBe(startDate)
+
+    const tableScroller = page.locator('.pmc-finance-table-scroll').first()
+    expect(await tableScroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+    expect(await page.locator('body').innerText()).toMatch(/[\u0e31-\u0e3a\u0e47-\u0e4e]/)
+    expect(await page.locator('.pmc-finance-page').evaluate((element) => getComputedStyle(element).letterSpacing)).toMatch(/normal|0px/)
+    await page.getByRole('button', { name: 'กลับไปรายงาน' }).focus()
+    await page.keyboard.press('Tab')
+    const selectedPreset = page.getByRole('radio', { name: 'เลือกช่วงวันที่' })
+    await expect(selectedPreset).toBeFocused()
+    expect(await selectedPreset.evaluate((element) => getComputedStyle(element.nextElementSibling!).outlineStyle)).not.toBe('none')
+  })
+
+  test('finance staff opens the previous month and drills into an exact daily report', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance=enabled&role=finance')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await page.getByRole('button', { name: /รายงานรายเดือน/ }).click()
+
+    const monthInput = page.getByRole('textbox', { name: 'เดือนรายงาน' })
+    const currentMonth = await monthInput.inputValue()
+    const [year, month] = currentMonth.split('-').map(Number)
+    const previous = new Date(Date.UTC(year!, month! - 2, 1)).toISOString().slice(0, 7)
+    await monthInput.fill(previous)
+    await expect(page.getByRole('region', { name: 'ยอดรายรับหลักประจำเดือน' })).toBeVisible()
+    await expect(page.getByRole('table', { name: 'รายรับรายวันในเดือน' })).toBeVisible()
+    await expect(page.getByText('รายจ่ายที่บันทึก — เตรียมระบบ')).toBeVisible()
+    await page.screenshot({
+      path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-monthly-income.png'),
+      fullPage: false,
+    })
+
+    const dailyButtons = page.getByRole('button', { name: /ดูรายรับวันที่/ })
+    const selectedDate = (await dailyButtons.last().getAttribute('aria-label'))!.replace('ดูรายรับวันที่ ', '')
+    await dailyButtons.last().click()
+    await expect(page.getByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
+    await expect(page.getByLabel('วันเริ่มต้น')).toHaveValue(selectedDate)
+    await expect(page.getByLabel('วันสิ้นสุด')).toHaveValue(selectedDate)
+  })
 })
 
 test.describe('Clinic report Android acceptance', () => {

@@ -164,7 +164,7 @@ describe('authenticated JERA report API', () => {
 
     expect(createJeraRuntime(base, google, construct as never)).toBeDefined()
     expect(construct.mock.calls[0]![0].config.allocation.leaseBucket).toBe('pmc-private-allocation-leases')
-    const { JERA_ALLOCATION_LEASE_BUCKET: _missing, ...missing } = base
+    const missing = { ...base, JERA_ALLOCATION_LEASE_BUCKET: undefined }
     expect(createJeraRuntime(missing, google, construct as never)).toBeUndefined()
     expect(createJeraRuntime({ ...base, JERA_ALLOCATION_LEASE_BUCKET: 'gs://not-private' }, google, construct as never)).toBeUndefined()
     expect(construct).toHaveBeenCalledOnce()
@@ -209,11 +209,11 @@ describe('authenticated JERA report API', () => {
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ ...JSON.parse(validBody), extra: true }),
     })).status).toBe(400)
-    const { attempt: _attempt, ...missingAttempt } = valid
+    const missingAttempt = { ...valid, attempt: undefined }
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify(missingAttempt),
     })).status).toBe(400)
-    const { metadataSnapshotHash: _metadataSnapshotHash, ...missingMetadata } = valid
+    const missingMetadata = { ...valid, metadataSnapshotHash: undefined }
     expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
       method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify(missingMetadata),
     })).status).toBe(400)

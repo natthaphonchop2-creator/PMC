@@ -161,6 +161,20 @@ describe('daily income report', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'อัปเดตวันที่เลือก' })).toBeEnabled())
   })
 
+  it('clears loading and shows validation for an invalid initial filter without requesting data', () => {
+    const adapter = dailyAdapter()
+    render(<DailyIncomePage
+      bangkokDate="2026-08-29"
+      adapter={adapter}
+      onBack={vi.fn()}
+      initialFilter={{ preset: 'CUSTOM', startDate: '2026-07-30', endDate: '2026-08-30' }}
+    />)
+
+    expect(screen.getByText('เลือกช่วงเวลาได้ไม่เกิน 31 วัน')).toBeVisible()
+    expect(screen.queryByText('กำลังโหลดรายรับ')).not.toBeInTheDocument()
+    expect(adapter.load).not.toHaveBeenCalled()
+  })
+
   it('hides old-period totals immediately when the daily filter changes', async () => {
     const user = userEvent.setup()
     const nextPeriod = deferred<DailyIncomeProjection>()

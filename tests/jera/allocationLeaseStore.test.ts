@@ -61,30 +61,29 @@ class LeaseStorageState {
   current(): ObjectState | null { return this.object ? structuredClone(this.object) : null }
   put(object: ObjectState): void { this.object = structuredClone(object); this.nextGeneration = Math.max(this.nextGeneration, Number(object.generation) + 1) }
   client(): Storage {
-    const state = this
     return {
       bucket: () => ({
         file: (objectKey: string, options?: { generation?: string | number }) => ({
-          async save(bytes: Buffer, input: { preconditionOpts: { ifGenerationMatch: string | number } }) {
+          save: async (bytes: Buffer, input: { preconditionOpts: { ifGenerationMatch: string | number } }) => {
             const expected = input.preconditionOpts.ifGenerationMatch
-            state.saves.push({ objectKey, ifGenerationMatch: expected })
-            const actual = state.object?.generation
+            this.saves.push({ objectKey, ifGenerationMatch: expected })
+            const actual = this.object?.generation
             if (expected === 0 ? actual !== undefined : actual !== String(expected)) throw Object.assign(new Error('precondition'), { code: 412 })
-            state.object = { body: bytes.toString('utf8'), generation: String(state.nextGeneration++) }
+            this.object = { body: bytes.toString('utf8'), generation: String(this.nextGeneration++) }
           },
-          async getMetadata() {
-            const object = options?.generation === undefined || String(options.generation) === state.object?.generation ? state.object : null
+          getMetadata: async () => {
+            const object = options?.generation === undefined || String(options.generation) === this.object?.generation ? this.object : null
             if (!object) throw Object.assign(new Error('missing'), { code: 404 })
             return [{ name: objectKey, size: String(Buffer.byteLength(object.body)), contentType: 'application/json', cacheControl: 'no-store', generation: object.generation, metadata: object.metadata }]
           },
-          async download() {
-            const object = options?.generation === undefined || String(options.generation) === state.object?.generation ? state.object : null
+          download: async () => {
+            const object = options?.generation === undefined || String(options.generation) === this.object?.generation ? this.object : null
             if (!object) throw Object.assign(new Error('missing'), { code: 404 })
             return [Buffer.from(object.body)]
           },
-          async delete(input: { ifGenerationMatch: string }) {
-            if (!state.object || state.object.generation !== String(input.ifGenerationMatch)) throw Object.assign(new Error('precondition'), { code: 412 })
-            state.object = null
+          delete: async (input: { ifGenerationMatch: string }) => {
+            if (!this.object || this.object.generation !== String(input.ifGenerationMatch)) throw Object.assign(new Error('precondition'), { code: 412 })
+            this.object = null
           },
         }),
       }),

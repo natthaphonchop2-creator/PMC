@@ -177,22 +177,18 @@ describe('Google Sheets JERA report store', () => {
     sheets.readCount = 0
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
     const timer = vi.spyOn(globalThis, 'setTimeout')
-    let snapshots: Awaited<ReturnType<typeof store.readSnapshots>>
-    let timerCalls = -1
     try {
-      snapshots = await store.readSnapshots(queries)
-      timerCalls = timer.mock.calls.length
+      const snapshots = await store.readSnapshots(queries)
+      expect(sheets.readCount).toBe(2)
+      expect(timer).not.toHaveBeenCalled()
+      expect(snapshots).toHaveLength(93)
+      expect(snapshots[0]?.rows).toHaveLength(1)
+      expect(snapshots[1]).toMatchObject({ rows: [], state: { status: 'SUCCESS', recordCount: 0 } })
+      expect(snapshots[2]?.rows).toEqual([])
+      expect(snapshots[0]?.rows.map((row) => row.cacheKey)).not.toContain(jeraCacheKey('PAYMENT', monthFilters))
     } finally {
       timer.mockRestore()
     }
-
-    expect(sheets.readCount).toBe(2)
-    expect(timerCalls).toBe(0)
-    expect(snapshots).toHaveLength(93)
-    expect(snapshots[0]?.rows).toHaveLength(1)
-    expect(snapshots[1]).toMatchObject({ rows: [], state: { status: 'SUCCESS', recordCount: 0 } })
-    expect(snapshots[2]?.rows).toEqual([])
-    expect(snapshots[0]?.rows.map((row) => row.cacheKey)).not.toContain(jeraCacheKey('PAYMENT', monthFilters))
   })
 })
 

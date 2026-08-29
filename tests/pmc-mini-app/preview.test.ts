@@ -54,6 +54,27 @@ describe('PMC Mini App local visual preview adapter', () => {
     })
   })
 
+  it('provides deterministic finance rows for one-day, 31-day, and monthly browser acceptance', async () => {
+    const api = createPreviewMiniAppApi({ financeReportsEnabled: true, canViewFinance: true })
+    const yesterday = await api.loadDailyIncome('preview-token', {
+      preset: 'YESTERDAY', startDate: '2026-08-29', endDate: '2026-08-29',
+    })
+    const month = await api.loadDailyIncome('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-01', endDate: '2026-08-31',
+    })
+    const monthly = await api.loadMonthlyIncome('preview-token', { year: 2026, month: 8 })
+
+    expect(yesterday.payments).toEqual([
+      expect.objectContaining({ eventDate: '2026-08-29', paymentCode: 'PAY-20260829', paidAmountSatang: 100_001 }),
+    ])
+    expect(yesterday.categories).toMatchObject({ state: 'READY', serviceSatang: 66_667, productSatang: 33_334 })
+    expect(month.payments).toHaveLength(31)
+    expect(month.payments[0]?.eventDate).toBe('2026-08-31')
+    expect(month.payments.at(-1)?.eventDate).toBe('2026-08-01')
+    expect(monthly.dailyTrend).toHaveLength(31)
+    expect(monthly.dailyTrend.at(-1)?.date).toBe('2026-08-31')
+  })
+
   it('advances the safe preview report timestamp after a refresh', async () => {
     const api = createPreviewMiniAppApi({ reportingEnabled: true })
     const filters = defaultReportFilters('2026-08-27')

@@ -30,7 +30,7 @@ export function DailyIncomePage({
 }) {
   const [filter, setFilter] = useState<FinanceDailyFilter>(() => initialFilter ?? defaultFinanceDailyFilter(bangkokDate))
   const [loadedProjection, setLoadedProjection] = useState<{ key: string; value: DailyIncomeProjection } | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => financeDailyFilterError(initialFilter ?? defaultFinanceDailyFilter(bangkokDate)) === null)
   const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
   const [messageTone, setMessageTone] = useState<'ERROR' | 'STATUS'>('STATUS')
