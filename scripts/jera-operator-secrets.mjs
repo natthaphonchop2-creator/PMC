@@ -8,6 +8,9 @@ export const JERA_OPERATOR_SECRET_NAMES = [
 ]
 
 const INSPECT = Symbol.for('nodejs.util.inspect.custom')
+const MAX_SECRET_BYTES = 1_024
+const MAX_BASE64_SECRET_LENGTH = 4 * Math.ceil(MAX_SECRET_BYTES / 3)
+const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
 
 export async function loadJeraOperatorSecrets(input, dependencies = {}) {
   const project = projectFrom(input)
@@ -54,10 +57,34 @@ async function defaultSecretAccessor() {
 
 function readSecretValue(response) {
   const value = unwrapSecretPayload(response)
-  if (typeof value === 'string') return value
-  if (Buffer.isBuffer(value)) return value.toString('utf8')
-  if (value instanceof Uint8Array) return Buffer.from(value).toString('utf8')
-  throw new Error('JERA operator secrets are unavailable')
+  if (typeof value === 'string') return decodeCanonicalBase64(value)
+  if (Buffer.isBuffer(value)) return decodeUtf8(value)
+  if (value instanceof Uint8Array) return decodeUtf8(Buffer.from(value))
+  throw secretsUnavailable()
+}
+
+function decodeCanonicalBase64(value) {
+  if (value.length === 0 || value.length > MAX_BASE64_SECRET_LENGTH || !CANONICAL_BASE64.test(value)) {
+    throw secretsUnavailable()
+  }
+  const bytes = Buffer.from(value, 'base64')
+  if (bytes.length === 0 || bytes.length > MAX_SECRET_BYTES || bytes.toString('base64') !== value) {
+    throw secretsUnavailable()
+  }
+  return decodeUtf8(bytes)
+}
+
+function decodeUtf8(value) {
+  if (value.length === 0 || value.length > MAX_SECRET_BYTES) throw secretsUnavailable()
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(value)
+  } catch {
+    throw secretsUnavailable()
+  }
+}
+
+function secretsUnavailable() {
+  return new Error('JERA operator secrets are unavailable')
 }
 
 function unwrapSecretPayload(response) {

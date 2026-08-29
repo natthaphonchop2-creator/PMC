@@ -128,6 +128,48 @@ describe('safe clinic branch discovery', () => {
     for (const value of Object.values(SECRET_VALUES)) expect(serialized).not.toContain(value)
   })
 
+  it('decodes canonical base64 strings from the googleapis secret envelope for every operator secret', async () => {
+    const { secretAccessor, encodedValues } = createGoogleapisSecretAccessor()
+    const secrets = await loadJeraOperatorSecrets({ project: PROJECT }, { secretAccessor })
+    const serialized = `${JSON.stringify(secrets)} ${inspect(secrets)}`
+
+    expect(secrets.baseUrl).toBe(SECRET_VALUES.JERA_API_BASE_URL)
+    expect(secrets.username).toBe(SECRET_VALUES.JERA_API_USERNAME)
+    expect(secrets.password).toBe(SECRET_VALUES.JERA_API_PASSWORD)
+    for (const value of [...Object.values(SECRET_VALUES), ...encodedValues]) expect(serialized).not.toContain(value)
+  })
+
+  it('rejects a plaintext googleapis payload without echoing the payload in its error', async () => {
+    const { secretAccessor } = createGoogleapisSecretAccessor((value, secretName) => secretName === 'JERA_API_BASE_URL' ? value : encodeSecret(value))
+    const failure = await loadJeraOperatorSecrets({ project: PROJECT }, { secretAccessor })
+      .then(() => new Error('expected secret loader to reject plaintext payload'), (error) => error)
+
+    expect(String(failure)).toBe('Error: JERA operator secrets are unavailable')
+    expect(String(failure)).not.toContain(SECRET_VALUES.JERA_API_BASE_URL)
+  })
+
+  it.each([
+    ['base64 without required padding', (value: string, secretName: keyof typeof SECRET_VALUES) => secretName === 'JERA_API_BASE_URL' ? encodeSecret(value).replace(/=+$/, '') : encodeSecret(value)],
+    ['base64 with excess padding', (value: string, secretName: keyof typeof SECRET_VALUES) => secretName === 'JERA_API_BASE_URL' ? `${encodeSecret(value)}=` : encodeSecret(value)],
+    ['an empty base64 string', (value: string, secretName: keyof typeof SECRET_VALUES) => secretName === 'JERA_API_USERNAME' ? '' : encodeSecret(value)],
+    ['base64 for invalid UTF-8 bytes', (value: string, secretName: keyof typeof SECRET_VALUES) => secretName === 'JERA_API_USERNAME' ? 'wyg=' : encodeSecret(value)],
+    ['an oversized base64 string', (value: string, secretName: keyof typeof SECRET_VALUES) => secretName === 'JERA_API_USERNAME' ? 'A'.repeat(2_000) : encodeSecret(value)],
+  ])('rejects %s from a googleapis secret envelope', async (_description, mapPayload) => {
+    const { secretAccessor } = createGoogleapisSecretAccessor(mapPayload)
+
+    await expect(loadJeraOperatorSecrets({ project: PROJECT }, { secretAccessor }))
+      .rejects.toThrow('JERA operator secrets are unavailable')
+  })
+
+  it('continues accepting Uint8Array secret payloads from injected adapters', async () => {
+    const secretAccessor = createSecretAccessor((value) => new Uint8Array(Buffer.from(value)))
+
+    const secrets = await loadJeraOperatorSecrets({ project: PROJECT }, { secretAccessor })
+    expect(secrets.baseUrl).toBe(SECRET_VALUES.JERA_API_BASE_URL)
+    expect(secrets.username).toBe(SECRET_VALUES.JERA_API_USERNAME)
+    expect(secrets.password).toBe(SECRET_VALUES.JERA_API_PASSWORD)
+  })
+
   it('requires the explicit production flag and exact project before reading secrets', async () => {
     const secretAccessor = createSecretAccessor()
     await expect(discoverClinicBranches(['--project', PROJECT], { secretAccessor, fetch: vi.fn() }))
@@ -149,13 +191,32 @@ function dependencies({
   return { secretAccessor, fetch }
 }
 
-function createSecretAccessor() {
+function createSecretAccessor(mapPayload = (value: string) => Buffer.from(value)) {
   return {
     accessSecretVersion: vi.fn(async ({ name }: { name: string }) => {
       const secretName = name.split('/').at(-3) as keyof typeof SECRET_VALUES
-      return [{ payload: { data: Buffer.from(SECRET_VALUES[secretName]) } }]
+      return [{ payload: { data: mapPayload(SECRET_VALUES[secretName]) } }]
     }),
   }
+}
+
+function createGoogleapisSecretAccessor(
+  mapPayload: (value: string, secretName: keyof typeof SECRET_VALUES) => string = (value) => encodeSecret(value),
+) {
+  const encodedValues = Object.values(SECRET_VALUES).map(encodeSecret)
+  return {
+    encodedValues,
+    secretAccessor: {
+      accessSecretVersion: vi.fn(async ({ name }: { name: string }) => {
+        const secretName = name.split('/').at(-3) as keyof typeof SECRET_VALUES
+        return { data: { payload: { data: mapPayload(SECRET_VALUES[secretName], secretName) } } }
+      }),
+    },
+  }
+}
+
+function encodeSecret(value: string) {
+  return Buffer.from(value).toString('base64')
 }
 
 function jsonResponse(status: number, body: unknown): Response {
