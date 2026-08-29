@@ -13,9 +13,22 @@ export interface FinanceDaySourceSnapshot {
   refund: JeraCacheEnvelope<JeraNormalizedRow[]>
   productSales: JeraCacheEnvelope<JeraNormalizedRow[]>
   allocations: PaymentRevenueAllocation[]
+  sourceBinding: {
+    paymentCacheKey: string
+    productSalesCacheKey: string
+    paymentSetHash: string
+    paymentRowCount: number
+    metadataSnapshotHash: string
+    productSalesRowCount: number
+  }
   allocationCoverage: null | {
     status: 'INCOMPLETE' | 'COMPLETE'
+    paymentCacheKey: string
+    productSalesCacheKey: string
+    paymentSetHash: string
+    paymentRowCount: number
     metadataSnapshotHash: string
+    productSalesRowCount: number
     paymentLastSuccessAt: string | null
     productSalesLastSuccessAt: string | null
     lastSuccessAt: string | null
@@ -84,6 +97,7 @@ export function buildDailyIncomeProjection(input: BuildDailyIncomeInput): DailyI
   addFreshnessWarning(warnings, 'REFUND', refundFreshness)
   addFreshnessWarning(warnings, 'ALLOCATION', allocationFreshness)
   if (categoryReadiness.sourceSnapshotMismatch) warnings.add('CATEGORY_SOURCE_SNAPSHOT_MISMATCH')
+  if (categoryReadiness.sourceBindingMismatch) warnings.add('CATEGORY_SOURCE_BINDING_MISMATCH')
   if (categoryReadiness.allocationIncomplete) warnings.add('CATEGORY_ALLOCATION_INCOMPLETE')
 
   const categoryAllocations = payments.flatMap((payment) => (
@@ -185,21 +199,39 @@ function categoryReadinessFor(days: FinanceDaySourceSnapshot[], enabled: boolean
   ready: boolean
   incompleteDates: string[]
   sourceSnapshotMismatch: boolean
+  sourceBindingMismatch: boolean
   allocationIncomplete: boolean
 } {
   const incompleteDates: string[] = []
   let sourceSnapshotMismatch = false
+  let sourceBindingMismatch = false
   let allocationIncomplete = false
   for (const day of days) {
     const coverage = day.allocationCoverage
-    const sourceMismatch = !coverage
-      || !sameSnapshotWithinFifteenMinutes(coverage.paymentLastSuccessAt, coverage.productSalesLastSuccessAt)
+    const bindingMismatch = !coverage || !coverageMatchesSourceBinding(coverage, day)
+    const timestampSkew = !sameSnapshotWithinFifteenMinutes(day.payment.lastSuccessAt, day.productSales.lastSuccessAt)
+      || Boolean(coverage && !sameSnapshotWithinFifteenMinutes(coverage.paymentLastSuccessAt, coverage.productSalesLastSuccessAt))
     const incompleteAllocation = !hasCompletePaymentAllocations(day)
-    if (coverage?.status !== 'COMPLETE' || sourceMismatch || incompleteAllocation) incompleteDates.push(day.eventDate)
-    if (sourceMismatch && coverage?.status === 'COMPLETE') sourceSnapshotMismatch = true
+    if (coverage?.status !== 'COMPLETE' || bindingMismatch || timestampSkew || incompleteAllocation) incompleteDates.push(day.eventDate)
+    if (timestampSkew && coverage?.status === 'COMPLETE') sourceSnapshotMismatch = true
+    if (bindingMismatch && coverage?.status === 'COMPLETE') sourceBindingMismatch = true
     if (incompleteAllocation) allocationIncomplete = true
   }
-  return { ready: enabled && incompleteDates.length === 0, incompleteDates, sourceSnapshotMismatch, allocationIncomplete }
+  return { ready: enabled && incompleteDates.length === 0, incompleteDates, sourceSnapshotMismatch, sourceBindingMismatch, allocationIncomplete }
+}
+
+function coverageMatchesSourceBinding(
+  coverage: NonNullable<FinanceDaySourceSnapshot['allocationCoverage']>,
+  day: FinanceDaySourceSnapshot,
+): boolean {
+  return coverage.paymentCacheKey === day.sourceBinding.paymentCacheKey
+    && coverage.productSalesCacheKey === day.sourceBinding.productSalesCacheKey
+    && coverage.paymentSetHash === day.sourceBinding.paymentSetHash
+    && coverage.paymentRowCount === day.sourceBinding.paymentRowCount
+    && coverage.metadataSnapshotHash === day.sourceBinding.metadataSnapshotHash
+    && coverage.productSalesRowCount === day.sourceBinding.productSalesRowCount
+    && coverage.paymentLastSuccessAt === day.payment.lastSuccessAt
+    && coverage.productSalesLastSuccessAt === day.productSales.lastSuccessAt
 }
 
 function hasCompletePaymentAllocations(day: FinanceDaySourceSnapshot): boolean {

@@ -73,10 +73,14 @@ export function createJeraFinanceService(options: {
         throw new JeraFinanceServiceError('FINANCE_CACHE_EMPTY')
       }
       const payments = exactRows(payment.data, 'PAYMENT', branchUuid, eventDate)
-      const metadata = buildItemTypeMetadata(exactRows(productSales.data, 'PRODUCT_SALES', branchUuid, eventDate).map((row) => ({
+      const productSalesRows = exactRows(productSales.data, 'PRODUCT_SALES', branchUuid, eventDate)
+      const metadata = buildItemTypeMetadata(productSalesRows.map((row) => ({
         itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
       })))
-      return { eventDate, payment, refund, productSales, payments, metadata, paymentSetHash: paymentSetHash(payments) }
+      return {
+        eventDate, payment, refund, productSales, payments, metadata, productSalesRows,
+        paymentSetHash: paymentSetHash(payments),
+      }
     })
 
     let allocationDays: Awaited<ReturnType<JeraAllocationStore['readDays']>>
@@ -98,6 +102,14 @@ export function createJeraFinanceService(options: {
         refund: source.refund,
         productSales: source.productSales,
         allocations: allocationsFor(source.payments, allocationDay.details, source.metadata),
+        sourceBinding: {
+          paymentCacheKey: jeraCacheKey('PAYMENT', exactQuery('PAYMENT', branchUuid, source.eventDate).filters),
+          productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', exactQuery('PRODUCT_SALES', branchUuid, source.eventDate).filters),
+          paymentSetHash: source.paymentSetHash,
+          paymentRowCount: source.payments.length,
+          metadataSnapshotHash: source.metadata.snapshotHash,
+          productSalesRowCount: source.productSalesRows.length,
+        },
         allocationCoverage: financeCoverage(allocationDay.coverage),
       }
     })
@@ -141,7 +153,8 @@ export function createJeraFinanceService(options: {
           throw new JeraFinanceServiceError('FINANCE_REFRESH_UNAVAILABLE')
         }
         const payments = exactRows(envelopes[0]!.data, 'PAYMENT', branchUuid, eventDate)
-        const metadata = buildItemTypeMetadata(exactRows(envelopes[2]!.data, 'PRODUCT_SALES', branchUuid, eventDate).map((row) => ({
+        const productSalesRows = exactRows(envelopes[2]!.data, 'PRODUCT_SALES', branchUuid, eventDate)
+        const metadata = buildItemTypeMetadata(productSalesRows.map((row) => ({
           itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
         })))
         const hash = paymentSetHash(payments)
@@ -164,6 +177,7 @@ export function createJeraFinanceService(options: {
           ? {
               ...existingCoverage,
               paymentRowCount: payments.length,
+              productSalesRowCount: productSalesRows.length,
               paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
               productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
               status: 'INCOMPLETE', safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
@@ -174,6 +188,7 @@ export function createJeraFinanceService(options: {
               paymentCacheKey: jeraCacheKey('PAYMENT', queries[0]!.filters),
               productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', queries[2]!.filters),
               paymentSetHash: hash, paymentRowCount: payments.length, successfulDetailCount: 0,
+              productSalesRowCount: productSalesRows.length,
               metadataSnapshotHash: metadata.snapshotHash,
               paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
               productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
@@ -256,7 +271,9 @@ function allocationsFor(
 
 function financeCoverage(value: JeraAllocationCoverage | null): FinanceDaySourceSnapshot['allocationCoverage'] {
   return value ? {
-    status: value.status, metadataSnapshotHash: value.metadataSnapshotHash,
+    status: value.status, paymentCacheKey: value.paymentCacheKey, productSalesCacheKey: value.productSalesCacheKey,
+    paymentSetHash: value.paymentSetHash, paymentRowCount: value.paymentRowCount,
+    metadataSnapshotHash: value.metadataSnapshotHash, productSalesRowCount: value.productSalesRowCount,
     paymentLastSuccessAt: value.paymentLastSuccessAt, productSalesLastSuccessAt: value.productSalesLastSuccessAt,
     lastSuccessAt: value.lastSuccessAt,
   } : null

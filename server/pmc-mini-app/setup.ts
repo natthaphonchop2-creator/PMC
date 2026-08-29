@@ -32,7 +32,7 @@ export const JERA_ALLOCATION_COVERAGE_HEADERS = [
   'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
   'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
   'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt',
+  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
 ] as const
 
 export const STOCK_PRODUCT_HEADERS = [
@@ -136,7 +136,7 @@ export async function ensureMiniAppWorkbook(input: {
     const actual = (currentHeaders[range]?.[0] ?? []).map(String)
     const expected = [...MANAGED_TAB_HEADERS[title as keyof typeof MANAGED_TAB_HEADERS]]
     const compatibleAllocationCoverage = title === 'JERA_ALLOCATION_COVERAGE'
-      && sameHeader(actual, expected.slice(0, -1))
+      && (sameHeader(actual, expected.slice(0, -1)) || sameHeader(actual, expected.slice(0, -2)))
     if (actual.length > 0 && !sameHeader(actual, expected) && !compatibleAllocationCoverage) {
       throw new Error(`incompatible header: ${title}`)
     }
@@ -154,7 +154,8 @@ export async function ensureMiniAppWorkbook(input: {
   const allocationRange = "'JERA_ALLOCATION_COVERAGE'!1:1"
   const allocationHeader = (currentHeaders[allocationRange]?.[0] ?? []).map(String)
   const expectedAllocationHeader = [...JERA_ALLOCATION_COVERAGE_HEADERS]
-  if (sameHeader(allocationHeader, expectedAllocationHeader.slice(0, -1))) {
+  if (sameHeader(allocationHeader, expectedAllocationHeader.slice(0, -1))
+    || sameHeader(allocationHeader, expectedAllocationHeader.slice(0, -2))) {
     const sheet = byTitle.get('JERA_ALLOCATION_COVERAGE')
     if (!sheet) throw new Error('managed tab missing after setup: JERA_ALLOCATION_COVERAGE')
     const requests: Array<Record<string, unknown>> = []
@@ -172,10 +173,11 @@ export async function ensureMiniAppWorkbook(input: {
           sheetId: sheet.sheetId,
           startRowIndex: 0,
           endRowIndex: 1,
-          startColumnIndex: expectedAllocationHeader.length - 1,
+          startColumnIndex: allocationHeader.length,
           endColumnIndex: expectedAllocationHeader.length,
         },
-        rows: [{ values: [{ userEnteredValue: { stringValue: 'taskAttempt' } }] }],
+        rows: [{ values: expectedAllocationHeader.slice(allocationHeader.length)
+          .map((stringValue) => ({ userEnteredValue: { stringValue } })) }],
         fields: 'userEnteredValue',
       },
     })

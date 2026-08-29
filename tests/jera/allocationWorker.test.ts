@@ -377,7 +377,10 @@ function payment(index: number): JeraNormalizedRow {
 }
 
 function productSales(): JeraNormalizedRow {
-  return { reportType: 'PRODUCT_SALES', itemCode: 'ITEM-1', type: 'service', sourceHash: hash('metadata') } as JeraNormalizedRow
+  return {
+    reportType: 'PRODUCT_SALES', branchUuid: BRANCH, eventDate: DATE,
+    itemCode: 'ITEM-1', type: 'service', sourceHash: hash('metadata'),
+  } as JeraNormalizedRow
 }
 
 function detailPayload(paymentUuid: string) {
@@ -406,7 +409,8 @@ function coverage(patch: Partial<JeraAllocationCoverage>): JeraAllocationCoverag
     dayKey: dayKey(), branchUuid: BRANCH, eventDate: DATE, paymentCacheKey: paymentCacheKey(), productSalesCacheKey: productCacheKey(),
     paymentSetHash: hash('old'), paymentRowCount: 0, successfulDetailCount: 0, metadataSnapshotHash: metadataHash(),
     paymentLastSuccessAt: null, productSalesLastSuccessAt: null, cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null,
-    lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, taskAttempt: 0, ...patch,
+    lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, taskAttempt: 0,
+    productSalesRowCount: 1, ...patch,
   }
 }
 

@@ -50,6 +50,7 @@ export interface JeraAllocationCoverage {
   leaseOwner: string | null
   leaseExpiresAt: string | null
   taskAttempt: number
+  productSalesRowCount: number
 }
 
 export interface JeraAllocationStore {
@@ -428,7 +429,7 @@ function validateCoverage(value: JeraAllocationCoverage): JeraAllocationCoverage
   for (const hash of [value.paymentSetHash, value.metadataSnapshotHash]) assertHash(hash)
   if (value.paymentCacheKey !== jeraCacheKey('PAYMENT', { branchUuid: value.branchUuid, startDate: value.eventDate, endDate: value.eventDate })
     || value.productSalesCacheKey !== jeraCacheKey('PRODUCT_SALES', { branchUuid: value.branchUuid, startDate: value.eventDate, endDate: value.eventDate })) invalid()
-  for (const number of [value.paymentRowCount, value.successfulDetailCount, value.cursor, value.taskAttempt]) if (!Number.isSafeInteger(number) || number < 0) invalid()
+  for (const number of [value.paymentRowCount, value.productSalesRowCount, value.successfulDetailCount, value.cursor, value.taskAttempt]) if (!Number.isSafeInteger(number) || number < 0) invalid()
   if (value.successfulDetailCount > value.paymentRowCount || !['INCOMPLETE', 'COMPLETE'].includes(value.status)) invalid()
   for (const date of [value.paymentLastSuccessAt, value.productSalesLastSuccessAt, value.lastAttemptAt, value.lastSuccessAt, value.leaseExpiresAt]) if (date !== null) instant(date)
   if (value.safeErrorCode !== null && !/^[A-Z0-9_]{1,80}$/.test(value.safeErrorCode)) invalid()
@@ -460,11 +461,11 @@ function detailLine(cells: unknown[]): JeraCachedPaymentDetailLine & { detailKey
   return value
 }
 function coverage(cells: unknown[]): JeraAllocationCoverage { return validateCoverage({
-  dayKey: text(cells[0]), branchUuid: text(cells[1]), eventDate: text(cells[2]), paymentCacheKey: text(cells[3]), productSalesCacheKey: text(cells[4]), paymentSetHash: text(cells[5]), paymentRowCount: integer(cells[6]), successfulDetailCount: integer(cells[7]), metadataSnapshotHash: text(cells[8]), paymentLastSuccessAt: nullable(cells[9]), productSalesLastSuccessAt: nullable(cells[10]), cursor: integer(cells[11]), status: text(cells[12]) as JeraAllocationCoverageStatus, lastAttemptAt: nullable(cells[13]), lastSuccessAt: nullable(cells[14]), safeErrorCode: nullable(cells[15]), leaseOwner: nullable(cells[16]), leaseExpiresAt: nullable(cells[17]), taskAttempt: integer(cells[18]),
+  dayKey: text(cells[0]), branchUuid: text(cells[1]), eventDate: text(cells[2]), paymentCacheKey: text(cells[3]), productSalesCacheKey: text(cells[4]), paymentSetHash: text(cells[5]), paymentRowCount: integer(cells[6]), successfulDetailCount: integer(cells[7]), metadataSnapshotHash: text(cells[8]), paymentLastSuccessAt: nullable(cells[9]), productSalesLastSuccessAt: nullable(cells[10]), cursor: integer(cells[11]), status: text(cells[12]) as JeraAllocationCoverageStatus, lastAttemptAt: nullable(cells[13]), lastSuccessAt: nullable(cells[14]), safeErrorCode: nullable(cells[15]), leaseOwner: nullable(cells[16]), leaseExpiresAt: nullable(cells[17]), taskAttempt: integer(cells[18]), productSalesRowCount: integer(cells[19]),
 }) }
 function detailCells(value: JeraCachedPaymentDetail): unknown[] { return [value.detailKey, value.branchUuid, value.eventDate, value.paymentUuid, value.paymentSourceHash, value.detailSourceHash, value.detailFetchedAt, value.lineCount, value.truncated] }
 function lineCells(detailKey: string, value: JeraCachedPaymentDetailLine): unknown[] { return [detailKey, value.lineOrdinal, value.lineKind, value.itemCode ?? '', value.netLineSatang] }
-function coverageCells(value: JeraAllocationCoverage): unknown[] { return [value.dayKey, value.branchUuid, value.eventDate, value.paymentCacheKey, value.productSalesCacheKey, value.paymentSetHash, value.paymentRowCount, value.successfulDetailCount, value.metadataSnapshotHash, value.paymentLastSuccessAt ?? '', value.productSalesLastSuccessAt ?? '', value.cursor, value.status, value.lastAttemptAt ?? '', value.lastSuccessAt ?? '', value.safeErrorCode ?? '', value.leaseOwner ?? '', value.leaseExpiresAt ?? '', value.taskAttempt] }
+function coverageCells(value: JeraAllocationCoverage): unknown[] { return [value.dayKey, value.branchUuid, value.eventDate, value.paymentCacheKey, value.productSalesCacheKey, value.paymentSetHash, value.paymentRowCount, value.successfulDetailCount, value.metadataSnapshotHash, value.paymentLastSuccessAt ?? '', value.productSalesLastSuccessAt ?? '', value.cursor, value.status, value.lastAttemptAt ?? '', value.lastSuccessAt ?? '', value.safeErrorCode ?? '', value.leaseOwner ?? '', value.leaseExpiresAt ?? '', value.taskAttempt, value.productSalesRowCount] }
 function stripDetailKey(value: JeraCachedPaymentDetailLine & { detailKey: string }): JeraCachedPaymentDetailLine {
   return {
     lineOrdinal: value.lineOrdinal, lineKind: value.lineKind,

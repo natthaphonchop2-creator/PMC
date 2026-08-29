@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, LockKeyhole } from 'lucide-react'
-import type { MonthlyIncomeProjection } from '../../../shared/pmcFinance'
+import type { FinanceComponentFreshness, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
 import {
   defaultFinanceMonthSelection,
   financeMonthSelectionError,
@@ -105,6 +105,7 @@ function MonthlyIncomeContent({
   onDrillDown: (filter: FinanceDailyFilter) => void
 }) {
   const categoriesReady = projection.categories.state === 'READY'
+  const categorySourceLate = projection.warnings.includes('CATEGORY_SOURCE_SNAPSHOT_MISMATCH')
   return <div className="pmc-finance-report-content">
     <section className="pmc-finance-authority" aria-label="ยอดรายรับหลักประจำเดือน">
       <article><span>ยอดรับชำระ</span><strong>{formatBaht(projection.receivedSatang)}</strong></article>
@@ -147,12 +148,15 @@ function MonthlyIncomeContent({
         <strong>กำลังตรวจสอบหมวด</strong>
         <span>วันที่ยังไม่ครบ: {projection.categories.incompleteDates.join(', ')}</span>
       </div>}
+      {categorySourceLate && <p className="pmc-finance-late-warning">ข้อมูลหมวดอาจล่าช้า</p>}
       <div className="pmc-finance-category-grid">
         <MonthlyCategory label="บริการและคอร์ส" value={categoriesReady ? projection.categories.serviceSatang : null} />
         <MonthlyCategory label="Product" value={categoriesReady ? projection.categories.productSatang : null} />
         <MonthlyCategory label="ยังไม่จัดหมวด" value={categoriesReady ? projection.categories.unclassifiedSatang : null} />
       </div>
     </section>
+
+    <MonthlyFreshnessSection freshness={projection.freshness} />
 
     <section className="pmc-finance-section pmc-monthly-deferred" aria-labelledby="monthly-deferred-heading">
       <h2 id="monthly-deferred-heading">ส่วนที่กำลังเตรียม</h2>
@@ -168,6 +172,31 @@ function MonthlyDefinition({ label, value }: { label: string; value: number }) {
 
 function MonthlyCategory({ label, value }: { label: string; value: number | null }) {
   return <article><span>{label}</span><strong className="pmc-finance-category-value">{formatBaht(value)}</strong></article>
+}
+
+function MonthlyFreshnessSection({ freshness }: { freshness: MonthlyIncomeProjection['freshness'] }) {
+  return <section className="pmc-finance-section pmc-finance-freshness" aria-labelledby="monthly-freshness-heading">
+    <h2 id="monthly-freshness-heading">สถานะข้อมูล</h2>
+    <dl>
+      <MonthlyFreshnessRow label="ข้อมูลรับชำระ" value={freshness.payment} />
+      <MonthlyFreshnessRow label="ข้อมูลคืนเงิน" value={freshness.refund} />
+      <MonthlyFreshnessRow label="ข้อมูลหมวด" value={freshness.allocation} />
+    </dl>
+  </section>
+}
+
+function MonthlyFreshnessRow({ label, value }: { label: string; value: FinanceComponentFreshness }) {
+  return <div><dt>{label}</dt><dd><span>{value.stale ? 'ล่าช้า' : 'พร้อม'}</span>{value.lastSuccessAt
+    ? <time dateTime={value.lastSuccessAt}>{formatBangkokTimestamp(value.lastSuccessAt)}</time>
+    : <span>ยังไม่เคยซิงก์</span>}</dd></div>
+}
+
+function formatBangkokTimestamp(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'เวลาไม่พร้อม'
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(date)
 }
 
 function monthSelectionKey(selection: FinanceMonthSelection): string {

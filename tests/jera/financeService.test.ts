@@ -11,6 +11,7 @@ import {
   type JeraAllocationTaskQueuePort,
 } from '../../server/jera/allocationTaskQueue'
 import type { JeraSyncCoordinator, JeraSyncQuery } from '../../server/jera/syncCoordinator'
+import { jeraCacheKey } from '../../server/jera/cacheKey'
 
 describe('JERA finance service', () => {
   it.each([
@@ -401,14 +402,16 @@ function coverage(input: {
 }): JeraAllocationCoverage {
   return {
     dayKey: createHash('sha256').update(JSON.stringify([BRANCH, input.date])).digest('hex'),
-    branchUuid: BRANCH, eventDate: input.date, paymentCacheKey: `PAYMENT:${input.date}`,
-    productSalesCacheKey: `PRODUCT_SALES:${input.date}`, paymentSetHash: input.paymentSetHash,
+    branchUuid: BRANCH, eventDate: input.date,
+    paymentCacheKey: jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: input.date, endDate: input.date }),
+    productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', { branchUuid: BRANCH, startDate: input.date, endDate: input.date }),
+    paymentSetHash: input.paymentSetHash,
     paymentRowCount: 1, successfulDetailCount: 1, metadataSnapshotHash: input.metadataSnapshotHash,
     paymentLastSuccessAt: input.paymentLastSuccessAt ?? '2026-08-29T10:00:00.000Z',
     productSalesLastSuccessAt: input.productSalesLastSuccessAt ?? '2026-08-29T10:00:00.000Z',
     cursor: 1, status: 'COMPLETE', lastAttemptAt: '2026-08-29T10:00:00.000Z',
     lastSuccessAt: '2026-08-29T10:00:00.000Z', safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
-    taskAttempt: 0,
+    taskAttempt: 0, productSalesRowCount: 1,
   }
 }
 

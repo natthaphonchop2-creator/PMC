@@ -135,15 +135,15 @@ describe('PMC Mini App managed Sheet setup', () => {
     expect(sheets.deletedTabs).toEqual([])
   })
 
-  it('appends only taskAttempt for the exact legacy allocation coverage header', async () => {
+  it('appends only the exact freshness/task suffix for the legacy allocation coverage header', async () => {
     const workbook = Object.keys(MANAGED_TAB_HEADERS).map((title, index) => ({
       sheetId: index + 1,
       title,
-      ...(title === 'JERA_ALLOCATION_COVERAGE' ? { columnCount: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 1 } : {}),
+      ...(title === 'JERA_ALLOCATION_COVERAGE' ? { columnCount: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 2 } : {}),
     }))
     const sheets = new SetupSheets(workbook)
     for (const [tab, headers] of Object.entries(MANAGED_TAB_HEADERS)) {
-      sheets.headers.set(tab, tab === 'JERA_ALLOCATION_COVERAGE' ? [...headers.slice(0, -1)] : [...headers])
+      sheets.headers.set(tab, tab === 'JERA_ALLOCATION_COVERAGE' ? [...headers.slice(0, -2)] : [...headers])
     }
 
     await ensureMiniAppWorkbook({ spreadsheetId: 'sheet-1', sheets })
@@ -152,16 +152,19 @@ describe('PMC Mini App managed Sheet setup', () => {
     expect(sheets.workbookRequests[0]).toEqual([
       { appendDimension: {
         sheetId: workbook.find(({ title }) => title === 'JERA_ALLOCATION_COVERAGE')!.sheetId,
-        dimension: 'COLUMNS', length: 1,
+        dimension: 'COLUMNS', length: 2,
       } },
       { updateCells: {
         range: {
           sheetId: workbook.find(({ title }) => title === 'JERA_ALLOCATION_COVERAGE')!.sheetId,
           startRowIndex: 0, endRowIndex: 1,
-          startColumnIndex: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 1,
+          startColumnIndex: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 2,
           endColumnIndex: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length,
         },
-        rows: [{ values: [{ userEnteredValue: { stringValue: 'taskAttempt' } }] }],
+        rows: [{ values: [
+          { userEnteredValue: { stringValue: 'taskAttempt' } },
+          { userEnteredValue: { stringValue: 'productSalesRowCount' } },
+        ] }],
         fields: 'userEnteredValue',
       } },
     ])
@@ -191,7 +194,7 @@ describe('PMC Mini App managed Sheet setup', () => {
       'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
       'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
       'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-      'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt',
+      'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
     ])
   })
 

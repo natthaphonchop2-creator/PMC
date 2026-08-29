@@ -136,12 +136,15 @@ export function createJeraAllocationWorker(options: {
         }
         const payments = exactDayPayments(paymentSnapshot.rows, input.branchUuid, input.eventDate)
         const currentPaymentSetHash = paymentSetHash(payments)
-        const metadata = buildItemTypeMetadata(productSnapshot.rows.map((row) => ({
+        const productSalesRows = productSnapshot.rows.filter((row) => row.reportType === 'PRODUCT_SALES'
+          && row.branchUuid === input.branchUuid && row.eventDate === input.eventDate)
+        const metadata = buildItemTypeMetadata(productSalesRows.map((row) => ({
           itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
         })))
         const currentMetadataSnapshotHash = metadata.snapshotHash
         const sourceEvidence = {
           paymentCacheKey: jeraCacheKey('PAYMENT', filters), productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', filters),
+          productSalesRowCount: productSalesRows.length,
           paymentLastSuccessAt: validInstantOrNull(paymentSnapshot.state?.lastSuccessAt ?? null),
           productSalesLastSuccessAt: validInstantOrNull(productSnapshot.state?.lastSuccessAt ?? null),
         }
@@ -321,6 +324,7 @@ function completionFields(input: {
 interface SourceEvidence {
   paymentCacheKey: string
   productSalesCacheKey: string
+  productSalesRowCount: number
   paymentLastSuccessAt: string | null
   productSalesLastSuccessAt: string | null
 }

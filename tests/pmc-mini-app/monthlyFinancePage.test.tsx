@@ -53,6 +53,37 @@ describe('monthly finance report', () => {
     expect(screen.queryByRole('button', { name: /อัปเดตทั้งหมด|refresh all/i })).not.toBeInTheDocument()
   })
 
+  it('keeps PAYMENT, REFUND, allocation sync times, stale states, and category-late warning visible', async () => {
+    const report = monthlyProjection({
+      categories: {
+        state: 'CHECKING', serviceSatang: null, productSatang: null, unclassifiedSatang: null,
+        incompleteDates: ['2026-08-28'],
+      },
+      freshness: {
+        payment: { lastSuccessAt: '2026-08-29T10:00:00.000Z', stale: true, warningCode: 'COMPONENT_STALE' },
+        refund: { lastSuccessAt: '2026-08-29T10:05:00.000Z', stale: false, warningCode: null },
+        allocation: { lastSuccessAt: null, stale: true, warningCode: 'COMPONENT_STALE' },
+      },
+      warnings: ['CATEGORY_SOURCE_SNAPSHOT_MISMATCH', 'PAYMENT_STALE', 'ALLOCATION_STALE'],
+    })
+    const view = render(<MonthlyFinancePage
+      canViewFinance bangkokDate="2026-08-29" adapter={monthlyAdapter(report)} onBack={vi.fn()} onDrillDown={vi.fn()}
+    />)
+
+    expect(await screen.findByRole('heading', { name: 'สถานะข้อมูล' })).toBeVisible()
+    const status = screen.getByRole('region', { name: 'สถานะข้อมูล' })
+    expect(within(status).getByText('ข้อมูลรับชำระ')).toBeVisible()
+    expect(within(status).getByText('ข้อมูลคืนเงิน')).toBeVisible()
+    expect(within(status).getByText('ข้อมูลหมวด')).toBeVisible()
+    expect(within(status).getAllByText('ล่าช้า')).toHaveLength(2)
+    expect(within(status).getByText('พร้อม')).toBeVisible()
+    expect(within(status).getByText('ยังไม่เคยซิงก์')).toBeVisible()
+    expect(view.container.querySelector('time[datetime="2026-08-29T10:00:00.000Z"]')).toBeVisible()
+    expect(view.container.querySelector('time[datetime="2026-08-29T10:05:00.000Z"]')).toBeVisible()
+    expect(screen.getByText('ข้อมูลหมวดอาจล่าช้า')).toBeVisible()
+    expect(screen.getByText('วันที่ยังไม่ครบ: 2026-08-28')).toBeVisible()
+  })
+
   it('changes month selection and drills into one daily range without another monthly provider call', async () => {
     const user = userEvent.setup()
     const adapter = monthlyAdapter()

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { PaymentRevenueAllocation } from '../../shared/pmcFinance'
 import type { JeraCacheEnvelope, JeraNormalizedRow } from '../../server/jera/contracts'
@@ -66,6 +67,38 @@ describe('finance income projections', () => {
 
     expect(report.categories).toMatchObject({ state: 'CHECKING', serviceSatang: null, incompleteDates: ['2026-08-29'] })
     expect(report.warnings).toContain('CATEGORY_SOURCE_SNAPSHOT_MISMATCH')
+  })
+
+  it('renders same-hash source refreshes CHECKING until coverage is rebound to the new timestamps', () => {
+    const input = fixture({
+      paymentPaidSatang: 100_000,
+      allocation: { serviceSatang: 60_000, productSatang: 30_000, unclassifiedSatang: 10_000 },
+    })
+    input.days[0]!.payment = {
+      ...input.days[0]!.payment,
+      fetchedAt: '2026-08-29T10:05:00.000Z',
+      lastSuccessAt: '2026-08-29T10:05:00.000Z',
+    }
+
+    const report = buildDailyIncomeProjection(input)
+
+    expect(report.categories).toMatchObject({ state: 'CHECKING', incompleteDates: ['2026-08-29'] })
+    expect(report.warnings).toContain('CATEGORY_SOURCE_BINDING_MISMATCH')
+  })
+
+  it('fails category readiness when PRODUCT_SALES row count changes without changing mapped metadata hash', () => {
+    const input = fixture({
+      paymentPaidSatang: 100_000,
+      allocation: { serviceSatang: 60_000, productSatang: 30_000, unclassifiedSatang: 10_000 },
+    })
+    const product = input.days[0]!.productSales.data.find((row) => row.reportType === 'PRODUCT_SALES')!
+    input.days[0]!.productSales.data.push({ ...product, sourceUuid: 'product-extra', sourceHash: 'f'.repeat(64) })
+    input.days[0]!.sourceBinding.productSalesRowCount = 2
+
+    const report = buildDailyIncomeProjection(input)
+
+    expect(report.categories).toMatchObject({ state: 'CHECKING', incompleteDates: ['2026-08-29'] })
+    expect(report.warnings).toContain('CATEGORY_SOURCE_BINDING_MISMATCH')
   })
 
   it.each([
@@ -138,12 +171,23 @@ function fixture(options: FixtureOptions = {}): BuildDailyIncomeInput {
   const allocation = options.allocation
     ? [{ paymentUuid: payment.sourceUuid, paymentSourceHash: paymentHash, warningCodes: [], ...options.allocation }]
     : []
+  const paymentSetHash = createHash('sha256').update(JSON.stringify([[payment.sourceUuid, payment.sourceHash]])).digest('hex')
+  const metadataSnapshotHash = createHash('sha256').update(JSON.stringify([['PRD-1', 'PRODUCT']])).digest('hex')
   return {
     days: [{
       eventDate: date,
       payment: envelope([payment]), refund: envelope([refund]), productSales: envelope([productSales, misleadingOpd]), allocations: allocation,
+      sourceBinding: {
+        paymentCacheKey: payment.cacheKey,
+        productSalesCacheKey: productSales.cacheKey,
+        paymentSetHash,
+        paymentRowCount: 1,
+        metadataSnapshotHash,
+        productSalesRowCount: 1,
+      },
       allocationCoverage: {
-        status: 'COMPLETE', metadataSnapshotHash: 'm'.repeat(64),
+        status: 'COMPLETE', paymentCacheKey: payment.cacheKey, productSalesCacheKey: productSales.cacheKey,
+        paymentSetHash, paymentRowCount: 1, metadataSnapshotHash, productSalesRowCount: 1,
         paymentLastSuccessAt: '2026-08-29T10:00:00.000Z', productSalesLastSuccessAt: '2026-08-29T10:00:00.000Z',
         lastSuccessAt: '2026-08-29T10:00:00.000Z',
       },

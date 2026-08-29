@@ -15,6 +15,7 @@ import { createJeraFinanceService } from '../../server/jera/financeService'
 import { createJeraMiniAppApi } from '../../server/jera/middleware'
 import type { JeraReportStore } from '../../server/jera/store'
 import type { JeraSyncCoordinator, JeraSyncQuery } from '../../server/jera/syncCoordinator'
+import { jeraCacheKey } from '../../server/jera/cacheKey'
 import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts'
 import { submitMiniAppBooking } from '../../apps/pmc-google-booking-ops/src/workflows/miniAppSubmit'
 import { createTestPorts } from '../../apps/pmc-google-booking-ops/tests/helpers/fakes'
@@ -143,7 +144,7 @@ function financeServerSystem(categoryMoneyEnabled: boolean) {
     saveCoverage: ReturnType<typeof vi.fn>
   }
   const queue = {
-    enqueue: vi.fn(async () => ({ taskName: 'finance-task-1', alreadyExists: false })),
+    enqueue: vi.fn(async () => ({ taskName: 'finance-task-1', alreadyExists: false, live: true })),
   } satisfies JeraAllocationTaskQueuePort
   const service = createJeraFinanceService({
     coordinator,
@@ -307,10 +308,11 @@ function financeCoverage(input: {
     dayKey: createHash('sha256').update(`${input.branchUuid}:${input.eventDate}`).digest('hex'),
     branchUuid: input.branchUuid,
     eventDate: input.eventDate,
-    paymentCacheKey: `PAYMENT:${input.eventDate}`,
-    productSalesCacheKey: `PRODUCT_SALES:${input.eventDate}`,
+    paymentCacheKey: jeraCacheKey('PAYMENT', { branchUuid: input.branchUuid, startDate: input.eventDate, endDate: input.eventDate }),
+    productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', { branchUuid: input.branchUuid, startDate: input.eventDate, endDate: input.eventDate }),
     paymentSetHash: input.paymentSetHash,
     paymentRowCount: 1,
+    productSalesRowCount: 2,
     successfulDetailCount: 1,
     metadataSnapshotHash: input.metadataSnapshotHash,
     paymentLastSuccessAt: FINANCE_LAST_SUCCESS,
@@ -322,6 +324,7 @@ function financeCoverage(input: {
     safeErrorCode: null,
     leaseOwner: null,
     leaseExpiresAt: null,
+    taskAttempt: 0,
   }
 }
 
