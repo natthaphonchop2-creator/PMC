@@ -63,6 +63,10 @@ JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL
 
 The exact disabled-first comparison, one-day GET, audit, scheduler, and rollback gates are documented in `docs/pmc-mini-app/jera-shadow-runbook.md`. That runbook still requires fresh owner approval before every Production action.
 
+The separate daily/monthly finance-report rollout is documented in `docs/pmc-mini-app/finance-report-rollout-runbook.md`. It adds read-only preflight, one approved comparison-day seed, a bounded 1–31-day resumable backfill, immutable finance permissions, allocation queue/lease controls, category-money approval, 10%/100% traffic gates, and a non-destructive rollback. The tooling and runbook do not authorize a Sheet migration, Apps Script push/version/deploy, Cloud Run revision or flag change, queue/bucket/IAM/Scheduler change, role grant, source read, cache write, backfill, or traffic change.
+
+Finance operator commands accept project/service/region/date control values only. Do not pass credentials, tokens, Sheet IDs, deployment IDs, URLs, LINE IDs, provider rows, or patient data on the command line or place them in repository evidence. The finance rollout evidence file remains unchanged until a real owner-approved rollout produces verified evidence.
+
 Do not bind JERA credentials during Booking-only acceptance. Never paste credential values into this repository, terminal history, screenshots, logs, Sheets, or LINE.
 
 ## Local verification gate
