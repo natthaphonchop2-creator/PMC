@@ -17,6 +17,24 @@ describe('PMC Mini App async booking processing', () => {
     expect(adapter.load).toHaveBeenCalledTimes(12)
     await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
     expect(adapter.load).toHaveBeenCalledTimes(18)
+    await act(async () => { await vi.advanceTimersByTimeAsync(240_000) })
+    expect(adapter.load).toHaveBeenCalledTimes(66)
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    expect(adapter.load).toHaveBeenCalledTimes(66)
+  })
+
+  it('returns home automatically two seconds after persisted confirmation', async () => {
+    const onExit = vi.fn()
+    const confirmed = { ...queuedDraft(), state: 'CONFIRMED' as const, caseId: 'PMC-260828-0001', confirmationStatus: 'CONFIRMED' as const }
+    render(<BookingProcessing draft={queuedDraft()} adapter={processingAdapter(confirmed)} onExit={onExit} />)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_500) })
+    expect(screen.getByRole('heading', { name: 'PMC-260828-0001' })).toBeVisible()
+    expect(onExit).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_999) })
+    expect(onExit).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(onExit).toHaveBeenCalledOnce()
   })
 
   it('stops polling when the server projection becomes terminal and gives close-safe confirmation copy', async () => {
