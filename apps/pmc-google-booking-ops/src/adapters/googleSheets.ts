@@ -2,6 +2,7 @@ import { SHEET_SCHEMAS } from '../sheetSchema'
 import { bookingMasterMigrationPlan, staffConfigMigrationPlan } from '../domain/sheetMigration'
 import type { SheetRow, SheetStore } from '../repositories'
 import type { DashboardPort } from '../ports'
+import type { ExpenseTopologyPort } from '../ports'
 
 function requireSheet(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet, tab: string) {
   const sheet = spreadsheet.getSheetByName(tab)
@@ -31,6 +32,30 @@ export function ensureSheetTopology(spreadsheet: GoogleAppsScript.Spreadsheet.Sp
       sheet.getRange(1, 1, 1, columns.length).setValues([[...columns]])
       sheet.setFrozenRows(1)
     }
+  }
+}
+
+export function createGoogleExpenseTopologyPort(
+  spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
+): ExpenseTopologyPort {
+  return {
+    readHeader(tab) {
+      const sheet = spreadsheet.getSheetByName(tab)
+      if (!sheet) return null
+      if (sheet.getLastColumn() < 1) return []
+      return sheet
+        .getRange(1, 1, 1, sheet.getLastColumn())
+        .getValues()[0]
+        .map(String)
+    },
+    createTab(tab, headers) {
+      if (spreadsheet.getSheetByName(tab)) throw new Error(`sheet already exists: ${tab}`)
+      const sheet = spreadsheet.insertSheet(tab)
+      sheet.getRange(1, 1, 1, headers.length).setValues([[...headers]])
+    },
+    freezeHeader(tab) {
+      requireSheet(spreadsheet, tab).setFrozenRows(1)
+    },
   }
 }
 

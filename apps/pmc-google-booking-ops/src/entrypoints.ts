@@ -17,7 +17,9 @@ import {
   configureCompactBookingIdentityFieldsWorkflow,
   configureFacebookNameFieldWorkflow,
   configureQueueModeFormsWorkflow,
+  applyExpensePermissionsWorkflow,
   migrateFinancePermissionColumnsWorkflow,
+  prepareExpensePermissionsWorkflow,
   prepareAutoQueueMigrationWorkflow,
   applyAutoQueueMigrationWorkflow,
   pauseAndCutoverBookingFormWorkflow,
@@ -29,6 +31,7 @@ import {
   sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
   setupSystem,
+  setupExpenseFinanceStorageWorkflow,
   validateProductionFlexMessagesWorkflow,
 } from './runtime'
 import { SCRIPT_PROPERTY_KEYS, SHARED_DOCTOR_CALENDAR_ID } from './config'
@@ -166,6 +169,18 @@ export function setupPmcBookingSystem() {
 
 export function migratePmcFinancePermissionColumns() {
   return migrateFinancePermissionColumnsWorkflow()
+}
+
+export function preparePmcExpensePermissions() {
+  return prepareExpensePermissionsWorkflow()
+}
+
+export function applyPmcExpensePermissions() {
+  return applyExpensePermissionsWorkflow()
+}
+
+export function setupPmcExpenseFinanceStorage() {
+  return setupExpenseFinanceStorageWorkflow()
 }
 
 export function preparePmcStaffAeMigration() {

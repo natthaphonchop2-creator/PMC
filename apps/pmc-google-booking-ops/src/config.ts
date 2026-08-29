@@ -15,6 +15,12 @@ export const SCRIPT_PROPERTY_KEYS = {
   brandLogoUrl: 'BOOKING_BRAND_LOGO_URL',
   sharedAccountEmail: 'PMC_SHARED_ACCOUNT_EMAIL',
   autoQueueMigrationApproval: 'PMC_AUTO_QUEUE_MIGRATION_APPROVED',
+  financeMasterSpreadsheetId: 'PMC_FINANCE_MASTER_SPREADSHEET_ID',
+  financeFolderId: 'PMC_FINANCE_FOLDER_ID',
+  expenseIngressSecret: 'PMC_EXPENSE_INGRESS_SECRET',
+  expenseSubmitterIds: 'PMC_EXPENSE_SUBMITTER_IDS',
+  financeManagerIds: 'PMC_FINANCE_MANAGER_IDS',
+  financePermissionCutoverApproved: 'PMC_FINANCE_PERMISSION_CUTOVER_APPROVED',
 } as const
 
 export const BOOKING_FORM_LABELS = {

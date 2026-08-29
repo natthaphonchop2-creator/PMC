@@ -11,6 +11,12 @@ export interface LockPort {
   withLock<T>(operation: () => T): T
 }
 
+export interface ExpenseTopologyPort {
+  readHeader(tab: string): string[] | null
+  createTab(tab: string, headers: readonly string[]): void
+  freezeHeader(tab: string): void
+}
+
 export interface StaffConfig {
   id: string
   name: string

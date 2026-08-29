@@ -37,6 +37,9 @@ describe('Apps Script bundle', () => {
       'configurePmcSharedDoctorCalendar',
       'configurePmcStockManagers',
       'migratePmcFinancePermissionColumns',
+      'preparePmcExpensePermissions',
+      'applyPmcExpensePermissions',
+      'setupPmcExpenseFinanceStorage',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }

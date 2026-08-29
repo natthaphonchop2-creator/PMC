@@ -1,5 +1,26 @@
 import type { StaffConfig } from '../ports'
 
+function configBoolean(value: unknown): boolean {
+  return value === true || String(value).toLowerCase() === 'true' || String(value) === '1'
+}
+
+export function parseStaffConfigRow(row: Record<string, unknown>): StaffConfig {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    email: String(row.email).trim().toLowerCase(),
+    lineUserId: String(row.lineUserId),
+    canCloseBooking: configBoolean(row.canCloseBooking),
+    canBeAe: configBoolean(row.canBeAe),
+    canManageStock: configBoolean(row.canManageStock),
+    canSubmitExpense: row.canSubmitExpense === true,
+    canViewFinance: row.canViewFinance === true,
+    canManageExpense: row.canManageExpense === true,
+    active: configBoolean(row.active),
+    profileImageUrl: String(row.profileImageUrl ?? '').trim(),
+  }
+}
+
 export function normalizeStaffEmail(value: string): string {
   return value.trim().toLowerCase()
 }
