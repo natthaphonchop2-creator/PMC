@@ -237,6 +237,41 @@ describe('JERA Production read-only runtime gates', () => {
     expect(JSON.stringify(result)).not.toContain(rawProviderMarker)
   })
 
+  it('follows a valid next value after a short no-count appointment page', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const fetch = vi.fn(async (url: string) => Number(new URL(String(url)).searchParams.get('page')) === 1
+      ? jsonResponse(200, { next: 'page-2', data: [{ uuid: appointmentUuid(1) }] })
+      : jsonResponse(200, { next: null, data: [{ uuid: appointmentUuid(2) }] }))
+
+    await expect(checker.readAppointments({
+      baseUrl: 'https://jera.example', branchUuid: validEnvironment().JERA_DEFAULT_BRANCH_UUID,
+      date: '2026-08-27', fetch, token: 'synthetic-read-token',
+    })).resolves.toEqual({ count: 2 })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a malformed non-null next value for no-count appointment pagination', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const fetch = vi.fn(async () => jsonResponse(200, { next: 123, data: [{ uuid: appointmentUuid(1) }] }))
+
+    await expect(checker.readAppointments({
+      baseUrl: 'https://jera.example', branchUuid: validEnvironment().JERA_DEFAULT_BRANCH_UUID,
+      date: '2026-08-27', fetch, token: 'synthetic-read-token',
+    })).rejects.toThrow('JERA appointment pagination is inconsistent')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('rejects an overlong next value for no-count appointment pagination', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const fetch = vi.fn(async () => jsonResponse(200, { next: 'x'.repeat(2_049), data: [{ uuid: appointmentUuid(1) }] }))
+
+    await expect(checker.readAppointments({
+      baseUrl: 'https://jera.example', branchUuid: validEnvironment().JERA_DEFAULT_BRANCH_UUID,
+      date: '2026-08-27', fetch, token: 'synthetic-read-token',
+    })).rejects.toThrow('JERA appointment pagination is inconsistent')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('rejects a duplicate provider UUID across appointment pages', async () => {
     const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ uuid: appointmentUuid(index + 1) }))

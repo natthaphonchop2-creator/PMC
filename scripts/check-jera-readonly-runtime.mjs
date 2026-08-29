@@ -156,9 +156,13 @@ export async function readAppointments({ baseUrl, branchUuid, date, fetch, token
       continue
     }
 
-    const hasNext = typeof pageResult.next === 'string' && pageResult.next.length > 0 && pageResult.next.length <= 2_048
-    if (!hasNext || pageResult.rows.length < APPOINTMENT_PAGE_SIZE) return { count: acceptedCount }
-    if (addedRows === 0 || page === MAX_APPOINTMENT_PAGES) throw new Error('JERA appointment pagination is inconsistent')
+    if (pageResult.next === undefined || pageResult.next === null || pageResult.next === '') return { count: acceptedCount }
+    if (typeof pageResult.next !== 'string' || pageResult.next.length > 2_048) {
+      throw new Error('JERA appointment pagination is inconsistent')
+    }
+    if (pageResult.rows.length === 0 || addedRows === 0 || page === MAX_APPOINTMENT_PAGES) {
+      throw new Error('JERA appointment pagination is inconsistent')
+    }
   }
   throw new Error('JERA appointment pagination is inconsistent')
 }
