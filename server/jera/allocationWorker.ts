@@ -11,7 +11,11 @@ import {
   type JeraAllocationStore,
   type JeraCachedPaymentDetail,
 } from './allocationStore.js'
-import { MAX_JERA_ALLOCATION_ATTEMPT, type JeraAllocationTaskQueuePort } from './allocationTaskQueue.js'
+import {
+  enqueueJeraAllocationTaskGeneration,
+  MAX_JERA_ALLOCATION_ATTEMPT,
+  type JeraAllocationTaskQueuePort,
+} from './allocationTaskQueue.js'
 import { jeraCacheKey } from './cacheKey.js'
 import { normalizePaymentDetail } from './normalize.js'
 import type { JeraReportStore } from './store.js'
@@ -111,13 +115,23 @@ export function createJeraAllocationWorker(options: {
           ])
         } catch {
           const retryCursor = coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash) ? existingCoverage.cursor : 0
-          await enqueue(input.paymentSetHash, input.metadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
+          const taskAttempt = await enqueue(input.paymentSetHash, input.metadataSnapshotHash, retryCursor,
+            previousTaskAttempt(input.attempt, existingCoverage), options.continuationDelaySeconds)
+          if (existingCoverage?.status === 'INCOMPLETE') {
+            existingCoverage.taskAttempt = taskAttempt
+            await saveCoverage(existingCoverage)
+          }
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
         const [paymentSnapshot, productSnapshot] = snapshots
         if (!paymentSnapshot || !productSnapshot) {
           const retryCursor = coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash) ? existingCoverage.cursor : 0
-          await enqueue(input.paymentSetHash, input.metadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
+          const taskAttempt = await enqueue(input.paymentSetHash, input.metadataSnapshotHash, retryCursor,
+            previousTaskAttempt(input.attempt, existingCoverage), options.continuationDelaySeconds)
+          if (existingCoverage?.status === 'INCOMPLETE') {
+            existingCoverage.taskAttempt = taskAttempt
+            await saveCoverage(existingCoverage)
+          }
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
         const payments = exactDayPayments(paymentSnapshot.rows, input.branchUuid, input.eventDate)
@@ -140,8 +154,11 @@ export function createJeraAllocationWorker(options: {
                 input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
                 metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: retryCursor, successfulDetailCount: 0,
               }), safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE' }
+          incomplete.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, retryCursor,
+            currentPaymentSetHash === input.paymentSetHash && currentMetadataSnapshotHash === input.metadataSnapshotHash
+              ? previousTaskAttempt(input.attempt, existingCoverage) : -1,
+            options.continuationDelaySeconds)
           await saveCoverage(incomplete)
-          await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
         if (coverageMatches(existingCoverage, input.paymentSetHash, input.metadataSnapshotHash)
@@ -156,7 +173,7 @@ export function createJeraAllocationWorker(options: {
             input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
             metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: 0, successfulDetailCount: matchingCount(read.details, payments),
           })
-          await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, 0, 0, options.continuationDelaySeconds)
+          reset.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, 0, -1, options.continuationDelaySeconds)
           await saveCoverage(reset)
           return { status: 'CONTINUED', processed: 0, nextCursor: 0 }
         }
@@ -175,7 +192,9 @@ export function createJeraAllocationWorker(options: {
 
         while (cursor < payments.length && processed < options.maxDetailsPerRun) {
           if (now().getTime() >= deadline) {
-            await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+            coverage.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor,
+              previousTaskAttempt(input.attempt, coverage), options.continuationDelaySeconds)
+            await saveCoverage(coverage)
             return { status: 'CONTINUED', processed, nextCursor: cursor }
           }
           const payment = payments[cursor]!
@@ -189,12 +208,16 @@ export function createJeraAllocationWorker(options: {
           if (previousAttemptAt !== null) {
             const delay = previousAttemptAt + 3_000 - now().getTime()
             if (now().getTime() + Math.max(0, delay) + JERA_ALLOCATION_REQUEST_RESERVE_MS > deadline) {
-              await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+              coverage.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor,
+                previousTaskAttempt(input.attempt, coverage), options.continuationDelaySeconds)
+              await saveCoverage(coverage)
               return { status: 'CONTINUED', processed, nextCursor: cursor }
             }
             if (delay > 0) await sleep(delay)
           } else if (now().getTime() + JERA_ALLOCATION_REQUEST_RESERVE_MS > deadline) {
-            await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+            coverage.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor,
+              previousTaskAttempt(input.attempt, coverage), options.continuationDelaySeconds)
+            await saveCoverage(coverage)
             return { status: 'CONTINUED', processed, nextCursor: cursor }
           }
           const attemptedAt = now()
@@ -233,7 +256,9 @@ export function createJeraAllocationWorker(options: {
             coverage.successfulDetailCount = matchingCount(details, payments)
             await saveCoverage(coverage)
             const retryAfter = error instanceof JeraReadError ? error.retryAfterSeconds ?? 0 : 0
-            await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, nextAttempt(input.attempt), Math.max(options.continuationDelaySeconds, retryAfter))
+            coverage.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor,
+              previousTaskAttempt(input.attempt, coverage), Math.max(options.continuationDelaySeconds, retryAfter))
+            await saveCoverage(coverage)
             return { status: 'CONTINUED', processed: processed - 1, nextCursor: cursor }
           }
         }
@@ -245,23 +270,29 @@ export function createJeraAllocationWorker(options: {
           }
           return { status: 'COMPLETE', processed, nextCursor: null }
         }
-        await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+        coverage.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor,
+          previousTaskAttempt(input.attempt, coverage), options.continuationDelaySeconds)
+        await saveCoverage(coverage)
         return { status: 'CONTINUED', processed, nextCursor: cursor }
 
         async function enqueue(
           hash: string,
           metadataHash: string,
           nextCursor: number,
-          attempt: number,
+          previousAttempt: number,
           delaySeconds: number,
-        ): Promise<void> {
-          await fencedMutation(async () => {
-            await options.queue.enqueue({
-              branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: hash,
-              metadataSnapshotHash: metadataHash, cursor: nextCursor, attempt,
-              scheduleAt: new Date(now().getTime() + delaySeconds * 1_000),
-            })
+        ): Promise<number> {
+          const guardedQueue: JeraAllocationTaskQueuePort = {
+            enqueue(task) {
+              return fencedMutation(() => options.queue.enqueue(task))
+            },
+          }
+          const result = await enqueueJeraAllocationTaskGeneration(guardedQueue, {
+            branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: hash,
+            metadataSnapshotHash: metadataHash, cursor: nextCursor, previousTaskAttempt: previousAttempt,
+            scheduleAt: new Date(now().getTime() + delaySeconds * 1_000),
           })
+          return result.taskAttempt
         }
       } finally {
         await options.lease.release(lease)
@@ -295,7 +326,7 @@ interface SourceEvidence {
 }
 
 function coverageBase(input: {
-  input: { branchUuid: string; eventDate: string }
+  input: { branchUuid: string; eventDate: string; attempt: number }
   lease: JeraAllocationLease
   paymentSetHash: string
   paymentRowCount: number
@@ -310,6 +341,7 @@ function coverageBase(input: {
     paymentRowCount: input.paymentRowCount, successfulDetailCount: input.successfulDetailCount,
     metadataSnapshotHash: input.metadataSnapshotHash, cursor: input.cursor, status: 'INCOMPLETE', lastAttemptAt: null,
     lastSuccessAt: null, safeErrorCode: null, leaseOwner: input.lease.owner, leaseExpiresAt: input.lease.expiresAt,
+    taskAttempt: input.input.attempt,
   }
 }
 
@@ -371,9 +403,8 @@ function coverageMatches(
   return coverage?.paymentSetHash === paymentSetHash && coverage.metadataSnapshotHash === metadataSnapshotHash
 }
 
-function nextAttempt(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 0 || value >= MAX_JERA_ALLOCATION_ATTEMPT) throw new Error('JERA_ALLOCATION_RETRY_EXHAUSTED')
-  return value + 1
+function previousTaskAttempt(inputAttempt: number, coverage: JeraAllocationCoverage | null | undefined): number {
+  return Math.max(inputAttempt, coverage?.taskAttempt ?? -1)
 }
 
 function instant(value: Date): string {

@@ -129,7 +129,7 @@ describe('Google Sheets JERA allocation store', () => {
     expect(sheets.batchGets).toEqual([[
       `'JERA_PAYMENT_DETAIL_CACHE'!A1:I${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxDetailRows + 2}`,
       `'JERA_PAYMENT_DETAIL_LINES'!A1:E${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxLineRows + 2}`,
-      `'JERA_ALLOCATION_COVERAGE'!A1:R${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxCoverageRows + 2}`,
+      `'JERA_ALLOCATION_COVERAGE'!A1:S${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxCoverageRows + 2}`,
     ]])
     const lines = sheets.tab('JERA_PAYMENT_DETAIL_LINES')
     lines[2]![1] = 3
@@ -275,6 +275,7 @@ function coverageRow(patch: Partial<JeraAllocationCoverage> = {}): JeraAllocatio
     paymentRowCount: 1, successfulDetailCount: 0, metadataSnapshotHash: hash('m'),
     paymentLastSuccessAt: '2026-08-29T10:00:00.000Z', productSalesLastSuccessAt: '2026-08-29T10:00:00.000Z',
     cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
+    taskAttempt: 0,
     ...patch,
   }
 }

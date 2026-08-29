@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { CloudTasksClient, protos } from '@google-cloud/tasks'
 
 export const MAX_JERA_ALLOCATION_ATTEMPT = 1_000_000
+export const MAX_JERA_ALLOCATION_ENQUEUE_GENERATIONS = 8
 
 export interface JeraAllocationTaskQueuePort {
   enqueue(input: {
@@ -12,7 +13,40 @@ export interface JeraAllocationTaskQueuePort {
     cursor: number
     attempt: number
     scheduleAt: Date
-  }): Promise<{ taskName: string; alreadyExists: boolean }>
+  }): Promise<{ taskName: string; alreadyExists: boolean; live: boolean }>
+}
+
+export async function enqueueJeraAllocationTaskGeneration(
+  queue: JeraAllocationTaskQueuePort,
+  input: {
+    branchUuid: string
+    eventDate: string
+    paymentSetHash: string
+    metadataSnapshotHash: string
+    cursor: number
+    previousTaskAttempt: number
+    scheduleAt: Date
+  },
+): Promise<{ taskName: string; taskAttempt: number; created: boolean }> {
+  if (!Number.isSafeInteger(input.previousTaskAttempt) || input.previousTaskAttempt < -1
+    || input.previousTaskAttempt >= MAX_JERA_ALLOCATION_ATTEMPT) throw safeTaskFailure()
+  for (let offset = 1; offset <= MAX_JERA_ALLOCATION_ENQUEUE_GENERATIONS; offset += 1) {
+    const taskAttempt = input.previousTaskAttempt + offset
+    if (taskAttempt > MAX_JERA_ALLOCATION_ATTEMPT) break
+    const result = await queue.enqueue({
+      branchUuid: input.branchUuid,
+      eventDate: input.eventDate,
+      paymentSetHash: input.paymentSetHash,
+      metadataSnapshotHash: input.metadataSnapshotHash,
+      cursor: input.cursor,
+      attempt: taskAttempt,
+      scheduleAt: input.scheduleAt,
+    })
+    if (!result.alreadyExists || result.live) {
+      return { taskName: result.taskName, taskAttempt, created: !result.alreadyExists }
+    }
+  }
+  throw new Error('JERA_ALLOCATION_TASK_GENERATIONS_EXHAUSTED')
 }
 
 export function createGoogleJeraAllocationTaskQueue(input: {
@@ -55,9 +89,17 @@ export function createGoogleJeraAllocationTaskQueue(input: {
             dispatchDeadline: { seconds: 300 },
           },
         })
-        return { taskName, alreadyExists: false }
+        return { taskName, alreadyExists: false, live: true }
       } catch (error) {
-        if (grpcCode(error) === 6) return { taskName, alreadyExists: true }
+        if (grpcCode(error) === 6) {
+          try {
+            await client.getTask({ name: taskName })
+            return { taskName, alreadyExists: true, live: true }
+          } catch (lookupError) {
+            if (grpcCode(lookupError) === 5) return { taskName, alreadyExists: true, live: false }
+            throw safeTaskFailure()
+          }
+        }
         throw safeTaskFailure()
       }
     },

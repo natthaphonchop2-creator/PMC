@@ -6,7 +6,10 @@ import {
   JeraFinanceServiceError,
 } from '../../server/jera/financeService'
 import type { JeraAllocationCoverage, JeraAllocationStore, JeraCachedPaymentDetail } from '../../server/jera/allocationStore'
-import type { JeraAllocationTaskQueuePort } from '../../server/jera/allocationTaskQueue'
+import {
+  MAX_JERA_ALLOCATION_ENQUEUE_GENERATIONS,
+  type JeraAllocationTaskQueuePort,
+} from '../../server/jera/allocationTaskQueue'
 import type { JeraSyncCoordinator, JeraSyncQuery } from '../../server/jera/syncCoordinator'
 
 describe('JERA finance service', () => {
@@ -129,7 +132,7 @@ describe('JERA finance service', () => {
     expect(maxActive).toBe(1)
     expect(deps.allocationStore.saveCoverage).toHaveBeenCalledWith(expect.objectContaining({
       branchUuid: BRANCH, eventDate: '2026-08-29', cursor: 0, status: 'INCOMPLETE',
-      paymentRowCount: 1, successfulDetailCount: 0,
+      paymentRowCount: 1, successfulDetailCount: 0, taskAttempt: 0,
     }))
     const seeded = vi.mocked(deps.allocationStore.saveCoverage).mock.calls[0]![0]
     expect(deps.queue.enqueue).toHaveBeenCalledWith({
@@ -139,18 +142,11 @@ describe('JERA finance service', () => {
     })
   })
 
-  it.each([
-    ['COMPLETE', 1, '2026-08-29T10:00:00.000Z'],
-    ['INCOMPLETE', 0, null],
-  ] as const)('preserves same-hash %s coverage as an idempotent replay', async (status, cursor, lastSuccessAt) => {
+  it('keeps same-hash COMPLETE coverage as a task no-op', async () => {
     const existing = coverage({
       date: '2026-08-29', paymentSetHash: currentPaymentSetHash('2026-08-29'),
       metadataSnapshotHash: currentMetadataSnapshotHash(),
     })
-    existing.status = status
-    existing.cursor = cursor
-    existing.lastSuccessAt = lastSuccessAt
-    existing.lastAttemptAt = status === 'INCOMPLETE' ? '2026-08-29T10:05:00.000Z' : existing.lastAttemptAt
     const deps = fixture({ existingCoverage: existing })
 
     const result = await deps.service.refreshDay({
@@ -161,7 +157,66 @@ describe('JERA finance service', () => {
     expect(deps.allocationStore.getCoverage).toHaveBeenCalledWith(existing.dayKey)
     expect(deps.allocationStore.saveCoverage).not.toHaveBeenCalled()
     expect(deps.queue.enqueue).not.toHaveBeenCalled()
-    expect(existing).toMatchObject({ status, cursor, lastSuccessAt })
+  })
+
+  it('resumes same-hash INCOMPLETE coverage from its saved cursor with a new durable task generation', async () => {
+    const existing = coverage({
+      date: '2026-08-29', paymentSetHash: currentPaymentSetHash('2026-08-29'),
+      metadataSnapshotHash: currentMetadataSnapshotHash(),
+    })
+    Object.assign(existing, {
+      status: 'INCOMPLETE', cursor: 1, successfulDetailCount: 1, lastSuccessAt: null,
+      lastAttemptAt: '2026-08-29T10:05:00.000Z', taskAttempt: 4,
+    })
+    const deps = fixture({ existingCoverage: existing })
+
+    const result = await deps.service.refreshDay({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
+    })
+
+    expect(result).toEqual({ accepted: true, allocationQueued: true, retryAfterSeconds: 300 })
+    expect(deps.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ cursor: 1, attempt: 5 }))
+    expect(deps.allocationStore.saveCoverage).toHaveBeenCalledWith(expect.objectContaining({
+      cursor: 1, successfulDetailCount: 1, status: 'INCOMPLETE', taskAttempt: 5,
+    }))
+    expect(vi.mocked(deps.queue.enqueue).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.allocationStore.saveCoverage).mock.invocationCallOrder[0]!)
+  })
+
+  it('skips a tombstoned manual-resume generation and persists only the replacement task', async () => {
+    const existing = coverage({
+      date: '2026-08-29', paymentSetHash: currentPaymentSetHash('2026-08-29'),
+      metadataSnapshotHash: currentMetadataSnapshotHash(),
+    })
+    Object.assign(existing, { status: 'INCOMPLETE', cursor: 1, taskAttempt: 4 })
+    const deps = fixture({ existingCoverage: existing })
+    vi.mocked(deps.queue.enqueue)
+      .mockResolvedValueOnce({ taskName: 'tombstoned-5', alreadyExists: true, live: false })
+      .mockResolvedValueOnce({ taskName: 'created-6', alreadyExists: false, live: true })
+
+    await deps.service.refreshDay({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
+    })
+
+    expect(vi.mocked(deps.queue.enqueue).mock.calls.map(([input]) => input.attempt)).toEqual([5, 6])
+    expect(deps.allocationStore.saveCoverage).toHaveBeenCalledOnce()
+    expect(deps.allocationStore.saveCoverage).toHaveBeenCalledWith(expect.objectContaining({ taskAttempt: 6, cursor: 1 }))
+  })
+
+  it('leaves coverage untouched when every bounded resume generation is tombstoned', async () => {
+    const existing = coverage({
+      date: '2026-08-29', paymentSetHash: currentPaymentSetHash('2026-08-29'),
+      metadataSnapshotHash: currentMetadataSnapshotHash(),
+    })
+    Object.assign(existing, { status: 'INCOMPLETE', cursor: 1, taskAttempt: 4 })
+    const deps = fixture({ existingCoverage: existing })
+    vi.mocked(deps.queue.enqueue).mockResolvedValue({ taskName: 'tombstone', alreadyExists: true, live: false })
+
+    await expect(deps.service.refreshDay({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
+    })).rejects.toMatchObject({ code: 'FINANCE_REFRESH_UNAVAILABLE' })
+    expect(deps.queue.enqueue).toHaveBeenCalledTimes(MAX_JERA_ALLOCATION_ENQUEUE_GENERATIONS)
+    expect(deps.allocationStore.saveCoverage).not.toHaveBeenCalled()
   })
 
   it('creates a distinct cursor-zero task for a metadata-only change before resetting coverage', async () => {
@@ -219,17 +274,17 @@ describe('JERA finance service', () => {
     expect(deps.allocationStore.saveCoverage).not.toHaveBeenCalled()
   })
 
-  it('does not overwrite working coverage when a changed-hash task already exists', async () => {
+  it('binds changed-hash coverage only after confirming the existing task is live', async () => {
     const existing = coverage({
       date: '2026-08-29', paymentSetHash: 'f'.repeat(64), metadataSnapshotHash: currentMetadataSnapshotHash(),
     })
     const deps = fixture({ existingCoverage: existing })
-    vi.mocked(deps.queue.enqueue).mockResolvedValueOnce({ taskName: 'existing-task', alreadyExists: true })
+    vi.mocked(deps.queue.enqueue).mockResolvedValueOnce({ taskName: 'existing-task', alreadyExists: true, live: true })
 
     await expect(deps.service.refreshDay({
       branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
     })).resolves.toEqual({ accepted: true, allocationQueued: false, retryAfterSeconds: 300 })
-    expect(deps.allocationStore.saveCoverage).not.toHaveBeenCalled()
+    expect(deps.allocationStore.saveCoverage).toHaveBeenCalledWith(expect.objectContaining({ taskAttempt: 0, cursor: 0 }))
   })
 
   it('does not seed or enqueue when a source refresh fails, preserving the coordinator cache', async () => {
@@ -301,7 +356,7 @@ function fixture(options: {
     saveCoverage: vi.fn(async () => undefined),
   } as unknown as JeraAllocationStore & { readDays: ReturnType<typeof vi.fn>; getCoverage: ReturnType<typeof vi.fn>; saveCoverage: ReturnType<typeof vi.fn> }
   const queue = {
-    enqueue: vi.fn(async () => ({ taskName: 'task-1', alreadyExists: false })),
+    enqueue: vi.fn(async () => ({ taskName: 'task-1', alreadyExists: false, live: true })),
   } as JeraAllocationTaskQueuePort
   const service = createJeraFinanceService({
     coordinator, allocationStore, allocationQueue: queue,
@@ -353,6 +408,7 @@ function coverage(input: {
     productSalesLastSuccessAt: input.productSalesLastSuccessAt ?? '2026-08-29T10:00:00.000Z',
     cursor: 1, status: 'COMPLETE', lastAttemptAt: '2026-08-29T10:00:00.000Z',
     lastSuccessAt: '2026-08-29T10:00:00.000Z', safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
+    taskAttempt: 0,
   }
 }
 

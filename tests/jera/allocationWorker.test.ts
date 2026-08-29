@@ -48,7 +48,7 @@ describe('resumable JERA payment-detail worker', () => {
       .toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
     expect(harness.queue.enqueue).toHaveBeenCalledWith({
       branchUuid: BRANCH, eventDate: DATE, paymentSetHash: harness.paymentSetHash,
-      metadataSnapshotHash: harness.metadataSnapshotHash, cursor: 20, attempt: 0,
+      metadataSnapshotHash: harness.metadataSnapshotHash, cursor: 20, attempt: 8,
       scheduleAt: new Date(harness.clockMs + 60_000),
     })
   })
@@ -143,6 +143,27 @@ describe('resumable JERA payment-detail worker', () => {
     expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
       cursor: 0, attempt: 1, scheduleAt: new Date(harness.clockMs + 95_000),
     }))
+  })
+
+  it('replaces a tombstoned continuation generation and persists the live task attempt after creation', async () => {
+    const harness = workerHarness(1)
+    harness.coverage = coverage({
+      paymentSetHash: harness.paymentSetHash, metadataSnapshotHash: harness.metadataSnapshotHash,
+      status: 'INCOMPLETE', cursor: 0, taskAttempt: 4,
+    })
+    harness.client.request.mockRejectedValueOnce(new JeraReadError('JERA_PROVIDER_FAILED'))
+    vi.mocked(harness.queue.enqueue)
+      .mockResolvedValueOnce({ taskName: 'tombstone-5', alreadyExists: true, live: false })
+      .mockResolvedValueOnce({ taskName: 'created-6', alreadyExists: false, live: true })
+
+    await expect(harness.worker.run(task(harness.paymentSetHash, 4))).resolves.toEqual({
+      status: 'CONTINUED', processed: 0, nextCursor: 0,
+    })
+
+    expect(vi.mocked(harness.queue.enqueue).mock.calls.map(([input]) => input.attempt)).toEqual([5, 6])
+    expect(harness.coverage).toMatchObject({ taskAttempt: 6, cursor: 0, status: 'INCOMPLETE' })
+    expect(vi.mocked(harness.queue.enqueue).mock.invocationCallOrder.at(-1))
+      .toBeLessThan(vi.mocked(harness.runSession.saveCoverage).mock.invocationCallOrder.at(-1)!)
   })
 
   it('resets changed payment-set coverage and seeds cursor zero without deleting detail evidence', async () => {
@@ -296,7 +317,7 @@ function workerHarness(count: number, leasePatch: {
     release: vi.fn(async () => undefined),
   }
   const client = { request: vi.fn(async (_type, filters) => [detailPayload(filters.paymentUuid!)]) } as unknown as JeraReadPort & { request: ReturnType<typeof vi.fn> }
-  const queue = (leasePatch.queue ?? { enqueue: vi.fn(async () => ({ taskName: 'task', alreadyExists: false })) }) as JeraAllocationTaskQueuePort & { enqueue: ReturnType<typeof vi.fn> }
+  const queue = (leasePatch.queue ?? { enqueue: vi.fn(async () => ({ taskName: 'task', alreadyExists: false, live: true })) }) as JeraAllocationTaskQueuePort & { enqueue: ReturnType<typeof vi.fn> }
   const replacePaymentDetail = vi.fn(async (detail: JeraCachedPaymentDetail) => {
       const index = details.findIndex((stored) => stored.paymentUuid === detail.paymentUuid)
       if (index >= 0) details[index] = structuredClone(detail); else details.push(structuredClone(detail))
@@ -385,7 +406,7 @@ function coverage(patch: Partial<JeraAllocationCoverage>): JeraAllocationCoverag
     dayKey: dayKey(), branchUuid: BRANCH, eventDate: DATE, paymentCacheKey: paymentCacheKey(), productSalesCacheKey: productCacheKey(),
     paymentSetHash: hash('old'), paymentRowCount: 0, successfulDetailCount: 0, metadataSnapshotHash: metadataHash(),
     paymentLastSuccessAt: null, productSalesLastSuccessAt: null, cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null,
-    lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, ...patch,
+    lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, taskAttempt: 0, ...patch,
   }
 }
 

@@ -32,7 +32,7 @@ export const JERA_ALLOCATION_COVERAGE_HEADERS = [
   'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
   'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
   'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
+  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt',
 ] as const
 
 export const STOCK_PRODUCT_HEADERS = [
@@ -135,7 +135,11 @@ export async function ensureMiniAppWorkbook(input: {
     const range = `'${title}'!1:1`
     const actual = (currentHeaders[range]?.[0] ?? []).map(String)
     const expected = [...MANAGED_TAB_HEADERS[title as keyof typeof MANAGED_TAB_HEADERS]]
-    if (actual.length > 0 && !sameHeader(actual, expected)) throw new Error(`incompatible header: ${title}`)
+    const compatibleAllocationCoverage = title === 'JERA_ALLOCATION_COVERAGE'
+      && sameHeader(actual, expected.slice(0, -1))
+    if (actual.length > 0 && !sameHeader(actual, expected) && !compatibleAllocationCoverage) {
+      throw new Error(`incompatible header: ${title}`)
+    }
   }
 
   const missingTitles = Object.keys(MANAGED_TAB_HEADERS).filter((title) => !initialTitles.has(title))
@@ -147,6 +151,37 @@ export async function ensureMiniAppWorkbook(input: {
 
   const workbook = await sheets.getWorkbook(spreadsheetId)
   const byTitle = new Map(workbook.map((sheet) => [sheet.title, sheet]))
+  const allocationRange = "'JERA_ALLOCATION_COVERAGE'!1:1"
+  const allocationHeader = (currentHeaders[allocationRange]?.[0] ?? []).map(String)
+  const expectedAllocationHeader = [...JERA_ALLOCATION_COVERAGE_HEADERS]
+  if (sameHeader(allocationHeader, expectedAllocationHeader.slice(0, -1))) {
+    const sheet = byTitle.get('JERA_ALLOCATION_COVERAGE')
+    if (!sheet) throw new Error('managed tab missing after setup: JERA_ALLOCATION_COVERAGE')
+    const requests: Array<Record<string, unknown>> = []
+    const existingColumnCount = sheet.columnCount ?? allocationHeader.length
+    if (existingColumnCount < expectedAllocationHeader.length) {
+      requests.push({ appendDimension: {
+        sheetId: sheet.sheetId,
+        dimension: 'COLUMNS',
+        length: expectedAllocationHeader.length - existingColumnCount,
+      } })
+    }
+    requests.push({
+      updateCells: {
+        range: {
+          sheetId: sheet.sheetId,
+          startRowIndex: 0,
+          endRowIndex: 1,
+          startColumnIndex: expectedAllocationHeader.length - 1,
+          endColumnIndex: expectedAllocationHeader.length,
+        },
+        rows: [{ values: [{ userEnteredValue: { stringValue: 'taskAttempt' } }] }],
+        fields: 'userEnteredValue',
+      },
+    })
+    await sheets.applyWorkbookRequests(spreadsheetId, requests)
+    currentHeaders[allocationRange] = [[...expectedAllocationHeader]]
+  }
   for (const [title, headers] of Object.entries(MANAGED_TAB_HEADERS)) {
     const sheet = byTitle.get(title)
     if (!sheet) throw new Error(`managed tab missing after setup: ${title}`)

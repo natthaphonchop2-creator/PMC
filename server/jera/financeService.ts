@@ -7,7 +7,10 @@ import {
   type JeraAllocationStore,
   type JeraCachedPaymentDetail,
 } from './allocationStore.js'
-import type { JeraAllocationTaskQueuePort } from './allocationTaskQueue.js'
+import {
+  enqueueJeraAllocationTaskGeneration,
+  type JeraAllocationTaskQueuePort,
+} from './allocationTaskQueue.js'
 import { jeraCacheKey } from './cacheKey.js'
 import type { JeraCacheEnvelope, JeraNormalizedRow, JeraSourceReportType } from './contracts.js'
 import {
@@ -142,40 +145,45 @@ export function createJeraFinanceService(options: {
           itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
         })))
         const hash = paymentSetHash(payments)
-        if (existingCoverage?.paymentSetHash === hash
-          && existingCoverage.metadataSnapshotHash === metadata.snapshotHash) {
+        const sameSourceCoverage = existingCoverage?.paymentSetHash === hash
+          && existingCoverage.metadataSnapshotHash === metadata.snapshotHash
+        if (sameSourceCoverage && existingCoverage.status === 'COMPLETE') {
           return {
             accepted: true,
             allocationQueued: false,
             retryAfterSeconds: Math.max(...retryAfterSeconds),
           }
         }
-        const coverage: JeraAllocationCoverage = {
-          dayKey, branchUuid, eventDate,
-          paymentCacheKey: jeraCacheKey('PAYMENT', queries[0]!.filters),
-          productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', queries[2]!.filters),
-          paymentSetHash: hash, paymentRowCount: payments.length, successfulDetailCount: 0,
-          metadataSnapshotHash: metadata.snapshotHash,
-          paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
-          productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
-          cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null,
-          safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
-        }
-        const queued = await options.allocationQueue.enqueue({
+        const cursor = sameSourceCoverage ? existingCoverage.cursor : 0
+        const queued = await enqueueJeraAllocationTaskGeneration(options.allocationQueue, {
           branchUuid, eventDate, paymentSetHash: hash, metadataSnapshotHash: metadata.snapshotHash,
-          cursor: 0, attempt: 0, scheduleAt: validNow(now()),
+          cursor, previousTaskAttempt: sameSourceCoverage ? existingCoverage.taskAttempt : -1,
+          scheduleAt: validNow(now()),
         })
-        if (queued.alreadyExists) {
-          return {
-            accepted: true,
-            allocationQueued: false,
-            retryAfterSeconds: Math.max(...retryAfterSeconds),
-          }
-        }
+        const coverage: JeraAllocationCoverage = sameSourceCoverage
+          ? {
+              ...existingCoverage,
+              paymentRowCount: payments.length,
+              paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
+              productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
+              status: 'INCOMPLETE', safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
+              taskAttempt: queued.taskAttempt,
+            }
+          : {
+              dayKey, branchUuid, eventDate,
+              paymentCacheKey: jeraCacheKey('PAYMENT', queries[0]!.filters),
+              productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', queries[2]!.filters),
+              paymentSetHash: hash, paymentRowCount: payments.length, successfulDetailCount: 0,
+              metadataSnapshotHash: metadata.snapshotHash,
+              paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
+              productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
+              cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null,
+              safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, taskAttempt: queued.taskAttempt,
+            }
         await options.allocationStore.saveCoverage(coverage)
         return {
           accepted: true,
-          allocationQueued: true,
+          allocationQueued: queued.created,
           retryAfterSeconds: Math.max(...retryAfterSeconds),
         }
       } catch (error) {
