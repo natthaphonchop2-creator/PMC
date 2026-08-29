@@ -47,6 +47,27 @@ describe('safe clinic branch discovery', () => {
     expect(result).toEqual({ clinicCount: 1, branchCount: 1, branches: [{ uuid: BRANCH_UUID, name: 'สาขารอง' }] })
   })
 
+  it('accepts the Production single-clinic object with a branches array', async () => {
+    const result = await discoverClinicBranches(
+      ['--allow-readonly-production', '--project', PROJECT],
+      dependencies({ clinicBody: { uuid: CLINIC_UUID, name: 'Promed', branches: [{ uuid: BRANCH_UUID, name: 'สาขาหลัก' }] } }),
+    )
+
+    expect(result).toEqual({ clinicCount: 1, branchCount: 1, branches: [{ uuid: BRANCH_UUID, name: 'สาขาหลัก' }] })
+  })
+
+  it('fails closed when a root object ambiguously contains both data and branches', async () => {
+    await expect(discoverClinicBranches(
+      ['--allow-readonly-production', '--project', PROJECT],
+      dependencies({
+        clinicBody: {
+          data: [{ branches: [{ uuid: BRANCH_UUID, name: 'สาขาจาก data' }] }],
+          branches: [{ uuid: BRANCH_UUID, name: 'สาขาจาก root' }],
+        },
+      }),
+    )).rejects.toThrow('Clinic branch discovery failed')
+  })
+
   it('fails closed on ambiguous or malformed clinic metadata without including the body', async () => {
     const rawBodyMarker = 'must-not-appear-in-errors'
     await expect(discoverClinicBranches(

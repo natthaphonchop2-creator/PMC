@@ -46,7 +46,7 @@ function parseArguments(args) {
 }
 
 function sanitizeClinicBranches(value) {
-  const clinics = Array.isArray(value) ? value : isObject(value) && Array.isArray(value.data) ? value.data : null
+  const clinics = clinicRecords(value)
   if (!clinics) throw new Error('clinic schema invalid')
 
   const branches = []
@@ -67,6 +67,18 @@ function sanitizeClinicBranches(value) {
     }
   }
   return { clinicCount: clinics.length, branchCount: branches.length, branches }
+}
+
+function clinicRecords(value) {
+  if (Array.isArray(value)) return value
+  if (!isObject(value)) return null
+
+  const branchKey = exactlyOneKey(value, ['branches', 'branch_data', 'clinic_branches'])
+  const hasDataEnvelope = Object.hasOwn(value, 'data') && Array.isArray(value.data)
+  if (hasDataEnvelope && branchKey) return null
+  if (hasDataEnvelope) return value.data
+  if (branchKey && Array.isArray(value[branchKey])) return [value]
+  return null
 }
 
 function exactlyOneKey(value, keys) {
