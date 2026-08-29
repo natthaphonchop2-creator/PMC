@@ -105,3 +105,43 @@ Post-remediation Production revision: `pmc-mini-app-00046-pam`
 - Core report smoke result: cache source, refreshing false, stale false, no warning
 - Post-route unexpected HTTP 5xx: 0
 - Rollback revision for this remediation: `pmc-mini-app-00044-lug`
+
+## Final cache-only architecture correction
+
+Real mobile use proved the first quota remediation was insufficient. On revision `pmc-mini-app-00046-pam`:
+
+- Authenticated report responses: 13 HTTP 200 and 4 HTTP 503
+- Failed requests: TODAY_SUMMARY GET x2, TODAY_SUMMARY refresh POST x1, PAYMENT GET x1
+- Sheets HTTP 429 in the observed hour: 48
+- Peak BatchGetValues usage: 65 requests/minute against a 60 requests/minute per-user limit
+- Cloud Run crash/restart: none
+
+The remaining feedback loop was `GET -> background refresh -> client poll -> full Sheet reads`. The final architecture removes that loop:
+
+- Report GET is cache-only and never starts provider or Sheet writes.
+- Single-report manual refresh remains inside the HTTP request until complete.
+- TODAY_SUMMARY bulk refresh returns 409 and the UI directs staff to refresh source reports individually.
+- Client polling of the full report endpoint is removed.
+- JERA_API_CACHE uses a five-second process snapshot with single-flight loading, explicit timer eviction, and write invalidation.
+- Sync state, lease, and audit tables are never cached.
+- Relative date presets are recomputed from the current Bangkok date.
+- PAYMENT_LIST is reachable from the report menu, completing all 14 report views.
+- Successful manual refresh no longer performs a discarded cache/state read.
+
+Final commits: `ba34860`, `454f995`, `43baa09`
+
+Final Production revision: `pmc-mini-app-00049-ced`
+
+- Production traffic: 100%
+- Current-date source caches seeded: 13 / 13 SUCCESS
+- Current-date seed warnings: 0
+- Cache-only stress passes: 10
+- Stress result: refreshing false, stale false, warning null
+- Main Vitest: 130 files / 1,474 tests PASS
+- Booking Vitest: 42 files / 423 tests PASS
+- OCR Vitest: 18 files / 231 tests PASS
+- Browser acceptance: 10 / 10 PASS
+- Final independent review: no Critical or Important blockers
+- Post-route health: HTTP 200
+- Post-route unexpected HTTP 5xx at verification: 0
+- Rollback revision: `pmc-mini-app-00046-pam`
