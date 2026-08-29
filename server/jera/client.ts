@@ -120,28 +120,62 @@ export function createJeraReadClient(
         if (!endpoint) throw new JeraReadError('JERA_READ_ONLY_VIOLATION')
       }
       const normalized = validateFilters(reportType, filters, endpoint, config.defaultBranchUuid)
-      const chunks = endpointNeedsDate(endpoint) ? dateChunks(normalized.startDate, normalized.endDate) : [{ startDate: '', endDate: '' }]
+      const variants = providerFilterVariants(reportType, normalized)
       const rows: unknown[] = []
       const seen = new Set<string>()
-      for (const chunk of chunks) {
-        const path = endpointPath(endpoint.path, normalized)
-        let page = 1
-        while (true) {
-          const query = endpointQuery(reportType, { ...normalized, ...chunk }, endpoint, page)
-          const parsed = await rawRequest({ method: 'GET', path, query })
-          const pageResult = extractRows(reportType, parsed, endpoint.paginated)
-          pageResult.rows.forEach((row, index) => {
-            const identity = stableIdentity(row) ?? `${chunk.startDate}:${page}:${index}`
-            if (!seen.has(identity)) { seen.add(identity); rows.push(row) }
-          })
-          if (!endpoint.paginated || !pageResult.hasMore(page, rows.length)) break
-          page += 1
-          if (page > 1_000) throw new JeraReadError('JERA_SCHEMA_INVALID')
+      for (let variantIndex = 0; variantIndex < variants.length; variantIndex += 1) {
+        const variant = variants[variantIndex]
+        const chunks = endpointNeedsDate(endpoint) ? dateChunks(variant.startDate, variant.endDate) : [{ startDate: '', endDate: '' }]
+        for (const chunk of chunks) {
+          const path = endpointPath(endpoint.path, variant)
+          let page = 1
+          while (true) {
+            const query = endpointQuery(reportType, { ...variant, ...chunk }, endpoint, page)
+            const parsed = await rawRequest({ method: 'GET', path, query })
+            const pageResult = extractRows(reportType, parsed, endpoint.paginated)
+            pageResult.rows.forEach((row, index) => {
+              const identity = stableIdentity(row) ?? `${variantIndex}:${chunk.startDate}:${page}:${index}`
+              if (!seen.has(identity)) { seen.add(identity); rows.push(row) }
+            })
+            if (!endpoint.paginated || !pageResult.hasMore(page, rows.length)) break
+            page += 1
+            if (page > 1_000) throw new JeraReadError('JERA_SCHEMA_INVALID')
+          }
         }
       }
       return rows
     },
   }
+}
+
+function providerFilterVariants(endpointKey: JeraEndpointKey, filters: JeraReportFilters): JeraReportFilters[] {
+  if ((endpointKey === 'PRODUCT_USE' || endpointKey === 'PRODUCT_SALES') && !filters.type) {
+    return ['medicine', 'service', 'course'].map((type) => ({ ...filters, type }))
+  }
+  if (endpointKey === 'COURSE_SALES' && !filters.ctype) return [{ ...filters, ctype: '01' }]
+  if (endpointKey === 'REMAINING_COURSE') {
+    return [{
+      ...filters,
+      courseType: filters.courseType ?? ['normal', 'private', 'buffet'],
+      searchBy: filters.searchBy ?? 'buy_date',
+      remainingType: filters.remainingType ?? 'remain',
+      showExpired: filters.showExpired ?? false,
+      showDel: filters.showDel ?? false,
+      showFormer: filters.showFormer ?? false,
+    }]
+  }
+  if (endpointKey === 'REMAINING_COURSE_BY_DATE') {
+    return [{
+      ...filters,
+      courseType: filters.courseType ?? ['normal', 'private', 'buffet'],
+      searchBy: filters.searchBy ?? 'buy_date',
+      selectDate: filters.selectDate ?? filters.endDate,
+      showExpired: filters.showExpired ?? false,
+      showDel: filters.showDel ?? false,
+      showFormer: filters.showFormer ?? false,
+    }]
+  }
+  return [filters]
 }
 
 export function parseProviderRetryAfter(value: string | null, nowMs: number): number | null {

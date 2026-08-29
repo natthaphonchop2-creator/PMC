@@ -94,6 +94,50 @@ describe('bounded JERA read client', () => {
     })).resolves.toEqual([{ product_code: 'PRD-SYN-1' }])
   })
 
+  it.each(['PRODUCT_USE', 'PRODUCT_SALES'] as const)('aggregates medicine, service, and course when %s has no explicit type', async (reportType) => {
+    const fetch = vi.fn(async (url: string) => {
+      const type = new URL(url).searchParams.get('type')!
+      const row = { uuid: `${type}-row` }
+      return response(200, reportType === 'PRODUCT_SALES' ? { data: [row], summary: {} } : [row])
+    })
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await expect(client.request(reportType, filters())).resolves.toHaveLength(3)
+    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).searchParams.get('type'))).toEqual([
+      'medicine', 'service', 'course',
+    ])
+  })
+
+  it('applies the documented default course-sales type when ctype is omitted', async () => {
+    const fetch = vi.fn(async () => response(200, []))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await client.request('COURSE_SALES', filters())
+
+    expect(new URL(String(fetch.mock.calls[0]![0])).searchParams.get('ctype')).toBe('01')
+  })
+
+  it('applies documented all-course defaults to remaining-course reports', async () => {
+    const fetch = vi.fn(async () => response(200, []))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await client.request('REMAINING_COURSE', filters())
+    await client.request('REMAINING_COURSE_BY_DATE', filters())
+
+    const remaining = new URL(String(fetch.mock.calls[0]![0]))
+    expect(remaining.searchParams.getAll('course_type')).toEqual(['normal', 'private', 'buffet'])
+    expect(remaining.searchParams.get('search_by')).toBe('buy_date')
+    expect(remaining.searchParams.get('remaining_type')).toBe('remain')
+    expect(remaining.searchParams.get('show_expired')).toBe('false')
+    expect(remaining.searchParams.get('show_del')).toBe('false')
+    expect(remaining.searchParams.get('show_former')).toBe('false')
+
+    const byDate = new URL(String(fetch.mock.calls[1]![0]))
+    expect(byDate.searchParams.getAll('course_type')).toEqual(['normal', 'private', 'buffet'])
+    expect(byDate.searchParams.get('search_by')).toBe('buy_date')
+    expect(byDate.searchParams.get('select_date')).toBe('2026-01-01')
+  })
+
   it('paginates with bounded page sizes and deduplicates stable provider identities', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({ uuid: `appointment-${index}`, value: index }))
     const fetch = vi.fn(async (url: string) => {
