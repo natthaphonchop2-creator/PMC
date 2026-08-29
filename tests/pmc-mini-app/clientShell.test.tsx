@@ -62,7 +62,8 @@ describe('PMC LINE Mini App shell', () => {
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
   })
 
-  it('opens the latest active request instead of creating another draft', async () => {
+  it('starts on Home and opens the latest active request only after a booking action', async () => {
+    const user = userEvent.setup()
     const api = miniAppApi()
     api.initialize = vi.fn(async () => 'raw-id-token')
     api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'มัส', active: true }))
@@ -74,11 +75,17 @@ describe('PMC LINE Mini App shell', () => {
     }))
     render(<PmcMiniApp api={api} />)
 
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(api.loadLatestActiveDraft).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+
     expect(await screen.findByText('รับรายการแล้ว')).toBeVisible()
+    expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
     expect(api.createDraft).not.toHaveBeenCalled()
   })
 
   it('resumes a saved staged draft on preview without asking for evidence again', async () => {
+    const user = userEvent.setup()
     const api = miniAppApi()
     const input = {
       requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
@@ -100,6 +107,10 @@ describe('PMC LINE Mini App shell', () => {
     }))
 
     render(<PmcMiniApp api={api} />)
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(api.loadLatestActiveDraft).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
 
     expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
     expect(screen.getByText('สลิป 3 รูป')).toBeVisible()
