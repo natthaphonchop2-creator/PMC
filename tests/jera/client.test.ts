@@ -108,6 +108,18 @@ describe('bounded JERA read client', () => {
     ])
   })
 
+  it('deduplicates the same product-use row returned by multiple type variants', async () => {
+    const sharedRow = {
+      opd_code: 'OPD-SYN-1', product_code: 'PRD-SYN-1', patient_code: 'PAT-SYN-1',
+      opd_create_date: '2026-01-01 10:00:00', action: 'use',
+    }
+    const fetch = vi.fn(async () => response(200, [sharedRow]))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await expect(client.request('PRODUCT_USE', filters())).resolves.toEqual([sharedRow])
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
   it('applies the documented default course-sales type when ctype is omitted', async () => {
     const fetch = vi.fn(async () => response(200, []))
     const client = createJeraReadClient(config(), tokenPort(), { fetch })

@@ -134,7 +134,9 @@ export function createJeraReadClient(
             const parsed = await rawRequest({ method: 'GET', path, query })
             const pageResult = extractRows(reportType, parsed, endpoint.paginated)
             pageResult.rows.forEach((row, index) => {
-              const identity = stableIdentity(row) ?? `${variantIndex}:${chunk.startDate}:${page}:${index}`
+              const identity = stableReportIdentity(reportType, row)
+                ?? stableIdentity(row)
+                ?? `${variantIndex}:${chunk.startDate}:${page}:${index}`
               if (!seen.has(identity)) { seen.add(identity); rows.push(row) }
             })
             if (!endpoint.paginated || !pageResult.hasMore(page, rows.length)) break
@@ -349,6 +351,31 @@ function stableIdentity(value: unknown): string | null {
     if (typeof row[key] === 'string' && row[key]) return `${key}:${row[key]}`
   }
   return null
+}
+
+function stableReportIdentity(endpointKey: JeraEndpointKey, value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  if (endpointKey === 'PRODUCT_USE') {
+    return boundedIdentity(endpointKey, row, ['opd_code', 'product_code', 'patient_code', 'opd_create_date', 'action'])
+  }
+  if (endpointKey === 'PRODUCT_SALES') {
+    return boundedIdentity(endpointKey, row, ['product_code', 'action', 'type_name', 'cat_name', 'subcat_name'], 2)
+  }
+  return null
+}
+
+function boundedIdentity(
+  prefix: string,
+  row: Record<string, unknown>,
+  keys: string[],
+  requiredCount = keys.length,
+): string | null {
+  const values = keys.map((key) => row[key])
+  if (values.slice(0, requiredCount).some((value) => typeof value !== 'string' || value.length === 0 || value.length > 512)) return null
+  if (values.slice(requiredCount).some((value) => value !== null && value !== undefined
+    && (typeof value !== 'string' || value.length > 512))) return null
+  return `${prefix}:${JSON.stringify(values)}`
 }
 
 function isoDate(value: unknown): value is string {
