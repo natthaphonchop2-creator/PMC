@@ -2,10 +2,13 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
-import { assertNoSensitiveFlags, safeProject } from './seed-finance-report-day.mjs'
+import { APPROVED_FINANCE_PROJECT, assertNoSensitiveFlags, safeProject } from './seed-finance-report-day.mjs'
 
 const executeFile = promisify(execFile)
 const FINANCE_SEED_PATH = '/internal/mini-app/finance-daily-seed'
+const ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
+const APPROVED_REGION = 'asia-southeast1'
+const STAGES = new Set(['DISABLED', 'ALLOCATION', 'READY'])
 const REQUIRED_ALLOCATION_NAMES = [
   'JERA_ALLOCATION_PROJECT_ID', 'JERA_ALLOCATION_LOCATION', 'JERA_ALLOCATION_QUEUE',
   'JERA_ALLOCATION_WORKER_URL', 'JERA_ALLOCATION_WORKER_AUDIENCE',
@@ -26,12 +29,12 @@ export async function runFinanceRuntimeCheck(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout }
   if (parsed.help) {
-    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3\n')
+    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --expected-stage=DISABLED|ALLOCATION|READY [stage expected bindings]\n')
     return 0
   }
   const report = await inspectFinanceRuntime(parsed, options)
   io.stdout.write(`${JSON.stringify(report, null, 2)}\n`)
-  return report.ready ? 0 : 1
+  return report.stageReady ? 0 : 1
 }
 
 export async function inspectFinanceRuntime(input, options = {}) {
@@ -66,11 +69,27 @@ export async function inspectFinanceRuntime(input, options = {}) {
     requiredNameCount: REQUIRED_ALLOCATION_NAMES.length,
     presentNameCount: REQUIRED_ALLOCATION_NAMES.filter((name) => Boolean(environment[name]?.trim())).length,
     leaseBucketPresent: Boolean(bucketName && bucket),
+    approvedProject: input.project === APPROVED_FINANCE_PROJECT,
+    approvedRegion: input.region === APPROVED_REGION,
+    projectMatches: environment.JERA_ALLOCATION_PROJECT_ID === input.project,
+    locationMatches: environment.JERA_ALLOCATION_LOCATION === input.region,
+    queueMatches: input.expectedQueue !== null && environment.JERA_ALLOCATION_QUEUE === input.expectedQueue,
+    workerAudienceMatches: input.expectedWorkerAudience !== null
+      && normalizedOrigin(environment.JERA_ALLOCATION_WORKER_AUDIENCE) === input.expectedWorkerAudience,
+    workerUrlMatches: input.expectedWorkerAudience !== null
+      && exactHttpsUrl(environment.JERA_ALLOCATION_WORKER_URL) === `${input.expectedWorkerAudience}${ALLOCATION_WORKER_PATH}`,
+    invokerMatches: input.expectedInvoker !== null
+      && safeEmail(environment.JERA_ALLOCATION_TASK_INVOKER_EMAIL) === input.expectedInvoker,
   }
+  allocationConfig.exactExpectedConfig = allocationConfig.approvedProject && allocationConfig.approvedRegion
+    && allocationConfig.projectMatches && allocationConfig.locationMatches && allocationConfig.queueMatches
+    && allocationConfig.workerAudienceMatches && allocationConfig.workerUrlMatches && allocationConfig.invokerMatches
   const queueReport = {
     present: queue !== null, running: queue?.state === 'RUNNING',
     maxConcurrentDispatches: safeNonnegative(queue?.rateLimits?.maxConcurrentDispatches),
     maxDispatchesPerSecond: safeRate(queue?.rateLimits?.maxDispatchesPerSecond),
+    leaseBucketLocationMatches: typeof bucket?.location === 'string'
+      && bucket.location.toLowerCase() === input.region.toLowerCase(),
   }
   const runtimeIdentity = serviceAccountMember(service?.spec?.template?.spec?.serviceAccountName)
   const invokerEmail = safeEmail(environment.JERA_ALLOCATION_TASK_INVOKER_EMAIL)
@@ -80,27 +99,47 @@ export async function inspectFinanceRuntime(input, options = {}) {
     oidcInvokerPresent: hasBinding(runIam, 'roles/run.invoker', invokerIdentity),
     leaseBucketObjectUserPresent: hasBinding(bucketIam, 'roles/storage.objectUser', runtimeIdentity),
   }
-  const scheduler = schedulerReport(schedulerJobs, invokerEmail)
+  const scheduler = schedulerReport(schedulerJobs, {
+    seedUrl: input.expectedFinanceSeedUrl, oidcAudience: input.expectedOidcAudience,
+    invoker: input.expectedInvoker,
+  })
   const taskReport = tasksReport(tasks)
   const tabs = tabsReport(googleState?.tabHeaders)
   const financePermissions = permissionReport(googleState?.staffRows, input.expectedFinanceViewers)
   const leases = leaseReport(googleState?.coverageRows, now)
-  const ready = cloudRun.servicePresent && cloudRun.trafficPercentTotal === 100
+  const infrastructureReady = cloudRun.servicePresent
     && allocationConfig.presentNameCount === allocationConfig.requiredNameCount && allocationConfig.leaseBucketPresent
-    && queueReport.present && queueReport.running && queueReport.maxConcurrentDispatches === 1 && queueReport.maxDispatchesPerSecond === 0.016
-    && Object.values(bindings).every(Boolean) && scheduler.oidcBindingPresent
+    && allocationConfig.exactExpectedConfig
+    && queueReport.present && queueReport.running && queueReport.maxConcurrentDispatches === 1
+    && queueReport.maxDispatchesPerSecond === 0.016 && queueReport.leaseBucketLocationMatches
+    && Object.values(bindings).every(Boolean)
     && taskReport.invalidPayloadCount === 0 && tabs.exactHeaderCount === tabs.requiredHeaderCount
     && financePermissions.activeViewerCount === input.expectedFinanceViewers && financePermissions.nameBasedDerivationCount === 0
     && leases.olderThan15MinutesCount === 0
+  const expectedFlags = stageFlags(input.expectedStage)
+  const flagsMatch = flags.financeReportsEnabled === expectedFlags.financeReportsEnabled
+    && flags.revenueAllocationEnabled === expectedFlags.revenueAllocationEnabled
+    && flags.categoryMoneyEnabled === expectedFlags.categoryMoneyEnabled
+  const stageReady = input.expectedStage === 'DISABLED'
+    ? cloudRun.servicePresent && flagsMatch && scheduler.enabledJobCount === 0
+    : input.expectedStage === 'ALLOCATION'
+      ? flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
+      : flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic && scheduler.readyMatchCount === 1
   return {
-    mode: 'READ_ONLY', ready, safeCode: ready ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
+    mode: 'READ_ONLY', expectedStage: input.expectedStage, stageReady, ready: stageReady,
+    safeCode: stageReady ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
     allocationConfig, queue: queueReport, bindings, scheduler, tasks: taskReport, tabs, financePermissions, leases,
   }
 }
 
 function parseArguments(args) {
   assertNoSensitiveFlags(args)
-  const parsed = { help: false, allowReadonlyProduction: false, project: null, service: null, region: null, expectedFinanceViewers: null }
+  const parsed = {
+    help: false, allowReadonlyProduction: false, project: null, service: null, region: null,
+    expectedFinanceViewers: null, expectedStage: null, expectedQueue: null,
+    expectedWorkerAudience: null, expectedInvoker: null,
+    expectedFinanceSeedUrl: null, expectedOidcAudience: null,
+  }
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index]
     if (value === '--help' || value === '-h') parsed.help = true
@@ -109,6 +148,12 @@ function parseArguments(args) {
     else if (value === '--service' && parsed.service === null && args[index + 1]) parsed.service = args[++index]
     else if (value === '--region' && parsed.region === null && args[index + 1]) parsed.region = args[++index]
     else if (value === '--expected-finance-viewers' && parsed.expectedFinanceViewers === null && args[index + 1]) parsed.expectedFinanceViewers = Number(args[++index])
+    else if (value.startsWith('--expected-stage=') && parsed.expectedStage === null) parsed.expectedStage = value.slice('--expected-stage='.length)
+    else if (value === '--expected-queue' && parsed.expectedQueue === null && args[index + 1]) parsed.expectedQueue = args[++index]
+    else if (value === '--expected-worker-audience' && parsed.expectedWorkerAudience === null && args[index + 1]) parsed.expectedWorkerAudience = args[++index]
+    else if (value === '--expected-invoker' && parsed.expectedInvoker === null && args[index + 1]) parsed.expectedInvoker = args[++index]
+    else if (value === '--expected-finance-seed-url' && parsed.expectedFinanceSeedUrl === null && args[index + 1]) parsed.expectedFinanceSeedUrl = args[++index]
+    else if (value === '--expected-oidc-audience' && parsed.expectedOidcAudience === null && args[index + 1]) parsed.expectedOidcAudience = args[++index]
     else throw new Error('Unknown finance operator argument')
   }
   if (parsed.help) return parsed
@@ -116,6 +161,19 @@ function parseArguments(args) {
   parsed.project = safeProject(parsed.project)
   if (!safeToken(parsed.service) || !safeToken(parsed.region)) throw new Error('Project, service, and region are required')
   if (parsed.expectedFinanceViewers !== 3) throw new Error('Expected finance viewers must be exactly 3')
+  if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, or READY')
+  if (parsed.expectedStage !== 'DISABLED') {
+    if (!safeResource(parsed.expectedQueue) || !normalizedOrigin(parsed.expectedWorkerAudience) || !safeEmail(parsed.expectedInvoker)) {
+      throw new Error('Allocation stage expected bindings are required')
+    }
+    parsed.expectedWorkerAudience = normalizedOrigin(parsed.expectedWorkerAudience)
+  }
+  if (parsed.expectedStage === 'READY') {
+    if (!exactHttpsUrl(parsed.expectedFinanceSeedUrl) || safePath(parsed.expectedFinanceSeedUrl) !== FINANCE_SEED_PATH
+      || !normalizedOrigin(parsed.expectedOidcAudience)) throw new Error('Ready stage expected Scheduler bindings are required')
+    parsed.expectedFinanceSeedUrl = exactHttpsUrl(parsed.expectedFinanceSeedUrl)
+    parsed.expectedOidcAudience = normalizedOrigin(parsed.expectedOidcAudience)
+  }
   return parsed
 }
 
@@ -142,20 +200,34 @@ async function readGoogleState({ environment }) {
 
 function cloudRunReport(service) {
   const traffic = Array.isArray(service?.status?.traffic) ? service.status.traffic : []
+  const latestReadyRevisionName = typeof service?.status?.latestReadyRevisionName === 'string'
+    ? service.status.latestReadyRevisionName : null
+  const latestReadyTrafficPercent = latestReadyRevisionName === null ? 0 : traffic
+    .filter((item) => item?.revisionName === latestReadyRevisionName)
+    .reduce((total, item) => total + safeNonnegative(item?.percent), 0)
   return {
     servicePresent: service !== null,
-    latestReadyRevisionPresent: typeof service?.status?.latestReadyRevisionName === 'string',
+    latestReadyRevisionPresent: latestReadyRevisionName !== null,
+    latestReadyHasNoTraffic: latestReadyRevisionName !== null && latestReadyTrafficPercent === 0,
+    latestReadyTrafficPercent,
     trafficPercentTotal: traffic.reduce((total, item) => total + safeNonnegative(item?.percent), 0),
     trafficTargetCount: traffic.length,
   }
 }
-function schedulerReport(value, expectedEmail) {
-  const jobs = Array.isArray(value) ? value.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_SEED_PATH) : []
+function schedulerReport(value, expected) {
+  const allJobs = Array.isArray(value) ? value : []
+  const jobs = allJobs.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_SEED_PATH)
   const enabled = jobs.filter((job) => job?.state === 'ENABLED')
+  const matching = enabled.filter((job) => exactHttpsUrl(job?.httpTarget?.uri) === expected.seedUrl)
+  const post = matching.filter((job) => job?.httpTarget?.httpMethod === 'POST')
+  const audience = post.filter((job) => normalizedOrigin(job?.httpTarget?.oidcToken?.audience) === expected.oidcAudience)
+  const invoker = audience.filter((job) => safeEmail(job?.httpTarget?.oidcToken?.serviceAccountEmail) === expected.invoker)
+  const ready = invoker.filter((job) => job?.schedule === '15 2 * * *' && job?.timeZone === 'Asia/Bangkok')
   return {
     matchingJobCount: jobs.length, enabledJobCount: enabled.length,
-    oidcBindingPresent: Boolean(expectedEmail) && enabled.some((job) => safeEmail(job?.httpTarget?.oidcToken?.serviceAccountEmail) === expectedEmail
-      && job?.schedule === '15 2 * * *' && job?.timeZone === 'Asia/Bangkok'),
+    exactTarget: matching.length === 1, postMethod: post.length === 1,
+    oidcAudienceMatches: audience.length === 1, oidcInvokerMatches: invoker.length === 1,
+    oidcBindingPresent: invoker.length === 1, readyMatchCount: ready.length,
   }
 }
 function tasksReport(value) {
@@ -213,6 +285,25 @@ function safeToken(value) { return typeof value === 'string' && /^[A-Za-z0-9._:-
 function safeStaffId(value) { return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value) }
 function safeName(value) { return typeof value === 'string' && value.length > 0 && value.length <= 120 && !/[\r\n]/.test(value) }
 function safePath(value) { try { const url = new URL(value); return url.protocol === 'https:' ? url.pathname : null } catch { return null } }
+function exactHttpsUrl(value) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+      ? url.toString().replace(/\/$/, '') : null
+  } catch { return null }
+}
+function normalizedOrigin(value) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+      && (url.pathname === '/' || url.pathname === '') ? url.origin : null
+  } catch { return null }
+}
+function stageFlags(stage) {
+  if (stage === 'DISABLED') return { financeReportsEnabled: false, revenueAllocationEnabled: false, categoryMoneyEnabled: false }
+  if (stage === 'ALLOCATION') return { financeReportsEnabled: false, revenueAllocationEnabled: true, categoryMoneyEnabled: false }
+  return { financeReportsEnabled: true, revenueAllocationEnabled: true, categoryMoneyEnabled: true }
+}
 function taskBody(value) { try { const textValue = Buffer.from(value ?? '', 'base64').toString('utf8'); return JSON.parse(textValue) } catch { return null } }
 function safeNonnegative(value) { return Number.isFinite(value) && value >= 0 ? Number(value) : 0 }
 function safeRate(value) { return Number.isFinite(value) && value >= 0 && value <= 1000 ? Number(value) : 0 }
@@ -226,7 +317,7 @@ async function runExternal(command) { const { stdout } = await executeFile(comma
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runFinanceRuntimeCheck(process.argv.slice(2)).then((code) => { process.exitCode = code }).catch((error) => {
-    const message = error instanceof Error && /^(Explicit|Unknown|Sensitive|Expected|Project)/.test(error.message)
+    const message = error instanceof Error && /^(Explicit|Unknown|Sensitive|Expected|Project|Allocation|Ready)/.test(error.message)
       ? error.message : 'Finance runtime check failed'
     process.stderr.write(`${message}\n`); process.exitCode = 2
   })

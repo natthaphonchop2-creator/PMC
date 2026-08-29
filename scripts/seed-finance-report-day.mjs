@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import { JERA_OPERATOR_PROJECT, loadJeraOperatorSecrets } from './jera-operator-secrets.mjs'
@@ -48,8 +49,8 @@ export async function seedFinanceReportDay(args, options = {}) {
 export async function seedApprovedFinanceDay(input) {
   const date = strictDate(input.date)
   const sleep = input.sleep ?? defaultSleep
-  const reportDelayMs = boundedDelay(input.reportDelayMs, FINANCE_REPORT_DELAY_MS)
-  const statusDelayMs = boundedDelay(input.statusDelayMs, FINANCE_STATUS_DELAY_MS)
+  const reportDelayMs = minimumDelay(input.reportDelayMs, FINANCE_REPORT_DELAY_MS)
+  const statusDelayMs = minimumDelay(input.statusDelayMs, FINANCE_STATUS_DELAY_MS)
   const maxStatusReads = boundedInteger(input.maxStatusReads, 1, 20, DEFAULT_STATUS_READS)
   if (!input.operator || typeof input.operator.refreshReport !== 'function'
     || typeof input.operator.seedAllocation !== 'function'
@@ -59,19 +60,21 @@ export async function seedApprovedFinanceDay(input) {
   }
 
   const sources = []
+  const sourceIdentities = {}
   for (let index = 0; index < FINANCE_SOURCE_TYPES.length; index += 1) {
     const reportType = FINANCE_SOURCE_TYPES[index]
     let evidence
     try { evidence = safeSourceEvidence(reportType, await input.operator.refreshReport(reportType, date)) }
     catch (error) { throw safeOperatorError(error) }
-    sources.push(evidence)
+    sources.push(evidence.publicEvidence)
+    sourceIdentities[reportType] = evidence.identity
     if (index + 1 < FINANCE_SOURCE_TYPES.length) await sleep(reportDelayMs)
   }
 
   try { await input.operator.seedAllocation(date) } catch (error) { throw safeOperatorError(error) }
   let allocation = emptyAllocationStatus()
   for (let read = 0; read < maxStatusReads; read += 1) {
-    try { allocation = safeAllocationStatus(await input.operator.readAllocationStatus(date)) }
+    try { allocation = safeAllocationStatus(await input.operator.readAllocationStatus(date), sourceIdentities) }
     catch (error) { throw safeOperatorError(error) }
     if (allocation.status === 'COMPLETE') break
     if (read + 1 < maxStatusReads) await sleep(statusDelayMs)
@@ -84,7 +87,9 @@ export async function seedApprovedFinanceDay(input) {
     mode: 'FINANCE_DAY_SEED', date, sequential: true, sources, allocation,
     totals: {
       receivedSatang: summary.receivedSatang, refundSatang: summary.refundSatang,
-      channels: summary.channels, categories: summary.categories,
+      channels: summary.channels,
+      categories: allocation.status === 'COMPLETE'
+        ? summary.categories : { serviceSatang: null, productSatang: null, unclassifiedSatang: null },
     },
     warnings: [...new Set([
       ...summary.warnings, ...(allocation.status === 'COMPLETE' ? [] : ['ALLOCATION_INCOMPLETE']),
@@ -148,7 +153,13 @@ export async function createFinanceOperator(input) {
     async refreshReport(reportType, date) {
       if (!FINANCE_SOURCE_TYPES.includes(reportType)) throw new Error('FINANCE_OPERATOR_FAILED')
       const envelope = await coordinator.scheduledRefresh(query(reportType, strictDate(date)))
-      return safeEnvelopeEvidence(reportType, envelope)
+      const rows = Array.isArray(envelope?.data) ? envelope.data : []
+      return safeEnvelopeEvidence(reportType, envelope, {
+        paymentSetHash: reportType === 'PAYMENT' ? paymentSetHash(rows) : null,
+        metadataSnapshotHash: reportType === 'PRODUCT_SALES'
+          ? runtime.buildItemTypeMetadata(rows.map((row) => ({ itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash }))).snapshotHash
+          : null,
+      })
     },
     seedAllocation(date) {
       return seeder.refreshDay({ branchUuid, eventDate: strictDate(date), actor: { type: 'SCHEDULER', schedulerId: 'operator-finance-seed' } })
@@ -159,7 +170,10 @@ export async function createFinanceOperator(input) {
       return coverage ? {
         status: coverage.status, paymentCount: coverage.paymentRowCount,
         coveredPaymentCount: coverage.successfulDetailCount,
-        metadataHashPrefix: coverage.metadataSnapshotHash.slice(0, 12), lastSuccessAt: coverage.lastSuccessAt,
+        paymentSetHash: coverage.paymentSetHash, metadataSnapshotHash: coverage.metadataSnapshotHash,
+        paymentLastSuccessAt: coverage.paymentLastSuccessAt,
+        productSalesLastSuccessAt: coverage.productSalesLastSuccessAt,
+        lastSuccessAt: coverage.lastSuccessAt, safeErrorCode: coverage.safeErrorCode,
       } : emptyAllocationStatus()
     },
     async readSummary(date) {
@@ -207,35 +221,68 @@ function parseSeedArguments(args) {
 }
 
 function safeSourceEvidence(reportType, value) {
-  return {
+  const lastSuccessAt = safeInstant(value?.lastSuccessAt)
+  const warningCode = safeCode(value?.warningCode)
+  return { publicEvidence: {
     reportType,
     count: boundedInteger(value?.count, 0, Number.MAX_SAFE_INTEGER, 0),
     totalSatang: safeMoney(value?.totalSatang),
-    lastSuccessAt: safeInstant(value?.lastSuccessAt),
-    warningCode: safeCode(value?.warningCode),
-  }
+    lastSuccessAt,
+    warningCode,
+  }, identity: {
+    lastSuccessAt, warningCode, stale: value?.stale !== false,
+    paymentSetHash: exactHash(value?.paymentSetHash),
+    metadataSnapshotHash: exactHash(value?.metadataSnapshotHash),
+  } }
 }
 
-function safeEnvelopeEvidence(reportType, envelope) {
+function safeEnvelopeEvidence(reportType, envelope, identities) {
   const rows = Array.isArray(envelope?.data) ? envelope.data : []
   const field = reportType === 'PAYMENT' ? 'paidAmountSatang' : reportType === 'REFUND' ? 'refundAmountSatang' : null
-  return safeSourceEvidence(reportType, {
-    count: rows.length, totalSatang: field ? sumMoney(rows, field) : 0,
-    lastSuccessAt: envelope?.lastSuccessAt, warningCode: envelope?.warningCode,
-  })
-}
-
-function safeAllocationStatus(value) {
   return {
-    status: value?.status === 'COMPLETE' ? 'COMPLETE' : 'INCOMPLETE',
-    paymentCount: boundedInteger(value?.paymentCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    coveredPaymentCount: boundedInteger(value?.coveredPaymentCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    metadataHashPrefix: typeof value?.metadataHashPrefix === 'string' && /^[a-f0-9]{12}$/.test(value.metadataHashPrefix) ? value.metadataHashPrefix : null,
-    lastSuccessAt: safeInstant(value?.lastSuccessAt),
+    reportType,
+    count: rows.length, totalSatang: field ? sumMoney(rows, field) : 0,
+    lastSuccessAt: envelope?.lastSuccessAt, warningCode: envelope?.warningCode, stale: envelope?.stale === true,
+    paymentSetHash: identities.paymentSetHash, metadataSnapshotHash: identities.metadataSnapshotHash,
   }
 }
 
-function emptyAllocationStatus() { return { status: 'INCOMPLETE', paymentCount: 0, coveredPaymentCount: 0, metadataHashPrefix: null, lastSuccessAt: null } }
+function safeAllocationStatus(value, sourceIdentities) {
+  const paymentCount = boundedInteger(value?.paymentCount, 0, Number.MAX_SAFE_INTEGER, 0)
+  const coveredPaymentCount = boundedInteger(value?.coveredPaymentCount, 0, Number.MAX_SAFE_INTEGER, 0)
+  const paymentSetHash = exactHash(value?.paymentSetHash)
+  const metadataSnapshotHash = exactHash(value?.metadataSnapshotHash)
+  const paymentLastSuccessAt = safeInstant(value?.paymentLastSuccessAt)
+  const productSalesLastSuccessAt = safeInstant(value?.productSalesLastSuccessAt)
+  const lastSuccessAt = safeInstant(value?.lastSuccessAt)
+  const paymentIdentity = sourceIdentities.PAYMENT ?? {}
+  const productIdentity = sourceIdentities.PRODUCT_SALES ?? {}
+  const sourceTimesClose = timestampsWithin(paymentLastSuccessAt, productSalesLastSuccessAt, 15 * 60_000)
+  const allocationAfterSources = timestampsOrderedAfter(lastSuccessAt, paymentLastSuccessAt, productSalesLastSuccessAt)
+  const complete = value?.status === 'COMPLETE'
+    && paymentCount === coveredPaymentCount
+    && paymentSetHash !== null && paymentSetHash === paymentIdentity.paymentSetHash
+    && metadataSnapshotHash !== null && metadataSnapshotHash === productIdentity.metadataSnapshotHash
+    && paymentLastSuccessAt !== null && paymentLastSuccessAt === paymentIdentity.lastSuccessAt
+    && productSalesLastSuccessAt !== null && productSalesLastSuccessAt === productIdentity.lastSuccessAt
+    && lastSuccessAt !== null && sourceTimesClose && allocationAfterSources
+    && paymentIdentity.stale === false && productIdentity.stale === false
+    && paymentIdentity.warningCode === null && productIdentity.warningCode === null
+    && value?.safeErrorCode === null
+  return {
+    status: complete ? 'COMPLETE' : 'INCOMPLETE', paymentCount, coveredPaymentCount,
+    metadataHashPrefix: metadataSnapshotHash?.slice(0, 12) ?? null, lastSuccessAt,
+  }
+}
+
+function emptyAllocationStatus() {
+  return {
+    status: 'INCOMPLETE', paymentCount: 0, coveredPaymentCount: 0,
+    paymentSetHash: null, metadataSnapshotHash: null,
+    paymentLastSuccessAt: null, productSalesLastSuccessAt: null,
+    metadataHashPrefix: null, lastSuccessAt: null, safeErrorCode: null,
+  }
+}
 function safeSummary(value) {
   const categories = value?.categories?.state === 'CHECKING' ? value.categories : value?.categories
   return {
@@ -259,15 +306,20 @@ function deployedEnvironment(service) {
 }
 function jeraEnvironment(environment) { return Object.fromEntries(Object.entries(environment).filter(([name]) => name.startsWith('JERA_'))) }
 function requiredOpaque(value) { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(value)) throw new Error('FINANCE_OPERATOR_FAILED'); return value }
-function boundedDelay(value, fallback) { return Number.isSafeInteger(value) && value >= 0 && value <= 600_000 ? value : fallback }
+function minimumDelay(value, minimum) { return Number.isSafeInteger(value) && value >= minimum && value <= 600_000 ? value : minimum }
 function boundedInteger(value, min, max, fallback) { return Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback }
 function safeMoney(value) { return Number.isSafeInteger(value) && value >= 0 ? value : 0 }
 function nullableMoney(value) { return value === null || value === undefined ? null : safeMoney(value) }
 function safeInstant(value) { return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null }
 function safeCode(value) { return typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(value) ? value : null }
 function safeOperatorError(error) {
-  const code = error && typeof error === 'object' && typeof error.code === 'string' ? error.code
+  const rawCode = error && typeof error === 'object' && typeof error.code === 'string' ? error.code
     : error instanceof Error && /^FINANCE_[A-Z0-9_]{1,70}$/.test(error.message) ? error.message : null
+  const code = {
+    JERA_RATE_LIMITED: 'FINANCE_RATE_LIMITED',
+    JERA_AUTH_FAILED: 'FINANCE_AUTH_FAILED',
+    JERA_SCHEMA_INVALID: 'FINANCE_SCHEMA_INVALID',
+  }[rawCode] ?? rawCode
   if (!['FINANCE_RATE_LIMITED', 'FINANCE_AUTH_FAILED', 'FINANCE_SCHEMA_INVALID', 'FINANCE_ALLOCATION_INCOMPLETE'].includes(code)) {
     return new Error('FINANCE_OPERATOR_FAILED')
   }
@@ -278,16 +330,30 @@ function safeOperatorError(error) {
   return safe
 }
 function sumMoney(rows, field) { return rows.reduce((total, row) => total + safeMoney(row?.[field]), 0) }
+function exactHash(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value) ? value : null }
+function paymentSetHash(rows) {
+  const pairs = [...rows].sort((left, right) => String(left?.sourceUuid).localeCompare(String(right?.sourceUuid)))
+    .map((row) => [row?.sourceUuid, row?.sourceHash])
+  return createHash('sha256').update(JSON.stringify(pairs)).digest('hex')
+}
+function timestampsWithin(left, right, limitMs) {
+  return left !== null && right !== null && Math.abs(Date.parse(left) - Date.parse(right)) <= limitMs
+}
+function timestampsOrderedAfter(allocation, payment, product) {
+  if (allocation === null || payment === null || product === null) return false
+  return Date.parse(allocation) >= Math.max(Date.parse(payment), Date.parse(product))
+}
 function defaultSleep(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
 async function runExternal(command) { const { stdout } = await executeFile(command[0], command.slice(1), { maxBuffer: 2_000_000 }); return stdout }
 
 async function loadFinanceRuntime() {
-  const [config, tokenClient, client, store, coordinator, googleClient, allocationStore, allocationQueue, financeService] = await Promise.all([
+  const [config, tokenClient, client, store, coordinator, googleClient, allocationStore, allocationQueue, financeService, allocation] = await Promise.all([
     import('../dist-server/server/jera/config.js'), import('../dist-server/server/jera/tokenClient.js'),
     import('../dist-server/server/jera/client.js'), import('../dist-server/server/jera/store.js'),
     import('../dist-server/server/jera/syncCoordinator.js'), import('../dist-server/server/pmc-mini-app/googleClient.js'),
     import('../dist-server/server/jera/allocationStore.js'), import('../dist-server/server/jera/allocationTaskQueue.js'),
     import('../dist-server/server/jera/financeService.js'),
+    import('../dist-server/server/jera/allocation.js'),
   ])
   return {
     readJeraConfig: config.readJeraConfig, createJeraTokenClient: tokenClient.createJeraTokenClient,
@@ -297,6 +363,7 @@ async function loadFinanceRuntime() {
     jeraAllocationDayKey: allocationStore.jeraAllocationDayKey,
     createGoogleJeraAllocationTaskQueue: allocationQueue.createGoogleJeraAllocationTaskQueue,
     createJeraFinanceService: financeService.createJeraFinanceService,
+    buildItemTypeMetadata: allocation.buildItemTypeMetadata,
   }
 }
 

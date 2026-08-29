@@ -62,7 +62,7 @@ export async function backfillFinanceReportDays(args, options = {}) {
       io.stdout.write(`${JSON.stringify(resultReport(state))}\n`)
       return 1
     }
-    if (index + 1 < days.length) await sleep(options.dateDelayMs ?? DATE_DELAY_MS)
+    if (index + 1 < days.length) await sleep(minimumDateDelay(options.dateDelayMs))
   }
   io.stdout.write(`${JSON.stringify(resultReport(state))}\n`)
   return 0
@@ -193,6 +193,7 @@ async function assertOperatorOwnedTarget(path, allowMissing) {
   }
 }
 function defaultSleep(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)) }
+function minimumDateDelay(value) { return Number.isSafeInteger(value) && value >= DATE_DELAY_MS && value <= 600_000 ? value : DATE_DELAY_MS }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   backfillFinanceReportDays(process.argv.slice(2)).then((code) => { process.exitCode = code }).catch((error) => {

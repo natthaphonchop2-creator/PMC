@@ -36,6 +36,18 @@ JERA_FINANCE_CATEGORY_MONEY_ENABLED=false
 
 Deploy a tagged revision with zero traffic. Do not print or commit its URL, environment values, secret bindings, or resource IDs. Read back only the revision label, traffic percentage, flag booleans, and binding-presence booleans.
 
+Run the stage-specific read-only check. At `DISABLED`, an absent/paused Scheduler and an absent latest no-traffic ready revision are valid; the three flags must be exactly false:
+
+```bash
+node scripts/check-finance-report-runtime.mjs \
+  --allow-readonly-production \
+  --project "$(gcloud config get-value project)" \
+  --service pmc-mini-app \
+  --region asia-southeast1 \
+  --expected-finance-viewers 3 \
+  --expected-stage=DISABLED
+```
+
 ## Gate 2 — owner approval for queue, lease bucket, and least-privilege IAM
 
 After separate approval, create the allocation queue in `asia-southeast1` with:
@@ -101,14 +113,32 @@ node scripts/check-finance-report-runtime.mjs \
   --project "$(gcloud config get-value project)" \
   --service pmc-mini-app \
   --region asia-southeast1 \
-  --expected-finance-viewers 3
+  --expected-finance-viewers 3 \
+  --expected-stage=DISABLED
 ```
 
-Require exactly three active finance viewers, zero name-based derivations, three exact allocation headers, no active allocation lease older than 15 minutes, correct queue pacing, valid pending-task hash/attempt fields, and queue/lease/OIDC/Scheduler status by presence only. `check` is read-only; it must never mutate Cloud or Sheets.
+Require exactly three active finance viewers and zero name-based derivations in the safe report. The `DISABLED` stage itself requires only the exact false flags, no enabled finance Scheduler, and a readable service; later stages make infrastructure and schema evidence blocking. `check` is read-only; it must never mutate Cloud or Sheets.
 
 ## Gate 7 — owner approval to enable allocation on zero traffic
 
 Approve a new zero-traffic revision or configuration revision with `JERA_REVENUE_ALLOCATION_ENABLED=true`; keep both `PMC_FINANCE_REPORTS_ENABLED=false` and `JERA_FINANCE_CATEGORY_MONEY_ENABLED=false`. Read back flag booleans and required binding presence only.
+
+Run the `ALLOCATION` preflight with operator-owned expected values. Do not paste or commit those values:
+
+```bash
+node scripts/check-finance-report-runtime.mjs \
+  --allow-readonly-production \
+  --project "$(gcloud config get-value project)" \
+  --service pmc-mini-app \
+  --region asia-southeast1 \
+  --expected-finance-viewers 3 \
+  --expected-stage=ALLOCATION \
+  --expected-queue pmc-revenue-allocation \
+  --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
+  --expected-invoker "$OPERATOR_EXPECTED_INVOKER"
+```
+
+Require exact false/true/false flags, the approved project and region, exact queue/worker destination/invoker, queue and lease-bucket location/configuration, least-privilege queue/lease/OIDC bindings, a latest ready revision receiving zero traffic, three exact allocation headers, exactly three immutable finance viewers, valid pending task hash/attempt fields, and no active lease older than 15 minutes. Scheduler absent or paused remains valid at this stage.
 
 ## Gate 8 — owner approval for the one-day source comparison
 
@@ -152,6 +182,25 @@ Create one daily POST at `02:15 Asia/Bangkok` to `/internal/mini-app/finance-dai
 Present the source-day comparison and 31-day cache/coverage counts to the owner. Only after separate explicit approval set `JERA_FINANCE_CATEGORY_MONEY_ENABLED=true` on a zero-traffic revision. Keep `PMC_FINANCE_REPORTS_ENABLED=false`.
 
 Run synthetic daily, 31-day, monthly, ordinary-staff 403, and finance-staff 200 checks against the tagged zero-traffic revision. Confirm no provider write and no report GET-triggered refresh, Sheet write, task, or polling loop. Only after every check passes may the owner separately approve `PMC_FINANCE_REPORTS_ENABLED=true` on zero traffic.
+
+After the report flag is enabled on zero traffic, run the final `READY` preflight with operator-owned expected values:
+
+```bash
+node scripts/check-finance-report-runtime.mjs \
+  --allow-readonly-production \
+  --project "$(gcloud config get-value project)" \
+  --service pmc-mini-app \
+  --region asia-southeast1 \
+  --expected-finance-viewers 3 \
+  --expected-stage=READY \
+  --expected-queue pmc-revenue-allocation \
+  --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
+  --expected-invoker "$OPERATOR_EXPECTED_INVOKER" \
+  --expected-finance-seed-url "$OPERATOR_EXPECTED_FINANCE_SEED_URL" \
+  --expected-oidc-audience "$OPERATOR_EXPECTED_OIDC_AUDIENCE"
+```
+
+Require exact true/true/true flags and every `ALLOCATION` requirement, plus one enabled Scheduler with the exact HTTPS finance-seed target, POST method, `02:15 Asia/Bangkok`, OIDC audience, and OIDC invoker. A wrong project, region, queue destination, worker host/path, Scheduler host/path/method, audience, or invoker fails closed. `READY` must pass before any canary traffic.
 
 ## Gate 12 — explicit 10% traffic approval
 

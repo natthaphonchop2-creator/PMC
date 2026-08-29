@@ -9,6 +9,10 @@ const SERVICE = 'pmc-mini-app'
 const REGION = 'asia-southeast1'
 const APPROVED_DAY = '2026-08-22'
 const NOW = '2026-08-30T02:00:00.000Z'
+const QUEUE = 'pmc-revenue-allocation'
+const AUDIENCE = 'https://private.example'
+const INVOKER = 'invoker@example.iam.gserviceaccount.com'
+const SEED_URL = `${AUDIENCE}/internal/mini-app/finance-daily-seed`
 
 describe('finance operator script approval gates', () => {
   it('loads the three operator modules with callable entry points', async () => {
@@ -90,9 +94,9 @@ describe('read-only finance runtime checker', () => {
       if (joined.includes('run services get-iam-policy')) return JSON.stringify({
         bindings: [{ role: 'roles/run.invoker', members: ['serviceAccount:invoker@example.iam.gserviceaccount.com'] }],
       })
-      if (joined.includes('scheduler jobs list')) return JSON.stringify([{ state: 'ENABLED', schedule: '15 2 * * *', timeZone: 'Asia/Bangkok', httpTarget: {
-        uri: 'https://private.example/internal/mini-app/finance-daily-seed', oidcToken: { serviceAccountEmail: 'invoker@example.iam.gserviceaccount.com' },
-      } }])
+      if (joined.includes('scheduler jobs list')) return JSON.stringify([{
+        state: 'ENABLED', httpTarget: { uri: 'https://private.example/internal/unrelated-job' },
+      }])
       if (joined.includes('tasks list')) return JSON.stringify([{ httpRequest: { body: Buffer.from(JSON.stringify({
         branchUuid: '11111111-2222-4333-8444-555555555555', eventDate: APPROVED_DAY,
         paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 2,
@@ -107,7 +111,7 @@ describe('read-only finance runtime checker', () => {
 
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3',
+      '--expected-finance-viewers', '3', '--expected-stage=DISABLED',
     ], { execute, readGoogleState: googleReads, now: () => new Date(NOW), io: { stdout } })
 
     expect(code).toBe(0)
@@ -116,12 +120,13 @@ describe('read-only finance runtime checker', () => {
     const report = JSON.parse(stdout.text())
     expect(report).toMatchObject({
       mode: 'READ_ONLY',
+      expectedStage: 'DISABLED', stageReady: true,
       cloudRun: { servicePresent: true, trafficPercentTotal: 100, trafficTargetCount: 1 },
       flags: { financeReportsEnabled: false, revenueAllocationEnabled: false, categoryMoneyEnabled: false },
       allocationConfig: { requiredNameCount: 7, presentNameCount: 7, leaseBucketPresent: true },
       queue: { present: true, maxConcurrentDispatches: 1, maxDispatchesPerSecond: 0.016 },
       bindings: { queueEnqueuerPresent: true, oidcInvokerPresent: true, leaseBucketObjectUserPresent: true },
-      scheduler: { matchingJobCount: 1, enabledJobCount: 1, oidcBindingPresent: true },
+      scheduler: { matchingJobCount: 0, enabledJobCount: 0, oidcBindingPresent: false },
       tasks: { pendingCount: 1, validMetadataHashCount: 1, validAttemptCount: 1, invalidPayloadCount: 0 },
       tabs: { exactHeaderCount: 3, requiredHeaderCount: 3 },
       financePermissions: { expectedCount: 3, activeViewerCount: 3, nameBasedDerivationCount: 0 },
@@ -145,13 +150,87 @@ describe('read-only finance runtime checker', () => {
 
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3',
+      '--expected-finance-viewers', '3', '--expected-stage=DISABLED',
     ], { execute, readGoogleState: vi.fn(async () => { throw new Error('sheet private-spreadsheet') }), io: { stdout } })
 
     expect(code).toBe(1)
     expect(stdout.text()).not.toContain('private')
     expect(stdout.text()).not.toContain('secret')
     expect(JSON.parse(stdout.text())).toMatchObject({ mode: 'READ_ONLY', ready: false, safeCode: 'FINANCE_RUNTIME_INCOMPLETE' })
+  })
+
+  it('accepts only the exact DISABLED, ALLOCATION, and READY stage values before external access', async () => {
+    const [check] = await loadScripts()
+    const execute = vi.fn(async () => { throw new Error('must not execute') })
+    for (const stage of ['', 'disabled', 'CANARY', 'READY ']) {
+      const stageArg = stage ? [`--expected-stage=${stage}`] : []
+      await expect(check.runFinanceRuntimeCheck([
+        '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
+        '--expected-finance-viewers', '3', ...stageArg,
+      ], { execute })).rejects.toThrow('Expected stage must be DISABLED, ALLOCATION, or READY')
+    }
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('makes ALLOCATION ready only with exact flags, queue/lease/OIDC, permissions, and a no-traffic latest revision', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: false, allocation: true, category: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({ service, schedulerJobs: [] }), readGoogleState: vi.fn(async () => googleState()),
+      now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(0)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'ALLOCATION', stageReady: true, ready: true,
+      flags: { financeReportsEnabled: false, revenueAllocationEnabled: true, categoryMoneyEnabled: false },
+      cloudRun: { latestReadyRevisionPresent: true, latestReadyHasNoTraffic: true },
+      scheduler: { enabledJobCount: 0 },
+      allocationConfig: { exactExpectedConfig: true },
+    })
+  })
+
+  it('makes READY fail closed for wrong project, destination, host, method, OIDC audience, or invoker', async () => {
+    const [check] = await loadScripts()
+    const validService = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+    const validJob = schedulerJob()
+    const mutations = [
+      { service: cloudRunService({ flags: { reports: true, allocation: true, category: true }, allocationProject: 'wrong-project', latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision' }), job: validJob },
+      { service: cloudRunService({ flags: { reports: true, allocation: true, category: true }, queue: 'wrong-queue', latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision' }), job: validJob },
+      { service: cloudRunService({ flags: { reports: true, allocation: true, category: true }, audience: 'https://wrong.example', latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision' }), job: validJob },
+      { service: validService, job: schedulerJob({ uri: 'https://wrong.example/internal/mini-app/finance-daily-seed' }) },
+      { service: validService, job: schedulerJob({ method: 'GET' }) },
+      { service: validService, job: schedulerJob({ oidcAudience: 'https://wrong.example' }) },
+      { service: validService, job: schedulerJob({ invoker: 'wrong@example.iam.gserviceaccount.com' }) },
+    ]
+
+    for (const mutation of mutations) {
+      const stdout = bufferWriter()
+      const code = await check.runFinanceRuntimeCheck(checkerArgs('READY'), {
+        execute: runtimeExecute({ service: mutation.service, schedulerJobs: [mutation.job] }),
+        readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+      })
+      expect(code).toBe(1)
+      expect(JSON.parse(stdout.text())).toMatchObject({ expectedStage: 'READY', stageReady: false, ready: false })
+    }
+
+    const stdout = bufferWriter()
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('READY'), {
+      execute: runtimeExecute({ service: validService, schedulerJobs: [validJob] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+    expect(code).toBe(0)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'READY', stageReady: true,
+      scheduler: { exactTarget: true, postMethod: true, oidcAudienceMatches: true, oidcInvokerMatches: true },
+    })
   })
 })
 
@@ -239,6 +318,107 @@ describe('one-day finance seed', () => {
     })
     expect(code).toBe(1)
     expect(JSON.parse(stdout.text()).warnings).toContain('ALLOCATION_INCOMPLETE')
+  })
+
+  it.each([
+    ['payment hash mismatch', { paymentSetHash: 'c'.repeat(64) }],
+    ['metadata hash mismatch', { metadataSnapshotHash: 'c'.repeat(64) }],
+    ['count mismatch', { coveredPaymentCount: 1 }],
+    ['missing payment timestamp', { paymentLastSuccessAt: null }],
+    ['invalid product timestamp', { productSalesLastSuccessAt: 'not-an-instant' }],
+    ['missing allocation timestamp', { lastSuccessAt: null }],
+    ['stale source identity', { paymentLastSuccessAt: '2026-08-30T01:00:00.000Z' }],
+    ['safe allocation error', { safeErrorCode: 'JERA_PROVIDER_FAILED' }],
+  ])('treats provider COMPLETE as incomplete for %s', async (_label, patch) => {
+    const [, seed] = await loadScripts()
+    const operator = operatorFixture({ completeImmediately: true })
+    const readStatus = operator.readAllocationStatus
+    operator.readAllocationStatus = vi.fn(async (date: string) => ({ ...await readStatus(date), ...patch }))
+    const stdout = bufferWriter()
+
+    const code = await seed.seedFinanceReportDay([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT, '--date', APPROVED_DAY,
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined),
+      maxStatusReads: 1, io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      allocation: { status: 'INCOMPLETE' }, warnings: expect.arrayContaining(['ALLOCATION_INCOMPLETE']),
+    })
+  })
+
+  it('treats a stale refreshed PAYMENT identity as incomplete even when coverage says COMPLETE', async () => {
+    const [, seed] = await loadScripts()
+    const operator = operatorFixture({ completeImmediately: true })
+    const refresh = operator.refreshReport
+    operator.refreshReport = vi.fn(async (reportType: string, date: string) => ({
+      ...await refresh(reportType, date), ...(reportType === 'PAYMENT' ? { stale: true } : {}),
+    }))
+    const stdout = bufferWriter()
+
+    const code = await seed.seedFinanceReportDay([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT, '--date', APPROVED_DAY,
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined),
+      maxStatusReads: 1, io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).allocation.status).toBe('INCOMPLETE')
+  })
+
+  it('fails closed when a refreshed source omits its stale marker', async () => {
+    const [, seed] = await loadScripts()
+    const operator = operatorFixture({ completeImmediately: true })
+    const refresh = operator.refreshReport
+    operator.refreshReport = vi.fn(async (reportType: string, date: string) => {
+      const value = await refresh(reportType, date)
+      if (reportType !== 'PAYMENT') return value
+      return Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'stale'))
+    })
+    const stdout = bufferWriter()
+
+    const code = await seed.seedFinanceReportDay([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT, '--date', APPROVED_DAY,
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined), maxStatusReads: 1, io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).allocation.status).toBe('INCOMPLETE')
+  })
+
+  it('clamps reusable seed pacing to 20 seconds between reports and 60 seconds between status reads', async () => {
+    const [, seed] = await loadScripts()
+    const sleep = vi.fn(async () => undefined)
+
+    await seed.seedApprovedFinanceDay({
+      date: APPROVED_DAY, operator: operatorFixture(), sleep,
+      reportDelayMs: 0, statusDelayMs: 1, maxStatusReads: 2,
+    })
+
+    expect(sleep.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([20_000, 20_000, 60_000])
+  })
+
+  it.each([
+    ['JERA_AUTH_FAILED', 'FINANCE_AUTH_FAILED'],
+    ['JERA_SCHEMA_INVALID', 'FINANCE_SCHEMA_INVALID'],
+  ])('maps real %s without exposing provider metadata', async (jeraCode, financeCode) => {
+    const [, seed] = await loadScripts()
+    const operator = operatorFixture()
+    operator.refreshReport = vi.fn(async () => {
+      throw Object.assign(new Error('provider token=private'), { code: jeraCode, response: { private: true } })
+    })
+
+    let caught: unknown
+    try {
+      await seed.seedApprovedFinanceDay({ date: APPROVED_DAY, operator, sleep: vi.fn(async () => undefined) })
+    } catch (error) { caught = error }
+    expect(caught).toMatchObject({ message: financeCode, code: financeCode })
+    expect(caught).not.toHaveProperty('cause')
+    expect(JSON.stringify(caught)).not.toContain('private')
   })
 })
 
@@ -371,7 +551,7 @@ describe('bounded finance backfill', () => {
     const operator = operatorFixture()
     operator.refreshReport = vi.fn(async () => {
       const error = Object.assign(new Error('provider token=private'), {
-        code: 'FINANCE_RATE_LIMITED', retryAfterSeconds: 120,
+        code: 'JERA_RATE_LIMITED', retryAfterSeconds: 120,
       })
       throw error
     })
@@ -391,6 +571,72 @@ describe('bounded finance backfill', () => {
     })
     expect(JSON.stringify(resumeStore.writeAtomic.mock.calls)).not.toContain('private')
   })
+
+  it.each([
+    ['JERA_AUTH_FAILED', 'FINANCE_AUTH_STOPPED'],
+    ['JERA_SCHEMA_INVALID', 'FINANCE_SCHEMA_STOPPED'],
+  ])('stops backfill safely for real %s', async (jeraCode, safeCode) => {
+    const [, , backfill] = await loadScripts()
+    const operator = operatorFixture()
+    operator.refreshReport = vi.fn(async () => {
+      throw Object.assign(new Error('provider metadata private'), { code: jeraCode, response: { private: true } })
+    })
+    const resumeStore = resumeStoreFixture()
+
+    const code = await backfill.backfillFinanceReportDays([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT,
+      '--start-date', '2026-08-01', '--end-date', '2026-08-02', '--resume-file', '/tmp/resume.json',
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined),
+      resumeStore, io: { stdout: bufferWriter() },
+    })
+
+    expect(code).toBe(1)
+    expect(resumeStore.writeAtomic.mock.calls.at(-1)?.[1]).toMatchObject({
+      nextDate: '2026-08-01', completedDates: [],
+      safeFailures: [{ date: '2026-08-01', safeCode, retryAfterSeconds: null }],
+    })
+    expect(JSON.stringify(resumeStore.writeAtomic.mock.calls)).not.toContain('private')
+  })
+
+  it('clamps reusable backfill pacing to 20 seconds between reports and 60 seconds between dates', async () => {
+    const [, , backfill] = await loadScripts()
+    const sleep = vi.fn(async () => undefined)
+
+    await backfill.backfillFinanceReportDays([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT,
+      '--start-date', '2026-08-01', '--end-date', '2026-08-02', '--resume-file', '/tmp/resume.json',
+    ], {
+      createOperator: vi.fn(async () => operatorFixture({ completeImmediately: true })),
+      sleep, resumeStore: resumeStoreFixture(), io: { stdout: bufferWriter() },
+      reportDelayMs: 0, statusDelayMs: 0, dateDelayMs: 0,
+    })
+
+    expect(sleep.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([20_000, 20_000, 60_000, 20_000, 20_000])
+  })
+
+  it('does not advance the resume cursor for a mismatched COMPLETE coverage identity', async () => {
+    const [, , backfill] = await loadScripts()
+    const operator = operatorFixture({ completeImmediately: true })
+    const readStatus = operator.readAllocationStatus
+    operator.readAllocationStatus = vi.fn(async (date: string) => ({
+      ...await readStatus(date), metadataSnapshotHash: 'c'.repeat(64),
+    }))
+    const resumeStore = resumeStoreFixture()
+
+    const code = await backfill.backfillFinanceReportDays([
+      '--allow-readonly-production', '--allow-cache-write', '--project', PROJECT,
+      '--start-date', '2026-08-01', '--end-date', '2026-08-02', '--resume-file', '/tmp/resume.json',
+    ], {
+      createOperator: vi.fn(async () => operator), sleep: vi.fn(async () => undefined),
+      resumeStore, io: { stdout: bufferWriter() }, maxStatusReads: 1,
+    })
+
+    expect(code).toBe(1)
+    expect(resumeStore.writeAtomic.mock.calls.at(-1)?.[1]).toMatchObject({
+      nextDate: '2026-08-01', completedDates: [],
+    })
+  })
 })
 
 async function loadScripts() {
@@ -401,23 +647,74 @@ async function loadScripts() {
   ])
 }
 
-function cloudRunService() {
+function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'READY') {
+  const args = [
+    '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
+    '--expected-finance-viewers', '3', `--expected-stage=${stage}`,
+  ]
+  if (stage !== 'DISABLED') args.push(
+    '--expected-queue', QUEUE, '--expected-worker-audience', AUDIENCE, '--expected-invoker', INVOKER,
+  )
+  if (stage === 'READY') args.push(
+    '--expected-finance-seed-url', SEED_URL, '--expected-oidc-audience', AUDIENCE,
+  )
+  return args
+}
+
+function runtimeExecute({ service, schedulerJobs }: { service: unknown; schedulerJobs: unknown[] }) {
+  return vi.fn(async (command: string[]) => {
+    const joined = command.join(' ')
+    if (joined.includes('run services describe')) return JSON.stringify(service)
+    if (joined.includes('tasks queues describe')) return JSON.stringify(queueDescription())
+    if (joined.includes('tasks queues get-iam-policy')) return JSON.stringify({
+      bindings: [{ role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }],
+    })
+    if (joined.includes('run services get-iam-policy')) return JSON.stringify({
+      bindings: [{ role: 'roles/run.invoker', members: [`serviceAccount:${INVOKER}`] }],
+    })
+    if (joined.includes('scheduler jobs list')) return JSON.stringify(schedulerJobs)
+    if (joined.includes('tasks list')) return JSON.stringify([{ httpRequest: { body: Buffer.from(JSON.stringify({
+      branchUuid: '11111111-2222-4333-8444-555555555555', eventDate: APPROVED_DAY,
+      paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 2,
+    })).toString('base64') } }])
+    if (joined.includes('storage buckets describe')) return JSON.stringify({ location: REGION })
+    if (joined.includes('storage buckets get-iam-policy')) return JSON.stringify({
+      bindings: [{ role: 'roles/storage.objectUser', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }],
+    })
+    throw new Error('unexpected read-only command')
+  })
+}
+
+function schedulerJob({
+  uri = SEED_URL, method = 'POST', oidcAudience = AUDIENCE, invoker = INVOKER,
+} = {}) {
+  return {
+    state: 'ENABLED', schedule: '15 2 * * *', timeZone: 'Asia/Bangkok',
+    httpTarget: { uri, httpMethod: method, oidcToken: { audience: oidcAudience, serviceAccountEmail: invoker } },
+  }
+}
+
+function cloudRunService({
+  flags = { reports: false, allocation: false, category: false },
+  allocationProject = PROJECT, queue = QUEUE, audience = AUDIENCE,
+  latestReadyRevisionName = 'private-revision', trafficRevisionName = 'private-revision',
+} = {}) {
   const env = [
-    ['PMC_FINANCE_REPORTS_ENABLED', 'false'],
-    ['JERA_REVENUE_ALLOCATION_ENABLED', 'false'],
-    ['JERA_FINANCE_CATEGORY_MONEY_ENABLED', 'false'],
-    ['JERA_ALLOCATION_PROJECT_ID', PROJECT],
+    ['PMC_FINANCE_REPORTS_ENABLED', String(flags.reports)],
+    ['JERA_REVENUE_ALLOCATION_ENABLED', String(flags.allocation)],
+    ['JERA_FINANCE_CATEGORY_MONEY_ENABLED', String(flags.category)],
+    ['JERA_ALLOCATION_PROJECT_ID', allocationProject],
     ['JERA_ALLOCATION_LOCATION', REGION],
-    ['JERA_ALLOCATION_QUEUE', 'pmc-revenue-allocation'],
+    ['JERA_ALLOCATION_QUEUE', queue],
     ['JERA_ALLOCATION_WORKER_URL', 'https://private.example/internal/mini-app/jera-allocation-worker'],
-    ['JERA_ALLOCATION_WORKER_AUDIENCE', 'https://private.example'],
-    ['JERA_ALLOCATION_TASK_INVOKER_EMAIL', 'invoker@example.iam.gserviceaccount.com'],
+    ['JERA_ALLOCATION_WORKER_AUDIENCE', audience],
+    ['JERA_ALLOCATION_TASK_INVOKER_EMAIL', INVOKER],
     ['JERA_ALLOCATION_LEASE_BUCKET', 'private-lease-bucket'],
     ['PMC_SPREADSHEET_ID', 'private-spreadsheet'],
   ].map(([name, value]) => ({ name, value }))
   return {
-    spec: { template: { metadata: { name: 'private-revision' }, spec: { serviceAccountName: 'runtime@example.iam.gserviceaccount.com', containers: [{ env }] } } },
-    status: { latestReadyRevisionName: 'private-revision', traffic: [{ revisionName: 'private-revision', percent: 100 }] },
+    spec: { template: { metadata: { name: latestReadyRevisionName }, spec: { serviceAccountName: 'runtime@example.iam.gserviceaccount.com', containers: [{ env }] } } },
+    status: { latestReadyRevisionName, traffic: [{ revisionName: trafficRevisionName, percent: 100 }] },
   }
 }
 
@@ -454,9 +751,15 @@ function operatorFixture({ completeImmediately = false } = {}) {
     calls,
     async refreshReport(reportType: string, date: string) {
       calls.push(`refresh:${reportType}:${date}`)
-      if (reportType === 'PAYMENT') return { reportType, count: 2, totalSatang: 300_000, lastSuccessAt: NOW, warningCode: null }
-      if (reportType === 'REFUND') return { reportType, count: 1, totalSatang: 25_000, lastSuccessAt: NOW, warningCode: null }
-      return { reportType, count: 4, totalSatang: 0, lastSuccessAt: NOW, warningCode: null }
+      if (reportType === 'PAYMENT') return {
+        reportType, count: 2, totalSatang: 300_000, lastSuccessAt: NOW, warningCode: null,
+        stale: false, paymentSetHash: 'a'.repeat(64),
+      }
+      if (reportType === 'REFUND') return { reportType, count: 1, totalSatang: 25_000, lastSuccessAt: NOW, warningCode: null, stale: false }
+      return {
+        reportType, count: 4, totalSatang: 0, lastSuccessAt: NOW, warningCode: null,
+        stale: false, metadataSnapshotHash: 'b'.repeat(64),
+      }
     },
     async seedAllocation(date: string) {
       calls.push(`seed:${date}`)
@@ -468,7 +771,10 @@ function operatorFixture({ completeImmediately = false } = {}) {
       const complete = completeImmediately || statusReads >= 2
       return {
         status: complete ? 'COMPLETE' : 'INCOMPLETE', paymentCount: 2,
-        coveredPaymentCount: complete ? 2 : 1, metadataHashPrefix: 'b'.repeat(12), lastSuccessAt: complete ? NOW : null,
+        coveredPaymentCount: complete ? 2 : 1,
+        paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64),
+        paymentLastSuccessAt: NOW, productSalesLastSuccessAt: NOW,
+        lastSuccessAt: complete ? NOW : null, safeErrorCode: null,
       }
     },
     async readSummary(date: string) {
