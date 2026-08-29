@@ -7,6 +7,9 @@ export const EXPENSE_MAX_FILES = 5
 export const EXPENSE_MAX_FILE_BYTES = 10_000_000
 export const EXPENSE_MAX_TOTAL_BYTES = 25_000_000
 export const EXPENSE_MAX_PIXELS = 20_000_000
+// Multipart headers, boundaries, and rejected parts have one bounded extra allowance above file bytes.
+export const EXPENSE_MULTIPART_OVERHEAD_BYTES = 1_000_000
+export const EXPENSE_MAX_RAW_MULTIPART_BYTES = EXPENSE_MAX_TOTAL_BYTES + EXPENSE_MULTIPART_OVERHEAD_BYTES
 
 export type ExpenseImageMimeType = 'image/jpeg' | 'image/png'
 
@@ -35,7 +38,45 @@ export class ExpenseMultipartError extends Error {
 
 export function consumeExpenseMultipart(req: IncomingMessage): Promise<ExpenseMultipartBatch> {
   return new Promise((resolve, reject) => {
-    let parser: ReturnType<typeof Busboy>
+    let parser: ReturnType<typeof Busboy> | null = null
+    let settled = false
+    let rawBytes = 0
+    let totalBytes = 0
+    const files = new Map<number, { bytes: Buffer; advertisedMime: string; originalFileName: string }>()
+    const seenOrdinals = new Set<number>()
+    const stop = () => {
+      req.off('data', countRawChunk)
+      if (parser) {
+        req.unpipe(parser)
+        parser.destroy()
+      }
+      req.resume()
+    }
+    const hardFail = (code: string) => {
+      if (settled) return
+      settled = true
+      stop()
+      reject(new ExpenseMultipartError(code))
+    }
+    const countRawChunk = (chunk: Buffer | string) => {
+      if (settled) return
+      rawBytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
+      if (!Number.isSafeInteger(rawBytes) || rawBytes > EXPENSE_MAX_RAW_MULTIPART_BYTES) hardFail('EXPENSE_MULTIPART_TOO_LARGE')
+    }
+    const declaredLength = req.headers['content-length']
+    if (declaredLength !== undefined) {
+      const text = Array.isArray(declaredLength) ? '' : declaredLength
+      const numeric = /^\d+$/.test(text) ? Number(text) : NaN
+      if (!Number.isSafeInteger(numeric) || numeric < 0) {
+        hardFail('EXPENSE_INVALID_MULTIPART')
+        return
+      }
+      if (numeric > EXPENSE_MAX_RAW_MULTIPART_BYTES) {
+        hardFail('EXPENSE_MULTIPART_TOO_LARGE')
+        return
+      }
+    }
+    req.on('data', countRawChunk)
     try {
       parser = Busboy({
         headers: req.headers,
@@ -47,24 +88,17 @@ export function consumeExpenseMultipart(req: IncomingMessage): Promise<ExpenseMu
         },
       })
     } catch {
-      reject(new ExpenseMultipartError('EXPENSE_INVALID_MULTIPART'))
+      hardFail('EXPENSE_INVALID_MULTIPART')
       return
     }
 
-    const files = new Map<number, { bytes: Buffer; advertisedMime: string; originalFileName: string }>()
-    const seenOrdinals = new Set<number>()
-    let totalBytes = 0
-    let failure: ExpenseMultipartError | null = null
-    let settled = false
-
-    const fail = (code: string) => { failure ??= new ExpenseMultipartError(code) }
     const finish = () => {
       if (settled) return
       settled = true
+      req.off('data', countRawChunk)
       void validateBatch().then(resolve, reject)
     }
     const validateBatch = async (): Promise<ExpenseMultipartBatch> => {
-      if (failure) throw failure
       if (files.size === 0) throw new ExpenseMultipartError('EXPENSE_FILE_REQUIRED')
       const ordered = [...files.entries()].sort(([left], [right]) => left - right)
       if (ordered.some(([ordinal], index) => ordinal !== index + 1)) throw new ExpenseMultipartError('EXPENSE_INVALID_ORDER')
@@ -76,14 +110,15 @@ export function consumeExpenseMultipart(req: IncomingMessage): Promise<ExpenseMu
     }
 
     parser.on('file', (fieldName, stream, info) => {
+      stream.on('error', () => hardFail('EXPENSE_INVALID_MULTIPART'))
       const ordinal = ordinalForField(fieldName)
       if (ordinal === null) {
-        fail(fieldName === 'file6' ? 'EXPENSE_FILE_LIMIT' : 'EXPENSE_UNKNOWN_MULTIPART_FIELD')
+        hardFail(fieldName === 'file6' ? 'EXPENSE_FILE_LIMIT' : 'EXPENSE_UNKNOWN_MULTIPART_FIELD')
         stream.resume()
         return
       }
       if (seenOrdinals.has(ordinal)) {
-        fail('EXPENSE_DUPLICATE_ORDINAL')
+        hardFail('EXPENSE_DUPLICATE_ORDINAL')
         stream.resume()
         return
       }
@@ -93,34 +128,41 @@ export function consumeExpenseMultipart(req: IncomingMessage): Promise<ExpenseMu
       let limited = false
       stream.on('limit', () => { limited = true })
       stream.on('data', (chunk: Buffer) => {
+        if (settled) return
         const copy = Buffer.from(chunk)
         fileBytes += copy.length
         totalBytes += copy.length
-        if (fileBytes > EXPENSE_MAX_FILE_BYTES || limited) fail('EXPENSE_FILE_TOO_LARGE')
-        if (totalBytes > EXPENSE_MAX_TOTAL_BYTES) fail('EXPENSE_BATCH_TOO_LARGE')
-        if (!failure) chunks.push(copy)
+        if (fileBytes > EXPENSE_MAX_FILE_BYTES || limited) {
+          hardFail('EXPENSE_FILE_TOO_LARGE')
+          return
+        }
+        if (totalBytes > EXPENSE_MAX_TOTAL_BYTES) {
+          hardFail('EXPENSE_BATCH_TOO_LARGE')
+          return
+        }
+        chunks.push(copy)
       })
-      stream.on('error', () => fail('EXPENSE_INVALID_MULTIPART'))
       stream.on('end', () => {
+        if (settled) return
         if (limited || fileBytes > EXPENSE_MAX_FILE_BYTES) {
-          fail('EXPENSE_FILE_TOO_LARGE')
+          hardFail('EXPENSE_FILE_TOO_LARGE')
           return
         }
         if (fileBytes === 0) {
-          fail('EXPENSE_FILE_EMPTY')
+          hardFail('EXPENSE_FILE_EMPTY')
           return
         }
         files.set(ordinal, { bytes: Buffer.concat(chunks), advertisedMime: info.mimeType, originalFileName: info.filename })
       })
     })
-    parser.on('field', () => fail('EXPENSE_UNKNOWN_MULTIPART_FIELD'))
-    parser.on('fieldsLimit', () => fail('EXPENSE_UNKNOWN_MULTIPART_FIELD'))
-    parser.on('filesLimit', () => fail('EXPENSE_FILE_LIMIT'))
-    parser.on('partsLimit', () => fail('EXPENSE_FILE_LIMIT'))
-    parser.on('error', () => fail('EXPENSE_INVALID_MULTIPART'))
+    parser.on('field', () => hardFail('EXPENSE_UNKNOWN_MULTIPART_FIELD'))
+    parser.on('fieldsLimit', () => hardFail('EXPENSE_UNKNOWN_MULTIPART_FIELD'))
+    parser.on('filesLimit', () => hardFail('EXPENSE_FILE_LIMIT'))
+    parser.on('partsLimit', () => hardFail('EXPENSE_FILE_LIMIT'))
+    parser.on('error', () => hardFail('EXPENSE_INVALID_MULTIPART'))
     parser.on('close', finish)
-    req.on('aborted', () => { fail('EXPENSE_INVALID_MULTIPART'); finish() })
-    req.on('error', () => { fail('EXPENSE_INVALID_MULTIPART'); finish() })
+    req.on('aborted', () => hardFail('EXPENSE_INVALID_MULTIPART'))
+    req.on('error', () => hardFail('EXPENSE_INVALID_MULTIPART'))
     req.pipe(parser)
   })
 }

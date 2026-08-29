@@ -2,7 +2,10 @@ import type { IncomingMessage } from 'node:http'
 import { PassThrough } from 'node:stream'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
-import { consumeExpenseMultipart } from '../../server/pmc-mini-app/finance/multipart'
+import {
+  consumeExpenseMultipart,
+  EXPENSE_MAX_RAW_MULTIPART_BYTES,
+} from '../../server/pmc-mini-app/finance/multipart'
 
 describe('expense evidence multipart parser', () => {
   it('returns one-to-five images in ordinal order even when multipart parts arrive out of order', async () => {
@@ -56,11 +59,11 @@ describe('expense evidence multipart parser', () => {
       filePart(boundary, 'file1', 'large.jpg', 'image/jpeg', Buffer.concat([image, Buffer.alloc(10_000_001)])), closingPart(boundary),
     ]))).rejects.toMatchObject({ code: 'EXPENSE_FILE_TOO_LARGE' })
 
-    const nineMegabytes = Buffer.concat([image, Buffer.alloc(9_000_000)])
+    const eightPointFiveMegabytes = Buffer.concat([image, Buffer.alloc(8_500_000)])
     await expect(consumeExpenseMultipart(multipartRequest(boundary, [
-      filePart(boundary, 'file1', 'one.jpg', 'image/jpeg', nineMegabytes),
-      filePart(boundary, 'file2', 'two.jpg', 'image/jpeg', nineMegabytes),
-      filePart(boundary, 'file3', 'three.jpg', 'image/jpeg', nineMegabytes),
+      filePart(boundary, 'file1', 'one.jpg', 'image/jpeg', eightPointFiveMegabytes),
+      filePart(boundary, 'file2', 'two.jpg', 'image/jpeg', eightPointFiveMegabytes),
+      filePart(boundary, 'file3', 'three.jpg', 'image/jpeg', eightPointFiveMegabytes),
       closingPart(boundary),
     ]))).rejects.toMatchObject({ code: 'EXPENSE_BATCH_TOO_LARGE' })
 
@@ -80,6 +83,41 @@ describe('expense evidence multipart parser', () => {
       filePart(boundary, 'file1', 'large.png', 'image/png', oversizedHeader), closingPart(boundary),
     ]))).rejects.toMatchObject({ code: 'EXPENSE_PIXEL_LIMIT' })
   })
+
+  it('rejects an oversized Content-Length before it starts Busboy parsing', async () => {
+    const request = multipartStream('expense-boundary', { 'content-length': String(EXPENSE_MAX_RAW_MULTIPART_BYTES + 1) })
+    await expect(consumeExpenseMultipart(request)).rejects.toMatchObject({ code: 'EXPENSE_MULTIPART_TOO_LARGE' })
+    expect(request.listenerCount('data')).toBe(0)
+    request.end()
+  })
+
+  it('stops immediately for unknown or duplicate fields before their large tails can reach later file processing', async () => {
+    const boundary = 'expense-boundary'
+    const image = await jpeg(1, 1)
+    const unknown = multipartStream(boundary)
+    const unknownResult = consumeExpenseMultipart(unknown)
+    unknown.write(filePart(boundary, 'unknown', 'tail.jpg', 'image/jpeg', image))
+    await expect(unknownResult).rejects.toMatchObject({ code: 'EXPENSE_UNKNOWN_MULTIPART_FIELD' })
+    expect(unknown.listenerCount('data')).toBe(0)
+    unknown.end(Buffer.alloc(EXPENSE_MAX_RAW_MULTIPART_BYTES + 1))
+
+    const duplicate = multipartStream(boundary)
+    const duplicateResult = consumeExpenseMultipart(duplicate)
+    duplicate.write(filePart(boundary, 'file1', 'one.jpg', 'image/jpeg', image))
+    duplicate.write(filePart(boundary, 'file1', 'duplicate.jpg', 'image/jpeg', image))
+    await expect(duplicateResult).rejects.toMatchObject({ code: 'EXPENSE_DUPLICATE_ORDINAL' })
+    expect(duplicate.listenerCount('data')).toBe(0)
+    duplicate.end(Buffer.alloc(EXPENSE_MAX_RAW_MULTIPART_BYTES + 1))
+  })
+
+  it('enforces the raw chunked multipart budget before Busboy can buffer a malformed tail', async () => {
+    const request = multipartStream('expense-boundary')
+    const result = consumeExpenseMultipart(request)
+    request.write(Buffer.alloc(EXPENSE_MAX_RAW_MULTIPART_BYTES + 1))
+    await expect(result).rejects.toMatchObject({ code: 'EXPENSE_MULTIPART_TOO_LARGE' })
+    expect(request.listenerCount('data')).toBe(0)
+    request.end()
+  })
 })
 
 function jpeg(width: number, height: number): Promise<Buffer> {
@@ -95,9 +133,13 @@ function pngHeader(width: number, height: number): Promise<Buffer> {
 }
 
 function multipartRequest(boundary: string, chunks: Buffer[]): IncomingMessage {
-  const request = Object.assign(new PassThrough(), { headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } })
+  const request = multipartStream(boundary)
   request.end(Buffer.concat(chunks))
-  return request as IncomingMessage
+  return request
+}
+
+function multipartStream(boundary: string, headers: Record<string, string> = {}): IncomingMessage & PassThrough {
+  return Object.assign(new PassThrough(), { headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, ...headers } }) as IncomingMessage & PassThrough
 }
 
 function filePart(boundary: string, fieldName: string, fileName: string, mimeType: string, bytes: Buffer): Buffer {

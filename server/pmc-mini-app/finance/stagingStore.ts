@@ -107,14 +107,25 @@ export function createGoogleExpenseStagingPort(input: {
           })
         } catch (error) {
           if (!isCreateOnlyConflict(error)) throw error
-          let existing: ExpenseStagingReceipt
           try {
-            existing = receiptFromMetadata(objectKey, (await file.getMetadata())[0])
+            const metadata = (await file.getMetadata())[0]
+            const existing = receiptFromMetadata(objectKey, metadata)
+            const [existingBytes] = await bucket.file(objectKey, { generation: metadata.generation }).download({ validation: 'crc32c' })
+            if (
+              existingBytes.length !== existing.sizeBytes
+              || !existingBytes.equals(request.bytes)
+              || createHash('sha256').update(existingBytes).digest('hex') !== existing.sha256
+            ) throw new ExpenseStagingError('EXPENSE_STAGING_CONFLICT')
+            const inspected = await inspectExpenseImage({
+              bytes: existingBytes, advertisedMime: existing.mimeType, originalFileName: existing.originalFileName,
+            })
+            if (inspected.mimeType !== existing.mimeType || !sameReceipt(existing, expected)) {
+              throw new ExpenseStagingError('EXPENSE_STAGING_CONFLICT')
+            }
+            return existing
           } catch {
             throw new ExpenseStagingError('EXPENSE_STAGING_CONFLICT')
           }
-          if (!sameReceipt(existing, expected)) throw new ExpenseStagingError('EXPENSE_STAGING_CONFLICT')
-          return existing
         }
         return expected
       } catch (error) {
