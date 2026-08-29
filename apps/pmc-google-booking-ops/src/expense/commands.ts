@@ -15,7 +15,12 @@ import {
   type MiniAppExpenseCommand,
   type MiniAppExpenseSafeErrorCode,
 } from '../../../../shared/pmcMiniAppExpenseIngress'
-import type { ExpenseRepository } from '../ports'
+import type {
+  ExpenseBookRevisionClaim,
+  ExpenseRecoveryCandidate,
+  ExpenseRecoveryRequestSnapshot,
+  ExpenseRepository,
+} from '../ports'
 
 export interface ExpenseCommandPorts {
   clock: { nowIso(): string }
@@ -77,6 +82,12 @@ interface StoredCommandSuccess {
 interface StoredCommandFailure {
   ok: false
   error: MiniAppExpenseSafeErrorCode
+}
+
+interface ExpenseRecoveryContext {
+  events: ExpenseAuditEvent[]
+  request: ExpenseRecoveryRequestSnapshot | null
+  bookRevisionClaims: ExpenseBookRevisionClaim[]
 }
 
 const SAFE_ERRORS = new Set<string>(MINI_APP_EXPENSE_SAFE_ERROR_CODES)
@@ -273,7 +284,7 @@ function commitExpense(
   const existingCommit = ports.expense.auditForExpense(command.payload.expenseId)
     .find((event) => event.action === 'COMMIT' && event.correlationId === command.commandIdempotencyKey)
   if (existingCommit) {
-    return finishDurableCommit(parseCommitAudit(existingCommit), ports, false)
+    return finishDurableCommit(parseCommitAudit(existingCommit), ports)
   }
 
   const submission = ports.expense.getSubmission(monthKey, command.payload.expenseId)
@@ -299,9 +310,8 @@ function commitExpense(
   let supersedesExpenseId: string | null = null
   if (submission.bookDailyKey !== null) {
     if (command.payload.expectedRevision > 0) requireManager(actor)
-    const effective = ports.expense.effectiveByBookDailyKey(monthKey, submission.bookDailyKey)
-    const effectiveRevision = effective?.revision ?? 0
-    if (effectiveRevision !== command.payload.expectedRevision) {
+    const authority = bookRevisionAuthority(monthKey, submission.bookDailyKey, null, ports)
+    if ((authority?.revision ?? 0) !== command.payload.expectedRevision) {
       completeFailure(
         command.commandIdempotencyKey,
         fingerprint,
@@ -310,7 +320,7 @@ function commitExpense(
       )
       throw new Error('EXPENSE_REVISION_CONFLICT')
     }
-    supersedesExpenseId = effective?.expenseId ?? null
+    supersedesExpenseId = authority?.expenseId ?? null
   } else if (command.payload.expectedRevision !== 0) {
     throw new Error('EXPENSE_REVISION_CONFLICT')
   }
@@ -337,19 +347,19 @@ function commitExpense(
     createdAt: now,
     correlationId: command.commandIdempotencyKey,
   })
-  return finishDurableCommit(payload, ports, false)
+  return finishDurableCommit(payload, ports)
 }
 
 function finishDurableCommit(
   payload: CommitAuditPayload,
   ports: ExpenseCommandPorts,
-  recovering: boolean,
+  recoveryContext?: ExpenseRecoveryContext,
 ): ExpenseCommandResult {
   const expenseId = payload.attachments[0]?.expenseId ?? ''
   const submission = ports.expense.getSubmission(payload.monthKey, expenseId)
   if (!submission) throw new Error('EXPENSE_NOT_FOUND')
   validateStoredSubmission(submission, payload.expectedRevision)
-  const prepare = requirePrepareAudit(submission, ports)
+  const prepare = requirePrepareAudit(submission, ports, recoveryContext?.events)
   if (
     prepare.rootRequestId !== payload.rootRequestId
     || prepare.monthKey !== payload.monthKey
@@ -370,10 +380,16 @@ function finishDurableCommit(
   if (submission.recordState === 'PREPARED') {
     if (submission.version !== payload.expectedVersion) throw new Error('EXPENSE_NOT_PREPARED')
     if (submission.bookDailyKey !== null) {
-      const effective = ports.expense.effectiveByBookDailyKey(payload.monthKey, submission.bookDailyKey)
+      const authority = bookRevisionAuthority(
+        payload.monthKey,
+        submission.bookDailyKey,
+        expenseId,
+        ports,
+        recoveryContext?.bookRevisionClaims,
+      )
       if (
-        (effective?.revision ?? 0) !== payload.expectedRevision
-        || (effective?.expenseId ?? null) !== payload.supersedesExpenseId
+        (authority?.revision ?? 0) !== payload.expectedRevision
+        || (authority?.expenseId ?? null) !== payload.supersedesExpenseId
       ) throw new Error('EXPENSE_REVISION_CONFLICT')
     }
   } else if (
@@ -410,7 +426,7 @@ function finishDurableCommit(
       afterJson: JSON.stringify({ supersededByExpenseId: expenseId }),
       createdAt: payload.committedAt,
       correlationId: payload.commandIdempotencyKey,
-    })
+    }, recoveryContext?.events)
   }
   ports.expense.replaceMonthlySummary(
     payload.monthKey,
@@ -419,19 +435,28 @@ function finishDurableCommit(
   )
   const receipt = receiptFromSubmission(committed)
   const result: ExpenseCommandResult = { commandType: 'COMMIT_EXPENSE', ...receipt }
-  if (recovering) {
+  if (recoveryContext) {
+    const eventId = auditEventId(payload.commandFingerprint, 'R')
+    const existing = recoveryContext.events.find((event) => event.eventId === eventId)
     ports.expense.appendAudit({
-      eventId: auditEventId(payload.commandFingerprint, 'R'),
+      eventId,
       expenseId,
       actorStaffId: committed.submittedByStaffId,
       action: 'RECOVER',
       beforeJson: '{}',
       afterJson: JSON.stringify({ recordState: 'COMMITTED' }),
-      createdAt: ports.clock.nowIso(),
+      createdAt: existing?.createdAt ?? ports.clock.nowIso(),
       correlationId: payload.commandIdempotencyKey,
-    })
+    }, recoveryContext.events)
+    if (!recoveryContext.request) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   }
-  completeSuccess(payload.commandIdempotencyKey, payload.commandFingerprint, result, ports)
+  completeSuccess(
+    payload.commandIdempotencyKey,
+    payload.commandFingerprint,
+    result,
+    ports,
+    recoveryContext?.request,
+  )
   return result
 }
 
@@ -456,36 +481,52 @@ function voidExpense(
   requireManager(actor)
   const submission = ports.expense.getSubmission(monthKey, command.payload.expenseId)
   if (!submission) throw new Error('EXPENSE_NOT_FOUND')
-  const priorVoid = ports.expense.auditForExpense(submission.expenseId)
-    .find((event) => event.action === 'VOID' && event.correlationId === command.commandIdempotencyKey)
+  const eventId = auditEventId(fingerprint, 'V')
+  const priorVoid = ports.expense.getAuditByEventId(eventId)
+  const afterJson = JSON.stringify({
+    rootRequestId: command.rootRequestId,
+    commandFingerprint: fingerprint,
+    reason: command.payload.reason,
+  })
+  if (
+    priorVoid
+    && (
+      priorVoid.expenseId !== submission.expenseId
+      || priorVoid.actorStaffId !== actor.id
+      || priorVoid.action !== 'VOID'
+      || priorVoid.afterJson !== afterJson
+      || priorVoid.correlationId !== command.commandIdempotencyKey
+    )
+  ) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
   if (
     !priorVoid
     && (submission.recordState === 'VOID' || submission.version !== command.payload.expectedVersion)
   ) throw new Error('EXPENSE_NOT_PREPARED')
-  ports.expense.appendAudit({
-    eventId: auditEventId(fingerprint, 'V'),
+  if (
+    priorVoid
+    && submission.recordState !== 'VOID'
+    && submission.version !== command.payload.expectedVersion
+  ) throw new Error('EXPENSE_NOT_PREPARED')
+  const durableVoid = ports.expense.appendAudit({
+    eventId,
     expenseId: submission.expenseId,
     actorStaffId: actor.id,
     action: 'VOID',
-    beforeJson: JSON.stringify(submission),
-    afterJson: JSON.stringify({
-      rootRequestId: command.rootRequestId,
-      commandFingerprint: fingerprint,
-      reason: command.payload.reason,
-    }),
-    createdAt: now,
+    beforeJson: priorVoid?.beforeJson ?? JSON.stringify(submission),
+    afterJson,
+    createdAt: priorVoid?.createdAt ?? now,
     correlationId: command.commandIdempotencyKey,
-  })
+  }, priorVoid ? [priorVoid] : [])
   const voided = submission.recordState === 'VOID'
     ? submission
     : ports.expense.updateSubmission(monthKey, submission.expenseId, command.payload.expectedVersion, {
         recordState: 'VOID',
-        updatedAt: now,
+        updatedAt: durableVoid.createdAt,
       })
   ports.expense.replaceMonthlySummary(
     monthKey,
     projectMonthlyExpenses(ports.expense.listMonth(monthKey), monthKey),
-    now,
+    durableVoid.createdAt,
   )
   const result: ExpenseCommandResult = {
     commandType: 'VOID_EXPENSE',
@@ -504,11 +545,14 @@ export function runExpenseRecovery(ports: ExpenseCommandPorts): ExpenseRecoveryR
     for (const candidate of ports.expense.listRecoveryCandidates(100)) {
       result.inspected += 1
       try {
-        const events = ports.expense.auditForExpense(candidate.expenseId)
-        const commit = events.find((event) => event.action === 'COMMIT')
+        const commit = candidate.events.find((event) => event.action === 'COMMIT')
         if (commit) {
           try {
-            finishDurableCommit(parseCommitAudit(commit), ports, true)
+            finishDurableCommit(parseCommitAudit(commit), ports, {
+              events: candidate.events,
+              request: candidate.commitRequest,
+              bookRevisionClaims: candidate.bookRevisionClaims,
+            })
             result.recovered += 1
             continue
           } catch (error) {
@@ -516,7 +560,7 @@ export function runExpenseRecovery(ports: ExpenseCommandPorts): ExpenseRecoveryR
               safeExpenseError(error) === 'EXPENSE_PRIVATE_FILE_INVALID'
               && recoveryAgeHours(candidate.preparedAt, ports.clock.nowIso()) >= 48
             ) {
-              abandonRecoveryCandidate(candidate, events, ports)
+              abandonRecoveryCandidate(candidate, ports)
               result.abandoned += 1
               continue
             }
@@ -524,7 +568,7 @@ export function runExpenseRecovery(ports: ExpenseCommandPorts): ExpenseRecoveryR
           }
         }
         if (recoveryAgeHours(candidate.preparedAt, ports.clock.nowIso()) < 48) continue
-        abandonRecoveryCandidate(candidate, events, ports)
+        abandonRecoveryCandidate(candidate, ports)
         result.abandoned += 1
       } catch (error) {
         const code = safeExpenseError(error)
@@ -536,16 +580,11 @@ export function runExpenseRecovery(ports: ExpenseCommandPorts): ExpenseRecoveryR
 }
 
 function abandonRecoveryCandidate(
-  candidate: {
-    expenseId: string
-    monthKey: string
-    rootRequestId: string
-  },
-  events: ExpenseAuditEvent[],
+  candidate: ExpenseRecoveryCandidate,
   ports: ExpenseCommandPorts,
 ): void {
   const submission = ports.expense.getSubmission(candidate.monthKey, candidate.expenseId)
-  if (submission && submission.recordState !== 'PREPARED' && submission.recordState !== 'VOID') {
+  if (submission && submission.recordState !== 'PREPARED') {
     throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   }
   const beforeJson = JSON.stringify(submission ?? {})
@@ -562,7 +601,7 @@ function abandonRecoveryCandidate(
       ports.clock.nowIso(),
     )
   }
-  const prepare = events.find((event) => event.action === 'PREPARE')
+  const prepare = candidate.events.find((event) => event.action === 'PREPARE')
   if (!prepare) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   ports.expense.appendAudit({
     eventId: auditEventIdFromExpense(candidate.expenseId, 'A'),
@@ -573,7 +612,7 @@ function abandonRecoveryCandidate(
     afterJson: JSON.stringify({ recordState: 'VOID' }),
     createdAt: ports.clock.nowIso(),
     correlationId: `${candidate.rootRequestId}:prepare`,
-  })
+  }, candidate.events)
 }
 
 function recoveryAgeHours(preparedAt: string, now: string): number {
@@ -584,8 +623,9 @@ function recoveryAgeHours(preparedAt: string, now: string): number {
 function requirePrepareAudit(
   submission: ExpenseSubmission,
   ports: ExpenseCommandPorts,
+  knownEvents?: readonly ExpenseAuditEvent[],
 ): PrepareAuditPayload {
-  const events = ports.expense.auditForExpense(submission.expenseId)
+  const events = (knownEvents ?? ports.expense.auditForExpense(submission.expenseId))
     .filter((event) => event.action === 'PREPARE')
   if (events.length !== 1 || events[0]?.actorStaffId !== submission.submittedByStaffId) {
     throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
@@ -648,6 +688,38 @@ function validateAttachmentManifest(
     command.payload.expectedManifestHash,
     ports,
   )
+}
+
+function bookRevisionAuthority(
+  monthKey: string,
+  bookDailyKey: string,
+  excludedExpenseId: string | null,
+  ports: ExpenseCommandPorts,
+  knownClaims?: ExpenseBookRevisionClaim[],
+): ExpenseSubmission | null {
+  const committed = ports.expense.effectiveByBookDailyKey(monthKey, bookDailyKey)
+  const claims = (knownClaims ?? ports.expense.listBookRevisionClaims(monthKey, bookDailyKey))
+    .filter(({ submission }) => submission.expenseId !== excludedExpenseId)
+    .map(({ submission, commitAudit }) => {
+      const payload = parseCommitAudit(commitAudit)
+      validateStoredSubmission(submission, payload.expectedRevision)
+      if (
+        submission.recordState !== 'PREPARED'
+        || submission.bookDailyKey !== bookDailyKey
+        || payload.monthKey !== monthKey
+        || payload.attachments[0]?.expenseId !== submission.expenseId
+      ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      return submission
+    })
+  const candidates = [...(committed ? [committed] : []), ...claims]
+    .sort((left, right) => right.revision - left.revision)
+  if (
+    candidates[0]
+    && candidates[1]
+    && candidates[0].revision === candidates[1].revision
+    && candidates[0].expenseId !== candidates[1].expenseId
+  ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  return candidates[0] ?? null
 }
 
 function validateAttachments(
@@ -722,6 +794,7 @@ function completeSuccess(
   fingerprint: string,
   result: ExpenseCommandResult,
   ports: ExpenseCommandPorts,
+  knownRequest?: ExpenseRecoveryRequestSnapshot | null,
 ): void {
   const stored: StoredCommandSuccess = { ok: true, result }
   ports.expense.completeRequest({
@@ -729,7 +802,7 @@ function completeSuccess(
     commandFingerprint: fingerprint,
     resultJson: JSON.stringify(stored),
     updatedAt: ports.clock.nowIso(),
-  })
+  }, knownRequest ?? undefined)
 }
 
 function completeFailure(
@@ -749,13 +822,139 @@ function completeFailure(
 
 function replayStoredOutcome(resultJson: string): ExpenseCommandResult {
   const parsed = parseJsonRecord(resultJson)
-  if (parsed.ok === false && typeof parsed.error === 'string' && SAFE_ERRORS.has(parsed.error)) {
+  if (
+    hasExactKeys(parsed, ['ok', 'error'])
+    && parsed.ok === false
+    && typeof parsed.error === 'string'
+    && SAFE_ERRORS.has(parsed.error)
+  ) {
     throw new Error(parsed.error)
   }
-  if (parsed.ok !== true || !parsed.result || typeof parsed.result !== 'object') {
+  if (!hasExactKeys(parsed, ['ok', 'result']) || parsed.ok !== true) {
     throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   }
-  return parsed.result as ExpenseCommandResult
+  return parseStoredCommandResult(parsed.result)
+}
+
+function parseStoredCommandResult(value: unknown): ExpenseCommandResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  const result = value as Record<string, unknown>
+  if (result.commandType === 'PREPARE_EXPENSE') {
+    if (
+      !hasExactKeys(result, [
+        'commandType', 'expenseId', 'monthKey', 'recordState', 'version', 'expectedRevision',
+      ])
+      || !SAFE_ID.test(String(result.expenseId ?? ''))
+      || !validStoredMonth(String(result.monthKey ?? ''), String(result.expenseId ?? ''))
+      || result.recordState !== 'PREPARED'
+      || result.version !== 1
+      || !safeInteger(result.expectedRevision, 0)
+    ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    return {
+      commandType: 'PREPARE_EXPENSE',
+      expenseId: result.expenseId as string,
+      monthKey: result.monthKey as string,
+      recordState: 'PREPARED',
+      version: result.version,
+      expectedRevision: result.expectedRevision,
+    }
+  }
+  if (result.commandType === 'COMMIT_EXPENSE') {
+    if (
+      !hasExactKeys(result, [
+        'commandType', 'expenseId', 'receiptNumber', 'expenseDate', 'monthKey', 'category',
+        'scope', 'amountSatang', 'recordState', 'revision', 'committedAt', 'unreviewed',
+      ])
+      || !SAFE_ID.test(String(result.expenseId ?? ''))
+      || result.receiptNumber !== result.expenseId
+      || typeof result.expenseDate !== 'string'
+      || typeof result.monthKey !== 'string'
+      || !validStoredDate(result.expenseDate, result.monthKey, result.expenseId as string)
+      || !isStoredCategory(result.category)
+      || result.scope !== deriveExpenseScope(result.category)
+      || !safeInteger(result.amountSatang, 1)
+      || result.recordState !== 'COMMITTED'
+      || !safeInteger(result.revision, 1)
+      || typeof result.committedAt !== 'string'
+      || !Number.isFinite(Date.parse(result.committedAt))
+      || result.unreviewed !== true
+    ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    return {
+      commandType: 'COMMIT_EXPENSE',
+      expenseId: result.expenseId as string,
+      receiptNumber: result.receiptNumber as string,
+      expenseDate: result.expenseDate,
+      monthKey: result.monthKey,
+      category: result.category,
+      scope: deriveExpenseScope(result.category),
+      amountSatang: result.amountSatang,
+      recordState: 'COMMITTED',
+      revision: result.revision,
+      committedAt: result.committedAt,
+      unreviewed: true,
+    }
+  }
+  if (result.commandType === 'VOID_EXPENSE') {
+    if (
+      !hasExactKeys(result, ['commandType', 'expenseId', 'recordState', 'version', 'updatedAt'])
+      || !validStoredExpenseId(String(result.expenseId ?? ''))
+      || result.recordState !== 'VOID'
+      || !safeInteger(result.version, 2)
+      || typeof result.updatedAt !== 'string'
+      || !Number.isFinite(Date.parse(result.updatedAt))
+    ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    return {
+      commandType: 'VOID_EXPENSE',
+      expenseId: result.expenseId as string,
+      recordState: 'VOID',
+      version: result.version,
+      updatedAt: result.updatedAt,
+    }
+  }
+  throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
+}
+
+function safeInteger(value: unknown, minimum: number): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum
+}
+
+function isStoredCategory(value: unknown): value is ExpenseSubmission['category'] {
+  return value === 'BILL_DOCUMENT' || value === 'BOOK_CLINIC' || value === 'BOOK_DOCTOR_PERSONAL'
+}
+
+function validStoredMonth(monthKey: string, expenseId: string): boolean {
+  try {
+    return parseExpenseDate(`${monthKey}-01`).monthKey === monthKey
+      && monthFromExpenseId(expenseId) === monthKey
+  } catch {
+    return false
+  }
+}
+
+function validStoredExpenseId(expenseId: string): boolean {
+  try {
+    monthFromExpenseId(expenseId)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function validStoredDate(expenseDate: string, monthKey: string, expenseId: string): boolean {
+  try {
+    return parseExpenseDate(expenseDate).monthKey === monthKey
+      && monthFromExpenseId(expenseId) === monthKey
+  } catch {
+    return false
+  }
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> {

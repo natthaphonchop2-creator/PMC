@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { executeExpenseCommand } from '../src/expense/commands'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { executeExpenseCommand, runExpenseRecovery } from '../src/expense/commands'
+import { createGoogleExpenseRepository } from '../src/expense/repository'
 import {
+  EXPENSE_NOW,
   bookPrepareCommand,
   commitCommand,
   createExpenseTestPorts,
@@ -9,6 +11,9 @@ import {
   prepareWithManifest,
   summaryRows,
 } from './helpers/expenseFakes'
+import { installGoogleExpenseFakes } from './helpers/googleExpenseFakes'
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe('Apps Script expense repository and command journal', () => {
   it('rejects a global phase-key fingerprint conflict before touching another monthly ledger', () => {
@@ -84,6 +89,38 @@ describe('Apps Script expense repository and command journal', () => {
       .toBe(10_000)
     expect(ports.expense.auditForExpense(secondPrepared.prepared.expenseId))
       .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
+  })
+
+  it('treats a durable partial COMMIT as the book revision claim before recovery', () => {
+    const ports = createExpenseTestPorts()
+    const firstPrepared = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'claim-a', expectedRevision: 0, amountSatang: 10_000,
+    }))
+    ports.backend.failAttachmentAppendCount = 1
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'claim-a', expenseId: firstPrepared.prepared.expenseId,
+      expectedRevision: 0, attachments: firstPrepared.attachments,
+    }), ports)).toThrow('simulated attachment append failure')
+
+    const secondPrepared = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'claim-b', expectedRevision: 0, amountSatang: 20_000,
+    }))
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'claim-b', expenseId: secondPrepared.prepared.expenseId,
+      expectedRevision: 0, attachments: secondPrepared.attachments,
+    }), ports)).toThrow('EXPENSE_REVISION_CONFLICT')
+
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 2,
+      recovered: 1,
+      abandoned: 0,
+      errors: [],
+    })
+    expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toMatchObject({
+      expenseId: firstPrepared.prepared.expenseId,
+      amountSatang: 10_000,
+      revision: 1,
+    })
   })
 
   it('serializes concurrent replacements and never resurrects a superseded predecessor after void', () => {
@@ -192,4 +229,146 @@ describe('Apps Script expense repository and command journal', () => {
     expect(ports.expense.auditForExpense(prepared.prepared.expenseId))
       .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
   })
+
+  it('rejects unknown or private fields in every stored command-result replay union', () => {
+    const preparePorts = createExpenseTestPorts()
+    const prepare = prepareCommand({
+      rootRequestId: 'replay-prepare-shape',
+      commandIdempotencyKey: 'replay-prepare-shape:prepare',
+    })
+    const prepareResult = executeExpenseCommand(prepare, preparePorts)
+    corruptStoredResult(preparePorts, prepare.commandIdempotencyKey, {
+      ...prepareResult,
+      ledgerSpreadsheetId: 'private-ledger-id',
+    })
+    expect(() => executeExpenseCommand(prepare, preparePorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+    corruptStoredResult(preparePorts, prepare.commandIdempotencyKey, {
+      ...prepareResult,
+      version: 2,
+    })
+    expect(() => executeExpenseCommand(prepare, preparePorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+
+    const commitPorts = createExpenseTestPorts()
+    const committedPrepared = prepareWithManifest(commitPorts, prepareCommand({
+      rootRequestId: 'replay-commit-shape',
+      commandIdempotencyKey: 'replay-commit-shape:prepare',
+    }))
+    const commit = commitCommand({
+      rootRequestId: 'replay-commit-shape',
+      expenseId: committedPrepared.prepared.expenseId,
+      attachments: committedPrepared.attachments,
+    })
+    const commitResult = executeExpenseCommand(commit, commitPorts)
+    corruptStoredResult(commitPorts, commit.commandIdempotencyKey, {
+      ...commitResult,
+      privateFileId: 'private-file-id',
+    })
+    expect(() => executeExpenseCommand(commit, commitPorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+
+    const voidPorts = createExpenseTestPorts()
+    const voidPrepared = executeExpenseCommand(prepareCommand({
+      rootRequestId: 'replay-void-shape',
+      commandIdempotencyKey: 'replay-void-shape:prepare',
+    }), voidPorts)
+    if (voidPrepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected result')
+    const voidCommand = {
+      rootRequestId: 'replay-void-command',
+      commandIdempotencyKey: 'replay-void-command:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE' as const,
+      payload: {
+        expenseId: voidPrepared.expenseId,
+        expectedVersion: 1,
+        reason: 'ยกเลิกรายการทดสอบ',
+      },
+    }
+    const voidResult = executeExpenseCommand(voidCommand, voidPorts)
+    corruptStoredResult(voidPorts, voidCommand.commandIdempotencyKey, {
+      ...voidResult,
+      monthFolderId: 'private-folder-id',
+    })
+    expect(() => executeExpenseCommand(voidCommand, voidPorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+    corruptStoredResult(voidPorts, voidCommand.commandIdempotencyKey, {
+      ...voidResult,
+      expenseId: 'finance-master',
+    })
+    expect(() => executeExpenseCommand(voidCommand, voidPorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+  })
 })
+
+describe('Google expense repository containment and literal text', () => {
+  it.each([
+    ['shared', { ledgerSharing: 'ANYONE' as const }],
+    ['outside', { ledgerParent: 'OUTSIDE' as const }],
+  ])('rejects an adopted %s monthly workbook before topology mutation', (_name, options) => {
+    const environment = installGoogleExpenseFakes(options)
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master',
+      financeFolderId: 'finance-root',
+    })
+
+    expect(() => repository.ensureMonth('2026-08', EXPENSE_NOW))
+      .toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+    expect(environment.ledger.topologyMutationCount()).toBe(0)
+  })
+
+  it('persists formula-like free text as literal cells and restores the canonical text', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master',
+      financeFolderId: 'finance-root',
+    })
+    const submission = {
+      expenseId: 'EXP-202608-FORMULA-1',
+      expenseDate: '2026-08-29',
+      monthKey: '2026-08',
+      category: 'BILL_DOCUMENT' as const,
+      scope: 'CLINIC' as const,
+      amountSatang: 12_000,
+      counterpartyName: '  =HYPERLINK("https://invalid.test")',
+      description: ' +SUM(A1:A2)',
+      paymentMethod: 'TRANSFER' as const,
+      recordState: 'PREPARED' as const,
+      bookDailyKey: null,
+      revision: 1,
+      supersedesExpenseId: null,
+      submittedByStaffId: 'STAFF_01',
+      submittedByName: ' @IMPORTXML("https://invalid.test")',
+      submittedAt: EXPENSE_NOW,
+      committedAt: null,
+      updatedAt: EXPENSE_NOW,
+      version: 1,
+      idempotencyKey: 'formula-roundtrip',
+    }
+    repository.insertPrepared(submission)
+    repository.appendAttachments('2026-08', [{
+      attachmentId: 'ATT-FORMULA-1',
+      expenseId: submission.expenseId,
+      ordinal: 1,
+      mediaType: 'image/jpeg',
+      originalFileName: ' -receipt.jpg',
+      privateFileId: 'FILE-FORMULA-1',
+      sha256: 'a'.repeat(64),
+      uploadedByStaffId: 'STAFF_01',
+      uploadedAt: EXPENSE_NOW,
+    }])
+
+    expect(repository.getSubmission('2026-08', submission.expenseId)).toEqual(submission)
+    expect(repository.listAttachments('2026-08', submission.expenseId)[0]?.originalFileName)
+      .toBe(' -receipt.jpg')
+    expect(environment.ledger.formulaWriteCount()).toBe(0)
+  })
+})
+
+function corruptStoredResult(
+  ports: ReturnType<typeof createExpenseTestPorts>,
+  commandIdempotencyKey: string,
+  result: Record<string, unknown>,
+): void {
+  const rows = ports.backend.master.get('EXPENSE_REQUESTS')!
+  const index = rows.findIndex((row) => row.commandIdempotencyKey === commandIdempotencyKey)
+  rows[index] = {
+    ...rows[index],
+    resultJson: JSON.stringify({ ok: true, result }),
+  }
+}

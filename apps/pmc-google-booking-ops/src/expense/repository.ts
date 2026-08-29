@@ -8,7 +8,11 @@ import type {
   ExpensePrivateAttachment,
   MiniAppExpenseCommand,
 } from '../../../../shared/pmcMiniAppExpenseIngress'
-import type { ExpenseRepository } from '../ports'
+import type {
+  ExpenseBookRevisionClaim,
+  ExpenseRecoveryRequestSnapshot,
+  ExpenseRepository,
+} from '../ports'
 import { createGoogleExpenseTopologyPort } from '../adapters/googleSheets'
 import { ensureExpenseMonthTopology } from './setup'
 import {
@@ -60,6 +64,7 @@ interface ExpenseRequestRow {
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
+const LITERAL_TEXT_PREFIX = '\u200c'
 const MUTABLE_SUBMISSION_FIELDS = new Set<keyof ExpenseSubmission>([
   'recordState',
   'committedAt',
@@ -74,6 +79,10 @@ function clonePlain<T>(value: T): T {
 function nullableString(value: unknown): string | null {
   const normalized = String(value ?? '').trim()
   return normalized || null
+}
+
+function nullableText(value: unknown): string | null {
+  return value === null || value === undefined || value === '' ? null : String(value)
 }
 
 function asRequest(row: ExpenseStorageRow): ExpenseRequestRow {
@@ -99,7 +108,7 @@ function asSubmission(row: ExpenseStorageRow): ExpenseSubmission {
     category: String(row.category ?? '') as ExpenseSubmission['category'],
     scope: String(row.scope ?? '') as ExpenseSubmission['scope'],
     amountSatang: Number(row.amountSatang),
-    counterpartyName: nullableString(row.counterpartyName),
+    counterpartyName: nullableText(row.counterpartyName),
     description: String(row.description ?? ''),
     paymentMethod: nullableString(row.paymentMethod) as ExpenseSubmission['paymentMethod'],
     recordState: String(row.recordState ?? '') as ExpenseSubmission['recordState'],
@@ -177,6 +186,21 @@ function parseAuditAfter(event: ExpenseAuditEvent): Record<string, unknown> | nu
   }
 }
 
+function bookRevisionClaims(
+  submissions: ExpenseSubmission[],
+  audits: ExpenseAuditEvent[],
+): ExpenseBookRevisionClaim[] {
+  return submissions.flatMap((submission) => {
+    const commits = audits.filter((event) => (
+      event.expenseId === submission.expenseId && event.action === 'COMMIT'
+    ))
+    if (commits.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    return commits[0]
+      ? [{ submission: clonePlain(submission), commitAudit: clonePlain(commits[0]) }]
+      : []
+  })
+}
+
 export function createExpenseRepository(backend: ExpenseRepositoryBackend): ExpenseRepository {
   const repository: ExpenseRepository = {
     ensureMonth(monthKey, createdAt) {
@@ -218,17 +242,27 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
         resultJson: null,
       }
     },
-    completeRequest(input) {
+    completeRequest(input, knownRequest) {
       if (!SAFE_ID.test(input.commandIdempotencyKey) || !SHA256.test(input.commandFingerprint)) {
         throw new Error('EXPENSE_INVALID_REQUEST')
       }
-      const rows = backend.readMaster('EXPENSE_REQUESTS')
-      const index = rows.findIndex((row) => row.commandIdempotencyKey === input.commandIdempotencyKey)
-      if (index < 0) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
-      if (rows.some((row, candidate) => candidate !== index && row.commandIdempotencyKey === input.commandIdempotencyKey)) {
+      let index: number
+      let before: ExpenseRequestRow
+      if (knownRequest) {
+        index = knownRequest.rowIndex
+        before = asRequest(knownRequest as unknown as ExpenseStorageRow)
+      } else {
+        const rows = backend.readMaster('EXPENSE_REQUESTS')
+        index = rows.findIndex((row) => row.commandIdempotencyKey === input.commandIdempotencyKey)
+        if (index < 0) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        if (rows.some((row, candidate) => candidate !== index && row.commandIdempotencyKey === input.commandIdempotencyKey)) {
+          throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        }
+        before = asRequest(rows[index]!)
+      }
+      if (before.commandIdempotencyKey !== input.commandIdempotencyKey || index < 0) {
         throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
       }
-      const before = asRequest(rows[index]!)
       if (before.commandFingerprint !== input.commandFingerprint) {
         throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
       }
@@ -345,15 +379,30 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
       if (matches.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
       return matches[0] ? clonePlain(matches[0]) : null
     },
-    appendAudit(event) {
-      const rows = backend.readMaster('EXPENSE_AUDIT')
-      const matches = rows.map(asAudit).filter((row) => row.eventId === event.eventId)
+    listBookRevisionClaims(monthKey, bookDailyKey) {
+      const submissions = backend.readMonth(monthKey, 'EXPENSE_SUBMISSIONS')
+        .map(asSubmission)
+        .filter((row) => row.recordState === 'PREPARED' && row.bookDailyKey === bookDailyKey)
+      const audits = backend.readMaster('EXPENSE_AUDIT').map(asAudit)
+      return bookRevisionClaims(submissions, audits)
+    },
+    getAuditByEventId(eventId) {
+      const matches = backend.readMaster('EXPENSE_AUDIT')
+        .map(asAudit)
+        .filter((row) => row.eventId === eventId)
+      if (matches.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      return matches[0] ? clonePlain(matches[0]) : null
+    },
+    appendAudit(event, knownEvents) {
+      const events = knownEvents ? [...knownEvents] : backend.readMaster('EXPENSE_AUDIT').map(asAudit)
+      const matches = events.filter((row) => row.eventId === event.eventId)
       if (matches.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
       if (matches[0]) {
         if (!sameValue(matches[0], event)) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
-        return
+        return clonePlain(matches[0])
       }
       backend.appendMaster('EXPENSE_AUDIT', [event as unknown as ExpenseStorageRow])
+      return clonePlain(event)
     },
     auditForExpense(expenseId) {
       return backend.readMaster('EXPENSE_AUDIT')
@@ -387,31 +436,68 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
     listRecoveryCandidates(limit = 100) {
       const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 100) : 100
       const audits = backend.readMaster('EXPENSE_AUDIT').map(asAudit)
-      const requests = backend.readMaster('EXPENSE_REQUESTS').map(asRequest)
-      const prepared = audits.filter((event) => event.action === 'PREPARE').slice(-boundedLimit)
-      return prepared.flatMap((event) => {
+      const requestEntries = backend.readMaster('EXPENSE_REQUESTS')
+        .map((row, rowIndex) => ({ request: asRequest(row), rowIndex }))
+      const requestByKey = new Map<string, ExpenseRecoveryRequestSnapshot>()
+      for (const { request, rowIndex } of requestEntries) {
+        if (requestByKey.has(request.commandIdempotencyKey)) {
+          throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        }
+        requestByKey.set(request.commandIdempotencyKey, { ...request, rowIndex })
+      }
+      const auditByExpense = new Map<string, ExpenseAuditEvent[]>()
+      for (const audit of audits) {
+        const events = auditByExpense.get(audit.expenseId) ?? []
+        events.push(audit)
+        auditByExpense.set(audit.expenseId, events)
+      }
+      const unresolved = audits.filter((event) => event.action === 'PREPARE').flatMap((event) => {
         const after = parseAuditAfter(event)
         const rootRequestId = String(after?.rootRequestId ?? '')
         const monthKey = String(after?.monthKey ?? '')
         if (!SAFE_ID.test(rootRequestId) || !/^\d{4}-\d{2}$/.test(monthKey)) return []
-        const events = audits.filter((candidate) => candidate.expenseId === event.expenseId)
-        if (events.some((candidate) => candidate.action === 'ABANDON')) return []
-        const commitAudit = events.find((candidate) => candidate.action === 'COMMIT')
-        const commitRequest = requests.find(
-          (request) => request.commandIdempotencyKey === `${rootRequestId}:commit`,
-        )
-        if (
-          commitAudit
-          && commitRequest?.resultJson
-          && events.some((candidate) => candidate.action === 'RECOVER' || candidate.action === 'COMMIT')
-        ) return []
+        const events = auditByExpense.get(event.expenseId) ?? []
+        if (events.filter((candidate) => candidate.action === 'PREPARE').length !== 1) {
+          throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        }
+        if (events.some((candidate) => candidate.action === 'VOID' || candidate.action === 'ABANDON')) return []
+        const commitAudits = events.filter((candidate) => candidate.action === 'COMMIT')
+        if (commitAudits.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        const commitRequest = requestByKey.get(`${rootRequestId}:commit`) ?? null
+        if (commitAudits.length === 1 && !commitRequest) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        if (commitAudits.length === 1 && commitRequest?.resultJson !== null) return []
         return [{
           expenseId: event.expenseId,
           monthKey,
           rootRequestId,
           preparedAt: event.createdAt,
+          events: clonePlain(events),
+          commitRequest: commitRequest ? clonePlain(commitRequest) : null,
+          bookRevisionClaims: [] as ExpenseBookRevisionClaim[],
         }]
       })
+      unresolved.sort((left, right) => (
+        Date.parse(left.preparedAt) - Date.parse(right.preparedAt)
+        || left.expenseId.localeCompare(right.expenseId)
+      ))
+      const selected = unresolved.slice(0, boundedLimit)
+      const submissionsByMonth = new Map<string, ExpenseSubmission[]>()
+      for (const candidate of selected) {
+        if (!submissionsByMonth.has(candidate.monthKey)) {
+          submissionsByMonth.set(
+            candidate.monthKey,
+            backend.readMonth(candidate.monthKey, 'EXPENSE_SUBMISSIONS').map(asSubmission),
+          )
+        }
+        const submission = submissionsByMonth.get(candidate.monthKey)!
+          .find((row) => row.expenseId === candidate.expenseId)
+        if (submission?.bookDailyKey) {
+          const sameBookPrepared = submissionsByMonth.get(candidate.monthKey)!
+            .filter((row) => row.recordState === 'PREPARED' && row.bookDailyKey === submission.bookDailyKey)
+          candidate.bookRevisionClaims = bookRevisionClaims(sameBookPrepared, audits)
+        }
+      }
+      return selected
     },
   }
   return repository
@@ -506,14 +592,14 @@ function createGoogleExpenseRepositoryBackend(
       const monthFolder = uniqueOrCreateFolder(root, `PMC Expenses ${monthKey}`)
       const spreadsheetName = `PMC Expenses ${monthKey}`
       const spreadsheet = uniqueOrCreateSpreadsheet(monthFolder, spreadsheetName)
-      ensureExpenseMonthTopology(createGoogleExpenseTopologyPort(spreadsheet))
-      validateSchemas(spreadsheet, EXPENSE_MONTH_SCHEMAS)
       const spreadsheetFile = DriveApp.getFileById(spreadsheet.getId())
       if (
         spreadsheetFile.isTrashed()
         || spreadsheetFile.getSharingAccess() !== DriveApp.Access.PRIVATE
         || !hasDirectParent(spreadsheetFile.getParents(), monthFolder.getId())
       ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      ensureExpenseMonthTopology(createGoogleExpenseTopologyPort(spreadsheet))
+      validateSchemas(spreadsheet, EXPENSE_MONTH_SCHEMAS)
       appendRows(master, 'EXPENSE_MONTHLY_INDEX', EXPENSE_MASTER_SCHEMAS.EXPENSE_MONTHLY_INDEX, [{
         monthKey,
         ledgerSpreadsheetId: spreadsheet.getId(),
@@ -650,7 +736,10 @@ function readRows(
   if (!sheet) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   if (sheet.getLastRow() < 2) return []
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, headers.length).getValues()
-    .map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])))
+    .map((values) => Object.fromEntries(headers.map((header, index) => [
+      header,
+      decodeCell(values[index] ?? ''),
+    ])))
 }
 
 function appendRows(
@@ -699,6 +788,17 @@ function replaceRows(
 
 function encodeCell(value: unknown): string | number | boolean {
   if (value === null || value === undefined) return ''
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    return value.startsWith(LITERAL_TEXT_PREFIX) || /^\s*[=+\-@]/.test(value)
+      ? `${LITERAL_TEXT_PREFIX}${value}`
+      : value
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value
   return JSON.stringify(value)
+}
+
+function decodeCell(value: unknown): unknown {
+  return typeof value === 'string' && value.startsWith(LITERAL_TEXT_PREFIX)
+    ? value.slice(LITERAL_TEXT_PREFIX.length)
+    : value
 }

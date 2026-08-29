@@ -33,8 +33,11 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
   readonly months = new Map<string, Map<ExpenseRepositoryMonthTab, ExpenseStorageRow[]>>()
   readonly monthlySummaries = new Map<string, ExpenseStorageRow[]>()
   readonly verifiedAttachmentIds: string[] = []
+  readonly masterReadCount = new Map<ExpenseRepositoryMasterTab, number>()
   monthOperationCount = 0
   failAttachmentAppendCount = 0
+  failSubmissionUpdateCount = 0
+  failRequestCompletionCount = 0
   privateFilesValid = true
 
   constructor() {
@@ -66,15 +69,20 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
   }
 
   readMaster(tab: ExpenseRepositoryMasterTab): ExpenseStorageRow[] {
+    this.masterReadCount.set(tab, (this.masterReadCount.get(tab) ?? 0) + 1)
     return clone(this.master.get(tab) ?? [])
   }
 
   appendMaster(tab: ExpenseRepositoryMasterTab, rows: ExpenseStorageRow[]): void {
-    this.master.set(tab, [...this.readMaster(tab), ...clone(rows)])
+    this.master.set(tab, [...clone(this.master.get(tab) ?? []), ...clone(rows)])
   }
 
   updateMaster(tab: ExpenseRepositoryMasterTab, rowIndex: number, row: ExpenseStorageRow): void {
-    const rows = this.readMaster(tab)
+    if (tab === 'EXPENSE_REQUESTS' && this.failRequestCompletionCount > 0) {
+      this.failRequestCompletionCount -= 1
+      throw new Error('simulated request completion failure')
+    }
+    const rows = clone(this.master.get(tab) ?? [])
     rows[rowIndex] = clone(row)
     this.master.set(tab, rows)
   }
@@ -101,6 +109,10 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
     row: ExpenseStorageRow,
   ): void {
     this.monthOperationCount += 1
+    if (tab === 'EXPENSE_SUBMISSIONS' && this.failSubmissionUpdateCount > 0) {
+      this.failSubmissionUpdateCount -= 1
+      throw new Error('simulated submission update failure')
+    }
     const month = this.requireMonth(monthKey)
     const rows = clone(month.get(tab) ?? [])
     rows[rowIndex] = clone(row)
@@ -293,6 +305,25 @@ export function commitCommand(input: {
       expectedRevision: input.expectedRevision ?? 0,
       expectedManifestHash: manifestHash(attachments),
       attachments,
+    },
+  }
+}
+
+export function voidCommand(input: {
+  rootRequestId: string
+  expenseId: string
+  expectedVersion?: number
+  reason?: string
+}): Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }> {
+  return {
+    rootRequestId: input.rootRequestId,
+    commandIdempotencyKey: `${input.rootRequestId}:void`,
+    staffId: 'MANAGER_01',
+    commandType: 'VOID_EXPENSE',
+    payload: {
+      expenseId: input.expenseId,
+      expectedVersion: input.expectedVersion ?? 1,
+      reason: input.reason ?? 'ยกเลิกรายการทดสอบ',
     },
   }
 }

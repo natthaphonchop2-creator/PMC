@@ -199,6 +199,28 @@ export interface ExpenseRecoveryCandidate {
   monthKey: string
   rootRequestId: string
   preparedAt: string
+  events: ExpenseAuditEvent[]
+  commitRequest: ExpenseRecoveryRequestSnapshot | null
+  bookRevisionClaims: ExpenseBookRevisionClaim[]
+}
+
+export interface ExpenseRecoveryRequestSnapshot {
+  rowIndex: number
+  commandIdempotencyKey: string
+  rootRequestId: string
+  commandType: MiniAppExpenseCommand['commandType']
+  commandFingerprint: string
+  expenseId: string
+  monthKey: string
+  recordState: 'RESERVED' | 'COMPLETED'
+  resultJson: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ExpenseBookRevisionClaim {
+  submission: ExpenseSubmission
+  commitAudit: ExpenseAuditEvent
 }
 
 export interface ExpenseRepository {
@@ -225,7 +247,7 @@ export interface ExpenseRepository {
     commandFingerprint: string
     resultJson: string
     updatedAt: string
-  }): void
+  }, knownRequest?: ExpenseRecoveryRequestSnapshot): void
   getSubmission(monthKey: string, expenseId: string): ExpenseSubmission | null
   insertPrepared(submission: ExpenseSubmission): ExpenseSubmission
   updateSubmission(
@@ -238,7 +260,9 @@ export interface ExpenseRepository {
   listAttachments(monthKey: string, expenseId: string): ExpensePrivateAttachment[]
   appendAttachments(monthKey: string, attachments: ExpensePrivateAttachment[]): void
   effectiveByBookDailyKey(monthKey: string, bookDailyKey: string): ExpenseSubmission | null
-  appendAudit(event: ExpenseAuditEvent): void
+  listBookRevisionClaims(monthKey: string, bookDailyKey: string): ExpenseBookRevisionClaim[]
+  getAuditByEventId(eventId: string): ExpenseAuditEvent | null
+  appendAudit(event: ExpenseAuditEvent, knownEvents?: readonly ExpenseAuditEvent[]): ExpenseAuditEvent
   auditForExpense(expenseId: string): ExpenseAuditEvent[]
   replaceMonthlySummary(
     monthKey: string,

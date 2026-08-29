@@ -7,6 +7,7 @@ import {
   createExpenseTestPorts,
   prepareCommand,
   prepareWithManifest,
+  voidCommand,
 } from './helpers/expenseFakes'
 
 describe('Apps Script expense recovery journal', () => {
@@ -130,5 +131,127 @@ describe('Apps Script expense recovery journal', () => {
       errors: ['EXPENSE_STORAGE_UNAVAILABLE'],
     })
     expect(ports.expense.getSubmission('2026-08', prepared.prepared.expenseId)?.recordState).toBe('PREPARED')
+  })
+
+  it('filters terminal rows before selecting the oldest 100 unresolved candidates', () => {
+    const ports = createExpenseTestPorts({ now: '2026-08-20T09:00:00+07:00' })
+    const unresolved = executeExpenseCommand(prepareCommand({
+      rootRequestId: 'old-unresolved', commandIdempotencyKey: 'old-unresolved:prepare',
+    }), ports)
+    if (unresolved.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected result')
+    for (let index = 0; index < 101; index += 1) {
+      const expenseId = `EXP-202608-RESOLVED-${String(index).padStart(3, '0')}`
+      const rootRequestId = `resolved-${String(index).padStart(3, '0')}`
+      const createdAt = new Date(Date.parse('2026-08-21T09:00:00+07:00') + index * 1_000).toISOString()
+      ports.backend.appendMaster('EXPENSE_AUDIT', [{
+        eventId: `EAUD:RESOLVED:${index}:P`,
+        expenseId,
+        actorStaffId: 'STAFF_01',
+        action: 'PREPARE',
+        beforeJson: '{}',
+        afterJson: JSON.stringify({ rootRequestId, monthKey: '2026-08' }),
+        createdAt,
+        correlationId: `${rootRequestId}:prepare`,
+      }, {
+        eventId: `EAUD:RESOLVED:${index}:V`,
+        expenseId,
+        actorStaffId: 'MANAGER_01',
+        action: 'VOID',
+        beforeJson: '{}',
+        afterJson: '{}',
+        createdAt,
+        correlationId: `${rootRequestId}:void`,
+      }])
+    }
+    ports.backend.masterReadCount.clear()
+    ports.setNow('2026-08-22T09:00:01+07:00')
+
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 1,
+      recovered: 0,
+      abandoned: 1,
+      errors: [],
+    })
+    expect(ports.backend.masterReadCount.get('EXPENSE_AUDIT')).toBe(1)
+    expect(ports.backend.masterReadCount.get('EXPENSE_REQUESTS')).toBe(1)
+    expect(ports.expense.getSubmission('2026-08', unresolved.expenseId)?.recordState).toBe('VOID')
+  })
+
+  it('treats a VOID submission and audit as terminal after 48 hours', () => {
+    const ports = createExpenseTestPorts({ now: '2026-08-20T09:00:00+07:00' })
+    const prepared = executeExpenseCommand(prepareCommand({
+      rootRequestId: 'void-terminal', commandIdempotencyKey: 'void-terminal:prepare',
+    }), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected result')
+    executeExpenseCommand(voidCommand({
+      rootRequestId: 'void-terminal-command', expenseId: prepared.expenseId,
+    }), ports)
+    ports.setNow('2026-08-23T09:00:00+07:00')
+
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 0,
+      recovered: 0,
+      abandoned: 0,
+      errors: [],
+    })
+    expect(ports.expense.auditForExpense(prepared.expenseId).map(({ action }) => action))
+      .toEqual(['PREPARE', 'VOID'])
+  })
+
+  it('reuses the first durable VOID audit after request-completion failure', () => {
+    const ports = createExpenseTestPorts()
+    const prepared = executeExpenseCommand(prepareCommand({
+      rootRequestId: 'void-crash', commandIdempotencyKey: 'void-crash:prepare',
+    }), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected result')
+    const command = voidCommand({ rootRequestId: 'void-crash-command', expenseId: prepared.expenseId })
+    ports.backend.failRequestCompletionCount = 1
+    expect(() => executeExpenseCommand(command, ports)).toThrow('simulated request completion failure')
+    const firstAudit = ports.expense.auditForExpense(prepared.expenseId)
+      .find(({ action }) => action === 'VOID')!
+    ports.setNow('2026-08-29T11:00:00+07:00')
+
+    expect(executeExpenseCommand(command, ports)).toEqual({
+      commandType: 'VOID_EXPENSE',
+      expenseId: prepared.expenseId,
+      recordState: 'VOID',
+      version: 2,
+      updatedAt: EXPENSE_NOW,
+    })
+    const voidAudits = ports.expense.auditForExpense(prepared.expenseId)
+      .filter(({ action }) => action === 'VOID')
+    expect(voidAudits).toEqual([firstAudit])
+  })
+
+  it('reuses the first durable RECOVER audit after request-completion failure', () => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'recover-crash', commandIdempotencyKey: 'recover-crash:prepare',
+    }))
+    ports.backend.failAttachmentAppendCount = 1
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'recover-crash', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)).toThrow()
+    ports.backend.failRequestCompletionCount = 1
+
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 1,
+      recovered: 0,
+      abandoned: 0,
+      errors: ['EXPENSE_STORAGE_UNAVAILABLE'],
+    })
+    const firstAudit = ports.expense.auditForExpense(prepared.prepared.expenseId)
+      .find(({ action }) => action === 'RECOVER')!
+    ports.setNow('2026-08-29T11:00:00+07:00')
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 1,
+      recovered: 1,
+      abandoned: 0,
+      errors: [],
+    })
+    const recoverAudits = ports.expense.auditForExpense(prepared.prepared.expenseId)
+      .filter(({ action }) => action === 'RECOVER')
+    expect(recoverAudits).toEqual([firstAudit])
   })
 })
