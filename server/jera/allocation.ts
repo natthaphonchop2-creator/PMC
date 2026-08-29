@@ -59,17 +59,17 @@ export function allocatePaymentRevenue(input: AllocatePaymentRevenueInput): Paym
     return unclassified(input, input.detail?.truncated ? 'DETAIL_TRUNCATED' : 'DETAIL_UNAVAILABLE')
   }
 
-  const weights: Record<AllocationCategory, number> = { SERVICE: 0, PRODUCT: 0, UNCLASSIFIED: 0 }
+  const weights: Record<AllocationCategory, bigint> = { SERVICE: 0n, PRODUCT: 0n, UNCLASSIFIED: 0n }
   for (const line of input.detail.lines) {
     if (!Number.isSafeInteger(line.netLineSatang) || line.netLineSatang <= 0) continue
     const category: AllocationCategory = line.kind === 'COURSE'
       ? 'SERVICE'
       : line.itemCode ? input.metadata.byItemCode.get(line.itemCode) ?? 'UNCLASSIFIED' : 'UNCLASSIFIED'
-    weights[category] += line.netLineSatang
+    weights[category] += BigInt(line.netLineSatang)
   }
 
   const totalWeight = weights.SERVICE + weights.PRODUCT + weights.UNCLASSIFIED
-  if (totalWeight === 0) return unclassified(input, 'ZERO_ALLOCATION_WEIGHT')
+  if (totalWeight === 0n) return unclassified(input, 'ZERO_ALLOCATION_WEIGHT')
   const allocated = largestRemainder(input.paidAmountSatang, weights, ['SERVICE', 'PRODUCT', 'UNCLASSIFIED'])
   return {
     paymentUuid: input.paymentUuid,
@@ -112,23 +112,29 @@ function unclassified(input: AllocatePaymentRevenueInput, warningCode: string): 
 
 function largestRemainder(
   paidAmountSatang: number,
-  weights: Record<AllocationCategory, number>,
+  weights: Record<AllocationCategory, bigint>,
   categories: AllocationCategory[],
 ): Record<AllocationCategory, number> {
-  const totalWeight = categories.reduce((sum, category) => sum + weights[category], 0)
+  const paidAmount = BigInt(paidAmountSatang)
+  const totalWeight = categories.reduce((sum, category) => sum + weights[category], 0n)
   const allocated = { SERVICE: 0, PRODUCT: 0, UNCLASSIFIED: 0 }
   const remainders = categories.map((category) => {
-    const numerator = paidAmountSatang * weights[category]
-    const base = Math.floor(numerator / totalWeight)
-    allocated[category] = base
+    const numerator = paidAmount * weights[category]
+    const base = numerator / totalWeight
+    if (base > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('JERA_ALLOCATION_INVALID_MONEY')
+    allocated[category] = Number(base)
     return { category, remainder: numerator % totalWeight }
   })
-  let remaining = paidAmountSatang - categories.reduce((sum, category) => sum + allocated[category], 0)
-  remainders.sort((left, right) => right.remainder - left.remainder || categories.indexOf(left.category) - categories.indexOf(right.category))
+  let remaining = paidAmount - categories.reduce((sum, category) => sum + BigInt(allocated[category]), 0n)
+  remainders.sort((left, right) => (
+    left.remainder === right.remainder
+      ? categories.indexOf(left.category) - categories.indexOf(right.category)
+      : left.remainder > right.remainder ? -1 : 1
+  ))
   for (const { category } of remainders) {
-    if (remaining === 0) break
+    if (remaining === 0n) break
     allocated[category] += 1
-    remaining -= 1
+    remaining -= 1n
   }
   return allocated
 }

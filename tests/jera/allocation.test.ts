@@ -85,4 +85,34 @@ describe('payment-level revenue allocation', () => {
       paidAmountSatang: -1, paymentType: 'NORMAL', detail: null, metadata: buildItemTypeMetadata([]),
     })).toThrow('JERA_ALLOCATION_INVALID_MONEY')
   })
+
+  it('preserves every satang near MAX_SAFE_INTEGER with large safe allocation weights', () => {
+    const paidAmountSatang = Number.MAX_SAFE_INTEGER
+    const result = allocatePaymentRevenue({
+      paymentUuid: '10000000-0000-4000-8000-000000000007', paymentSourceHash: '5'.repeat(64),
+      paidAmountSatang, paymentType: 'NORMAL',
+      detail: {
+        truncated: false,
+        lines: [
+          { kind: 'OPD', itemCode: 'SVC-1', netLineSatang: 1_766_182_316_386_299 },
+          { kind: 'OPD', itemCode: 'PRD-1', netLineSatang: 8_319_522_072_649_691 },
+          { kind: 'OPD', itemCode: null, netLineSatang: 2_643_733_385_921_131 },
+        ],
+      },
+      metadata: buildItemTypeMetadata([
+        { itemCode: 'SVC-1', type: 'service', sourceHash: '6'.repeat(64) },
+        { itemCode: 'PRD-1', type: 'product', sourceHash: '7'.repeat(64) },
+      ]),
+    })
+
+    expect(result.serviceSatang + result.productSatang + result.unclassifiedSatang).toBe(paidAmountSatang)
+    expect([result.serviceSatang, result.productSatang, result.unclassifiedSatang].every(Number.isSafeInteger)).toBe(true)
+  })
+
+  it('rejects unsafe paid money before it can become a public allocation output', () => {
+    expect(() => allocatePaymentRevenue({
+      paymentUuid: '10000000-0000-4000-8000-000000000008', paymentSourceHash: '8'.repeat(64),
+      paidAmountSatang: Number.MAX_SAFE_INTEGER + 1, paymentType: 'NORMAL', detail: null, metadata: buildItemTypeMetadata([]),
+    })).toThrow('JERA_ALLOCATION_INVALID_MONEY')
+  })
 })

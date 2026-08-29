@@ -84,6 +84,7 @@ export function buildDailyIncomeProjection(input: BuildDailyIncomeInput): DailyI
   addFreshnessWarning(warnings, 'REFUND', refundFreshness)
   addFreshnessWarning(warnings, 'ALLOCATION', allocationFreshness)
   if (categoryReadiness.sourceSnapshotMismatch) warnings.add('CATEGORY_SOURCE_SNAPSHOT_MISMATCH')
+  if (categoryReadiness.allocationIncomplete) warnings.add('CATEGORY_ALLOCATION_INCOMPLETE')
 
   const categoryAllocations = payments.flatMap((payment) => (
     payment.serviceSatang === null || payment.productSatang === null || payment.unclassifiedSatang === null
@@ -184,17 +185,42 @@ function categoryReadinessFor(days: FinanceDaySourceSnapshot[], enabled: boolean
   ready: boolean
   incompleteDates: string[]
   sourceSnapshotMismatch: boolean
+  allocationIncomplete: boolean
 } {
   const incompleteDates: string[] = []
   let sourceSnapshotMismatch = false
+  let allocationIncomplete = false
   for (const day of days) {
     const coverage = day.allocationCoverage
     const sourceMismatch = !coverage
       || !sameSnapshotWithinFifteenMinutes(coverage.paymentLastSuccessAt, coverage.productSalesLastSuccessAt)
-    if (coverage?.status !== 'COMPLETE' || sourceMismatch) incompleteDates.push(day.eventDate)
+    const incompleteAllocation = !hasCompletePaymentAllocations(day)
+    if (coverage?.status !== 'COMPLETE' || sourceMismatch || incompleteAllocation) incompleteDates.push(day.eventDate)
     if (sourceMismatch && coverage?.status === 'COMPLETE') sourceSnapshotMismatch = true
+    if (incompleteAllocation) allocationIncomplete = true
   }
-  return { ready: enabled && incompleteDates.length === 0, incompleteDates, sourceSnapshotMismatch }
+  return { ready: enabled && incompleteDates.length === 0, incompleteDates, sourceSnapshotMismatch, allocationIncomplete }
+}
+
+function hasCompletePaymentAllocations(day: FinanceDaySourceSnapshot): boolean {
+  const allocationsByPaymentVersion = new Map<string, PaymentRevenueAllocation[]>()
+  for (const allocation of day.allocations) {
+    const key = allocationKey(allocation.paymentUuid, allocation.paymentSourceHash)
+    const matches = allocationsByPaymentVersion.get(key) ?? []
+    matches.push(allocation)
+    allocationsByPaymentVersion.set(key, matches)
+  }
+  return deduplicatedPaymentsForDay(day).every((payment) => {
+    const matches = allocationsByPaymentVersion.get(allocationKey(payment.sourceUuid, payment.sourceHash)) ?? []
+    return matches.length === 1 && partitionsPayment(matches[0]!, payment)
+  })
+}
+
+function partitionsPayment(allocation: PaymentRevenueAllocation, payment: JeraNormalizedRow): boolean {
+  const values = [allocation.serviceSatang, allocation.productSatang, allocation.unclassifiedSatang]
+  if (!values.every((value) => Number.isSafeInteger(value) && value >= 0)) return false
+  const allocated = values.reduce((total, value) => total + BigInt(value), 0n)
+  return allocated === BigInt(money(payment.paidAmountSatang))
 }
 
 function sameSnapshotWithinFifteenMinutes(left: string | null, right: string | null): boolean {

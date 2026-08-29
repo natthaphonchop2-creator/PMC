@@ -69,6 +69,27 @@ describe('finance income projections', () => {
     expect(report.warnings).toContain('CATEGORY_SOURCE_SNAPSHOT_MISMATCH')
   })
 
+  it.each([
+    ['a PAYMENT has no allocation', (input: BuildDailyIncomeInput) => { input.days[0]!.allocations = [] }],
+    ['an allocation source hash is stale', (input: BuildDailyIncomeInput) => { input.days[0]!.allocations[0]!.paymentSourceHash = 'b'.repeat(64) }],
+    ['a matching allocation does not partition its payment', (input: BuildDailyIncomeInput) => { input.days[0]!.allocations[0]!.unclassifiedSatang = 1 }],
+    ['a payment has duplicate matching allocations', (input: BuildDailyIncomeInput) => { input.days[0]!.allocations.push({ ...input.days[0]!.allocations[0]! }) }],
+  ])('fails closed when %s', (_scenario, arrange) => {
+    const input = fixture({
+      paymentPaidSatang: 100_000,
+      allocation: { serviceSatang: 60_000, productSatang: 30_000, unclassifiedSatang: 10_000 },
+    })
+    arrange(input)
+
+    const report = buildDailyIncomeProjection(input)
+
+    expect(report.categories).toEqual({
+      state: 'CHECKING', serviceSatang: null, productSatang: null, unclassifiedSatang: null,
+      incompleteDates: ['2026-08-29'],
+    })
+    expect(report.warnings).toContain('CATEGORY_ALLOCATION_INCOMPLETE')
+  })
+
   it('aggregates daily projections into an ascending monthly trend without inventing expenses', () => {
     const input = twoDayFixture({ incompleteDate: null })
     const report = buildMonthlyIncomeProjection({ monthKey: '2026-08', ...input })
@@ -134,8 +155,9 @@ function fixture(options: FixtureOptions = {}): BuildDailyIncomeInput {
 }
 
 function twoDayFixture(input: { incompleteDate: string | null }): BuildDailyIncomeInput {
-  const older = fixture({ date: '2026-08-28' })
-  const newer = fixture({ date: '2026-08-29' })
+  const allocation = { serviceSatang: 60_000, productSatang: 30_000, unclassifiedSatang: 10_000 }
+  const older = fixture({ date: '2026-08-28', allocation })
+  const newer = fixture({ date: '2026-08-29', allocation })
   for (const day of [...older.days, ...newer.days]) {
     if (day.eventDate === input.incompleteDate) day.allocationCoverage = { ...day.allocationCoverage!, status: 'INCOMPLETE' }
   }
