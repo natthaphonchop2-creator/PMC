@@ -57,6 +57,37 @@ describe('PMC Mini App finance report filter state', () => {
       monthly: { year: 2026, month: 8 },
     })
   })
+
+  it('strips hostile runtime properties before saving and loading filter preferences', () => {
+    const storage = memoryStorage()
+    const hostile = JSON.parse(`{
+      "daily": {
+        "preset": "CUSTOM", "startDate": "2026-08-01", "endDate": "2026-08-29",
+        "rows": [{"patient": "private"}], "totals": {"receivedSatang": 12345},
+        "canViewFinance": true, "evidence": ["private-file"], "unknown": "drop",
+        "__proto__": {"prototypePollution": true}
+      },
+      "monthly": {
+        "year": 2026, "month": 8,
+        "rows": [{"patient": "private"}], "totals": {"receivedSatang": 12345},
+        "canViewFinance": true, "evidence": ["private-file"], "unknown": "drop",
+        "__proto__": {"prototypePollution": true}
+      }
+    }`) as unknown as Parameters<typeof saveFinanceReportFilterPreferences>[1]
+
+    saveFinanceReportFilterPreferences(storage, hostile)
+
+    expect(JSON.parse(storage.value)).toStrictEqual({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-01', endDate: '2026-08-29' },
+      monthly: { year: 2026, month: 8 },
+    })
+
+    storage.setItem('pmc-finance-report-filters-v1', JSON.stringify(hostile))
+    expect(loadFinanceReportFilterPreferences(storage, '2026-08-29')).toStrictEqual({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-01', endDate: '2026-08-29' },
+      monthly: { year: 2026, month: 8 },
+    })
+  })
 })
 
 function memoryStorage(): FinanceReportFilterStorage & { value: string } {

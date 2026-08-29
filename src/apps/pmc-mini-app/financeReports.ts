@@ -75,7 +75,9 @@ export function saveFinanceReportFilterPreferences(
   const daily = preferences.daily.preset === 'CUSTOM' && financeDailyFilterError(preferences.daily) === null
     ? { preset: 'CUSTOM' as const, startDate: preferences.daily.startDate, endDate: preferences.daily.endDate }
     : { preset: preferences.daily.preset === 'YESTERDAY' ? 'YESTERDAY' as const : 'TODAY' as const }
-  const monthly = financeMonthSelectionError(preferences.monthly) === null ? preferences.monthly : null
+  const monthly = financeMonthSelectionError(preferences.monthly) === null
+    ? { year: preferences.monthly.year, month: preferences.monthly.month }
+    : null
   storage.setItem(FINANCE_REPORT_FILTERS_STORAGE_KEY, JSON.stringify({ daily, monthly }))
 }
 
