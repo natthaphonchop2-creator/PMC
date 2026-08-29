@@ -326,6 +326,9 @@ describe('booking Form workflow', () => {
       canCloseBooking: true,
       canBeAe: true,
       canManageStock: false,
+      canSubmitExpense: false,
+      canViewFinance: false,
+      canManageExpense: false,
       active: true,
     })
 

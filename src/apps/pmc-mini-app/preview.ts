@@ -22,6 +22,9 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   reportingEnabled: false,
   stockEnabled: false,
   canManageStock: false,
+  canSubmitExpense: false,
+  canViewFinance: false,
+  canManageExpense: false,
   doctors: [{ id: 'doctor-benz', name: 'หมอ Benz' }, { id: 'doctor-jam', name: 'หมอ Jam' }],
   services: [
     { id: 'fat-transfer', name: 'เติมไขมัน', durationMinutes: 60 },

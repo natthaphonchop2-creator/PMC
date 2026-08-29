@@ -21,6 +21,14 @@ describe('PMC Mini App local visual preview adapter', () => {
     expect(createPreviewMiniAppConfig({ reportingEnabled: true }).reportingEnabled).toBe(true)
   })
 
+  it('keeps future finance permissions fail-closed in preview mode', () => {
+    expect(createPreviewMiniAppConfig()).toMatchObject({
+      canSubmitExpense: false,
+      canViewFinance: false,
+      canManageExpense: false,
+    })
+  })
+
   it('advances the safe preview report timestamp after a refresh', async () => {
     const api = createPreviewMiniAppApi({ reportingEnabled: true })
     const filters = defaultReportFilters('2026-08-27')

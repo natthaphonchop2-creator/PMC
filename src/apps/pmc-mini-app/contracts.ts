@@ -12,6 +12,9 @@ export interface MiniAppConfig {
   reportingEnabled: boolean
   stockEnabled: boolean
   canManageStock: boolean
+  canSubmitExpense: boolean
+  canViewFinance: boolean
+  canManageExpense: boolean
   doctors: Array<{ id: string; name: string }>
   services: Array<{ id: string; name: string; durationMinutes: number }>
   channels: Array<{ id: string; name: string }>

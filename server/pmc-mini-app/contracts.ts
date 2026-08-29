@@ -20,6 +20,9 @@ export interface AuthenticatedMiniAppContext {
   displayName: string
   lineUserId: string
   canManageStock: boolean
+  canSubmitExpense: boolean
+  canViewFinance: boolean
+  canManageExpense: boolean
 }
 
 export interface StockProductProjection {

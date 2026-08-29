@@ -17,6 +17,7 @@ import {
   configureCompactBookingIdentityFieldsWorkflow,
   configureFacebookNameFieldWorkflow,
   configureQueueModeFormsWorkflow,
+  migrateFinancePermissionColumnsWorkflow,
   prepareAutoQueueMigrationWorkflow,
   applyAutoQueueMigrationWorkflow,
   pauseAndCutoverBookingFormWorkflow,
@@ -161,6 +162,10 @@ export function runIntegrityChecks() {
 
 export function setupPmcBookingSystem() {
   return setupSystem()
+}
+
+export function migratePmcFinancePermissionColumns() {
+  return migrateFinancePermissionColumnsWorkflow()
 }
 
 export function preparePmcStaffAeMigration() {

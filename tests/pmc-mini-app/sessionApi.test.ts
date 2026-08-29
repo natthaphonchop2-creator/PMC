@@ -90,6 +90,9 @@ describe('PMC Mini App session and configuration API', () => {
       reportingEnabled: false,
       stockEnabled: false,
       canManageStock: false,
+      canSubmitExpense: true,
+      canViewFinance: false,
+      canManageExpense: true,
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
@@ -128,7 +131,9 @@ function dependencies(): {
   const store = {
     getActiveStaffByLineUserId: vi.fn(async (lineUserId: string) => lineUserId === 'Uactive' ? ({
       id: 'staff-1', name: 'มัส', email: 'private@example.com', lineUserId: 'Uactive',
-      canCloseBooking: true, canBeAe: true, active: true as const, profileImageUrl: null,
+      canCloseBooking: true, canBeAe: true, canManageStock: false,
+      canSubmitExpense: true, canViewFinance: false, canManageExpense: true,
+      active: true as const, profileImageUrl: null,
     }) : null),
     getActiveBookingConfig: vi.fn(async () => ({
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
@@ -170,6 +175,7 @@ function enrollmentDependencies() {
       linked = true
       return {
         id: staffId, name: 'หมวย', email: '', lineUserId, canCloseBooking: true, canBeAe: true,
+        canManageStock: false, canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
         active: true as const, profileImageUrl: null,
       }
     },
@@ -178,6 +184,7 @@ function enrollmentDependencies() {
   deps.store.getActiveStaffByLineUserId = async (lineUserId) => {
     if (linked && lineUserId === 'Uunknown') return {
       id: 'staff-open', name: 'หมวย', email: '', lineUserId, canCloseBooking: true, canBeAe: true,
+      canManageStock: false, canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
       active: true, profileImageUrl: null,
     }
     return originalLookup(lineUserId)

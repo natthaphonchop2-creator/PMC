@@ -77,18 +77,21 @@ export function bookingMasterMigrationPlan(existing: string[]): BookingMasterMig
   throw new Error('unsupported BOOKING_MASTER header')
 }
 
-export type StaffProfileMigrationPlan =
+export type StaffConfigMigrationPlan =
   | { kind: 'NONE' }
   | { kind: 'APPEND_PROFILE_IMAGE_URL'; afterColumn: number; header: 'profileImageUrl' }
   | { kind: 'APPEND_CAN_MANAGE_STOCK'; afterColumn: number; header: 'canManageStock' }
+  | {
+      kind: 'APPEND_FINANCE_PERMISSIONS'
+      afterColumn: number
+      headers: ['canSubmitExpense', 'canViewFinance', 'canManageExpense']
+    }
 
-export function staffProfileMigrationPlan(existing: string[]): StaffProfileMigrationPlan {
+export function staffConfigMigrationPlan(existing: string[]): StaffConfigMigrationPlan {
   if (JSON.stringify(existing) === JSON.stringify(STAFF_CONFIG_COLUMNS)) {
     return { kind: 'NONE' }
   }
-  const legacyWithoutProfile = STAFF_CONFIG_COLUMNS.filter(
-    (column) => !['profileImageUrl', 'canManageStock'].includes(column),
-  )
+  const legacyWithoutProfile = STAFF_CONFIG_COLUMNS.slice(0, 7)
   if (JSON.stringify(existing) === JSON.stringify(legacyWithoutProfile)) {
     return {
       kind: 'APPEND_PROFILE_IMAGE_URL',
@@ -96,12 +99,20 @@ export function staffProfileMigrationPlan(existing: string[]): StaffProfileMigra
       header: 'profileImageUrl',
     }
   }
-  const legacyWithoutStockRole = STAFF_CONFIG_COLUMNS.filter((column) => column !== 'canManageStock')
+  const legacyWithoutStockRole = STAFF_CONFIG_COLUMNS.slice(0, 8)
   if (JSON.stringify(existing) === JSON.stringify(legacyWithoutStockRole)) {
     return {
       kind: 'APPEND_CAN_MANAGE_STOCK',
       afterColumn: legacyWithoutStockRole.length,
       header: 'canManageStock',
+    }
+  }
+  const legacyWithoutFinancePermissions = STAFF_CONFIG_COLUMNS.slice(0, 9)
+  if (JSON.stringify(existing) === JSON.stringify(legacyWithoutFinancePermissions)) {
+    return {
+      kind: 'APPEND_FINANCE_PERMISSIONS',
+      afterColumn: legacyWithoutFinancePermissions.length,
+      headers: ['canSubmitExpense', 'canViewFinance', 'canManageExpense'],
     }
   }
   throw new Error('unsupported CONFIG_STAFF header')

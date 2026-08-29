@@ -19,6 +19,9 @@ export interface StaffConfig {
   canCloseBooking: boolean
   canBeAe: boolean
   canManageStock: boolean
+  canSubmitExpense: boolean
+  canViewFinance: boolean
+  canManageExpense: boolean
   active: boolean
   profileImageUrl?: string
 }

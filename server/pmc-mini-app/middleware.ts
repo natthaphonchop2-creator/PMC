@@ -232,6 +232,9 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         reportingEnabled: Boolean(deps.jera),
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
         canManageStock: authenticated.canManageStock,
+        canSubmitExpense: authenticated.canSubmitExpense,
+        canViewFinance: authenticated.canViewFinance,
+        canManageExpense: authenticated.canManageExpense,
         doctors: bookingConfig.doctors,
         services: bookingConfig.services,
         channels: bookingConfig.channels,
@@ -1026,7 +1029,15 @@ async function authenticate(
       respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
       return null
     }
-    return { staffId: staff.id, displayName: staff.name, lineUserId, canManageStock: staff.canManageStock === true }
+    return {
+      staffId: staff.id,
+      displayName: staff.name,
+      lineUserId,
+      canManageStock: staff.canManageStock === true,
+      canSubmitExpense: staff.canSubmitExpense === true,
+      canViewFinance: staff.canViewFinance === true,
+      canManageExpense: staff.canManageExpense === true,
+    }
   } catch {
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return null

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bookingMasterMigrationPlan, staffProfileMigrationPlan } from '../src/domain/sheetMigration'
+import { bookingMasterMigrationPlan, staffConfigMigrationPlan } from '../src/domain/sheetMigration'
 import { BOOKING_MASTER_COLUMNS, STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
 
 describe('booking staff schema migration', () => {
@@ -25,10 +25,10 @@ describe('booking staff schema migration', () => {
   })
 })
 
-describe('staff profile schema migration', () => {
+describe('staff config schema migration', () => {
   it('appends profileImageUrl after the original seven staff columns', () => {
-    const legacy = STAFF_CONFIG_COLUMNS.filter((column) => !['profileImageUrl', 'canManageStock'].includes(column))
-    expect(staffProfileMigrationPlan([...legacy])).toEqual({
+    const legacy = ['id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active']
+    expect(staffConfigMigrationPlan([...legacy])).toEqual({
       kind: 'APPEND_PROFILE_IMAGE_URL',
       afterColumn: 7,
       header: 'profileImageUrl',
@@ -36,20 +36,38 @@ describe('staff profile schema migration', () => {
   })
 
   it('appends canManageStock after a legacy eight-column CONFIG_STAFF header', () => {
-    const legacy = STAFF_CONFIG_COLUMNS.filter((column) => column !== 'canManageStock')
-    expect(staffProfileMigrationPlan([...legacy])).toEqual({
+    const legacy = [
+      'id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active', 'profileImageUrl',
+    ]
+    expect(staffConfigMigrationPlan([...legacy])).toEqual({
       kind: 'APPEND_CAN_MANAGE_STOCK',
       afterColumn: 8,
       header: 'canManageStock',
     })
   })
 
-  it('does nothing when CONFIG_STAFF already has the profile column', () => {
-    expect(staffProfileMigrationPlan([...STAFF_CONFIG_COLUMNS])).toEqual({ kind: 'NONE' })
+  it('appends all finance permissions atomically after the legacy nine-column header', () => {
+    const legacy = [
+      'id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active',
+      'profileImageUrl', 'canManageStock',
+    ]
+
+    expect(staffConfigMigrationPlan(legacy)).toEqual({
+      kind: 'APPEND_FINANCE_PERMISSIONS',
+      afterColumn: 9,
+      headers: ['canSubmitExpense', 'canViewFinance', 'canManageExpense'],
+    })
   })
 
-  it('rejects an unknown CONFIG_STAFF header', () => {
-    expect(() => staffProfileMigrationPlan(['id', 'unexpected'])).toThrow(
+  it('does nothing when CONFIG_STAFF already has all twelve canonical columns', () => {
+    expect(staffConfigMigrationPlan([...STAFF_CONFIG_COLUMNS])).toEqual({ kind: 'NONE' })
+  })
+
+  it.each([
+    ['unknown', ['id', 'unexpected']],
+    ['reordered', ['name', 'id', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active', 'profileImageUrl', 'canManageStock']],
+  ])('rejects an %s CONFIG_STAFF header before migration', (_label, header) => {
+    expect(() => staffConfigMigrationPlan(header)).toThrow(
       'unsupported CONFIG_STAFF header',
     )
   })

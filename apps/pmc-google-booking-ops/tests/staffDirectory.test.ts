@@ -17,6 +17,9 @@ const staff: StaffConfig[] = [
     canCloseBooking: true,
     canBeAe: true,
     canManageStock: false,
+    canSubmitExpense: false,
+    canViewFinance: false,
+    canManageExpense: false,
     active: true,
   },
   {
@@ -27,14 +30,18 @@ const staff: StaffConfig[] = [
     canCloseBooking: false,
     canBeAe: true,
     canManageStock: false,
+    canSubmitExpense: false,
+    canViewFinance: false,
+    canManageExpense: false,
     active: true,
   },
 ]
 
 describe('staff directory', () => {
-  it('defines canManageStock as the ninth CONFIG_STAFF column', () => {
+  it('defines the canonical twelve-column CONFIG_STAFF schema', () => {
     expect(STAFF_CONFIG_COLUMNS).toEqual([
       'id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active', 'profileImageUrl', 'canManageStock',
+      'canSubmitExpense', 'canViewFinance', 'canManageExpense',
     ])
   })
 

@@ -67,6 +67,9 @@ export interface MiniAppStaffRecord {
   canCloseBooking: boolean
   canBeAe: boolean
   canManageStock: boolean
+  canSubmitExpense: boolean
+  canViewFinance: boolean
+  canManageExpense: boolean
   active: true
   profileImageUrl: string | null
 }
@@ -144,7 +147,7 @@ export const MINI_APP_LINK_ATTEMPT_HEADERS = [
 
 const REQUEST_TAB = 'MINI_APP_REQUESTS'
 const REQUEST_RANGE = `'${REQUEST_TAB}'!A2:${columnName(MINI_APP_REQUEST_HEADERS.length)}`
-const STAFF_RANGE = "'CONFIG_STAFF'!A2:I"
+const STAFF_RANGE = "'CONFIG_STAFF'!A2:L"
 const LINK_ATTEMPT_TAB = 'MINI_APP_LINK_ATTEMPTS'
 const LINK_ATTEMPT_RANGE = `'${LINK_ATTEMPT_TAB}'!A2:${columnName(MINI_APP_LINK_ATTEMPT_HEADERS.length)}`
 const DOCTORS_RANGE = "'CONFIG_DOCTORS'!A2:E"
@@ -280,9 +283,9 @@ export function createGoogleMiniAppStore(input: {
         if (!target) throw new Error('ENROLLMENT_STAFF_NOT_AVAILABLE')
         if (target.staff.lineUserId) throw new Error('STAFF_ALREADY_LINKED')
         const nextRow = [...target.row]
-        while (nextRow.length < 9) nextRow.push('')
+        while (nextRow.length < 12) nextRow.push('')
         nextRow[3] = lineUserId
-        await sheets.update(spreadsheetId, `'CONFIG_STAFF'!A${target.rowNumber}:I${target.rowNumber}`, [nextRow.slice(0, 9)])
+        await sheets.update(spreadsheetId, `'CONFIG_STAFF'!A${target.rowNumber}:L${target.rowNumber}`, [nextRow.slice(0, 12)])
         const linked = staffFromRow(nextRow)
         if (!linked) throw new Error('ENROLLMENT_STAFF_UPDATE_FAILED')
         return linked
@@ -473,12 +476,18 @@ function staffFromRow(row: unknown[]): MiniAppStaffRecord | null {
 }
 
 function staffCandidateFromRow(row: unknown[]): MiniAppStaffRecord | null {
-  const [id, name, email, lineUserId, canCloseBooking, canBeAe, active, profileImageUrl, canManageStock] = row
+  const [
+    id, name, email, lineUserId, canCloseBooking, canBeAe, active, profileImageUrl, canManageStock,
+    canSubmitExpense, canViewFinance, canManageExpense,
+  ] = row
   const normalizedLineUserId = text(lineUserId)
   if (!safeId(text(id)) || !text(name) || (normalizedLineUserId && !safeLineUserId(normalizedLineUserId)) || !booleanValue(active)) return null
   return {
     id: text(id), name: text(name), email: text(email), lineUserId: normalizedLineUserId,
     canCloseBooking: booleanValue(canCloseBooking), canBeAe: booleanValue(canBeAe), canManageStock: booleanValue(canManageStock), active: true,
+    canSubmitExpense: financePermissionValue(canSubmitExpense),
+    canViewFinance: financePermissionValue(canViewFinance),
+    canManageExpense: financePermissionValue(canManageExpense),
     profileImageUrl: nullableText(profileImageUrl),
   }
 }
@@ -523,6 +532,7 @@ function text(value: unknown): string { return value === null || value === undef
 function nullableText(value: unknown): string | null { const result = text(value); return result ? result : null }
 function numberValue(value: unknown): number { return typeof value === 'number' ? value : Number(value) }
 function booleanValue(value: unknown): boolean { return value === true || String(value).toLowerCase() === 'true' }
+function financePermissionValue(value: unknown): boolean { return value === true }
 function safeId(value: string): boolean { return /^[A-Za-z0-9._:-]{1,124}$/.test(value) }
 function safeConfigId(value: string): boolean {
   return value.length > 0 && value.length <= 124 && value.trim() === value && hasNoControlCharacters(value)

@@ -1,5 +1,5 @@
 import { SHEET_SCHEMAS } from '../sheetSchema'
-import { bookingMasterMigrationPlan, staffProfileMigrationPlan } from '../domain/sheetMigration'
+import { bookingMasterMigrationPlan, staffConfigMigrationPlan } from '../domain/sheetMigration'
 import type { SheetRow, SheetStore } from '../repositories'
 import type { DashboardPort } from '../ports'
 
@@ -54,22 +54,33 @@ export function migrateBookingMasterStaffColumns(
   throw new Error('BOOKING_MASTER migration did not converge')
 }
 
-export function migrateConfigStaffProfileColumn(
+export function migrateConfigStaffColumns(
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
-): void {
+): boolean {
   const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
-  if (!sheet || sheet.getLastColumn() < 1) return
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  if (!sheet || sheet.getLastColumn() < 1) return false
+  let changed = false
+  let mutations = 0
+  while (true) {
     const headers = sheet
       .getRange(1, 1, 1, sheet.getLastColumn())
       .getValues()[0]
       .map(String)
-    const plan = staffProfileMigrationPlan(headers)
-    if (plan.kind === 'NONE') return
-    sheet.insertColumnsAfter(plan.afterColumn, 1)
-    sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
+    const plan = staffConfigMigrationPlan(headers)
+    if (plan.kind === 'NONE') return changed
+    if (mutations >= 3) throw new Error('CONFIG_STAFF migration did not converge')
+    if (plan.kind === 'APPEND_FINANCE_PERMISSIONS') {
+      sheet.insertColumnsAfter(plan.afterColumn, plan.headers.length)
+      sheet
+        .getRange(1, plan.afterColumn + 1, 1, plan.headers.length)
+        .setValues([[...plan.headers]])
+    } else {
+      sheet.insertColumnsAfter(plan.afterColumn, 1)
+      sheet.getRange(1, plan.afterColumn + 1).setValue(plan.header)
+    }
+    changed = true
+    mutations += 1
   }
-  throw new Error('CONFIG_STAFF migration did not converge')
 }
 
 export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet): SheetStore {

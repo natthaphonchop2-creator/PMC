@@ -25,7 +25,7 @@ import {
   createGoogleSheetStore,
   ensureSheetTopology,
   migrateBookingMasterStaffColumns,
-  migrateConfigStaffProfileColumn,
+  migrateConfigStaffColumns,
 } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import { BOOKING_FORM_LABELS, NO_AE_OPTION } from './config'
@@ -110,6 +110,9 @@ function createConfigPort(
       canCloseBooking: isActive(row.canCloseBooking),
       canBeAe: isActive(row.canBeAe),
       canManageStock: isActive(row.canManageStock),
+      canSubmitExpense: row.canSubmitExpense === true,
+      canViewFinance: row.canViewFinance === true,
+      canManageExpense: row.canManageExpense === true,
       active: isActive(row.active),
       profileImageUrl: String(row.profileImageUrl ?? '').trim(),
     }))
@@ -647,7 +650,7 @@ export function setupSystem(): {
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
   migrateBookingMasterStaffColumns(spreadsheet)
-  migrateConfigStaffProfileColumn(spreadsheet)
+  migrateConfigStaffColumns(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const runtime = createRuntime()
   const staff = runtime.config.listStaff().filter((item) => item.active)
@@ -706,6 +709,30 @@ export function setupSystem(): {
   }
 }
 
+export function migrateFinancePermissionColumnsWorkflow(): {
+  changed: boolean
+  columnCount: 12
+} {
+  const spreadsheetId = PropertiesService.getScriptProperties()
+    .getProperties()[SCRIPT_PROPERTY_KEYS.spreadsheetId]
+    ?.trim()
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  const changed = migrateConfigStaffColumns(spreadsheet)
+  const sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
+  if (!sheet || sheet.getLastColumn() !== STAFF_CONFIG_COLUMNS.length) {
+    throw new Error('sheet header mismatch: CONFIG_STAFF')
+  }
+  const headers = sheet
+    .getRange(1, 1, 1, STAFF_CONFIG_COLUMNS.length)
+    .getValues()[0]
+    .map(String)
+  if (JSON.stringify(headers) !== JSON.stringify(STAFF_CONFIG_COLUMNS)) {
+    throw new Error('sheet header mismatch: CONFIG_STAFF')
+  }
+  return { changed, columnCount: STAFF_CONFIG_COLUMNS.length }
+}
+
 export function prepareStaffAeMigrationWorkflow(): {
   staffRows: number
   missingPersonalEmailNames: string[]
@@ -714,7 +741,7 @@ export function prepareStaffAeMigrationWorkflow(): {
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
   migrateBookingMasterStaffColumns(spreadsheet)
-  migrateConfigStaffProfileColumn(spreadsheet)
+  migrateConfigStaffColumns(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const store = createGoogleSheetStore(spreadsheet)
   let staffRows = store.read('CONFIG_STAFF')
@@ -767,7 +794,7 @@ export function configureStaffProfileImagesWorkflow(): {
     backupFolder,
   )
 
-  migrateConfigStaffProfileColumn(spreadsheet)
+  migrateConfigStaffColumns(spreadsheet)
   sheet = spreadsheet.getSheetByName('CONFIG_STAFF')
   if (!sheet) throw new Error('missing required sheet: CONFIG_STAFF')
   const headers = sheet
@@ -1054,7 +1081,7 @@ export function applyAutoQueueMigrationWorkflow(): {
   )
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
   migrateBookingMasterStaffColumns(spreadsheet)
-  migrateConfigStaffProfileColumn(spreadsheet)
+  migrateConfigStaffColumns(spreadsheet)
   ensureSheetTopology(spreadsheet)
   const store = createGoogleSheetStore(spreadsheet)
   const before = store.read('BOOKING_MASTER')
@@ -1109,7 +1136,7 @@ export function configureFacebookNameFieldWorkflow(): {
   )
 
   migrateBookingMasterStaffColumns(spreadsheet)
-  migrateConfigStaffProfileColumn(spreadsheet)
+  migrateConfigStaffColumns(spreadsheet)
   ensureSheetTopology(spreadsheet)
   runtime.forms.ensureFacebookNameField()
   if (!runtime.forms.bookingHasFacebookNameField()) {

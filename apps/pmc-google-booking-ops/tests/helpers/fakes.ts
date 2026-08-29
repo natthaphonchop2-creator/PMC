@@ -188,6 +188,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               canCloseBooking: true,
               canBeAe: true,
               canManageStock: false,
+              canSubmitExpense: false,
+              canViewFinance: false,
+              canManageExpense: false,
               active: true,
             }
           : null,
@@ -201,6 +204,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               canCloseBooking: true,
               canBeAe: true,
               canManageStock: false,
+              canSubmitExpense: false,
+              canViewFinance: false,
+              canManageExpense: false,
               active: true,
             }
           : null,
@@ -215,6 +221,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               canCloseBooking: true,
               canBeAe: true,
               canManageStock: false,
+              canSubmitExpense: false,
+              canViewFinance: false,
+              canManageExpense: false,
               active: true,
             }
           : name === 'เอม'
@@ -226,6 +235,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
                 canCloseBooking: false,
                 canBeAe: true,
                 canManageStock: false,
+                canSubmitExpense: false,
+                canViewFinance: false,
+                canManageExpense: false,
                 active: true,
               }
             : null,
@@ -239,6 +251,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
               canCloseBooking: true,
               canBeAe: true,
               canManageStock: false,
+              canSubmitExpense: false,
+              canViewFinance: false,
+              canManageExpense: false,
               active: true,
             }
           : id === 'staff-ae'
@@ -250,6 +265,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
                 canCloseBooking: false,
                 canBeAe: true,
                 canManageStock: false,
+                canSubmitExpense: false,
+                canViewFinance: false,
+                canManageExpense: false,
                 active: true,
               }
             : null,
@@ -262,6 +280,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           canCloseBooking: true,
           canBeAe: true,
           canManageStock: false,
+          canSubmitExpense: false,
+          canViewFinance: false,
+          canManageExpense: false,
           active: true,
         },
         {
@@ -272,6 +293,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           canCloseBooking: false,
           canBeAe: true,
           canManageStock: false,
+          canSubmitExpense: false,
+          canViewFinance: false,
+          canManageExpense: false,
           active: true,
         },
       ],
@@ -284,6 +308,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           canCloseBooking: true,
           canBeAe: true,
           canManageStock: false,
+          canSubmitExpense: false,
+          canViewFinance: false,
+          canManageExpense: false,
           active: true,
         },
         {
@@ -294,6 +321,9 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
           canCloseBooking: false,
           canBeAe: true,
           canManageStock: false,
+          canSubmitExpense: false,
+          canViewFinance: false,
+          canManageExpense: false,
           active: true,
         },
       ],

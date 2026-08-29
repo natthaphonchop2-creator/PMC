@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { SCRIPT_PROPERTY_KEYS } from '../src/config'
-import { migrateConfigStaffProfileColumn } from '../src/adapters/googleSheets'
+import { migrateConfigStaffColumns } from '../src/adapters/googleSheets'
 import { SHEET_SCHEMAS, STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
 
 const fakes = vi.hoisted(() => ({
@@ -67,9 +67,12 @@ vi.mock('../src/adapters/lineMessaging', async (importOriginal) => ({
 import {
   applyAutoQueueMigrationWorkflow,
   configureFacebookNameFieldWorkflow,
+  migrateFinancePermissionColumnsWorkflow,
 } from '../src/runtime'
 
 class FakeSheet {
+  readonly insertedColumns: Array<{ afterColumn: number; count: number }> = []
+
   constructor(readonly headers: string[]) {}
 
   getLastColumn(): number { return this.headers.length }
@@ -90,6 +93,7 @@ class FakeSheet {
   }
 
   insertColumnsAfter(column: number, count: number): void {
+    this.insertedColumns.push({ afterColumn: column, count })
     this.headers.splice(column, 0, ...Array<string>(count).fill(''))
   }
 }
@@ -101,7 +105,9 @@ class FakeSpreadsheet {
     for (const [title, headers] of Object.entries(SHEET_SCHEMAS)) {
       this.sheets.set(title, new FakeSheet([...headers]))
     }
-    this.sheets.set('CONFIG_STAFF', new FakeSheet(STAFF_CONFIG_COLUMNS.filter((header) => header !== 'canManageStock')))
+    this.sheets.set('CONFIG_STAFF', new FakeSheet([
+      'id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active', 'profileImageUrl',
+    ]))
   }
 
   getSheetByName(title: string): FakeSheet | null { return this.sheets.get(title) ?? null }
@@ -143,13 +149,42 @@ function installFakes(): FakeSpreadsheet {
   return fakes.spreadsheet
 }
 
-describe('Stock-role CONFIG_STAFF migration in side-effecting workflows', () => {
+describe('CONFIG_STAFF migration in side-effecting workflows', () => {
   it('converges a legacy eight-column CONFIG_STAFF header once and stays canonical on repeat', () => {
     const spreadsheet = installFakes()
 
-    migrateConfigStaffProfileColumn(spreadsheet as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet)
-    migrateConfigStaffProfileColumn(spreadsheet as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet)
+    migrateConfigStaffColumns(spreadsheet as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet)
+    migrateConfigStaffColumns(spreadsheet as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet)
 
+    expect(spreadsheet.getSheetByName('CONFIG_STAFF')?.headers).toEqual(STAFF_CONFIG_COLUMNS)
+    expect(spreadsheet.getSheetByName('CONFIG_STAFF')?.insertedColumns).toEqual([
+      { afterColumn: 8, count: 1 },
+      { afterColumn: 9, count: 3 },
+    ])
+  })
+
+  it('converges the original seven-column header through Profile, Stock, and one atomic finance append', () => {
+    const spreadsheet = installFakes()
+    spreadsheet.sheets.set('CONFIG_STAFF', new FakeSheet([
+      'id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active',
+    ]))
+
+    expect(() => migrateConfigStaffColumns(
+      spreadsheet as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet,
+    )).not.toThrow()
+    expect(spreadsheet.getSheetByName('CONFIG_STAFF')?.headers).toEqual(STAFF_CONFIG_COLUMNS)
+    expect(spreadsheet.getSheetByName('CONFIG_STAFF')?.insertedColumns).toEqual([
+      { afterColumn: 7, count: 1 },
+      { afterColumn: 8, count: 1 },
+      { afterColumn: 9, count: 3 },
+    ])
+  })
+
+  it('returns only safe migration metadata and exact readback state', () => {
+    const spreadsheet = installFakes()
+
+    expect(migrateFinancePermissionColumnsWorkflow()).toEqual({ changed: true, columnCount: 12 })
+    expect(migrateFinancePermissionColumnsWorkflow()).toEqual({ changed: false, columnCount: 12 })
     expect(spreadsheet.getSheetByName('CONFIG_STAFF')?.headers).toEqual(STAFF_CONFIG_COLUMNS)
   })
 

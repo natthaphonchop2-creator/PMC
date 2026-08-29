@@ -258,10 +258,86 @@ describe('PMC Mini App Sheet store', () => {
       .resolves.toMatchObject({ id: 'staff-legacy', canManageStock: false })
   })
 
+  it('reads each finance permission only from an exact boolean true in its canonical column', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-finance', 'การเงิน', 'finance@example.com', 'Ufinance', true, false, true, '', false, true, true, true],
+    ])
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getActiveStaffByLineUserId('Ufinance'))
+      .resolves.toMatchObject({
+        id: 'staff-finance',
+        canSubmitExpense: true,
+        canViewFinance: true,
+        canManageExpense: true,
+      })
+  })
+
+  it.each([
+    ['blank', ['', '', '']],
+    ['missing', []],
+    ['malformed', ['true', 1, { value: true }]],
+  ])('fails closed for %s finance permission values', async (suffix, permissionValues) => {
+    const sheets = new MemorySheets()
+    const lineUserId = `U${suffix}`
+    sheets.setTab('CONFIG_STAFF', [
+      [`staff-${suffix}`, suffix, `${suffix}@example.com`, lineUserId, true, false, true, '', false, ...permissionValues],
+    ])
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getActiveStaffByLineUserId(lineUserId))
+      .resolves.toMatchObject({
+        canSubmitExpense: false,
+        canViewFinance: false,
+        canManageExpense: false,
+      })
+  })
+
+  it.each([
+    ['canSubmitExpense', ['', true, false]],
+    ['canViewFinance', [false, '', true]],
+    ['canManageExpense', [true, false, '']],
+  ] as const)('does not enable %s from a true value shifted into another permission column', async (permission, values) => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-shifted', 'shifted', 'shifted@example.com', 'Ushifted', true, false, true, '', false, ...values],
+    ])
+
+    const staff = await createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+      .getActiveStaffByLineUserId('Ushifted')
+
+    expect(staff?.[permission]).toBe(false)
+  })
+
+  it.each(['owner', 'doctor', 'มัส'])('does not derive finance permissions from the staff name %s', async (name) => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-named', name, 'named@example.com', 'Unamed', true, true, true, '', true],
+    ])
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getActiveStaffByLineUserId('Unamed'))
+      .resolves.toMatchObject({
+        canSubmitExpense: false,
+        canViewFinance: false,
+        canManageExpense: false,
+      })
+  })
+
+  it('denies inactive and unlinked records even when every finance permission cell is true', async () => {
+    const sheets = new MemorySheets()
+    sheets.setTab('CONFIG_STAFF', [
+      ['staff-inactive-finance', 'inactive', 'inactive@example.com', 'UinactiveFinance', true, true, false, '', false, true, true, true],
+      ['staff-unlinked-finance', 'unlinked', 'unlinked@example.com', '', true, true, true, '', false, true, true, true],
+    ])
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await expect(store.getActiveStaffByLineUserId('UinactiveFinance')).resolves.toBeNull()
+    await expect(store.getActiveStaffByLineUserId('UunlinkedFinance')).resolves.toBeNull()
+  })
+
   it('lists only unlinked booking staff and links each LINE account exactly once', async () => {
     const sheets = new MemorySheets()
     sheets.setTab('CONFIG_STAFF', [
-      ['staff-open', 'มัส', 'open@example.com', '', true, true, true, ''],
+      ['staff-open', 'มัส', 'open@example.com', '', true, true, true, '', false, true, true, false],
       ['staff-second', 'หมวย', 'second@example.com', '', true, true, true, ''],
       ['staff-linked', 'มิ้น', 'linked@example.com', 'Uexisting', true, true, true, ''],
       ['staff-ae-only', 'เออี', 'ae@example.com', '', false, true, true, ''],
@@ -274,7 +350,9 @@ describe('PMC Mini App Sheet store', () => {
       { id: 'staff-second', name: 'หมวย' },
     ])
     await expect(store.linkLineUserToStaff('staff-open', 'Unew')).resolves.toMatchObject({ id: 'staff-open', name: 'มัส' })
-    await expect(store.getActiveStaffByLineUserId('Unew')).resolves.toMatchObject({ id: 'staff-open', name: 'มัส' })
+    await expect(store.getActiveStaffByLineUserId('Unew')).resolves.toMatchObject({
+      id: 'staff-open', name: 'มัส', canSubmitExpense: true, canViewFinance: true, canManageExpense: false,
+    })
     await expect(store.linkLineUserToStaff('staff-open', 'Uother')).rejects.toThrow('STAFF_ALREADY_LINKED')
     await expect(store.linkLineUserToStaff('staff-second', 'Unew')).rejects.toThrow('LINE_USER_ALREADY_LINKED')
   })

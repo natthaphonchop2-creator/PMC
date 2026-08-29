@@ -36,6 +36,7 @@ describe('Apps Script bundle', () => {
       'resumePmcBookingFormAfterAeCutover',
       'configurePmcSharedDoctorCalendar',
       'configurePmcStockManagers',
+      'migratePmcFinancePermissionColumns',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }

@@ -23,6 +23,7 @@ function pollJeraIncoming() { return PmcBooking.pollJeraIncoming(); }
 function runPmcJeraFileImportManually() { return PmcBooking.runPmcJeraFileImportManually(); }
 function runIntegrityChecks() { return PmcBooking.runIntegrityChecks(); }
 function setupPmcBookingSystem() { return PmcBooking.setupPmcBookingSystem(); }
+function migratePmcFinancePermissionColumns() { return PmcBooking.migratePmcFinancePermissionColumns(); }
 function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigration(); }
 function preparePmcAutoQueueMigration() { return PmcBooking.preparePmcAutoQueueMigration(); }
 function applyPmcAutoQueueMigration() { return PmcBooking.applyPmcAutoQueueMigration(); }
