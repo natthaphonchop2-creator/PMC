@@ -8,6 +8,11 @@ import { encodeSheetCell } from './googleSheets'
 import type { MiniAppRequestStatePort } from '../ports'
 
 const TAB = 'MINI_APP_REQUESTS'
+const REQUEST_ROW_NUMBER_FORMATS = MINI_APP_ASYNC_REQUEST_HEADERS.map((header) => {
+  if (header === 'version' || header === 'evidenceCount' || header === 'attemptCount') return '0'
+  if (header === 'depositAmount') return '0.############'
+  return '@'
+})
 
 export function createGoogleMiniAppRequestStatePort(
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
@@ -47,7 +52,9 @@ export function createGoogleMiniAppRequestStatePort(
         throw new Error('invalid mini app async row update')
       }
       const sheet = requireSheet()
-      sheet.getRange(row.rowNumber, 1, 1, MINI_APP_ASYNC_REQUEST_HEADERS.length).setValues([toRow(next)])
+      const target = sheet.getRange(row.rowNumber, 1, 1, MINI_APP_ASYNC_REQUEST_HEADERS.length)
+      target.setNumberFormats([REQUEST_ROW_NUMBER_FORMATS])
+      target.setValues([toRow(next)])
       return JSON.parse(JSON.stringify(next)) as MiniAppAsyncRequestRecord
     },
   }
