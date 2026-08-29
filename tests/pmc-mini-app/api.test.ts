@@ -243,7 +243,7 @@ function inertLiff() {
 function queuedProjection() {
   return {
     draftId: 'draft-1', requestId: 'request-1', state: 'QUEUED', retentionState: '', version: 5,
-    input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+    input: null, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
     caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: null,
   }
 }

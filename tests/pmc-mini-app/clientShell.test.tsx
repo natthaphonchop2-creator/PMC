@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('PMC LINE Mini App shell', () => {
   it('hides JERA navigation while reporting is paused', () => {
@@ -76,6 +76,71 @@ describe('PMC LINE Mini App shell', () => {
 
     expect(await screen.findByText('รับรายการแล้ว')).toBeVisible()
     expect(api.createDraft).not.toHaveBeenCalled()
+  })
+
+  it('resumes a saved staged draft on preview without asking for evidence again', async () => {
+    const api = miniAppApi()
+    const input = {
+      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    api.initialize = vi.fn(async () => 'raw-id-token')
+    api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'มัส', active: true }))
+    api.loadConfig = vi.fn(async () => config)
+    api.loadLatestActiveDraft = vi.fn(async () => ({
+      draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3, input: null,
+      paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+    api.loadDraft = vi.fn(async () => ({
+      draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3, input,
+      paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+
+    render(<PmcMiniApp api={api} />)
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(screen.getByText('สลิป 3 รูป')).toBeVisible()
+    expect(screen.getByText('แชท 1 รูป')).toBeVisible()
+    expect(api.createDraft).not.toHaveBeenCalled()
+  })
+
+  it('returns home immediately after async queue acknowledgement', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const input = {
+      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    const ready = {
+      draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM' as const, retentionState: '' as const,
+      version: 3, input, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 2, chatEvidenceCount: 1,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }
+    api.createDraft = vi.fn(async () => ready)
+    api.confirm = vi.fn(async () => ({
+      requestId: input.requestId,
+      status: 'QUEUED' as const,
+      projection: { ...ready, state: 'QUEUED' as const, version: 4, input: null, queuedAt: '2026-08-29T10:00:00.000Z' },
+    }))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    const toast = screen.getByRole('status')
+    expect(toast).toHaveTextContent('ทำรายการเรียบร้อย ระบบจะบันทึกภายใน 5 นาที')
+    expect(toast).toHaveClass('success')
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), { timeout: 3_500 })
   })
 
   it('single-flights deferred home and bottom booking taps before creating a draft', async () => {

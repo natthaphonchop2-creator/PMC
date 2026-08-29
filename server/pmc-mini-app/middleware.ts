@@ -678,6 +678,7 @@ function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
     } : null,
     paymentEvidenceIds: [...draft.paymentEvidenceFileIds],
     chatEvidenceIds: [...draft.chatEvidenceFileIds],
+    ...evidenceCounts(draft),
     confirmationStatus: draft.confirmationStatus,
     caseId: draft.caseId,
     safeErrorCode: draft.safeErrorCode,
@@ -696,11 +697,19 @@ function safeActiveDraftProjection(draft: MiniAppRequestRecord): Record<string, 
     input: null,
     paymentEvidenceIds: [],
     chatEvidenceIds: [],
+    ...evidenceCounts(draft),
     confirmationStatus: draft.confirmationStatus,
     caseId: draft.caseId,
     safeErrorCode: draft.safeErrorCode,
     queuedAt: draft.queuedAt,
     lastProgressAt: draft.lastProgressAt,
+  }
+}
+
+function evidenceCounts(draft: MiniAppRequestRecord): { paymentEvidenceCount: number; chatEvidenceCount: number } {
+  return {
+    paymentEvidenceCount: Math.max(draft.paymentEvidenceFileIds.length, draft.paymentEvidenceObjectKeys.length),
+    chatEvidenceCount: Math.max(draft.chatEvidenceFileIds.length, draft.chatEvidenceObjectKeys.length),
   }
 }
 

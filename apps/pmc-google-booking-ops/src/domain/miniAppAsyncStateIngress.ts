@@ -17,7 +17,7 @@ const PAYLOAD_KEYS = [
   'paymentEvidenceFileIds', 'chatEvidenceFileIds', 'evidenceCount', 'safeErrorCode', 'caseId', 'confirmationStatus',
 ] as const
 const TERMINAL_STATES = new Set(['CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED'])
-const MAX_LEASE_MS = 30_000
+const MAX_LEASE_MS = 240_000
 
 export function mutateMiniAppAsyncState(input: unknown, ports: BookingPorts): MiniAppAsyncStateIngressResult {
   const envelope = verifyEnvelope(input, ports)

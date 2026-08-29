@@ -47,6 +47,11 @@ describe('PMC Mini App asynchronous booking configuration', () => {
     ['worker audience with a fragment', { PMC_ASYNC_WORKER_AUDIENCE: 'https://pmc-mini-app.example#secret' }],
     ['invalid task invoker service account', { PMC_ASYNC_TASK_INVOKER_EMAIL: 'task-invoker@example.com' }],
     ['unsafe owner staff ID', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner/unsafe' }],
+    ['owner staff ID with whitespace', { PMC_ASYNC_OWNER_STAFF_IDS: 'shared account' }],
+    ['owner staff email', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner@example.com' }],
+    ['empty owner staff ID list item', { PMC_ASYNC_OWNER_STAFF_IDS: 'shared-account-test,,ADMIN_07' }],
+    ['owner staff ID with unsafe punctuation', { PMC_ASYNC_OWNER_STAFF_IDS: 'owner!' }],
+    ['oversized owner staff ID', { PMC_ASYNC_OWNER_STAFF_IDS: `a${'a'.repeat(124)}` }],
   ])('fails closed for %s', (_name, patch) => {
     expect(readPmcAsyncBookingConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })

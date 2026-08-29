@@ -76,6 +76,8 @@ export interface BookingDraftProjection {
   input: BookingDraftInput | null
   paymentEvidenceIds: string[]
   chatEvidenceIds: string[]
+  paymentEvidenceCount?: number
+  chatEvidenceCount?: number
   confirmationStatus: BookingConfirmationResult['status'] | null
   caseId: string | null
   safeErrorCode: string | null

@@ -35,6 +35,26 @@ describe('Apps Script Mini App request row store', () => {
     expect(fake.setRanges).toEqual([])
   })
 
+  it('preserves hash-bound text fields when Sheets would otherwise coerce a rewritten row', () => {
+    const original = requestRecord()
+    const fake = fakeSpreadsheet([original], { coerceUnformattedStrings: true })
+    const port = createGoogleMiniAppRequestStatePort(fake.spreadsheet)
+    const current = port.getByRequestId(original.requestId)!
+
+    port.updateByRequestId(original.requestId, current.version, {
+      ...current,
+      state: 'QUEUED',
+      version: current.version + 1,
+      payloadHash: 'payload-hash-1',
+      taskName: 'projects/p/locations/l/queues/q/tasks/t',
+    })
+
+    const persisted = port.getByRequestId(original.requestId)!
+    expect(persisted.phoneNormalized).toBe('0812345678')
+    expect(persisted.appointmentDate).toBe('2026-09-01')
+    expect(persisted.appointmentTime).toBe('13:00')
+  })
+
   it('constructs lazily so disabled async state does not require the optional tab', () => {
     const spreadsheet = { getSheetByName: () => null } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet
 
@@ -74,9 +94,13 @@ function requestRecord(patch: Partial<MiniAppAsyncRequestRecord> = {}): MiniAppA
   }
 }
 
-function fakeSpreadsheet(initial: MiniAppAsyncRequestRecord[]) {
+function fakeSpreadsheet(
+  initial: MiniAppAsyncRequestRecord[],
+  options: { coerceUnformattedStrings?: boolean } = {},
+) {
   const headers: string[] = [...MINI_APP_ASYNC_REQUEST_HEADERS]
   const values = initial.map(toRow)
+  const formats = initial.map(() => Array<string>(headers.length).fill('General'))
   const setRanges: Array<{ row: number; column: number; rows: number; columns: number }> = []
   let clearCalls = 0
   const sheet = {
@@ -90,7 +114,20 @@ function fakeSpreadsheet(initial: MiniAppAsyncRequestRecord[]) {
         },
         setValues(next: unknown[][]) {
           setRanges.push({ row, column, rows, columns })
-          for (let index = 0; index < rows; index += 1) values[row - 2 + index] = [...(next[index] ?? [])]
+          for (let index = 0; index < rows; index += 1) {
+            values[row - 2 + index] = [...(next[index] ?? [])].map((value, valueIndex) => (
+              options.coerceUnformattedStrings && formats[row - 2 + index]?.[column - 1 + valueIndex] !== '@'
+                ? coerceLikeSheets(value)
+                : value
+            ))
+          }
+        },
+        setNumberFormats(next: string[][]) {
+          for (let index = 0; index < rows; index += 1) {
+            const current = formats[row - 2 + index] ?? Array<string>(headers.length).fill('General')
+            current.splice(column - 1, columns, ...(next[index] ?? []))
+            formats[row - 2 + index] = current
+          }
         },
         clearContent() { clearCalls += 1 },
       }
@@ -100,6 +137,17 @@ function fakeSpreadsheet(initial: MiniAppAsyncRequestRecord[]) {
     getSheetByName: (name: string) => name === 'MINI_APP_REQUESTS' ? sheet : null,
   } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet
   return { spreadsheet, headers, setRanges, get clearCalls() { return clearCalls } }
+}
+
+function coerceLikeSheets(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  if (/^\d+$/.test(value)) return Number(value)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date(`${value}T00:00:00.000Z`)
+  if (/^\d{2}:\d{2}$/.test(value)) {
+    const [hour, minute] = value.split(':').map(Number)
+    return (hour * 60 + minute) / 1_440
+  }
+  return value
 }
 
 function toRow(record: MiniAppAsyncRequestRecord): unknown[] {

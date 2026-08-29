@@ -27,6 +27,23 @@ describe('PMC Mini App booking draft API', () => {
     })
   })
 
+  it('projects staged evidence counts without exposing private object keys', async () => {
+    const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', {})
+    const draftId = String(created.body.draftId)
+    deps.storeFixture.attachStagedEvidence(draftId)
+
+    const response = await invoke(middleware, `/api/mini-app/booking-drafts/${draftId}`, {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const body = await response.json() as Record<string, unknown>
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ paymentEvidenceCount: 1, chatEvidenceCount: 1 })
+    expect(JSON.stringify(body)).not.toContain(`drafts/${draftId}`)
+  })
+
   it('authenticates and returns a PII-free projection of the current owner latest async draft', async () => {
     const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
     await createReadyDraftAndConfirm(deps)
@@ -705,6 +722,8 @@ function queuedBody(draft: MiniAppRequestRecord) {
     projection: {
       draftId: draft.draftId, requestId: draft.requestId, state: draft.state, retentionState: draft.retentionState,
       version: draft.version, input: null, paymentEvidenceIds: [], chatEvidenceIds: [],
+      paymentEvidenceCount: Math.max(draft.paymentEvidenceFileIds.length, draft.paymentEvidenceObjectKeys.length),
+      chatEvidenceCount: Math.max(draft.chatEvidenceFileIds.length, draft.chatEvidenceObjectKeys.length),
       confirmationStatus: draft.confirmationStatus, caseId: draft.caseId, safeErrorCode: draft.safeErrorCode,
       queuedAt: draft.queuedAt, lastProgressAt: draft.lastProgressAt,
     },

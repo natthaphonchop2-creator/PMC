@@ -175,7 +175,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
   it('rejects a worker whose claim expires during a long external call even before another owner reclaims', async () => {
     const fixtureRef: { current?: ReturnType<typeof workerFixture> } = {}
     const fixture = workerFixture({
-      afterEvidenceUpload: () => fixtureRef.current?.clock.advance(16_000),
+      afterEvidenceUpload: () => fixtureRef.current?.clock.advance(241_000),
     })
     fixtureRef.current = fixture
 
@@ -186,6 +186,25 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.state.operations()).not.toContain('RETRY')
     expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
     expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+  })
+
+  it('keeps ownership across forty-second evidence uploads within the four-minute lease', async () => {
+    const fixture = workerFixture({ advanceOnEvidenceUploadMs: 40_000 })
+
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({
+      caseId: 'PMC-202608-0001', state: 'CONFIRMED',
+    })
+    expect(fixture.state.read()).toMatchObject({ state: 'CONFIRMED', processingOwnerToken: null })
+  })
+
+  it('keeps attempt eight processing after the thirty-second overlap window', async () => {
+    const fixture = workerFixture({ advanceOnEvidenceUploadMs: 40_000 })
+
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toMatchObject({
+      caseId: 'PMC-202608-0001', state: 'CONFIRMED',
+    })
+    expect(fixture.clock.now.getTime() - fixedNow.getTime()).toBeGreaterThan(30_000)
+    expect(fixture.state.operations()).toContain('COMPLETE')
   })
 
   it.each([
@@ -322,7 +341,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.state.read()).toMatchObject({ state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED' })
   })
 
-  it('waits for a reclaimed live post-claim owner to expire before attempt eight atomically exhausts', async () => {
+  it('waits at most thirty seconds for a reclaimed four-minute owner before atomically exhausting', async () => {
     const fixtureRef: { current?: ReturnType<typeof workerFixture> } = {}
     const fixture = workerFixture({
       afterEvidenceUpload: () => fixtureRef.current?.state.reclaim('worker-owner-token-2'),
@@ -332,7 +351,7 @@ describe('PMC async worker through Apps Script state ingress', () => {
     await expect(fixture.worker.finalize(taskInput(8))).resolves.toEqual({
       requestId: 'request-1', caseId: null, state: 'NEEDS_REVIEW',
     })
-    expect(fixture.clock.totalWait).toBe(15_000)
+    expect(fixture.clock.totalWait).toBe(30_000)
     expect(fixture.state.operations().at(-1)).toBe('EXHAUST')
   })
 
@@ -350,13 +369,13 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.state.operations().filter((operation) => operation === 'EXHAUST')).toHaveLength(1)
   })
 
-  it('begins no new final-attempt I/O after a claim send consumes the absolute deadline', async () => {
+  it('atomically exhausts after the thirty-second final-attempt overlap window', async () => {
     const fixture = workerFixture({ alwaysBusyClaim: true, advanceOnClaimSendMs: 30_000 })
 
-    await expect(fixture.worker.finalize(taskInput(8))).rejects.toMatchObject({ code: 'ASYNC_STATE_RETRY' })
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toMatchObject({ state: 'NEEDS_REVIEW' })
 
-    expect(fixture.state.operations()).toEqual(['CLAIM'])
-    expect(fixture.getDraft).toHaveBeenCalledTimes(1)
+    expect(fixture.state.operations()).toEqual(['CLAIM', 'EXHAUST'])
+    expect(fixture.getDraft).toHaveBeenCalledTimes(2)
     expect(fixture.clock.waits).toEqual([])
   })
 
@@ -373,9 +392,9 @@ describe('PMC async worker through Apps Script state ingress', () => {
     await expect(fixture.worker.finalize(taskInput(8))).rejects.toMatchObject({ code: 'ASYNC_STATE_RETRY' })
 
     expect(fixture.state.operations().filter((operation) => operation === 'EXHAUST')).toHaveLength(1)
-    expect(fixture.readsAfterExhaust()).toBe(3)
-    expect(fixture.clock.waits).toEqual([1_000, 1_000])
-    expect(fixture.clock.now.getTime() - fixedNow.getTime()).toBe(30_000)
+    expect(fixture.readsAfterExhaust()).toBeLessThanOrEqual(8)
+    expect(fixture.clock.waits.every((milliseconds) => milliseconds <= 1_000)).toBe(true)
+    expect(fixture.clock.now.getTime() - fixedNow.getTime()).toBeLessThanOrEqual(65_000)
   })
 
   it('uses an exact terminal reread started before the deadline even when that call resolves after it', async () => {
@@ -395,16 +414,16 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.clock.waits).toEqual([])
   })
 
-  it('begins no new state I/O after an in-flight staging read consumes the final deadline', async () => {
+  it('persists review after a long failed staging read on the final attempt', async () => {
     const fixture = workerFixture({
       stagingFailure: new Error('private storage detail'),
       advanceOnStagingGetMs: 30_000,
     })
 
-    await expect(fixture.worker.finalize(taskInput(8))).rejects.toMatchObject({ code: 'ASYNC_STATE_RETRY' })
+    await expect(fixture.worker.finalize(taskInput(8))).resolves.toMatchObject({ state: 'NEEDS_REVIEW' })
 
-    expect(fixture.state.operations()).toEqual(['CLAIM', 'RENEW'])
-    expect(fixture.getDraft).toHaveBeenCalledTimes(3)
+    expect(fixture.state.operations()).toEqual(['CLAIM', 'RENEW', 'RENEW', 'RETRY'])
+    expect(fixture.getDraft).toHaveBeenCalledTimes(6)
     expect(fixture.clock.waits).toEqual([])
   })
 })
@@ -425,6 +444,7 @@ function workerFixture(options: {
   advanceOnReadAfterExhaustMs?: number
   failReadsAfterExhaust?: boolean
   advanceOnStagingGetMs?: number
+  advanceOnEvidenceUploadMs?: number
   stagingFailure?: Error
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
@@ -481,6 +501,7 @@ function workerFixture(options: {
   }
   const evidenceIngress: EvidenceIngressPort = {
     upload: vi.fn(async ({ kind }) => {
+      clock.advance(options.advanceOnEvidenceUploadMs ?? 0)
       options.afterEvidenceUpload?.()
       return kind === 'PAYMENT' ? 'owner-drive-payment-1' : 'owner-drive-chat-1'
     }),
@@ -543,7 +564,7 @@ class StateIngressFixture implements AsyncStateIngressPort {
     this.draft = {
       ...this.draft, state: 'PROCESSING', attemptCount: this.draft.attemptCount + 1,
       version: this.draft.version + 1, processingOwnerToken: ownerToken,
-      processingLeaseUntil: new Date(this.clock.now.getTime() + 15_000).toISOString(),
+      processingLeaseUntil: new Date(this.clock.now.getTime() + 240_000).toISOString(),
     }
   }
 

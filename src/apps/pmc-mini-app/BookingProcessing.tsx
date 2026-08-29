@@ -3,6 +3,9 @@ import { CircleAlert, CircleCheck, Clock3 } from 'lucide-react'
 import type { BookingDraftProjection } from './contracts'
 import { isBookingTerminalState } from './contracts'
 
+const POLL_WINDOW_MS = 300_000
+const SUCCESS_RETURN_DELAY_MS = 2_000
+
 export interface BookingProcessingAdapter {
   load(draftId: string, signal: AbortSignal): Promise<BookingDraftProjection>
 }
@@ -22,6 +25,8 @@ export function BookingProcessing({
   const projection = polledProjection.draftId === draft.draftId && polledProjection.version >= draft.version
     ? polledProjection
     : draft
+  const terminal = isBookingTerminalState(projection.state)
+  const confirmed = projection.state === 'CONFIRMED' || projection.state === 'CONFIRMED_WITH_RETRY'
   const latestProjection = useRef(projection)
 
   useEffect(() => {
@@ -37,7 +42,7 @@ export function BookingProcessing({
 
     const poll = () => {
       const elapsed = Date.now() - startedAt
-      if (elapsed >= 60_000 || cancelled) return
+      if (elapsed >= POLL_WINDOW_MS || cancelled) return
       const delay = elapsed < 30_000 ? 2_500 : 5_000
       timeout = setTimeout(() => {
         if (cancelled) return
@@ -65,8 +70,11 @@ export function BookingProcessing({
     }
   }, [adapter, draft.draftId, onProjection])
 
-  const terminal = isBookingTerminalState(projection.state)
-  const confirmed = projection.state === 'CONFIRMED' || projection.state === 'CONFIRMED_WITH_RETRY'
+  useEffect(() => {
+    if (!confirmed || !onExit) return
+    const timeout = setTimeout(onExit, SUCCESS_RETURN_DELAY_MS)
+    return () => clearTimeout(timeout)
+  }, [confirmed, onExit])
 
   return <main className="pmc-booking-processing">
     <div className={`pmc-processing-icon ${terminal ? (confirmed ? 'confirmed' : 'review') : 'waiting'}`}>
@@ -79,6 +87,6 @@ export function BookingProcessing({
       {(projection.state === 'CANCELLED' || projection.state === 'EXPIRED') && <><p className="pmc-processing-kicker">รายการสิ้นสุดแล้ว</p><h1>ไม่สามารถดำเนินการต่อได้</h1><p>หากต้องการความช่วยเหลือ กรุณาติดต่อผู้ดูแล</p></>}
     </div>
     <p className="pmc-processing-case">เลขอ้างอิง: {projection.requestId}</p>
-    {terminal && <button type="button" className="pmc-secondary-button" onClick={onExit}>กลับหน้าหลัก</button>}
+    {onExit && <button type="button" className="pmc-secondary-button" onClick={onExit}>กลับหน้าหลัก</button>}
   </main>
 }

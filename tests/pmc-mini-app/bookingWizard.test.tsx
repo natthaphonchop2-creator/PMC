@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
 import { BookingWizard, type BookingWizardAdapter } from '../../src/apps/pmc-mini-app/BookingWizard'
-import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
+import type { BookingConfirmationResult, BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
 
 afterEach(cleanup)
 
@@ -54,6 +54,18 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
     expect(app.confirm).toHaveBeenCalledOnce()
     expect(await screen.findByText('PMC-202608-0001')).toBeVisible()
+  })
+
+  it('hands synchronous success to the app shell for immediate home navigation', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onConfirmed = vi.fn()
+    renderWizard({ initialStep: 4, adapter: app, onConfirmed })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(onConfirmed).toHaveBeenCalledWith({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+    expect(screen.queryByText('PMC-202608-0001')).not.toBeInTheDocument()
   })
 
   it('does not send the same valid confirmation twice before React disables the submit button', () => {
@@ -174,6 +186,34 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(app.load).toHaveBeenCalledWith('draft-1')
   })
+
+  it('recovers an already-saved staged draft instead of uploading evidence again', async () => {
+    const user = userEvent.setup()
+    const current: BookingDraftProjection = { ...draft, input: completeInput(), version: 2 }
+    const latest: BookingDraftProjection = {
+      ...current,
+      state: 'READY_TO_CONFIRM',
+      version: 3,
+      paymentEvidenceCount: 3,
+      chatEvidenceCount: 1,
+    }
+    const app = {
+      ...adapter(),
+      uploadEvidenceBatch: vi.fn(async () => { throw new MiniAppApiError('DRAFT_NOT_UPLOADABLE', 409) }),
+      load: vi.fn(async () => latest),
+    }
+    renderWizard({ initialStep: 3, adapter: app, draft: current })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(screen.getByText('สลิป 3 รูป')).toBeVisible()
+    expect(screen.getByText('แชท 1 รูป')).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(app.load).toHaveBeenCalledWith('draft-1')
+  })
 })
 
 function renderWizard(options: {
@@ -182,6 +222,7 @@ function renderWizard(options: {
   draft?: BookingDraftProjection
   onExit?: () => void
   onQueued?: (projection: BookingDraftProjection) => void
+  onConfirmed?: (result: BookingConfirmationResult) => void
 } = {}) {
   return render(<BookingWizard
     session={session}
@@ -191,6 +232,7 @@ function renderWizard(options: {
     initialStep={options.initialStep}
     onExit={options.onExit}
     onQueued={options.onQueued}
+    onConfirmed={options.onConfirmed}
   />)
 }
 

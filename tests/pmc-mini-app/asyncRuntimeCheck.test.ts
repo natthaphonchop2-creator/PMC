@@ -43,15 +43,28 @@ describe('PMC async runtime checker', () => {
         },
       },
       iam: {
-        requiredBindingCount: 3,
+        requiredBindingCount: 4,
         exactBindingsReady: true,
         forbiddenBroadBindings: false,
-        roles: expect.arrayContaining(['roles/cloudtasks.enqueuer', 'roles/run.invoker', 'roles/storage.objectUser']),
+        roles: expect.arrayContaining(['roles/cloudtasks.enqueuer', 'roles/iam.serviceAccountUser', 'roles/run.invoker', 'roles/storage.objectUser']),
       },
       deployed: { serviceExists: true, asyncDisabled: true, requiredNameCount: 10, presentNameCount: 10 },
     })
     for (const value of Object.values(privateInputs)) expect(serialized).not.toContain(value)
     expect(serialized).not.toContain('pmc-mini-app-task-invoker@private-project-123.iam.gserviceaccount.com')
+    expect(execute.mock.calls.map(([command]) => command.join(' ')).join('\n')).toContain('iam service-accounts get-iam-policy')
+  })
+
+  it('fails infrastructure readiness when the runtime cannot act as the task identity', async () => {
+    const execute = vi.fn(async (command: string[]) => {
+      if (command[1] === 'iam' && command[2] === 'service-accounts') return JSON.stringify({ bindings: [] })
+      return responseFor(command)
+    })
+
+    const report = await inspectPmcAsyncRuntime(privateInputs, execute, asyncEnvironment())
+
+    expect(report.infrastructureReady).toBe(false)
+    expect(report.iam).toMatchObject({ requiredBindingCount: 4, exactBindingsReady: false })
   })
 
   it('accepts the real gcloud bucket schema without exposing infrastructure values', async () => {
@@ -200,6 +213,9 @@ function responseFor(command: string[]): string {
       { name: 'PMC_BOOKING_INGRESS_SECRET', valueFrom: { secretKeyRef: { name: 'private-secret', key: 'latest' } } },
     ] }] } } },
   })
+  if (command[1] === 'iam' && command[2] === 'service-accounts' && command[3] === 'get-iam-policy') return JSON.stringify({ bindings: [
+    { role: 'roles/iam.serviceAccountUser', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },
+  ] })
   if (command[1] === 'projects') return JSON.stringify({ bindings: [] })
   return JSON.stringify({ bindings: [
     { role: 'roles/storage.objectUser', members: ['serviceAccount:private-runtime@private-project-123.iam.gserviceaccount.com'] },

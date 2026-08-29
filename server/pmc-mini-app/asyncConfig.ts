@@ -99,6 +99,6 @@ function parseOwnerStaffIds(value: string): ReadonlySet<string> | null {
   const ownerStaffIds = new Set(ids)
   if (ids.length === 0
     || ownerStaffIds.size !== ids.length
-    || ids.some((id) => !/^[A-Za-z0-9._:-]{1,124}$/.test(id))) return null
+    || ids.some((id) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,123}$/.test(id))) return null
   return ownerStaffIds
 }

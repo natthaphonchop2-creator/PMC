@@ -234,14 +234,15 @@ export function parseBookingConfirmationResponse(body: unknown, status: number):
 function parseSafeQueuedProjection(value: unknown): BookingDraftProjection | null {
   if (!isRecord(value)) return null
   const expectedKeys = [
-    'caseId', 'chatEvidenceIds', 'confirmationStatus', 'draftId', 'input', 'lastProgressAt',
-    'paymentEvidenceIds', 'queuedAt', 'requestId', 'retentionState', 'safeErrorCode', 'state', 'version',
+    'caseId', 'chatEvidenceCount', 'chatEvidenceIds', 'confirmationStatus', 'draftId', 'input', 'lastProgressAt',
+    'paymentEvidenceCount', 'paymentEvidenceIds', 'queuedAt', 'requestId', 'retentionState', 'safeErrorCode', 'state', 'version',
   ]
   if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')) return null
   if (typeof value.draftId !== 'string' || typeof value.requestId !== 'string' || !isProjectionState(value.state)
     || (value.retentionState !== '' && value.retentionState !== 'PENDING_APPROVAL')
     || !isSafeInteger(value.version) || value.input !== null
     || !emptyStringArray(value.paymentEvidenceIds) || !emptyStringArray(value.chatEvidenceIds)
+    || !evidenceCount(value.paymentEvidenceCount) || !evidenceCount(value.chatEvidenceCount)
     || !nullableString(value.caseId) || !nullableString(value.safeErrorCode)
     || !nullableString(value.queuedAt) || !nullableString(value.lastProgressAt)
     || !(value.confirmationStatus === null || isConfirmationStatus(value.confirmationStatus))) return null
@@ -254,6 +255,8 @@ function parseSafeQueuedProjection(value: unknown): BookingDraftProjection | nul
     input: null,
     paymentEvidenceIds: value.paymentEvidenceIds,
     chatEvidenceIds: value.chatEvidenceIds,
+    paymentEvidenceCount: value.paymentEvidenceCount,
+    chatEvidenceCount: value.chatEvidenceCount,
     confirmationStatus: value.confirmationStatus,
     caseId: value.caseId,
     safeErrorCode: value.safeErrorCode,
@@ -276,6 +279,10 @@ function nullableString(value: unknown): value is string | null {
 
 function isSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value)
+}
+
+function evidenceCount(value: unknown): value is number {
+  return isSafeInteger(value) && value >= 0 && value <= 10
 }
 
 function isConfirmationStatus(value: unknown): value is BookingConfirmationResult['status'] {

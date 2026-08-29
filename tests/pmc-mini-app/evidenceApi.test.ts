@@ -29,6 +29,8 @@ describe('PMC Mini App evidence API', () => {
         input: null,
         paymentEvidenceIds: [],
         chatEvidenceIds: ['drive-file-1', 'drive-file-2'],
+        paymentEvidenceCount: 0,
+        chatEvidenceCount: 2,
         confirmationStatus: null,
         caseId: null,
         safeErrorCode: null,
@@ -89,7 +91,7 @@ describe('PMC Mini App evidence API', () => {
       status: 200,
       body: {
         draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 4,
-        input: null, paymentEvidenceIds: ['owner-drive-file-1'], chatEvidenceIds: [], confirmationStatus: null,
+        input: null, paymentEvidenceIds: ['owner-drive-file-1'], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 0, confirmationStatus: null,
         caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
       },
     })
