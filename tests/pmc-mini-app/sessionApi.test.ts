@@ -88,6 +88,7 @@ describe('PMC Mini App session and configuration API', () => {
     expect(body).toEqual({
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
       reportingEnabled: false,
+      financeReportsEnabled: false,
       stockEnabled: false,
       canManageStock: false,
       canSubmitExpense: true,
@@ -104,15 +105,16 @@ describe('PMC Mini App session and configuration API', () => {
     expect(serialized).not.toContain('private-calendar')
   })
 
-  it('advertises reporting only when the JERA runtime exists', async () => {
+  it('advertises legacy reporting only when JERA exists and finance reports only when its rollout flag is enabled', async () => {
     const response = await invoke(createPmcMiniAppMiddleware({
       ...dependencies(),
+      config: { ...dependencies().config, financeReportsEnabled: true },
       jera: { handle: vi.fn(), handleInternal: vi.fn() },
     }), '/api/mini-app/config', {
       headers: { authorization: 'Bearer valid-token' },
     })
 
-    expect(await response.json()).toMatchObject({ reportingEnabled: true })
+    expect(await response.json()).toMatchObject({ reportingEnabled: true, financeReportsEnabled: true })
   })
 })
 
@@ -156,6 +158,7 @@ function dependencies(): {
       enrollmentPin: null,
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
+      financeReportsEnabled: false,
     },
     identity,
     store,

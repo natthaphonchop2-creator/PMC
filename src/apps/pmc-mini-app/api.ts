@@ -9,8 +9,10 @@ import type {
   MiniAppSession,
   StockProductProjection,
 } from './contracts'
+import { monthSelectionToSearch, type FinanceDailyFilter, type FinanceMonthSelection } from './financeReports'
 import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
 import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '../../../shared/pmcStock'
+import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -35,6 +37,9 @@ export interface MiniAppBrowserApi {
   cancel(idToken: string, draftId: string, version: number): Promise<BookingDraftProjection>
   loadReport<T = unknown>(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<JeraClientEnvelope<T>>
   refreshReport(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<{ accepted: true; correlationId: string }>
+  loadDailyIncome(idToken: string, filter: FinanceDailyFilter): Promise<DailyIncomeProjection>
+  refreshDailyIncome(idToken: string, eventDate: string): Promise<{ accepted: true; allocationQueued: boolean; retryAfterSeconds: number }>
+  loadMonthlyIncome(idToken: string, selection: FinanceMonthSelection): Promise<MonthlyIncomeProjection>
   loadStockProducts(idToken: string): Promise<{ products: StockProductProjection[] }>
   loadStockHistory(idToken: string, cursor?: string): Promise<StockHistoryPage>
   submitStockCommand(idToken: string, command: StockClientCommand): Promise<StockCommandResult>
@@ -138,6 +143,19 @@ export function createMiniAppApi(options: {
         method: 'POST', headers: { authorization: `Bearer ${idToken}` },
       })
     },
+    loadDailyIncome(idToken, filter) {
+      const query = new URLSearchParams({ startDate: filter.startDate, endDate: filter.endDate })
+      return requestJson(request, `/api/mini-app/finance/daily?${query}`, authenticated(idToken))
+    },
+    refreshDailyIncome(idToken, eventDate) {
+      return requestJson(request, `/api/mini-app/finance/daily/refresh?date=${encodeURIComponent(eventDate)}`, {
+        method: 'POST', headers: { authorization: `Bearer ${idToken}` },
+      }, parseFinanceRefreshResponse)
+    },
+    loadMonthlyIncome(idToken, selection) {
+      const query = monthSelectionToSearch(selection)
+      return requestJson(request, `/api/mini-app/finance/monthly?${query}`, authenticated(idToken))
+    },
     loadStockProducts(idToken) {
       return requestJson(request, '/api/mini-app/stock/products', authenticated(idToken))
     },
@@ -208,10 +226,22 @@ async function requestJson<T>(
   if (!response.ok) {
     const code = body && typeof body === 'object' && !Array.isArray(body) && 'error' in body ? String(body.error) : 'MINI_APP_REQUEST_FAILED'
     const retryAfterSeconds = body && typeof body === 'object' && !Array.isArray(body) && 'retryAfterSeconds' in body
-      && Number.isSafeInteger(Number(body.retryAfterSeconds)) ? Number(body.retryAfterSeconds) : null
+      && safeRetryAfterSeconds(body.retryAfterSeconds) !== null ? safeRetryAfterSeconds(body.retryAfterSeconds) : null
     throw new MiniAppApiError(/^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED', response.status, retryAfterSeconds)
   }
   return parse ? parse(body, response.status) : body as T
+}
+
+function parseFinanceRefreshResponse(body: unknown, status: number): { accepted: true; allocationQueued: boolean; retryAfterSeconds: number } {
+  if (status === 202 && isRecord(body) && body.accepted === true && typeof body.allocationQueued === 'boolean'
+    && safeRetryAfterSeconds(body.retryAfterSeconds) !== null) {
+    return { accepted: true, allocationQueued: body.allocationQueued, retryAfterSeconds: safeRetryAfterSeconds(body.retryAfterSeconds)! }
+  }
+  throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+}
+
+function safeRetryAfterSeconds(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 3_600 ? value : null
 }
 
 export function parseBookingConfirmationResponse(body: unknown, status: number): BookingQueuedResult | BookingConfirmationResult {

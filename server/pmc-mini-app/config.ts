@@ -14,6 +14,7 @@ export interface PmcMiniAppServerConfig {
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
   asyncBooking: PmcAsyncBookingConfig | null
+  financeReportsEnabled: boolean
   stockEnabled: boolean
   stockManagerPilotOnly: boolean
 }
@@ -52,6 +53,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     && env.PMC_MINI_APP_ENROLLMENT_ENABLED !== 'false') return null
   if (!validOptionalFlag(env.PMC_STOCK_ENABLED)) return null
   if (!validOptionalFlag(env.PMC_STOCK_MANAGER_PILOT_ONLY)) return null
+  if (!validOptionalFlag(env.PMC_FINANCE_REPORTS_ENABLED)) return null
   const enrollmentPin = env.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
     ? env.PMC_MINI_APP_ENROLLMENT_PIN?.trim() ?? ''
     : null
@@ -74,6 +76,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
     asyncBooking,
+    financeReportsEnabled: env.PMC_FINANCE_REPORTS_ENABLED === 'true',
     stockEnabled: env.PMC_STOCK_ENABLED === 'true',
     stockManagerPilotOnly: env.PMC_STOCK_MANAGER_PILOT_ONLY === 'true',
   }

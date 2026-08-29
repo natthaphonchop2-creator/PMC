@@ -7,12 +7,14 @@ import type {
   StockProductProjection,
 } from './contracts'
 import type { JeraClientEnvelope, JeraReportType } from './reports'
+import type { FinanceDailyFilter, FinanceMonthSelection } from './financeReports'
 import type {
   StockClientCommand,
   StockCommandResult,
   StockDocumentSummary,
   StockHistoryPage,
 } from '../../../shared/pmcStock'
+import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
 
 export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displayName: 'มัส', active: true }
 
@@ -20,6 +22,7 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   miniAppId: 'preview-mini-app',
   fallbackFormUrl: 'https://docs.google.com/forms/',
   reportingEnabled: false,
+  financeReportsEnabled: false,
   stockEnabled: false,
   canManageStock: false,
   canSubmitExpense: false,
@@ -129,11 +132,42 @@ export function createPreviewMiniAppApi(options: {
       reportRefreshSequence += 1
       return { accepted: true, correlationId: `preview-refresh-${reportRefreshSequence}` }
     },
+    async loadDailyIncome(_token: string, filter: FinanceDailyFilter) { return emptyDailyIncomeProjection(filter.startDate, filter.endDate) },
+    async refreshDailyIncome() { return { accepted: true as const, allocationQueued: false, retryAfterSeconds: 0 } },
+    async loadMonthlyIncome(_token: string, selection: FinanceMonthSelection) {
+      const startDate = `${selection.year}-${String(selection.month).padStart(2, '0')}-01`
+      const endDate = new Date(Date.UTC(selection.year, selection.month, 0)).toISOString().slice(0, 10)
+      return {
+        ...emptyDailyIncomeProjection(startDate, endDate),
+        monthKey: `${selection.year}-${String(selection.month).padStart(2, '0')}`,
+        dailyTrend: [],
+        expense: { state: 'NOT_IMPLEMENTED' as const, clinicExpenseSatang: null, estimatedBalanceSatang: null },
+      } satisfies MonthlyIncomeProjection
+    },
     async loadStockProducts() { return stock.loadProducts() },
     async loadStockHistory(_token: string, cursor?: string) { return stock.loadHistory(cursor) },
     async submitStockCommand(_token: string, command: StockClientCommand) {
       return stock.submit(command)
     },
+  }
+}
+
+function emptyDailyIncomeProjection(startDate: string, endDate: string): DailyIncomeProjection {
+  return {
+    startDate,
+    endDate,
+    receivedSatang: 0,
+    refundSatang: 0,
+    netReceivedSatang: 0,
+    channels: { transferSatang: 0, cashSatang: 0, creditSatang: 0, otherSatang: 0, differenceSatang: 0 },
+    categories: { state: 'CHECKING', serviceSatang: null, productSatang: null, unclassifiedSatang: null, incompleteDates: [startDate] },
+    payments: [],
+    freshness: {
+      payment: { lastSuccessAt: null, stale: true, warningCode: 'PREVIEW' },
+      refund: { lastSuccessAt: null, stale: true, warningCode: 'PREVIEW' },
+      allocation: { lastSuccessAt: null, stale: true, warningCode: 'PREVIEW' },
+    },
+    warnings: ['PREVIEW'],
   }
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMiniAppApi } from '../../src/apps/pmc-mini-app/api'
+import { type FinanceDailyFilter, type FinanceMonthSelection } from '../../src/apps/pmc-mini-app/financeReports'
 import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
 describe('PMC Mini App browser API', () => {
@@ -176,6 +177,61 @@ describe('PMC Mini App browser API', () => {
     expect(parsed.searchParams.getAll('status')).toEqual(['Confirmed'])
     expect(parsed.searchParams.has('doctorUuid')).toBe(false)
     expect(init).toMatchObject({ headers: { authorization: 'Bearer raw-id-token' } })
+  })
+
+  it('loads daily income through the exact finance route with bearer-only authentication', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, { startDate: '2026-08-29', endDate: '2026-08-29' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const filter: FinanceDailyFilter = { preset: 'TODAY', startDate: '2026-08-29', endDate: '2026-08-29' }
+
+    await api.loadDailyIncome('raw-id-token', filter)
+
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/finance/daily?startDate=2026-08-29&endDate=2026-08-29', {
+      headers: { authorization: 'Bearer raw-id-token' },
+    })
+  })
+
+  it('refreshes one daily income date without a JSON body and preserves a finance 403', async () => {
+    const fetch = vi.fn(async () => jsonResponse(202, { accepted: true, allocationQueued: true, retryAfterSeconds: 300 }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.refreshDailyIncome('raw-id-token', '2026-08-29')).resolves.toEqual({
+      accepted: true, allocationQueued: true, retryAfterSeconds: 300,
+    })
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/finance/daily/refresh?date=2026-08-29', {
+      method: 'POST', headers: { authorization: 'Bearer raw-id-token' },
+    })
+
+    fetch.mockResolvedValueOnce(jsonResponse(403, { error: 'FINANCE_FORBIDDEN' }))
+    await expect(api.refreshDailyIncome('raw-id-token', '2026-08-29')).rejects.toMatchObject({
+      code: 'FINANCE_FORBIDDEN', status: 403, retryAfterSeconds: null,
+    })
+  })
+
+  it('loads monthly income without sending a derived month key', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, { monthKey: '2026-08' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const selection: FinanceMonthSelection = { year: 2026, month: 8 }
+
+    await api.loadMonthlyIncome('raw-id-token', selection)
+
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe('/api/mini-app/finance/monthly?year=2026&month=8')
+    expect(init).toEqual({ headers: { authorization: 'Bearer raw-id-token' } })
+    expect(String(url)).not.toContain('monthKey')
+  })
+
+  it('keeps only a bounded numeric integer retry delay from a finance error response', async () => {
+    const fetch = vi.fn(async () => jsonResponse(429, { error: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds: 999_999 }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.refreshDailyIncome('raw-id-token', '2026-08-29')).rejects.toMatchObject({
+      code: 'FINANCE_REFRESH_UNAVAILABLE', status: 429, retryAfterSeconds: null,
+    })
+    fetch.mockResolvedValueOnce(jsonResponse(429, { error: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds: '300' }))
+    await expect(api.refreshDailyIncome('raw-id-token', '2026-08-29')).rejects.toMatchObject({
+      code: 'FINANCE_REFRESH_UNAVAILABLE', status: 429, retryAfterSeconds: null,
+    })
   })
 
   it('loads Stock products and cursor history with bearer auth', async () => {

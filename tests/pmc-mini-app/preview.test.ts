@@ -29,6 +29,19 @@ describe('PMC Mini App local visual preview adapter', () => {
     })
   })
 
+  it('keeps finance reports disabled in preview configuration while satisfying the typed client contract', async () => {
+    const api = createPreviewMiniAppApi()
+
+    await expect(api.loadDailyIncome('preview-token', {
+      preset: 'TODAY', startDate: '2026-08-29', endDate: '2026-08-29',
+    })).resolves.toMatchObject({ startDate: '2026-08-29', endDate: '2026-08-29' })
+    await expect(api.loadMonthlyIncome('preview-token', { year: 2026, month: 8 })).resolves.toMatchObject({ monthKey: '2026-08' })
+    await expect(api.refreshDailyIncome('preview-token', '2026-08-29')).resolves.toEqual({
+      accepted: true, allocationQueued: false, retryAfterSeconds: 0,
+    })
+    expect(createPreviewMiniAppConfig()).toMatchObject({ financeReportsEnabled: false })
+  })
+
   it('advances the safe preview report timestamp after a refresh', async () => {
     const api = createPreviewMiniAppApi({ reportingEnabled: true })
     const filters = defaultReportFilters('2026-08-27')
