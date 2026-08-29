@@ -119,16 +119,21 @@ test.describe('Finance report Android acceptance', () => {
     await expect(page.getByRole('button', { name: /รายงานรายเดือน/ })).toHaveAttribute('aria-disabled', 'true')
     await expect(page.getByText('เตรียมระบบ')).toHaveCount(6)
     await expect(page.getByRole('button', { name: /บันทึก|ส่งรายจ่าย|แนบ/ })).toHaveCount(0)
+    await expectBottomNavClearance(page, '.pmc-finance-deferred')
     await page.screenshot({
       path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-finance-home.png'),
       fullPage: false,
     })
 
     await page.getByRole('button', { name: /รายรับรายวัน/ }).click()
+    const expectedYesterday = await bangkokDateOffset(page, -1)
     await page.getByText('เมื่อวาน', { exact: true }).click()
+    await expect(page.getByRole('radio', { name: 'เมื่อวาน' })).toBeChecked()
+    await expect(page.getByRole('heading', { level: 3, name: expectedYesterday })).toBeVisible()
+    await expect(page.getByText(`PAY-${expectedYesterday.replaceAll('-', '')}`, { exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'รายละเอียดรับชำระ' })).toBeVisible()
-    await expect(page.getByText(/PAY-\d{8}/)).toBeVisible()
     await expect(page.getByText('ลูกค้าทดสอบ')).toBeVisible()
+    await expectFinanceAuthorityHierarchy(page, 'ยอดรายรับหลัก')
     await page.screenshot({
       path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-daily-income.png'),
       fullPage: false,
@@ -156,6 +161,7 @@ test.describe('Finance report Android acceptance', () => {
     const selectedPreset = page.getByRole('radio', { name: 'เลือกช่วงวันที่' })
     await expect(selectedPreset).toBeFocused()
     expect(await selectedPreset.evaluate((element) => getComputedStyle(element.nextElementSibling!).outlineStyle)).not.toBe('none')
+    await expectBottomNavClearance(page, '.pmc-finance-details')
   })
 
   test('finance staff opens the previous month and drills into an exact daily report', async ({ page }) => {
@@ -168,15 +174,23 @@ test.describe('Finance report Android acceptance', () => {
     const [year, month] = currentMonth.split('-').map(Number)
     const previous = new Date(Date.UTC(year!, month! - 2, 1)).toISOString().slice(0, 7)
     await monthInput.fill(previous)
+    await monthInput.blur()
+    await expect(monthInput).toHaveValue(previous)
     await expect(page.getByRole('region', { name: 'ยอดรายรับหลักประจำเดือน' })).toBeVisible()
-    await expect(page.getByRole('table', { name: 'รายรับรายวันในเดือน' })).toBeVisible()
+    const trend = page.getByRole('table', { name: 'รายรับรายวันในเดือน' })
+    await expect(trend).toBeVisible()
+    const trendDates = await trend.getByRole('button', { name: /ดูรายรับวันที่/ }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')?.replace('ดูรายรับวันที่ ', '')))
+    expect(trendDates.length).toBeGreaterThan(27)
+    expect(trendDates.every((date) => date?.startsWith(`${previous}-`))).toBe(true)
     await expect(page.getByText('รายจ่ายที่บันทึก — เตรียมระบบ')).toBeVisible()
+    await expectFinanceAuthorityHierarchy(page, 'ยอดรายรับหลักประจำเดือน')
     await page.screenshot({
       path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-monthly-income.png'),
       fullPage: false,
     })
+    await expectBottomNavClearance(page, '.pmc-monthly-deferred')
 
-    const dailyButtons = page.getByRole('button', { name: /ดูรายรับวันที่/ })
+    const dailyButtons = trend.getByRole('button', { name: /ดูรายรับวันที่/ })
     const selectedDate = (await dailyButtons.last().getAttribute('aria-label'))!.replace('ดูรายรับวันที่ ', '')
     await dailyButtons.last().click()
     await expect(page.getByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
@@ -302,4 +316,59 @@ function imageFile(name: string) {
 
 async function expectNoStockSheetLink(page: Page) {
   await expect(page.getByRole('link', { name: /Google Sheet/i })).toHaveCount(0)
+}
+
+async function bangkokDateOffset(page: Page, dayOffset: number): Promise<string> {
+  return page.evaluate((offset) => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date())
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+    const date = new Date(`${values.year}-${values.month}-${values.day}T00:00:00.000Z`)
+    date.setUTCDate(date.getUTCDate() + offset)
+    return date.toISOString().slice(0, 10)
+  }, dayOffset)
+}
+
+async function expectFinanceAuthorityHierarchy(page: Page, name: string): Promise<void> {
+  const authority = page.getByRole('region', { name })
+  const cards = authority.locator('article')
+  const gridBox = await authority.boundingBox()
+  const primaryBox = await cards.first().boundingBox()
+  expect(gridBox).not.toBeNull()
+  expect(primaryBox).not.toBeNull()
+  expect(primaryBox!.width).toBeGreaterThanOrEqual(gridBox!.width - 1)
+
+  const primaryMoney = cards.first().locator('strong')
+  const original = await primaryMoney.innerText()
+  await primaryMoney.evaluate((element) => { element.textContent = '123,456,789.01 บาท' })
+  const metrics = await primaryMoney.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const lineHeight = Number.parseFloat(style.lineHeight)
+    const box = element.getBoundingClientRect()
+    return {
+      height: box.height,
+      lineHeight,
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      overflowWrap: style.overflowWrap,
+      whiteSpace: style.whiteSpace,
+    }
+  })
+  expect(metrics.height).toBeLessThanOrEqual(metrics.lineHeight * 1.15)
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth)
+  expect(metrics.overflowWrap).toBe('normal')
+  expect(metrics.whiteSpace).toBe('nowrap')
+  await primaryMoney.evaluate((element, value) => { element.textContent = value }, original)
+}
+
+async function expectBottomNavClearance(page: Page, finalContentSelector: string): Promise<void> {
+  const finalContent = page.locator(finalContentSelector)
+  await finalContent.scrollIntoViewIfNeeded()
+  await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }))
+  const finalBox = await finalContent.boundingBox()
+  const navBox = await page.getByRole('navigation', { name: 'เมนูด้านล่าง' }).boundingBox()
+  expect(finalBox).not.toBeNull()
+  expect(navBox).not.toBeNull()
+  expect(finalBox!.y + finalBox!.height).toBeLessThanOrEqual(navBox!.y - 12)
 }
