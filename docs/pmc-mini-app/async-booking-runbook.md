@@ -28,6 +28,7 @@ Acceptance evidence contains only safe booleans, counts, API names, role names, 
 
 - Cloud Run runtime identity: `roles/storage.objectUser` on the staging bucket only.
 - Cloud Run runtime identity: `roles/cloudtasks.enqueuer` on the booking-finalize queue only.
+- Cloud Run runtime identity: `roles/iam.serviceAccountUser` on the dedicated task-invoker identity only, so Cloud Tasks may attach its OIDC identity.
 - Dedicated task-invoker identity: `roles/run.invoker` on the existing Mini App service only.
 - No project-wide Owner, Editor, Storage Admin, Cloud Tasks Admin, or broad Secret Manager binding.
 
@@ -38,6 +39,7 @@ Documentation-only binding templates, to be filled with owner-approved shell var
 ```bash
 gcloud storage buckets add-iam-policy-binding gs://"$PMC_ASYNC_BUCKET" --member="serviceAccount:$PMC_RUNTIME_SERVICE_ACCOUNT" --role=roles/storage.objectUser
 gcloud tasks queues add-iam-policy-binding "$PMC_ASYNC_QUEUE" --location="$PMC_ASYNC_LOCATION" --member="serviceAccount:$PMC_RUNTIME_SERVICE_ACCOUNT" --role=roles/cloudtasks.enqueuer
+gcloud iam service-accounts add-iam-policy-binding "$PMC_ASYNC_TASK_INVOKER_EMAIL" --member="serviceAccount:$PMC_RUNTIME_SERVICE_ACCOUNT" --role=roles/iam.serviceAccountUser
 gcloud run services add-iam-policy-binding "$PMC_MINI_APP_SERVICE" --region="$PMC_ASYNC_LOCATION" --member="serviceAccount:$PMC_ASYNC_TASK_INVOKER_EMAIL" --role=roles/run.invoker
 ```
 

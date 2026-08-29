@@ -16,7 +16,8 @@ const FORBIDDEN_PROJECT_ROLES = new Set([
 ])
 
 export async function inspectPmcAsyncRuntime(inputs, execute = runGoogleCommand, _localEnvironment = process.env) {
-  const [apis, bucket, queue, service, bucketIam, queueIam, serviceIam, projectIam] = await Promise.all([
+  const taskInvokerEmail = dedicatedTaskInvokerEmail(inputs.project)
+  const [apis, bucket, queue, service, bucketIam, queueIam, serviceIam, taskInvokerIam, projectIam] = await Promise.all([
     safeJson(execute, ['gcloud', 'services', 'list', '--enabled', '--project', inputs.project, '--format=json']),
     safeJson(execute, ['gcloud', 'storage', 'buckets', 'describe', `gs://${inputs.bucket}`, '--project', inputs.project, '--format=json']),
     safeJson(execute, ['gcloud', 'tasks', 'queues', 'describe', inputs.queue, '--location', inputs.region, '--project', inputs.project, '--format=json']),
@@ -24,6 +25,7 @@ export async function inspectPmcAsyncRuntime(inputs, execute = runGoogleCommand,
     safeJson(execute, ['gcloud', 'storage', 'buckets', 'get-iam-policy', `gs://${inputs.bucket}`, '--project', inputs.project, '--format=json']),
     safeJson(execute, ['gcloud', 'tasks', 'queues', 'get-iam-policy', inputs.queue, '--location', inputs.region, '--project', inputs.project, '--format=json']),
     safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', inputs.service, '--region', inputs.region, '--project', inputs.project, '--format=json']),
+    safeJson(execute, ['gcloud', 'iam', 'service-accounts', 'get-iam-policy', taskInvokerEmail, '--project', inputs.project, '--format=json']),
     safeJson(execute, ['gcloud', 'projects', 'get-iam-policy', inputs.project, '--format=json']),
   ])
   const expectedTaskInvokerIdentity = dedicatedTaskInvokerIdentity(inputs.project)
@@ -33,14 +35,15 @@ export async function inspectPmcAsyncRuntime(inputs, execute = runGoogleCommand,
     && hasMemberRole(bucketIam, 'roles/storage.objectUser', runtimeIdentity)
     && hasMemberRole(queueIam, 'roles/cloudtasks.enqueuer', runtimeIdentity)
     && hasMemberRole(serviceIam, 'roles/run.invoker', expectedTaskInvokerIdentity)
+    && hasMemberRole(taskInvokerIam, 'roles/iam.serviceAccountUser', runtimeIdentity)
   const forbiddenBroadBindings = Boolean(runtimeIdentity)
     && [runtimeIdentity, expectedTaskInvokerIdentity].some((identity) => hasForbiddenProjectRole(projectIam, identity))
-  const roles = [...new Set([bucketIam, queueIam, serviceIam, projectIam].flatMap(roleNames))].sort()
+  const roles = [...new Set([bucketIam, queueIam, serviceIam, taskInvokerIam, projectIam].flatMap(roleNames))].sort()
   const apisReport = REQUIRED_APIS.map((name) => ({ name, enabled: enabledApiNames(apis).has(name) }))
   const retrySettings = queue ? retryReport(queue) : emptyRetryReport()
   const bucketReport = normalizeBucket(bucket, inputs.region)
   const queueReport = { exists: queue !== null, locationMatches: queue !== null, retrySettings }
-  const iam = { requiredBindingCount: 3, exactBindingsReady, forbiddenBroadBindings, roles }
+  const iam = { requiredBindingCount: 4, exactBindingsReady, forbiddenBroadBindings, roles }
   const safeDeployed = {
     serviceExists: deployed.serviceExists,
     asyncDisabled: deployed.asyncDisabled,
@@ -88,8 +91,10 @@ function deployedReport(service, expectedTaskInvokerIdentity) {
 }
 
 function dedicatedTaskInvokerIdentity(project) {
-  return `serviceAccount:pmc-mini-app-task-invoker@${project}.iam.gserviceaccount.com`
+  return `serviceAccount:${dedicatedTaskInvokerEmail(project)}`
 }
+
+function dedicatedTaskInvokerEmail(project) { return `pmc-mini-app-task-invoker@${project}.iam.gserviceaccount.com` }
 
 function normalizeBucket(bucket, region) {
   const snake = bucket && Object.hasOwn(bucket, 'uniform_bucket_level_access') && Object.hasOwn(bucket, 'public_access_prevention')

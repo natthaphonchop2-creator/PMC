@@ -277,6 +277,7 @@ export function PmcMiniApp({
       config={config}
       draft={draft}
       adapter={bookingAdapter}
+      initialStep={draft.state === 'READY_TO_CONFIRM' ? 4 : 0}
       onQueued={(queuedProjection) => setDraft(queuedProjection)}
       onExit={() => { navigateTo('HOME'); setDraft(null) }}
     />

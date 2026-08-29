@@ -174,6 +174,34 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(app.load).toHaveBeenCalledWith('draft-1')
   })
+
+  it('recovers an already-saved staged draft instead of uploading evidence again', async () => {
+    const user = userEvent.setup()
+    const current: BookingDraftProjection = { ...draft, input: completeInput(), version: 2 }
+    const latest: BookingDraftProjection = {
+      ...current,
+      state: 'READY_TO_CONFIRM',
+      version: 3,
+      paymentEvidenceCount: 3,
+      chatEvidenceCount: 1,
+    }
+    const app = {
+      ...adapter(),
+      uploadEvidenceBatch: vi.fn(async () => { throw new MiniAppApiError('DRAFT_NOT_UPLOADABLE', 409) }),
+      load: vi.fn(async () => latest),
+    }
+    renderWizard({ initialStep: 3, adapter: app, draft: current })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(screen.getByText('สลิป 3 รูป')).toBeVisible()
+    expect(screen.getByText('แชท 1 รูป')).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(app.load).toHaveBeenCalledWith('draft-1')
+  })
 })
 
 function renderWizard(options: {

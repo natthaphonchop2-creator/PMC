@@ -110,20 +110,20 @@ export function BookingWizard({
             if (newChats.length > 0) current = await adapter.upload(current.draftId, 'CHAT', newChats)
           }
           setDraft(current)
-          replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, dispatch)
-          replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, dispatch)
+          replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, current.paymentEvidenceCount, dispatch)
+          replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, current.chatEvidenceCount, dispatch)
         }
         current = await adapter.save(current.draftId, current.version, input)
         setDraft(current)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
       } catch (error) {
-        if (errorCode(error) === 'STALE_DRAFT_VERSION') {
+        if (errorCode(error) === 'STALE_DRAFT_VERSION' || errorCode(error) === 'DRAFT_NOT_UPLOADABLE') {
           try {
             const latest = await adapter.load(draft.draftId)
             if (latest.state === 'READY_TO_CONFIRM' && sameBookingInput(latest.input, input)) {
               setDraft(latest)
-              replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, dispatch)
-              replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, dispatch)
+              replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, latest.paymentEvidenceCount, dispatch)
+              replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, latest.chatEvidenceCount, dispatch)
               dispatch({ type: 'GO_TO_STEP', step: 4 })
               return
             }
@@ -310,8 +310,8 @@ function initialDraftState(draft: BookingDraftProjection, initialStep: number) {
   if (draft.input) {
     state.values = { ...state.values, ...draft.input, depositAmount: String(draft.input.depositAmount) }
   }
-  state.evidence.PAYMENT = draft.paymentEvidenceIds.map((id) => ({ id, name: 'สลิปที่แนบแล้ว', size: 0, type: 'image/jpeg', previewUrl: '' }))
-  state.evidence.CHAT = draft.chatEvidenceIds.map((id) => ({ id, name: 'แชทที่แนบแล้ว', size: 0, type: 'image/jpeg', previewUrl: '' }))
+  state.evidence.PAYMENT = savedEvidenceItems('PAYMENT', draft.paymentEvidenceIds, draft.paymentEvidenceCount)
+  state.evidence.CHAT = savedEvidenceItems('CHAT', draft.chatEvidenceIds, draft.chatEvidenceCount)
   return state
 }
 
@@ -352,6 +352,7 @@ function replaceUploadedEvidence(
   kind: 'PAYMENT' | 'CHAT',
   currentItems: BookingEvidenceItem[],
   fileIds: string[],
+  persistedCount: number | undefined,
   dispatch: Dispatch<BookingWizardAction>,
 ): void {
   for (const item of currentItems) {
@@ -360,12 +361,21 @@ function replaceUploadedEvidence(
   dispatch({
     type: 'REPLACE_EVIDENCE',
     kind,
-    items: fileIds.map((id) => ({
-      id,
-      name: kind === 'PAYMENT' ? 'สลิปที่แนบแล้ว' : 'แชทที่แนบแล้ว',
-      size: 0,
-      type: 'image/jpeg',
-      previewUrl: '',
-    })),
+    items: savedEvidenceItems(kind, fileIds, persistedCount),
   })
+}
+
+function savedEvidenceItems(
+  kind: 'PAYMENT' | 'CHAT',
+  fileIds: string[],
+  persistedCount: number | undefined,
+): BookingEvidenceItem[] {
+  const count = Math.max(fileIds.length, Number.isSafeInteger(persistedCount) ? persistedCount ?? 0 : 0)
+  return Array.from({ length: count }, (_, index) => ({
+    id: fileIds[index] ?? `saved-${kind.toLowerCase()}-${index + 1}`,
+    name: kind === 'PAYMENT' ? 'สลิปที่แนบแล้ว' : 'แชทที่แนบแล้ว',
+    size: 0,
+    type: 'image/jpeg',
+    previewUrl: '',
+  }))
 }

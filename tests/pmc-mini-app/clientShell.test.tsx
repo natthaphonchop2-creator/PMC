@@ -78,6 +78,35 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.createDraft).not.toHaveBeenCalled()
   })
 
+  it('resumes a saved staged draft on preview without asking for evidence again', async () => {
+    const api = miniAppApi()
+    const input = {
+      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    api.initialize = vi.fn(async () => 'raw-id-token')
+    api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'มัส', active: true }))
+    api.loadConfig = vi.fn(async () => config)
+    api.loadLatestActiveDraft = vi.fn(async () => ({
+      draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3, input: null,
+      paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+    api.loadDraft = vi.fn(async () => ({
+      draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3, input,
+      paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+
+    render(<PmcMiniApp api={api} />)
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(screen.getByText('สลิป 3 รูป')).toBeVisible()
+    expect(screen.getByText('แชท 1 รูป')).toBeVisible()
+    expect(api.createDraft).not.toHaveBeenCalled()
+  })
+
   it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
