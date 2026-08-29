@@ -93,19 +93,45 @@ export class JeraStoreError extends Error {
 export function createGoogleJeraReportStore(input: {
   spreadsheetId: string
   sheets: MiniAppSheetsPort
+  readCacheMs?: number
+  now?: () => number
 }): JeraReportStore {
   const { spreadsheetId, sheets } = input
   const mutexKey = `jera-report-store:${spreadsheetId}`
+  const readCacheMs = input.readCacheMs ?? 5_000
+  const now = input.now ?? Date.now
+  if (!Number.isSafeInteger(readCacheMs) || readCacheMs < 1_000 || readCacheMs > 60_000) {
+    throw new JeraStoreError('JERA_STORE_INVALID_INPUT')
+  }
+  const tableSnapshots = new Map<string, { expiresAt: number; rows: Array<{ rowNumber: number; cells: unknown[] }> }>()
+  const tableReads = new Map<string, Promise<Array<{ rowNumber: number; cells: unknown[] }>>>()
 
   async function readTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
-    const range = `'${tab}'!A1:${columnName(headers.length)}`
-    const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
-    const actualHeader = (values[0] ?? []).map(stringValue)
-    if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
-    return values.slice(1).flatMap((cells, index) => cells.every(blank)
-      ? []
-      : [{ rowNumber: index + 2, cells }])
+    const cached = tableSnapshots.get(tab)
+    if (cached && cached.expiresAt > now()) return structuredClone(cached.rows)
+    const active = tableReads.get(tab)
+    if (active) return structuredClone(await active)
+
+    const operation = (async () => {
+      const range = `'${tab}'!A1:${columnName(headers.length)}`
+      const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
+      const actualHeader = (values[0] ?? []).map(stringValue)
+      if (!sameHeader(actualHeader, headers)) throw new JeraStoreError('JERA_STORE_INCOMPATIBLE_HEADER')
+      const rows = values.slice(1).flatMap((cells, index) => cells.every(blank)
+        ? []
+        : [{ rowNumber: index + 2, cells }])
+      tableSnapshots.set(tab, { expiresAt: now() + readCacheMs, rows: structuredClone(rows) })
+      return rows
+    })()
+    tableReads.set(tab, operation)
+    try {
+      return structuredClone(await operation)
+    } finally {
+      if (tableReads.get(tab) === operation) tableReads.delete(tab)
+    }
   }
+
+  function invalidateTable(tab: string): void { tableSnapshots.delete(tab) }
 
   async function writeExisting(tab: string, headers: readonly string[], writes: Array<{ rowNumber: number; cells: unknown[] }>): Promise<void> {
     if (writes.length === 0) return
@@ -114,6 +140,7 @@ export function createGoogleJeraReportStore(input: {
       range: `'${tab}'!A${rowNumber}:${end}${rowNumber}`,
       values: [cells],
     })))
+    invalidateTable(tab)
   }
 
   async function mutateCache(
@@ -168,6 +195,7 @@ export function createGoogleJeraReportStore(input: {
       await writeExisting(CACHE_TAB, JERA_API_CACHE_HEADERS, updates)
       if (additions.length > 0) {
         await sheets.append(spreadsheetId, `'${CACHE_TAB}'!A:${columnName(JERA_API_CACHE_HEADERS.length)}`, additions)
+        invalidateTable(CACHE_TAB)
       }
       return { inserted, updated, unchanged, removed }
     })
@@ -189,6 +217,7 @@ export function createGoogleJeraReportStore(input: {
       await writeExisting(STATE_TAB, JERA_SYNC_STATE_HEADERS, [{ rowNumber: existing.rowNumber, cells: stateToCells(normalized) }])
     } else {
       await sheets.append(spreadsheetId, `'${STATE_TAB}'!A:${columnName(JERA_SYNC_STATE_HEADERS.length)}`, [stateToCells(normalized)])
+      invalidateTable(STATE_TAB)
     }
   }
 
@@ -223,6 +252,7 @@ export function createGoogleJeraReportStore(input: {
       const normalized = validateAudit(audit)
       await readTable(AUDIT_TAB, JERA_SYNC_AUDIT_HEADERS)
       await sheets.append(spreadsheetId, `'${AUDIT_TAB}'!A:${columnName(JERA_SYNC_AUDIT_HEADERS.length)}`, [auditToCells(normalized)])
+      invalidateTable(AUDIT_TAB)
     },
     async claimLease(lease) {
       return withMutex(mutexKey, async () => {

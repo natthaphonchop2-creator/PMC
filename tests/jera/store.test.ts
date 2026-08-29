@@ -9,6 +9,25 @@ import type { JeraNormalizedRow } from '../../server/jera/contracts'
 import { createGoogleJeraReportStore, type JeraSyncAuditRecord } from '../../server/jera/store'
 
 describe('Google Sheets JERA report store', () => {
+  it('reuses a short-lived single-flight snapshot and invalidates it after a write', async () => {
+    const sheets = sheetsFixture()
+    const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await Promise.all([
+      store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }),
+      store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }),
+      store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' }),
+    ])
+    await store.getSyncState('PAYMENT:key')
+    await store.getSyncState('PAYMENT:key')
+
+    expect(sheets.readCount).toBe(2)
+
+    await store.upsertRows('PAYMENT', [paymentRow()])
+    await store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' })
+    expect(sheets.readCount).toBe(3)
+  })
+
   it('upserts the same source without duplicate rows', async () => {
     const sheets = sheetsFixture()
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
@@ -164,11 +183,13 @@ function hash(character: string): string { return character.repeat(64) }
 class MemorySheets implements MiniAppSheetsPort {
   private readonly tabs = new Map<string, unknown[][]>()
   writeCount = 0
+  readCount = 0
 
   setTab(tab: string, rows: unknown[][]): void { this.tabs.set(tab, structuredClone(rows)) }
   tab(tab: string): unknown[][] { return structuredClone(this.tabs.get(tab) ?? []) }
 
   async batchGet(_spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
+    this.readCount += 1
     return Object.fromEntries(ranges.map((range) => [range, this.tab(tabName(range))]))
   }
 
