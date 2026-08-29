@@ -91,12 +91,6 @@ export function PmcMiniApp({
         if (!active) return
         setSession(nextSession)
         setConfig(nextConfig)
-        const activeDraft = await api.loadLatestActiveDraft(token)
-        if (!active || !activeDraft) return
-        const resumedDraft = await hydrateActiveDraft(api, token, activeDraft)
-        if (!active) return
-        setDraft(resumedDraft)
-        setView('BOOKING')
       } catch (error) {
         if (!active) return
         const code = safeErrorCode(error)

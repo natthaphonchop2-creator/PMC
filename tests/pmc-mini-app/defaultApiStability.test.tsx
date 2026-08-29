@@ -26,7 +26,7 @@ afterEach(() => {
 })
 
 describe('PMC Mini App default browser API stability', () => {
-  it('loads LIFF, session, and config only once across its own state renders', async () => {
+  it('loads only startup APIs once and leaves active-draft lookup for a booking action', async () => {
     const request = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/client-config')) return json(200, { miniAppId: 'mini-id' })
@@ -49,7 +49,6 @@ describe('PMC Mini App default browser API stability', () => {
       '/api/mini-app/client-config',
       '/api/mini-app/session',
       '/api/mini-app/config',
-      '/api/mini-app/booking-drafts/active',
     ])
   })
 })
