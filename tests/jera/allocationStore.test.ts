@@ -74,19 +74,14 @@ describe('Google Sheets JERA allocation store', () => {
     expect((await store.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') })).details).toEqual([next])
   })
 
-  it('persists coverage cursor and counts across recreation and owner-checks its lease', async () => {
+  it('persists coverage cursor and counts across recreation', async () => {
     const sheets = fixture()
     const first = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
     const coverage = coverageRow({ cursor: 7, paymentRowCount: 9, successfulDetailCount: 7 })
     await first.saveCoverage(coverage)
-    await expect(first.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-a', now: '2026-08-29T10:00:00.000Z', ttlMs: 60_000 })).resolves.toBe(true)
-    await expect(first.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-b', now: '2026-08-29T10:00:30.000Z', ttlMs: 60_000 })).resolves.toBe(false)
-    await first.releaseCoverageLease(coverage.dayKey, 'worker-b')
 
     const second = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
-    expect(await second.getCoverage(coverage.dayKey)).toMatchObject({ cursor: 7, paymentRowCount: 9, successfulDetailCount: 7, leaseOwner: 'worker-a' })
-    await second.releaseCoverageLease(coverage.dayKey, 'worker-a')
-    expect((await second.getCoverage(coverage.dayKey))?.leaseOwner).toBeNull()
+    expect(await second.getCoverage(coverage.dayKey)).toMatchObject({ cursor: 7, paymentRowCount: 9, successfulDetailCount: 7 })
   })
 
   it('returns at most twenty oldest incomplete coverage rows', async () => {
@@ -109,24 +104,6 @@ describe('Google Sheets JERA allocation store', () => {
     const rows = await store.listIncompleteCoverage(99)
     expect(rows).toHaveLength(20)
     expect(rows.map((row) => row.lastAttemptAt)).toEqual([...rows.map((row) => row.lastAttemptAt)].sort())
-  })
-
-  it('fences competing stores so only one claimant wins and a stale owner cannot release a newer lease', async () => {
-    const sheets = fixture()
-    const coverage = coverageRow()
-    const first = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
-    const second = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
-    await first.saveCoverage(coverage)
-
-    const claims = await Promise.all([
-      first.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-a', now: '2026-08-29T10:00:00.000Z', ttlMs: 1_000 }),
-      second.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-b', now: '2026-08-29T10:00:00.000Z', ttlMs: 1_000 }),
-    ])
-    expect(claims.filter(Boolean)).toHaveLength(1)
-    await second.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-b', now: '2026-08-29T10:00:02.000Z', ttlMs: 60_000 })
-    await first.releaseCoverageLease(coverage.dayKey, 'worker-a')
-
-    expect((await second.getCoverage(coverage.dayKey))?.leaseOwner).toBe('worker-b')
   })
 
   it('accepts only canonical exact-day source cache keys for coverage', async () => {

@@ -57,8 +57,6 @@ export interface JeraAllocationStore {
   getCoverage(dayKey: string): Promise<JeraAllocationCoverage | null>
   saveCoverage(value: JeraAllocationCoverage): Promise<void>
   listIncompleteCoverage(limit: number): Promise<JeraAllocationCoverage[]>
-  claimCoverageLease(input: { dayKey: string; owner: string; now: string; ttlMs: number }): Promise<boolean>
-  releaseCoverageLease(dayKey: string, owner: string): Promise<void>
 }
 
 const DETAIL_TAB = 'JERA_PAYMENT_DETAIL_CACHE'
@@ -203,26 +201,6 @@ export function createGoogleJeraAllocationStore(input: { spreadsheetId: string; 
       if (!Number.isSafeInteger(limit) || limit < 1) throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INVALID_INPUT')
       return (await coverageRows()).map((row) => row.value).filter((row) => row.status === 'INCOMPLETE')
         .sort((a, b) => (a.lastAttemptAt ?? '').localeCompare(b.lastAttemptAt ?? '') || a.dayKey.localeCompare(b.dayKey)).slice(0, Math.min(limit, 20))
-    },
-    async claimCoverageLease(lease) {
-      return withMutex(mutexKey, async () => {
-        assertHash(lease.dayKey); assertToken(lease.owner); const now = instant(lease.now)
-        if (!Number.isSafeInteger(lease.ttlMs) || lease.ttlMs < 1_000 || lease.ttlMs > 900_000) throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INVALID_INPUT')
-        const current = (await coverageRows()).find((row) => row.value.dayKey === lease.dayKey)?.value
-        if (!current) return false
-        if (current.leaseOwner && current.leaseOwner !== lease.owner && current.leaseExpiresAt && Date.parse(current.leaseExpiresAt) > Date.parse(now)) return false
-        const leaseExpiresAt = new Date(Date.parse(now) + lease.ttlMs).toISOString()
-        await writeCoverage({ ...current, leaseOwner: lease.owner, leaseExpiresAt })
-        const verified = (await coverageRows()).find((row) => row.value.dayKey === lease.dayKey)?.value
-        return verified?.leaseOwner === lease.owner && verified.leaseExpiresAt === leaseExpiresAt
-      })
-    },
-    async releaseCoverageLease(dayKey, owner) {
-      await withMutex(mutexKey, async () => {
-        assertHash(dayKey); assertToken(owner)
-        const current = (await coverageRows()).find((row) => row.value.dayKey === dayKey)?.value
-        if (current?.leaseOwner === owner) await writeCoverage({ ...current, leaseOwner: null, leaseExpiresAt: null })
-      })
     },
   }
 }
