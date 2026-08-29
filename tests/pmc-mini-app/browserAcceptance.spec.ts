@@ -61,7 +61,9 @@ test('active staff can traverse normal booking, multiple evidence, preview, and 
     button.click()
     button.click()
   })
-  await expect(page.getByText('PMC-PREVIEW-0001')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+  await expect(page.getByRole('status')).toHaveText('บันทึกการจองแล้ว')
+  await expect(page.getByText('PMC-PREVIEW-0001')).toHaveCount(0)
   await expect(page.getByText('ยืนยันการจองไม่สำเร็จ กรุณาลองอีกครั้ง')).toHaveCount(0)
 })
 
