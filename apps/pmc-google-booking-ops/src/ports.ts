@@ -2,6 +2,8 @@ import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { CalendarInterval } from './domain/automaticQueue'
 import type { MiniAppAsyncRequestRecord } from '../../../shared/pmcMiniAppAsyncState'
 import type { StockAuditEvent, StockDocumentSummary, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
+import type { ExpenseAuditEvent, ExpenseMonthlyProjection, ExpenseSubmission } from '../../../shared/pmcExpense'
+import type { ExpensePrivateAttachment, MiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress'
 
 export interface Clock {
   nowIso(): string
@@ -190,6 +192,65 @@ export interface StockRepository {
   listUnresolvedPrepared(): StockAuditEvent[]
   findAcceptedAuditByRequestId(requestId: string): StockAuditEvent | null
   appendAudit(event: StockAuditEvent): void
+}
+
+export interface ExpenseRecoveryCandidate {
+  expenseId: string
+  monthKey: string
+  rootRequestId: string
+  preparedAt: string
+}
+
+export interface ExpenseRepository {
+  ensureMonth(monthKey: string, createdAt: string): {
+    ledgerSpreadsheetId: string
+    monthFolderId: string
+  }
+  reserveRequest(input: {
+    commandIdempotencyKey: string
+    rootRequestId: string
+    commandType: MiniAppExpenseCommand['commandType']
+    commandFingerprint: string
+    expenseId: string
+    monthKey: string
+    createdAt: string
+  }): {
+    state: 'RESERVED' | 'REPLAY'
+    expenseId: string
+    monthKey: string
+    resultJson: string | null
+  }
+  completeRequest(input: {
+    commandIdempotencyKey: string
+    commandFingerprint: string
+    resultJson: string
+    updatedAt: string
+  }): void
+  getSubmission(monthKey: string, expenseId: string): ExpenseSubmission | null
+  insertPrepared(submission: ExpenseSubmission): ExpenseSubmission
+  updateSubmission(
+    monthKey: string,
+    expenseId: string,
+    expectedVersion: number,
+    patch: Partial<ExpenseSubmission>,
+  ): ExpenseSubmission
+  listMonth(monthKey: string): ExpenseSubmission[]
+  listAttachments(monthKey: string, expenseId: string): ExpensePrivateAttachment[]
+  appendAttachments(monthKey: string, attachments: ExpensePrivateAttachment[]): void
+  effectiveByBookDailyKey(monthKey: string, bookDailyKey: string): ExpenseSubmission | null
+  appendAudit(event: ExpenseAuditEvent): void
+  auditForExpense(expenseId: string): ExpenseAuditEvent[]
+  replaceMonthlySummary(
+    monthKey: string,
+    projection: ExpenseMonthlyProjection,
+    calculatedAt: string,
+  ): void
+  verifyPrivateAttachments(
+    monthKey: string,
+    expenseId: string,
+    attachments: ExpensePrivateAttachment[],
+  ): void
+  listRecoveryCandidates(limit?: number): ExpenseRecoveryCandidate[]
 }
 
 export interface DrivePort {

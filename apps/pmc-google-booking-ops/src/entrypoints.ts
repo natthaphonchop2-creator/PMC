@@ -28,6 +28,7 @@ import {
   runDailyOperationsWorkflow,
   runBookingRetriesWorkflow,
   runIntegrityAndBackupWorkflow,
+  runExpenseRecoveryWorkflow,
   sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
   setupSystem,
@@ -52,6 +53,7 @@ import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
 import type { BookingCase } from './domain/types'
 import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
 import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
+import { processExpenseIngressResponse, type ExpenseIngressPorts } from './expense/ingress'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -75,12 +77,23 @@ export function doPost(event: AppsScriptDoPostEvent) {
 
 export function processBookingDoPost(
   event: AppsScriptDoPostEvent,
-  ports: BookingPorts & Partial<Pick<StockIngressPorts, 'stock' | 'commandFingerprint' | 'allocateId'>>,
+  ports: BookingPorts
+    & Partial<Pick<StockIngressPorts, 'stock' | 'commandFingerprint' | 'allocateId'>>
+    & Partial<Pick<
+      ExpenseIngressPorts,
+      | 'expense'
+      | 'expenseSecrets'
+      | 'expenseCommandFingerprint'
+      | 'allocateExpenseId'
+    >>,
 ) {
   const evidenceCandidate = event.postData?.contents.startsWith('{"kind":"MINI_APP_EVIDENCE"')
   const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_STOCK') {
     return processStockIngressResponse(parsed, requireStockIngressPorts(ports))
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE') {
+    return processExpenseIngressResponse(parsed, requireExpenseIngressPorts(ports))
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EVIDENCE') {
     return uploadMiniAppEvidence(parsed, ports)
@@ -97,6 +110,25 @@ export function processBookingDoPost(
     return { ok: true as const }
   }
   throw new Error('unsupported ingress kind')
+}
+
+function requireExpenseIngressPorts(
+  ports: BookingPorts
+    & Partial<Pick<
+      ExpenseIngressPorts,
+      | 'expense'
+      | 'expenseSecrets'
+      | 'expenseCommandFingerprint'
+      | 'allocateExpenseId'
+    >>,
+): ExpenseIngressPorts {
+  if (
+    !ports.expense
+    || !ports.expenseSecrets
+    || typeof ports.expenseCommandFingerprint !== 'function'
+    || typeof ports.allocateExpenseId !== 'function'
+  ) throw new Error('expense runtime is unavailable')
+  return ports as BookingPorts & ExpenseIngressPorts
 }
 
 function bookingIngressResult(booking: BookingCase): MiniAppBookingIngressResult {
@@ -181,6 +213,10 @@ export function applyPmcExpensePermissions() {
 
 export function setupPmcExpenseFinanceStorage() {
   return setupExpenseFinanceStorageWorkflow()
+}
+
+export function runPmcExpenseRecovery() {
+  return runExpenseRecoveryWorkflow()
 }
 
 export function preparePmcStaffAeMigration() {

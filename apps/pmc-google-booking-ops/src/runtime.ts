@@ -51,10 +51,14 @@ import {
 } from './repositories'
 import { createGoogleMiniAppRequestStatePort } from './adapters/miniAppRequestState'
 import { canonicalMiniAppStockCommand } from '../../../shared/pmcMiniAppStockIngress'
+import { canonicalMiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress'
 import {
   configureStockManagers,
   type StockIngressPorts,
 } from './stock/ingress'
+import { createGoogleExpenseRepository } from './expense/repository'
+import { runExpenseRecovery, type ExpenseRecoveryResult } from './expense/commands'
+import type { ExpenseIngressPorts } from './expense/ingress'
 import {
   createInitialCallTask,
   runDailyCallReminders,
@@ -158,7 +162,7 @@ function bangkokNow(): string {
   return Utilities.formatDate(new Date(), 'Asia/Bangkok', "yyyy-MM-dd'T'HH:mm:ssXXX")
 }
 
-export function createRuntime(): BookingPorts & StockIngressPorts {
+export function createRuntime(): BookingPorts & StockIngressPorts & ExpenseIngressPorts {
   const properties = PropertiesService.getScriptProperties().getProperties()
   validateRuntimeProperties(properties)
   const spreadsheet = SpreadsheetApp.openById(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
@@ -168,6 +172,10 @@ export function createRuntime(): BookingPorts & StockIngressPorts {
   const clock = { nowIso: bangkokNow }
   const crypto = createAppsScriptCryptoPort()
   const stock = createStockRepository(store)
+  const expense = createGoogleExpenseRepository({
+    masterSpreadsheetId: properties[SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId] ?? '',
+    financeFolderId: properties[SCRIPT_PROPERTY_KEYS.financeFolderId] ?? '',
+  })
   const locks = {
     withLock<T>(operation: () => T): T {
       const lock = LockService.getScriptLock()
@@ -194,6 +202,16 @@ export function createRuntime(): BookingPorts & StockIngressPorts {
     stock,
     commandFingerprint: (command) => crypto.sha256Hex(canonicalMiniAppStockCommand(command)),
     allocateId: (prefix) => `${prefix}-${Utilities.getUuid()}`,
+    expense,
+    expenseSecrets: {
+      expenseIngressSecret: () => {
+        const secret = properties[SCRIPT_PROPERTY_KEYS.expenseIngressSecret]?.trim()
+        if (!secret) throw new Error('expense runtime is unavailable')
+        return secret
+      },
+    },
+    expenseCommandFingerprint: (command) => crypto.sha256Hex(canonicalMiniAppExpenseCommand(command)),
+    allocateExpenseId: (monthKey) => `EXP-${monthKey.replace('-', '')}-${Utilities.getUuid()}`,
     drive: createGoogleDrivePort(properties[SCRIPT_PROPERTY_KEYS.driveRootId]),
     calendar: createGoogleCalendarPort(),
     line: createGoogleLinePort(properties[SCRIPT_PROPERTY_KEYS.lineAccessToken]),
@@ -220,6 +238,28 @@ export function createRuntime(): BookingPorts & StockIngressPorts {
       properties[SCRIPT_PROPERTY_KEYS.spreadsheetId],
       properties[SCRIPT_PROPERTY_KEYS.backupFolderId],
     ),
+  }
+}
+
+export function runExpenseRecoveryWorkflow(): ExpenseRecoveryResult {
+  try {
+    const runtime = createRuntime()
+    return runExpenseRecovery({
+      clock: runtime.clock,
+      locks: runtime.locks,
+      staff: { findById: (staffId) => runtime.config.findStaffById(staffId) },
+      expense: runtime.expense,
+      crypto: { sha256Hex: runtime.crypto.sha256Hex },
+      commandFingerprint: runtime.expenseCommandFingerprint,
+      allocateExpenseId: runtime.allocateExpenseId,
+    })
+  } catch {
+    return {
+      inspected: 0,
+      recovered: 0,
+      abandoned: 0,
+      errors: ['EXPENSE_STORAGE_UNAVAILABLE'],
+    }
   }
 }
 

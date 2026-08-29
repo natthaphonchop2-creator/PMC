@@ -113,6 +113,17 @@ export const MINI_APP_EXPENSE_SAFE_ERROR_CODES = [
 
 export type MiniAppExpenseSafeErrorCode = typeof MINI_APP_EXPENSE_SAFE_ERROR_CODES[number]
 
+export type MiniAppExpenseIngressResponse =
+  | { ok: true; result: ExpenseCommandResult }
+  | { ok: false; error: MiniAppExpenseSafeErrorCode }
+
+export function isMiniAppExpenseSafeErrorCode(
+  value: unknown,
+): value is MiniAppExpenseSafeErrorCode {
+  return typeof value === 'string'
+    && (MINI_APP_EXPENSE_SAFE_ERROR_CODES as readonly string[]).includes(value)
+}
+
 const COMMAND_KEYS = [
   'rootRequestId',
   'commandIdempotencyKey',
@@ -196,11 +207,11 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
       || !nullableBoundedText(value.payload.counterpartyName, 160)
       || !boundedText(value.payload.description, 500)
       || !nullablePaymentMethod(value.payload.paymentMethod)
-      || !Number.isSafeInteger(value.payload.expectedAttachmentCount)
+      || !safeInteger(value.payload.expectedAttachmentCount)
       || value.payload.expectedAttachmentCount < 1
       || value.payload.expectedAttachmentCount > 5
       || !sha256(value.payload.expectedManifestHash)
-      || !Number.isSafeInteger(value.payload.expectedRevision)
+      || !safeInteger(value.payload.expectedRevision)
       || value.payload.expectedRevision < 0
     ) {
       throw new Error('invalid mini app expense command payload')
@@ -229,9 +240,9 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
     if (
       !hasExactKeys(value.payload, keys)
       || !safeId(value.payload.expenseId)
-      || !Number.isSafeInteger(value.payload.expectedVersion)
+      || !safeInteger(value.payload.expectedVersion)
       || value.payload.expectedVersion < 1
-      || !Number.isSafeInteger(value.payload.expectedRevision)
+      || !safeInteger(value.payload.expectedRevision)
       || value.payload.expectedRevision < 0
       || !sha256(value.payload.expectedManifestHash)
       || !Array.isArray(value.payload.attachments)
@@ -264,7 +275,7 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
     if (
       !hasExactKeys(value.payload, keys)
       || !safeId(value.payload.expenseId)
-      || !Number.isSafeInteger(value.payload.expectedVersion)
+      || !safeInteger(value.payload.expectedVersion)
       || value.payload.expectedVersion < 1
       || !boundedText(value.payload.reason, 300)
       || value.payload.reason.trim().length < 3
@@ -302,7 +313,7 @@ function orderedAttachment(value: unknown): ExpensePrivateAttachment {
     !hasExactKeys(value, keys)
     || !safeId(value.attachmentId)
     || !safeId(value.expenseId)
-    || !Number.isSafeInteger(value.ordinal)
+    || !safeInteger(value.ordinal)
     || value.ordinal < 1
     || value.ordinal > 5
     || (value.mediaType !== 'image/jpeg' && value.mediaType !== 'image/png')
@@ -349,7 +360,11 @@ function sha256(value: unknown): value is string {
 }
 
 function positiveSatang(value: unknown): value is number {
-  return Number.isSafeInteger(value) && value > 0
+  return safeInteger(value) && value > 0
+}
+
+function safeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value)
 }
 
 function boundedText(value: unknown, max: number): value is string {

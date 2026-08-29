@@ -27,6 +27,7 @@ function migratePmcFinancePermissionColumns() { return PmcBooking.migratePmcFina
 function preparePmcExpensePermissions() { return PmcBooking.preparePmcExpensePermissions(); }
 function applyPmcExpensePermissions() { return PmcBooking.applyPmcExpensePermissions(); }
 function setupPmcExpenseFinanceStorage() { return PmcBooking.setupPmcExpenseFinanceStorage(); }
+function runPmcExpenseRecovery() { return PmcBooking.runPmcExpenseRecovery(); }
 function preparePmcStaffAeMigration() { return PmcBooking.preparePmcStaffAeMigration(); }
 function preparePmcAutoQueueMigration() { return PmcBooking.preparePmcAutoQueueMigration(); }
 function applyPmcAutoQueueMigration() { return PmcBooking.applyPmcAutoQueueMigration(); }
