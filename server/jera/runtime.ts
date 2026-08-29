@@ -10,6 +10,7 @@ import { createGoogleJeraAllocationStore } from './allocationStore.js'
 import { createGoogleJeraAllocationLeasePort } from './allocationLeaseStore.js'
 import { createGoogleJeraAllocationTaskQueue } from './allocationTaskQueue.js'
 import { createJeraAllocationWorker, type JeraAllocationWorker } from './allocationWorker.js'
+import { createJeraFinanceService, type JeraFinanceService } from './financeService.js'
 
 export interface JeraRuntime {
   config: JeraConfig
@@ -17,12 +18,14 @@ export interface JeraRuntime {
   store: JeraReportStore
   api: JeraMiniAppApi
   allocationWorker: JeraAllocationWorker | null
+  financeService: JeraFinanceService | null
 }
 
 export type JeraRuntimeConstructor = (input: {
   config: JeraConfig
   spreadsheetId: string
   sheets: MiniAppSheetsPort
+  categoryMoneyEnabled: boolean
 }) => JeraRuntime
 
 export function createJeraRuntime(
@@ -33,7 +36,10 @@ export function createJeraRuntime(
   try {
     const config = readJeraConfig(env)
     if (!config) return undefined
-    return construct({ config, spreadsheetId: google.spreadsheetId, sheets: google.sheets })
+    return construct({
+      config, spreadsheetId: google.spreadsheetId, sheets: google.sheets,
+      categoryMoneyEnabled: env.JERA_FINANCE_CATEGORY_MONEY_ENABLED === 'true',
+    })
   } catch {
     return undefined
   }
@@ -43,6 +49,7 @@ function constructJeraRuntime(input: {
   config: JeraConfig
   spreadsheetId: string
   sheets: MiniAppSheetsPort
+  categoryMoneyEnabled: boolean
 }): JeraRuntime {
   const tokens = createJeraTokenClient(input.config)
   const client = createJeraReadClient(input.config, tokens)
@@ -52,21 +59,28 @@ function constructJeraRuntime(input: {
     staleAfterMs: input.config.syncIntervalMinutes * 2 * 60_000,
   })
   const schedulerIdentity = input.config.scheduler ? createGoogleSchedulerIdentity() : null
+  const allocationStore = input.config.allocation
+    ? createGoogleJeraAllocationStore({ spreadsheetId: input.spreadsheetId, sheets: input.sheets })
+    : null
+  const allocationQueue = input.config.allocation ? createGoogleJeraAllocationTaskQueue({
+    projectId: input.config.allocation.projectId,
+    location: input.config.allocation.location,
+    queueName: input.config.allocation.queueName,
+    workerUrl: input.config.allocation.workerUrl,
+    workerAudience: input.config.allocation.workerAudience,
+    taskInvokerEmail: input.config.allocation.taskInvokerEmail,
+  }) : null
   const allocationWorker = input.config.allocation ? createJeraAllocationWorker({
     client: createJeraReadClient(input.config, tokens, { mode: 'INTERACTIVE', replayUnauthorized: false }),
     reportStore: store,
-    allocationStore: createGoogleJeraAllocationStore({ spreadsheetId: input.spreadsheetId, sheets: input.sheets }),
+    allocationStore: allocationStore!,
     lease: createGoogleJeraAllocationLeasePort({ bucketName: input.config.allocation.leaseBucket }),
-    queue: createGoogleJeraAllocationTaskQueue({
-      projectId: input.config.allocation.projectId,
-      location: input.config.allocation.location,
-      queueName: input.config.allocation.queueName,
-      workerUrl: input.config.allocation.workerUrl,
-      workerAudience: input.config.allocation.workerAudience,
-      taskInvokerEmail: input.config.allocation.taskInvokerEmail,
-    }),
+    queue: allocationQueue!,
     maxDetailsPerRun: input.config.allocation.maxDetailsPerRun,
     continuationDelaySeconds: input.config.allocation.continuationDelaySeconds,
+  }) : null
+  const financeService = allocationStore && allocationQueue ? createJeraFinanceService({
+    coordinator, allocationStore, allocationQueue, categoryMoneyEnabled: input.categoryMoneyEnabled,
   }) : null
   const allocationIdentity = allocationWorker ? createGoogleSchedulerIdentity() : null
   const api = createJeraMiniAppApi({
@@ -85,9 +99,20 @@ function constructJeraRuntime(input: {
         audience: input.config.allocation.workerAudience,
         serviceAccountEmail: input.config.allocation.taskInvokerEmail,
       },
+      ...(financeService ? {
+        finance: {
+          service: financeService,
+          seed: {
+            identity: allocationIdentity,
+            audience: input.config.allocation.workerAudience,
+            serviceAccountEmail: input.config.allocation.taskInvokerEmail,
+            schedulerId: 'finance-daily-seed',
+          },
+        },
+      } : {}),
     } : {}),
   })
-  return { config: input.config, coordinator, store, api, allocationWorker }
+  return { config: input.config, coordinator, store, api, allocationWorker, financeService }
 }
 
 function createGoogleSchedulerIdentity(): JeraSchedulerIdentityPort {

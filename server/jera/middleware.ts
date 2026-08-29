@@ -22,6 +22,7 @@ import type { JeraSyncCoordinator } from './syncCoordinator.js'
 import type { JeraReportStore, JeraSyncStateRecord } from './store.js'
 import type { JeraAllocationWorker } from './allocationWorker.js'
 import { MAX_JERA_ALLOCATION_ATTEMPT } from './allocationTaskQueue.js'
+import { JeraFinanceServiceError, type JeraFinanceService } from './financeService.js'
 
 export interface JeraMiniAppApi {
   handle(
@@ -44,6 +45,13 @@ const ADDITIONAL_TYPES = new Set<JeraSourceReportType>([
 
 export function isJeraMiniAppApiPath(pathname: string): boolean {
   return pathname === '/api/mini-app/integration-health' || pathname.startsWith('/api/mini-app/reports/')
+    || isJeraFinanceApiPath(pathname)
+}
+
+export function isJeraFinanceApiPath(pathname: string): boolean {
+  return pathname === '/api/mini-app/finance/daily'
+    || pathname === '/api/mini-app/finance/daily/refresh'
+    || pathname === '/api/mini-app/finance/monthly'
 }
 
 export function createJeraMiniAppApi(options: {
@@ -63,6 +71,15 @@ export function createJeraMiniAppApi(options: {
     audience: string
     serviceAccountEmail: string
   }
+  finance?: {
+    service: JeraFinanceService
+    seed?: {
+      identity: JeraSchedulerIdentityPort
+      audience: string
+      serviceAccountEmail: string
+      schedulerId: string
+    }
+  }
 }): JeraMiniAppApi {
   const now = options.now ?? (() => new Date())
   const id = options.id ?? randomUUID
@@ -77,9 +94,23 @@ export function createJeraMiniAppApi(options: {
     audience: requiredHttpsUrl(options.allocation.audience),
     serviceAccountEmail: requiredServiceAccountEmail(options.allocation.serviceAccountEmail),
   } : null
+  const finance = options.finance ? {
+    service: options.finance.service,
+    seed: options.finance.seed ? {
+      ...options.finance.seed,
+      audience: requiredHttpsUrl(options.finance.seed.audience),
+      serviceAccountEmail: requiredServiceAccountEmail(options.finance.seed.serviceAccountEmail),
+      schedulerId: safeCorrelationId(options.finance.seed.schedulerId),
+    } : null,
+  } : null
 
   return {
     async handle(req, res, url, authenticated) {
+      if (isJeraFinanceApiPath(url.pathname)) {
+        if (!finance) { respond(res, 503, { error: 'FINANCE_CACHE_UNAVAILABLE' }); return true }
+        await handleFinance(req, res, url, authenticated, defaultBranchUuid, finance.service)
+        return true
+      }
       if (url.pathname === '/api/mini-app/integration-health') {
         if (req.method !== 'GET') return handledMethodNotAllowed(res)
         try {
@@ -137,6 +168,26 @@ export function createJeraMiniAppApi(options: {
       return true
     },
     async handleInternal(req, res, url) {
+      if (url.pathname === '/internal/mini-app/finance-daily-seed') {
+        if (req.method !== 'POST') return handledMethodNotAllowed(res)
+        if (!finance?.seed) { respond(res, 503, { error: 'FINANCE_REFRESH_UNAVAILABLE' }); return true }
+        const authorized = await authorizeInternal(req, finance.seed)
+        if (authorized === 'UNAUTHORIZED') { respond(res, 401, { error: 'FINANCE_REFRESH_UNAVAILABLE' }); return true }
+        if (authorized === 'FORBIDDEN') { respond(res, 403, { error: 'FINANCE_FORBIDDEN' }); return true }
+        if ([...url.searchParams.keys()].length > 0) { respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return true }
+        if (!await requestBodyIsEmpty(req, 256)) { respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return true }
+        try {
+          const result = await finance.service.refreshDay({
+            branchUuid: defaultBranchUuid,
+            eventDate: previousBangkokDate(now()),
+            actor: { type: 'SCHEDULER', schedulerId: finance.seed.schedulerId },
+          })
+          respond(res, 202, result)
+        } catch (error) {
+          respondFinanceRefreshError(res, error)
+        }
+        return true
+      }
       if (url.pathname === '/internal/mini-app/jera-allocation-worker') {
         if (req.method !== 'POST') return handledMethodNotAllowed(res)
         if (!allocation) {
@@ -197,6 +248,114 @@ export function createJeraMiniAppApi(options: {
   }
 }
 
+async function handleFinance(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  authenticated: AuthenticatedMiniAppContext,
+  branchUuid: string,
+  service: JeraFinanceService,
+): Promise<void> {
+  if (url.pathname === '/api/mini-app/finance/daily') {
+    if (req.method !== 'GET') { handledMethodNotAllowed(res); return }
+    const query = exactSearch(url.searchParams, ['startDate', 'endDate'])
+    if (!query || !validFinanceRange(query.startDate!, query.endDate!)) {
+      respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return
+    }
+    try {
+      respond(res, 200, await service.readDaily({ branchUuid, startDate: query.startDate!, endDate: query.endDate! }) as unknown as Record<string, unknown>)
+    } catch (error) {
+      respondFinanceReadError(res, error)
+    }
+    return
+  }
+  if (url.pathname === '/api/mini-app/finance/monthly') {
+    if (req.method !== 'GET') { handledMethodNotAllowed(res); return }
+    if (!authenticated.canViewFinance) { respond(res, 403, { error: 'FINANCE_FORBIDDEN' }); return }
+    const query = exactSearch(url.searchParams, ['year', 'month'])
+    const year = query && /^\d{4}$/.test(query.year ?? '') ? Number(query.year) : Number.NaN
+    const month = query && /^(?:[1-9]|1[0-2])$/.test(query.month ?? '') ? Number(query.month) : Number.NaN
+    if (!query || !Number.isSafeInteger(year) || year < 2020 || year > 2100 || !Number.isSafeInteger(month)) {
+      respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return
+    }
+    try {
+      respond(res, 200, await service.readMonthly({ branchUuid, year, month }) as unknown as Record<string, unknown>)
+    } catch (error) {
+      respondFinanceReadError(res, error)
+    }
+    return
+  }
+  if (req.method !== 'POST') { handledMethodNotAllowed(res); return }
+  if (!authenticated.canViewFinance) { respond(res, 403, { error: 'FINANCE_FORBIDDEN' }); return }
+  const query = exactSearch(url.searchParams, ['date'])
+  if (!query || !validFinanceRange(query.date!, query.date!)) {
+    respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return
+  }
+  try {
+    const result = await service.refreshDay({
+      branchUuid, eventDate: query.date!, actor: { type: 'STAFF', staffId: authenticated.staffId },
+    })
+    respond(res, 202, result)
+  } catch (error) {
+    respondFinanceRefreshError(res, error)
+  }
+}
+
+function exactSearch(search: URLSearchParams, keys: string[]): Record<string, string> | null {
+  const expected = [...keys].sort()
+  const actual = [...search.keys()].sort()
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) return null
+  const result: Record<string, string> = {}
+  for (const key of keys) {
+    const values = search.getAll(key)
+    if (values.length !== 1 || values[0] === '') return null
+    result[key] = values[0]!
+  }
+  return result
+}
+
+function validFinanceRange(startDate: string, endDate: string): boolean {
+  try {
+    const start = dateNumber(requiredDate(startDate))
+    const end = dateNumber(requiredDate(endDate))
+    const days = Math.floor((end - start) / 86_400_000) + 1
+    return days >= 1 && days <= 31
+  } catch { return false }
+}
+
+function dateNumber(value: string): number {
+  return Date.parse(`${value}T00:00:00.000Z`)
+}
+
+function respondFinanceReadError(res: ServerResponse, error: unknown): void {
+  if (financeErrorCode(error) === 'FINANCE_FILTER_INVALID') {
+    respond(res, 400, { error: 'FINANCE_FILTER_INVALID' })
+    return
+  }
+  respond(res, 503, { error: 'FINANCE_CACHE_UNAVAILABLE' })
+}
+
+function respondFinanceRefreshError(res: ServerResponse, error: unknown): void {
+  const retryAfterSeconds = financeRetryAfter(error)
+  if (retryAfterSeconds !== null) {
+    res.setHeader('retry-after', String(retryAfterSeconds))
+    respond(res, 429, { error: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds })
+    return
+  }
+  respond(res, 503, { error: 'FINANCE_REFRESH_UNAVAILABLE' })
+}
+
+function financeErrorCode(error: unknown): unknown {
+  return error instanceof JeraFinanceServiceError
+    ? error.code
+    : error && typeof error === 'object' && 'code' in error ? error.code : null
+}
+
+function financeRetryAfter(error: unknown): number | null {
+  const value = error && typeof error === 'object' && 'retryAfterSeconds' in error ? error.retryAfterSeconds : null
+  return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 3_600 ? Number(value) : null
+}
+
 async function authorizeInternal(
   req: IncomingMessage,
   config: { identity: JeraSchedulerIdentityPort; audience: string; serviceAccountEmail: string },
@@ -223,6 +382,19 @@ async function readBoundedJson(req: IncomingMessage, maxBytes: number): Promise<
     if (size === 0) return null
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch { return null }
+}
+
+async function requestBodyIsEmpty(req: IncomingMessage, maxBytes: number): Promise<boolean> {
+  const advertised = Number(req.headers['content-length'])
+  if (Number.isFinite(advertised) && advertised > 0) return false
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      size += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk))
+      if (size > maxBytes) return false
+    }
+    return size === 0
+  } catch { return false }
 }
 
 function allocationBody(value: unknown): { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number; attempt: number } | null {
@@ -423,6 +595,11 @@ function bangkokDate(date: Date): string {
   }).formatToParts(date)
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ''
   return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function previousBangkokDate(date: Date): string {
+  const today = requiredDate(bangkokDate(date))
+  return new Date(dateNumber(today) - 86_400_000).toISOString().slice(0, 10)
 }
 
 function latest(values: Array<string | null>): string | null {

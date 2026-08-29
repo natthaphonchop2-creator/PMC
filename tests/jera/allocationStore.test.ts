@@ -129,6 +129,26 @@ describe('Google Sheets JERA allocation store', () => {
     await expect(store.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') })).rejects.toThrow('JERA_ALLOCATION_STORE_CORRUPT_ROW')
   })
 
+  it('reads up to 31 exact days through one allocation snapshot and matches both source hashes', async () => {
+    const sheets = fixture()
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.replacePaymentDetail(paymentDetail())
+    await store.saveCoverage(coverageRow())
+    sheets.batchGets.length = 0
+
+    const result = await store.readDays([
+      { branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p'), metadataSnapshotHash: hash('m') },
+      { branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p'), metadataSnapshotHash: hash('changed-metadata') },
+    ])
+
+    expect(sheets.batchGets).toHaveLength(1)
+    expect(result[0]).toMatchObject({ coverage: coverageRow(), details: [paymentDetail()] })
+    expect(result[1]).toMatchObject({ coverage: null, details: [paymentDetail()] })
+    await expect(store.readDays(Array.from({ length: 32 }, () => ({
+      branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p'), metadataSnapshotHash: hash('m'),
+    })))).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
+  })
+
   it('reuses line slots for changed detail versions without growing the used line range', async () => {
     const sheets = fixture()
     const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })

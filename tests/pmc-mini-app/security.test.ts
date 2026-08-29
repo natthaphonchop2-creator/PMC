@@ -36,8 +36,9 @@ describe('PMC Mini App security regression', () => {
 
   it('contains no PII console logging or raw HTML injection in Mini App source', async () => {
     const serverSource = await readTree(resolve('server/pmc-mini-app'))
+    const financeSource = await readFile(resolve('server/jera/financeService.ts'), 'utf8')
     const clientSource = await readTree(resolve('src/apps/pmc-mini-app'))
-    const source = `${serverSource}\n${clientSource}`
+    const source = `${serverSource}\n${financeSource}\n${clientSource}`
     expect(source).not.toMatch(/console\.(?:log|warn|error)/)
     expect(source).not.toContain('dangerouslySetInnerHTML')
     expect(source).not.toMatch(/\.innerHTML\s*=/)

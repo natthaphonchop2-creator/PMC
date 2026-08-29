@@ -54,6 +54,12 @@ export interface JeraAllocationCoverage {
 export interface JeraAllocationStore {
   replacePaymentDetail(input: JeraCachedPaymentDetail): Promise<void>
   readDay(input: { branchUuid: string; eventDate: string; paymentSetHash: string }): Promise<{ coverage: JeraAllocationCoverage | null; details: JeraCachedPaymentDetail[] }>
+  readDays(inputs: Array<{
+    branchUuid: string
+    eventDate: string
+    paymentSetHash: string
+    metadataSnapshotHash: string
+  }>): Promise<Array<{ coverage: JeraAllocationCoverage | null; details: JeraCachedPaymentDetail[] }>>
   getCoverage(dayKey: string): Promise<JeraAllocationCoverage | null>
   saveCoverage(value: JeraAllocationCoverage): Promise<void>
   listIncompleteCoverage(limit: number): Promise<JeraAllocationCoverage[]>
@@ -194,6 +200,39 @@ export function createGoogleJeraAllocationStore(input: { spreadsheetId: string; 
           return { ...value, lines: ordered }
         }),
       }
+    },
+    async readDays(inputs) {
+      if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > 31) {
+        throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INVALID_INPUT')
+      }
+      for (const input of inputs) {
+        assertUuid(input.branchUuid); assertDate(input.eventDate); assertHash(input.paymentSetHash); assertHash(input.metadataSnapshotHash)
+      }
+      const detailRange = `'${DETAIL_TAB}'!A1:${columnName(JERA_PAYMENT_DETAIL_CACHE_HEADERS.length)}`
+      const lineRange = `'${LINE_TAB}'!A1:${columnName(JERA_PAYMENT_DETAIL_LINES_HEADERS.length)}`
+      const coverageRange = `'${COVERAGE_TAB}'!A1:${columnName(JERA_ALLOCATION_COVERAGE_HEADERS.length)}`
+      const values = await sheets.batchGet(spreadsheetId, [detailRange, lineRange, coverageRange])
+      const storedDetails = tableRows(values[detailRange] ?? [], JERA_PAYMENT_DETAIL_CACHE_HEADERS).map(({ cells }) => detailHeader(cells))
+      const storedLines = tableRows(values[lineRange] ?? [], JERA_PAYMENT_DETAIL_LINES_HEADERS).map(({ cells }) => detailLine(cells))
+      const storedCoverage = tableRows(values[coverageRange] ?? [], JERA_ALLOCATION_COVERAGE_HEADERS).map(({ cells }) => coverage(cells))
+      const byDetailKey = new Map<string, JeraCachedPaymentDetailLine[]>()
+      for (const line of storedLines) byDetailKey.set(line.detailKey, [...(byDetailKey.get(line.detailKey) ?? []), stripDetailKey(line)])
+      const headerKeys = new Set(storedDetails.map((detail) => detail.detailKey))
+      if (storedLines.some((line) => !headerKeys.has(line.detailKey))) corrupt()
+      const hydrated = storedDetails.map((value): JeraCachedPaymentDetail => {
+        const ordered = [...(byDetailKey.get(value.detailKey) ?? [])].sort((a, b) => a.lineOrdinal - b.lineOrdinal)
+        if (ordered.length !== value.lineCount || ordered.some((line, index) => line.lineOrdinal !== index)) corrupt()
+        return { ...value, lines: ordered }
+      })
+      return inputs.map((input) => {
+        const dayKey = jeraAllocationDayKey(input.branchUuid, input.eventDate)
+        return {
+          coverage: storedCoverage.find((value) => value.dayKey === dayKey
+            && value.paymentSetHash === input.paymentSetHash
+            && value.metadataSnapshotHash === input.metadataSnapshotHash) ?? null,
+          details: hydrated.filter((detail) => detail.branchUuid === input.branchUuid && detail.eventDate === input.eventDate),
+        }
+      })
     },
     async getCoverage(dayKey) { assertHash(dayKey); return (await coverageRows()).find((row) => row.value.dayKey === dayKey)?.value ?? null },
     async saveCoverage(value) { await withMutex(mutexKey, () => writeCoverage(value)) },

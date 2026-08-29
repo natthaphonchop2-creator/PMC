@@ -11,6 +11,7 @@ import { createJeraRuntime } from '../../server/jera/runtime'
 import type { JeraSyncCoordinator } from '../../server/jera/syncCoordinator'
 import type { JeraReportStore, JeraSyncStateRecord } from '../../server/jera/store'
 import type { JeraAllocationWorker } from '../../server/jera/allocationWorker'
+import type { JeraFinanceService } from '../../server/jera/financeService'
 
 describe('authenticated JERA report API', () => {
   it('does not access report data before LINE staff authorization', async () => {
@@ -218,6 +219,158 @@ describe('authenticated JERA report API', () => {
   })
 })
 
+describe('authenticated finance report API', () => {
+  it.each([
+    ['daily GET', '/api/mini-app/finance/daily?startDate=2026-08-29&endDate=2026-08-29', 'GET'],
+    ['monthly GET', '/api/mini-app/finance/monthly?year=2026&month=8', 'GET'],
+    ['daily refresh', '/api/mini-app/finance/daily/refresh?date=2026-08-29', 'POST'],
+  ])('returns 401 for unauthenticated %s before finance access', async (_label, path, method) => {
+    const deps = financeDependencies()
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), path, { method })
+
+    expect(response.status).toBe(401)
+    expect(deps.finance.readDaily).not.toHaveBeenCalled()
+    expect(deps.finance.readMonthly).not.toHaveBeenCalled()
+    expect(deps.finance.refreshDay).not.toHaveBeenCalled()
+  })
+
+  it('allows any active linked staff member to read a daily cache projection', async () => {
+    const deps = financeDependencies({ canViewFinance: false })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/finance/daily?startDate=2026-08-28&endDate=2026-08-29', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(200)
+    expect(deps.finance.readDaily).toHaveBeenCalledWith({ branchUuid: BRANCH, startDate: '2026-08-28', endDate: '2026-08-29' })
+    expect(deps.coordinator.readAndRefresh).not.toHaveBeenCalled()
+    expect(deps.coordinator.manualRefresh).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['monthly read', '/api/mini-app/finance/monthly?year=2026&month=8', 'GET'],
+    ['manual daily refresh', '/api/mini-app/finance/daily/refresh?date=2026-08-29', 'POST'],
+  ])('returns 403 before finance store or provider access for %s without canViewFinance', async (_label, path, method) => {
+    const deps = financeDependencies({ canViewFinance: false })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), path, {
+      method, headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual({ error: 'FINANCE_FORBIDDEN' })
+    expect(deps.finance.readMonthly).not.toHaveBeenCalled()
+    expect(deps.finance.refreshDay).not.toHaveBeenCalled()
+  })
+
+  it('allows finance viewers to read monthly and manually refresh exactly one day', async () => {
+    const deps = financeDependencies({ canViewFinance: true })
+    const middleware = createPmcMiniAppMiddleware(deps)
+
+    const monthly = await invoke(middleware, '/api/mini-app/finance/monthly?year=2028&month=2', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const refresh = await invoke(middleware, '/api/mini-app/finance/daily/refresh?date=2026-08-29', {
+      method: 'POST', headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(monthly.status).toBe(200)
+    expect(deps.finance.readMonthly).toHaveBeenCalledWith({ branchUuid: BRANCH, year: 2028, month: 2 })
+    expect(refresh.status).toBe(202)
+    expect(deps.finance.refreshDay).toHaveBeenCalledWith({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
+    })
+  })
+
+  it.each([
+    ['daily unknown parameter', '/api/mini-app/finance/daily?startDate=2026-08-29&endDate=2026-08-29&branchUuid=' + BRANCH, 'GET'],
+    ['daily repeated parameter', '/api/mini-app/finance/daily?startDate=2026-08-29&startDate=2026-08-28&endDate=2026-08-29', 'GET'],
+    ['daily extra parameter', '/api/mini-app/finance/daily?startDate=2026-08-29&endDate=2026-08-29&extra=1', 'GET'],
+    ['daily over 31 days', '/api/mini-app/finance/daily?startDate=2026-07-30&endDate=2026-08-30', 'GET'],
+    ['monthly caller monthKey', '/api/mini-app/finance/monthly?year=2026&month=8&monthKey=2026-08', 'GET'],
+    ['monthly caller startDate', '/api/mini-app/finance/monthly?year=2026&month=8&startDate=2026-08-01', 'GET'],
+    ['monthly caller endDate', '/api/mini-app/finance/monthly?year=2026&month=8&endDate=2026-08-31', 'GET'],
+    ['monthly repeated year', '/api/mini-app/finance/monthly?year=2026&year=2027&month=8', 'GET'],
+    ['refresh repeated date', '/api/mini-app/finance/daily/refresh?date=2026-08-29&date=2026-08-28', 'POST'],
+    ['refresh extra parameter', '/api/mini-app/finance/daily/refresh?date=2026-08-29&extra=1', 'POST'],
+  ])('rejects %s before finance access', async (_label, path, method) => {
+    const deps = financeDependencies({ canViewFinance: true })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), path, {
+      method, headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'FINANCE_FILTER_INVALID' })
+    expect(deps.finance.readDaily).not.toHaveBeenCalled()
+    expect(deps.finance.readMonthly).not.toHaveBeenCalled()
+    expect(deps.finance.refreshDay).not.toHaveBeenCalled()
+  })
+
+  it('returns only safe finance fields and preserves null category money from the server gate', async () => {
+    const deps = financeDependencies({ canViewFinance: false })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/finance/daily?startDate=2026-08-29&endDate=2026-08-29', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const body = await response.json()
+    const serialized = JSON.stringify(body)
+
+    expect(body.categories).toEqual({
+      state: 'CHECKING', serviceSatang: null, productSatang: null, unclassifiedSatang: null, incompleteDates: [],
+    })
+    for (const privateValue of ['raw detail', '0812345678', 'facebook-private', 'sheet-private', 'provider-secret', 'PAYMENT:private-cache-key']) {
+      expect(serialized).not.toContain(privateValue)
+    }
+  })
+
+  it('maps cache and refresh failures to the finance-only safe error surface', async () => {
+    const deps = financeDependencies({ canViewFinance: true })
+    vi.mocked(deps.finance.readDaily).mockRejectedValueOnce(Object.assign(new Error('private cache identity'), { code: 'FINANCE_CACHE_EMPTY' }))
+    vi.mocked(deps.finance.refreshDay).mockRejectedValueOnce(Object.assign(new Error('private provider response'), {
+      code: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds: 120,
+    }))
+    const middleware = createPmcMiniAppMiddleware(deps)
+
+    const cache = await invoke(middleware, '/api/mini-app/finance/daily?startDate=2026-08-29&endDate=2026-08-29', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const refresh = await invoke(middleware, '/api/mini-app/finance/daily/refresh?date=2026-08-29', {
+      method: 'POST', headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect({ status: cache.status, body: await cache.json() }).toEqual({ status: 503, body: { error: 'FINANCE_CACHE_UNAVAILABLE' } })
+    expect(refresh.status).toBe(429)
+    expect(refresh.headers.get('retry-after')).toBe('120')
+    expect(await refresh.json()).toEqual({ error: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds: 120 })
+  })
+
+  it('authenticates the exact internal seed route, rejects caller input, and derives the previous Bangkok day', async () => {
+    const deps = financeDependencies({ canViewFinance: true, internalSeed: true })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const authorization = { authorization: 'Bearer worker-token' }
+
+    expect((await invoke(middleware, '/internal/mini-app/finance-daily-seed', { method: 'GET', headers: authorization })).status).toBe(405)
+    expect((await invoke(middleware, '/internal/mini-app/finance-daily-seed', { method: 'POST' })).status).toBe(401)
+    expect((await invoke(middleware, '/internal/mini-app/finance-daily-seed', { method: 'POST', headers: { authorization: 'Bearer wrong-email' } })).status).toBe(403)
+    expect((await invoke(middleware, '/internal/mini-app/finance-daily-seed?date=2026-08-28', { method: 'POST', headers: authorization })).status).toBe(400)
+    expect((await invoke(middleware, '/internal/mini-app/finance-daily-seed', {
+      method: 'POST', headers: { ...authorization, 'content-type': 'application/json' }, body: JSON.stringify({ date: '2026-08-28' }),
+    })).status).toBe(400)
+    expect((await invoke(middleware, '/internal/mini-app/finance-daily-seed', {
+      method: 'POST', headers: { ...authorization, 'content-type': 'text/plain' }, body: 'not-json',
+    })).status).toBe(400)
+
+    const accepted = await invoke(middleware, '/internal/mini-app/finance-daily-seed', { method: 'POST', headers: authorization })
+
+    expect(accepted.status).toBe(202)
+    expect(deps.finance.refreshDay).toHaveBeenCalledWith({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'SCHEDULER', schedulerId: 'finance-daily-seed' },
+    })
+  })
+})
+
 function allocationApi(worker: JeraAllocationWorker) {
   return createJeraMiniAppApi({
     coordinator: dependencies().coordinator, store: { listSyncStates: vi.fn(async () => []) } as unknown as JeraReportStore,
@@ -232,7 +385,7 @@ function allocationApi(worker: JeraAllocationWorker) {
   })
 }
 
-function dependencies(options: { manualAccepted?: boolean } = {}) {
+function dependencies(options: { manualAccepted?: boolean; canViewFinance?: boolean } = {}) {
   const coordinator = {
     readAndRefresh: vi.fn(async () => envelope()),
     manualRefresh: vi.fn(async () => ({
@@ -262,9 +415,62 @@ function dependencies(options: { manualAccepted?: boolean } = {}) {
     getActiveStaffByLineUserId: vi.fn(async (lineUserId: string) => lineUserId === 'Uactive' ? ({
       id: 'staff-1', name: 'มัส', email: 'private@example.com', lineUserId: 'Uactive',
       canCloseBooking: true, canBeAe: true, active: true as const, profileImageUrl: null,
+      canViewFinance: options.canViewFinance ?? false,
     }) : null),
   } as unknown as MiniAppStore
   return { config: config(), identity, store, jera, coordinator }
+}
+
+function financeDependencies(options: { canViewFinance?: boolean; internalSeed?: boolean } = {}) {
+  const deps = dependencies({ canViewFinance: options.canViewFinance })
+  const finance = {
+    readDaily: vi.fn(async () => dailyProjection()),
+    readMonthly: vi.fn(async () => ({
+      ...dailyProjection(), monthKey: '2028-02', dailyTrend: [],
+      expense: { state: 'NOT_IMPLEMENTED' as const, clinicExpenseSatang: null, estimatedBalanceSatang: null },
+    })),
+    refreshDay: vi.fn(async () => ({ accepted: true as const, allocationQueued: true, retryAfterSeconds: 300 })),
+  } satisfies JeraFinanceService
+  deps.jera = createJeraMiniAppApi({
+    coordinator: deps.coordinator,
+    store: { listSyncStates: vi.fn(async () => []) } as unknown as JeraReportStore,
+    defaultBranchUuid: BRANCH,
+    now: () => new Date('2026-08-29T17:30:00.000Z'),
+    finance: {
+      service: finance,
+      ...(options.internalSeed ? {
+        seed: {
+          schedulerId: 'finance-daily-seed', audience: 'https://pmc-mini-app.example',
+          serviceAccountEmail: 'worker@pmc-project.iam.gserviceaccount.com',
+          identity: {
+            verify: vi.fn(async (token: string) => token === 'worker-token'
+              ? { email: 'worker@pmc-project.iam.gserviceaccount.com', emailVerified: true }
+              : { email: 'other@pmc-project.iam.gserviceaccount.com', emailVerified: true }),
+          },
+        },
+      } : {}),
+    },
+  } as never)
+  return { ...deps, finance }
+}
+
+function dailyProjection() {
+  return {
+    startDate: '2026-08-29', endDate: '2026-08-29', receivedSatang: 100_000, refundSatang: 0, netReceivedSatang: 100_000,
+    channels: { transferSatang: 100_000, cashSatang: 0, creditSatang: 0, otherSatang: 0, differenceSatang: 0 },
+    categories: { state: 'CHECKING' as const, serviceSatang: null, productSatang: null, unclassifiedSatang: null, incompleteDates: [] },
+    payments: [{
+      paymentUuid: PAYMENT_UUID, paymentCode: 'PAY-1', eventDate: '2026-08-29', patientName: 'Synthetic Patient',
+      paidAmountSatang: 100_000, transferSatang: 100_000, cashSatang: 0, creditSatang: 0, otherSatang: 0,
+      serviceSatang: null, productSatang: null, unclassifiedSatang: null,
+    }],
+    freshness: {
+      payment: { lastSuccessAt: '2026-08-29T10:00:00.000Z', stale: false, warningCode: null },
+      refund: { lastSuccessAt: '2026-08-29T10:00:00.000Z', stale: false, warningCode: null },
+      allocation: { lastSuccessAt: null, stale: true, warningCode: 'COMPONENT_STALE' },
+    },
+    warnings: ['ALLOCATION_STALE'],
+  }
 }
 
 function envelope() {
@@ -323,3 +529,4 @@ async function invoke(
 }
 
 const BRANCH = '11111111-2222-4333-8444-555555555555'
+const PAYMENT_UUID = '10000000-0000-4000-8000-000000000001'
