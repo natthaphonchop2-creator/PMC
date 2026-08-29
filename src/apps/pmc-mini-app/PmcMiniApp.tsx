@@ -278,7 +278,16 @@ export function PmcMiniApp({
       draft={draft}
       adapter={bookingAdapter}
       initialStep={draft.state === 'READY_TO_CONFIRM' ? 4 : 0}
-      onQueued={(queuedProjection) => setDraft(queuedProjection)}
+      onQueued={() => {
+        navigateTo('HOME')
+        setDraft(null)
+        setMessage('รับรายการแล้ว ระบบกำลังดำเนินการเบื้องหลัง')
+      }}
+      onConfirmed={() => {
+        navigateTo('HOME')
+        setDraft(null)
+        setMessage('บันทึกการจองแล้ว')
+      }}
       onExit={() => { navigateTo('HOME'); setDraft(null) }}
     />
   }

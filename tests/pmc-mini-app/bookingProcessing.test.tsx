@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BookingProcessing, type BookingProcessingAdapter } from '../../src/apps/pmc-mini-app/BookingProcessing'
 import type { BookingDraftProjection } from '../../src/apps/pmc-mini-app/contracts'
@@ -56,6 +56,15 @@ describe('PMC Mini App async booking processing', () => {
 
     expect(screen.getByText(/ผู้ดูแลตรวจสอบ/)).toBeVisible()
     expect(screen.queryByText(/ส่งรายการอีกครั้ง|ยืนยันบันทึกอีกครั้ง|submit again/i)).not.toBeInTheDocument()
+  })
+
+  it('lets staff return home while processing continues in the background', async () => {
+    const onExit = vi.fn()
+    render(<BookingProcessing draft={queuedDraft()} adapter={processingAdapter()} onExit={onExit} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'กลับหน้าหลัก' }))
+
+    expect(onExit).toHaveBeenCalledOnce()
   })
 })
 

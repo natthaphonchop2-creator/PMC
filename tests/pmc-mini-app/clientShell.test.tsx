@@ -107,6 +107,39 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.createDraft).not.toHaveBeenCalled()
   })
 
+  it('returns home immediately after async queue acknowledgement', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const input = {
+      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    const ready = {
+      draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM' as const, retentionState: '' as const,
+      version: 3, input, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 2, chatEvidenceCount: 1,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }
+    api.createDraft = vi.fn(async () => ready)
+    api.confirm = vi.fn(async () => ({
+      requestId: input.requestId,
+      status: 'QUEUED' as const,
+      projection: { ...ready, state: 'QUEUED' as const, version: 4, input: null, queuedAt: '2026-08-29T10:00:00.000Z' },
+    }))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('รับรายการแล้ว ระบบกำลังดำเนินการเบื้องหลัง')
+  })
+
   it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()

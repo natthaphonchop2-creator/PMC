@@ -87,6 +87,6 @@ export function BookingProcessing({
       {(projection.state === 'CANCELLED' || projection.state === 'EXPIRED') && <><p className="pmc-processing-kicker">รายการสิ้นสุดแล้ว</p><h1>ไม่สามารถดำเนินการต่อได้</h1><p>หากต้องการความช่วยเหลือ กรุณาติดต่อผู้ดูแล</p></>}
     </div>
     <p className="pmc-processing-case">เลขอ้างอิง: {projection.requestId}</p>
-    {terminal && <button type="button" className="pmc-secondary-button" onClick={onExit}>กลับหน้าหลัก</button>}
+    {onExit && <button type="button" className="pmc-secondary-button" onClick={onExit}>กลับหน้าหลัก</button>}
   </main>
 }

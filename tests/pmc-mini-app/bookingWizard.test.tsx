@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
 import { BookingWizard, type BookingWizardAdapter } from '../../src/apps/pmc-mini-app/BookingWizard'
-import type { BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
+import type { BookingConfirmationResult, BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
 
 afterEach(cleanup)
 
@@ -54,6 +54,18 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
     expect(app.confirm).toHaveBeenCalledOnce()
     expect(await screen.findByText('PMC-202608-0001')).toBeVisible()
+  })
+
+  it('hands synchronous success to the app shell for immediate home navigation', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onConfirmed = vi.fn()
+    renderWizard({ initialStep: 4, adapter: app, onConfirmed })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(onConfirmed).toHaveBeenCalledWith({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+    expect(screen.queryByText('PMC-202608-0001')).not.toBeInTheDocument()
   })
 
   it('does not send the same valid confirmation twice before React disables the submit button', () => {
@@ -210,6 +222,7 @@ function renderWizard(options: {
   draft?: BookingDraftProjection
   onExit?: () => void
   onQueued?: (projection: BookingDraftProjection) => void
+  onConfirmed?: (result: BookingConfirmationResult) => void
 } = {}) {
   return render(<BookingWizard
     session={session}
@@ -219,6 +232,7 @@ function renderWizard(options: {
     initialStep={options.initialStep}
     onExit={options.onExit}
     onQueued={options.onQueued}
+    onConfirmed={options.onConfirmed}
   />)
 }
 
