@@ -755,17 +755,51 @@ function configuredExpenseStaffIds(value: string | undefined): string[] {
   return requiredExpenseSetupValue(value).split(',').map((id) => id.trim())
 }
 
+const SAFE_EXPENSE_DOMAIN_MESSAGES = new Set([
+  'unsupported CONFIG_STAFF header',
+  'CONFIG_STAFF migration did not converge',
+  'sheet header mismatch: CONFIG_STAFF',
+  'sheet header mismatch: EXPENSE_MONTHLY_INDEX',
+  'sheet header mismatch: EXPENSE_REQUESTS',
+  'sheet header mismatch: EXPENSE_AUDIT',
+  'invalid expense permission configuration',
+  'expense permission cutover is not approved',
+  'expense permission setup is not configured',
+  'expense finance setup is not configured',
+  'expense permission readback mismatch',
+  'finance master is outside the configured private folder',
+])
+
+function throwSafeExpenseOperatorError(error: unknown, unavailableCode: string): never {
+  const message = error instanceof Error ? error.message : ''
+  if (SAFE_EXPENSE_DOMAIN_MESSAGES.has(message)) throw new Error(message)
+  throw new Error(unavailableCode)
+}
+
+function runSafeExpenseOperatorWorkflow<T>(
+  unavailableCode: string,
+  operation: () => T,
+): T {
+  try {
+    return operation()
+  } catch (error) {
+    return throwSafeExpenseOperatorError(error, unavailableCode)
+  }
+}
+
 export function prepareExpensePermissionsWorkflow(): ExpensePermissionRosterItem[] {
-  const spreadsheetId = PropertiesService.getScriptProperties()
-    .getProperties()[SCRIPT_PROPERTY_KEYS.spreadsheetId]
-    ?.trim()
-  if (!spreadsheetId) throw new Error('expense permission setup is not configured')
-  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
-  migrateConfigStaffColumns(spreadsheet)
-  requireCanonicalStaffSheet(spreadsheet)
-  return prepareExpensePermissionRoster(
-    createGoogleSheetStore(spreadsheet).read('CONFIG_STAFF').map(parseStaffConfigRow),
-  )
+  return runSafeExpenseOperatorWorkflow('EXPENSE_PERMISSION_PREPARE_UNAVAILABLE', () => {
+    const spreadsheetId = PropertiesService.getScriptProperties()
+      .getProperties()[SCRIPT_PROPERTY_KEYS.spreadsheetId]
+      ?.trim()
+    if (!spreadsheetId) throw new Error('expense permission setup is not configured')
+    const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+    migrateConfigStaffColumns(spreadsheet)
+    requireCanonicalStaffSheet(spreadsheet)
+    return prepareExpensePermissionRoster(
+      createGoogleSheetStore(spreadsheet).read('CONFIG_STAFF').map(parseStaffConfigRow),
+    )
+  })
 }
 
 export function applyExpensePermissionsWorkflow(): {
@@ -773,50 +807,52 @@ export function applyExpensePermissionsWorkflow(): {
   managerCount: 3
   changedRows: number
 } {
-  const properties = PropertiesService.getScriptProperties().getProperties()
-  if (properties[SCRIPT_PROPERTY_KEYS.financePermissionCutoverApproved]?.trim() !== 'true') {
-    throw new Error('expense permission cutover is not approved')
-  }
-  const spreadsheetId = requiredExpenseSetupValue(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
-  const submitterIds = configuredExpenseStaffIds(properties[SCRIPT_PROPERTY_KEYS.expenseSubmitterIds])
-  const managerIds = configuredExpenseStaffIds(properties[SCRIPT_PROPERTY_KEYS.financeManagerIds])
-  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
-  const lock = LockService.getScriptLock()
-  lock.waitLock(30_000)
-  try {
-    const sheet = requireCanonicalStaffSheet(spreadsheet)
-    const staff = createGoogleSheetStore(spreadsheet)
-      .read('CONFIG_STAFF')
-      .map(parseStaffConfigRow)
-    const plan = applyExpensePermissionGrants(staff, submitterIds, managerIds)
-    const permissionColumn = STAFF_CONFIG_COLUMNS.indexOf('canSubmitExpense') + 1
-    const expected = plan.grants.map((grant) => [
-      grant.canSubmitExpense,
-      grant.canViewFinance,
-      grant.canManageExpense,
-    ])
-    if (plan.changedRows > 0) {
-      sheet.getRange(2, permissionColumn, expected.length, 3).setValues(expected)
+  return runSafeExpenseOperatorWorkflow('EXPENSE_PERMISSION_APPLY_UNAVAILABLE', () => {
+    const properties = PropertiesService.getScriptProperties().getProperties()
+    if (properties[SCRIPT_PROPERTY_KEYS.financePermissionCutoverApproved]?.trim() !== 'true') {
+      throw new Error('expense permission cutover is not approved')
     }
-    const readback = sheet
-      .getRange(2, permissionColumn, expected.length, 3)
-      .getValues()
-    if (
-      readback.length !== expected.length
-      || readback.some((row, rowIndex) => (
-        row.length !== 3 || row.some((value, columnIndex) => value !== expected[rowIndex]?.[columnIndex])
-      ))
-    ) {
-      throw new Error('expense permission readback mismatch')
+    const spreadsheetId = requiredExpenseSetupValue(properties[SCRIPT_PROPERTY_KEYS.spreadsheetId])
+    const submitterIds = configuredExpenseStaffIds(properties[SCRIPT_PROPERTY_KEYS.expenseSubmitterIds])
+    const managerIds = configuredExpenseStaffIds(properties[SCRIPT_PROPERTY_KEYS.financeManagerIds])
+    const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+    const lock = LockService.getScriptLock()
+    lock.waitLock(30_000)
+    try {
+      const sheet = requireCanonicalStaffSheet(spreadsheet)
+      const staff = createGoogleSheetStore(spreadsheet)
+        .read('CONFIG_STAFF')
+        .map(parseStaffConfigRow)
+      const plan = applyExpensePermissionGrants(staff, submitterIds, managerIds)
+      const permissionColumn = STAFF_CONFIG_COLUMNS.indexOf('canSubmitExpense') + 1
+      const expected = plan.grants.map((grant) => [
+        grant.canSubmitExpense,
+        grant.canViewFinance,
+        grant.canManageExpense,
+      ])
+      if (plan.changedRows > 0) {
+        sheet.getRange(2, permissionColumn, expected.length, 3).setValues(expected)
+      }
+      const readback = sheet
+        .getRange(2, permissionColumn, expected.length, 3)
+        .getValues()
+      if (
+        readback.length !== expected.length
+        || readback.some((row, rowIndex) => (
+          row.length !== 3 || row.some((value, columnIndex) => value !== expected[rowIndex]?.[columnIndex])
+        ))
+      ) {
+        throw new Error('expense permission readback mismatch')
+      }
+      return {
+        submitterCount: plan.submitterCount,
+        managerCount: plan.managerCount,
+        changedRows: plan.changedRows,
+      }
+    } finally {
+      lock.releaseLock()
     }
-    return {
-      submitterCount: plan.submitterCount,
-      managerCount: plan.managerCount,
-      changedRows: plan.changedRows,
-    }
-  } finally {
-    lock.releaseLock()
-  }
+  })
 }
 
 function fileHasDirectParent(
@@ -835,42 +871,33 @@ export function setupExpenseFinanceStorageWorkflow(): {
   createdTabCount: number
   verifiedTabCount: number
 } {
-  const properties = PropertiesService.getScriptProperties().getProperties()
-  const masterSpreadsheetId = requiredExpenseSetupValue(
-    properties[SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId],
-  )
-  const financeFolderId = requiredExpenseSetupValue(
-    properties[SCRIPT_PROPERTY_KEYS.financeFolderId],
-  )
-  let masterInsidePrivateFolder: boolean
-  try {
+  return runSafeExpenseOperatorWorkflow('EXPENSE_FINANCE_STORAGE_UNAVAILABLE', () => {
+    const properties = PropertiesService.getScriptProperties().getProperties()
+    const masterSpreadsheetId = requiredExpenseSetupValue(
+      properties[SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId],
+    )
+    const financeFolderId = requiredExpenseSetupValue(
+      properties[SCRIPT_PROPERTY_KEYS.financeFolderId],
+    )
     const folder = DriveApp.getFolderById(financeFolderId)
     const file = DriveApp.getFileById(masterSpreadsheetId)
-    masterInsidePrivateFolder = !folder.isTrashed()
+    const masterInsidePrivateFolder = !folder.isTrashed()
       && !file.isTrashed()
       && folder.getSharingAccess() === DriveApp.Access.PRIVATE
       && file.getSharingAccess() === DriveApp.Access.PRIVATE
       && fileHasDirectParent(file, financeFolderId)
-  } catch {
-    throw new Error('expense finance storage is unavailable')
-  }
-  if (!masterInsidePrivateFolder) {
-    throw new Error('finance master is outside the configured private folder')
-  }
-  let masterSpreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet
-  try {
-    masterSpreadsheet = SpreadsheetApp.openById(masterSpreadsheetId)
-  } catch {
-    throw new Error('expense finance storage is unavailable')
-  }
-  const topology = ensureFinanceMasterTopology(
-    createGoogleExpenseTopologyPort(masterSpreadsheet),
-  )
-  return {
-    masterReady: true,
-    createdTabCount: topology.createdTabCount,
-    verifiedTabCount: topology.verifiedTabCount,
-  }
+    if (!masterInsidePrivateFolder) {
+      throw new Error('finance master is outside the configured private folder')
+    }
+    const topology = ensureFinanceMasterTopology(
+      createGoogleExpenseTopologyPort(SpreadsheetApp.openById(masterSpreadsheetId)),
+    )
+    return {
+      masterReady: true,
+      createdTabCount: topology.createdTabCount,
+      verifiedTabCount: topology.verifiedTabCount,
+    }
+  })
 }
 
 export function prepareStaffAeMigrationWorkflow(): {

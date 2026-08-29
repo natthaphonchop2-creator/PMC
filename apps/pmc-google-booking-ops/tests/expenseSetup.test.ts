@@ -57,19 +57,31 @@ class FakeSheet {
   frozenRows = 0
   readonly writes: Array<{ row: number; column: number; rows: number; columns: number }> = []
 
-  constructor(readonly data: unknown[][]) {}
+  constructor(
+    readonly data: unknown[][],
+    private readonly failure?: {
+      operation: 'read' | 'write' | 'freeze'
+      sentinel: string
+      row?: number
+      column?: number
+    },
+  ) {}
 
   getLastColumn(): number { return this.data[0]?.length ?? 0 }
   getLastRow(): number { return this.data.length }
 
   getRange(row: number, column: number, rows = 1, columns = 1) {
     return {
-      getValues: () => Array.from({ length: rows }, (_, rowOffset) => (
-        Array.from({ length: columns }, (_, columnOffset) => (
-          this.data[row - 1 + rowOffset]?.[column - 1 + columnOffset] ?? ''
+      getValues: () => {
+        this.throwIfConfigured('read', row, column)
+        return Array.from({ length: rows }, (_, rowOffset) => (
+          Array.from({ length: columns }, (_, columnOffset) => (
+            this.data[row - 1 + rowOffset]?.[column - 1 + columnOffset] ?? ''
+          ))
         ))
-      )),
+      },
       setValues: (values: unknown[][]) => {
+        this.throwIfConfigured('write', row, column)
         this.writes.push({ row, column, rows, columns })
         for (let rowOffset = 0; rowOffset < rows; rowOffset += 1) {
           const target = this.data[row - 1 + rowOffset] ?? []
@@ -82,7 +94,20 @@ class FakeSheet {
     }
   }
 
-  setFrozenRows(rows: number): void { this.frozenRows = rows }
+  setFrozenRows(rows: number): void {
+    this.throwIfConfigured('freeze')
+    this.frozenRows = rows
+  }
+
+  private throwIfConfigured(operation: 'read' | 'write' | 'freeze', row?: number, column?: number): void {
+    if (
+      this.failure?.operation === operation
+      && (this.failure.row === undefined || this.failure.row === row)
+      && (this.failure.column === undefined || this.failure.column === column)
+    ) {
+      throw new Error(`external service leaked ${this.failure.sentinel}`)
+    }
+  }
 }
 
 class FakeSpreadsheet {
@@ -91,9 +116,15 @@ class FakeSpreadsheet {
 
   getSheetByName(tab: string): FakeSheet | null { return this.sheets.get(tab) ?? null }
 
+  constructor(
+    private readonly insertFailure?: { sentinel: string },
+    private readonly insertedSheetFailure?: ConstructorParameters<typeof FakeSheet>[1],
+  ) {}
+
   insertSheet(tab: string): FakeSheet {
+    if (this.insertFailure) throw new Error(`external service leaked ${this.insertFailure.sentinel}`)
     this.inserted.push(tab)
-    const sheet = new FakeSheet([])
+    const sheet = new FakeSheet([], this.insertedSheetFailure)
     this.sheets.set(tab, sheet)
     return sheet
   }
@@ -114,17 +145,50 @@ function installAppsScriptFakes(options: {
   masterParentId?: string
   folderSharing?: string
   resourceLookupFails?: boolean
+  externalFailureAt?:
+    | 'open-booking'
+    | 'open-finance'
+    | 'staff-header-read'
+    | 'permission-write'
+    | 'permission-readback'
+    | 'topology-header-read'
+    | 'topology-create'
+    | 'topology-header-write'
+    | 'topology-freeze'
+  externalSentinel?: string
+  financeHeaderMismatch?: boolean
+  managerIds?: string
 } = {}) {
+  const sentinel = options.externalSentinel ?? 'SENSITIVE-CONFIGURED-ID'
   const booking = new FakeSpreadsheet()
-  booking.sheets.set('CONFIG_STAFF', new FakeSheet(staffRows()))
-  const finance = new FakeSpreadsheet()
-  finance.sheets.set('EXPENSE_MONTHLY_INDEX', new FakeSheet([[...EXPENSE_MONTHLY_INDEX_HEADERS]]))
+  booking.sheets.set('CONFIG_STAFF', new FakeSheet(staffRows(),
+    options.externalFailureAt === 'staff-header-read'
+      ? { operation: 'read', row: 1, column: 1, sentinel }
+      : options.externalFailureAt === 'permission-write'
+        ? { operation: 'write', row: 2, column: 10, sentinel }
+        : options.externalFailureAt === 'permission-readback'
+          ? { operation: 'read', row: 2, column: 10, sentinel }
+          : undefined))
+  const finance = new FakeSpreadsheet(
+    options.externalFailureAt === 'topology-create' ? { sentinel } : undefined,
+    options.externalFailureAt === 'topology-header-write'
+      ? { operation: 'write', row: 1, column: 1, sentinel }
+      : undefined,
+  )
+  finance.sheets.set('EXPENSE_MONTHLY_INDEX', new FakeSheet([[
+    ...EXPENSE_MONTHLY_INDEX_HEADERS,
+    ...(options.financeHeaderMismatch ? ['unexpected'] : []),
+  ]], options.externalFailureAt === 'topology-header-read'
+    ? { operation: 'read', row: 1, column: 1, sentinel }
+    : options.externalFailureAt === 'topology-freeze'
+      ? { operation: 'freeze', sentinel }
+      : undefined))
   const properties = {
     [SCRIPT_PROPERTY_KEYS.spreadsheetId]: 'booking-sheet',
     [SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId]: 'finance-master',
     [SCRIPT_PROPERTY_KEYS.financeFolderId]: 'finance-folder',
     [SCRIPT_PROPERTY_KEYS.expenseSubmitterIds]: 'OWNER_01,DOCTOR_01,ADMIN_09,STAFF_01',
-    [SCRIPT_PROPERTY_KEYS.financeManagerIds]: 'OWNER_01,DOCTOR_01,ADMIN_09',
+    [SCRIPT_PROPERTY_KEYS.financeManagerIds]: options.managerIds ?? 'OWNER_01,DOCTOR_01,ADMIN_09',
     [SCRIPT_PROPERTY_KEYS.financePermissionCutoverApproved]: options.cutoverApproved ?? 'true',
   }
   let lockHeld = false
@@ -136,7 +200,15 @@ function installAppsScriptFakes(options: {
     }),
   })
   vi.stubGlobal('SpreadsheetApp', {
-    openById: (id: string) => id === 'booking-sheet' ? booking : finance,
+    openById: (id: string) => {
+      if (
+        (id === 'booking-sheet' && options.externalFailureAt === 'open-booking')
+        || (id === 'finance-master' && options.externalFailureAt === 'open-finance')
+      ) {
+        throw new Error(`external service leaked ${sentinel}`)
+      }
+      return id === 'booking-sheet' ? booking : finance
+    },
   })
   vi.stubGlobal('LockService', {
     getScriptLock: () => ({
@@ -168,8 +240,30 @@ function installAppsScriptFakes(options: {
   return {
     booking,
     finance,
+    sentinel,
     lockState: () => ({ lockHeld, waitCount, releaseCount }),
   }
+}
+
+function captureError(operation: () => unknown): Error {
+  try {
+    operation()
+  } catch (error) {
+    if (error instanceof Error) return error
+  }
+  throw new Error('expected operation to throw')
+}
+
+function expectSafeExternalError(
+  operation: () => unknown,
+  safeCode: string,
+  sentinel: string,
+): void {
+  const error = captureError(operation)
+  expect(error.message).toBe(safeCode)
+  expect(String(error)).not.toContain(sentinel)
+  expect(String(error.stack)).not.toContain(sentinel)
+  expect(Object.prototype.hasOwnProperty.call(error, 'cause')).toBe(false)
 }
 
 afterEach(() => {
@@ -426,13 +520,64 @@ describe('expense finance setup', () => {
   it('does not expose configured resource values when Drive lookup fails', () => {
     installAppsScriptFakes({ resourceLookupFails: true })
 
-    expect(() => setupExpenseFinanceStorageWorkflow()).toThrow(
-      'expense finance storage is unavailable',
+    expectSafeExternalError(
+      setupExpenseFinanceStorageWorkflow,
+      'EXPENSE_FINANCE_STORAGE_UNAVAILABLE',
+      'finance-folder',
     )
-    try {
-      setupExpenseFinanceStorageWorkflow()
-    } catch (error) {
-      expect(String(error)).not.toContain('finance-folder')
-    }
+  })
+
+  it.each([
+    ['prepare open', prepareExpensePermissionsWorkflow, 'open-booking'],
+    ['prepare header read', prepareExpensePermissionsWorkflow, 'staff-header-read'],
+    ['apply open', applyExpensePermissionsWorkflow, 'open-booking'],
+    ['apply header read', applyExpensePermissionsWorkflow, 'staff-header-read'],
+    ['apply permission write', applyExpensePermissionsWorkflow, 'permission-write'],
+    ['apply permission readback', applyExpensePermissionsWorkflow, 'permission-readback'],
+  ] as const)('maps external %s failures to workflow-specific safe codes', (_label, workflow, externalFailureAt) => {
+    const appsScript = installAppsScriptFakes({ externalFailureAt })
+    expectSafeExternalError(
+      workflow,
+      workflow === prepareExpensePermissionsWorkflow
+        ? 'EXPENSE_PERMISSION_PREPARE_UNAVAILABLE'
+        : 'EXPENSE_PERMISSION_APPLY_UNAVAILABLE',
+      appsScript.sentinel,
+    )
+  })
+
+  it.each([
+    ['open', 'open-finance'],
+    ['header read', 'topology-header-read'],
+    ['tab create', 'topology-create'],
+    ['header mutation', 'topology-header-write'],
+    ['header freeze', 'topology-freeze'],
+  ] as const)('maps external finance topology %s failures to a safe code', (_label, externalFailureAt) => {
+    const appsScript = installAppsScriptFakes({ externalFailureAt })
+    expectSafeExternalError(
+      setupExpenseFinanceStorageWorkflow,
+      'EXPENSE_FINANCE_STORAGE_UNAVAILABLE',
+      appsScript.sentinel,
+    )
+  })
+
+  it('preserves safe local validation errors without configured identifiers', () => {
+    const unsupportedHeader = installAppsScriptFakes()
+    unsupportedHeader.booking.getSheetByName('CONFIG_STAFF')!.data[0]![1] = 'unexpected'
+    expect(captureError(prepareExpensePermissionsWorkflow).message).toBe(
+      'unsupported CONFIG_STAFF header',
+    )
+
+    const invalidPermissions = installAppsScriptFakes({ managerIds: 'OWNER_01,DOCTOR_01' })
+    expect(captureError(applyExpensePermissionsWorkflow).message).toBe(
+      'invalid expense permission configuration',
+    )
+    expect(String(captureError(applyExpensePermissionsWorkflow))).not.toContain(
+      invalidPermissions.sentinel,
+    )
+
+    installAppsScriptFakes({ financeHeaderMismatch: true })
+    expect(captureError(setupExpenseFinanceStorageWorkflow).message).toBe(
+      'sheet header mismatch: EXPENSE_MONTHLY_INDEX',
+    )
   })
 })
