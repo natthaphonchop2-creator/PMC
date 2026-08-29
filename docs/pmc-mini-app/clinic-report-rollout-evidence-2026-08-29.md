@@ -71,3 +71,37 @@ All monetary values in this table are integer satang.
 ## Rollback
 
 Route 100% traffic back to `pmc-mini-app-00042-hab` and keep the report cache/audit tabs intact for investigation. Do not delete cache, sync, audit, Booking, Stock, Drive, Calendar, or LINE evidence during rollback.
+
+## Production quota incident remediation
+
+After the initial release, real report usage exposed a Google Sheets read-quota burst:
+
+- Report requests observed: 28
+- Successful report responses: 20
+- Report HTTP 503 responses: 8
+- Sheets HTTP 429 responses in the incident window: 137
+- Cloud Run crash or restart: none
+- Root cause: every cache GET started a provider refresh even while cache was fresh; TODAY_SUMMARY fanned out four cache/refresh paths concurrently; the client poll then repeated reads.
+
+Remediation commit: `85871be`
+
+- Fresh cache reads no longer start provider or Sheet writes until the configured 15-minute refresh interval is due.
+- Distinct refresh work is serialized, same-key deduplicated, and capped at four pending operations.
+- TODAY_SUMMARY cache reads and manual refresh initiation are sequential.
+- Initial and manual refresh use bounded polling and stop as stale instead of leaving a permanent spinner.
+- An older manual refresh cannot overwrite a newly selected date/filter.
+- Scheduler remains disabled and is excluded from this release.
+
+Post-remediation Production revision: `pmc-mini-app-00046-pam`
+
+- Production traffic: 100%
+- Build: PASS
+- Main Vitest: 130 files / 1,470 tests PASS
+- Booking Vitest: 42 files / 423 tests PASS
+- OCR Vitest: 18 files / 231 tests PASS
+- Browser acceptance: 10 / 10 PASS
+- Final focused review: no Critical or Important blockers
+- Repeated Production-cache smoke passes: 3
+- Core report smoke result: cache source, refreshing false, stale false, no warning
+- Post-route unexpected HTTP 5xx: 0
+- Rollback revision for this remediation: `pmc-mini-app-00044-lug`
