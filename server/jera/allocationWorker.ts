@@ -16,6 +16,11 @@ import { jeraCacheKey } from './cacheKey.js'
 import { normalizePaymentDetail } from './normalize.js'
 import type { JeraReportStore } from './store.js'
 
+export const JERA_ALLOCATION_WORKER_MAX_RUN_MS = 240_000
+export const JERA_ALLOCATION_LEASE_TTL_MS = 270_000
+export const JERA_ALLOCATION_LEASE_RENEW_WINDOW_MS = 60_000
+const JERA_ALLOCATION_REQUEST_RESERVE_MS = 10_000
+
 export interface JeraAllocationWorker {
   run(input: {
     branchUuid: string
@@ -49,15 +54,54 @@ export function createJeraAllocationWorker(options: {
   return {
     async run(input) {
       validateRunInput(input)
+      const startedAt = now()
+      const deadline = startedAt.getTime() + JERA_ALLOCATION_WORKER_MAX_RUN_MS
       const dayKey = jeraAllocationDayKey(input.branchUuid, input.eventDate)
       const claimed = await options.lease.claim({
-        dayKey, owner: input.workerId, now: instant(now()), ttlMs: 300_000,
+        dayKey, owner: input.workerId, now: instant(startedAt), ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
       })
       if (!validClaim(claimed, dayKey, input.workerId)) return skipped()
-      const lease = claimed
+      let lease = claimed
       try {
         const runSession: JeraAllocationRunSession = await options.allocationStore.openRunSession()
         const existingCoverage = await runSession.getCoverage(dayKey)
+
+        async function assertLeaseForMutation(): Promise<void> {
+          const checkedAt = now()
+          const remaining = Date.parse(lease.expiresAt) - checkedAt.getTime()
+          if (!Number.isFinite(remaining) || remaining <= 0) leaseLost()
+          if (remaining <= JERA_ALLOCATION_LEASE_RENEW_WINDOW_MS) {
+            const renewed = await options.lease.renew(lease, {
+              now: instant(checkedAt), ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
+            })
+            if (!validClaim(renewed, dayKey, input.workerId)) leaseLost()
+            lease = renewed
+          }
+          if (!await options.lease.assertCurrent(lease, instant(now()))) leaseLost()
+        }
+
+        async function fencedMutation<T>(operation: () => Promise<T>): Promise<T> {
+          await assertLeaseForMutation()
+          const result = await operation()
+          if (!await options.lease.assertCurrent(lease, instant(now()))) leaseLost()
+          return result
+        }
+
+        async function saveCoverage(value: JeraAllocationCoverage): Promise<void> {
+          await fencedMutation(async () => {
+            value.leaseOwner = lease.owner
+            value.leaseExpiresAt = lease.expiresAt
+            await runSession.saveCoverage(value)
+          })
+        }
+
+        async function persistDetail(detail: JeraCachedPaymentDetail, value: JeraAllocationCoverage): Promise<void> {
+          await fencedMutation(async () => {
+            value.leaseOwner = lease.owner
+            value.leaseExpiresAt = lease.expiresAt
+            await runSession.persistPaymentDetail({ detail, coverage: value })
+          })
+        }
 
         const filters = { branchUuid: input.branchUuid, startDate: input.eventDate, endDate: input.eventDate }
         let snapshots: Awaited<ReturnType<JeraReportStore['readSnapshots']>>
@@ -96,7 +140,7 @@ export function createJeraAllocationWorker(options: {
                 input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
                 metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: retryCursor, successfulDetailCount: 0,
               }), safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE' }
-          await runSession.saveCoverage(incomplete)
+          await saveCoverage(incomplete)
           await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, retryCursor, nextAttempt(input.attempt), options.continuationDelaySeconds)
           return { status: 'CONTINUED', processed: 0, nextCursor: retryCursor }
         }
@@ -113,7 +157,7 @@ export function createJeraAllocationWorker(options: {
             metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: 0, successfulDetailCount: matchingCount(read.details, payments),
           })
           await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, 0, 0, options.continuationDelaySeconds)
-          await runSession.saveCoverage(reset)
+          await saveCoverage(reset)
           return { status: 'CONTINUED', processed: 0, nextCursor: 0 }
         }
 
@@ -130,17 +174,28 @@ export function createJeraAllocationWorker(options: {
         let previousAttemptAt = coverage.lastAttemptAt ? Date.parse(coverage.lastAttemptAt) : null
 
         while (cursor < payments.length && processed < options.maxDetailsPerRun) {
+          if (now().getTime() >= deadline) {
+            await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+            return { status: 'CONTINUED', processed, nextCursor: cursor }
+          }
           const payment = payments[cursor]!
           if (hasCurrentDetail(details, payment)) {
             cursor += 1
             Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
-            await runSession.saveCoverage(coverage)
+            await saveCoverage(coverage)
             continue
           }
 
           if (previousAttemptAt !== null) {
             const delay = previousAttemptAt + 3_000 - now().getTime()
+            if (now().getTime() + Math.max(0, delay) + JERA_ALLOCATION_REQUEST_RESERVE_MS > deadline) {
+              await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+              return { status: 'CONTINUED', processed, nextCursor: cursor }
+            }
             if (delay > 0) await sleep(delay)
+          } else if (now().getTime() + JERA_ALLOCATION_REQUEST_RESERVE_MS > deadline) {
+            await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
+            return { status: 'CONTINUED', processed, nextCursor: cursor }
           }
           const attemptedAt = now()
           previousAttemptAt = attemptedAt.getTime()
@@ -148,7 +203,7 @@ export function createJeraAllocationWorker(options: {
           coverage.safeErrorCode = null
           coverage.leaseOwner = lease.owner
           coverage.leaseExpiresAt = lease.expiresAt
-          await runSession.saveCoverage(coverage)
+          await saveCoverage(coverage)
           processed += 1
 
           try {
@@ -163,17 +218,20 @@ export function createJeraAllocationWorker(options: {
             })
             if (detail.sourceUuid !== payment.sourceUuid || detail.eventDate !== input.eventDate) throw new JeraReadError('JERA_SCHEMA_INVALID')
             const cached = buildCachedPaymentDetail({ branchUuid: input.branchUuid, paymentSourceHash: payment.sourceHash, detail })
-            details = [...details.filter((stored) => stored.paymentUuid !== cached.paymentUuid), cached]
-            cursor += 1
-            Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
-            await runSession.persistPaymentDetail({ detail: cached, coverage })
+            const nextDetails = [...details.filter((stored) => stored.paymentUuid !== cached.paymentUuid), cached]
+            const nextCursor = cursor + 1
+            Object.assign(coverage, completionFields({ cursor: nextCursor, payments, details: nextDetails, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
+            await persistDetail(cached, coverage)
+            details = nextDetails
+            cursor = nextCursor
           } catch (error) {
+            if (isLeaseLost(error)) throw error
             const code = safeProviderCode(error)
             coverage.safeErrorCode = code
             coverage.status = 'INCOMPLETE'
             coverage.cursor = cursor
             coverage.successfulDetailCount = matchingCount(details, payments)
-            await runSession.saveCoverage(coverage)
+            await saveCoverage(coverage)
             const retryAfter = error instanceof JeraReadError ? error.retryAfterSeconds ?? 0 : 0
             await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, nextAttempt(input.attempt), Math.max(options.continuationDelaySeconds, retryAfter))
             return { status: 'CONTINUED', processed: processed - 1, nextCursor: cursor }
@@ -181,8 +239,10 @@ export function createJeraAllocationWorker(options: {
         }
 
         if (cursor >= payments.length) {
-          Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
-          await runSession.saveCoverage(coverage)
+          if (coverage.status !== 'COMPLETE') {
+            Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
+            await saveCoverage(coverage)
+          }
           return { status: 'COMPLETE', processed, nextCursor: null }
         }
         await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor, 0, options.continuationDelaySeconds)
@@ -195,10 +255,12 @@ export function createJeraAllocationWorker(options: {
           attempt: number,
           delaySeconds: number,
         ): Promise<void> {
-          await options.queue.enqueue({
-            branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: hash,
-            metadataSnapshotHash: metadataHash, cursor: nextCursor, attempt,
-            scheduleAt: new Date(now().getTime() + delaySeconds * 1_000),
+          await fencedMutation(async () => {
+            await options.queue.enqueue({
+              branchUuid: input.branchUuid, eventDate: input.eventDate, paymentSetHash: hash,
+              metadataSnapshotHash: metadataHash, cursor: nextCursor, attempt,
+              scheduleAt: new Date(now().getTime() + delaySeconds * 1_000),
+            })
           })
         }
       } finally {
@@ -321,4 +383,12 @@ function instant(value: Date): string {
 
 function skipped(): { status: 'SKIPPED'; processed: 0; nextCursor: null } {
   return { status: 'SKIPPED', processed: 0, nextCursor: null }
+}
+
+function leaseLost(): never {
+  throw new Error('JERA_ALLOCATION_LEASE_LOST')
+}
+
+function isLeaseLost(error: unknown): boolean {
+  return error instanceof Error && error.message === 'JERA_ALLOCATION_LEASE_LOST'
 }

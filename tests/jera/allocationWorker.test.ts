@@ -11,7 +11,11 @@ import type {
   JeraCachedPaymentDetail,
 } from '../../server/jera/allocationStore'
 import { createGoogleJeraAllocationTaskQueue, type JeraAllocationTaskQueuePort } from '../../server/jera/allocationTaskQueue'
-import { createJeraAllocationWorker } from '../../server/jera/allocationWorker'
+import {
+  createJeraAllocationWorker,
+  JERA_ALLOCATION_LEASE_TTL_MS,
+  JERA_ALLOCATION_WORKER_MAX_RUN_MS,
+} from '../../server/jera/allocationWorker'
 import { jeraCacheKey } from '../../server/jera/cacheKey'
 import type { JeraReportStore } from '../../server/jera/store'
 
@@ -65,6 +69,54 @@ describe('resumable JERA payment-detail worker', () => {
     expect(harness.runSession.persistPaymentDetail).toHaveBeenLastCalledWith(expect.objectContaining({
       coverage: expect.objectContaining({ cursor: 2, successfulDetailCount: 2, status: 'COMPLETE' }),
     }))
+    expect(harness.lease.assertCurrent).toHaveBeenCalledTimes(8)
+  })
+
+  it('keeps the worker deadline below both the lease and Cloud Tasks deadline', () => {
+    expect(JERA_ALLOCATION_WORKER_MAX_RUN_MS).toBeLessThan(JERA_ALLOCATION_LEASE_TTL_MS)
+    expect(JERA_ALLOCATION_LEASE_TTL_MS).toBeLessThan(300_000)
+  })
+
+  it('renews an expiring generation before mutation and releases the renewed token', async () => {
+    const expiring = { dayKey: dayKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 30_000).toISOString() }
+    const renewed = { ...expiring, fencingToken: '78', expiresAt: new Date(START + JERA_ALLOCATION_LEASE_TTL_MS).toISOString() }
+    const harness = workerHarness(1, { claim: expiring, renew: renewed })
+
+    await expect(harness.worker.run(task(harness.paymentSetHash))).resolves.toMatchObject({ status: 'COMPLETE' })
+
+    expect(harness.lease.renew).toHaveBeenCalledWith(expiring, {
+      now: '2026-08-29T10:00:00.000Z', ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
+    })
+    expect(harness.lease.release).toHaveBeenLastCalledWith(renewed)
+    expect(harness.coverage).toMatchObject({ leaseOwner: 'worker-1', leaseExpiresAt: renewed.expiresAt })
+  })
+
+  it('fails closed after takeover and cannot persist COMPLETE for the stale generation', async () => {
+    const harness = workerHarness(1)
+    vi.mocked(harness.lease.assertCurrent)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false)
+
+    await expect(harness.worker.run(task(harness.paymentSetHash))).rejects.toThrow('JERA_ALLOCATION_LEASE_LOST')
+
+    expect(harness.client.request).toHaveBeenCalledOnce()
+    expect(harness.runSession.persistPaymentDetail).not.toHaveBeenCalled()
+    expect(harness.coverageWrites.some((value) => value.status === 'COMPLETE')).toBe(false)
+  })
+
+  it('stops before another provider request when the safe worker deadline is exhausted', async () => {
+    const harness = workerHarness(2)
+    harness.client.request.mockImplementationOnce(async (_type, filters) => {
+      harness.advance(JERA_ALLOCATION_WORKER_MAX_RUN_MS - 5_000)
+      return [detailPayload(filters.paymentUuid!)]
+    })
+
+    await expect(harness.worker.run(task(harness.paymentSetHash))).resolves.toEqual({
+      status: 'CONTINUED', processed: 1, nextCursor: 1,
+    })
+    expect(harness.client.request).toHaveBeenCalledOnce()
+    expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({ cursor: 1 }))
   })
 
   it('skips an identical detail without a provider call and stores complete source evidence', async () => {
@@ -221,7 +273,11 @@ describe('resumable JERA payment-detail worker', () => {
   })
 })
 
-function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease | null; queue?: JeraAllocationTaskQueuePort } = {}) {
+function workerHarness(count: number, leasePatch: {
+  claim?: JeraAllocationLease | null
+  renew?: JeraAllocationLease | null
+  queue?: JeraAllocationTaskQueuePort
+} = {}) {
   let clockMs = START
   const attemptTimes: number[] = []
   const payments = Array.from({ length: count }, (_, index) => payment(index + 1))
@@ -235,6 +291,8 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
     : leasePatch.claim
   const lease: JeraAllocationLeasePort = {
     claim: vi.fn(async () => claimedLease),
+    renew: vi.fn(async () => leasePatch.renew === undefined ? claimedLease : leasePatch.renew),
+    assertCurrent: vi.fn(async () => true),
     release: vi.fn(async () => undefined),
   }
   const client = { request: vi.fn(async (_type, filters) => [detailPayload(filters.paymentUuid!)]) } as unknown as JeraReadPort & { request: ReturnType<typeof vi.fn> }
@@ -285,6 +343,7 @@ function workerHarness(count: number, leasePatch: { claim?: JeraAllocationLease 
     allocationStore, runSession,
     details, coverageWrites, attemptTimes, paymentState, productState, reportStore,
     get coverage() { return currentCoverage }, set coverage(value) { currentCoverage = value }, get clockMs() { return clockMs },
+    advance(milliseconds: number) { clockMs += milliseconds },
   }
 }
 

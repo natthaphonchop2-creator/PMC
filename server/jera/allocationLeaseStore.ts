@@ -13,6 +13,8 @@ export interface JeraAllocationLease {
 
 export interface JeraAllocationLeasePort {
   claim(input: { dayKey: string; owner: string; now: string; ttlMs: number }): Promise<JeraAllocationLease | null>
+  renew(lease: JeraAllocationLease, input: { now: string; ttlMs: number }): Promise<JeraAllocationLease | null>
+  assertCurrent(lease: JeraAllocationLease, now: string): Promise<boolean>
   release(lease: JeraAllocationLease): Promise<void>
 }
 
@@ -81,6 +83,25 @@ export function createGoogleJeraAllocationLeasePort(input: { bucketName: string;
       if (Date.parse(current.expiresAt) > Date.parse(request.now)) return null
       return save(next, current.fencingToken)
     },
+    async renew(lease, request) {
+      validateLease(lease)
+      validateRenew(request)
+      const now = Date.parse(request.now)
+      if (Date.parse(lease.expiresAt) <= now) return null
+      const current = await read(lease.dayKey)
+      if (!sameLeaseGeneration(current, lease) || Date.parse(current.expiresAt) <= now) return null
+      return save({
+        dayKey: lease.dayKey,
+        owner: lease.owner,
+        expiresAt: new Date(now + request.ttlMs).toISOString(),
+      }, lease.fencingToken)
+    },
+    async assertCurrent(lease, nowValue) {
+      validateLease(lease)
+      const now = Date.parse(instant(nowValue))
+      const current = await read(lease.dayKey)
+      return sameLeaseGeneration(current, lease) && Date.parse(current.expiresAt) > now
+    },
     async release(lease) {
       validateLease(lease)
       const objectKey = jeraAllocationLeaseObjectKey(lease.dayKey)
@@ -98,6 +119,10 @@ function validateClaim(input: { dayKey: string; owner: string; now: string; ttlM
   assertDayKey(input.dayKey); assertOwner(input.owner); instant(input.now)
   if (!Number.isSafeInteger(input.ttlMs) || input.ttlMs < 1_000 || input.ttlMs > 900_000) invalid()
 }
+function validateRenew(input: { now: string; ttlMs: number }): void {
+  instant(input.now)
+  if (!Number.isSafeInteger(input.ttlMs) || input.ttlMs < 1_000 || input.ttlMs > 900_000) invalid()
+}
 function validateLease(lease: JeraAllocationLease): void {
   if (!lease || typeof lease !== 'object') invalid()
   assertDayKey(lease.dayKey); assertOwner(lease.owner); assertGeneration(lease.fencingToken); instant(lease.expiresAt)
@@ -108,6 +133,10 @@ function parseLease(value: unknown, generation: string): JeraAllocationLease {
   if (Object.keys(object).length !== 3 || typeof object.dayKey !== 'string' || typeof object.owner !== 'string' || typeof object.expiresAt !== 'string') corrupt()
   try { assertDayKey(object.dayKey); assertOwner(object.owner); instant(object.expiresAt) } catch { corrupt() }
   return { dayKey: object.dayKey, owner: object.owner, fencingToken: generation, expiresAt: new Date(object.expiresAt).toISOString() }
+}
+function sameLeaseGeneration(current: JeraAllocationLease | null, expected: JeraAllocationLease): current is JeraAllocationLease {
+  return Boolean(current && current.dayKey === expected.dayKey && current.owner === expected.owner
+    && current.fencingToken === expected.fencingToken && current.expiresAt === expected.expiresAt)
 }
 function verifyMetadata(key: string, metadata: FileMetadata): string {
   if (metadata.name !== undefined && metadata.name !== key || metadata.contentType !== 'application/json' || metadata.cacheControl !== 'no-store'

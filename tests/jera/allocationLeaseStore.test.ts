@@ -40,6 +40,33 @@ describe('Google JERA allocation lease port', () => {
     expect(state.saves.filter((save) => save.ifGenerationMatch !== 0)).toHaveLength(2)
   })
 
+  it('renews only the current generation and asserts exact ownership without reviving a stale lease', async () => {
+    const state = new LeaseStorageState()
+    const port = createGoogleJeraAllocationLeasePort({ bucketName: 'pmc-private-locks', storage: state.client() })
+    const original = await port.claim({ dayKey: DAY_KEY, owner: 'worker-a', now: NOW, ttlMs: 60_000 })
+    expect(original).not.toBeNull()
+
+    const renewed = await port.renew(original!, { now: '2026-08-29T10:00:30.000Z', ttlMs: 60_000 })
+
+    expect(renewed).toMatchObject({ dayKey: DAY_KEY, owner: 'worker-a', expiresAt: '2026-08-29T10:01:30.000Z' })
+    expect(renewed?.fencingToken).not.toBe(original?.fencingToken)
+    await expect(port.assertCurrent(original!, '2026-08-29T10:00:31.000Z')).resolves.toBe(false)
+    await expect(port.assertCurrent(renewed!, '2026-08-29T10:00:31.000Z')).resolves.toBe(true)
+    expect(state.saves.at(-1)?.ifGenerationMatch).toBe(original?.fencingToken)
+  })
+
+  it('rejects renew/assert after expiry when a newer generation owns the day', async () => {
+    const state = new LeaseStorageState()
+    const port = createGoogleJeraAllocationLeasePort({ bucketName: 'pmc-private-locks', storage: state.client() })
+    const stale = await port.claim({ dayKey: DAY_KEY, owner: 'worker-a', now: NOW, ttlMs: 1_000 })
+    const current = await port.claim({ dayKey: DAY_KEY, owner: 'worker-b', now: '2026-08-29T10:00:02.000Z', ttlMs: 60_000 })
+
+    expect(current?.fencingToken).not.toBe(stale?.fencingToken)
+    await expect(port.assertCurrent(stale!, '2026-08-29T10:00:02.000Z')).resolves.toBe(false)
+    await expect(port.renew(stale!, { now: '2026-08-29T10:00:02.000Z', ttlMs: 60_000 })).resolves.toBeNull()
+    await expect(port.assertCurrent(current!, '2026-08-29T10:00:02.000Z')).resolves.toBe(true)
+  })
+
   it('fails closed on malformed content or metadata without exposing raw storage errors', async () => {
     const state = new LeaseStorageState()
     state.put({ body: '{"dayKey":"bad"}', generation: '7' })
