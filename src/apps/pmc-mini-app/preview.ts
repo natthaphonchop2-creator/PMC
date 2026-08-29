@@ -40,12 +40,16 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
 
 export function createPreviewMiniAppConfig(options: {
   reportingEnabled?: boolean
+  financeReportsEnabled?: boolean
+  canViewFinance?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean
 } = {}): MiniAppConfig {
   return {
     ...PREVIEW_CONFIG,
     reportingEnabled: options.reportingEnabled === true,
+    financeReportsEnabled: options.financeReportsEnabled === true,
+    canViewFinance: options.financeReportsEnabled === true && options.canViewFinance === true,
     stockEnabled: options.stockEnabled === true,
     canManageStock: options.stockEnabled === true && options.canManageStock === true,
   }
@@ -54,6 +58,8 @@ export function createPreviewMiniAppConfig(options: {
 export function createPreviewMiniAppApi(options: {
   staffAllowed?: boolean
   reportingEnabled?: boolean
+  financeReportsEnabled?: boolean
+  canViewFinance?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean
 } = {}): MiniAppBrowserApi {

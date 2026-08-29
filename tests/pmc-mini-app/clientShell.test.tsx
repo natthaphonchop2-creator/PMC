@@ -47,6 +47,86 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.getByRole('button', { name: 'รายงาน' })).toBeVisible()
   })
 
+  it('replaces the primary report catalog only when the finance flag is enabled', async () => {
+    const user = userEvent.setup()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: false }}
+      api={miniAppApi()}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+
+    expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /รายรับรายวัน/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /รายงานรายเดือน/ })).toHaveAttribute('aria-disabled', 'true')
+    for (const legacyLabel of ['สรุปวันนี้', 'มัดจำ', 'นัดหมาย', 'รายงานเพิ่มเติม']) {
+      expect(screen.queryByText(legacyLabel)).not.toBeInTheDocument()
+    }
+  })
+
+  it('keeps the legacy ReportCenter as the exact rollback path when the finance flag is off', async () => {
+    const user = userEvent.setup()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, reportingEnabled: true, financeReportsEnabled: false }}
+      api={miniAppApi()}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+
+    expect(screen.getByText('สรุปวันนี้')).toBeVisible()
+    expect(screen.getByText('มัดจำ')).toBeVisible()
+    expect(screen.getByText('นัดหมาย')).toBeVisible()
+    expect(screen.getByText('รายงานเพิ่มเติม')).toBeVisible()
+    expect(screen.queryByRole('button', { name: /รายรับรายวัน/ })).not.toBeInTheDocument()
+  })
+
+  it('opens daily income for every staff member and monthly income only for finance staff', async () => {
+    const user = userEvent.setup()
+    const ordinaryApi = miniAppApi()
+    const ordinary = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: false }}
+      api={ordinaryApi}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+    expect(await screen.findByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
+    expect(ordinaryApi.loadDailyIncome).toHaveBeenCalledOnce()
+    ordinary.unmount()
+
+    const financeApi = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: true }}
+      api={financeApi}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
+    expect(await screen.findByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
+    expect(financeApi.loadMonthlyIncome).toHaveBeenCalledOnce()
+  })
+
+  it('drills from a monthly trend into the selected daily range', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: true }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
+    await user.click(await screen.findByRole('button', { name: 'ดูรายรับวันที่ 2026-08-29' }))
+
+    expect(await screen.findByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
+    expect(api.loadDailyIncome).toHaveBeenCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-29', endDate: '2026-08-29',
+    })
+  })
+
   it('opens a server-created booking draft from the home action', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -356,7 +436,8 @@ describe('PMC LINE Mini App shell', () => {
 
 const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
-  stockEnabled: false, canManageStock: false,
+  financeReportsEnabled: false, stockEnabled: false, canManageStock: false,
+  canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
 }
@@ -374,12 +455,39 @@ function miniAppApi(): PmcMiniAppApi {
     loadDraft: vi.fn(),
     upload: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
     loadReport: vi.fn(), refreshReport: vi.fn(),
+    loadDailyIncome: vi.fn(async (_token, filter) => dailyIncomeProjection(filter.startDate, filter.endDate)),
+    refreshDailyIncome: vi.fn(async () => ({ accepted: true as const, allocationQueued: true, retryAfterSeconds: 60 })),
+    loadMonthlyIncome: vi.fn(async () => monthlyIncomeProjection()),
     loadStockProducts: vi.fn(async () => ({ products: [{
       productId: 'STK-000001', name: 'ถุงมือ', category: 'CLINIC_SUPPLY', unit: 'กล่อง',
       minimumQuantityMilli: 5_000, onHandMilli: 4_000, lowStock: true, active: true,
       hasLedgerActivity: true, version: 2,
     }] })),
     loadStockHistory: vi.fn(), submitStockCommand: vi.fn(),
+  }
+}
+
+function dailyIncomeProjection(startDate = '2026-08-29', endDate = '2026-08-29') {
+  return {
+    startDate, endDate, receivedSatang: 100_000, refundSatang: 10_000, netReceivedSatang: 90_000,
+    channels: { transferSatang: 60_000, cashSatang: 20_000, creditSatang: 10_000, otherSatang: 10_000, differenceSatang: 0 },
+    categories: { state: 'READY' as const, serviceSatang: 60_000, productSatang: 30_000, unclassifiedSatang: 10_000, incompleteDates: [] },
+    payments: [],
+    freshness: {
+      payment: { lastSuccessAt: '2026-08-29T10:00:00.000Z', stale: false, warningCode: null },
+      refund: { lastSuccessAt: '2026-08-29T10:00:00.000Z', stale: false, warningCode: null },
+      allocation: { lastSuccessAt: '2026-08-29T10:00:00.000Z', stale: false, warningCode: null },
+    },
+    warnings: [],
+  }
+}
+
+function monthlyIncomeProjection() {
+  return {
+    ...dailyIncomeProjection('2026-08-01', '2026-08-31'),
+    monthKey: '2026-08',
+    dailyTrend: [{ date: '2026-08-29', receivedSatang: 100_000, refundSatang: 10_000, netReceivedSatang: 90_000 }],
+    expense: { state: 'NOT_IMPLEMENTED' as const, clinicExpenseSatang: null, estimatedBalanceSatang: null },
   }
 }
 

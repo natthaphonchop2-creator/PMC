@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDays, FileChartColumn, House, PackageOpen, UserRound } from 'lucide-react'
 import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
@@ -12,6 +12,9 @@ import {
 } from './contracts'
 import { EnrollmentPage } from './EnrollmentPage'
 import { Home } from './Home'
+import { DailyIncomePage, type DailyIncomePageAdapter } from './DailyIncomePage'
+import { FinanceReportHome, type FinanceReportView } from './FinanceReportHome'
+import { MonthlyFinancePage, type MonthlyIncomePageAdapter } from './MonthlyFinancePage'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
 import { StockHome } from './stock/StockHome'
@@ -25,9 +28,17 @@ import {
   type ReportSelection,
 } from './reports'
 import type { StockHistoryPage } from '../../../shared/pmcStock'
+import {
+  loadFinanceReportFilterPreferences,
+  saveFinanceReportFilterPreferences,
+  type FinanceDailyFilter,
+  type FinanceMonthSelection,
+  type FinanceReportFilterStorage,
+} from './financeReports'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
+type FinanceView = 'FINANCE_HOME' | FinanceReportView
 
 export function PmcMiniApp({
   initialSession,
@@ -52,6 +63,10 @@ export function PmcMiniApp({
   const [enrollmentMessage, setEnrollmentMessage] = useState('')
   const [reportFilters, setReportFilters] = useState<ReportFilterState>(() => loadReportFilterPreferences())
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
+  const bangkokDate = useMemo(() => currentBangkokDate(), [])
+  const financeFilterStorage = useMemo(() => safeFinanceFilterStorage(), [])
+  const [financeFilters, setFinanceFilters] = useState(() => loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate))
+  const [financeView, setFinanceView] = useState<FinanceView>('FINANCE_HOME')
   const openingBookingRef = useRef<Promise<void> | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
   const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
@@ -61,6 +76,7 @@ export function PmcMiniApp({
   const navigationEpochRef = useRef(0)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
+  useEffect(() => { saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters) }, [financeFilterStorage, financeFilters])
 
   useEffect(() => {
     if (!message || messageTone !== 'SUCCESS') return
@@ -120,6 +136,28 @@ export function PmcMiniApp({
     load: (reportType, filters) => api.loadReport(idToken, reportType, filters),
     refresh: (reportType, filters) => api.refreshReport(idToken, reportType, filters),
   }), [api, idToken])
+
+  const dailyIncomeAdapter = useMemo<DailyIncomePageAdapter>(() => ({
+    load: (filter) => api.loadDailyIncome(idToken, filter),
+    refresh: (eventDate) => api.refreshDailyIncome(idToken, eventDate),
+  }), [api, idToken])
+
+  const monthlyIncomeAdapter = useMemo<MonthlyIncomePageAdapter>(() => ({
+    load: (selection) => api.loadMonthlyIncome(idToken, selection),
+  }), [api, idToken])
+
+  const rememberDailyFilter = useCallback((daily: FinanceDailyFilter) => {
+    setFinanceFilters((current) => sameDailyFilter(current.daily, daily) ? current : { ...current, daily })
+  }, [])
+
+  const rememberMonthSelection = useCallback((monthly: FinanceMonthSelection) => {
+    setFinanceFilters((current) => sameMonthSelection(current.monthly, monthly) ? current : { ...current, monthly })
+  }, [])
+
+  const drillIntoDailyIncome = useCallback((daily: FinanceDailyFilter) => {
+    setFinanceFilters((current) => ({ ...current, daily }))
+    setFinanceView('DAILY_INCOME')
+  }, [])
 
   const stockIssueAdapter = useMemo<StockIssueFlowAdapter>(() => ({
     issue: (command) => api.submitStockCommand(idToken, command),
@@ -230,11 +268,15 @@ export function PmcMiniApp({
     setLoading(false)
     setMessage('')
     if (next === 'REPORTS' && view === 'REPORTS') {
-      setSelectedReport(null)
+      if (config?.financeReportsEnabled) setFinanceView('FINANCE_HOME')
+      else setSelectedReport(null)
       return
     }
     setView(next)
-    if (next !== 'REPORTS') setSelectedReport(null)
+    if (next !== 'REPORTS') {
+      setSelectedReport(null)
+      setFinanceView('FINANCE_HOME')
+    }
   }
 
   const linkAccount = async (staffId: string, pin: string) => {
@@ -346,7 +388,7 @@ export function PmcMiniApp({
     <div className="pmc-mini-app-shell">
       {view === 'HOME' && <Home
         session={session}
-        reportingEnabled={Boolean(config?.reportingEnabled)}
+        reportingEnabled={Boolean(config?.reportingEnabled || config?.financeReportsEnabled)}
         stockEnabled={Boolean(config?.stockEnabled)}
         onAction={(action) => {
           if (action === 'BOOKING') void openBooking()
@@ -354,17 +396,43 @@ export function PmcMiniApp({
           else navigateTo(action)
         }}
       />}
-      {view === 'REPORTS' && (selectedReport === 'ADDITIONAL'
-        ? <AdditionalReportMenu onBack={() => setSelectedReport(null)} onSelect={setSelectedReport} />
-        : selectedReport
-          ? <ReportPage
-            reportType={selectedReport}
-            filters={reportFilters}
-            onFiltersChange={setReportFilters}
-            adapter={reportAdapter}
-            onBack={() => setSelectedReport(isAdditionalReport(selectedReport) ? 'ADDITIONAL' : null)}
+      {view === 'REPORTS' && (config?.financeReportsEnabled
+        ? financeView === 'DAILY_INCOME'
+          ? <DailyIncomePage
+            bangkokDate={bangkokDate}
+            initialFilter={financeFilters.daily}
+            adapter={dailyIncomeAdapter}
+            onFilterChange={rememberDailyFilter}
+            onBack={() => setFinanceView('FINANCE_HOME')}
           />
-          : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
+          : financeView === 'MONTHLY_INCOME'
+            ? <MonthlyFinancePage
+              canViewFinance={Boolean(config.canViewFinance)}
+              bangkokDate={bangkokDate}
+              initialSelection={financeFilters.monthly}
+              adapter={monthlyIncomeAdapter}
+              onSelectionChange={rememberMonthSelection}
+              onDrillDown={drillIntoDailyIncome}
+              onBack={() => setFinanceView('FINANCE_HOME')}
+            />
+            : <FinanceReportHome
+              canViewFinance={Boolean(config.canViewFinance)}
+              onSelect={(next) => {
+                if (next === 'MONTHLY_INCOME' && !config.canViewFinance) return
+                setFinanceView(next)
+              }}
+            />
+        : selectedReport === 'ADDITIONAL'
+          ? <AdditionalReportMenu onBack={() => setSelectedReport(null)} onSelect={setSelectedReport} />
+          : selectedReport
+            ? <ReportPage
+              reportType={selectedReport}
+              filters={reportFilters}
+              onFiltersChange={setReportFilters}
+              adapter={reportAdapter}
+              onBack={() => setSelectedReport(isAdditionalReport(selectedReport) ? 'ADDITIONAL' : null)}
+            />
+            : <ReportCenter filters={reportFilters} onFiltersChange={setReportFilters} onSelect={setSelectedReport} />)}
       {view === 'ACCOUNT' && <AccountPage session={session} fallbackFormUrl={config?.fallbackFormUrl} />}
       {view === 'STOCK' && stockView === 'HOME' && <StockHome
         products={stockProducts}
@@ -384,7 +452,7 @@ export function PmcMiniApp({
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
       <BottomNavigation
         view={view}
-        reportingEnabled={Boolean(config?.reportingEnabled)}
+        reportingEnabled={Boolean(config?.reportingEnabled || config?.financeReportsEnabled)}
         stockEnabled={Boolean(config?.stockEnabled)}
         onChange={(next) => {
         if (next === 'BOOKING') void openBooking()
@@ -393,6 +461,33 @@ export function PmcMiniApp({
       }} />
     </div>
   )
+}
+
+function sameDailyFilter(left: FinanceDailyFilter, right: FinanceDailyFilter): boolean {
+  return left.preset === right.preset && left.startDate === right.startDate && left.endDate === right.endDate
+}
+
+function sameMonthSelection(left: FinanceMonthSelection, right: FinanceMonthSelection): boolean {
+  return left.year === right.year && left.month === right.month
+}
+
+function safeFinanceFilterStorage(): FinanceReportFilterStorage {
+  return {
+    getItem(key) {
+      try { return globalThis.localStorage?.getItem(key) ?? null } catch { return null }
+    },
+    setItem(key, value) {
+      try { globalThis.localStorage?.setItem(key, value) } catch { /* Preference storage is optional. */ }
+    },
+  }
+}
+
+function currentBangkokDate(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date())
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${value.year}-${value.month}-${value.day}`
 }
 
 function BottomNavigation({ view, reportingEnabled, stockEnabled, onChange }: {

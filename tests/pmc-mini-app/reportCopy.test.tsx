@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Home } from '../../src/apps/pmc-mini-app/Home'
 import { AdditionalReportMenu, ReportCenter } from '../../src/apps/pmc-mini-app/ReportCenter'
 import { ReportPage } from '../../src/apps/pmc-mini-app/ReportPage'
+import { FinanceReportHome } from '../../src/apps/pmc-mini-app/FinanceReportHome'
 import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
 afterEach(cleanup)
@@ -54,5 +55,16 @@ describe('PMC Clinic Reports product language', () => {
     />)
     expect(screen.getByText('CLINIC REPORT')).toBeVisible()
     assertNoProviderName(page.container)
+  })
+
+  it('keeps the finance-first home provider-neutral and free of legacy primary copy', () => {
+    const view = render(<FinanceReportHome canViewFinance onSelect={vi.fn()} />)
+
+    expect(screen.getByRole('button', { name: /รายรับรายวัน/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /รายงานรายเดือน/ })).toBeVisible()
+    for (const legacyLabel of ['สรุปวันนี้', 'มัดจำ', 'นัดหมาย', 'รายงานเพิ่มเติม']) {
+      expect(screen.queryByText(legacyLabel)).not.toBeInTheDocument()
+    }
+    assertNoProviderName(view.container)
   })
 })

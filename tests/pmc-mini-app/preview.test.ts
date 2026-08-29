@@ -42,6 +42,18 @@ describe('PMC Mini App local visual preview adapter', () => {
     expect(createPreviewMiniAppConfig()).toMatchObject({ financeReportsEnabled: false })
   })
 
+  it('enables finance report previews explicitly without granting finance access by default', () => {
+    expect(createPreviewMiniAppConfig({ financeReportsEnabled: true })).toMatchObject({
+      reportingEnabled: false,
+      financeReportsEnabled: true,
+      canViewFinance: false,
+    })
+    expect(createPreviewMiniAppConfig({ financeReportsEnabled: true, canViewFinance: true })).toMatchObject({
+      financeReportsEnabled: true,
+      canViewFinance: true,
+    })
+  })
+
   it('advances the safe preview report timestamp after a refresh', async () => {
     const api = createPreviewMiniAppApi({ reportingEnabled: true })
     const filters = defaultReportFilters('2026-08-27')
