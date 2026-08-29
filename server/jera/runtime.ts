@@ -44,6 +44,7 @@ function constructJeraRuntime(input: {
   const store = createGoogleJeraReportStore({ spreadsheetId: input.spreadsheetId, sheets: input.sheets })
   const coordinator = createJeraSyncCoordinator({
     client, store, manualRefreshSeconds: input.config.manualRefreshSeconds,
+    refreshIntervalMinutes: input.config.syncIntervalMinutes,
     staleAfterMs: input.config.syncIntervalMinutes * 2 * 60_000,
   })
   const schedulerIdentity = input.config.scheduler ? createGoogleSchedulerIdentity() : null

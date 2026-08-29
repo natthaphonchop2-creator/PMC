@@ -15,6 +15,24 @@ import type {
 import { jeraCacheKey } from '../../server/jera/cacheKey'
 
 describe('JERA sync coordinator', () => {
+  it('serves a fresh cache without starting another background refresh', async () => {
+    const store = new MemoryReportStore([paymentRow({ paidAmountSatang: 10_000 })])
+    store.states.set(cacheKey(), state({
+      status: 'SUCCESS', lastAttemptAt: '2026-08-27T09:55:00.000Z',
+      lastSuccessAt: '2026-08-27T09:55:00.000Z', recordCount: 1,
+    }))
+    const client = readPort(async () => [providerPayment('120.00')])
+    const coordinator = createCoordinator(store, client)
+
+    const result = await coordinator.readAndRefresh(query())
+    await coordinator.waitForIdle()
+
+    expect(result).toMatchObject({ source: 'CACHE', refreshing: false, stale: false })
+    expect(result.data[0]?.paidAmountSatang).toBe(10_000)
+    expect(client.request).not.toHaveBeenCalled()
+    expect(store.writeOperations).toBe(0)
+  })
+
   it('returns cache immediately and shares one background refresh', async () => {
     const store = new MemoryReportStore([paymentRow({ paidAmountSatang: 10_000 })])
     let releaseProvider = (): void => undefined
@@ -36,6 +54,49 @@ describe('JERA sync coordinator', () => {
     releaseProvider()
     await coordinator.waitForIdle()
     expect((await store.readRows('PAYMENT', { cacheKey: cacheKey() }))[0]?.paidAmountSatang).toBe(12_000)
+  })
+
+  it('serializes background refreshes across different cache keys', async () => {
+    const store = new MemoryReportStore()
+    let active = 0
+    let maxActive = 0
+    const client = readPort(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      active -= 1
+      return []
+    })
+    const coordinator = createCoordinator(store, client)
+
+    await Promise.all([
+      coordinator.readAndRefresh(query()),
+      coordinator.readAndRefresh({ ...query(), reportType: 'REFUND' }),
+    ])
+    await coordinator.waitForIdle()
+
+    expect(client.request).toHaveBeenCalledTimes(2)
+    expect(maxActive).toBe(1)
+  })
+
+  it('bounds pending distinct refreshes and serves cache when the queue is full', async () => {
+    const store = new MemoryReportStore()
+    let releaseProvider = (): void => undefined
+    const providerWait = new Promise<void>((resolve) => { releaseProvider = resolve })
+    const client = readPort(async () => {
+      await providerWait
+      return []
+    })
+    const coordinator = createCoordinator(store, client, { maxPendingRefreshes: 1 })
+
+    const first = await coordinator.readAndRefresh(query())
+    const second = await coordinator.readAndRefresh({ ...query(), reportType: 'REFUND' })
+
+    expect(first.refreshing).toBe(true)
+    expect(second.refreshing).toBe(false)
+    releaseProvider()
+    await coordinator.waitForIdle()
+    expect(client.request).toHaveBeenCalledOnce()
   })
 
   it('throttles accepted manual refreshes for five minutes per cache key', async () => {
@@ -125,12 +186,13 @@ function query(): JeraSyncQuery {
 
 function cacheKey(): string { return jeraCacheKey('PAYMENT', query().filters) }
 
-function createCoordinator(store: MemoryReportStore, client: JeraReadPort) {
+function createCoordinator(store: MemoryReportStore, client: JeraReadPort, options: { maxPendingRefreshes?: number } = {}) {
   let sequence = 0
   return createJeraSyncCoordinator({
     client, store, now: () => new Date(NOW), id: () => `synthetic-run-${++sequence}`,
     manualRefreshSeconds: 300, staleAfterMs: 30 * 60_000, leaseTtlMs: 60_000,
-  })
+    ...options,
+  } as Parameters<typeof createJeraSyncCoordinator>[0])
 }
 
 function readPort(handler: (reportType: JeraSourceReportType, filters: JeraReportFilters) => Promise<unknown[]>): JeraReadPort {
@@ -173,12 +235,14 @@ class MemoryReportStore implements JeraReportStore {
   readonly rows = new Map<string, JeraNormalizedRow[]>()
   readonly states = new Map<string, JeraSyncStateRecord>()
   readonly audits: JeraSyncAuditRecord[] = []
+  writeOperations = 0
 
   constructor(rows: JeraNormalizedRow[] = []) {
     for (const row of rows) this.rows.set(row.cacheKey, [...(this.rows.get(row.cacheKey) ?? []), structuredClone(row)])
   }
 
   async upsertRows(_reportType: JeraSourceReportType, rows: JeraNormalizedRow[]): Promise<JeraStoreWriteResult> {
+    this.writeOperations += 1
     for (const row of rows) {
       const current = this.rows.get(row.cacheKey) ?? []
       const index = current.findIndex((candidate) => candidate.reportType === row.reportType && candidate.sourceUuid === row.sourceUuid)
@@ -189,6 +253,7 @@ class MemoryReportStore implements JeraReportStore {
   }
 
   async replaceRows(_reportType: JeraSourceReportType, key: string, rows: JeraNormalizedRow[]): Promise<JeraStoreWriteResult> {
+    this.writeOperations += 1
     const removed = this.rows.get(key)?.length ?? 0
     this.rows.set(key, structuredClone(rows))
     return { inserted: rows.length, updated: 0, unchanged: 0, removed }
@@ -200,10 +265,11 @@ class MemoryReportStore implements JeraReportStore {
 
   async getSyncState(key: string): Promise<JeraSyncStateRecord | null> { return structuredClone(this.states.get(key) ?? null) }
   async listSyncStates(): Promise<JeraSyncStateRecord[]> { return structuredClone([...this.states.values()]) }
-  async saveSyncState(value: JeraSyncStateRecord): Promise<void> { this.states.set(value.cacheKey, structuredClone(value)) }
-  async appendSyncAudit(value: JeraSyncAuditRecord): Promise<void> { this.audits.push(structuredClone(value)) }
+  async saveSyncState(value: JeraSyncStateRecord): Promise<void> { this.writeOperations += 1; this.states.set(value.cacheKey, structuredClone(value)) }
+  async appendSyncAudit(value: JeraSyncAuditRecord): Promise<void> { this.writeOperations += 1; this.audits.push(structuredClone(value)) }
 
   async claimLease(input: { cacheKey: string; reportType: JeraSourceReportType; filterHash: string; owner: string; now: string; ttlMs: number }): Promise<boolean> {
+    this.writeOperations += 1
     const current = this.states.get(input.cacheKey)
     if (current?.leaseOwner && current.leaseOwner !== input.owner && current.leaseExpiresAt
       && Date.parse(current.leaseExpiresAt) > Date.parse(input.now)) return false
@@ -215,6 +281,7 @@ class MemoryReportStore implements JeraReportStore {
   }
 
   async releaseLease(key: string, owner: string): Promise<void> {
+    this.writeOperations += 1
     const current = this.states.get(key)
     if (current?.leaseOwner === owner) this.states.set(key, { ...current, leaseOwner: null, leaseExpiresAt: null })
   }

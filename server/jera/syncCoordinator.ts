@@ -84,6 +84,8 @@ export function createJeraSyncCoordinator(options: {
   id?: () => string
   normalizers?: Partial<Record<JeraSourceReportType, JeraNormalizer>>
   manualRefreshSeconds?: number
+  refreshIntervalMinutes?: number
+  maxPendingRefreshes?: number
   staleAfterMs?: number
   leaseTtlMs?: number
 }): JeraSyncCoordinator {
@@ -91,15 +93,21 @@ export function createJeraSyncCoordinator(options: {
   const id = options.id ?? randomUUID
   const normalizers = { ...DEFAULT_NORMALIZERS, ...options.normalizers }
   const manualRefreshSeconds = positiveInteger(options.manualRefreshSeconds ?? 300, 60, 3_600)
+  const refreshIntervalMinutes = positiveInteger(options.refreshIntervalMinutes ?? 15, 15, 60)
+  const maxPendingRefreshes = positiveInteger(options.maxPendingRefreshes ?? 4, 1, 20)
   const staleAfterMs = positiveInteger(options.staleAfterMs ?? 30 * 60_000, 60_000, 24 * 60 * 60_000)
   const leaseTtlMs = positiveInteger(options.leaseTtlMs ?? 60_000, 1_000, 900_000)
   const inFlight = new Map<string, Promise<JeraNormalizedRow[] | null>>()
+  let refreshTail: Promise<void> = Promise.resolve()
 
   function startRefresh(query: JeraSyncQuery, actorType: JeraSyncAuditRecord['actorType'], actorId: string): Promise<JeraNormalizedRow[] | null> {
     const key = jeraCacheKey(query.reportType, query.filters)
     const active = inFlight.get(key)
     if (active) return active
-    const promise = refresh(query, actorType, actorId).finally(() => {
+    if (inFlight.size >= maxPendingRefreshes) return Promise.resolve(null)
+    const operation = refreshTail.then(() => refresh(query, actorType, actorId))
+    refreshTail = operation.then(() => undefined, () => undefined)
+    const promise = operation.finally(() => {
       if (inFlight.get(key) === promise) inFlight.delete(key)
     })
     inFlight.set(key, promise)
@@ -165,19 +173,30 @@ export function createJeraSyncCoordinator(options: {
     }
   }
 
-  async function cachedEnvelope(query: JeraSyncQuery, refreshing: boolean): Promise<JeraCacheEnvelope<JeraNormalizedRow[]>> {
+  async function cachedSnapshot(query: JeraSyncQuery, refreshing: boolean): Promise<{
+    envelope: JeraCacheEnvelope<JeraNormalizedRow[]>
+    state: JeraSyncStateRecord | null
+  }> {
     const key = jeraCacheKey(query.reportType, query.filters)
     const [data, state] = await Promise.all([
       options.store.readRows(query.reportType, { cacheKey: key }), options.store.getSyncState(key),
     ])
-    return envelope(data, state, 'CACHE', refreshing, now(), staleAfterMs)
+    return { envelope: envelope(data, state, 'CACHE', refreshing, now(), staleAfterMs), state }
+  }
+
+  async function cachedEnvelope(query: JeraSyncQuery, refreshing: boolean): Promise<JeraCacheEnvelope<JeraNormalizedRow[]>> {
+    return (await cachedSnapshot(query, refreshing)).envelope
   }
 
   return {
     async readAndRefresh(query) {
-      const result = await cachedEnvelope(query, true)
-      void startRefresh(query, 'READ', 'cache-read').catch(() => undefined)
-      return result
+      const key = jeraCacheKey(query.reportType, query.filters)
+      const snapshot = await cachedSnapshot(query, false)
+      const refreshDue = isJeraRefreshDue(snapshot.state?.lastAttemptAt ?? null, now().toISOString(), refreshIntervalMinutes)
+      if (refreshDue && !inFlight.has(key) && inFlight.size < maxPendingRefreshes) {
+        void startRefresh(query, 'READ', 'cache-read').catch(() => undefined)
+      }
+      return { ...snapshot.envelope, refreshing: inFlight.has(key) }
     },
     async manualRefresh(query, actorId) {
       const key = jeraCacheKey(query.reportType, query.filters)
@@ -192,6 +211,13 @@ export function createJeraSyncCoordinator(options: {
           accepted: false,
           retryAfterSeconds: manualRefreshSeconds - elapsedSeconds,
           envelope: await cachedEnvelope(query, inFlight.has(key)),
+        }
+      }
+      if (!inFlight.has(key) && inFlight.size >= maxPendingRefreshes) {
+        return {
+          accepted: false,
+          retryAfterSeconds: Math.min(manualRefreshSeconds, 60),
+          envelope: await cachedEnvelope(query, false),
         }
       }
       await options.store.saveSyncState({

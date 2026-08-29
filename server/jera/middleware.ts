@@ -195,7 +195,8 @@ async function readReport(
     return projectEnvelope(reportType, await coordinator.readAndRefresh({ reportType, filters }))
   }
   const types = ['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'] as const
-  const envelopes = await Promise.all(types.map((type) => coordinator.readAndRefresh({ reportType: type, filters })))
+  const envelopes = []
+  for (const type of types) envelopes.push(await coordinator.readAndRefresh({ reportType: type, filters }))
   return {
     data: buildTodaySummary({
       payments: envelopes[0].data, deposits: envelopes[1].data,
@@ -221,7 +222,8 @@ async function manualRefresh(
     return { accepted: result.accepted, retryAfterSeconds: result.retryAfterSeconds }
   }
   const types = ['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'] as const
-  const results = await Promise.all(types.map((type) => coordinator.manualRefresh({ reportType: type, filters }, actorId)))
+  const results = []
+  for (const type of types) results.push(await coordinator.manualRefresh({ reportType: type, filters }, actorId))
   return {
     accepted: results.some(({ accepted }) => accepted),
     retryAfterSeconds: Math.min(...results.map(({ retryAfterSeconds }) => retryAfterSeconds)),

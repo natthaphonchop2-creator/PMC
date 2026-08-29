@@ -85,6 +85,7 @@ async function createCoordinator(environment, dependencies) {
   const store = runtime.createGoogleJeraReportStore({ spreadsheetId, sheets: ports.sheets })
   return runtime.createJeraSyncCoordinator({
     client, store, manualRefreshSeconds: config.manualRefreshSeconds,
+    refreshIntervalMinutes: config.syncIntervalMinutes,
     staleAfterMs: config.syncIntervalMinutes * 2 * 60_000,
   })
 }

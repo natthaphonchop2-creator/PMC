@@ -39,6 +39,52 @@ describe('authenticated JERA report API', () => {
     expect(JSON.stringify(body)).not.toContain('production-secret')
   })
 
+  it('reads TODAY_SUMMARY source caches sequentially to avoid a Sheets burst', async () => {
+    const deps = dependencies()
+    const order: string[] = []
+    let active = 0
+    let maxActive = 0
+    vi.mocked(deps.coordinator.readAndRefresh).mockImplementation(async ({ reportType }) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      order.push(reportType)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      active -= 1
+      return { ...envelope(), data: [] }
+    })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), reportPath('TODAY_SUMMARY'), {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(200)
+    expect(order).toEqual(['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'])
+    expect(maxActive).toBe(1)
+  })
+
+  it('initiates TODAY_SUMMARY manual refreshes sequentially to avoid a Sheets burst', async () => {
+    const deps = dependencies()
+    const order: string[] = []
+    let active = 0
+    let maxActive = 0
+    vi.mocked(deps.coordinator.manualRefresh).mockImplementation(async ({ reportType }) => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      order.push(reportType)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      active -= 1
+      return { accepted: true, retryAfterSeconds: 300, envelope: envelope() }
+    })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), refreshPath('TODAY_SUMMARY'), {
+      method: 'POST', headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(202)
+    expect(order).toEqual(['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'])
+    expect(maxActive).toBe(1)
+  })
+
   it.each([
     ['unknown report', '/api/mini-app/reports/UNKNOWN', 404],
     ['repeated scalar', reportPath('APPOINTMENT') + '&status=paid&status=unpaid', 400],

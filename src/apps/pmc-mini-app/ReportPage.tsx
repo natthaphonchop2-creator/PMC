@@ -1,5 +1,5 @@
 import { ArrowLeft, RefreshCw } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ReportFilters } from './ReportFilters'
 import { ReportView } from './reportViews'
 import {
@@ -23,6 +23,7 @@ export function ReportPage({
   adapter,
   onBack,
   pollDelayMs = 1_500,
+  maxPollAttempts = 10,
 }: {
   reportType: JeraReportType
   filters: ReportFilterState
@@ -31,50 +32,82 @@ export function ReportPage({
   adapter: ReportPageAdapter
   onBack: () => void
   pollDelayMs?: number
+  maxPollAttempts?: number
 }) {
   const [envelope, setEnvelope] = useState<JeraClientEnvelope<unknown> | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [message, setMessage] = useState('')
+  const requestEpochRef = useRef(0)
   const filterKey = useMemo(() => JSON.stringify(filters), [filters])
   const filterError = reportFilterError(filters)
+  const pollLimit = Number.isFinite(maxPollAttempts) ? Math.max(0, Math.min(20, Math.floor(maxPollAttempts))) : 10
+
+  const pollReport = useCallback(async (
+    requestEpoch: number,
+    onEnvelope: (value: JeraClientEnvelope<unknown>) => void,
+  ): Promise<{ cancelled: boolean; error: unknown | null }> => {
+    for (let pollAttempt = 0; pollAttempt <= pollLimit; pollAttempt += 1) {
+      if (requestEpochRef.current !== requestEpoch) return { cancelled: true, error: null }
+      let next: JeraClientEnvelope<unknown>
+      try {
+        next = await adapter.load(reportType, filters)
+      } catch (error) {
+        return requestEpochRef.current === requestEpoch
+          ? { cancelled: false, error }
+          : { cancelled: true, error: null }
+      }
+      if (requestEpochRef.current !== requestEpoch) return { cancelled: true, error: null }
+      const pollingExhausted = next.refreshing && pollAttempt >= pollLimit
+      onEnvelope(pollingExhausted ? {
+        ...next,
+        refreshing: false,
+        stale: true,
+        warningCode: next.warningCode ?? 'JERA_DATA_STALE',
+      } : next)
+      if (!next.refreshing || pollingExhausted) return { cancelled: false, error: null }
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, pollDelayMs)))
+    }
+    return { cancelled: false, error: null }
+  }, [adapter, filters, pollDelayMs, pollLimit, reportType])
 
   useEffect(() => {
-    let active = true
-    let timer: ReturnType<typeof setTimeout> | undefined
+    const requestEpoch = ++requestEpochRef.current
     setEnvelope(null)
     setMessage('')
     if (filterError) { setLoading(false); return () => undefined }
     setLoading(true)
 
-    const load = async (poll: boolean) => {
-      try {
-        const next = await adapter.load(reportType, filters)
-        if (!active) return
+    void (async () => {
+      const result = await pollReport(requestEpoch, (next) => {
         setEnvelope(next)
         setLoading(false)
-        if (!poll && next.refreshing) timer = setTimeout(() => { void load(true) }, Math.max(0, pollDelayMs))
-      } catch (error) {
-        if (!active) return
+      })
+      if (result.cancelled) return
+      if (result.error) {
+        const error = result.error
         const code = safeErrorCode(error)
         setEnvelope((current) => current ? { ...current, refreshing: false, stale: true, warningCode: code } : null)
         setMessage(code === 'JERA_TIMEOUT' ? 'อัปเดตไม่สำเร็จ ระบบยังแสดงข้อมูลล่าสุด' : 'เปิดรายงานไม่สำเร็จ กรุณาลองอีกครั้ง')
         setLoading(false)
       }
-    }
-    void load(false)
-    return () => { active = false; if (timer) clearTimeout(timer) }
-  }, [adapter, filterError, filterKey, filters, pollDelayMs, reportType])
+    })()
+    return () => { if (requestEpochRef.current === requestEpoch) requestEpochRef.current += 1 }
+  }, [filterError, filterKey, pollReport])
 
   const refresh = async () => {
     if (filterError) return
+    const requestEpoch = ++requestEpochRef.current
     setRefreshing(true)
     setMessage('')
     try {
       await adapter.refresh(reportType, filters)
-      const next = await adapter.load(reportType, filters)
-      setEnvelope(next)
+      if (requestEpochRef.current !== requestEpoch) return
+      const result = await pollReport(requestEpoch, setEnvelope)
+      if (result.cancelled) return
+      if (result.error) throw result.error
     } catch (error) {
+      if (requestEpochRef.current !== requestEpoch) return
       const retry = retryAfter(error)
       setMessage(retry ? `รีเฟรชได้อีกครั้งใน ${Math.ceil(retry / 60)} นาที` : 'รีเฟรชไม่สำเร็จ ระบบยังแสดงข้อมูลล่าสุด')
       setEnvelope((current) => current ? { ...current, stale: true, refreshing: false, warningCode: safeErrorCode(error) } : null)
@@ -95,7 +128,7 @@ export function ReportPage({
           <span>{envelope?.lastSuccessAt ? `อัปเดตล่าสุดเมื่อ ${formatBangkokTime(envelope.lastSuccessAt)}` : 'ยังไม่เคยอัปเดตสำเร็จ'}</span>
           {(envelope?.stale || envelope?.warningCode) && <strong>ข้อมูลอาจล่าช้า</strong>}
         </div>
-        <button type="button" onClick={() => void refresh()} disabled={refreshing || loading || Boolean(filterError)} aria-label="รีเฟรชข้อมูล">
+        <button type="button" onClick={() => void refresh()} disabled={refreshing || loading || Boolean(envelope?.refreshing) || Boolean(filterError)} aria-label="รีเฟรชข้อมูล">
           <RefreshCw className={refreshing || envelope?.refreshing ? 'spinning' : ''} aria-hidden="true" />
           <span>รีเฟรช</span>
         </button>

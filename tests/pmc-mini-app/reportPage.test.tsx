@@ -9,6 +9,43 @@ import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 afterEach(cleanup)
 
 describe('cache-first JERA report page', () => {
+  it('keeps polling until a queued refresh finishes', async () => {
+    const adapter = adapterWith([
+      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
+      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
+      () => Promise.resolve(paymentEnvelope({ refreshing: false, lastSuccessAt: '2026-08-27T03:05:00.000Z' })),
+    ])
+    render(<ReportPage
+      reportType="PAYMENT"
+      filters={defaultReportFilters('2026-08-27')}
+      onFiltersChange={() => undefined}
+      adapter={adapter}
+      onBack={() => undefined}
+      pollDelayMs={0}
+    />)
+
+    await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(3))
+    expect(screen.getByText('อัปเดตล่าสุดเมื่อ 10:05')).toBeVisible()
+    expect(document.querySelector('.spinning')).toBeNull()
+  })
+
+  it('stops bounded polling and marks cache stale when refresh stays queued', async () => {
+    const adapter = adapterWith([() => Promise.resolve(paymentEnvelope({ refreshing: true }))])
+    render(<ReportPage
+      reportType="PAYMENT"
+      filters={defaultReportFilters('2026-08-27')}
+      onFiltersChange={() => undefined}
+      adapter={adapter}
+      onBack={() => undefined}
+      pollDelayMs={0}
+      maxPollAttempts={2}
+    />)
+
+    await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(3))
+    expect(screen.getByText('ข้อมูลอาจล่าช้า')).toBeVisible()
+    expect(document.querySelector('.spinning')).toBeNull()
+  })
+
   it('renders cache immediately, polls once, and discloses a stale refresh failure', async () => {
     const adapter = adapterWith([
       () => Promise.resolve(paymentEnvelope({ refreshing: true })),
@@ -50,6 +87,64 @@ describe('cache-first JERA report page', () => {
 
     await waitFor(() => expect(adapter.refresh).toHaveBeenCalledOnce())
     await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps bounded polling after a manual refresh until queued work finishes', async () => {
+    const user = userEvent.setup()
+    const adapter = adapterWith([
+      () => Promise.resolve(paymentEnvelope()),
+      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
+      () => Promise.resolve(paymentEnvelope({ refreshing: true })),
+      () => Promise.resolve(paymentEnvelope({ refreshing: false, lastSuccessAt: '2026-08-27T03:06:00.000Z' })),
+    ])
+    render(<ReportPage
+      reportType="PAYMENT"
+      filters={defaultReportFilters('2026-08-27')}
+      onFiltersChange={() => undefined}
+      adapter={adapter}
+      onBack={() => undefined}
+      pollDelayMs={0}
+    />)
+    await screen.findAllByText('10,000 บาท')
+
+    await user.click(screen.getByRole('button', { name: 'รีเฟรชข้อมูล' }))
+
+    await waitFor(() => expect(adapter.load).toHaveBeenCalledTimes(4))
+    expect(screen.getByText('อัปเดตล่าสุดเมื่อ 10:06')).toBeVisible()
+    expect(document.querySelector('.spinning')).toBeNull()
+  })
+
+  it('does not let an older manual refresh overwrite a newly selected date', async () => {
+    const user = userEvent.setup()
+    let releaseRefresh = (): void => undefined
+    const refreshWait = new Promise<void>((resolve) => { releaseRefresh = resolve })
+    const adapter: ReportPageAdapter = {
+      load: vi.fn(async (_reportType, filters) => paymentEnvelope({
+        lastSuccessAt: filters.startDate === '2026-08-27'
+          ? '2026-08-27T03:00:00.000Z'
+          : '2026-08-28T03:08:00.000Z',
+      })),
+      refresh: vi.fn(async () => { await refreshWait; return { accepted: true, correlationId: 'refresh-deferred' } }),
+    }
+    const firstFilters = defaultReportFilters('2026-08-27')
+    const secondFilters = defaultReportFilters('2026-08-28')
+    const view = render(<ReportPage
+      reportType="PAYMENT" filters={firstFilters} onFiltersChange={() => undefined}
+      adapter={adapter} onBack={() => undefined} pollDelayMs={0}
+    />)
+    await screen.findByText('อัปเดตล่าสุดเมื่อ 10:00')
+    await user.click(screen.getByRole('button', { name: 'รีเฟรชข้อมูล' }))
+
+    view.rerender(<ReportPage
+      reportType="PAYMENT" filters={secondFilters} onFiltersChange={() => undefined}
+      adapter={adapter} onBack={() => undefined} pollDelayMs={0}
+    />)
+    expect(await screen.findByText('อัปเดตล่าสุดเมื่อ 10:08')).toBeVisible()
+
+    releaseRefresh()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'รีเฟรชข้อมูล' })).toBeEnabled())
+    expect(adapter.load).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('อัปเดตล่าสุดเมื่อ 10:08')).toBeVisible()
   })
 
   it('keeps navigation explicit and reports an empty cache without claiming zero live data', async () => {
