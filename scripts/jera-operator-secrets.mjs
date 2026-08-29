@@ -11,6 +11,7 @@ const INSPECT = Symbol.for('nodejs.util.inspect.custom')
 const MAX_SECRET_BYTES = 1_024
 const MAX_BASE64_SECRET_LENGTH = 4 * Math.ceil(MAX_SECRET_BYTES / 3)
 const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const CLOUD_PLATFORM_SCOPE = 'https://www.googleapis.com/auth/cloud-platform'
 
 export async function loadJeraOperatorSecrets(input, dependencies = {}) {
   const project = projectFrom(input)
@@ -49,7 +50,12 @@ function projectFrom(input) {
 
 async function defaultSecretAccessor() {
   const { google } = await import('googleapis')
-  const client = google.secretmanager({ version: 'v1' })
+  return createJeraOperatorSecretAccessor(google)
+}
+
+export function createJeraOperatorSecretAccessor(google) {
+  const auth = new google.auth.GoogleAuth({ scopes: [CLOUD_PLATFORM_SCOPE] })
+  const client = google.secretmanager({ version: 'v1', auth })
   return {
     accessSecretVersion: (request) => client.projects.secrets.versions.access(request),
   }

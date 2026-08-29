@@ -1,7 +1,7 @@
 import { inspect } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
 import { discoverClinicBranches } from '../../scripts/discover-clinic-report-branch.mjs'
-import { loadJeraOperatorSecrets } from '../../scripts/jera-operator-secrets.mjs'
+import { createJeraOperatorSecretAccessor, loadJeraOperatorSecrets } from '../../scripts/jera-operator-secrets.mjs'
 
 const PROJECT = 'project-2099d92f-51c8-4d2b-a8c'
 const CLINIC_UUID = '11111111-2222-4333-8444-555555555555'
@@ -13,6 +13,21 @@ const SECRET_VALUES = {
 }
 
 describe('safe clinic branch discovery', () => {
+  it('constructs the default Secret Manager accessor with explicit Cloud Platform ADC', async () => {
+    const auth = { kind: 'synthetic-auth' }
+    const access = vi.fn(async () => ({ data: { payload: { data: encodeSecret(SECRET_VALUES.JERA_API_BASE_URL) } } }))
+    const GoogleAuth = vi.fn(function GoogleAuth() { return auth })
+    const secretmanager = vi.fn(() => ({ projects: { secrets: { versions: { access } } } }))
+    const accessor = createJeraOperatorSecretAccessor({ auth: { GoogleAuth }, secretmanager })
+
+    await accessor.accessSecretVersion({ name: `projects/${PROJECT}/secrets/JERA_API_BASE_URL/versions/latest` })
+
+    expect(GoogleAuth).toHaveBeenCalledOnce()
+    expect(GoogleAuth).toHaveBeenCalledWith({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] })
+    expect(secretmanager).toHaveBeenCalledWith({ version: 'v1', auth })
+    expect(access).toHaveBeenCalledWith({ name: `projects/${PROJECT}/secrets/JERA_API_BASE_URL/versions/latest` })
+  })
+
   it('returns only bounded clinic branch metadata', async () => {
     const result = await discoverClinicBranches(
       ['--allow-readonly-production', '--project', PROJECT],
