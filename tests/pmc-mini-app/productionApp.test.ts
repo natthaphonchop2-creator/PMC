@@ -142,6 +142,21 @@ describe('production PMC Mini App route isolation', () => {
     expect(createPmcMiniAppRuntime({ ...validEnvironment(), PMC_BOOKING_INGRESS_URL: 'http://unsafe.test' }, construct)).toBeUndefined()
     expect(createPmcMiniAppRuntime(validEnvironment(), () => { throw new Error('constructor detail') })).toBeUndefined()
   })
+
+  it('constructs the Mini App runtime with the live-compatible async owner staff ID', () => {
+    const middleware: Middleware = async (_req, res) => { res.end('mini') }
+    const construct = vi.fn(() => middleware)
+
+    expect(createPmcMiniAppRuntime({
+      ...validEnvironment(),
+      ...validAsyncEnvironment(),
+    }, construct)).toBe(middleware)
+    expect(construct).toHaveBeenCalledWith(expect.objectContaining({
+      asyncBooking: expect.objectContaining({
+        ownerStaffIds: new Set(['shared-account-test']),
+      }),
+    }), expect.any(Object))
+  })
 })
 
 function handler(overrides: Partial<ProductionAppDependencies> = {}) {
@@ -220,5 +235,19 @@ function validEnvironment(): NodeJS.ProcessEnv {
     PMC_BOOKING_INGRESS_URL: 'https://script.google.com/macros/s/deployment/exec',
     PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
     PMC_BOOKING_INGRESS_SECRET: 'ingress-secret', PMC_MINI_APP_SIGNING_SECRET: 'signing-secret',
+  }
+}
+
+function validAsyncEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PMC_MINI_APP_ASYNC_ENABLED: 'true',
+    PMC_GCP_PROJECT_ID: 'project-2099d92f-51c8-4d2b-a8c',
+    PMC_ASYNC_LOCATION: 'asia-southeast1',
+    PMC_ASYNC_BUCKET: 'pmc-mini-app-evidence-staging',
+    PMC_ASYNC_QUEUE: 'pmc-booking-finalize',
+    PMC_ASYNC_WORKER_URL: 'https://pmc-mini-app.example/internal/mini-app/finalize-booking',
+    PMC_ASYNC_WORKER_AUDIENCE: 'https://pmc-mini-app.example',
+    PMC_ASYNC_TASK_INVOKER_EMAIL: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+    PMC_ASYNC_OWNER_STAFF_IDS: 'shared-account-test',
   }
 }
