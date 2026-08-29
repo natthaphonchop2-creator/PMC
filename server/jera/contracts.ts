@@ -171,6 +171,13 @@ export interface JeraNormalizedPaymentDetail {
   truncated: boolean
 }
 
+/** The PRODUCT_SALES fields used to version a payment-allocation metadata snapshot. */
+export interface JeraItemTypeMetadataSource {
+  itemCode: string | null
+  type: string | null
+  sourceHash: string
+}
+
 export interface JeraCacheEnvelope<T> {
   data: T
   source: 'CACHE' | 'LIVE'
