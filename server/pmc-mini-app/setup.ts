@@ -19,6 +19,22 @@ export const JERA_SYNC_AUDIT_HEADERS = [
   'recordCount', 'safeErrorCode', 'correlationId',
 ] as const
 
+export const JERA_PAYMENT_DETAIL_CACHE_HEADERS = [
+  'detailKey', 'branchUuid', 'eventDate', 'paymentUuid', 'paymentSourceHash',
+  'detailSourceHash', 'detailFetchedAt', 'lineCount', 'truncated',
+] as const
+
+export const JERA_PAYMENT_DETAIL_LINES_HEADERS = [
+  'detailKey', 'lineOrdinal', 'lineKind', 'itemCode', 'netLineSatang',
+] as const
+
+export const JERA_ALLOCATION_COVERAGE_HEADERS = [
+  'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
+  'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
+  'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
+  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
+] as const
+
 export const STOCK_PRODUCT_HEADERS = [
   'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',
   'createdAt', 'createdByStaffId', 'updatedAt', 'updatedByStaffId', 'version',
@@ -41,6 +57,9 @@ export const MANAGED_TAB_HEADERS = {
   JERA_API_CACHE: JERA_API_CACHE_HEADERS,
   JERA_SYNC_STATE: JERA_SYNC_STATE_HEADERS,
   JERA_SYNC_AUDIT: JERA_SYNC_AUDIT_HEADERS,
+  JERA_PAYMENT_DETAIL_CACHE: JERA_PAYMENT_DETAIL_CACHE_HEADERS,
+  JERA_PAYMENT_DETAIL_LINES: JERA_PAYMENT_DETAIL_LINES_HEADERS,
+  JERA_ALLOCATION_COVERAGE: JERA_ALLOCATION_COVERAGE_HEADERS,
   STOCK_PRODUCTS: STOCK_PRODUCT_HEADERS,
   STOCK_LEDGER: STOCK_LEDGER_HEADERS,
   STOCK_AUDIT: STOCK_AUDIT_HEADERS,

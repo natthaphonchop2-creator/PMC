@@ -37,6 +37,7 @@ export interface JeraManualRefreshResult {
 
 export interface JeraSyncCoordinator {
   readAndRefresh(query: JeraSyncQuery): Promise<JeraCacheEnvelope<JeraNormalizedRow[]>>
+  readCachedBatch(queries: JeraSyncQuery[]): Promise<Array<JeraCacheEnvelope<JeraNormalizedRow[]>>>
   manualRefresh(query: JeraSyncQuery, actorId: string): Promise<JeraManualRefreshResult>
   scheduledRefresh(query: JeraSyncQuery): Promise<JeraCacheEnvelope<JeraNormalizedRow[]>>
   dailyLookback(input: {
@@ -189,6 +190,13 @@ export function createJeraSyncCoordinator(options: {
     async readAndRefresh(query) {
       const key = jeraCacheKey(query.reportType, query.filters)
       return cachedEnvelope(query, inFlight.has(key))
+    },
+    async readCachedBatch(queries) {
+      if (queries.length > 100) throw new JeraSyncError('JERA_CACHE_BATCH_LIMIT')
+      const snapshots = await options.store.readSnapshots(queries)
+      return snapshots.map(({ query, rows, state }) => envelope(
+        rows, state, 'CACHE', inFlight.has(jeraCacheKey(query.reportType, query.filters)), now(), staleAfterMs,
+      ))
     },
     async manualRefresh(query, actorId) {
       const key = jeraCacheKey(query.reportType, query.filters)

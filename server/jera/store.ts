@@ -5,6 +5,8 @@ import {
   JERA_SYNC_STATE_HEADERS,
 } from '../pmc-mini-app/setup.js'
 import type { JeraNormalizedRow, JeraSourceReportType } from './contracts.js'
+import type { JeraReportFilters } from './contracts.js'
+import { jeraCacheKey } from './cacheKey.js'
 
 export type JeraSyncStatus = 'IDLE' | 'RUNNING' | 'SUCCESS' | 'FAILED'
 
@@ -45,6 +47,11 @@ export interface JeraCacheReadQuery {
   endDate?: string
 }
 
+export interface JeraCachedSnapshotQuery {
+  reportType: JeraSourceReportType
+  filters: JeraReportFilters
+}
+
 export interface JeraStoreWriteResult {
   inserted: number
   updated: number
@@ -56,6 +63,11 @@ export interface JeraReportStore {
   upsertRows(reportType: JeraSourceReportType, rows: JeraNormalizedRow[]): Promise<JeraStoreWriteResult>
   replaceRows(reportType: JeraSourceReportType, cacheKey: string, rows: JeraNormalizedRow[]): Promise<JeraStoreWriteResult>
   readRows(reportType: JeraSourceReportType, query?: JeraCacheReadQuery): Promise<JeraNormalizedRow[]>
+  readSnapshots(queries: JeraCachedSnapshotQuery[]): Promise<Array<{
+    query: JeraCachedSnapshotQuery
+    rows: JeraNormalizedRow[]
+    state: JeraSyncStateRecord | null
+  }>>
   getSyncState(cacheKey: string): Promise<JeraSyncStateRecord | null>
   listSyncStates(): Promise<JeraSyncStateRecord[]>
   saveSyncState(state: JeraSyncStateRecord): Promise<void>
@@ -259,6 +271,27 @@ export function createGoogleJeraReportStore(input: {
         && (!safeQuery.branchUuid || row.branchUuid === safeQuery.branchUuid)
         && (!safeQuery.startDate || row.eventDate >= safeQuery.startDate)
         && (!safeQuery.endDate || row.eventDate <= safeQuery.endDate))
+    },
+    async readSnapshots(queries) {
+      const normalizedQueries = queries.map((query) => {
+        validateReportType(query.reportType)
+        const cacheKey = jeraCacheKey(query.reportType, query.filters)
+        return { query: structuredClone(query), cacheKey }
+      })
+      const [cachedRows, states] = await Promise.all([
+        readTable(CACHE_TAB, JERA_API_CACHE_HEADERS), readStates(),
+      ])
+      const rowsByKey = new Map<string, JeraNormalizedRow[]>()
+      for (const { cells } of cachedRows) {
+        const row = cacheRowFromCells(cells)
+        rowsByKey.set(`${row.reportType}|${row.cacheKey}`, [...(rowsByKey.get(`${row.reportType}|${row.cacheKey}`) ?? []), row])
+      }
+      const stateByKey = new Map(states.map(({ value }) => [value.cacheKey, value]))
+      return normalizedQueries.map(({ query, cacheKey }) => ({
+        query,
+        rows: structuredClone(rowsByKey.get(`${query.reportType}|${cacheKey}`) ?? []),
+        state: structuredClone(stateByKey.get(cacheKey) ?? null),
+      }))
     },
     async getSyncState(cacheKey) {
       safeToken(cacheKey)

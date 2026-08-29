@@ -187,6 +187,28 @@ describe('JERA sync coordinator', () => {
     expect(isJeraRefreshDue('2026-08-27T09:45:00.000Z', '2026-08-27T10:00:00.000Z', 15)).toBe(true)
     expect(isJeraRefreshDue('2026-08-27T09:45:01.000Z', '2026-08-27T10:00:00.000Z', 15)).toBe(false)
   })
+
+  it('reads cached batches in input order without a provider request and preserves envelope freshness', async () => {
+    const payment = query()
+    const refund = { ...query(), reportType: 'REFUND' as const }
+    const store = new MemoryReportStore([paymentRow()])
+    store.states.set(cacheKey(), state({ status: 'SUCCESS', lastSuccessAt: '2026-08-27T09:55:00.000Z', recordCount: 1 }))
+    store.states.set(jeraCacheKey('REFUND', refund.filters), {
+      ...state(), cacheKey: jeraCacheKey('REFUND', refund.filters), reportType: 'REFUND', filterHash: jeraCacheKey('REFUND', refund.filters).split(':')[1]!,
+      status: 'SUCCESS', lastSuccessAt: '2026-08-27T09:55:00.000Z', recordCount: 0,
+    })
+    const client = readPort(async () => [providerPayment('120.00')])
+    const coordinator = createCoordinator(store, client)
+
+    const result = await coordinator.readCachedBatch([refund, payment])
+
+    expect(result).toMatchObject([
+      { data: [], source: 'CACHE', stale: false, refreshing: false },
+      { data: [{ paidAmountSatang: 10_000 }], source: 'CACHE', stale: false, refreshing: false },
+    ])
+    expect(client.request).not.toHaveBeenCalled()
+    await expect(coordinator.readCachedBatch(Array.from({ length: 101 }, () => payment))).rejects.toThrow('JERA_CACHE_BATCH_LIMIT')
+  })
 })
 
 const BRANCH = '11111111-2222-4333-8444-555555555555'
@@ -274,6 +296,13 @@ class MemoryReportStore implements JeraReportStore {
 
   async readRows(reportType: JeraSourceReportType, query: JeraCacheReadQuery = {}): Promise<JeraNormalizedRow[]> {
     return [...this.rows.values()].flat().filter((row) => row.reportType === reportType && (!query.cacheKey || row.cacheKey === query.cacheKey))
+  }
+
+  async readSnapshots(queries: Array<{ reportType: JeraSourceReportType; filters: JeraReportFilters }>) {
+    return Promise.all(queries.map(async (query) => {
+      const cacheKey = jeraCacheKey(query.reportType, query.filters)
+      return { query, rows: await this.readRows(query.reportType, { cacheKey }), state: await this.getSyncState(cacheKey) }
+    }))
   }
 
   async getSyncState(key: string): Promise<JeraSyncStateRecord | null> { return structuredClone(this.states.get(key) ?? null) }

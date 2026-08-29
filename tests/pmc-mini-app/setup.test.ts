@@ -105,6 +105,7 @@ describe('PMC Mini App managed Sheet setup', () => {
 
     expect(sheets.workbook.map(({ title }) => title)).toEqual([
       'BOOKING_MASTER', 'MINI_APP_REQUESTS', 'MINI_APP_LINK_ATTEMPTS', 'JERA_API_CACHE', 'JERA_SYNC_STATE', 'JERA_SYNC_AUDIT',
+      'JERA_PAYMENT_DETAIL_CACHE', 'JERA_PAYMENT_DETAIL_LINES', 'JERA_ALLOCATION_COVERAGE',
       'STOCK_PRODUCTS', 'STOCK_LEDGER', 'STOCK_AUDIT',
     ])
     for (const [tab, headers] of Object.entries(MANAGED_TAB_HEADERS)) {
@@ -144,6 +145,22 @@ describe('PMC Mini App managed Sheet setup', () => {
       'itemCode', 'itemName', 'quantity', 'remainingQuantity', 'remainingValueSatang',
     ]))
     expect(MANAGED_TAB_HEADERS.JERA_SYNC_STATE).toEqual(expect.arrayContaining(['lastManualAt', 'leaseOwner', 'leaseExpiresAt']))
+  })
+
+  it('defines the exact bounded JERA allocation cache headers', () => {
+    expect(MANAGED_TAB_HEADERS.JERA_PAYMENT_DETAIL_CACHE).toEqual([
+      'detailKey', 'branchUuid', 'eventDate', 'paymentUuid', 'paymentSourceHash',
+      'detailSourceHash', 'detailFetchedAt', 'lineCount', 'truncated',
+    ])
+    expect(MANAGED_TAB_HEADERS.JERA_PAYMENT_DETAIL_LINES).toEqual([
+      'detailKey', 'lineOrdinal', 'lineKind', 'itemCode', 'netLineSatang',
+    ])
+    expect(MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE).toEqual([
+      'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
+      'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
+      'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
+      'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
+    ])
   })
 
   it('defines the exact managed Stock tab headers', () => {

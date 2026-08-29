@@ -6,7 +6,8 @@ import {
   JERA_SYNC_STATE_HEADERS,
 } from '../../server/pmc-mini-app/setup'
 import type { JeraNormalizedRow } from '../../server/jera/contracts'
-import { createGoogleJeraReportStore, type JeraSyncAuditRecord } from '../../server/jera/store'
+import { jeraCacheKey } from '../../server/jera/cacheKey'
+import { createGoogleJeraReportStore, type JeraCachedSnapshotQuery, type JeraSyncAuditRecord } from '../../server/jera/store'
 
 describe('Google Sheets JERA report store', () => {
   it('reuses a short-lived single-flight snapshot and invalidates it after a write', async () => {
@@ -149,6 +150,40 @@ describe('Google Sheets JERA report store', () => {
     const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
 
     await expect(store.readRows('PAYMENT', { cacheKey: 'PAYMENT:key' })).rejects.toThrow('JERA_STORE_INCOMPATIBLE_HEADER')
+  })
+
+  it('loads cache and state once for 93 exact-day source snapshots without including a month cache row', async () => {
+    const sheets = sheetsFixture()
+    const writer = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
+    const days = Array.from({ length: 31 }, (_, index) => `2026-08-${String(index + 1).padStart(2, '0')}`)
+    const queries: JeraCachedSnapshotQuery[] = days.flatMap((day) => ['PAYMENT', 'REFUND', 'PRODUCT_SALES'].map((reportType) => ({
+      reportType: reportType as JeraCachedSnapshotQuery['reportType'],
+      filters: { branchUuid: '11111111-2222-4333-8444-555555555555', startDate: day, endDate: day },
+    })))
+    const exactPayment = queries[0]!
+    const monthFilters = { branchUuid: exactPayment.filters.branchUuid, startDate: '2026-08-01', endDate: '2026-08-31' }
+    await writer.replaceRows('PAYMENT', jeraCacheKey('PAYMENT', exactPayment.filters), [paymentRow({
+      cacheKey: jeraCacheKey('PAYMENT', exactPayment.filters), eventDate: '2026-08-01',
+    })])
+    await writer.replaceRows('PAYMENT', jeraCacheKey('PAYMENT', monthFilters), [paymentRow({
+      cacheKey: jeraCacheKey('PAYMENT', monthFilters), eventDate: '2026-08-01', sourceHash: hash('e'),
+    })])
+    await writer.saveSyncState({
+      cacheKey: jeraCacheKey('REFUND', queries[1]!.filters), reportType: 'REFUND', filterHash: jeraCacheKey('REFUND', queries[1]!.filters).split(':')[1]!,
+      lastAttemptAt: '2026-08-01T10:00:00.000Z', lastManualAt: null, lastSuccessAt: '2026-08-01T10:00:00.000Z', lastSourceDate: '2026-08-01',
+      status: 'SUCCESS', recordCount: 0, nextPage: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
+    })
+
+    sheets.readCount = 0
+    const store = createGoogleJeraReportStore({ spreadsheetId: 'sheet-1', sheets })
+    const snapshots = await store.readSnapshots(queries)
+
+    expect(sheets.readCount).toBe(2)
+    expect(snapshots).toHaveLength(93)
+    expect(snapshots[0]?.rows).toHaveLength(1)
+    expect(snapshots[1]).toMatchObject({ rows: [], state: { status: 'SUCCESS', recordCount: 0 } })
+    expect(snapshots[2]?.rows).toEqual([])
+    expect(snapshots[0]?.rows.map((row) => row.cacheKey)).not.toContain(jeraCacheKey('PAYMENT', monthFilters))
   })
 })
 
