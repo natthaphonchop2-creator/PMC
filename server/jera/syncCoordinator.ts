@@ -33,7 +33,6 @@ export interface JeraSyncQuery {
 export interface JeraManualRefreshResult {
   accepted: boolean
   retryAfterSeconds: number
-  envelope: JeraCacheEnvelope<JeraNormalizedRow[]>
 }
 
 export interface JeraSyncCoordinator {
@@ -203,14 +202,12 @@ export function createJeraSyncCoordinator(options: {
         return {
           accepted: false,
           retryAfterSeconds: manualRefreshSeconds - elapsedSeconds,
-          envelope: await cachedEnvelope(query, inFlight.has(key)),
         }
       }
       if (!inFlight.has(key) && inFlight.size >= maxPendingRefreshes) {
         return {
           accepted: false,
           retryAfterSeconds: Math.min(manualRefreshSeconds, 60),
-          envelope: await cachedEnvelope(query, false),
         }
       }
       await options.store.saveSyncState({
@@ -221,10 +218,9 @@ export function createJeraSyncCoordinator(options: {
         return {
           accepted: false,
           retryAfterSeconds: Math.min(manualRefreshSeconds, 60),
-          envelope: await cachedEnvelope(query, false),
         }
       }
-      return { accepted: true, retryAfterSeconds: manualRefreshSeconds, envelope: await cachedEnvelope(query, false) }
+      return { accepted: true, retryAfterSeconds: manualRefreshSeconds }
     },
     async scheduledRefresh(query) {
       const rows = await startRefresh(query, 'SCHEDULED', 'cloud-scheduler')

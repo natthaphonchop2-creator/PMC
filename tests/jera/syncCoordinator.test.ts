@@ -121,7 +121,8 @@ describe('JERA sync coordinator', () => {
     releaseProvider()
     const result = await operation
 
-    expect(result).toMatchObject({ accepted: true, envelope: { refreshing: false, source: 'CACHE' } })
+    expect(result).toMatchObject({ accepted: true, retryAfterSeconds: 300 })
+    expect('envelope' in result).toBe(false)
     expect((await store.readRows('PAYMENT', { cacheKey: cacheKey() }))[0]?.paidAmountSatang).toBe(14_000)
   })
 
