@@ -46,6 +46,7 @@ export function PmcMiniApp({
   const [draft, setDraft] = useState<BookingDraftProjection | null>(null)
   const [loading, setLoading] = useState(!initialSession)
   const [message, setMessage] = useState('')
+  const [messageTone, setMessageTone] = useState<'ERROR' | 'SUCCESS'>('ERROR')
   const [enrollmentStaff, setEnrollmentStaff] = useState<Array<{ id: string; name: string }> | null>(null)
   const [enrollmentBusy, setEnrollmentBusy] = useState(false)
   const [enrollmentMessage, setEnrollmentMessage] = useState('')
@@ -60,6 +61,12 @@ export function PmcMiniApp({
   const navigationEpochRef = useRef(0)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
+
+  useEffect(() => {
+    if (!message || messageTone !== 'SUCCESS') return
+    const timeout = setTimeout(() => setMessage(''), 3_000)
+    return () => clearTimeout(timeout)
+  }, [message, messageTone])
 
   useEffect(() => {
     if (initialSession) return
@@ -93,6 +100,7 @@ export function PmcMiniApp({
       } catch (error) {
         if (!active) return
         const code = safeErrorCode(error)
+        setMessageTone('ERROR')
         setMessage(code === 'MINI_APP_ENROLLMENT_UNAVAILABLE' ? 'ระบบผูกบัญชียังไม่พร้อม กรุณาติดต่อผู้ดูแล' : 'เปิดระบบไม่สำเร็จ กรุณาลองอีกครั้ง')
       } finally {
         if (active) setLoading(false)
@@ -134,7 +142,10 @@ export function PmcMiniApp({
     const requestEpoch = ++navigationEpochRef.current
     const operation = (async () => {
       if (!config) {
-        if (requestEpoch === navigationEpochRef.current) setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
+        if (requestEpoch === navigationEpochRef.current) {
+          setMessageTone('ERROR')
+          setMessage('ข้อมูลตั้งค่ายังไม่พร้อม')
+        }
         return
       }
       setLoading(true)
@@ -147,6 +158,7 @@ export function PmcMiniApp({
         setView('BOOKING')
       } catch {
         if (requestEpoch === navigationEpochRef.current) {
+          setMessageTone('ERROR')
           setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
         }
       } finally {
@@ -173,6 +185,7 @@ export function PmcMiniApp({
       setView('STOCK')
     } catch {
       if (requestEpoch !== navigationEpochRef.current) return
+      setMessageTone('ERROR')
       setMessage('โหลดรายการสต็อกไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
       if (requestEpoch === navigationEpochRef.current) setLoading(false)
@@ -193,6 +206,7 @@ export function PmcMiniApp({
     } catch {
       if (requestEpoch !== navigationEpochRef.current) return
       setStockView('HOME')
+      setMessageTone('ERROR')
       setMessage('โหลดประวัติ Stock ไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
       if (requestEpoch === navigationEpochRef.current) setLoading(false)
@@ -281,11 +295,13 @@ export function PmcMiniApp({
       onQueued={() => {
         navigateTo('HOME')
         setDraft(null)
-        setMessage('รับรายการแล้ว ระบบกำลังดำเนินการเบื้องหลัง')
+        setMessageTone('SUCCESS')
+        setMessage('ทำรายการเรียบร้อย ระบบจะบันทึกภายใน 5 นาที')
       }}
       onConfirmed={() => {
         navigateTo('HOME')
         setDraft(null)
+        setMessageTone('SUCCESS')
         setMessage('บันทึกการจองแล้ว')
       }}
       onExit={() => { navigateTo('HOME'); setDraft(null) }}
@@ -367,7 +383,10 @@ export function PmcMiniApp({
         }}
         onHistory={() => { void openStockHistory() }}
       />}
-      {message && <p className="pmc-shell-alert" role="alert">{message}</p>}
+      {message && <p
+        className={`pmc-shell-alert${messageTone === 'SUCCESS' ? ' success' : ''}`}
+        role={messageTone === 'SUCCESS' ? 'status' : 'alert'}
+      >{message}</p>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
       <BottomNavigation
         view={view}

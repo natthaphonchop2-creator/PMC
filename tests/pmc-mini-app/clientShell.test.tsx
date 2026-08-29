@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('PMC LINE Mini App shell', () => {
   it('hides JERA navigation while reporting is paused', () => {
@@ -137,7 +137,10 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
     expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
-    expect(screen.getByRole('alert')).toHaveTextContent('รับรายการแล้ว ระบบกำลังดำเนินการเบื้องหลัง')
+    const toast = screen.getByRole('status')
+    expect(toast).toHaveTextContent('ทำรายการเรียบร้อย ระบบจะบันทึกภายใน 5 นาที')
+    expect(toast).toHaveClass('success')
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), { timeout: 3_500 })
   })
 
   it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
