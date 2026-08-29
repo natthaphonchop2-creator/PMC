@@ -25,12 +25,28 @@ export interface JeraConfig {
   scheduledTimeoutMs: 30_000
   maxResponseBytes: 2_000_000
   scheduler: { audience: string; serviceAccountEmail: string } | null
+  allocation: null | {
+    projectId: string
+    location: 'asia-southeast1'
+    queueName: string
+    workerUrl: string
+    workerAudience: string
+    taskInvokerEmail: string
+    leaseBucket: string
+    maxDetailsPerRun: 20
+    continuationDelaySeconds: 60
+  }
+  financeCategoryMoneyEnabled: boolean
 }
 
 const ALLOWED_NAMES = new Set([
   'JERA_REPORTING_ENABLED', 'JERA_API_BASE_URL', 'JERA_DEFAULT_BRANCH_UUID',
   'JERA_SYNC_INTERVAL_MINUTES', 'JERA_API_USERNAME', 'JERA_API_PASSWORD',
   'JERA_SCHEDULER_AUDIENCE', 'JERA_SCHEDULER_SERVICE_ACCOUNT_EMAIL',
+  'JERA_REVENUE_ALLOCATION_ENABLED', 'JERA_ALLOCATION_PROJECT_ID', 'JERA_ALLOCATION_LOCATION',
+  'JERA_ALLOCATION_QUEUE', 'JERA_ALLOCATION_WORKER_URL', 'JERA_ALLOCATION_WORKER_AUDIENCE',
+  'JERA_ALLOCATION_TASK_INVOKER_EMAIL', 'JERA_ALLOCATION_LEASE_BUCKET',
+  'JERA_FINANCE_CATEGORY_MONEY_ENABLED',
 ])
 
 type JeraEnvironment = Record<string, string | undefined>
@@ -45,8 +61,12 @@ export function readJeraConfig(environment: JeraEnvironment): JeraConfig | null 
   const password = boundedSecret(environment.JERA_API_PASSWORD)
   const syncIntervalMinutes = positiveInteger(environment.JERA_SYNC_INTERVAL_MINUTES)
   const scheduler = schedulerConfig(environment)
+  const allocation = allocationConfig(environment)
+  const financeCategoryMoneyEnabled = strictBoolean(environment.JERA_FINANCE_CATEGORY_MONEY_ENABLED)
   if (!baseUrl || !uuid(defaultBranchUuid) || !username || !password
-    || syncIntervalMinutes === null || syncIntervalMinutes < 15 || syncIntervalMinutes > 60 || scheduler === undefined) return null
+    || syncIntervalMinutes === null || syncIntervalMinutes < 15 || syncIntervalMinutes > 60 || scheduler === undefined
+    || allocation === undefined || financeCategoryMoneyEnabled === null
+    || financeCategoryMoneyEnabled && allocation === null) return null
 
   return {
     enabled: true,
@@ -61,6 +81,34 @@ export function readJeraConfig(environment: JeraEnvironment): JeraConfig | null 
     scheduledTimeoutMs: 30_000,
     maxResponseBytes: 2_000_000,
     scheduler,
+    allocation,
+    financeCategoryMoneyEnabled,
+  }
+}
+
+function allocationConfig(environment: JeraEnvironment): JeraConfig['allocation'] | undefined {
+  const enabled = strictBoolean(environment.JERA_REVENUE_ALLOCATION_ENABLED)
+  if (enabled === null) return undefined
+  const names = [
+    'JERA_ALLOCATION_PROJECT_ID', 'JERA_ALLOCATION_LOCATION', 'JERA_ALLOCATION_QUEUE',
+    'JERA_ALLOCATION_WORKER_URL', 'JERA_ALLOCATION_WORKER_AUDIENCE',
+    'JERA_ALLOCATION_TASK_INVOKER_EMAIL', 'JERA_ALLOCATION_LEASE_BUCKET',
+  ] as const
+  if (!enabled) return names.some((name) => Boolean(environment[name]?.trim())) ? undefined : null
+
+  const projectId = environment.JERA_ALLOCATION_PROJECT_ID?.trim() ?? ''
+  const location = environment.JERA_ALLOCATION_LOCATION?.trim() ?? ''
+  const queueName = environment.JERA_ALLOCATION_QUEUE?.trim() ?? ''
+  const workerUrl = safeHttpsUrl(environment.JERA_ALLOCATION_WORKER_URL, false)
+  const workerAudience = safeHttpsUrl(environment.JERA_ALLOCATION_WORKER_AUDIENCE, true)
+  const taskInvokerEmail = environment.JERA_ALLOCATION_TASK_INVOKER_EMAIL?.trim() ?? ''
+  const leaseBucket = environment.JERA_ALLOCATION_LEASE_BUCKET?.trim() ?? ''
+  if (!/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(projectId) || location !== 'asia-southeast1'
+    || !/^[A-Za-z][A-Za-z0-9_-]{0,99}$/.test(queueName) || !workerUrl || !workerAudience
+    || !serviceAccountEmail(taskInvokerEmail) || !gcsBucketName(leaseBucket)) return undefined
+  return {
+    projectId, location, queueName, workerUrl, workerAudience, taskInvokerEmail, leaseBucket,
+    maxDetailsPerRun: 20, continuationDelaySeconds: 60,
   }
 }
 
@@ -76,6 +124,33 @@ function schedulerConfig(environment: JeraEnvironment): JeraConfig['scheduler'] 
   } catch {
     return undefined
   }
+}
+
+function strictBoolean(value: string | undefined): boolean | null {
+  if (value === undefined || value === '') return false
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return null
+}
+
+function safeHttpsUrl(value: string | undefined, originOnly: boolean): string | null {
+  try {
+    const parsed = new URL(value?.trim() ?? '')
+    if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash
+      || originOnly && parsed.pathname !== '/' && parsed.pathname !== '') return null
+    return originOnly ? parsed.origin : parsed.toString().replace(/\/$/, '')
+  } catch { return null }
+}
+
+function serviceAccountEmail(value: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value)
+}
+
+function gcsBucketName(value: string): boolean {
+  return value.length >= 3 && value.length <= 63
+    && /^[a-z0-9][a-z0-9._-]*[a-z0-9]$/.test(value)
+    && !/\.\./.test(value) && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)
+    && !/^goog/i.test(value) && !/google/i.test(value)
 }
 
 function safeBaseUrl(value: string | undefined): string | null {

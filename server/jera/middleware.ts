@@ -20,6 +20,7 @@ import {
 } from './reports.js'
 import type { JeraSyncCoordinator } from './syncCoordinator.js'
 import type { JeraReportStore, JeraSyncStateRecord } from './store.js'
+import type { JeraAllocationWorker } from './allocationWorker.js'
 
 export interface JeraMiniAppApi {
   handle(
@@ -55,6 +56,12 @@ export function createJeraMiniAppApi(options: {
     audience: string
     serviceAccountEmail: string
   }
+  allocation?: {
+    worker: JeraAllocationWorker
+    identity: JeraSchedulerIdentityPort
+    audience: string
+    serviceAccountEmail: string
+  }
 }): JeraMiniAppApi {
   const now = options.now ?? (() => new Date())
   const id = options.id ?? randomUUID
@@ -63,6 +70,11 @@ export function createJeraMiniAppApi(options: {
     ...options.scheduler,
     audience: requiredHttpsUrl(options.scheduler.audience),
     serviceAccountEmail: requiredServiceAccountEmail(options.scheduler.serviceAccountEmail),
+  } : null
+  const allocation = options.allocation ? {
+    ...options.allocation,
+    audience: requiredHttpsUrl(options.allocation.audience),
+    serviceAccountEmail: requiredServiceAccountEmail(options.allocation.serviceAccountEmail),
   } : null
 
   return {
@@ -124,6 +136,28 @@ export function createJeraMiniAppApi(options: {
       return true
     },
     async handleInternal(req, res, url) {
+      if (url.pathname === '/internal/mini-app/jera-allocation-worker') {
+        if (req.method !== 'POST') return handledMethodNotAllowed(res)
+        if (!allocation) {
+          respond(res, 503, { error: 'JERA_ALLOCATION_UNAVAILABLE' })
+          return true
+        }
+        const authorized = await authorizeInternal(req, allocation)
+        if (authorized === 'UNAUTHORIZED') { respond(res, 401, { error: 'JERA_ALLOCATION_UNAUTHORIZED' }); return true }
+        if (authorized === 'FORBIDDEN') { respond(res, 403, { error: 'JERA_ALLOCATION_FORBIDDEN' }); return true }
+        if ([...url.searchParams.keys()].length > 0) { respond(res, 400, { error: 'JERA_ALLOCATION_INVALID' }); return true }
+        const parsed = await readBoundedJson(req, 2_048)
+        if (parsed === 'TOO_LARGE') { respond(res, 413, { error: 'JERA_ALLOCATION_TOO_LARGE' }); return true }
+        const body = allocationBody(parsed)
+        if (!body) { respond(res, 400, { error: 'JERA_ALLOCATION_INVALID' }); return true }
+        try {
+          const result = await allocation.worker.run({ ...body, workerId: safeCorrelationId(id()) })
+          respond(res, 200, { status: result.status, processed: result.processed, nextCursor: result.nextCursor })
+        } catch {
+          respond(res, 500, { error: 'JERA_ALLOCATION_FAILED' })
+        }
+        return true
+      }
       if (url.pathname !== '/internal/mini-app/jera-sync') return false
       if (req.method !== 'POST') return handledMethodNotAllowed(res)
       if (!scheduler) {
@@ -160,6 +194,51 @@ export function createJeraMiniAppApi(options: {
       return true
     },
   }
+}
+
+async function authorizeInternal(
+  req: IncomingMessage,
+  config: { identity: JeraSchedulerIdentityPort; audience: string; serviceAccountEmail: string },
+): Promise<'AUTHORIZED' | 'UNAUTHORIZED' | 'FORBIDDEN'> {
+  const token = bearerToken(req.headers.authorization)
+  if (!token) return 'UNAUTHORIZED'
+  let identity: { email: string; emailVerified: boolean }
+  try { identity = await config.identity.verify(token, config.audience) } catch { return 'UNAUTHORIZED' }
+  return identity.emailVerified && identity.email.toLowerCase() === config.serviceAccountEmail.toLowerCase() ? 'AUTHORIZED' : 'FORBIDDEN'
+}
+
+async function readBoundedJson(req: IncomingMessage, maxBytes: number): Promise<unknown | 'TOO_LARGE'> {
+  const advertised = Number(req.headers['content-length'])
+  if (Number.isFinite(advertised) && advertised > maxBytes) return 'TOO_LARGE'
+  const chunks: Buffer[] = []
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      size += bytes.length
+      if (size <= maxBytes) chunks.push(bytes)
+    }
+    if (size > maxBytes) return 'TOO_LARGE'
+    if (size === 0) return null
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch { return null }
+}
+
+function allocationBody(value: unknown): { branchUuid: string; eventDate: string; paymentSetHash: string; cursor: number } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const body = value as Record<string, unknown>
+  const keys = Object.keys(body).sort()
+  if (JSON.stringify(keys) !== JSON.stringify(['branchUuid', 'cursor', 'eventDate', 'paymentSetHash'])) return null
+  if (typeof body.branchUuid !== 'string' || typeof body.eventDate !== 'string' || typeof body.paymentSetHash !== 'string'
+    || typeof body.cursor !== 'number' || !Number.isSafeInteger(body.cursor) || body.cursor < 0) return null
+  try {
+    if (!/^[a-f0-9]{64}$/.test(body.paymentSetHash)) return null
+    return {
+      branchUuid: requiredUuid(body.branchUuid), eventDate: requiredDate(body.eventDate),
+      paymentSetHash: body.paymentSetHash,
+      cursor: body.cursor,
+    }
+  } catch { return null }
 }
 
 const ACTIVE_SCHEDULE_REPORTS = ['PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT', 'PAYMENT_LIST'] as const

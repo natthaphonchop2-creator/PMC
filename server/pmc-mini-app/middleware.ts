@@ -69,12 +69,12 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     }
 
     const pathname = url.pathname
-    if (pathname === '/internal/mini-app/jera-sync') {
+    if (pathname === '/internal/mini-app/jera-sync' || pathname === '/internal/mini-app/jera-allocation-worker') {
       if (!deps.jera) {
         respond(res, 503, { error: 'JERA_SCHEDULER_UNAVAILABLE' })
         return
       }
-      if (!await deps.jera.handleInternal(req, res, url)) respond(res, 404, { error: 'JERA_SYNC_ROUTE_NOT_FOUND' })
+      if (!await deps.jera.handleInternal(req, res, url)) respond(res, 404, { error: 'JERA_INTERNAL_ROUTE_NOT_FOUND' })
       return
     }
     if (pathname === '/api/mini-app/client-config') {

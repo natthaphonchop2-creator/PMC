@@ -10,6 +10,7 @@ import { createJeraMiniAppApi } from '../../server/jera/middleware'
 import { createJeraRuntime } from '../../server/jera/runtime'
 import type { JeraSyncCoordinator } from '../../server/jera/syncCoordinator'
 import type { JeraReportStore, JeraSyncStateRecord } from '../../server/jera/store'
+import type { JeraAllocationWorker } from '../../server/jera/allocationWorker'
 
 describe('authenticated JERA report API', () => {
   it('does not access report data before LINE staff authorization', async () => {
@@ -145,7 +146,83 @@ describe('authenticated JERA report API', () => {
     expect(createJeraRuntime({ JERA_REPORTING_ENABLED: 'false' }, google, construct as never)).toBeUndefined()
     expect(construct).toHaveBeenCalledOnce()
   })
+
+  it('passes a validated private lease bucket into allocation runtime construction and rejects missing or invalid values', () => {
+    const construct = vi.fn(() => ({ api: {}, coordinator: {}, store: {}, config: {}, allocationWorker: null }))
+    const google = { spreadsheetId: 'sheet-1', sheets: {} as never }
+    const base = {
+      JERA_REPORTING_ENABLED: 'true', JERA_API_BASE_URL: 'https://jera.example', JERA_DEFAULT_BRANCH_UUID: BRANCH,
+      JERA_SYNC_INTERVAL_MINUTES: '15', JERA_API_USERNAME: 'synthetic-user', JERA_API_PASSWORD: 'synthetic-password',
+      JERA_REVENUE_ALLOCATION_ENABLED: 'true', JERA_ALLOCATION_PROJECT_ID: 'pmc-project',
+      JERA_ALLOCATION_LOCATION: 'asia-southeast1', JERA_ALLOCATION_QUEUE: 'pmc-revenue-allocation',
+      JERA_ALLOCATION_WORKER_URL: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker',
+      JERA_ALLOCATION_WORKER_AUDIENCE: 'https://pmc-mini-app.example',
+      JERA_ALLOCATION_TASK_INVOKER_EMAIL: 'worker@pmc-project.iam.gserviceaccount.com',
+      JERA_ALLOCATION_LEASE_BUCKET: 'pmc-private-allocation-leases',
+    }
+
+    expect(createJeraRuntime(base, google, construct as never)).toBeDefined()
+    expect(construct.mock.calls[0]![0].config.allocation.leaseBucket).toBe('pmc-private-allocation-leases')
+    const { JERA_ALLOCATION_LEASE_BUCKET: _missing, ...missing } = base
+    expect(createJeraRuntime(missing, google, construct as never)).toBeUndefined()
+    expect(createJeraRuntime({ ...base, JERA_ALLOCATION_LEASE_BUCKET: 'gs://not-private' }, google, construct as never)).toBeUndefined()
+    expect(construct).toHaveBeenCalledOnce()
+  })
+
+  it('runs the exact authenticated allocation worker contract and returns only progress', async () => {
+    const deps = dependencies()
+    const worker = { run: vi.fn(async () => ({ status: 'CONTINUED' as const, processed: 7, nextCursor: 12 })) } as JeraAllocationWorker
+    deps.jera = allocationApi(worker)
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5 }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ status: 'CONTINUED', processed: 7, nextCursor: 12 })
+    expect(worker.run).toHaveBeenCalledWith({
+      branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 5, workerId: 'worker-route-id',
+    })
+  })
+
+  it('fails closed on allocation worker auth, body shape, size, and unexpected errors', async () => {
+    const deps = dependencies()
+    const worker = { run: vi.fn(async () => { throw Object.assign(new Error('private'), { patient: 'private' }) }) } as unknown as JeraAllocationWorker
+    deps.jera = allocationApi(worker)
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const validBody = JSON.stringify({ branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: 'a'.repeat(64), cursor: 0 })
+
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', { method: 'GET' })).status).toBe(405)
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', { method: 'POST', body: validBody })).status).toBe(401)
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer wrong-email', 'content-type': 'application/json' }, body: validBody,
+    })).status).toBe(403)
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ ...JSON.parse(validBody), extra: true }),
+    })).status).toBe(400)
+    expect((await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: JSON.stringify({ pad: 'x'.repeat(2_100) }),
+    })).status).toBe(413)
+    const failed = await invoke(middleware, '/internal/mini-app/jera-allocation-worker', {
+      method: 'POST', headers: { authorization: 'Bearer worker-token', 'content-type': 'application/json' }, body: validBody,
+    })
+    expect({ status: failed.status, body: await failed.json() }).toEqual({ status: 500, body: { error: 'JERA_ALLOCATION_FAILED' } })
+  })
 })
+
+function allocationApi(worker: JeraAllocationWorker) {
+  return createJeraMiniAppApi({
+    coordinator: dependencies().coordinator, store: { listSyncStates: vi.fn(async () => []) } as unknown as JeraReportStore,
+    defaultBranchUuid: BRANCH, id: () => 'worker-route-id', allocation: {
+      worker, audience: 'https://pmc-mini-app.example', serviceAccountEmail: 'worker@pmc-project.iam.gserviceaccount.com',
+      identity: {
+        verify: vi.fn(async (token: string) => token === 'worker-token'
+          ? { email: 'worker@pmc-project.iam.gserviceaccount.com', emailVerified: true }
+          : { email: 'other@pmc-project.iam.gserviceaccount.com', emailVerified: true }),
+      },
+    },
+  })
+}
 
 function dependencies(options: { manualAccepted?: boolean } = {}) {
   const coordinator = {

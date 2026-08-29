@@ -6,12 +6,17 @@ import { createJeraMiniAppApi, type JeraMiniAppApi, type JeraSchedulerIdentityPo
 import { createGoogleJeraReportStore, type JeraReportStore } from './store.js'
 import { createJeraSyncCoordinator, type JeraSyncCoordinator } from './syncCoordinator.js'
 import { createJeraTokenClient } from './tokenClient.js'
+import { createGoogleJeraAllocationStore } from './allocationStore.js'
+import { createGoogleJeraAllocationLeasePort } from './allocationLeaseStore.js'
+import { createGoogleJeraAllocationTaskQueue } from './allocationTaskQueue.js'
+import { createJeraAllocationWorker, type JeraAllocationWorker } from './allocationWorker.js'
 
 export interface JeraRuntime {
   config: JeraConfig
   coordinator: JeraSyncCoordinator
   store: JeraReportStore
   api: JeraMiniAppApi
+  allocationWorker: JeraAllocationWorker | null
 }
 
 export type JeraRuntimeConstructor = (input: {
@@ -47,6 +52,23 @@ function constructJeraRuntime(input: {
     staleAfterMs: input.config.syncIntervalMinutes * 2 * 60_000,
   })
   const schedulerIdentity = input.config.scheduler ? createGoogleSchedulerIdentity() : null
+  const allocationWorker = input.config.allocation ? createJeraAllocationWorker({
+    client: createJeraReadClient(input.config, tokens, { mode: 'INTERACTIVE', replayUnauthorized: false }),
+    reportStore: store,
+    allocationStore: createGoogleJeraAllocationStore({ spreadsheetId: input.spreadsheetId, sheets: input.sheets }),
+    lease: createGoogleJeraAllocationLeasePort({ bucketName: input.config.allocation.leaseBucket }),
+    queue: createGoogleJeraAllocationTaskQueue({
+      projectId: input.config.allocation.projectId,
+      location: input.config.allocation.location,
+      queueName: input.config.allocation.queueName,
+      workerUrl: input.config.allocation.workerUrl,
+      workerAudience: input.config.allocation.workerAudience,
+      taskInvokerEmail: input.config.allocation.taskInvokerEmail,
+    }),
+    maxDetailsPerRun: input.config.allocation.maxDetailsPerRun,
+    continuationDelaySeconds: input.config.allocation.continuationDelaySeconds,
+  }) : null
+  const allocationIdentity = allocationWorker ? createGoogleSchedulerIdentity() : null
   const api = createJeraMiniAppApi({
     coordinator, store, defaultBranchUuid: input.config.defaultBranchUuid,
     ...(input.config.scheduler && schedulerIdentity ? {
@@ -56,8 +78,16 @@ function constructJeraRuntime(input: {
         serviceAccountEmail: input.config.scheduler.serviceAccountEmail,
       },
     } : {}),
+    ...(input.config.allocation && allocationWorker && allocationIdentity ? {
+      allocation: {
+        worker: allocationWorker,
+        identity: allocationIdentity,
+        audience: input.config.allocation.workerAudience,
+        serviceAccountEmail: input.config.allocation.taskInvokerEmail,
+      },
+    } : {}),
   })
-  return { config: input.config, coordinator, store, api }
+  return { config: input.config, coordinator, store, api, allocationWorker }
 }
 
 function createGoogleSchedulerIdentity(): JeraSchedulerIdentityPort {

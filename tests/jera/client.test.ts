@@ -69,6 +69,20 @@ describe('bounded JERA read client', () => {
     })).resolves.toEqual([{ uuid: 'payment-1' }])
   })
 
+  it('returns one PAYMENT_DETAIL object without paginating nested OPD rows', async () => {
+    const detail = {
+      uuid: '10000000-0000-4000-8000-000000000001',
+      opds: [{ uuid: '20000000-0000-4000-8000-000000000001' }, { uuid: '20000000-0000-4000-8000-000000000002' }],
+      courses: [],
+    }
+    const fetch = vi.fn(async () => response(200, detail))
+    const client = createJeraReadClient(config(), tokenPort(), { fetch })
+
+    await expect(client.request('PAYMENT_DETAIL', { paymentUuid: detail.uuid } as never)).resolves.toEqual([detail])
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(new URL(String(fetch.mock.calls[0]![0])).search).toBe('')
+  })
+
   it('preserves cash and product source kinds from the documented deposit envelope', async () => {
     const fetch = vi.fn(async () => response(200, {
       cash_deposits: [{ uuid: 'cash-1' }], product_deposits: [{ uuid: 'product-1' }],
@@ -180,6 +194,16 @@ describe('bounded JERA read client', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
+  it('can disable the 401 replay so a worker detail attempt is one provider request', async () => {
+    const tokens = tokenPort(['token-1', 'token-2'])
+    const fetch = vi.fn(async () => response(401, {}))
+    const client = createJeraReadClient(config(), tokens, { fetch, replayUnauthorized: false })
+
+    await expect(client.request('PAYMENT_DETAIL', { paymentUuid: uuid() } as never)).rejects.toMatchObject({ code: 'JERA_AUTH_FAILED' })
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(tokens.invalidate).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['rate limit', response(429, { detail: 'provider-private' }), 'JERA_RATE_LIMITED'],
     ['provider failure', response(500, { detail: 'provider-private' }), 'JERA_PROVIDER_FAILED'],
@@ -233,6 +257,25 @@ describe('bounded JERA read client', () => {
 
     await expect(client.request('PAYMENT', filters())).rejects.toMatchObject({ code: 'JERA_RATE_LIMITED' })
     expect(sleep).not.toHaveBeenCalled()
+  })
+
+  it('carries only bounded Retry-After seconds on the final rate-limit error', async () => {
+    const provider = Object.assign(new Error('private-provider-error'), { metadata: { private: true } })
+    const client = createJeraReadClient(config(), tokenPort(), {
+      fetch: vi.fn(async () => response(429, { detail: provider.message }, { 'retry-after': '31' })),
+    })
+
+    const failure = await client.request('PAYMENT_DETAIL', { paymentUuid: uuid() } as never).catch((error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'JERA_RATE_LIMITED', retryAfterSeconds: 31 })
+    expect(failure).not.toHaveProperty('cause')
+    expect(failure).not.toHaveProperty('metadata')
+    expect(JSON.stringify(failure)).not.toContain('private-provider-error')
+
+    const unsafe = createJeraReadClient(config(), tokenPort(), {
+      fetch: vi.fn(async () => response(429, {}, { 'retry-after': '121' })),
+    })
+    await expect(unsafe.request('PAYMENT_DETAIL', { paymentUuid: uuid() } as never))
+      .rejects.toMatchObject({ code: 'JERA_RATE_LIMITED', retryAfterSeconds: null })
   })
 
   it.each(['0', '-1', '121', 'invalid'])('rejects unsafe Retry-After %s', (value) => {

@@ -26,6 +26,7 @@ const OCR_API_PATHS = new Set([
   '/api/ocr-ledger/image',
 ])
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const JERA_ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
 
 const contentTypes: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -69,7 +70,7 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
       return
     }
 
-    if (req.url === ASYNC_WORKER_PATH) {
+    if (req.url === ASYNC_WORKER_PATH || req.url === JERA_ALLOCATION_WORKER_PATH) {
       if (!deps.pmcMiniApp) {
         jsonError(res, 503, 'Mini App is not configured')
         return

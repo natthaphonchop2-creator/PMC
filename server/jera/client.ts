@@ -29,11 +29,14 @@ export class JeraReadError extends Error {
     | 'JERA_TIMEOUT'
     | 'JERA_PROVIDER_FAILED'
     | 'JERA_SCHEMA_INVALID'
+  readonly retryAfterSeconds: number | null
 
-  constructor(code: JeraReadError['code']) {
+  constructor(code: JeraReadError['code'], retryAfterSeconds: number | null = null) {
     super(`JERA read failed: ${code}`)
     this.name = 'JeraReadError'
     this.code = code
+    this.retryAfterSeconds = code === 'JERA_RATE_LIMITED' && retryAfterSeconds !== null
+      && Number.isSafeInteger(retryAfterSeconds) && retryAfterSeconds >= 1 && retryAfterSeconds <= 120 ? retryAfterSeconds : null
   }
 }
 
@@ -48,6 +51,7 @@ export function createJeraReadClient(
     fetch?: JeraFetch
     mode?: 'INTERACTIVE' | 'SCHEDULED'
     sleep?: (milliseconds: number) => Promise<void>
+    replayUnauthorized?: boolean
   } = {},
 ): JeraReadClient {
   const request = options.fetch ?? (globalThis.fetch as unknown as JeraFetch)
@@ -67,7 +71,7 @@ export function createJeraReadClient(
   }
 
   async function performGet(url: URL): Promise<unknown> {
-    let authReplayAvailable = true
+    let authReplayAvailable = options.replayUnauthorized !== false
     let providerRetries = mode === 'SCHEDULED' ? 2 : 0
     while (true) {
       const token = await tokens.getAccessToken()
@@ -88,7 +92,10 @@ export function createJeraReadClient(
         await sleep(providerRetries === 1 ? 250 : 500)
         continue
       }
-      if (response.status === 429) throw new JeraReadError('JERA_RATE_LIMITED')
+      if (response.status === 429) {
+        const retryAfterMs = parseProviderRetryAfter(response.headers.get('retry-after'), Date.now())
+        throw new JeraReadError('JERA_RATE_LIMITED', retryAfterMs === null ? null : retryAfterMs / 1_000)
+      }
       if (!response.ok) throw new JeraReadError('JERA_PROVIDER_FAILED')
       return boundedJson(response, config.maxResponseBytes)
     }
@@ -292,6 +299,7 @@ function extractRows(
       hasMore: () => false,
     }
   }
+  if (endpointKey === 'PAYMENT_DETAIL') return { rows: [body], hasMore: () => false }
   const rows = Array.isArray(body.results) ? body.results : Array.isArray(body.data) ? body.data : null
   if (!rows) throw new JeraReadError('JERA_SCHEMA_INVALID')
   if (!paginated) return { rows, hasMore: () => false }

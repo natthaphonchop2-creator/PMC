@@ -7,8 +7,45 @@ describe('JERA Production read-only configuration', () => {
     expect(readJeraConfig({ JERA_REPORTING_ENABLED: 'true' })).toBeNull()
     expect(readJeraConfig(validJeraEnvironment())).toMatchObject({
       baseUrl: 'https://jera.example', syncIntervalMinutes: 15, manualRefreshSeconds: 300,
-      scheduler: null,
+      scheduler: null, allocation: null, financeCategoryMoneyEnabled: false,
     })
+  })
+
+  it('accepts only the complete fail-closed allocation contract', () => {
+    expect(readJeraConfig({ ...validJeraEnvironment(), ...allocationEnvironment() })).toMatchObject({
+      allocation: {
+        projectId: 'pmc-project', location: 'asia-southeast1', queueName: 'pmc-revenue-allocation',
+        workerUrl: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker',
+        workerAudience: 'https://pmc-mini-app.example',
+        taskInvokerEmail: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com',
+        leaseBucket: 'pmc-private-allocation-leases', maxDetailsPerRun: 20, continuationDelaySeconds: 60,
+      },
+      financeCategoryMoneyEnabled: false,
+    })
+
+    for (const name of Object.keys(allocationEnvironment()).filter((name) => name !== 'JERA_FINANCE_CATEGORY_MONEY_ENABLED')) {
+      const invalid = { ...validJeraEnvironment(), ...allocationEnvironment() }
+      delete invalid[name]
+      expect(readJeraConfig(invalid), `missing ${name}`).toBeNull()
+    }
+  })
+
+  it.each([
+    ['wrong location', { JERA_ALLOCATION_LOCATION: 'us-central1' }],
+    ['HTTP worker URL', { JERA_ALLOCATION_WORKER_URL: 'http://pmc-mini-app.example/internal/mini-app/jera-allocation-worker' }],
+    ['worker URL query', { JERA_ALLOCATION_WORKER_URL: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker?secret=x' }],
+    ['worker audience fragment', { JERA_ALLOCATION_WORKER_AUDIENCE: 'https://pmc-mini-app.example#worker' }],
+    ['invalid invoker email', { JERA_ALLOCATION_TASK_INVOKER_EMAIL: 'worker@example.com' }],
+    ['invalid lease bucket URL', { JERA_ALLOCATION_LEASE_BUCKET: 'gs://pmc-private-allocation-leases' }],
+    ['invalid lease bucket IPv4', { JERA_ALLOCATION_LEASE_BUCKET: '192.168.1.1' }],
+  ])('rejects allocation config with %s', (_name, patch) => {
+    expect(readJeraConfig({ ...validJeraEnvironment(), ...allocationEnvironment(), ...patch })).toBeNull()
+  })
+
+  it('rejects category money while allocation is disabled', () => {
+    expect(readJeraConfig({ ...validJeraEnvironment(), JERA_FINANCE_CATEGORY_MONEY_ENABLED: 'true' })).toBeNull()
+    expect(readJeraConfig({ ...validJeraEnvironment(), JERA_FINANCE_CATEGORY_MONEY_ENABLED: 'false' }))
+      .toMatchObject({ allocation: null, financeCategoryMoneyEnabled: false })
   })
 
   it('accepts scheduler OIDC settings only as a complete HTTPS/email pair', () => {
@@ -54,5 +91,19 @@ function validJeraEnvironment(): NodeJS.ProcessEnv {
     JERA_REPORTING_ENABLED: 'true', JERA_API_BASE_URL: 'https://jera.example/',
     JERA_DEFAULT_BRANCH_UUID: '11111111-2222-4333-8444-555555555555', JERA_SYNC_INTERVAL_MINUTES: '15',
     JERA_API_USERNAME: 'production-user-synthetic', JERA_API_PASSWORD: 'production-password-synthetic',
+  }
+}
+
+function allocationEnvironment(): NodeJS.ProcessEnv {
+  return {
+    JERA_REVENUE_ALLOCATION_ENABLED: 'true',
+    JERA_ALLOCATION_PROJECT_ID: 'pmc-project',
+    JERA_ALLOCATION_LOCATION: 'asia-southeast1',
+    JERA_ALLOCATION_QUEUE: 'pmc-revenue-allocation',
+    JERA_ALLOCATION_WORKER_URL: 'https://pmc-mini-app.example/internal/mini-app/jera-allocation-worker',
+    JERA_ALLOCATION_WORKER_AUDIENCE: 'https://pmc-mini-app.example',
+    JERA_ALLOCATION_TASK_INVOKER_EMAIL: 'pmc-mini-app-task-invoker@pmc-project.iam.gserviceaccount.com',
+    JERA_ALLOCATION_LEASE_BUCKET: 'pmc-private-allocation-leases',
+    JERA_FINANCE_CATEGORY_MONEY_ENABLED: 'false',
   }
 }
