@@ -13,6 +13,7 @@ import {
   type JeraAllocationCoverage,
   type JeraCachedPaymentDetail,
 } from '../../server/jera/allocationStore'
+import { jeraCacheKey } from '../../server/jera/cacheKey'
 
 const BRANCH = '11111111-2222-4333-8444-555555555555'
 const PAYMENT = '10000000-0000-4000-8000-000000000001'
@@ -91,17 +92,76 @@ describe('Google Sheets JERA allocation store', () => {
   it('returns at most twenty oldest incomplete coverage rows', async () => {
     const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets: fixture() })
     for (let index = 0; index < 22; index += 1) {
+      const eventDate = `2026-08-${String(index + 1).padStart(2, '0')}`
       await store.saveCoverage(coverageRow({
-        eventDate: `2026-08-${String(index + 1).padStart(2, '0')}`,
-        dayKey: jeraAllocationDayKey(BRANCH, `2026-08-${String(index + 1).padStart(2, '0')}`),
-        lastAttemptAt: `2026-08-${String(index + 1).padStart(2, '0')}T10:00:00.000Z`,
+        eventDate, dayKey: jeraAllocationDayKey(BRANCH, eventDate),
+        paymentCacheKey: jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: eventDate, endDate: eventDate }),
+        productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', { branchUuid: BRANCH, startDate: eventDate, endDate: eventDate }),
+        lastAttemptAt: `${eventDate}T10:00:00.000Z`,
       }))
     }
-    await store.saveCoverage(coverageRow({ dayKey: jeraAllocationDayKey(BRANCH, '2026-08-31'), eventDate: '2026-08-31', status: 'COMPLETE' }))
+    await store.saveCoverage(coverageRow({
+      dayKey: jeraAllocationDayKey(BRANCH, '2026-08-31'), eventDate: '2026-08-31', status: 'COMPLETE',
+      paymentCacheKey: jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: '2026-08-31', endDate: '2026-08-31' }),
+      productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', { branchUuid: BRANCH, startDate: '2026-08-31', endDate: '2026-08-31' }),
+    }))
 
     const rows = await store.listIncompleteCoverage(99)
     expect(rows).toHaveLength(20)
     expect(rows.map((row) => row.lastAttemptAt)).toEqual([...rows.map((row) => row.lastAttemptAt)].sort())
+  })
+
+  it('fences competing stores so only one claimant wins and a stale owner cannot release a newer lease', async () => {
+    const sheets = fixture()
+    const coverage = coverageRow()
+    const first = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    const second = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    await first.saveCoverage(coverage)
+
+    const claims = await Promise.all([
+      first.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-a', now: '2026-08-29T10:00:00.000Z', ttlMs: 1_000 }),
+      second.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-b', now: '2026-08-29T10:00:00.000Z', ttlMs: 1_000 }),
+    ])
+    expect(claims.filter(Boolean)).toHaveLength(1)
+    await second.claimCoverageLease({ dayKey: coverage.dayKey, owner: 'worker-b', now: '2026-08-29T10:00:02.000Z', ttlMs: 60_000 })
+    await first.releaseCoverageLease(coverage.dayKey, 'worker-a')
+
+    expect((await second.getCoverage(coverage.dayKey))?.leaseOwner).toBe('worker-b')
+  })
+
+  it('accepts only canonical exact-day source cache keys for coverage', async () => {
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets: fixture() })
+    const coverage = coverageRow()
+    await expect(store.saveCoverage({ ...coverage, paymentCacheKey: 'PAYMENT:anything' })).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
+    await expect(store.saveCoverage({ ...coverage, productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', {
+      branchUuid: BRANCH, startDate: '2026-08-01', endDate: '2026-08-31',
+    }) })).rejects.toThrow('JERA_ALLOCATION_STORE_INVALID_INPUT')
+    await expect(store.saveCoverage(coverage)).resolves.toBeUndefined()
+  })
+
+  it('reads all allocation tables in one snapshot and rejects torn line corruption', async () => {
+    const sheets = fixture()
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.replacePaymentDetail(paymentDetail())
+    sheets.batchGets.length = 0
+    await expect(store.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') })).resolves.toMatchObject({ details: [paymentDetail()] })
+    expect(sheets.batchGets).toEqual([["'JERA_PAYMENT_DETAIL_CACHE'!A1:I", "'JERA_PAYMENT_DETAIL_LINES'!A1:E", "'JERA_ALLOCATION_COVERAGE'!A1:R"]])
+    const lines = sheets.tab('JERA_PAYMENT_DETAIL_LINES')
+    lines[2]![1] = 3
+    sheets.setTab('JERA_PAYMENT_DETAIL_LINES', lines)
+    await expect(store.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') })).rejects.toThrow('JERA_ALLOCATION_STORE_CORRUPT_ROW')
+  })
+
+  it('reuses line slots for changed detail versions without growing the used line range', async () => {
+    const sheets = fixture()
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.replacePaymentDetail(paymentDetail())
+    const firstUsed = sheets.usedRows('JERA_PAYMENT_DETAIL_LINES')
+    const next = paymentDetail({ paymentSourceHash: hash('b'), detailKey: jeraPaymentDetailKey(BRANCH, DATE, PAYMENT, hash('b')) })
+    await store.replacePaymentDetail(next)
+    await store.replacePaymentDetail({ ...next, paymentSourceHash: hash('c'), detailKey: jeraPaymentDetailKey(BRANCH, DATE, PAYMENT, hash('c')) })
+
+    expect(sheets.usedRows('JERA_PAYMENT_DETAIL_LINES')).toBe(firstUsed)
   })
 })
 
@@ -121,7 +181,8 @@ function paymentDetail(patch: Partial<JeraCachedPaymentDetail> = {}): JeraCached
 function coverageRow(patch: Partial<JeraAllocationCoverage> = {}): JeraAllocationCoverage {
   return {
     dayKey: jeraAllocationDayKey(BRANCH, DATE), branchUuid: BRANCH, eventDate: DATE,
-    paymentCacheKey: 'PAYMENT:key', productSalesCacheKey: 'PRODUCT_SALES:key', paymentSetHash: hash('p'),
+    paymentCacheKey: jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }),
+    productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }), paymentSetHash: hash('p'),
     paymentRowCount: 1, successfulDetailCount: 0, metadataSnapshotHash: hash('m'),
     paymentLastSuccessAt: '2026-08-29T10:00:00.000Z', productSalesLastSuccessAt: '2026-08-29T10:00:00.000Z',
     cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
@@ -142,11 +203,14 @@ function hash(value: string): string { return createHash('sha256').update(value)
 class MemorySheets implements MiniAppSheetsPort {
   private readonly tabs = new Map<string, unknown[][]>()
   readonly batchWrites: Array<Array<{ range: string; values: unknown[][] }>> = []
+  readonly batchGets: string[][] = []
 
   setTab(tab: string, rows: unknown[][]): void { this.tabs.set(tab, structuredClone(rows)) }
   tab(tab: string): unknown[][] { return structuredClone(this.tabs.get(tab) ?? []) }
   serialized(): string { return JSON.stringify([...this.tabs.entries()]) }
+  usedRows(tab: string): number { return this.tab(tab).filter((row) => row.some((cell) => cell !== '')).length }
   async batchGet(_spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
+    this.batchGets.push([...ranges])
     return Object.fromEntries(ranges.map((range) => [range, this.tab(tabName(range))]))
   }
   async append(): Promise<void> { throw new Error('unexpected append') }

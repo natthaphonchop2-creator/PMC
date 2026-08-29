@@ -6,6 +6,7 @@ import {
   JERA_PAYMENT_DETAIL_LINES_HEADERS,
 } from '../pmc-mini-app/setup.js'
 import type { JeraNormalizedPaymentDetail } from './contracts.js'
+import { jeraCacheKey } from './cacheKey.js'
 
 export type JeraAllocationCoverageStatus = 'INCOMPLETE' | 'COMPLETE'
 
@@ -115,8 +116,7 @@ export function createGoogleJeraAllocationStore(input: { spreadsheetId: string; 
   async function readTable(tab: string, headers: readonly string[]): Promise<Array<{ rowNumber: number; cells: unknown[] }>> {
     const range = `'${tab}'!A1:${columnName(headers.length)}`
     const values = (await sheets.batchGet(spreadsheetId, [range]))[range] ?? []
-    if (!sameHeader((values[0] ?? []).map(text), headers)) throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INCOMPATIBLE_HEADER')
-    return values.slice(1).flatMap((cells, index) => cells.every(blank) ? [] : [{ rowNumber: index + 2, cells }])
+    return tableRows(values, headers)
   }
   async function details(): Promise<Array<{ rowNumber: number; value: Omit<JeraCachedPaymentDetail, 'lines'> }>> {
     return (await readTable(DETAIL_TAB, JERA_PAYMENT_DETAIL_CACHE_HEADERS)).map(({ rowNumber, cells }) => ({ rowNumber, value: detailHeader(cells) }))
@@ -147,36 +147,54 @@ export function createGoogleJeraAllocationStore(input: { spreadsheetId: string; 
         if (current && JSON.stringify({ ...current.value, lines: existingLines.map((row) => row.value).map(({ detailKey, ...line }) => line) }) === JSON.stringify(normalized)) return
         const obsolete = storedDetails.filter((row) => row.value.branchUuid === normalized.branchUuid && row.value.eventDate === normalized.eventDate
           && row.value.paymentUuid === normalized.paymentUuid && row.value.detailKey !== normalized.detailKey)
+        const reclaimableDetails = [...(current ? [current] : []), ...obsolete].sort((left, right) => left.rowNumber - right.rowNumber)
+        const detailRow = reclaimableDetails[0]?.rowNumber ?? Math.max(1, ...storedDetails.map((row) => row.rowNumber)) + 1
+        const reclaimableLines = storedLines.filter((row) => obsolete.some((detail) => detail.value.detailKey === row.value.detailKey) || row.value.detailKey === normalized.detailKey)
+          .sort((left, right) => left.rowNumber - right.rowNumber)
+        let nextLineRow = Math.max(1, ...storedLines.map((row) => row.rowNumber)) + 1
+        const lineRows = normalized.lines.map((_, index) => reclaimableLines[index]?.rowNumber ?? nextLineRow++)
         const writes: Array<{ range: string; values: unknown[][] }> = []
-        for (const row of [...obsolete, ...(current ? [current] : [])]) writes.push({
+        for (const row of reclaimableDetails.filter((row) => row.rowNumber !== detailRow)) writes.push({
           range: `'${DETAIL_TAB}'!A${row.rowNumber}:${columnName(JERA_PAYMENT_DETAIL_CACHE_HEADERS.length)}${row.rowNumber}`,
           values: [Array(JERA_PAYMENT_DETAIL_CACHE_HEADERS.length).fill('')],
         })
-        for (const row of storedLines.filter((row) => obsolete.some((detail) => detail.value.detailKey === row.value.detailKey) || row.value.detailKey === normalized.detailKey)) writes.push({
+        for (const row of reclaimableLines.filter((row) => !lineRows.includes(row.rowNumber))) writes.push({
           range: `'${LINE_TAB}'!A${row.rowNumber}:${columnName(JERA_PAYMENT_DETAIL_LINES_HEADERS.length)}${row.rowNumber}`,
           values: [Array(JERA_PAYMENT_DETAIL_LINES_HEADERS.length).fill('')],
         })
-        const nextDetailRow = current?.rowNumber ?? Math.max(1, ...storedDetails.map((row) => row.rowNumber)) + 1
-        writes.push({ range: `'${DETAIL_TAB}'!A${nextDetailRow}:${columnName(JERA_PAYMENT_DETAIL_CACHE_HEADERS.length)}${nextDetailRow}`, values: [detailCells(normalized)] })
-        let nextLineRow = Math.max(1, ...storedLines.map((row) => row.rowNumber)) + 1
-        for (const line of normalized.lines) {
-          writes.push({ range: `'${LINE_TAB}'!A${nextLineRow}:${columnName(JERA_PAYMENT_DETAIL_LINES_HEADERS.length)}${nextLineRow}`, values: [lineCells(normalized.detailKey, line)] })
-          nextLineRow += 1
+        writes.push({ range: `'${DETAIL_TAB}'!A${detailRow}:${columnName(JERA_PAYMENT_DETAIL_CACHE_HEADERS.length)}${detailRow}`, values: [detailCells(normalized)] })
+        for (const [index, line] of normalized.lines.entries()) {
+          const rowNumber = lineRows[index]!
+          writes.push({ range: `'${LINE_TAB}'!A${rowNumber}:${columnName(JERA_PAYMENT_DETAIL_LINES_HEADERS.length)}${rowNumber}`, values: [lineCells(normalized.detailKey, line)] })
         }
         await sheets.batchUpdate(spreadsheetId, writes)
       })
     },
     async readDay(query) {
       assertUuid(query.branchUuid); assertDate(query.eventDate); assertHash(query.paymentSetHash)
-      const [storedDetails, storedLines, storedCoverage] = await Promise.all([details(), lines(), coverageRows()])
+      const detailRange = `'${DETAIL_TAB}'!A1:${columnName(JERA_PAYMENT_DETAIL_CACHE_HEADERS.length)}`
+      const lineRange = `'${LINE_TAB}'!A1:${columnName(JERA_PAYMENT_DETAIL_LINES_HEADERS.length)}`
+      const coverageRange = `'${COVERAGE_TAB}'!A1:${columnName(JERA_ALLOCATION_COVERAGE_HEADERS.length)}`
+      const values = await sheets.batchGet(spreadsheetId, [detailRange, lineRange, coverageRange])
+      const storedDetails = tableRows(values[detailRange] ?? [], JERA_PAYMENT_DETAIL_CACHE_HEADERS)
+        .map(({ rowNumber, cells }) => ({ rowNumber, value: detailHeader(cells) }))
+      const storedLines = tableRows(values[lineRange] ?? [], JERA_PAYMENT_DETAIL_LINES_HEADERS)
+        .map(({ rowNumber, cells }) => ({ rowNumber, value: detailLine(cells) }))
+      const storedCoverage = tableRows(values[coverageRange] ?? [], JERA_ALLOCATION_COVERAGE_HEADERS)
+        .map(({ rowNumber, cells }) => ({ rowNumber, value: coverage(cells) }))
       const byDetailKey = new Map<string, JeraCachedPaymentDetailLine[]>()
       for (const line of storedLines) byDetailKey.set(line.value.detailKey, [...(byDetailKey.get(line.value.detailKey) ?? []), stripDetailKey(line.value)])
+      const headerKeys = new Set(storedDetails.map((row) => row.value.detailKey))
+      if (storedLines.some((line) => !headerKeys.has(line.value.detailKey))) corrupt()
       const dayKey = jeraAllocationDayKey(query.branchUuid, query.eventDate)
       return {
         coverage: storedCoverage.find((row) => row.value.dayKey === dayKey && row.value.paymentSetHash === query.paymentSetHash)?.value ?? null,
-        details: storedDetails.filter((row) => row.value.branchUuid === query.branchUuid && row.value.eventDate === query.eventDate).map(({ value }) => ({
-          ...value, lines: (byDetailKey.get(value.detailKey) ?? []).sort((a, b) => a.lineOrdinal - b.lineOrdinal),
-        })),
+        details: storedDetails.filter((row) => row.value.branchUuid === query.branchUuid && row.value.eventDate === query.eventDate).map(({ value }) => {
+          const detailLines = byDetailKey.get(value.detailKey) ?? []
+          const ordered = [...detailLines].sort((a, b) => a.lineOrdinal - b.lineOrdinal)
+          if (ordered.length !== value.lineCount || ordered.some((line, index) => line.lineOrdinal !== index)) corrupt()
+          return { ...value, lines: ordered }
+        }),
       }
     },
     async getCoverage(dayKey) { assertHash(dayKey); return (await coverageRows()).find((row) => row.value.dayKey === dayKey)?.value ?? null },
@@ -193,8 +211,10 @@ export function createGoogleJeraAllocationStore(input: { spreadsheetId: string; 
         const current = (await coverageRows()).find((row) => row.value.dayKey === lease.dayKey)?.value
         if (!current) return false
         if (current.leaseOwner && current.leaseOwner !== lease.owner && current.leaseExpiresAt && Date.parse(current.leaseExpiresAt) > Date.parse(now)) return false
-        await writeCoverage({ ...current, leaseOwner: lease.owner, leaseExpiresAt: new Date(Date.parse(now) + lease.ttlMs).toISOString() })
-        return true
+        const leaseExpiresAt = new Date(Date.parse(now) + lease.ttlMs).toISOString()
+        await writeCoverage({ ...current, leaseOwner: lease.owner, leaseExpiresAt })
+        const verified = (await coverageRows()).find((row) => row.value.dayKey === lease.dayKey)?.value
+        return verified?.leaseOwner === lease.owner && verified.leaseExpiresAt === leaseExpiresAt
       })
     },
     async releaseCoverageLease(dayKey, owner) {
@@ -226,7 +246,8 @@ function validateCoverage(value: JeraAllocationCoverage): JeraAllocationCoverage
   if (!value || typeof value !== 'object') invalid(); assertHash(value.dayKey); assertUuid(value.branchUuid); assertDate(value.eventDate)
   if (value.dayKey !== jeraAllocationDayKey(value.branchUuid, value.eventDate)) invalid()
   for (const hash of [value.paymentSetHash, value.metadataSnapshotHash]) assertHash(hash)
-  for (const token of [value.paymentCacheKey, value.productSalesCacheKey]) assertToken(token)
+  if (value.paymentCacheKey !== jeraCacheKey('PAYMENT', { branchUuid: value.branchUuid, startDate: value.eventDate, endDate: value.eventDate })
+    || value.productSalesCacheKey !== jeraCacheKey('PRODUCT_SALES', { branchUuid: value.branchUuid, startDate: value.eventDate, endDate: value.eventDate })) invalid()
   for (const number of [value.paymentRowCount, value.successfulDetailCount, value.cursor]) if (!Number.isSafeInteger(number) || number < 0) invalid()
   if (value.successfulDetailCount > value.paymentRowCount || !['INCOMPLETE', 'COMPLETE'].includes(value.status)) invalid()
   for (const date of [value.paymentLastSuccessAt, value.productSalesLastSuccessAt, value.lastAttemptAt, value.lastSuccessAt, value.leaseExpiresAt]) if (date !== null) instant(date)
@@ -273,7 +294,12 @@ function nullable(value: unknown): string | null { const result = text(value); r
 function integer(value: unknown): number { const result = typeof value === 'number' ? value : Number(value); if (!Number.isSafeInteger(result) || result < 0) throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_CORRUPT_ROW'); return result }
 function boolean(value: unknown): boolean { if (value === true || value === 'true') return true; if (value === false || value === 'false') return false; throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_CORRUPT_ROW') }
 function blank(value: unknown): boolean { return value === '' || value === null || value === undefined }
+function tableRows(values: unknown[][], headers: readonly string[]): Array<{ rowNumber: number; cells: unknown[] }> {
+  if (!sameHeader((values[0] ?? []).map(text), headers)) throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INCOMPATIBLE_HEADER')
+  return values.slice(1).flatMap((cells, index) => cells.every(blank) ? [] : [{ rowNumber: index + 2, cells }])
+}
 function sameHeader(actual: string[], expected: readonly string[]): boolean { return actual.length === expected.length && actual.every((value, index) => value === expected[index]) }
 function columnName(count: number): string { let value = count; let result = ''; while (value > 0) { value -= 1; result = String.fromCharCode(65 + (value % 26)) + result; value = Math.floor(value / 26) } return result }
 function invalid(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INVALID_INPUT') }
+function corrupt(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_CORRUPT_ROW') }
 async function withMutex<T>(key: string, operation: () => Promise<T>): Promise<T> { const previous = mutexes.get(key) ?? Promise.resolve(); let release = (): void => undefined; const current = new Promise<void>((resolve) => { release = resolve }); const queued = previous.then(() => current); mutexes.set(key, queued); await previous; try { return await operation() } finally { release(); if (mutexes.get(key) === queued) mutexes.delete(key) } }
