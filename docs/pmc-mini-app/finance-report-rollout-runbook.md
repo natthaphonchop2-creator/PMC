@@ -38,6 +38,14 @@ Deploy a tagged revision with zero traffic. Do not print or commit its URL, envi
 
 Run the stage-specific read-only check. At `DISABLED`, an absent/paused Scheduler and an absent latest no-traffic ready revision are valid; the three flags must be exactly false:
 
+Before every checker invocation, the operator must set the three owner-approved immutable `CONFIG_STAFF.id` values in the current shell. These values are operator input; do not hard-code or commit them:
+
+```bash
+export OPERATOR_FINANCE_STAFF_ID_1="<approved-staff-id-1>"
+export OPERATOR_FINANCE_STAFF_ID_2="<approved-staff-id-2>"
+export OPERATOR_FINANCE_STAFF_ID_3="<approved-staff-id-3>"
+```
+
 ```bash
 node scripts/check-finance-report-runtime.mjs \
   --allow-readonly-production \
@@ -45,6 +53,9 @@ node scripts/check-finance-report-runtime.mjs \
   --service pmc-mini-app \
   --region asia-southeast1 \
   --expected-finance-viewers 3 \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
   --expected-stage=DISABLED
 ```
 
@@ -114,10 +125,13 @@ node scripts/check-finance-report-runtime.mjs \
   --service pmc-mini-app \
   --region asia-southeast1 \
   --expected-finance-viewers 3 \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
   --expected-stage=DISABLED
 ```
 
-Require exactly three active finance viewers and zero name-based derivations in the safe report. The `DISABLED` stage itself requires only the exact false flags, no enabled finance Scheduler, and a readable service; later stages make infrastructure and schema evidence blocking. `check` is read-only; it must never mutate Cloud or Sheets.
+Require the exact three operator-provided IDs, with each row active, LINE-linked, and `canViewFinance=true`, and no additional `canViewFinance=true` row. The `DISABLED` stage itself requires only the exact false flags, no enabled finance Scheduler, and a readable service; later stages make staff, infrastructure, IAM, and schema evidence blocking. `check` is read-only; it must never mutate Cloud or Sheets.
 
 ## Gate 7 — owner approval to enable allocation on zero traffic
 
@@ -132,13 +146,16 @@ node scripts/check-finance-report-runtime.mjs \
   --service pmc-mini-app \
   --region asia-southeast1 \
   --expected-finance-viewers 3 \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
   --expected-stage=ALLOCATION \
   --expected-queue pmc-revenue-allocation \
   --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
   --expected-invoker "$OPERATOR_EXPECTED_INVOKER"
 ```
 
-Require exact false/true/false flags, the approved project and region, exact queue/worker destination/invoker, queue and lease-bucket location/configuration, least-privilege queue/lease/OIDC bindings, a latest ready revision receiving zero traffic, three exact allocation headers, exactly three immutable finance viewers, valid pending task hash/attempt fields, and no active lease older than 15 minutes. Scheduler absent or paused remains valid at this stage.
+Require exact false/true/false flags, the approved project and region, exact queue/worker destination/invoker, queue and lease-bucket location/configuration, exact least-privilege queue/lease/Cloud Run policies with no public, broad, unexpected, or extra principal, a latest ready revision receiving zero traffic, three exact allocation headers, the exact three active LINE-linked immutable finance viewers, valid pending task hash/attempt fields, and no active lease older than 15 minutes. Scheduler absent or paused remains valid at this stage.
 
 ## Gate 8 — owner approval for the one-day source comparison
 
@@ -192,6 +209,9 @@ node scripts/check-finance-report-runtime.mjs \
   --service pmc-mini-app \
   --region asia-southeast1 \
   --expected-finance-viewers 3 \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
   --expected-stage=READY \
   --expected-queue pmc-revenue-allocation \
   --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \

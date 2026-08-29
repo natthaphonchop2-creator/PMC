@@ -13,6 +13,8 @@ const QUEUE = 'pmc-revenue-allocation'
 const AUDIENCE = 'https://private.example'
 const INVOKER = 'invoker@example.iam.gserviceaccount.com'
 const SEED_URL = `${AUDIENCE}/internal/mini-app/finance-daily-seed`
+const APPROVED_FINANCE_STAFF_IDS = ['ADMIN_01', 'DOCTOR_01', 'ADMIN_09'] as const
+const APPROVED_FINANCE_STAFF_ARGS = APPROVED_FINANCE_STAFF_IDS.flatMap((id) => ['--approved-finance-staff-id', id])
 
 describe('finance operator script approval gates', () => {
   it('loads the three operator modules with callable entry points', async () => {
@@ -111,7 +113,7 @@ describe('read-only finance runtime checker', () => {
 
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3', '--expected-stage=DISABLED',
+      '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
     ], { execute, readGoogleState: googleReads, now: () => new Date(NOW), io: { stdout } })
 
     expect(code).toBe(0)
@@ -125,11 +127,18 @@ describe('read-only finance runtime checker', () => {
       flags: { financeReportsEnabled: false, revenueAllocationEnabled: false, categoryMoneyEnabled: false },
       allocationConfig: { requiredNameCount: 7, presentNameCount: 7, leaseBucketPresent: true },
       queue: { present: true, maxConcurrentDispatches: 1, maxDispatchesPerSecond: 0.016 },
-      bindings: { queueEnqueuerPresent: true, oidcInvokerPresent: true, leaseBucketObjectUserPresent: true },
+      bindings: {
+        queueEnqueuerPresent: true, oidcInvokerPresent: true, leaseBucketObjectUserPresent: true,
+        queuePolicyExact: true, runPolicyExact: true, leaseBucketPolicyExact: true,
+        publicMemberCount: 0, broadRoleCount: 0, unexpectedRoleCount: 0, extraPrincipalCount: 0,
+      },
       scheduler: { matchingJobCount: 0, enabledJobCount: 0, oidcBindingPresent: false },
       tasks: { pendingCount: 1, validMetadataHashCount: 1, validAttemptCount: 1, invalidPayloadCount: 0 },
       tabs: { exactHeaderCount: 3, requiredHeaderCount: 3 },
-      financePermissions: { expectedCount: 3, activeViewerCount: 3, nameBasedDerivationCount: 0 },
+      financePermissions: {
+        expectedCount: 3, approvedViewerCount: 3, activeViewerCount: 3, exactApprovedSet: true,
+        missingApprovedCount: 0, unlinkedApprovedCount: 0, extraViewerCount: 0, invalidStaffRowCount: 0,
+      },
       leases: { activeCount: 1, olderThan15MinutesCount: 0, oldestActiveAgeSeconds: 300 },
     })
     expect(report.financePermissions.viewers).toEqual([
@@ -150,7 +159,7 @@ describe('read-only finance runtime checker', () => {
 
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3', '--expected-stage=DISABLED',
+      '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
     ], { execute, readGoogleState: vi.fn(async () => { throw new Error('sheet private-spreadsheet') }), io: { stdout } })
 
     expect(code).toBe(1)
@@ -166,7 +175,7 @@ describe('read-only finance runtime checker', () => {
       const stageArg = stage ? [`--expected-stage=${stage}`] : []
       await expect(check.runFinanceRuntimeCheck([
         '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-        '--expected-finance-viewers', '3', ...stageArg,
+        '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, ...stageArg,
       ], { execute })).rejects.toThrow('Expected stage must be DISABLED, ALLOCATION, or READY')
     }
     expect(execute).not.toHaveBeenCalled()
@@ -192,6 +201,59 @@ describe('read-only finance runtime checker', () => {
       scheduler: { enabledJobCount: 0 },
       allocationConfig: { exactExpectedConfig: true },
     })
+  })
+
+  it.each([
+    ['wrong approved recipient', (state: ReturnType<typeof googleState>) => {
+      state.staffRows[0]!.canViewFinance = false
+      state.staffRows[3]!.canViewFinance = true
+    }, { missingApprovedCount: 1, extraViewerCount: 1 }],
+    ['unlinked approved recipient', (state: ReturnType<typeof googleState>) => {
+      state.staffRows[1]!.lineLinked = false
+    }, { unlinkedApprovedCount: 1 }],
+    ['extra finance viewer', (state: ReturnType<typeof googleState>) => {
+      state.staffRows[3]!.canViewFinance = true
+    }, { extraViewerCount: 1 }],
+  ])('rejects %s against the exact operator-provided staff ID set', async (_case, mutate, expected) => {
+    const [check] = await loadScripts()
+    const state = googleState()
+    mutate(state)
+    const stdout = bufferWriter()
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({ service: cloudRunService({
+        flags: { reports: false, allocation: true, category: false },
+        latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+      }), schedulerJobs: [] }),
+      readGoogleState: vi.fn(async () => state), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).financePermissions).toMatchObject({ exactApprovedSet: false, ...expected })
+  })
+
+  it.each([
+    ['public member', { runIam: { bindings: [{ role: 'roles/run.invoker', members: [`serviceAccount:${INVOKER}`, 'allUsers'] }] } }, { publicMemberCount: 1 }],
+    ['broad role', { queueIam: { bindings: [
+      { role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] },
+      { role: 'roles/owner', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] },
+    ] } }, { broadRoleCount: 1 }],
+    ['extra principal', { bucketIam: { bindings: [{ role: 'roles/storage.objectUser', members: [
+      'serviceAccount:runtime@example.iam.gserviceaccount.com', 'serviceAccount:extra@example.iam.gserviceaccount.com',
+    ] }] } }, { extraPrincipalCount: 1 }],
+  ])('rejects %s in least-privilege resource policies', async (_case, iam, expected) => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({
+        service: cloudRunService({ flags: { reports: false, allocation: true, category: false }, latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision' }),
+        schedulerJobs: [], ...iam,
+      }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).bindings).toMatchObject(expected)
   })
 
   it('makes READY fail closed for wrong project, destination, host, method, OIDC audience, or invoker', async () => {
@@ -740,7 +802,7 @@ async function loadScripts() {
 function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'READY') {
   const args = [
     '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-    '--expected-finance-viewers', '3', `--expected-stage=${stage}`,
+    '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, `--expected-stage=${stage}`,
   ]
   if (stage !== 'DISABLED') args.push(
     '--expected-queue', QUEUE, '--expected-worker-audience', AUDIENCE, '--expected-invoker', INVOKER,
@@ -751,26 +813,32 @@ function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'READY') {
   return args
 }
 
-function runtimeExecute({ service, schedulerJobs }: { service: unknown; schedulerJobs: unknown[] }) {
+function runtimeExecute({
+  service,
+  schedulerJobs,
+  queueIam = { bindings: [{ role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] },
+  runIam = { bindings: [{ role: 'roles/run.invoker', members: [`serviceAccount:${INVOKER}`] }] },
+  bucketIam = { bindings: [{ role: 'roles/storage.objectUser', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] },
+}: {
+  service: unknown
+  schedulerJobs: unknown[]
+  queueIam?: unknown
+  runIam?: unknown
+  bucketIam?: unknown
+}) {
   return vi.fn(async (command: string[]) => {
     const joined = command.join(' ')
     if (joined.includes('run services describe')) return JSON.stringify(service)
     if (joined.includes('tasks queues describe')) return JSON.stringify(queueDescription())
-    if (joined.includes('tasks queues get-iam-policy')) return JSON.stringify({
-      bindings: [{ role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }],
-    })
-    if (joined.includes('run services get-iam-policy')) return JSON.stringify({
-      bindings: [{ role: 'roles/run.invoker', members: [`serviceAccount:${INVOKER}`] }],
-    })
+    if (joined.includes('tasks queues get-iam-policy')) return JSON.stringify(queueIam)
+    if (joined.includes('run services get-iam-policy')) return JSON.stringify(runIam)
     if (joined.includes('scheduler jobs list')) return JSON.stringify(schedulerJobs)
     if (joined.includes('tasks list')) return JSON.stringify([{ httpRequest: { body: Buffer.from(JSON.stringify({
       branchUuid: '11111111-2222-4333-8444-555555555555', eventDate: APPROVED_DAY,
       paymentSetHash: 'a'.repeat(64), metadataSnapshotHash: 'b'.repeat(64), cursor: 0, attempt: 2,
     })).toString('base64') } }])
     if (joined.includes('storage buckets describe')) return JSON.stringify({ location: REGION })
-    if (joined.includes('storage buckets get-iam-policy')) return JSON.stringify({
-      bindings: [{ role: 'roles/storage.objectUser', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }],
-    })
+    if (joined.includes('storage buckets get-iam-policy')) return JSON.stringify(bucketIam)
     throw new Error('unexpected read-only command')
   })
 }
@@ -824,14 +892,14 @@ function googleState() {
         'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
         'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
         'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-        'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
+        'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
       ],
     },
     staffRows: [
-      { id: 'ADMIN_01', name: 'Owner', lineUserId: 'U-secret-owner', canViewFinance: true, active: true },
-      { id: 'DOCTOR_01', name: 'Doctor', lineUserId: 'U-secret-doctor', canViewFinance: true, active: true },
-      { id: 'ADMIN_09', name: 'Mus', lineUserId: 'U-secret-mus', canViewFinance: true, active: true },
-      { id: 'ADMIN_10', name: 'Staff', lineUserId: 'U-secret-staff', canViewFinance: false, active: true },
+      { id: 'ADMIN_01', name: 'Owner', lineLinked: true, canViewFinance: true, active: true },
+      { id: 'DOCTOR_01', name: 'Doctor', lineLinked: true, canViewFinance: true, active: true },
+      { id: 'ADMIN_09', name: 'Mus', lineLinked: true, canViewFinance: true, active: true },
+      { id: 'ADMIN_10', name: 'Staff', lineLinked: true, canViewFinance: false, active: true },
     ],
     coverageRows: [{ leaseOwner: 'lease-private', leaseExpiresAt: '2026-08-30T02:10:00.000Z', lastAttemptAt: '2026-08-30T01:55:00.000Z' }],
   }

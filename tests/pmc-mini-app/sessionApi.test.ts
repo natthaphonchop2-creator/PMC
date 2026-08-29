@@ -105,16 +105,23 @@ describe('PMC Mini App session and configuration API', () => {
     expect(serialized).not.toContain('private-calendar')
   })
 
-  it('advertises legacy reporting only when JERA exists and finance reports only when its rollout flag is enabled', async () => {
+  it.each([
+    ['flag off, no JERA', false, null, false, false],
+    ['flag on, no JERA', true, null, false, false],
+    ['flag off, legacy JERA only', false, false, true, false],
+    ['flag on, legacy JERA only', true, false, true, false],
+    ['flag off, finance service ready', false, true, true, false],
+    ['flag on, finance service ready', true, true, true, true],
+  ] as const)('uses the complete finance flag/capability truth table: %s', async (_case, flag, financeReady, reportingEnabled, financeReportsEnabled) => {
     const response = await invoke(createPmcMiniAppMiddleware({
       ...dependencies(),
-      config: { ...dependencies().config, financeReportsEnabled: true },
-      jera: { handle: vi.fn(), handleInternal: vi.fn() },
-    }), '/api/mini-app/config', {
-      headers: { authorization: 'Bearer valid-token' },
-    })
+      config: { ...dependencies().config, financeReportsEnabled: flag },
+      ...(financeReady === null ? {} : { jera: {
+        handle: vi.fn(), handleInternal: vi.fn(), financeServiceReady: financeReady,
+      } }),
+    }), '/api/mini-app/config', { headers: { authorization: 'Bearer valid-token' } })
 
-    expect(await response.json()).toMatchObject({ reportingEnabled: true, financeReportsEnabled: true })
+    expect(await response.json()).toMatchObject({ reportingEnabled, financeReportsEnabled })
   })
 })
 

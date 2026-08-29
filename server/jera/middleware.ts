@@ -25,6 +25,7 @@ import { MAX_JERA_ALLOCATION_ATTEMPT } from './allocationTaskQueue.js'
 import { JeraFinanceServiceError, type JeraFinanceService } from './financeService.js'
 
 export interface JeraMiniAppApi {
+  readonly financeServiceReady?: boolean
   handle(
     req: IncomingMessage,
     res: ServerResponse,
@@ -105,6 +106,7 @@ export function createJeraMiniAppApi(options: {
   } : null
 
   return {
+    financeServiceReady: finance !== null,
     async handle(req, res, url, authenticated) {
       if (isJeraFinanceApiPath(url.pathname)) {
         if (financeViewRequired(url.pathname) && !authenticated.canViewFinance) {

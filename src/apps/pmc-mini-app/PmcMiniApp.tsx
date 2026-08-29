@@ -474,10 +474,10 @@ function sameMonthSelection(left: FinanceMonthSelection, right: FinanceMonthSele
 function safeFinanceFilterStorage(): FinanceReportFilterStorage {
   return {
     getItem(key) {
-      try { return globalThis.localStorage?.getItem(key) ?? null } catch { return null }
+      try { return globalThis.sessionStorage?.getItem(key) ?? null } catch { return null }
     },
     setItem(key, value) {
-      try { globalThis.localStorage?.setItem(key, value) } catch { /* Preference storage is optional. */ }
+      try { globalThis.sessionStorage?.setItem(key, value) } catch { /* Preference storage is optional. */ }
     },
   }
 }

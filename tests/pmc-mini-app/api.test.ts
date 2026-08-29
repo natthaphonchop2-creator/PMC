@@ -234,6 +234,17 @@ describe('PMC Mini App browser API', () => {
     })
   })
 
+  it('preserves a valid bounded numeric retry delay on a 429 finance client error', async () => {
+    const fetch = vi.fn(async () => jsonResponse(429, {
+      error: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds: 300,
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.refreshDailyIncome('raw-id-token', '2026-08-29')).rejects.toMatchObject({
+      code: 'FINANCE_REFRESH_UNAVAILABLE', status: 429, retryAfterSeconds: 300,
+    })
+  })
+
   it('loads Stock products and cursor history with bearer auth', async () => {
     const fetch = vi.fn(async () => jsonResponse(200, { products: [] }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })

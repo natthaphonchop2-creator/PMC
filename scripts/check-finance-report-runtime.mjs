@@ -21,7 +21,7 @@ const EXPECTED_HEADERS = {
     'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
     'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
     'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
+    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
   ],
 }
 
@@ -29,7 +29,7 @@ export async function runFinanceRuntimeCheck(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout }
   if (parsed.help) {
-    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --expected-stage=DISABLED|ALLOCATION|READY [stage expected bindings]\n')
+    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|READY [stage expected bindings]\n')
     return 0
   }
   const report = await inspectFinanceRuntime(parsed, options)
@@ -94,10 +94,22 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const runtimeIdentity = serviceAccountMember(service?.spec?.template?.spec?.serviceAccountName)
   const invokerEmail = safeEmail(environment.JERA_ALLOCATION_TASK_INVOKER_EMAIL)
   const invokerIdentity = invokerEmail ? `serviceAccount:${invokerEmail}` : null
+  const queuePolicy = exactIamPolicy(queueIam, new Map([['roles/cloudtasks.enqueuer', new Set([runtimeIdentity].filter(Boolean))]]))
+  const runPolicy = exactIamPolicy(runIam, new Map([['roles/run.invoker', new Set([invokerIdentity].filter(Boolean))]]))
+  const bucketPolicy = exactIamPolicy(bucketIam, new Map([['roles/storage.objectUser', new Set([runtimeIdentity].filter(Boolean))]]))
   const bindings = {
     queueEnqueuerPresent: hasBinding(queueIam, 'roles/cloudtasks.enqueuer', runtimeIdentity),
     oidcInvokerPresent: hasBinding(runIam, 'roles/run.invoker', invokerIdentity),
     leaseBucketObjectUserPresent: hasBinding(bucketIam, 'roles/storage.objectUser', runtimeIdentity),
+    queuePolicyExact: queuePolicy.exact,
+    runPolicyExact: runPolicy.exact,
+    leaseBucketPolicyExact: bucketPolicy.exact,
+    publicMemberCount: queuePolicy.publicMemberCount + runPolicy.publicMemberCount + bucketPolicy.publicMemberCount,
+    broadRoleCount: queuePolicy.broadRoleCount + runPolicy.broadRoleCount + bucketPolicy.broadRoleCount,
+    unexpectedRoleCount: queuePolicy.unexpectedRoleCount + runPolicy.unexpectedRoleCount + bucketPolicy.unexpectedRoleCount,
+    extraPrincipalCount: queuePolicy.extraPrincipalCount + runPolicy.extraPrincipalCount + bucketPolicy.extraPrincipalCount,
+    missingBindingCount: queuePolicy.missingBindingCount + runPolicy.missingBindingCount + bucketPolicy.missingBindingCount,
+    invalidBindingCount: queuePolicy.invalidBindingCount + runPolicy.invalidBindingCount + bucketPolicy.invalidBindingCount,
   }
   const scheduler = schedulerReport(schedulerJobs, {
     seedUrl: input.expectedFinanceSeedUrl, oidcAudience: input.expectedOidcAudience,
@@ -105,16 +117,17 @@ export async function inspectFinanceRuntime(input, options = {}) {
   })
   const taskReport = tasksReport(tasks)
   const tabs = tabsReport(googleState?.tabHeaders)
-  const financePermissions = permissionReport(googleState?.staffRows, input.expectedFinanceViewers)
+  const financePermissions = permissionReport(googleState?.staffRows, input.expectedFinanceViewers, input.approvedFinanceStaffIds)
   const leases = leaseReport(googleState?.coverageRows, now)
   const infrastructureReady = cloudRun.servicePresent
     && allocationConfig.presentNameCount === allocationConfig.requiredNameCount && allocationConfig.leaseBucketPresent
     && allocationConfig.exactExpectedConfig
     && queueReport.present && queueReport.running && queueReport.maxConcurrentDispatches === 1
     && queueReport.maxDispatchesPerSecond === 0.016 && queueReport.leaseBucketLocationMatches
-    && Object.values(bindings).every(Boolean)
+    && bindings.queueEnqueuerPresent && bindings.oidcInvokerPresent && bindings.leaseBucketObjectUserPresent
+    && bindings.queuePolicyExact && bindings.runPolicyExact && bindings.leaseBucketPolicyExact
     && taskReport.invalidPayloadCount === 0 && tabs.exactHeaderCount === tabs.requiredHeaderCount
-    && financePermissions.activeViewerCount === input.expectedFinanceViewers && financePermissions.nameBasedDerivationCount === 0
+    && financePermissions.exactApprovedSet
     && leases.olderThan15MinutesCount === 0
   const expectedFlags = stageFlags(input.expectedStage)
   const flagsMatch = flags.financeReportsEnabled === expectedFlags.financeReportsEnabled
@@ -137,7 +150,7 @@ function parseArguments(args) {
   assertNoSensitiveFlags(args)
   const parsed = {
     help: false, allowReadonlyProduction: false, project: null, service: null, region: null,
-    expectedFinanceViewers: null, expectedStage: null, expectedQueue: null,
+    expectedFinanceViewers: null, approvedFinanceStaffIds: [], expectedStage: null, expectedQueue: null,
     expectedWorkerAudience: null, expectedInvoker: null,
     expectedFinanceSeedUrl: null, expectedOidcAudience: null,
   }
@@ -149,6 +162,7 @@ function parseArguments(args) {
     else if (value === '--service' && parsed.service === null && args[index + 1]) parsed.service = args[++index]
     else if (value === '--region' && parsed.region === null && args[index + 1]) parsed.region = args[++index]
     else if (value === '--expected-finance-viewers' && parsed.expectedFinanceViewers === null && args[index + 1]) parsed.expectedFinanceViewers = Number(args[++index])
+    else if (value === '--approved-finance-staff-id' && args[index + 1]) parsed.approvedFinanceStaffIds.push(args[++index])
     else if (value.startsWith('--expected-stage=') && parsed.expectedStage === null) parsed.expectedStage = value.slice('--expected-stage='.length)
     else if (value === '--expected-queue' && parsed.expectedQueue === null && args[index + 1]) parsed.expectedQueue = args[++index]
     else if (value === '--expected-worker-audience' && parsed.expectedWorkerAudience === null && args[index + 1]) parsed.expectedWorkerAudience = args[++index]
@@ -163,6 +177,11 @@ function parseArguments(args) {
   if (!safeToken(parsed.service) || !safeToken(parsed.region)) throw new Error('Project, service, and region are required')
   if (parsed.expectedFinanceViewers !== 3) throw new Error('Expected finance viewers must be exactly 3')
   if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, or READY')
+  if (parsed.approvedFinanceStaffIds.length !== parsed.expectedFinanceViewers
+    || new Set(parsed.approvedFinanceStaffIds).size !== parsed.expectedFinanceViewers
+    || parsed.approvedFinanceStaffIds.some((value) => !safeStaffId(value))) {
+    throw new Error('Exactly three unique approved finance staff IDs are required')
+  }
   if (parsed.expectedStage !== 'DISABLED') {
     if (!safeResource(parsed.expectedQueue) || !normalizedOrigin(parsed.expectedWorkerAudience) || !safeEmail(parsed.expectedInvoker)) {
       throw new Error('Allocation stage expected bindings are required')
@@ -186,13 +205,13 @@ async function readGoogleState({ environment }) {
   ])
   const sheets = createMiniAppGooglePorts({ spreadsheetId, intakeFolderId }).sheets
   const headerTabs = Object.keys(EXPECTED_HEADERS)
-  const ranges = [...headerTabs.map((tab) => `'${tab}'!1:1`), "'CONFIG_STAFF'!A2:L", "'JERA_ALLOCATION_COVERAGE'!A2:R"]
+  const ranges = [...headerTabs.map((tab) => `'${tab}'!1:1`), "'CONFIG_STAFF'!A2:L", "'JERA_ALLOCATION_COVERAGE'!A2:T"]
   const values = await sheets.batchGet(spreadsheetId, ranges)
   const tabHeaders = Object.fromEntries(headerTabs.map((tab) => [`${tab}`, (values[`'${tab}'!1:1`]?.[0] ?? []).map(String)]))
   const staffRows = (values["'CONFIG_STAFF'!A2:L"] ?? []).map((row) => ({
-    id: text(row[0]), name: text(row[1]), lineUserId: text(row[3]), active: bool(row[6]), canViewFinance: bool(row[10]),
+    id: text(row[0]), name: text(row[1]), lineLinked: text(row[3]).length > 0, active: bool(row[6]), canViewFinance: bool(row[10]),
   }))
-  const coverageRows = (values["'JERA_ALLOCATION_COVERAGE'!A2:R"] ?? []).map((row) => ({
+  const coverageRows = (values["'JERA_ALLOCATION_COVERAGE'!A2:T"] ?? []).map((row) => ({
     lastAttemptAt: text(row[13]), leaseOwner: text(row[16]), leaseExpiresAt: text(row[17]),
   }))
   void setup
@@ -250,14 +269,38 @@ function tabsReport(value) {
   const exactHeaderCount = Object.entries(EXPECTED_HEADERS).filter(([tab, expected]) => same(headers[tab], expected)).length
   return { exactHeaderCount, requiredHeaderCount: Object.keys(EXPECTED_HEADERS).length }
 }
-function permissionReport(value, expectedCount) {
+function permissionReport(value, expectedCount, approvedIds) {
   const rows = Array.isArray(value) ? value : []
-  const viewers = rows.filter((row) => row?.active === true && row?.canViewFinance === true)
-  const safeViewers = viewers.flatMap((row) => safeStaffId(row?.id) && safeName(row?.name) ? [{ staffId: row.id, name: row.name }] : [])
+  const approved = new Set(approvedIds)
+  const safeRows = rows.filter((row) => safeStaffId(row?.id))
+  const counts = new Map()
+  for (const row of safeRows) counts.set(row.id, (counts.get(row.id) ?? 0) + 1)
+  const configuredViewers = safeRows.filter((row) => row?.canViewFinance === true)
+  const approvedRows = approvedIds.map((id) => safeRows.find((row) => row.id === id) ?? null)
+  const approvedReady = approvedRows.filter((row) => row?.active === true && row?.lineLinked === true && row?.canViewFinance === true)
+  const invalidStaffRowCount = rows.length - safeRows.length
+  const duplicateStaffIdCount = [...counts.values()].filter((count) => count !== 1).length
+  const missingApprovedCount = approvedRows.filter((row) => !row || row.active !== true || row.lineLinked !== true || row.canViewFinance !== true).length
+  const inactiveApprovedCount = approvedRows.filter((row) => row && row.active !== true).length
+  const unlinkedApprovedCount = approvedRows.filter((row) => row && row.lineLinked !== true).length
+  const permissionMissingApprovedCount = approvedRows.filter((row) => row && row.canViewFinance !== true).length
+  const extraViewerCount = configuredViewers.filter((row) => !approved.has(row.id)).length
+  const viewers = approvedRows.flatMap((row) => row && safeName(row.name) ? [{ staffId: row.id, name: row.name }] : [])
+  const exactApprovedSet = approved.size === expectedCount && approvedReady.length === expectedCount
+    && missingApprovedCount === 0 && extraViewerCount === 0 && invalidStaffRowCount === 0 && duplicateStaffIdCount === 0
   return {
-    expectedCount, activeViewerCount: viewers.length,
-    nameBasedDerivationCount: viewers.length - safeViewers.length,
-    viewers: safeViewers,
+    expectedCount,
+    approvedViewerCount: approvedReady.length,
+    activeViewerCount: configuredViewers.filter((row) => row.active === true).length,
+    exactApprovedSet,
+    missingApprovedCount,
+    inactiveApprovedCount,
+    unlinkedApprovedCount,
+    permissionMissingApprovedCount,
+    extraViewerCount,
+    invalidStaffRowCount,
+    duplicateStaffIdCount,
+    viewers,
   }
 }
 function leaseReport(value, now) {
@@ -280,6 +323,35 @@ function deployedEnvironment(service) {
   return Object.fromEntries(entries.flatMap((entry) => typeof entry?.name === 'string' && typeof entry?.value === 'string' ? [[entry.name, entry.value]] : []))
 }
 function hasBinding(policy, role, member) { return Boolean(member) && Array.isArray(policy?.bindings) && policy.bindings.some((binding) => binding?.role === role && Array.isArray(binding.members) && binding.members.includes(member)) }
+function exactIamPolicy(policy, allowed) {
+  const bindings = Array.isArray(policy?.bindings) ? policy.bindings : []
+  const required = [...allowed.entries()].flatMap(([role, members]) => [...members].map((member) => `${role}|${member}`))
+  const present = new Set()
+  let publicMemberCount = 0
+  let broadRoleCount = 0
+  let unexpectedRoleCount = 0
+  let extraPrincipalCount = 0
+  let invalidBindingCount = Array.isArray(policy?.bindings) ? 0 : 1
+  for (const binding of bindings) {
+    const role = typeof binding?.role === 'string' ? binding.role : null
+    const members = Array.isArray(binding?.members) ? binding.members : null
+    if (!role || !members || binding.condition !== undefined) { invalidBindingCount += 1; continue }
+    if (role === 'roles/owner' || role === 'roles/editor') broadRoleCount += 1
+    const allowedMembers = allowed.get(role)
+    if (!allowedMembers) unexpectedRoleCount += 1
+    for (const member of members) {
+      if (member === 'allUsers' || member === 'allAuthenticatedUsers') publicMemberCount += 1
+      if (typeof member !== 'string' || !allowedMembers?.has(member)) extraPrincipalCount += 1
+      else present.add(`${role}|${member}`)
+    }
+  }
+  const missingBindingCount = required.filter((pair) => !present.has(pair)).length
+  return {
+    exact: bindings.length > 0 && publicMemberCount === 0 && broadRoleCount === 0 && unexpectedRoleCount === 0
+      && extraPrincipalCount === 0 && missingBindingCount === 0 && invalidBindingCount === 0,
+    publicMemberCount, broadRoleCount, unexpectedRoleCount, extraPrincipalCount, missingBindingCount, invalidBindingCount,
+  }
+}
 function serviceAccountMember(value) { const email = safeEmail(value); return email ? `serviceAccount:${email}` : null }
 function safeEmail(value) { return typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value) ? value : null }
 function safeResource(value) { return typeof value === 'string' && /^[A-Za-z0-9._-]{1,256}$/.test(value) ? value : null }
@@ -320,7 +392,7 @@ async function runExternal(command) { const { stdout } = await executeFile(comma
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runFinanceRuntimeCheck(process.argv.slice(2)).then((code) => { process.exitCode = code }).catch((error) => {
-    const message = error instanceof Error && /^(Explicit|Unknown|Sensitive|Expected|Project|Allocation|Ready)/.test(error.message)
+    const message = error instanceof Error && /^(Explicit|Unknown|Sensitive|Expected|Exactly|Project|Allocation|Ready)/.test(error.message)
       ? error.message : 'Finance runtime check failed'
     process.stderr.write(`${message}\n`); process.exitCode = 2
   })

@@ -6,9 +6,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
-afterEach(() => { cleanup(); vi.useRealTimers() })
+afterEach(() => { cleanup(); vi.useRealTimers(); sessionStorage.clear(); localStorage.clear() })
 
 describe('PMC LINE Mini App shell', () => {
+  it('stores finance filter preferences in sessionStorage only at the shell boundary', async () => {
+    localStorage.setItem('pmc-finance-report-filters-v1', 'local-sentinel')
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true }}
+      api={miniAppApi()}
+    />)
+
+    await waitFor(() => expect(sessionStorage.getItem('pmc-finance-report-filters-v1')).not.toBeNull())
+    expect(localStorage.getItem('pmc-finance-report-filters-v1')).toBe('local-sentinel')
+  })
+
   it('hides JERA navigation while reporting is paused', () => {
     const view = render(<PmcMiniApp
       initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}

@@ -132,6 +132,18 @@ describe('finance income projections', () => {
     })
     expect(report.dailyTrend.map(({ date }) => date)).toEqual(['2026-08-28', '2026-08-29'])
   })
+
+  it('fails closed when an aggregate would leave safe integer satang', () => {
+    const input = twoDayFixture({ incompleteDate: null })
+    for (const day of input.days) {
+      const payment = day.payment.data[0]!
+      payment.paidAmountSatang = Number.MAX_SAFE_INTEGER
+      payment.transferSatang = Number.MAX_SAFE_INTEGER
+    }
+
+    expect(() => buildDailyIncomeProjection(input)).toThrow('JERA_FINANCE_UNSAFE_MONEY')
+    expect(() => buildMonthlyIncomeProjection({ monthKey: '2026-08', ...input })).toThrow('JERA_FINANCE_UNSAFE_MONEY')
+  })
 })
 
 interface FixtureOptions {

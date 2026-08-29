@@ -61,9 +61,9 @@ export function buildDailyIncomeProjection(input: BuildDailyIncomeInput): DailyI
     otherSatang: sum(paymentRows.map((row) => sum([row.eWalletSatang, row.paymentLinkSatang, row.otherPaymentSatang]))),
     differenceSatang: 0,
   }
-  channels.differenceSatang = receivedSatang - sum([
+  channels.differenceSatang = subtract(receivedSatang, sum([
     channels.transferSatang, channels.cashSatang, channels.creditSatang, channels.otherSatang,
-  ])
+  ]))
 
   const categoryReadiness = categoryReadinessFor(days, input.categoryMoneyEnabled)
   const payments = paymentRows
@@ -110,7 +110,7 @@ export function buildDailyIncomeProjection(input: BuildDailyIncomeInput): DailyI
     endDate: days.at(-1)?.eventDate ?? '',
     receivedSatang,
     refundSatang,
-    netReceivedSatang: receivedSatang - refundSatang,
+    netReceivedSatang: subtract(receivedSatang, refundSatang),
     channels,
     categories: categoryReadiness.ready
       ? {
@@ -304,9 +304,23 @@ function allocationKey(paymentUuid: string, paymentSourceHash: string): string {
 }
 
 function money(value: number | null): number {
-  return value ?? 0
+  const amount = value ?? 0
+  if (!Number.isSafeInteger(amount)) throw new Error('JERA_FINANCE_UNSAFE_MONEY')
+  return amount
 }
 
 function sum(values: Array<number | null>): number {
-  return values.reduce<number>((total, value) => total + money(value), 0)
+  const total = values.reduce<bigint>((result, value) => result + BigInt(money(value)), 0n)
+  return safeBigInt(total)
+}
+
+function subtract(left: number, right: number): number {
+  return safeBigInt(BigInt(money(left)) - BigInt(money(right)))
+}
+
+function safeBigInt(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new Error('JERA_FINANCE_UNSAFE_MONEY')
+  }
+  return Number(value)
 }
