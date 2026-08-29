@@ -473,8 +473,17 @@ function stripDetailKey(value: JeraCachedPaymentDetailLine & { detailKey: string
   }
 }
 function stripLines(value: JeraCachedPaymentDetail): Omit<JeraCachedPaymentDetail, 'lines'> {
-  const { lines: _lines, ...header } = value
-  return structuredClone(header)
+  return structuredClone({
+    detailKey: value.detailKey,
+    branchUuid: value.branchUuid,
+    eventDate: value.eventDate,
+    paymentUuid: value.paymentUuid,
+    paymentSourceHash: value.paymentSourceHash,
+    detailSourceHash: value.detailSourceHash,
+    detailFetchedAt: value.detailFetchedAt,
+    lineCount: value.lineCount,
+    truncated: value.truncated,
+  })
 }
 function recycleRows(target: number[], rows: number[]): void {
   const unique = new Set([...target, ...rows])

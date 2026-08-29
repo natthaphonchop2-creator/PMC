@@ -7,7 +7,6 @@ import type { JeraAllocationLease, JeraAllocationLeasePort } from '../../server/
 import type {
   JeraAllocationCoverage,
   JeraAllocationRunSession,
-  JeraAllocationStore,
   JeraCachedPaymentDetail,
 } from '../../server/jera/allocationStore'
 import { createGoogleJeraAllocationTaskQueue, type JeraAllocationTaskQueuePort } from '../../server/jera/allocationTaskQueue'
