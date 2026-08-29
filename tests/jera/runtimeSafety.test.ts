@@ -193,6 +193,64 @@ describe('JERA Production read-only runtime gates', () => {
     expect(stdout).toContain('"count": 101')
   })
 
+  it('counts appointments without stable UUIDs without applying money handling to their raw rows', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const fetch = vi.fn(async (url: string) => String(url).endsWith('/openapi/v1/token/')
+      ? jsonResponse(200, { access_token: 'synthetic-bearer-token', expires_in: 3600, token_type: 'Bearer' })
+      : jsonResponse(200, { count: 1, next: null, data: [null] }))
+    let stdout = ''
+
+    await checker.runJeraRuntimeCheck([
+      '--allow-readonly-production', '--report', 'APPOINTMENT',
+      '--start-date', '2026-08-27', '--end-date', '2026-08-27',
+    ], {
+      environment: validEnvironment(), fetch,
+      io: { stdout: { write: (value: string) => { stdout += value } }, stderr: { write: () => undefined } },
+    })
+
+    expect(stdout).toContain('"count": 1')
+    expect(stdout).toContain('"totalSatang": 0')
+  })
+
+  it('returns only a scalar aggregate after the maximum bounded appointment page sequence', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const rawProviderMarker = 'raw-appointment-payload-must-not-be-retained'
+    const fetch = vi.fn(async (url: string) => {
+      const page = Number(new URL(String(url)).searchParams.get('page'))
+      const firstRow = (page - 1) * 100
+      return jsonResponse(200, {
+        count: 100_000,
+        data: Array.from({ length: 100 }, (_, index) => ({
+          appointment_uuid: appointmentUuid(firstRow + index + 1),
+          patient_name: rawProviderMarker,
+        })),
+      })
+    })
+
+    const result = await checker.readAppointments({
+      baseUrl: 'https://jera.example', branchUuid: validEnvironment().JERA_DEFAULT_BRANCH_UUID,
+      date: '2026-08-27', fetch, token: 'synthetic-read-token',
+    })
+
+    expect(fetch).toHaveBeenCalledTimes(1_000)
+    expect(result).toEqual({ count: 100_000 })
+    expect(JSON.stringify(result)).not.toContain(rawProviderMarker)
+  })
+
+  it('rejects a duplicate provider UUID across appointment pages', async () => {
+    const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({ uuid: appointmentUuid(index + 1) }))
+    const fetch = vi.fn(async (url: string) => Number(new URL(String(url)).searchParams.get('page')) === 1
+      ? jsonResponse(200, { count: 101, next: 'page-2', data: firstPage })
+      : jsonResponse(200, { count: 101, next: null, data: [{ uuid: appointmentUuid(1) }] }))
+
+    await expect(checker.readAppointments({
+      baseUrl: 'https://jera.example', branchUuid: validEnvironment().JERA_DEFAULT_BRANCH_UUID,
+      date: '2026-08-27', fetch, token: 'synthetic-read-token',
+    })).rejects.toThrow('JERA appointment pagination is inconsistent')
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects non-progressing appointment pagination instead of silently using page one', async () => {
     const checker = await import('../../scripts/check-jera-readonly-runtime.mjs')
     const stableUuid = '00000000-0000-4000-8000-000000000001'
@@ -250,6 +308,10 @@ function validEnvironment(): Record<string, string> {
     JERA_DEFAULT_BRANCH_UUID: '11111111-2222-4333-8444-555555555555', JERA_SYNC_INTERVAL_MINUTES: '15',
     JERA_API_USERNAME: 'synthetic-user-secret', JERA_API_PASSWORD: 'synthetic-password-secret',
   }
+}
+
+function appointmentUuid(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`
 }
 
 function jsonResponse(status: number, body: unknown, headers: Record<string, string> = {}): Response {

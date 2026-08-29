@@ -86,7 +86,7 @@ async function probeOneDay({ report, date, environment, fetch, sleep }) {
 
   try {
     const token = await requestOperatorToken({ fetch, baseUrl, username, password })
-    const rows = report === 'APPOINTMENT'
+    const appointment = report === 'APPOINTMENT'
       ? await readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep })
       : rowsFor(report, await readOneDayReport({ report, baseUrl, branchUuid, date, fetch, token, sleep }))
     return {
@@ -94,8 +94,8 @@ async function probeOneDay({ report, date, environment, fetch, sleep }) {
       report,
       startDate: date,
       endDate: date,
-      count: rows.length,
-      totalSatang: rows.reduce((sum, row) => sum + moneyFor(report, row), 0),
+      count: report === 'APPOINTMENT' ? appointment.count : appointment.length,
+      totalSatang: report === 'APPOINTMENT' ? 0 : appointment.reduce((sum, row) => sum + moneyFor(report, row), 0),
     }
   } catch {
     throw new Error('JERA runtime probe failed')
@@ -110,8 +110,8 @@ async function readOneDayReport({ report, baseUrl, branchUuid, date, fetch, toke
   return requestScheduledProviderJson({ fetch, url: url.toString(), accessToken: token, sleep })
 }
 
-async function readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep }) {
-  const rows = []
+export async function readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep }) {
+  let acceptedCount = 0
   const seenUuids = new Set()
   let expectedCount = null
   let rawRows = 0
@@ -126,6 +126,7 @@ async function readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep
     url.searchParams.set('row_per_page', String(APPOINTMENT_PAGE_SIZE))
     const body = await requestScheduledProviderJson({ fetch, url: url.toString(), accessToken: token, sleep })
     const pageResult = appointmentPage(body)
+    if (pageResult.rows.length > APPOINTMENT_PAGE_SIZE) throw new Error('JERA appointment pagination is inconsistent')
     if (pageResult.count !== null) {
       if (expectedCount === null) expectedCount = pageResult.count
       else if (expectedCount !== pageResult.count) throw new Error('JERA appointment pagination is inconsistent')
@@ -140,14 +141,14 @@ async function readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep
         if (seenUuids.has(stableUuid)) continue
         seenUuids.add(stableUuid)
       }
-      rows.push(row)
+      acceptedCount += 1
       addedRows += 1
     }
 
     if (expectedCount !== null) {
       if (rawRows === expectedCount) {
-        if (rows.length !== expectedCount) throw new Error('JERA appointment pagination is inconsistent')
-        return rows
+        if (acceptedCount !== expectedCount) throw new Error('JERA appointment pagination is inconsistent')
+        return { count: acceptedCount }
       }
       if (pageResult.rows.length === 0 || addedRows === 0 || page === MAX_APPOINTMENT_PAGES) {
         throw new Error('JERA appointment pagination is inconsistent')
@@ -156,7 +157,7 @@ async function readAppointments({ baseUrl, branchUuid, date, fetch, token, sleep
     }
 
     const hasNext = typeof pageResult.next === 'string' && pageResult.next.length > 0 && pageResult.next.length <= 2_048
-    if (!hasNext || pageResult.rows.length < APPOINTMENT_PAGE_SIZE) return rows
+    if (!hasNext || pageResult.rows.length < APPOINTMENT_PAGE_SIZE) return { count: acceptedCount }
     if (addedRows === 0 || page === MAX_APPOINTMENT_PAGES) throw new Error('JERA appointment pagination is inconsistent')
   }
   throw new Error('JERA appointment pagination is inconsistent')
