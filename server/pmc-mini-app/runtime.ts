@@ -9,7 +9,7 @@ import { createJeraRuntime } from '../jera/runtime.js'
 import { createEnrollmentService } from './enrollment.js'
 import { createGoogleEvidenceStagingPort } from './stagingStore.js'
 import { createGoogleBookingTaskQueue } from './taskQueue.js'
-import { createWorkerIdentityVerifier } from './workerAuth.js'
+import { createWorkerIdentityVerifier, type WorkerIdentityVerifier } from './workerAuth.js'
 import { createAsyncBookingWorker } from './asyncWorker.js'
 import { createAsyncStateIngressClient } from './asyncStateIngressClient.js'
 import { createAsyncBookingTelemetry } from './asyncTelemetry.js'
@@ -37,9 +37,16 @@ import {
   type ExpenseSubmissionService,
 } from './finance/submissionService.js'
 import { createFinanceReadStore } from './finance/readStore.js'
+import {
+  createExpenseRecoveryIngressClient,
+  createExpenseRecoveryWorker,
+  type ExpenseRecoveryWorker,
+} from './finance/recovery.js'
 
 export interface PmcFinanceRuntime {
   config: PmcFinanceConfig
+  recovery: ExpenseRecoveryWorker
+  recoveryIdentity: WorkerIdentityVerifier
   reads?: {
     finance: FinanceGoogleReadPorts
   }
@@ -55,6 +62,8 @@ export interface PmcFinanceRuntimeFactories {
   createGoogle(input: { masterSpreadsheetId: string; folderId: string }): FinanceGooglePorts
   createStaging(input: { bucketName: string }): ExpenseStagingPort
   createIngress(input: { url: string; secret: string }): ExpenseIngressClient
+  createRecovery(input: { url: string; secret: string }): ExpenseRecoveryWorker
+  createRecoveryIdentity(input: { audience: string; allowedEmail: string }): WorkerIdentityVerifier
   createSubmission(input: {
     ingress: ExpenseIngressClient
     finance: FinanceGoogleCapturePorts
@@ -71,6 +80,10 @@ const realFinanceFactories: PmcFinanceRuntimeFactories = {
   createGoogle: createFinanceGooglePorts,
   createStaging: createGoogleExpenseStagingPort,
   createIngress: createExpenseIngressClient,
+  createRecovery: (input) => createExpenseRecoveryWorker({
+    ingress: createExpenseRecoveryIngressClient(input),
+  }),
+  createRecoveryIdentity: createWorkerIdentityVerifier,
   createSubmission: createExpenseSubmissionService,
 }
 
@@ -78,6 +91,15 @@ export function createPmcFinanceRuntime(
   config: PmcFinanceConfig,
   factories: PmcFinanceRuntimeFactories = realFinanceFactories,
 ): PmcFinanceRuntime {
+  const recovery = factories.createRecovery({
+    url: config.expenseIngressUrl,
+    secret: config.expenseIngressSecret,
+  })
+  const recoveryIdentity = factories.createRecoveryIdentity({
+    audience: config.recoveryAudience,
+    allowedEmail: config.recoveryInvokerEmail,
+  })
+  if (!config.readsEnabled && !config.captureEnabled) return { config, recovery, recoveryIdentity }
   const finance = factories.createGoogle({
     masterSpreadsheetId: config.masterSpreadsheetId,
     folderId: config.folderId,
@@ -86,7 +108,7 @@ export function createPmcFinanceRuntime(
     ? { finance: financeGoogleReadCapability(finance) }
     : undefined
   if (!config.captureEnabled) {
-    return { config, ...(reads ? { reads } : {}) }
+    return { config, recovery, recoveryIdentity, ...(reads ? { reads } : {}) }
   }
   const captureFinance = financeGoogleCaptureCapability(finance)
   const staging = factories.createStaging({ bucketName: config.stagingBucketName })
@@ -96,7 +118,7 @@ export function createPmcFinanceRuntime(
   })
   const submission = factories.createSubmission({ ingress, finance: captureFinance, staging })
   const capture = { finance: captureFinance, staging, ingress, submission }
-  return { config, ...(reads ? { reads } : {}), capture }
+  return { config, recovery, recoveryIdentity, ...(reads ? { reads } : {}), capture }
 }
 
 export function createPmcMiniAppRuntime(
@@ -132,6 +154,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
   const finance = expenseFinance ? {
     signingSecret: config.signingSecret,
     now: () => now().getTime(),
+    recovery: expenseFinance.recovery,
     ...(expenseFinance.reads ? {
       reads: { readStore: createFinanceReadStore({ finance: expenseFinance.reads.finance }) },
     } : {}),
@@ -157,6 +180,10 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     store,
   }) : undefined
   const jera = createJeraRuntime(env, { spreadsheetId: config.spreadsheetId, sheets: google.sheets })
+  const workerIdentity = config.asyncBooking ? createWorkerIdentityVerifier({
+    audience: config.asyncBooking.workerAudience,
+    allowedEmail: config.asyncBooking.taskInvokerEmail,
+  }) : undefined
   const asyncDependencies = config.asyncBooking ? (() => {
     const evidenceStaging = createGoogleEvidenceStagingPort({ bucketName: config.asyncBooking.bucketName })
     const stateIngress = createAsyncStateIngressClient({
@@ -173,10 +200,6 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
         workerUrl: config.asyncBooking.workerUrl,
         workerAudience: config.asyncBooking.workerAudience,
         taskInvokerEmail: config.asyncBooking.taskInvokerEmail,
-      }),
-      workerIdentity: createWorkerIdentityVerifier({
-        audience: config.asyncBooking.workerAudience,
-        allowedEmail: config.asyncBooking.taskInvokerEmail,
       }),
       asyncWorker: createAsyncBookingWorker({
         store,
@@ -199,6 +222,8 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     evidenceIngress,
     asyncTelemetry,
     ...asyncDependencies,
+    ...(workerIdentity ? { workerIdentity } : {}),
+    ...(expenseFinance ? { expenseRecoveryIdentity: expenseFinance.recoveryIdentity } : {}),
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
     stock,

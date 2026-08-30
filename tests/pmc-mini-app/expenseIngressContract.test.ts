@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMiniAppExpenseCommand,
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseRecoveryIngress,
   type MiniAppExpenseCommand,
 } from '../../shared/pmcMiniAppExpenseIngress'
 
@@ -105,6 +106,49 @@ describe('expense ingress contract', () => {
     })).toBe(
       '{"kind":"MINI_APP_EXPENSE","version":1,"timestamp":1788000000,"nonce":"nonce-0001","command":{"rootRequestId":"expense-request-1","commandIdempotencyKey":"expense-request-1:prepare","staffId":"ADMIN_01","commandType":"PREPARE_EXPENSE","payload":{"expenseDate":"2026-08-29","category":"BOOK_CLINIC","bookDailyKey":"CLINIC:2026-08-29","amountSatang":12000,"counterpartyName":null,"description":"สมุดประจำวันที่ 29","paymentMethod":null,"expectedAttachmentCount":2,"expectedManifestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedRevision":0}}}',
     )
+  })
+
+  it('binds recovery to one verified worker identity and correlation ID in fixed-order canonical JSON', () => {
+    expect(canonicalMiniAppExpenseRecoveryIngress({
+      kind: 'MINI_APP_EXPENSE_RECOVERY',
+      version: 1,
+      timestamp: 1_788_000_000,
+      nonce: 'recovery-nonce-0001',
+      correlationId: 'expense-recovery-0001',
+      worker: {
+        email: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+        subject: 'google-subject-0001',
+      },
+    })).toBe(
+      '{"kind":"MINI_APP_EXPENSE_RECOVERY","version":1,"timestamp":1788000000,"nonce":"recovery-nonce-0001","correlationId":"expense-recovery-0001","worker":{"email":"pmc-mini-app-task-invoker@example.iam.gserviceaccount.com","subject":"google-subject-0001"}}',
+    )
+  })
+
+  it('rejects unknown or unsafe recovery worker fields before signing', () => {
+    const recovery = {
+      kind: 'MINI_APP_EXPENSE_RECOVERY' as const,
+      version: 1 as const,
+      timestamp: 1_788_000_000,
+      nonce: 'recovery-nonce-0001',
+      correlationId: 'expense-recovery-0001',
+      worker: {
+        email: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+        subject: 'google-subject-0001',
+      },
+    }
+
+    expect(() => canonicalMiniAppExpenseRecoveryIngress({
+      ...recovery,
+      worker: { ...recovery.worker, lineUserId: 'private-line-id' },
+    } as never)).toThrow('invalid mini app expense recovery worker')
+    expect(() => canonicalMiniAppExpenseRecoveryIngress({
+      ...recovery,
+      worker: { ...recovery.worker, email: 'ordinary-user@example.test' },
+    })).toThrow('invalid mini app expense recovery worker')
+    expect(() => canonicalMiniAppExpenseRecoveryIngress({
+      ...recovery,
+      privateFolderId: 'private-folder-id',
+    } as never)).toThrow('invalid mini app expense recovery envelope')
   })
 
   it('rejects unknown fields at every signed contract boundary', () => {

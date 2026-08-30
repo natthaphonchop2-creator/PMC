@@ -2,13 +2,16 @@ import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseRecoveryIngress,
   type MiniAppExpenseCommand,
   type MiniAppExpenseIngressEnvelope,
+  type MiniAppExpenseRecoveryIngressEnvelope,
 } from '../../../shared/pmcMiniAppExpenseIngress'
 import { processBookingDoPost } from '../src/entrypoints'
 import {
   processExpenseIngress,
   processExpenseIngressResponse,
+  processExpenseRecoveryIngressResponse,
   type ExpenseIngressPorts,
 } from '../src/expense/ingress'
 import { createTestPorts } from './helpers/fakes'
@@ -37,6 +40,52 @@ describe('Apps Script Mini App expense ingress', () => {
     expect(processBookingDoPost(event(signedEnvelope(routedCommand, 'expense-route-123')), routed)).toMatchObject({
       ok: true,
       result: { commandType: 'PREPARE_EXPENSE', recordState: 'PREPARED' },
+    })
+  })
+
+  it('runs signed recovery for the bound worker and returns only safe counts', () => {
+    const ports = createExpenseIngressPorts()
+    processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId: 'recovery-recent', commandIdempotencyKey: 'recovery-recent:prepare',
+    }), 'expense-recovery-prep'), ports)
+
+    const response = processExpenseRecoveryIngressResponse(signedRecoveryEnvelope(), ports)
+
+    expect(response).toEqual({
+      ok: true,
+      result: { recovered: 0, abandoned: 0, unchanged: 1, failed: 0 },
+    })
+    if (!response.ok) throw new Error('unexpected recovery failure')
+    expect(Object.keys(response.result).sort()).toEqual(['abandoned', 'failed', 'recovered', 'unchanged'])
+  })
+
+  it('routes signed recovery through doPost without exposing worker or private topology', () => {
+    const routed = createRoutedPorts()
+    const response = processBookingDoPost(event(signedRecoveryEnvelope('expense-recovery-route')), routed)
+
+    expect(response).toEqual({
+      ok: true,
+      result: { recovered: 0, abandoned: 0, unchanged: 0, failed: 0 },
+    })
+    expect(JSON.stringify(response)).not.toContain('pmc-mini-app-task-invoker')
+    expect(JSON.stringify(response)).not.toContain('spreadsheet')
+    expect(JSON.stringify(response)).not.toContain('folder')
+  })
+
+  it('rejects recovery worker tampering and nonce replay with one fixed safe code', () => {
+    const ports = createExpenseIngressPorts()
+    const tampered = signedRecoveryEnvelope('expense-recovery-tamper')
+    tampered.worker = { ...tampered.worker, subject: 'different-google-subject' }
+    expect(processExpenseRecoveryIngressResponse(tampered, ports)).toEqual({
+      ok: false, error: 'EXPENSE_STORAGE_UNAVAILABLE',
+    })
+
+    const replayed = signedRecoveryEnvelope('expense-recovery-replay')
+    expect(processExpenseRecoveryIngressResponse(replayed, ports)).toEqual({
+      ok: true, result: { recovered: 0, abandoned: 0, unchanged: 0, failed: 0 },
+    })
+    expect(processExpenseRecoveryIngressResponse(replayed, ports)).toEqual({
+      ok: false, error: 'EXPENSE_STORAGE_UNAVAILABLE',
     })
   })
 
@@ -191,7 +240,27 @@ function signedEnvelope(
   }
 }
 
-function event(envelope: MiniAppExpenseIngressEnvelope) {
+function signedRecoveryEnvelope(nonce = 'expense-recovery-123'): MiniAppExpenseRecoveryIngressEnvelope {
+  const unsigned = {
+    kind: 'MINI_APP_EXPENSE_RECOVERY' as const,
+    version: 1 as const,
+    timestamp: NOW_SECONDS,
+    nonce,
+    correlationId: 'expense-recovery-correlation-1',
+    worker: {
+      email: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+      subject: 'google-subject-1',
+    },
+  }
+  return {
+    ...unsigned,
+    signature: createHmac('sha256', SECRET)
+      .update(canonicalMiniAppExpenseRecoveryIngress(unsigned))
+      .digest('hex'),
+  }
+}
+
+function event(envelope: unknown) {
   return {
     postData: {
       contents: JSON.stringify(envelope),

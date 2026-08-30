@@ -160,9 +160,12 @@ function EvidenceThumbnail({
   const urlRef = useRef('')
   const activeRef = useRef(true)
 
-  useEffect(() => () => {
-    activeRef.current = false
-    revokeObjectUrl(urlRef.current)
+  useEffect(() => {
+    activeRef.current = true
+    return () => {
+      activeRef.current = false
+      revokeObjectUrl(urlRef.current)
+    }
   }, [])
 
   const load = async () => {

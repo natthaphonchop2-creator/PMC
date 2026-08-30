@@ -16,7 +16,11 @@ import type {
   StockHistoryPage,
 } from '../../../shared/pmcStock'
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
-import { deriveExpenseScope } from '../../../shared/pmcExpense'
+import {
+  deriveExpenseScope,
+  type ExpenseHistoryRow,
+  type ExpenseReceipt,
+} from '../../../shared/pmcExpense'
 
 export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displayName: 'มัส', active: true }
 
@@ -78,13 +82,17 @@ export function createPreviewMiniAppApi(options: {
   financeReadsEnabled?: boolean
   canSubmitExpense?: boolean
   canManageExpense?: boolean
+  expenseScenario?: 'lost-first-submit'
 } = {}): MiniAppBrowserApi {
   let current: BookingDraftProjection | null = null
   let staffAllowed = options.staffAllowed !== false
   let reportRefreshSequence = 0
   const config = createPreviewMiniAppConfig(options)
   const stock = createPreviewStockStore({ canManageStock: config.canManageStock })
-  let stagedExpense: { rootRequestId: string; tokens: string[] } | null = null
+  let stagedExpense: { rootRequestId: string; tokens: string[]; fileNames: string[] } | null = null
+  const expenseRows: ExpenseHistoryRow[] = [previewBookExpense()]
+  const expenseRequests = new Map<string, { fingerprint: string; receipt: ExpenseReceipt }>()
+  const evidenceTokens = new Map<string, { expenseId: string; attachmentId: string }>()
   return {
     async initialize() { return 'preview-token' },
     async loadSession() {
@@ -174,14 +182,40 @@ export function createPreviewMiniAppApi(options: {
       } satisfies MonthlyIncomeProjection
     },
     async loadMonthlyExpenses(_token, monthKey) {
+      const effective = expenseRows.filter((row) => row.expenseDate.startsWith(`${monthKey}-`) && row.recordState === 'COMMITTED')
+      const clinic = effective.filter((row) => row.scope === 'CLINIC')
       return {
-        monthKey, clinicCommittedSatang: 0, doctorPersonalCommittedSatang: 0,
-        clinicByCategorySatang: { BILL_DOCUMENT: 0, BOOK_CLINIC: 0 }, effectiveExpenseCount: 0, unreviewed: true as const,
+        monthKey,
+        clinicCommittedSatang: clinic.reduce((total, row) => total + row.amountSatang, 0),
+        doctorPersonalCommittedSatang: effective.filter((row) => row.scope === 'DOCTOR_PERSONAL')
+          .reduce((total, row) => total + row.amountSatang, 0),
+        clinicByCategorySatang: {
+          BILL_DOCUMENT: clinic.filter((row) => row.category === 'BILL_DOCUMENT')
+            .reduce((total, row) => total + row.amountSatang, 0),
+          BOOK_CLINIC: clinic.filter((row) => row.category === 'BOOK_CLINIC')
+            .reduce((total, row) => total + row.amountSatang, 0),
+        },
+        effectiveExpenseCount: effective.length,
+        unreviewed: true as const,
       }
     },
-    async loadExpenseHistory() { return { expenses: [], nextCursor: null } },
-    async issueExpenseEvidenceToken() { throw Object.assign(new Error('Preview evidence unavailable'), { code: 'EXPENSE_EVIDENCE_NOT_FOUND' }) },
-    async downloadExpenseEvidence() { throw Object.assign(new Error('Preview evidence unavailable'), { code: 'EXPENSE_EVIDENCE_NOT_FOUND' }) },
+    async loadExpenseHistory(_token, monthKey) {
+      return {
+        expenses: structuredClone(expenseRows.filter((row) => row.expenseDate.startsWith(`${monthKey}-`))),
+        nextCursor: null,
+      }
+    },
+    async issueExpenseEvidenceToken(_token, expenseId, attachmentId) {
+      const row = expenseRows.find((candidate) => candidate.expenseId === expenseId && candidate.recordState === 'COMMITTED')
+      if (!row?.attachments.some((attachment) => attachment.attachmentId === attachmentId)) throw previewExpenseError('EXPENSE_EVIDENCE_NOT_FOUND')
+      const token = `preview-evidence-${expenseId}-${attachmentId}.preview-signature`
+      evidenceTokens.set(token, { expenseId, attachmentId })
+      return token
+    },
+    async downloadExpenseEvidence(_token, token) {
+      if (!evidenceTokens.has(token)) throw previewExpenseError('EXPENSE_EVIDENCE_NOT_FOUND')
+      return previewEvidenceBlob()
+    },
     async loadStockProducts() { return stock.loadProducts() },
     async loadStockHistory(_token: string, cursor?: string) { return stock.loadHistory(cursor) },
     async submitStockCommand(_token: string, command: StockClientCommand) {
@@ -189,31 +223,131 @@ export function createPreviewMiniAppApi(options: {
     },
     async stageExpense(_token, rootRequestId, files) {
       const tokens = files.map((_, index) => `preview-expense-stage-${index + 1}.preview-signature-${index + 1}`)
-      stagedExpense = { rootRequestId, tokens }
+      stagedExpense = { rootRequestId, tokens, fileNames: files.map(({ name }) => name) }
       return { stagingTokens: [...tokens] }
     },
     async submitExpense(_token, input) {
-      if (!stagedExpense || stagedExpense.rootRequestId !== input.rootRequestId
-        || stagedExpense.tokens.join('|') !== input.stagingTokens.join('|')) {
-        throw Object.assign(new Error('Invalid preview staging'), { code: 'EXPENSE_STAGING_INVALID' })
+      requirePreviewStaging(stagedExpense, input)
+      const fingerprint = previewExpenseFingerprint(input)
+      const existing = expenseRequests.get(input.rootRequestId)
+      if (existing) {
+        if (existing.fingerprint !== fingerprint) throw previewExpenseError('EXPENSE_IDEMPOTENCY_CONFLICT')
+        return structuredClone(existing.receipt)
       }
-      return {
-        expenseId: 'EXP-202608-PREVIEW', receiptNumber: 'EXP-202608-PREVIEW', expenseDate: input.expenseDate,
-        monthKey: input.expenseDate.slice(0, 7), category: input.category, scope: deriveExpenseScope(input.category),
-        amountSatang: input.amountSatang, recordState: 'COMMITTED' as const, revision: input.expectedRevision + 1,
-        committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
+      const receipt = previewExpenseReceipt('PREVIEW', input)
+      expenseRequests.set(input.rootRequestId, {
+        fingerprint,
+        receipt,
+      })
+      expenseRows.unshift(previewHistoryFromReceipt(receipt, stagedExpense!.fileNames))
+      if (options.expenseScenario === 'lost-first-submit') {
+        throw previewExpenseError('EXPENSE_STORAGE_UNAVAILABLE')
       }
+      return structuredClone(receipt)
     },
-    async replaceExpense(_token, _expenseId, input: ExpenseSubmitInput) {
-      return {
-        expenseId: 'EXP-202608-PREVIEW-REPLACEMENT', receiptNumber: 'EXP-202608-PREVIEW-REPLACEMENT', expenseDate: input.expenseDate,
-        monthKey: input.expenseDate.slice(0, 7), category: input.category, scope: deriveExpenseScope(input.category),
-        amountSatang: input.amountSatang, recordState: 'COMMITTED' as const, revision: input.expectedRevision + 1,
-        committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
-      }
+    async replaceExpense(_token, expenseId, input: ExpenseSubmitInput) {
+      requirePreviewStaging(stagedExpense, input)
+      const index = expenseRows.findIndex((row) => row.expenseId === expenseId && row.recordState === 'COMMITTED')
+      const currentRow = expenseRows[index]
+      if (!currentRow
+        || currentRow.category !== input.category
+        || currentRow.expenseDate !== input.expenseDate
+        || currentRow.revision !== input.expectedRevision) throw previewExpenseError('EXPENSE_REVISION_CONFLICT')
+      const receipt = previewExpenseReceipt('PREVIEW-REPLACEMENT', input)
+      expenseRows.splice(index, 1, previewHistoryFromReceipt(receipt, stagedExpense!.fileNames))
+      return structuredClone(receipt)
     },
-    async voidExpense() { return undefined },
+    async voidExpense(_token, expenseId) {
+      const row = expenseRows.find((candidate) => candidate.expenseId === expenseId)
+      if (!row) throw previewExpenseError('EXPENSE_NOT_FOUND')
+      row.recordState = 'VOID'
+    },
   }
+}
+
+function previewBookExpense(): ExpenseHistoryRow {
+  return {
+    expenseId: 'EXP-202608-BOOK-01',
+    expenseDate: '2026-08-29',
+    category: 'BOOK_CLINIC',
+    scope: 'CLINIC',
+    amountSatang: 98_000,
+    description: 'ยอดสมุดประจำวัน',
+    recordState: 'COMMITTED',
+    revision: 1,
+    submittedByName: 'มัส',
+    submittedAt: '2026-08-29T03:00:00.000Z',
+    committedAt: '2026-08-29T03:01:00.000Z',
+    attachments: [{
+      attachmentId: 'ATT-1', expenseId: 'EXP-202608-BOOK-01', ordinal: 1,
+      mediaType: 'image/png', originalFileName: 'proof.png',
+    }],
+  }
+}
+
+function previewExpenseReceipt(
+  suffix: 'PREVIEW' | 'PREVIEW-REPLACEMENT',
+  input: ExpenseSubmitInput,
+): ExpenseReceipt {
+  const expenseId = `EXP-${input.expenseDate.slice(0, 7).replace('-', '')}-${suffix}`
+  return {
+    expenseId,
+    receiptNumber: expenseId,
+    expenseDate: input.expenseDate,
+    monthKey: input.expenseDate.slice(0, 7),
+    category: input.category,
+    scope: deriveExpenseScope(input.category),
+    amountSatang: input.amountSatang,
+    recordState: 'COMMITTED',
+    revision: input.expectedRevision + 1,
+    committedAt: '2026-08-30T04:00:00.000Z',
+    unreviewed: true,
+  }
+}
+
+function previewHistoryFromReceipt(receipt: ExpenseReceipt, fileNames: string[]): ExpenseHistoryRow {
+  return {
+    expenseId: receipt.expenseId,
+    expenseDate: receipt.expenseDate,
+    category: receipt.category,
+    scope: receipt.scope,
+    amountSatang: receipt.amountSatang,
+    description: '',
+    recordState: 'COMMITTED',
+    revision: receipt.revision,
+    submittedByName: PREVIEW_SESSION.displayName,
+    submittedAt: receipt.committedAt,
+    committedAt: receipt.committedAt,
+    attachments: fileNames.map((originalFileName, index) => ({
+      attachmentId: `ATT-PREVIEW-${index + 1}`,
+      expenseId: receipt.expenseId,
+      ordinal: index + 1,
+      mediaType: originalFileName.toLowerCase().endsWith('.jpg') ? 'image/jpeg' : 'image/png',
+      originalFileName,
+    })),
+  }
+}
+
+function requirePreviewStaging(
+  staged: { rootRequestId: string; tokens: string[] } | null,
+  input: ExpenseSubmitInput,
+): void {
+  if (!staged || staged.rootRequestId !== input.rootRequestId
+    || staged.tokens.join('|') !== input.stagingTokens.join('|')) throw previewExpenseError('EXPENSE_STAGING_INVALID')
+}
+
+function previewExpenseFingerprint(input: ExpenseSubmitInput): string {
+  return JSON.stringify(input)
+}
+
+function previewExpenseError(code: string): Error & { code: string; retryable?: boolean } {
+  return Object.assign(new Error(code), { code, retryable: code === 'EXPENSE_STORAGE_UNAVAILABLE' })
+}
+
+function previewEvidenceBlob(): Blob {
+  const encoded = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0))
+  return new Blob([bytes], { type: 'image/png' })
 }
 
 function emptyDailyIncomeProjection(startDate: string, endDate: string): DailyIncomeProjection {

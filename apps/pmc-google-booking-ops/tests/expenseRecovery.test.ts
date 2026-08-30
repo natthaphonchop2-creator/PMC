@@ -86,6 +86,29 @@ describe('Apps Script expense recovery journal', () => {
     expect(ports.expense.getSubmission('2026-08', prepared.prepared.expenseId)?.recordState).toBe('PREPARED')
   })
 
+  it('retains one safe error per failed candidate so the recovery route reports an exact failed count', () => {
+    const ports = createExpenseTestPorts()
+    ports.backend.failAttachmentAppendCount = 2
+    for (const rootRequestId of ['private-invalid-a', 'private-invalid-b']) {
+      const prepared = prepareWithManifest(ports, prepareCommand({
+        rootRequestId, commandIdempotencyKey: `${rootRequestId}:prepare`,
+      }))
+      expect(() => executeExpenseCommand(commitCommand({
+        rootRequestId,
+        expenseId: prepared.prepared.expenseId,
+        attachments: prepared.attachments,
+      }), ports)).toThrow()
+    }
+    ports.backend.privateFilesValid = false
+
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 2,
+      recovered: 0,
+      abandoned: 0,
+      errors: ['EXPENSE_PRIVATE_FILE_INVALID', 'EXPENSE_PRIVATE_FILE_INVALID'],
+    })
+  })
+
   it('abandons a 48-hour-old PREPARED when its durable COMMIT files cannot be reverified', () => {
     const ports = createExpenseTestPorts({ now: '2026-08-27T09:00:00+07:00' })
     const prepared = prepareWithManifest(ports, prepareCommand({

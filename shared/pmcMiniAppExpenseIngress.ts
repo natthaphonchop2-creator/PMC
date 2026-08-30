@@ -124,6 +124,36 @@ export type MiniAppExpenseIngressResponse =
   | { ok: true; result: ExpenseCommandResult }
   | { ok: false; error: MiniAppExpenseSafeErrorCode }
 
+export interface ExpenseRecoveryCounts {
+  recovered: number
+  abandoned: number
+  unchanged: number
+  failed: number
+}
+
+export interface ExpenseRecoveryWorkerIdentity {
+  email: string
+  subject: string
+}
+
+export interface UnsignedMiniAppExpenseRecoveryIngressEnvelope {
+  kind: 'MINI_APP_EXPENSE_RECOVERY'
+  version: 1
+  timestamp: number
+  nonce: string
+  correlationId: string
+  worker: ExpenseRecoveryWorkerIdentity
+}
+
+export interface MiniAppExpenseRecoveryIngressEnvelope
+  extends UnsignedMiniAppExpenseRecoveryIngressEnvelope {
+  signature: string
+}
+
+export type MiniAppExpenseRecoveryIngressResponse =
+  | { ok: true; result: ExpenseRecoveryCounts }
+  | { ok: false; error: 'EXPENSE_STORAGE_UNAVAILABLE' }
+
 export function isMiniAppExpenseSafeErrorCode(
   value: unknown,
 ): value is MiniAppExpenseSafeErrorCode {
@@ -140,6 +170,15 @@ const COMMAND_KEYS = [
 ] as const
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'command'] as const
+const RECOVERY_ENVELOPE_KEYS = [
+  'kind',
+  'version',
+  'timestamp',
+  'nonce',
+  'correlationId',
+  'worker',
+] as const
+const RECOVERY_WORKER_KEYS = ['email', 'subject'] as const
 
 export function canonicalMiniAppExpenseCommand(command: MiniAppExpenseCommand): string {
   return JSON.stringify(orderedCommand(command))
@@ -163,6 +202,47 @@ export function canonicalMiniAppExpenseIngress(envelope: UnsignedMiniAppExpenseI
     nonce: envelope.nonce,
     command: orderedCommand(envelope.command),
   })
+}
+
+export function canonicalMiniAppExpenseRecoveryIngress(
+  envelope: UnsignedMiniAppExpenseRecoveryIngressEnvelope,
+): string {
+  if (
+    !hasExactKeys(envelope, RECOVERY_ENVELOPE_KEYS)
+    || envelope.kind !== 'MINI_APP_EXPENSE_RECOVERY'
+    || envelope.version !== 1
+    || !Number.isSafeInteger(envelope.timestamp)
+    || envelope.timestamp <= 0
+    || typeof envelope.nonce !== 'string'
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(envelope.nonce)
+    || !safeId(envelope.correlationId)
+  ) throw new Error('invalid mini app expense recovery envelope')
+
+  if (
+    !hasExactKeys(envelope.worker, RECOVERY_WORKER_KEYS)
+    || !serviceAccountEmail(envelope.worker.email)
+    || typeof envelope.worker.subject !== 'string'
+    || !/^[A-Za-z0-9._:@-]{1,255}$/.test(envelope.worker.subject)
+  ) throw new Error('invalid mini app expense recovery worker')
+
+  return JSON.stringify({
+    kind: 'MINI_APP_EXPENSE_RECOVERY',
+    version: 1,
+    timestamp: envelope.timestamp,
+    nonce: envelope.nonce,
+    correlationId: envelope.correlationId,
+    worker: {
+      email: envelope.worker.email,
+      subject: envelope.worker.subject,
+    },
+  })
+}
+
+export function isExpenseRecoveryCounts(value: unknown): value is ExpenseRecoveryCounts {
+  if (!hasExactKeys(value, ['recovered', 'abandoned', 'unchanged', 'failed'] as const)) return false
+  const counts = [value.recovered, value.abandoned, value.unchanged, value.failed]
+  if (!counts.every((count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)) return false
+  return (counts as number[]).reduce((total, count) => total + count, 0) <= 100
 }
 
 function orderedCommand(value: unknown): MiniAppExpenseCommand {
@@ -396,6 +476,11 @@ function safeId(value: unknown): value is string {
 
 function sha256(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
+function serviceAccountEmail(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value)
 }
 
 function positiveSatang(value: unknown): value is number {

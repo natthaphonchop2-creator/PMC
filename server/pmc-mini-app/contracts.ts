@@ -15,6 +15,7 @@ import type {
 import type { ExpenseIngressClient } from './finance/ingressClient.js'
 import type { ExpenseStagingPort } from './finance/stagingStore.js'
 import type { ExpenseSubmissionService } from './finance/submissionService.js'
+import type { ExpenseRecoveryWorker } from './finance/recovery.js'
 
 export type MiniAppSafeErrorCode =
   | 'MINI_APP_UNAUTHORIZED'
@@ -90,6 +91,7 @@ export interface FinanceReadStore {
 export interface FinanceServerDependencies {
   signingSecret: string
   now?: () => number
+  recovery?: ExpenseRecoveryWorker
   reads?: {
     readStore: FinanceReadStore
   }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createPreviewMiniAppApi, createPreviewMiniAppConfig } from '../../src/apps/pmc-mini-app/preview'
 import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
@@ -112,4 +112,62 @@ describe('PMC Mini App local visual preview adapter', () => {
       },
     })).rejects.toMatchObject({ code: 'STOCK_MANAGER_REQUIRED' })
   })
+
+  it('keeps every expense preview method local across lost retry, history, evidence, replacement, and void', async () => {
+    const originalFetch = globalThis.fetch
+    const fetch = vi.fn(() => { throw new Error('preview attempted outbound network access') })
+    globalThis.fetch = fetch as typeof globalThis.fetch
+    try {
+      const api = createPreviewMiniAppApi({
+        expenseCaptureEnabled: true,
+        financeReadsEnabled: true,
+        canSubmitExpense: true,
+        canViewFinance: true,
+        canManageExpense: true,
+        expenseScenario: 'lost-first-submit',
+      })
+      const billFiles = [previewFile('bill-a.png'), previewFile('bill-b.png')]
+      const staged = await api.stageExpense('preview-token', 'preview-local-bill', billFiles)
+      const billInput = {
+        rootRequestId: 'preview-local-bill', category: 'BILL_DOCUMENT' as const,
+        expenseDate: '2026-08-30', amountSatang: 12_550,
+        counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'CASH' as const,
+        expectedRevision: 0, stagingTokens: staged.stagingTokens,
+      }
+
+      await expect(api.submitExpense('preview-token', billInput)).rejects.toMatchObject({
+        code: 'EXPENSE_STORAGE_UNAVAILABLE',
+      })
+      const retryReceipt = await api.submitExpense('preview-token', billInput)
+      expect(retryReceipt.expenseId).toBe('EXP-202608-PREVIEW')
+
+      const historyAfterRetry = await api.loadExpenseHistory('preview-token', '2026-08')
+      expect(historyAfterRetry.expenses.filter(({ expenseId }) => expenseId === retryReceipt.expenseId)).toHaveLength(1)
+      await expect(api.loadMonthlyExpenses('preview-token', '2026-08')).resolves.toMatchObject({
+        clinicCommittedSatang: 110_550,
+      })
+
+      const evidenceToken = await api.issueExpenseEvidenceToken('preview-token', 'EXP-202608-BOOK-01', 'ATT-1')
+      await expect(api.downloadExpenseEvidence('preview-token', evidenceToken)).resolves.toMatchObject({ type: 'image/png' })
+
+      const replacementStage = await api.stageExpense('preview-token', 'preview-local-replacement', [previewFile('replacement.png')])
+      const replacement = await api.replaceExpense('preview-token', 'EXP-202608-BOOK-01', {
+        rootRequestId: 'preview-local-replacement', category: 'BOOK_CLINIC', expenseDate: '2026-08-29',
+        amountSatang: 120_000, counterpartyName: null, description: '', paymentMethod: null,
+        expectedRevision: 1, stagingTokens: replacementStage.stagingTokens,
+      })
+      expect(replacement).toMatchObject({ expenseId: 'EXP-202608-PREVIEW-REPLACEMENT', revision: 2 })
+      await expect(api.voidExpense('preview-token', replacement.expenseId, {
+        rootRequestId: 'preview-local-void', expectedRevision: 2, reason: 'local preview test',
+      })).resolves.toBeUndefined()
+
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
+
+function previewFile(name: string): File {
+  return new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47)], name, { type: 'image/png' })
+}

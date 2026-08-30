@@ -53,7 +53,11 @@ import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
 import type { BookingCase } from './domain/types'
 import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
 import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
-import { processExpenseIngressResponse, type ExpenseIngressPorts } from './expense/ingress'
+import {
+  processExpenseIngressResponse,
+  processExpenseRecoveryIngressResponse,
+  type ExpenseIngressPorts,
+} from './expense/ingress'
 
 export function onBookingFormSubmit(event: GoogleAppsScript.Events.FormsOnFormSubmit) {
   return submitBookingIntake(parseBookingFormEvent(bookingFormResponseEvent(event)), createRuntime())
@@ -91,6 +95,9 @@ export function processBookingDoPost(
   const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_STOCK') {
     return processStockIngressResponse(parsed, requireStockIngressPorts(ports))
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE_RECOVERY') {
+    return processExpenseRecoveryIngressResponse(parsed, requireExpenseIngressPorts(ports))
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE') {
     return processExpenseIngressResponse(parsed, requireExpenseIngressPorts(ports))

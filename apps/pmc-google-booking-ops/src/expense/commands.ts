@@ -574,7 +574,7 @@ export function runExpenseRecovery(ports: ExpenseCommandPorts): ExpenseRecoveryR
         result.abandoned += 1
       } catch (error) {
         const code = safeExpenseError(error)
-        if (!result.errors.includes(code)) result.errors.push(code)
+        result.errors.push(code)
       }
     }
     return result
