@@ -271,11 +271,15 @@ function sheetRangeMatches(requested: string, returned: string): boolean {
   if (!expectedParts || !actualParts) return false
   const [, expectedSheet, expectedStartColumn, expectedStartRow, expectedEndColumn, expectedEndRow] = expectedParts
   const [, actualSheet, actualStartColumn, actualStartRow, actualEndColumn, actualEndRow] = actualParts
+  const startMatches = expectedStartRow ? expectedStartRow === actualStartRow : actualStartRow === '1'
+  const endMatches = expectedEndRow
+    ? /^\d+$/.test(actualEndRow) && Number(actualEndRow) >= Number(actualStartRow) && Number(actualEndRow) <= Number(expectedEndRow)
+    : /^\d+$/.test(actualEndRow)
   return expectedSheet === actualSheet
     && expectedStartColumn === actualStartColumn
     && expectedEndColumn === actualEndColumn
-    && (expectedStartRow ? expectedStartRow === actualStartRow : actualStartRow === '1')
-    && (expectedEndRow ? expectedEndRow === actualEndRow : /^\d+$/.test(actualEndRow))
+    && startMatches
+    && endMatches
 }
 
 function isDriveMetadata(value: unknown): value is {

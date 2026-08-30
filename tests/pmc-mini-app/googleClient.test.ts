@@ -81,6 +81,28 @@ describe('PMC Mini App keyless Google ports', () => {
     })
   })
 
+  it('matches a populated subrange returned inside an explicit bounded row limit', async () => {
+    const batchGet = vi.fn(async () => ({ data: { valueRanges: [
+      { range: "'$JERA_API_CACHE'!$A$1:$AF$143", values: [['cacheKey', 'reportType']] },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get: vi.fn(), batchUpdate: vi.fn(),
+            values: { batchGet, append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.batchGet('sheet-1', ["'JERA_API_CACHE'!A1:AF50002"]))
+      .resolves.toEqual({ "'JERA_API_CACHE'!A1:AF50002": [['cacheKey', 'reportType']] })
+  })
+
   it('maps a row-only header request to Google’s bounded populated range', async () => {
     const batchGet = vi.fn(async () => ({ data: { valueRanges: [
       { range: "'$MINI_APP_REQUESTS'!$A$1:$AL$1", values: [['requestId', 'draftId']] },
