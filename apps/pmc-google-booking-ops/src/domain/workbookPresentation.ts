@@ -56,6 +56,7 @@ export interface SheetPresentationSnapshot {
   formulasHash: string
   validationsHash: string
   protectionsHash: string
+  rowMetadataHash: string
 }
 
 export interface WorkbookMetadataSnapshot {
@@ -327,7 +328,10 @@ function validateSheetShape(sheet: SheetPresentationSnapshot): void {
     || sheet.frozenColumns > sheet.maxColumns
     || sheet.columnWidths.length !== sheet.maxColumns
     || sheet.columnWidths.some((width) => !Number.isSafeInteger(width) || width < 20 || width > 2_000)
-    || [sheet.valuesHash, sheet.formulasHash, sheet.validationsHash, sheet.protectionsHash]
+    || [
+      sheet.valuesHash, sheet.formulasHash, sheet.validationsHash,
+      sheet.protectionsHash, sheet.rowMetadataHash,
+    ]
       .some((hash) => !hash.trim())) {
     fail('INVALID_SHEET_METADATA')
   }
@@ -722,6 +726,7 @@ function assertImmutableWorkbook(before: WorkbookMetadataSnapshot, after: Workbo
     if (beforeSheet.formulasHash !== afterSheet.formulasHash) fail('FORMULAS_HASH_CHANGED')
     if (beforeSheet.validationsHash !== afterSheet.validationsHash) fail('VALIDATIONS_HASH_CHANGED')
     if (beforeSheet.protectionsHash !== afterSheet.protectionsHash) fail('PROTECTIONS_HASH_CHANGED')
+    if (beforeSheet.rowMetadataHash !== afterSheet.rowMetadataHash) fail('ROW_METADATA_HASH_CHANGED')
   }
 }
 

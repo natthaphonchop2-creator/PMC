@@ -400,6 +400,29 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
       expect(request.repeatCell?.cell?.userEnteredValue).toBeUndefined()
       expect(request.repeatCell?.cell?.dataValidation).toBeUndefined()
       expect(request.repeatCell?.cell?.note).toBeUndefined()
+      const format = request.repeatCell?.cell?.userEnteredFormat
+      expect(format?.backgroundColor).toBeUndefined()
+      expect(format?.backgroundColorStyle?.rgbColor).toBeDefined()
+      expect(format?.textFormat?.foregroundColor).toBeUndefined()
+      expect(format?.textFormat?.foregroundColorStyle?.rgbColor).toBeDefined()
+      for (const border of [
+        format?.borders?.top, format?.borders?.bottom,
+        format?.borders?.left, format?.borders?.right,
+      ]) {
+        expect(border?.color).toBeUndefined()
+        expect(border?.colorStyle?.rgbColor).toBeDefined()
+      }
+      expect(request.repeatCell?.fields?.split(',')).toEqual(expect.arrayContaining([
+        'userEnteredFormat.backgroundColorStyle',
+        'userEnteredFormat.textFormat.foregroundColorStyle',
+      ]))
+    }
+    for (const request of batch.requests.filter((request) => 'addConditionalFormatRule' in request)) {
+      const format = request.addConditionalFormatRule?.rule?.booleanRule?.format
+      expect(format?.backgroundColor).toBeUndefined()
+      expect(format?.backgroundColorStyle?.rgbColor).toBeDefined()
+      expect(format?.textFormat?.foregroundColor).toBeUndefined()
+      expect(format?.textFormat?.foregroundColorStyle?.rgbColor).toBeDefined()
     }
     expect(batch.requests.filter((request) => 'setBasicFilter' in request)).toHaveLength(4)
     expect(batch.requests.filter((request) => 'addConditionalFormatRule' in request)).toHaveLength(5)
@@ -473,6 +496,115 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
       .toThrow('UNSUPPORTED_PRESENTATION_METADATA')
   })
 
+  it('binds chip identity and data-source formulas into safe hashes without returning their contents', () => {
+    const baseResponse = sheetsV4Response(canonicalSnapshot())
+    const baseBooking = baseResponse.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    baseBooking.data![0]!.rowData!.push({
+      values: [{ userEnteredValue: { stringValue: '@smart-chip' } }],
+    })
+    const base = inspectWorkbookPresentationMetadata(baseResponse, sha256Hex)
+
+    const chipResponse = structuredClone(baseResponse)
+    const chipCell = chipResponse.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .data![0]!.rowData![1]!.values![0]!
+    ;(chipCell as unknown as Record<string, unknown>).chipRuns = [{
+      startIndex: 0,
+      chip: { richLinkProperties: { uri: 'https://private.invalid/customer-chip' } },
+    }]
+    const chip = inspectWorkbookPresentationMetadata(chipResponse, sha256Hex)
+    expect(sheet(chip, 'BOOKING_MASTER').valuesHash)
+      .not.toBe(sheet(base, 'BOOKING_MASTER').valuesHash)
+    expect(JSON.stringify(chip)).not.toContain('customer-chip')
+
+    const formulaResponse = structuredClone(baseResponse)
+    const formulaCell = formulaResponse.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .data![0]!.rowData![1]!.values![0]!
+    ;(formulaCell as unknown as Record<string, unknown>).dataSourceFormula = {
+      dataSourceId: 'private-data-source-id',
+      formula: '=PRIVATE_SOURCE()',
+    }
+    const formula = inspectWorkbookPresentationMetadata(formulaResponse, sha256Hex)
+    expect(sheet(formula, 'BOOKING_MASTER').formulasHash)
+      .not.toBe(sheet(base, 'BOOKING_MASTER').formulasHash)
+    expect(JSON.stringify(formula)).not.toContain('private-data-source-id')
+    expect(JSON.stringify(formula)).not.toContain('PRIVATE_SOURCE')
+  })
+
+  it.each([
+    ['pivot table', 'pivotTable', { source: { startRowIndex: 0 } }],
+    ['data-source table', 'dataSourceTable', { dataSourceId: 'private-data-source-id' }],
+  ])('classifies a cell %s as unsupported before backup', (_label, field, payload) => {
+    const response = sheetsV4Response(canonicalSnapshot())
+    const cell = response.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .data![0]!.rowData![0]!.values![0]!
+    ;(cell as unknown as Record<string, unknown>)[field] = payload
+
+    const snapshot = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    expect(sheet(snapshot, 'BOOKING_MASTER').unsupportedMetadataCount).toBeGreaterThan(0)
+    expect(() => buildPlan(snapshot)).toThrow('UNSUPPORTED_PRESENTATION_METADATA')
+    expect(JSON.stringify(snapshot)).not.toContain('private-data-source-id')
+  })
+
+  it.each([
+    ['hidden row', { hiddenByUser: true }],
+    ['filtered row', { hiddenByFilter: true }],
+    ['row developer metadata', { developerMetadata: [{ metadataKey: 'private-row-id' }] }],
+  ])('classifies %s metadata as unsupported before backup', (_label, rowMetadata) => {
+    const response = sheetsV4Response(canonicalSnapshot())
+    const booking = response.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    booking.data![0]!.rowMetadata![1] = rowMetadata
+
+    const snapshot = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    expect(sheet(snapshot, 'BOOKING_MASTER').unsupportedMetadataCount).toBeGreaterThan(0)
+    expect(() => buildPlan(snapshot)).toThrow('UNSUPPORTED_PRESENTATION_METADATA')
+    expect(JSON.stringify(snapshot)).not.toContain('private-row-id')
+  })
+
+  it('rejects readback when supported row-height metadata changes outside the owned presentation', () => {
+    const source = canonicalSnapshot()
+    for (const target of source.sheets) {
+      target.maxRows = 20
+      target.columnWidths = Array(target.maxColumns).fill(100)
+    }
+    const response = sheetsV4Response(source)
+    const booking = response.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    booking.data![0]!.rowMetadata![1] = { pixelSize: 21 }
+    const before = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    const plan = buildPlan(before)
+    applySheetsBatchToResponse(response, translateWorkbookPresentationPlan(plan))
+    booking.data![0]!.rowMetadata![1] = { pixelSize: 22 }
+    const after = inspectWorkbookPresentationMetadata(response, sha256Hex)
+
+    expect(() => verifyWorkbookPresentation(before, after, plan, sha256Hex))
+      .toThrow('ROW_METADATA_HASH_CHANGED')
+  })
+
+  it('requests every semantic and unsupported metadata field from Sheets v4', () => {
+    const response = sheetsV4Response(canonicalSnapshot())
+    const get = vi.fn(() => response)
+    vi.stubGlobal('Sheets', { Spreadsheets: { get, batchUpdate: vi.fn() } })
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: response.spreadsheetId!,
+      backupFolderId: 'backup-folder-private-id',
+      sha256Hex,
+    })
+
+    gateway.inspect()
+
+    const firstCall = get.mock.calls[0] as unknown as [string, { fields: string }]
+    const fields = firstCall[1].fields
+    for (const field of [
+      'chipRuns', 'textFormatRuns', 'dataSourceFormula', 'dataSourceTable',
+      'pivotTable', 'rowMetadata',
+    ]) expect(fields).toContain(field)
+  })
+
   it('recognizes only the exact adapter-owned cell style and actionable status rule', () => {
     const source = canonicalSnapshot()
     const booking = sheet(source, 'BOOKING_MASTER')
@@ -494,17 +626,7 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(result.unsupportedMetadataCount).toBe(0)
 
     const colorStyled = structuredClone(response)
-    const colorStyledRule = colorStyled.sheets!
-      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
-      .conditionalFormats![0]!
-    colorStyledRule.booleanRule!.format!.backgroundColorStyle = {
-      rgbColor: colorStyledRule.booleanRule!.format!.backgroundColor,
-    }
-    delete colorStyledRule.booleanRule!.format!.backgroundColor
-    colorStyledRule.booleanRule!.format!.textFormat!.foregroundColorStyle = {
-      rgbColor: colorStyledRule.booleanRule!.format!.textFormat!.foregroundColor,
-    }
-    delete colorStyledRule.booleanRule!.format!.textFormat!.foregroundColor
+    roundTripOwnedColorsThroughFloat32(colorStyled)
     expect(sheet(
       inspectWorkbookPresentationMetadata(colorStyled, sha256Hex),
       'BOOKING_MASTER',
@@ -512,6 +634,46 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
       range: columnBody(booking, booking.headers.indexOf('status')),
       ruleKey: 'BOOKING_STATUS',
     })
+
+    const themedCell = structuredClone(response)
+    const themedHeader = themedCell.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .data![0]!.rowData![0]!.values![0]!.userEnteredFormat!
+    themedHeader.backgroundColor = structuredClone(themedHeader.backgroundColorStyle!.rgbColor!)
+    themedHeader.backgroundColorStyle = { themeColor: 'ACCENT1' }
+    themedHeader.textFormat!.foregroundColor = structuredClone(
+      themedHeader.textFormat!.foregroundColorStyle!.rgbColor!,
+    )
+    themedHeader.textFormat!.foregroundColorStyle = { themeColor: 'ACCENT2' }
+    themedHeader.borders!.top!.color = structuredClone(
+      themedHeader.borders!.top!.colorStyle!.rgbColor!,
+    )
+    themedHeader.borders!.top!.colorStyle = { themeColor: 'ACCENT3' }
+    const themedCellResult = sheet(
+      inspectWorkbookPresentationMetadata(themedCell, sha256Hex),
+      'BOOKING_MASTER',
+    )
+    expect(themedCellResult.managedFormats).not.toContainEqual({
+      range: gridRange(booking, 0, 1, 0, booking.headers.length),
+      styleKey: 'HEADER',
+    })
+
+    const themedRule = structuredClone(response)
+    const themedRuleFormat = themedRule.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .conditionalFormats![0]!.booleanRule!.format!
+    themedRuleFormat.backgroundColor = structuredClone(themedRuleFormat.backgroundColorStyle!.rgbColor!)
+    themedRuleFormat.backgroundColorStyle = { themeColor: 'ACCENT1' }
+    themedRuleFormat.textFormat!.foregroundColor = structuredClone(
+      themedRuleFormat.textFormat!.foregroundColorStyle!.rgbColor!,
+    )
+    themedRuleFormat.textFormat!.foregroundColorStyle = { themeColor: 'ACCENT2' }
+    const themedRuleResult = sheet(
+      inspectWorkbookPresentationMetadata(themedRule, sha256Hex),
+      'BOOKING_MASTER',
+    )
+    expect(themedRuleResult.statusRules).toEqual([])
+    expect(themedRuleResult.unsupportedMetadataCount).toBe(1)
 
     const altered = structuredClone(response)
     const alteredBooking = altered.sheets!.find((item) => item.properties?.title === 'BOOKING_MASTER')!
@@ -521,12 +683,33 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(alteredResult.unsupportedMetadataCount).toBe(1)
   })
 
+  it('round-trips the first production batch through readback and the second plan is action-free', () => {
+    const source = canonicalSnapshot()
+    for (const target of source.sheets) {
+      target.maxRows = 20
+      target.columnWidths = Array(target.maxColumns).fill(100)
+    }
+    const response = sheetsV4Response(source)
+    const before = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    const firstPlan = buildPlan(before)
+
+    applySheetsBatchToResponse(response, translateWorkbookPresentationPlan(firstPlan))
+
+    const after = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    expect(() => verifyWorkbookPresentation(before, after, firstPlan, sha256Hex)).not.toThrow()
+    expect(buildPlan(after).actions).toEqual([])
+    expect(buildPlan(after).expectedPresentationFingerprint)
+      .toBe(firstPlan.expectedPresentationFingerprint)
+  })
+
   it('uses one Sheets batchUpdate and a bounded document lock in the production adapter', () => {
     const batchUpdate = vi.fn()
     const waitLock = vi.fn()
     const releaseLock = vi.fn()
+    const getScriptLock = vi.fn(() => ({ waitLock, releaseLock }))
+    const getDocumentLock = vi.fn(() => null)
     vi.stubGlobal('Sheets', { Spreadsheets: { batchUpdate, get: vi.fn() } })
-    vi.stubGlobal('LockService', { getDocumentLock: () => ({ waitLock, releaseLock }) })
+    vi.stubGlobal('LockService', { getScriptLock, getDocumentLock })
     const gateway = createGoogleWorkbookPresentationGateway({
       spreadsheetId: 'spreadsheet-test-id',
       backupFolderId: 'backup-folder-test-id',
@@ -540,30 +723,18 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(waitLock).toHaveBeenCalledOnce()
     expect(waitLock).toHaveBeenCalledWith(12_345)
     expect(releaseLock).toHaveBeenCalledOnce()
+    expect(getScriptLock).toHaveBeenCalledOnce()
+    expect(getDocumentLock).not.toHaveBeenCalled()
     expect(batchUpdate).toHaveBeenCalledOnce()
     expect(batchUpdate).toHaveBeenCalledWith(translateWorkbookPresentationPlan(plan), 'spreadsheet-test-id')
   })
 
-  it('creates and verifies a private native copy in the exact private backup folder', () => {
-    const setSharing = vi.fn()
-    const backup = {
-      getId: () => 'backup-file-test-id',
-      getUrl: () => 'https://example.invalid/private-backup',
-      getMimeType: () => 'application/vnd.google-apps.spreadsheet',
-      getSharingAccess: () => 'PRIVATE',
-      setSharing,
-      getParents: () => parentIterator(['backup-folder-test-id']),
-    }
-    const makeCopy = vi.fn(() => backup)
-    vi.stubGlobal('DriveApp', {
-      Access: { PRIVATE: 'PRIVATE' },
-      Permission: { NONE: 'NONE' },
-      getFolderById: () => ({ getSharingAccess: () => 'PRIVATE' }),
-      getFileById: () => ({ makeCopy }),
-    })
+  it('creates and verifies one owner-only native copy through Drive v3', () => {
+    const drive = driveV3BackupFake()
+    vi.stubGlobal('Drive', drive.service)
     const gateway = createGoogleWorkbookPresentationGateway({
-      spreadsheetId: 'spreadsheet-test-id',
-      backupFolderId: 'backup-folder-test-id',
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
       sha256Hex,
     })
 
@@ -571,8 +742,121 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
       fileId: 'backup-file-test-id',
       url: 'https://example.invalid/private-backup',
     })
-    expect(makeCopy).toHaveBeenCalledOnce()
-    expect(setSharing).toHaveBeenCalledWith('PRIVATE', 'NONE')
+    expect(drive.copy).toHaveBeenCalledOnce()
+    expect(drive.copy).toHaveBeenCalledWith(
+      { name: 'PMC Booking Presentation Backup', parents: [drive.folderId] },
+      drive.sourceId,
+      expect.objectContaining({ fields: expect.any(String) }),
+    )
+    expect(drive.cleanup).not.toHaveBeenCalled()
+    expect(drive.permissionList).toHaveBeenCalledTimes(2)
+    for (const call of drive.permissionList.mock.calls) {
+      const fields = String((call[1] as { fields?: string }).fields)
+      expect(fields).not.toContain('emailAddress')
+      expect(fields).not.toContain('displayName')
+      expect(fields).not.toContain('domain')
+      expect(fields).not.toMatch(/permissions\([^)]*\bid\b/)
+    }
+  })
+
+  it.each([
+    ['named reader', { folderPermissions: [ownerPermission(), readerPermission()] }],
+    ['domain access', { folderPermissions: [ownerPermission(), { type: 'domain', role: 'reader' }] }],
+    ['anyone access', { folderPermissions: [ownerPermission(), { type: 'anyone', role: 'reader' }] }],
+    ['shared drive', { folderPatch: { driveId: 'shared-drive-private-id' } }],
+  ])('rejects a destination with %s before creating a backup', (_label, options) => {
+    const drive = driveV3BackupFake(options)
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(() => gateway.createPrivateNativeBackup('PMC Booking Presentation Backup'))
+      .toThrow('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    expect(drive.copy).not.toHaveBeenCalled()
+    expect(drive.cleanup).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['inherited copied permission', { backupPermissions: [ownerPermission(), inheritedReaderPermission()] }],
+    ['wrong copied MIME', { backupPatch: { mimeType: 'application/pdf' } }],
+    ['wrong copied parent', { backupPatch: { parents: ['unexpected-parent-private-id'] } }],
+    ['shared-drive copy', { backupPatch: { driveId: 'shared-drive-private-id' } }],
+  ])('trashes only the new copy when post-copy verification finds %s', (_label, options) => {
+    const drive = driveV3BackupFake(options)
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(() => gateway.createPrivateNativeBackup('PMC Booking Presentation Backup'))
+      .toThrow('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    expect(drive.copy).toHaveBeenCalledOnce()
+    expect(drive.cleanup).toHaveBeenCalledOnce()
+    expect(drive.cleanup).toHaveBeenCalledWith({ trashed: true }, 'backup-file-test-id')
+    expect(drive.cleanup).not.toHaveBeenCalledWith(expect.anything(), drive.sourceId)
+  })
+
+  it.each([
+    ['wrong source identity', { sourcePatch: { id: 'wrong-source-private-id' } }],
+    ['wrong source MIME', { sourcePatch: { mimeType: 'application/pdf' } }],
+    ['trashed source', { sourcePatch: { trashed: true } }],
+    ['shared-drive source', { sourcePatch: { driveId: 'shared-drive-private-id' } }],
+  ])('rejects %s before copying and emits only a fixed safe code', (_label, options) => {
+    const drive = driveV3BackupFake(options)
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    let message = ''
+    try {
+      gateway.createPrivateNativeBackup('PMC Booking Presentation Backup')
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toBe('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    expect(message).not.toContain('private-id')
+    expect(drive.copy).not.toHaveBeenCalled()
+    expect(drive.cleanup).not.toHaveBeenCalled()
+  })
+
+  it('returns the fixed failure when cleanup itself fails after a rejected copy', () => {
+    const drive = driveV3BackupFake({
+      backupPatch: { mimeType: 'application/pdf' },
+      cleanupThrows: true,
+    })
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(() => gateway.createPrivateNativeBackup('PMC Booking Presentation Backup'))
+      .toThrow('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    expect(drive.cleanup).toHaveBeenCalledOnce()
+  })
+
+  it('never trashes the source when a malformed copy response repeats the source identity', () => {
+    const drive = driveV3BackupFake({ copyReturnedId: 'spreadsheet-source-private-id' })
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(() => gateway.createPrivateNativeBackup('PMC Booking Presentation Backup'))
+      .toThrow('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    expect(drive.copy).toHaveBeenCalledOnce()
+    expect(drive.cleanup).not.toHaveBeenCalled()
   })
 })
 
@@ -613,6 +897,7 @@ function makeSheet(title: string, headers: readonly string[], index: number): Sh
     formulasHash: `formulas-${index}`,
     validationsHash: `validations-${index}`,
     protectionsHash: `protections-${index}`,
+    rowMetadataHash: `row-metadata-${index}`,
   }
 }
 
@@ -906,12 +1191,16 @@ function testManagedStyle(
   const currency = styleKey === 'BODY_CURRENCY'
   const wrap = styleKey === 'BODY_WRAP' || styleKey === 'BODY_PLAIN_TEXT_WRAP'
   return {
-    backgroundColor: header
-      ? { red: 0.9568627451, green: 0.9607843137, blue: 0.9647058824 }
-      : { red: 1, green: 1, blue: 1 },
+    backgroundColorStyle: {
+      rgbColor: header
+        ? { red: 0.9568627451, green: 0.9607843137, blue: 0.9647058824 }
+        : { red: 1, green: 1, blue: 1 },
+    },
     textFormat: {
       bold: header,
-      foregroundColor: { red: 0.0666666667, green: 0.0666666667, blue: 0.0666666667 },
+      foregroundColorStyle: {
+        rgbColor: { red: 0.0666666667, green: 0.0666666667, blue: 0.0666666667 },
+      },
     },
     verticalAlignment: 'MIDDLE',
     wrapStrategy: wrap || header ? 'WRAP' : 'CLIP',
@@ -927,7 +1216,9 @@ function testManagedStyle(
 function testBorder(): GoogleAppsScript.Sheets.Schema.Border {
   return {
     style: 'SOLID',
-    color: { red: 0.8980392157, green: 0.9058823529, blue: 0.9215686275 },
+    colorStyle: {
+      rgbColor: { red: 0.8980392157, green: 0.9058823529, blue: 0.9215686275 },
+    },
   }
 }
 
@@ -945,21 +1236,223 @@ function bookingStatusRule(
         }],
       },
       format: {
-        backgroundColor: { red: 0.9960784314, green: 0.9529411765, blue: 0.7803921569 },
+        backgroundColorStyle: {
+          rgbColor: { red: 0.9960784314, green: 0.9529411765, blue: 0.7803921569 },
+        },
         textFormat: {
           bold: true,
-          foregroundColor: { red: 0.5725490196, green: 0.2509803922, blue: 0.0549019608 },
+          foregroundColorStyle: {
+            rgbColor: { red: 0.5725490196, green: 0.2509803922, blue: 0.0549019608 },
+          },
         },
       },
     },
   }
 }
 
-function parentIterator(ids: readonly string[]): GoogleAppsScript.Drive.FolderIterator {
-  let index = 0
+function applySheetsBatchToResponse(
+  response: GoogleAppsScript.Sheets.Schema.Spreadsheet,
+  batch: ReturnType<typeof translateWorkbookPresentationPlan>,
+): void {
+  const sheets = response.sheets ?? []
+  const byId = (sheetId: number) => {
+    const found = sheets.find((item) => item.properties?.sheetId === sheetId)
+    if (!found) throw new Error('test sheet missing')
+    return found
+  }
+  for (const request of batch.requests) {
+    if (request.updateSheetProperties?.properties) {
+      const properties = request.updateSheetProperties.properties
+      const target = byId(properties.sheetId!)
+      if (request.updateSheetProperties.fields === 'index') {
+        const current = sheets.indexOf(target)
+        sheets.splice(current, 1)
+        sheets.splice(properties.index!, 0, target)
+        sheets.forEach((item, index) => { item.properties!.index = index })
+      } else if (request.updateSheetProperties.fields === 'hidden') {
+        target.properties!.hidden = properties.hidden
+      } else {
+        target.properties!.gridProperties!.frozenRowCount = properties.gridProperties!.frozenRowCount
+        target.properties!.gridProperties!.frozenColumnCount = properties.gridProperties!.frozenColumnCount
+      }
+      continue
+    }
+    if (request.setBasicFilter?.filter?.range) {
+      byId(request.setBasicFilter.filter.range.sheetId!).basicFilter = structuredClone(
+        request.setBasicFilter.filter,
+      )
+      continue
+    }
+    if (request.updateDimensionProperties?.range) {
+      const dimension = request.updateDimensionProperties.range
+      const target = byId(dimension.sheetId!)
+      const metadata = target.data![0]!.columnMetadata!
+      for (let index = dimension.startIndex!; index < dimension.endIndex!; index += 1) {
+        metadata[index] = {
+          ...metadata[index],
+          pixelSize: request.updateDimensionProperties.properties?.pixelSize,
+        }
+      }
+      continue
+    }
+    if (request.repeatCell?.range) {
+      const targetRange = request.repeatCell.range
+      const target = byId(targetRange.sheetId!)
+      const rows = target.data![0]!.rowData!
+      for (let rowIndex = targetRange.startRowIndex!; rowIndex < targetRange.endRowIndex!; rowIndex += 1) {
+        rows[rowIndex] ??= { values: [] }
+        rows[rowIndex]!.values ??= []
+        for (let columnIndex = targetRange.startColumnIndex!;
+          columnIndex < targetRange.endColumnIndex!; columnIndex += 1) {
+          rows[rowIndex]!.values![columnIndex] ??= {}
+          rows[rowIndex]!.values![columnIndex]!.userEnteredFormat = structuredClone(
+            request.repeatCell.cell!.userEnteredFormat!,
+          )
+        }
+      }
+      continue
+    }
+    if (request.addConditionalFormatRule?.rule) {
+      const targetRange = request.addConditionalFormatRule.rule.ranges![0]!
+      const target = byId(targetRange.sheetId!)
+      target.conditionalFormats ??= []
+      target.conditionalFormats.splice(
+        request.addConditionalFormatRule.index ?? 0,
+        0,
+        structuredClone(request.addConditionalFormatRule.rule),
+      )
+    }
+  }
+}
+
+function roundTripOwnedColorsThroughFloat32(
+  response: GoogleAppsScript.Sheets.Schema.Spreadsheet,
+): void {
+  const roundStyle = (style: GoogleAppsScript.Sheets.Schema.ColorStyle | undefined) => {
+    if (!style?.rgbColor) return
+    for (const component of ['red', 'green', 'blue', 'alpha'] as const) {
+      const value = style.rgbColor[component]
+      if (value !== undefined) style.rgbColor[component] = Math.fround(value)
+    }
+  }
+  for (const target of response.sheets ?? []) {
+    for (const segment of target.data ?? []) {
+      for (const row of segment.rowData ?? []) {
+        for (const cell of row.values ?? []) {
+          const format = cell.userEnteredFormat
+          roundStyle(format?.backgroundColorStyle)
+          roundStyle(format?.textFormat?.foregroundColorStyle)
+          roundStyle(format?.borders?.top?.colorStyle)
+          roundStyle(format?.borders?.bottom?.colorStyle)
+          roundStyle(format?.borders?.left?.colorStyle)
+          roundStyle(format?.borders?.right?.colorStyle)
+        }
+      }
+    }
+    for (const rule of target.conditionalFormats ?? []) {
+      roundStyle(rule.booleanRule?.format?.backgroundColorStyle)
+      roundStyle(rule.booleanRule?.format?.textFormat?.foregroundColorStyle)
+    }
+  }
+}
+
+interface DriveBackupFakeOptions {
+  sourcePatch?: Partial<GoogleAppsScript.Drive_v3.Drive.V3.Schema.File>
+  folderPatch?: Partial<GoogleAppsScript.Drive_v3.Drive.V3.Schema.File>
+  backupPatch?: Partial<GoogleAppsScript.Drive_v3.Drive.V3.Schema.File>
+  folderPermissions?: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[]
+  backupPermissions?: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[]
+  cleanupThrows?: boolean
+  copyReturnedId?: string
+}
+
+function driveV3BackupFake(options: DriveBackupFakeOptions = {}): {
+  service: GoogleAppsScript.Drive
+  sourceId: string
+  folderId: string
+  copy: ReturnType<typeof vi.fn>
+  cleanup: ReturnType<typeof vi.fn>
+  permissionList: ReturnType<typeof vi.fn>
+} {
+  const sourceId = 'spreadsheet-source-private-id'
+  const folderId = 'backup-folder-private-id'
+  const backupId = 'backup-file-test-id'
+  const source: GoogleAppsScript.Drive_v3.Drive.V3.Schema.File = {
+    id: sourceId,
+    mimeType: 'application/vnd.google-apps.spreadsheet',
+    parents: ['source-parent-private-id'],
+    trashed: false,
+    ownedByMe: true,
+    shared: false,
+    capabilities: { canCopy: true },
+    ...options.sourcePatch,
+  }
+  const folder: GoogleAppsScript.Drive_v3.Drive.V3.Schema.File = {
+    id: folderId,
+    mimeType: 'application/vnd.google-apps.folder',
+    parents: ['my-drive-root-private-id'],
+    trashed: false,
+    ownedByMe: true,
+    shared: false,
+    capabilities: { canAddChildren: true },
+    ...options.folderPatch,
+  }
+  const backup: GoogleAppsScript.Drive_v3.Drive.V3.Schema.File = {
+    id: backupId,
+    mimeType: 'application/vnd.google-apps.spreadsheet',
+    parents: [folderId],
+    trashed: false,
+    ownedByMe: true,
+    shared: false,
+    webViewLink: 'https://example.invalid/private-backup',
+    ...options.backupPatch,
+  }
+  const files = new Map([
+    [sourceId, source],
+    [folderId, folder],
+    [backupId, backup],
+  ])
+  const permissions = new Map<string, GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[]>([
+    [folderId, options.folderPermissions ?? [ownerPermission()]],
+    [backupId, options.backupPermissions ?? [ownerPermission()]],
+  ])
+  const copy = vi.fn((resource: GoogleAppsScript.Drive_v3.Drive.V3.Schema.File) => {
+    files.set(backupId, { ...backup, name: resource.name })
+    return { id: options.copyReturnedId ?? backupId }
+  })
+  const cleanup = vi.fn((resource: GoogleAppsScript.Drive_v3.Drive.V3.Schema.File, fileId: string) => {
+    if (options.cleanupThrows) throw new Error('cleanup failed')
+    const target = files.get(fileId)
+    if (target) files.set(fileId, { ...target, ...resource })
+    return files.get(fileId) ?? {}
+  })
+  const permissionList = vi.fn((fileId: string) => ({
+    permissions: structuredClone(permissions.get(fileId) ?? []),
+  }))
+  const service = {
+    Files: {
+      get: vi.fn((fileId: string) => structuredClone(files.get(fileId) ?? {})),
+      copy,
+      update: cleanup,
+    },
+    Permissions: {
+      list: permissionList,
+    },
+  } as unknown as GoogleAppsScript.Drive
+  return { service, sourceId, folderId, copy, cleanup, permissionList }
+}
+
+function ownerPermission(): GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission {
+  return { type: 'user', role: 'owner', deleted: false, pendingOwner: false }
+}
+
+function readerPermission(): GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission {
+  return { type: 'user', role: 'reader', deleted: false, pendingOwner: false }
+}
+
+function inheritedReaderPermission(): GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission {
   return {
-    getContinuationToken: () => '',
-    hasNext: () => index < ids.length,
-    next: () => ({ getId: () => ids[index++] }) as GoogleAppsScript.Drive.Folder,
+    ...readerPermission(),
+    permissionDetails: [{ inherited: true, permissionType: 'file', role: 'reader' }],
   }
 }

@@ -19,10 +19,22 @@ import type {
 } from '../ports'
 
 const LOCK_TIMEOUT_MS = 30_000
+const GOOGLE_SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet'
+const GOOGLE_FOLDER_MIME = 'application/vnd.google-apps.folder'
+const DRIVE_FILE_FIELDS = [
+  'id,mimeType,parents,trashed,driveId,ownedByMe,shared,webViewLink,',
+  'capabilities(canAddChildren,canCopy)',
+].join('')
+const DRIVE_PERMISSION_FIELDS = [
+  'nextPageToken,permissions(type,role,deleted,pendingOwner,allowFileDiscovery,',
+  'permissionDetails(inherited,permissionType,role))',
+].join('')
 const SHEETS_V4_FIELDS = [
   'spreadsheetId,sheets(properties(sheetId,title,index,hidden,sheetType,gridProperties(',
   'rowCount,columnCount,frozenRowCount,frozenColumnCount)),data(startRow,startColumn,',
-  'rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note,textFormatRuns)),',
+  'rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note,textFormatRuns,chipRuns,',
+  'pivotTable,dataSourceFormula,dataSourceTable)),',
+  'rowMetadata(pixelSize,hiddenByUser,hiddenByFilter,developerMetadata),',
   'columnMetadata(pixelSize,hiddenByUser,hiddenByFilter,developerMetadata)),',
   'merges,basicFilter,filterViews,bandedRanges,conditionalFormats,protectedRanges,',
   'charts,tables,developerMetadata,rowGroups,columnGroups,slicers),namedRanges,developerMetadata',
@@ -173,26 +185,14 @@ export function createGoogleWorkbookPresentationGateway(
     createPrivateNativeBackup(label) {
       const safeLabel = label.trim()
       if (!safeLabel || safeLabel.length > 180) fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
-      try {
-        const folder = DriveApp.getFolderById(backupFolderId)
-        if (folder.isTrashed?.() || folder.getSharingAccess() !== DriveApp.Access.PRIVATE) {
-          fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
-        }
-        const backup = DriveApp.getFileById(spreadsheetId).makeCopy(safeLabel, folder)
-        backup.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
-        if (backup.isTrashed?.()
-          || backup.getMimeType() !== 'application/vnd.google-apps.spreadsheet'
-          || backup.getSharingAccess() !== DriveApp.Access.PRIVATE) {
-          fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
-        }
-        const parents = backup.getParents()
-        if (!parents.hasNext() || parents.next().getId() !== backupFolderId || parents.hasNext()) {
-          fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
-        }
-        return { fileId: backup.getId(), url: backup.getUrl() }
-      } catch {
-        fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
-      }
+      const driveService = Drive as unknown as DrivePresentationService | undefined
+      if (!driveService) fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+      return createAndVerifyPrivateBackup(
+        driveService,
+        spreadsheetId,
+        backupFolderId,
+        safeLabel,
+      )
     },
     apply(plan) {
       const batch = translateWorkbookPresentationPlan(plan)
@@ -206,8 +206,7 @@ export function createGoogleWorkbookPresentationGateway(
       }
     },
     withDocumentLock<T>(operation: () => T): T {
-      const lock = LockService.getDocumentLock()
-      if (!lock) fail('WORKBOOK_PRESENTATION_LOCK_UNAVAILABLE')
+      const lock = LockService.getScriptLock()
       lock.waitLock(lockTimeoutMs)
       try {
         return operation()
@@ -216,6 +215,141 @@ export function createGoogleWorkbookPresentationGateway(
       }
     },
   }
+}
+
+type DriveFile = GoogleAppsScript.Drive_v3.Drive.V3.Schema.File
+type DrivePermission = GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission
+type DrivePermissionList = GoogleAppsScript.Drive_v3.Drive.V3.Schema.PermissionList
+
+interface DrivePresentationService {
+  Files: {
+    get(fileId: string, options: Record<string, unknown>): DriveFile
+    copy(resource: DriveFile, fileId: string, options: Record<string, unknown>): DriveFile
+    update(resource: DriveFile, fileId: string): DriveFile
+  }
+  Permissions: {
+    list(fileId: string, options: Record<string, unknown>): DrivePermissionList
+  }
+}
+
+function createAndVerifyPrivateBackup(
+  driveService: DrivePresentationService,
+  spreadsheetId: string,
+  backupFolderId: string,
+  label: string,
+): { fileId: string; url: string } {
+  let createdFileId = ''
+  try {
+    const source = driveService.Files.get(spreadsheetId, {
+      fields: DRIVE_FILE_FIELDS,
+      supportsAllDrives: false,
+    })
+    if (!isExactOwnedMyDriveSource(source, spreadsheetId)) {
+      fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    }
+
+    const destination = driveService.Files.get(backupFolderId, {
+      fields: DRIVE_FILE_FIELDS,
+      supportsAllDrives: false,
+    })
+    if (!isExactPrivateMyDriveFolder(destination, backupFolderId)
+      || !hasExactOwnerOnlyPermissions(driveService, backupFolderId)) {
+      fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    }
+
+    const copy = driveService.Files.copy(
+      { name: label, parents: [backupFolderId] },
+      spreadsheetId,
+      { fields: DRIVE_FILE_FIELDS, supportsAllDrives: false },
+    )
+    const candidateId = copy.id?.trim() ?? ''
+    if (!candidateId || candidateId === spreadsheetId) fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    createdFileId = candidateId
+
+    const verified = driveService.Files.get(createdFileId, {
+      fields: DRIVE_FILE_FIELDS,
+      supportsAllDrives: false,
+    })
+    if (!isExactPrivateNativeBackup(verified, createdFileId, backupFolderId)
+      || !hasExactOwnerOnlyPermissions(driveService, createdFileId)) {
+      fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    }
+    const url = verified.webViewLink?.trim() ?? ''
+    if (!url) fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    return { fileId: createdFileId, url }
+  } catch {
+    if (createdFileId && createdFileId !== spreadsheetId) {
+      try {
+        driveService.Files.update({ trashed: true }, createdFileId)
+      } catch {
+        // The safe fixed failure below remains authoritative; never retry, delete,
+        // or expose the private identifier when cleanup itself is unavailable.
+      }
+    }
+    fail('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+  }
+}
+
+function isExactOwnedMyDriveSource(file: DriveFile, expectedId: string): boolean {
+  return file.id === expectedId
+    && file.mimeType === GOOGLE_SPREADSHEET_MIME
+    && file.trashed === false
+    && !file.driveId
+    && file.ownedByMe === true
+    && file.capabilities?.canCopy === true
+}
+
+function isExactPrivateMyDriveFolder(file: DriveFile, expectedId: string): boolean {
+  return file.id === expectedId
+    && file.mimeType === GOOGLE_FOLDER_MIME
+    && file.trashed === false
+    && !file.driveId
+    && file.ownedByMe === true
+    && file.shared !== true
+    && file.capabilities?.canAddChildren === true
+}
+
+function isExactPrivateNativeBackup(
+  file: DriveFile,
+  expectedId: string,
+  expectedParentId: string,
+): boolean {
+  return file.id === expectedId
+    && file.mimeType === GOOGLE_SPREADSHEET_MIME
+    && file.trashed === false
+    && !file.driveId
+    && file.ownedByMe === true
+    && file.shared !== true
+    && file.parents?.length === 1
+    && file.parents[0] === expectedParentId
+}
+
+function hasExactOwnerOnlyPermissions(
+  driveService: DrivePresentationService,
+  fileId: string,
+): boolean {
+  const permissions: DrivePermission[] = []
+  let pageToken = ''
+  for (let page = 0; page < 10; page += 1) {
+    const response = driveService.Permissions.list(fileId, {
+      fields: DRIVE_PERMISSION_FIELDS,
+      supportsAllDrives: false,
+      pageSize: 100,
+      ...(pageToken ? { pageToken } : {}),
+    })
+    permissions.push(...(response.permissions ?? []))
+    pageToken = response.nextPageToken?.trim() ?? ''
+    if (!pageToken) break
+    if (page === 9) return false
+  }
+  if (permissions.length !== 1) return false
+  const permission = permissions[0]!
+  return permission.type === 'user'
+    && permission.role === 'owner'
+    && permission.deleted !== true
+    && permission.pendingOwner !== true
+    && permission.allowFileDiscovery !== true
+    && !nonempty(permission.permissionDetails)
 }
 
 export function inspectWorkbookPresentationMetadata(
@@ -363,6 +497,7 @@ function inspectSheet(
   const unsupportedMetadataCount = unsupportedBasicFilter
     + recognizedRules.unrecognizedCount
     + dimensionUnsupported
+    + countUnsupportedCellObjects(cells)
     + count(raw.bandedRanges)
     + count(raw.charts)
     + count(raw.tables)
@@ -375,6 +510,7 @@ function inspectSheet(
   const formulas = formulaAttestation(cells)
   const validations = validationAttestation(cells)
   const protections = canonicalValue(raw.protectedRanges ?? [])
+  const rowMetadata = rowMetadataAttestation(raw.data ?? [], maxRows)
   return {
     sheetId,
     title: properties.title,
@@ -397,6 +533,7 @@ function inspectSheet(
     formulasHash: hashCanonical(formulas, sha256Hex),
     validationsHash: hashCanonical(validations, sha256Hex),
     protectionsHash: hashCanonical(protections, sha256Hex),
+    rowMetadataHash: hashCanonical(rowMetadata, sha256Hex),
   }
 }
 
@@ -516,19 +653,26 @@ function sameManagedFormat(
   expected: GoogleAppsScript.Sheets.Schema.CellFormat,
   styleKey: WorkbookPresentationStyleKey,
 ): boolean {
-  const normalize = (format: GoogleAppsScript.Sheets.Schema.CellFormat) => canonicalValue({
-    backgroundColor: normalizedColor(format.backgroundColorStyle?.rgbColor ?? format.backgroundColor),
-    foregroundColor: normalizedColor(
-      format.textFormat?.foregroundColorStyle?.rgbColor ?? format.textFormat?.foregroundColor,
-    ),
-    bold: format.textFormat?.bold === true,
-    verticalAlignment: format.verticalAlignment ?? null,
-    wrapStrategy: format.wrapStrategy ?? null,
-    borders: normalizedBorders(format.borders),
-    numberFormat: styleKey === 'BODY_PLAIN_TEXT' || styleKey === 'BODY_PLAIN_TEXT_WRAP'
-      || styleKey === 'BODY_CURRENCY' ? format.numberFormat ?? null : null,
-  })
-  return canonicalJson(normalize(actual)) === canonicalJson(normalize(expected))
+  if (!sameEffectiveColor(
+    actual.backgroundColorStyle,
+    actual.backgroundColor,
+    expected.backgroundColorStyle,
+    expected.backgroundColor,
+  ) || !sameEffectiveColor(
+    actual.textFormat?.foregroundColorStyle,
+    actual.textFormat?.foregroundColor,
+    expected.textFormat?.foregroundColorStyle,
+    expected.textFormat?.foregroundColor,
+  ) || (actual.textFormat?.bold === true) !== (expected.textFormat?.bold === true)
+    || (actual.verticalAlignment ?? null) !== (expected.verticalAlignment ?? null)
+    || (actual.wrapStrategy ?? null) !== (expected.wrapStrategy ?? null)
+    || !sameBorders(actual.borders, expected.borders)) return false
+
+  if (styleKey === 'BODY_PLAIN_TEXT' || styleKey === 'BODY_PLAIN_TEXT_WRAP'
+    || styleKey === 'BODY_CURRENCY') {
+    return canonicalJson(actual.numberFormat ?? null) === canonicalJson(expected.numberFormat ?? null)
+  }
+  return true
 }
 
 function recognizeStatusRules(
@@ -584,37 +728,50 @@ function sameStatusConditionalRule(
   const normalize = (rule: GoogleAppsScript.Sheets.Schema.ConditionalFormatRule) => ({
     ranges: [normalizedRange],
     condition: canonicalValue(rule.booleanRule?.condition ?? null),
-    format: {
-      backgroundColor: normalizedColor(
-        rule.booleanRule?.format?.backgroundColorStyle?.rgbColor
-          ?? rule.booleanRule?.format?.backgroundColor,
-      ),
-      foregroundColor: normalizedColor(
-        rule.booleanRule?.format?.textFormat?.foregroundColorStyle?.rgbColor
-          ?? rule.booleanRule?.format?.textFormat?.foregroundColor,
-      ),
-      bold: rule.booleanRule?.format?.textFormat?.bold === true,
-    },
   })
   return canonicalJson(normalize(actual)) === canonicalJson(normalize(expected))
+    && sameEffectiveColor(
+      actual.booleanRule?.format?.backgroundColorStyle,
+      actual.booleanRule?.format?.backgroundColor,
+      expected.booleanRule?.format?.backgroundColorStyle,
+      expected.booleanRule?.format?.backgroundColor,
+    )
+    && sameEffectiveColor(
+      actual.booleanRule?.format?.textFormat?.foregroundColorStyle,
+      actual.booleanRule?.format?.textFormat?.foregroundColor,
+      expected.booleanRule?.format?.textFormat?.foregroundColorStyle,
+      expected.booleanRule?.format?.textFormat?.foregroundColor,
+    )
+    && (actual.booleanRule?.format?.textFormat?.bold === true)
+      === (expected.booleanRule?.format?.textFormat?.bold === true)
 }
 
 function contentAttestation(cells: ReadonlyMap<string, InspectedCell>): unknown[] {
   return sortedCells(cells).flatMap(({ rowIndex, columnIndex, data }) => {
+    const raw = record(data)
     const entered = data.userEnteredValue
     const literal = entered && entered.formulaValue === undefined ? canonicalValue(entered) : null
     const note = data.note ?? null
     const runs = data.textFormatRuns?.length ? canonicalValue(data.textFormatRuns) : null
-    return literal === null && note === null && runs === null
+    const chips = nonempty(raw.chipRuns) ? canonicalValue(raw.chipRuns) : null
+    return literal === null && note === null && runs === null && chips === null
       ? []
-      : [{ rowIndex, columnIndex, literal, note, textFormatRuns: runs }]
+      : [{ rowIndex, columnIndex, literal, note, textFormatRuns: runs, chipRuns: chips }]
   })
 }
 
 function formulaAttestation(cells: ReadonlyMap<string, InspectedCell>): unknown[] {
   return sortedCells(cells).flatMap(({ rowIndex, columnIndex, data }) => {
     const formula = data.userEnteredValue?.formulaValue
-    return formula === undefined ? [] : [{ rowIndex, columnIndex, formula }]
+    const dataSourceFormula = record(data).dataSourceFormula
+    return formula === undefined && !nonempty(dataSourceFormula)
+      ? []
+      : [{
+        rowIndex,
+        columnIndex,
+        formula: formula ?? null,
+        dataSourceFormula: nonempty(dataSourceFormula) ? canonicalValue(dataSourceFormula) : null,
+      }]
   })
 }
 
@@ -639,8 +796,48 @@ function countUnsupportedDimensions(
         countUnsupported += 1
       }
     }
+    for (const metadata of segment.rowMetadata ?? []) {
+      if (metadata.hiddenByFilter || metadata.hiddenByUser || nonempty(metadata.developerMetadata)) {
+        countUnsupported += 1
+      }
+    }
   }
   return countUnsupported
+}
+
+function countUnsupportedCellObjects(cells: ReadonlyMap<string, InspectedCell>): number {
+  let unsupported = 0
+  for (const { data } of cells.values()) {
+    const raw = record(data)
+    if (nonempty(data.pivotTable)) unsupported += 1
+    if (nonempty(raw.dataSourceTable)) unsupported += 1
+    if (nonempty(raw.dataSourceTables)) unsupported += 1
+  }
+  return unsupported
+}
+
+function rowMetadataAttestation(
+  segments: readonly GoogleAppsScript.Sheets.Schema.GridData[],
+  maxRows: number,
+): unknown[] {
+  const rows = new Map<number, unknown>()
+  for (const segment of segments) {
+    const startRow = integerOrZero(segment.startRow)
+    for (let offset = 0; offset < (segment.rowMetadata?.length ?? 0); offset += 1) {
+      const rowIndex = startRow + offset
+      if (rowIndex >= maxRows || rows.has(rowIndex)) fail('SHEETS_V4_PRESENTATION_METADATA_INVALID')
+      const metadata = segment.rowMetadata?.[offset]
+      if (metadata?.pixelSize !== undefined
+        && (!Number.isSafeInteger(metadata.pixelSize) || metadata.pixelSize < 2 || metadata.pixelSize > 2_000)) {
+        fail('SHEETS_V4_PRESENTATION_METADATA_INVALID')
+      }
+      rows.set(rowIndex, metadata?.pixelSize === undefined ? {} : { pixelSize: metadata.pixelSize })
+    }
+  }
+  return [...rows.entries()]
+    .filter(([, metadata]) => nonempty(metadata))
+    .sort(([left], [right]) => left - right)
+    .map(([rowIndex, metadata]) => ({ rowIndex, metadata }))
 }
 
 function validateTranslatablePlan(plan: WorkbookPresentationPlan): void {
@@ -741,10 +938,10 @@ function managedCellFormat(
   const currency = styleKey === 'BODY_CURRENCY'
   const wrap = styleKey === 'BODY_WRAP' || styleKey === 'BODY_PLAIN_TEXT_WRAP'
   return {
-    backgroundColor: cloneColor(header ? COLORS.headerGray : COLORS.white),
+    backgroundColorStyle: { rgbColor: cloneColor(header ? COLORS.headerGray : COLORS.white) },
     textFormat: {
       bold: header,
-      foregroundColor: cloneColor(COLORS.nearBlack),
+      foregroundColorStyle: { rgbColor: cloneColor(COLORS.nearBlack) },
     },
     verticalAlignment: 'MIDDLE',
     wrapStrategy: header || wrap ? 'WRAP' : 'CLIP',
@@ -759,9 +956,9 @@ function managedCellFormat(
 
 function managedCellFormatFields(styleKey: WorkbookPresentationStyleKey): string {
   const fields = [
-    'userEnteredFormat.backgroundColor',
+    'userEnteredFormat.backgroundColorStyle',
     'userEnteredFormat.textFormat.bold',
-    'userEnteredFormat.textFormat.foregroundColor',
+    'userEnteredFormat.textFormat.foregroundColorStyle',
     'userEnteredFormat.verticalAlignment',
     'userEnteredFormat.wrapStrategy',
     'userEnteredFormat.borders',
@@ -772,7 +969,7 @@ function managedCellFormatFields(styleKey: WorkbookPresentationStyleKey): string
 }
 
 function managedBorder(): GoogleAppsScript.Sheets.Schema.Border {
-  return { style: 'SOLID', color: cloneColor(COLORS.borderGray) }
+  return { style: 'SOLID', colorStyle: { rgbColor: cloneColor(COLORS.borderGray) } }
 }
 
 function statusConditionalRule(
@@ -791,10 +988,10 @@ function statusConditionalRule(
         values: [{ userEnteredValue: `=OR(${clauses.join(',')})` }],
       },
       format: {
-        backgroundColor: cloneColor(COLORS.actionAmber),
+        backgroundColorStyle: { rgbColor: cloneColor(COLORS.actionAmber) },
         textFormat: {
           bold: true,
-          foregroundColor: cloneColor(COLORS.actionAmberText),
+          foregroundColorStyle: { rgbColor: cloneColor(COLORS.actionAmberText) },
         },
       },
     },
@@ -893,31 +1090,59 @@ function canonicalValue(value: unknown): unknown {
   }))
 }
 
-function normalizedColor(
-  color: GoogleAppsScript.Sheets.Schema.Color | undefined,
-): Record<string, number> | null {
-  if (!color) return null
-  return {
-    red: rounded(color.red ?? 0),
-    green: rounded(color.green ?? 0),
-    blue: rounded(color.blue ?? 0),
-    alpha: rounded(color.alpha ?? 1),
-  }
+const COLOR_TOLERANCE = 1e-5
+
+function sameEffectiveColor(
+  actualStyle: GoogleAppsScript.Sheets.Schema.ColorStyle | undefined,
+  actualDeprecated: GoogleAppsScript.Sheets.Schema.Color | undefined,
+  expectedStyle: GoogleAppsScript.Sheets.Schema.ColorStyle | undefined,
+  expectedDeprecated: GoogleAppsScript.Sheets.Schema.Color | undefined,
+): boolean {
+  const actual = effectiveRgbColor(actualStyle, actualDeprecated)
+  const expected = effectiveRgbColor(expectedStyle, expectedDeprecated)
+  if (!actual || !expected) return actual === expected
+  return ['red', 'green', 'blue', 'alpha'].every((component) => Math.abs(
+    actual[component as keyof typeof actual] - expected[component as keyof typeof expected],
+  ) <= COLOR_TOLERANCE)
 }
 
-function normalizedBorders(
-  borders: GoogleAppsScript.Sheets.Schema.Borders | undefined,
-): unknown {
-  const normalize = (border: GoogleAppsScript.Sheets.Schema.Border | undefined) => border ? {
-    style: border.style ?? null,
-    color: normalizedColor(border.colorStyle?.rgbColor ?? border.color),
-  } : null
-  return {
-    top: normalize(borders?.top),
-    bottom: normalize(borders?.bottom),
-    left: normalize(borders?.left),
-    right: normalize(borders?.right),
+function effectiveRgbColor(
+  style: GoogleAppsScript.Sheets.Schema.ColorStyle | undefined,
+  deprecated: GoogleAppsScript.Sheets.Schema.Color | undefined,
+): { red: number; green: number; blue: number; alpha: number } | null {
+  // ColorStyle takes precedence. A theme style is intentionally not resolved
+  // through the deprecated RGB field because the visible color is theme-owned.
+  const color = style
+    ? style.themeColor || !style.rgbColor ? null : style.rgbColor
+    : deprecated ?? null
+  if (!color) return null
+  const normalized = {
+    red: color.red ?? 0,
+    green: color.green ?? 0,
+    blue: color.blue ?? 0,
+    alpha: color.alpha ?? 1,
   }
+  return Object.values(normalized).every((value) => Number.isFinite(value)
+    && value >= 0 && value <= 1) ? normalized : null
+}
+
+function sameBorders(
+  actual: GoogleAppsScript.Sheets.Schema.Borders | undefined,
+  expected: GoogleAppsScript.Sheets.Schema.Borders | undefined,
+): boolean {
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const actualBorder = actual?.[side]
+    const expectedBorder = expected?.[side]
+    if (!actualBorder || !expectedBorder
+      || actualBorder.style !== expectedBorder.style
+      || !sameEffectiveColor(
+        actualBorder.colorStyle,
+        actualBorder.color,
+        expectedBorder.colorStyle,
+        expectedBorder.color,
+      )) return false
+  }
+  return true
 }
 
 function cloneColor(color: Readonly<{ red: number; green: number; blue: number }>): {
@@ -1005,10 +1230,6 @@ function record(value: unknown): Record<string, unknown> {
 function hasUnexpectedKeys(value: unknown, allowed: readonly string[]): boolean {
   const allowedSet = new Set(allowed)
   return Object.entries(record(value)).some(([key, item]) => !allowedSet.has(key) && nonempty(item))
-}
-
-function rounded(value: number): number {
-  return Math.round(value * 1e10) / 1e10
 }
 
 function fail(code: string): never {

@@ -82,6 +82,12 @@ describe('Apps Script bundle', () => {
     expect(sheetsServices).toEqual([{
       userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4',
     }])
+    const driveServices = manifest.dependencies?.enabledAdvancedServices?.filter(
+      (service) => service.userSymbol === 'Drive' || service.serviceId === 'drive',
+    ) ?? []
+    expect(driveServices).toEqual([{
+      userSymbol: 'Drive', serviceId: 'drive', version: 'v3',
+    }])
   })
 
   it('avoids structuredClone because the Apps Script V8 global is not guaranteed', () => {
