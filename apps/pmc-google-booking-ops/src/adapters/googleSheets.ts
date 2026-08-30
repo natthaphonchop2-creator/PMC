@@ -9,6 +9,7 @@ import {
   type AttributionMigrationTableSnapshot,
   type AttributionStaffSnapshot,
 } from '../domain/attributionMigration'
+import { normalizeAttributionSheetMetadata } from '../domain/attributionSheetMetadata'
 import type { SheetRow, SheetStore } from '../repositories'
 import type { DashboardPort } from '../ports'
 import type { ExpenseTopologyPort } from '../ports'
@@ -180,6 +181,10 @@ function sameHeader(left: readonly string[], right: readonly string[]): boolean 
 export function readGoogleBookingAttributionMigrationSnapshot(
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
   hash: (value: string) => string = localStableHash,
+  advancedMetadata?: {
+    MINI_APP_REQUESTS: unknown
+    BOOKING_MASTER: unknown
+  },
 ): {
   request: AttributionMigrationTableSnapshot
   master: AttributionMigrationTableSnapshot
@@ -188,39 +193,71 @@ export function readGoogleBookingAttributionMigrationSnapshot(
   const request = requireSheet(spreadsheet, 'MINI_APP_REQUESTS')
   const master = requireSheet(spreadsheet, 'BOOKING_MASTER')
   const staff = requireSheet(spreadsheet, 'CONFIG_STAFF')
+  if (!advancedMetadata) throw new Error('SHEETS_V4_METADATA_UNAVAILABLE')
   return {
     request: readAttributionTable(
       request,
-      new Set(['protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId']),
+      requestInsertedColumnIndexes(readHeader(request)),
       hash,
+      advancedMetadata.MINI_APP_REQUESTS,
     ),
     master: readAttributionTable(
       master,
-      new Set(['recorderId', 'recorderName', 'recorderSource']),
+      masterInsertedColumnIndexes(readHeader(master)),
       hash,
+      advancedMetadata.BOOKING_MASTER,
     ),
     staff: readAttributionStaff(staff),
   }
 }
 
+export const BOOKING_ATTRIBUTION_SHEET_WRITE_PHASES = [
+  'request.insert.protocol',
+  'request.insert.attribution',
+  'request.insert.ae',
+  'request.write.protocolVersion',
+  'request.format.protocolVersion',
+  'request.write.recorderName',
+  'request.format.recorderName',
+  'request.write.adminId',
+  'request.format.adminId',
+  'request.write.adminName',
+  'request.format.adminName',
+  'request.write.aeId',
+  'request.format.aeId',
+  'master.insert.attribution',
+  'master.write.recorderId',
+  'master.format.recorderId',
+  'master.write.recorderName',
+  'master.format.recorderName',
+  'master.write.recorderSource',
+  'master.format.recorderSource',
+] as const
+
 export function writeGoogleBookingAttributionMigration(
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
   plan: ApplyBookingAttributionMigrationPlan,
+  options: { afterEffect?(phase: typeof BOOKING_ATTRIBUTION_SHEET_WRITE_PHASES[number]): void } = {},
 ): void {
   if (plan.migrateRequestSchema) {
     const sheet = requireSheet(spreadsheet, 'MINI_APP_REQUESTS')
     requireExactSheetHeader(sheet, LEGACY_MINI_APP_REQUEST_HEADERS, 'MINI_APP_REQUESTS')
     sheet.insertColumnsBefore(3, 1)
+    options.afterEffect?.('request.insert.protocol')
     sheet.insertColumnsAfter(4, 3)
+    options.afterEffect?.('request.insert.attribution')
     const interim = readHeader(sheet)
     const aeNameColumn = interim.indexOf('aeName') + 1
     if (aeNameColumn < 1) throw new Error('MIGRATION_WRITE_HEADER_MISMATCH')
     sheet.insertColumnsBefore(aeNameColumn, 1)
+    options.afterEffect?.('request.insert.ae')
     writeInsertedColumns(
       sheet,
       TARGET_MINI_APP_REQUEST_HEADERS,
       plan.requestRows,
       ['protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId'],
+      'request',
+      options.afterEffect,
     )
     requireExactSheetHeader(sheet, TARGET_MINI_APP_REQUEST_HEADERS, 'MINI_APP_REQUESTS')
   }
@@ -228,11 +265,14 @@ export function writeGoogleBookingAttributionMigration(
     const sheet = requireSheet(spreadsheet, 'BOOKING_MASTER')
     requireExactSheetHeader(sheet, LEGACY_BOOKING_MASTER_HEADERS, 'BOOKING_MASTER')
     sheet.insertColumnsAfter(4, 3)
+    options.afterEffect?.('master.insert.attribution')
     writeInsertedColumns(
       sheet,
       TARGET_BOOKING_MASTER_HEADERS,
       plan.masterRows,
       ['recorderId', 'recorderName', 'recorderSource'],
+      'master',
+      options.afterEffect,
     )
     requireExactSheetHeader(sheet, TARGET_BOOKING_MASTER_HEADERS, 'BOOKING_MASTER')
   }
@@ -240,19 +280,54 @@ export function writeGoogleBookingAttributionMigration(
 
 function readAttributionTable(
   sheet: GoogleAppsScript.Spreadsheet.Sheet,
-  insertedHeaders: ReadonlySet<string>,
+  insertedColumnIndexes: readonly number[],
   hash: (value: string) => string,
+  advancedMetadata: unknown,
 ): AttributionMigrationTableSnapshot {
   const headers = readHeader(sheet)
   const rowCount = Math.max(sheet.getLastRow() - 1, 0)
   const rows = rowCount > 0
     ? sheet.getRange(2, 1, rowCount, headers.length).getValues()
     : []
+  const normalizedMetadata = normalizeAttributionSheetMetadata(advancedMetadata, insertedColumnIndexes)
+  const preservationStructureFingerprint = hash(JSON.stringify(normalizedMetadata.structure))
+  const normalizedRows = new Map(normalizedMetadata.rows.map((row) => {
+    const candidate = row as { rowIndex?: unknown }
+    const rowIndex = Number(candidate.rowIndex)
+    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0) throw new Error('UNSUPPORTED_SHEETS_METADATA')
+    return [rowIndex, row] as const
+  }))
+  const preservationRowFingerprints = Array.from(
+    { length: Math.max(sheet.getLastRow(), 1) },
+    (_value, rowIndex) => hash(JSON.stringify(
+      normalizedRows.get(rowIndex) ?? { rowIndex, rowMetadata: {}, cells: [] },
+    )),
+  )
   return {
     headers,
     rows,
-    preservationFingerprint: sheetPreservationFingerprint(sheet, headers, insertedHeaders, hash),
+    preservationFingerprint: hash(JSON.stringify({
+      structure: preservationStructureFingerprint,
+      rows: preservationRowFingerprints,
+    })),
+    preservationStructureFingerprint,
+    preservationRowFingerprints,
   }
+}
+
+function requestInsertedColumnIndexes(headers: readonly string[]): number[] {
+  if (sameHeader(headers, LEGACY_MINI_APP_REQUEST_HEADERS)) return []
+  if (sameHeader(headers, TARGET_MINI_APP_REQUEST_HEADERS)) {
+    return ['protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId']
+      .map((header) => (TARGET_MINI_APP_REQUEST_HEADERS as readonly string[]).indexOf(header))
+  }
+  throw new Error('UNKNOWN_REQUEST_HEADERS')
+}
+
+function masterInsertedColumnIndexes(headers: readonly string[]): number[] {
+  if (sameHeader(headers, LEGACY_BOOKING_MASTER_HEADERS)) return []
+  if (sameHeader(headers, TARGET_BOOKING_MASTER_HEADERS)) return [4, 5, 6]
+  throw new Error('UNKNOWN_MASTER_HEADERS')
 }
 
 function readAttributionStaff(
@@ -290,6 +365,8 @@ function writeInsertedColumns(
   targetHeaders: readonly string[],
   targetRows: readonly unknown[][],
   insertedHeaders: readonly string[],
+  scope: 'request' | 'master',
+  afterEffect?: (phase: typeof BOOKING_ATTRIBUTION_SHEET_WRITE_PHASES[number]) => void,
 ): void {
   if (sheet.getLastRow() !== targetRows.length + 1) throw new Error('MIGRATION_WRITE_ROW_COUNT_CHANGED')
   for (const header of insertedHeaders) {
@@ -298,7 +375,9 @@ function writeInsertedColumns(
     const values = [[header], ...targetRows.map((row) => [row[column - 1] ?? ''])]
     const range = sheet.getRange(1, column, values.length, 1)
     range.setValues(values)
+    afterEffect?.(`${scope}.write.${header}` as typeof BOOKING_ATTRIBUTION_SHEET_WRITE_PHASES[number])
     range.setNumberFormat(header === 'protocolVersion' ? '0' : '@')
+    afterEffect?.(`${scope}.format.${header}` as typeof BOOKING_ATTRIBUTION_SHEET_WRITE_PHASES[number])
   }
 }
 
@@ -315,89 +394,17 @@ function readHeader(sheet: GoogleAppsScript.Spreadsheet.Sheet): string[] {
   return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String)
 }
 
-function sheetPreservationFingerprint(
-  sheet: GoogleAppsScript.Spreadsheet.Sheet,
-  headers: readonly string[],
-  insertedHeaders: ReadonlySet<string>,
-  hash: (value: string) => string,
-): string {
-  const rowCount = Math.max(sheet.getLastRow(), 1)
-  const columnIndexes = headers.flatMap((header, index) => insertedHeaders.has(header) ? [] : [index])
-  const range = sheet.getRange(1, 1, rowCount, headers.length)
-  const pick = <T>(rows: T[][]): T[][] => rows.map((row) => columnIndexes.map((index) => row[index]))
-  const validations = pick(range.getDataValidations()).map((row) => row.map(validationSignature))
-  return hash(JSON.stringify({
-    headers: columnIndexes.map((index) => headers[index]),
-    formulas: pick(range.getFormulas()),
-    numberFormats: pick(range.getNumberFormats()),
-    validations,
-    frozenRows: sheet.getFrozenRows(),
-    frozenColumns: sheet.getFrozenColumns(),
-    filter: filterSignature(sheet, headers, insertedHeaders),
-  }))
-}
-
-function validationSignature(
-  validation: GoogleAppsScript.Spreadsheet.DataValidation | null,
-): unknown {
-  if (!validation) return null
-  return {
-    criteriaType: String(validation.getCriteriaType()),
-    criteriaValues: validation.getCriteriaValues().map(safeMetadataValue),
-    allowInvalid: validation.getAllowInvalid(),
-    helpText: validation.getHelpText(),
-  }
-}
-
-function filterSignature(
-  sheet: GoogleAppsScript.Spreadsheet.Sheet,
-  headers: readonly string[],
-  insertedHeaders: ReadonlySet<string>,
-): unknown {
-  const filter = sheet.getFilter()
-  if (!filter) return null
-  const range = filter.getRange()
-  const rangeStart = range.getColumn()
-  const rangeEnd = rangeStart + range.getNumColumns() - 1
-  const criteria: Array<[string, unknown]> = []
-  headers.forEach((header, index) => {
-    const column = index + 1
-    if (column < rangeStart || column > rangeEnd || insertedHeaders.has(header)) return
-    const item = filter.getColumnFilterCriteria(column)
-    if (!item) {
-      criteria.push([header, null])
-      return
-    }
-    criteria.push([header, {
-      criteriaType: String(item.getCriteriaType()),
-      criteriaValues: item.getCriteriaValues().map(safeMetadataValue),
-      hiddenValues: item.getHiddenValues(),
-    }])
-  })
-  return {
-    row: range.getRow(),
-    column: rangeStart,
-    rows: range.getNumRows(),
-    logicalColumns: range.getNumColumns() - headers.filter((header, index) => (
-      insertedHeaders.has(header) && index + 1 >= rangeStart && index + 1 <= rangeEnd
-    )).length,
-    criteria,
-  }
-}
-
-function safeMetadataValue(value: unknown): unknown {
-  if (value instanceof Date) return value.toISOString()
-  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value
-  return String(value)
-}
-
 function localStableHash(input: string): string {
-  let hash = 0x811c9dc5
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193)
+  const chunks: string[] = []
+  for (let seed = 0; seed < 8; seed += 1) {
+    let hash = (0x811c9dc5 ^ seed) >>> 0
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index) + seed
+      hash = Math.imul(hash, 0x01000193)
+    }
+    chunks.push((hash >>> 0).toString(16).padStart(8, '0'))
   }
-  return (hash >>> 0).toString(16).padStart(8, '0')
+  return chunks.join('')
 }
 
 function booleanCell(value: unknown): boolean {

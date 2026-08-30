@@ -91,8 +91,15 @@ import {
 } from './workflows/attributionMigration'
 import {
   canonicalAttributionMigrationSnapshot,
+  migrationSnapshotFingerprint,
   type AttributionMigrationSheetSnapshot,
 } from './domain/attributionMigration'
+import {
+  createBookingMigrationManifestEnvelope,
+  parseBookingMigrationManifestJson,
+  parseBookingQueueAttestationJson,
+  validateBookingMigrationManifestTransition,
+} from './domain/attributionMigrationState'
 
 const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.spreadsheetId,
@@ -109,11 +116,13 @@ const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.brandLogoUrl,
 ] as const
 
-const ATTRIBUTION_MIGRATION_QUEUE_STATE = 'PMC_BOOKING_ATTRIBUTION_QUEUE_STATE'
-const ATTRIBUTION_MIGRATION_ACTIVE_TASKS = 'PMC_BOOKING_ATTRIBUTION_ACTIVE_TASK_COUNT'
-const ATTRIBUTION_MIGRATION_GATE_VERIFIED_AT = 'PMC_BOOKING_ATTRIBUTION_GATE_VERIFIED_AT'
+const ATTRIBUTION_MIGRATION_QUEUE_ATTESTATION = 'PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION'
+const ATTRIBUTION_MIGRATION_EXPECTED_QUEUE_DIGEST = 'PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST'
+const ATTRIBUTION_MIGRATION_MANIFEST = 'PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST'
 const ATTRIBUTION_MIGRATION_APPROVAL = 'PMC_BOOKING_ATTRIBUTION_APPROVED_FINGERPRINT'
 const ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS = 10 * 60 * 1_000
+const ATTRIBUTION_MIGRATION_ENVIRONMENT = 'production'
+const ATTRIBUTION_MIGRATION_CHECKER_VERSION = 'pmc-booking-attribution-v2/1'
 const ATTRIBUTION_REQUEST_ROW_LIMIT = 10_000
 const ATTRIBUTION_MASTER_ROW_LIMIT = 100_000
 
@@ -284,8 +293,8 @@ export function runExpenseRecoveryWorkflow(): ExpenseRecoveryResult {
 }
 
 export function previewPmcBookingAttributionMigrationWorkflow(): {
-  kind: 'NONE' | 'MIGRATE'
-  preflightFingerprint: string
+  kind: 'NONE' | 'MIGRATE' | 'RESTORE_REQUIRED'
+  preflightFingerprint: string | null
   requestRowsMigrated: number
   bookingRowsMigrated: number
   requestInsertions: readonly string[]
@@ -293,6 +302,13 @@ export function previewPmcBookingAttributionMigrationWorkflow(): {
   liveWrites: false
 } {
   const plan = previewBookingAttributionMigration(createPmcBookingAttributionMigrationRuntime())
+  if (plan.kind === 'RESTORE_REQUIRED') {
+    return {
+      kind: 'RESTORE_REQUIRED', preflightFingerprint: null,
+      requestRowsMigrated: 0, bookingRowsMigrated: 0,
+      requestInsertions: [], masterInsertions: [], liveWrites: false,
+    }
+  }
   return {
     kind: plan.kind,
     preflightFingerprint: plan.preflightFingerprint,
@@ -307,11 +323,8 @@ export function previewPmcBookingAttributionMigrationWorkflow(): {
 }
 
 export function applyPmcBookingAttributionMigrationWorkflow(): {
-  backupCreated: boolean
-  requestRowsMigrated: number
-  bookingRowsMigrated: number
-  readbackVerified: true
-  preflightFingerprint: string
+  status: 'COMPLETE' | 'RESTORE_REQUIRED'
+  readbackVerified: boolean
 } {
   return applyBookingAttributionMigration(createPmcBookingAttributionMigrationRuntime())
 }
@@ -325,71 +338,160 @@ export function createPmcBookingAttributionMigrationRuntime(): BookingAttributio
   if (!backupFolderId) throw new Error('PMC_BACKUP_FOLDER_ID is not configured')
   const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
   const migrationCrypto = createAppsScriptCryptoPort()
+  const expectedQueueDigest = properties[ATTRIBUTION_MIGRATION_EXPECTED_QUEUE_DIGEST]?.trim() ?? ''
+  if (!/^[a-f0-9]{64}$/.test(expectedQueueDigest)) {
+    throw new Error('BOOKING_QUEUE_EXPECTED_IDENTITY_INVALID')
+  }
 
-  const requireFreshQueueGate = (): Record<string, string> => {
-    const current = scriptProperties.getProperties()
-    const verifiedAt = Date.parse(current[ATTRIBUTION_MIGRATION_GATE_VERIFIED_AT] ?? '')
-    if (!Number.isFinite(verifiedAt)
-      || Math.abs(Date.now() - verifiedAt) > ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS) {
-      throw new Error('BOOKING_QUEUE_GATE_STALE')
+  const readAdvancedMetadata = (targetSpreadsheetId: string): {
+    MINI_APP_REQUESTS: unknown
+    BOOKING_MASTER: unknown
+  } => {
+    let response: GoogleAppsScript.Sheets.Schema.Spreadsheet
+    try {
+      const sheetsService = Sheets
+      if (!sheetsService) throw new Error('unavailable')
+      response = sheetsService.Spreadsheets.get(targetSpreadsheetId, {
+        includeGridData: true,
+        ranges: ['MINI_APP_REQUESTS', 'BOOKING_MASTER'],
+        fields: [
+          'sheets(properties(sheetId,title,sheetType,gridProperties),data(startRow,startColumn,',
+          'rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note,textFormatRuns,pivotTable,',
+          'dataSourceTable,dataSourceFormula)),',
+          'rowMetadata,columnMetadata),merges,basicFilter,filterViews,bandedRanges,',
+          'conditionalFormats,rowGroups,columnGroups,charts,tables,protectedRanges,developerMetadata,slicers)',
+        ].join(''),
+      })
+    } catch {
+      throw new Error('SHEETS_V4_METADATA_UNAVAILABLE')
     }
-    return current
+    const byTitle = new Map((response.sheets ?? []).map((sheet) => [sheet.properties?.title ?? '', sheet]))
+    const request = byTitle.get('MINI_APP_REQUESTS')
+    const master = byTitle.get('BOOKING_MASTER')
+    if (!request || !master) throw new Error('SHEETS_V4_METADATA_UNAVAILABLE')
+    return { MINI_APP_REQUESTS: request, BOOKING_MASTER: master }
+  }
+
+  const readSnapshot = (
+    workbook: GoogleAppsScript.Spreadsheet.Spreadsheet,
+  ): AttributionMigrationSheetSnapshot => {
+    const snapshot: AttributionMigrationSheetSnapshot = {
+      ...readGoogleBookingAttributionMigrationSnapshot(
+        workbook,
+        migrationCrypto.sha256Hex,
+        readAdvancedMetadata(workbook.getId()),
+      ),
+      queueState: 'RUNNING',
+      activeTaskCount: -1,
+      requestRowLimit: ATTRIBUTION_REQUEST_ROW_LIMIT,
+      masterRowLimit: ATTRIBUTION_MASTER_ROW_LIMIT,
+      hashValue: migrationCrypto.sha256Hex,
+    }
+    return {
+      ...snapshot,
+      preflightFingerprint: migrationCrypto.sha256Hex(
+        canonicalAttributionMigrationSnapshot(snapshot),
+      ),
+    }
+  }
+
+  const readManifest = () => {
+    const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_MANIFEST)
+    return raw === null || raw.trim() === ''
+      ? null
+      : parseBookingMigrationManifestJson(raw, migrationCrypto.sha256Hex)
   }
 
   return {
     queueGate: {
-      state() {
-        const value = requireFreshQueueGate()[ATTRIBUTION_MIGRATION_QUEUE_STATE]
-        if (value !== 'PAUSED' && value !== 'RUNNING') throw new Error('BOOKING_QUEUE_GATE_INVALID')
-        return value
-      },
-      activeTaskCount() {
-        const raw = requireFreshQueueGate()[ATTRIBUTION_MIGRATION_ACTIVE_TASKS]
-        if (!/^\d+$/.test(raw ?? '')) throw new Error('BOOKING_QUEUE_GATE_INVALID')
-        const value = Number(raw)
-        if (!Number.isSafeInteger(value)) throw new Error('BOOKING_QUEUE_GATE_INVALID')
-        return value
+      readAttestation() {
+        const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_QUEUE_ATTESTATION)
+        if (raw === null) throw new Error('QUEUE_ATTESTATION_INVALID')
+        return parseBookingQueueAttestationJson(raw, {
+          nowMs: Date.now(),
+          maxAgeMs: ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS,
+          environment: ATTRIBUTION_MIGRATION_ENVIRONMENT,
+          queueResourceDigest: expectedQueueDigest,
+          checkerVersion: ATTRIBUTION_MIGRATION_CHECKER_VERSION,
+          sha256: migrationCrypto.sha256Hex,
+        })
       },
     },
-    readSnapshot(): AttributionMigrationSheetSnapshot {
-      const snapshot: AttributionMigrationSheetSnapshot = {
-        ...readGoogleBookingAttributionMigrationSnapshot(spreadsheet, migrationCrypto.sha256Hex),
-        // The workflow replaces these placeholders with a fresh QueueGatePort read.
-        queueState: 'RUNNING',
-        activeTaskCount: -1,
-        requestRowLimit: ATTRIBUTION_REQUEST_ROW_LIMIT,
-        masterRowLimit: ATTRIBUTION_MASTER_ROW_LIMIT,
-      }
-      return {
-        ...snapshot,
-        preflightFingerprint: migrationCrypto.sha256Hex(
-          canonicalAttributionMigrationSnapshot(snapshot),
-        ),
-      }
+    manifest: {
+      read: readManifest,
+      createPrepared(payload) {
+        if (payload.state !== 'PREPARED' || readManifest() !== null) {
+          throw new Error('MIGRATION_MANIFEST_CONFLICT')
+        }
+        const envelope = createBookingMigrationManifestEnvelope(payload, migrationCrypto.sha256Hex)
+        scriptProperties.setProperty(ATTRIBUTION_MIGRATION_MANIFEST, JSON.stringify(envelope))
+        const persisted = readManifest()
+        if (!persisted || persisted.digest !== envelope.digest) {
+          throw new Error('MIGRATION_MANIFEST_WRITE_FAILED')
+        }
+        return persisted
+      },
+      replaceExpected(expectedDigest, payload) {
+        const current = readManifest()
+        if (!current || current.digest !== expectedDigest) throw new Error('MIGRATION_MANIFEST_CONFLICT')
+        validateBookingMigrationManifestTransition(current, payload)
+        const envelope = createBookingMigrationManifestEnvelope(payload, migrationCrypto.sha256Hex)
+        scriptProperties.setProperty(ATTRIBUTION_MIGRATION_MANIFEST, JSON.stringify(envelope))
+        const persisted = readManifest()
+        if (!persisted || persisted.digest !== envelope.digest) {
+          throw new Error('MIGRATION_MANIFEST_WRITE_FAILED')
+        }
+        return persisted
+      },
     },
+    readSnapshot: () => readSnapshot(spreadsheet),
     withLock<T>(operation: () => T): T {
       const lock = LockService.getScriptLock()
       lock.waitLock(30_000)
       try { return operation() } finally { lock.releaseLock() }
     },
-    createPrivateNativeBackup(preflightFingerprint) {
+    createAndVerifyPrivateNativeBackup(preflightFingerprint) {
       const approval = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_APPROVAL)?.trim()
       if (!approval || approval !== preflightFingerprint) {
         throw new Error('ATTRIBUTION_MIGRATION_OWNER_APPROVAL_MISMATCH')
       }
-      const timestamp = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd_HH-mm-ss')
-      const backupFolder = DriveApp.getFolderById(backupFolderId)
-      if (backupFolder.getSharingAccess() !== DriveApp.Access.PRIVATE) {
-        throw new Error('ATTRIBUTION_MIGRATION_BACKUP_FOLDER_NOT_PRIVATE')
+      try {
+        const timestamp = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd_HH-mm-ss')
+        const backupFolder = DriveApp.getFolderById(backupFolderId)
+        if (backupFolder.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+          throw new Error('not private')
+        }
+        const backup = DriveApp.getFileById(spreadsheetId).makeCopy(
+          `PMC Booking Pre-Attribution-V2 ${timestamp}`,
+          backupFolder,
+        )
+        if (backup.getMimeType() !== 'application/vnd.google-apps.spreadsheet'
+          || backup.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+          throw new Error('invalid backup')
+        }
+        const parents = backup.getParents()
+        if (!parents.hasNext() || parents.next().getId() !== backupFolderId || parents.hasNext()) {
+          throw new Error('invalid parent')
+        }
+        const backupSnapshot = readSnapshot(SpreadsheetApp.openById(backup.getId()))
+        if (migrationSnapshotFingerprint(backupSnapshot) !== preflightFingerprint) {
+          throw new Error('fingerprint mismatch')
+        }
+        return {
+          fileId: backup.getId(),
+          mimeType: 'application/vnd.google-apps.spreadsheet' as const,
+          parentId: backupFolderId,
+          sourceFingerprint: preflightFingerprint,
+        }
+      } catch {
+        throw new Error('MIGRATION_BACKUP_FAILED')
       }
-      DriveApp.getFileById(spreadsheetId).makeCopy(
-        `PMC Booking Pre-Attribution-V2 ${timestamp}`,
-        backupFolder,
-      )
     },
     writeMigration(plan) {
       writeGoogleBookingAttributionMigration(spreadsheet, plan)
     },
+    nowIso: () => new Date().toISOString(),
+    sha256: migrationCrypto.sha256Hex,
   }
 }
 

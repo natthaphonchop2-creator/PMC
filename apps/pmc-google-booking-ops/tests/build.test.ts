@@ -70,6 +70,17 @@ describe('Apps Script bundle', () => {
     })
   })
 
+  it('enables the Sheets v4 advanced metadata service required by guarded migration', () => {
+    execFileSync('npm', ['run', 'booking:build'], { stdio: 'pipe' })
+    const manifest = JSON.parse(
+      readFileSync('apps/pmc-google-booking-ops/dist/appsscript.json', 'utf8'),
+    ) as { dependencies?: { enabledAdvancedServices?: Array<Record<string, string>> } }
+
+    expect(manifest.dependencies?.enabledAdvancedServices).toContainEqual({
+      userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4',
+    })
+  })
+
   it('avoids structuredClone because the Apps Script V8 global is not guaranteed', () => {
     execFileSync('npm', ['run', 'booking:build'], { stdio: 'pipe' })
     const bundle = readFileSync('apps/pmc-google-booking-ops/dist/Code.js', 'utf8')

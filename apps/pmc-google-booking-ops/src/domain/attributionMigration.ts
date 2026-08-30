@@ -1,5 +1,6 @@
 import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../../../shared/pmcMiniAppAsyncState'
 import { BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1 } from '../sheetSchema'
+import { isReservedAttributionOption } from './staffDirectory'
 
 export const LEGACY_MINI_APP_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS_V1
 
@@ -37,6 +38,8 @@ export interface AttributionMigrationTableSnapshot {
   rows: unknown[][]
   /** Hash of formats, validations, frozen panes, and filter behavior captured by the adapter. */
   preservationFingerprint: string
+  preservationStructureFingerprint?: string
+  preservationRowFingerprints?: string[]
 }
 
 export interface AttributionMigrationSheetSnapshot {
@@ -49,6 +52,8 @@ export interface AttributionMigrationSheetSnapshot {
   masterRowLimit: number
   /** Recomputed by the production adapter with SHA-256 on every read. */
   preflightFingerprint?: string
+  /** Production supplies SHA-256; deterministic local fallback keeps the pure planner testable. */
+  hashValue?: (value: string) => string
 }
 
 export interface NoBookingAttributionMigrationPlan {
@@ -58,6 +63,10 @@ export interface NoBookingAttributionMigrationPlan {
   bookingRowsMigrated: 0
   requestValueHash: string
   masterValueHash: string
+  requestHeaderHash: string
+  masterHeaderHash: string
+  requestNonTargetValueHash: string
+  masterNonTargetValueHash: string
   requestPreservationFingerprint: string
   masterPreservationFingerprint: string
 }
@@ -76,6 +85,8 @@ export interface ApplyBookingAttributionMigrationPlan {
   bookingRowsMigrated: number
   requestValueHash: string
   masterValueHash: string
+  requestHeaderHash: string
+  masterHeaderHash: string
   requestNonTargetValueHash: string
   masterNonTargetValueHash: string
   requestPreservationFingerprint: string
@@ -103,6 +114,7 @@ export function planBookingAttributionMigration(
   )
   if (requestSchema === 'TARGET') validateTargetRequestVersions(snapshot.request.rows)
   const preflightFingerprint = migrationSnapshotFingerprint(snapshot)
+  const hash = snapshot.hashValue ?? stableHash
 
   if (requestSchema === 'TARGET' && masterSchema === 'TARGET') {
     return {
@@ -110,10 +122,24 @@ export function planBookingAttributionMigration(
       preflightFingerprint,
       requestRowsMigrated: 0,
       bookingRowsMigrated: 0,
-      requestValueHash: hashRows(snapshot.request.headers, snapshot.request.rows),
-      masterValueHash: hashRows(snapshot.master.headers, snapshot.master.rows),
-      requestPreservationFingerprint: snapshot.request.preservationFingerprint,
-      masterPreservationFingerprint: snapshot.master.preservationFingerprint,
+      requestValueHash: hashRows(snapshot.request.headers, snapshot.request.rows, hash),
+      masterValueHash: hashRows(snapshot.master.headers, snapshot.master.rows, hash),
+      requestHeaderHash: hash(JSON.stringify(snapshot.request.headers)),
+      masterHeaderHash: hash(JSON.stringify(snapshot.master.headers)),
+      requestNonTargetValueHash: hashRowsExcluding(
+        snapshot.request.headers,
+        snapshot.request.rows,
+        new Set(['protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId']),
+        hash,
+      ),
+      masterNonTargetValueHash: hashRowsExcluding(
+        snapshot.master.headers,
+        snapshot.master.rows,
+        new Set(['recorderId', 'recorderName', 'recorderSource']),
+        hash,
+      ),
+      requestPreservationFingerprint: tablePreservationHash(snapshot.request, snapshot.request.rows.length, hash),
+      masterPreservationFingerprint: tablePreservationHash(snapshot.master, snapshot.master.rows.length, hash),
     }
   }
 
@@ -141,20 +167,24 @@ export function planBookingAttributionMigration(
     masterRows,
     requestRowsMigrated: requestSchema === 'LEGACY' ? requestRows.length : 0,
     bookingRowsMigrated: masterSchema === 'LEGACY' ? masterRows.length : 0,
-    requestValueHash: hashRows(TARGET_MINI_APP_REQUEST_HEADERS, requestRows),
-    masterValueHash: hashRows(TARGET_BOOKING_MASTER_HEADERS, masterRows),
+    requestValueHash: hashRows(TARGET_MINI_APP_REQUEST_HEADERS, requestRows, hash),
+    masterValueHash: hashRows(TARGET_BOOKING_MASTER_HEADERS, masterRows, hash),
+    requestHeaderHash: hash(JSON.stringify(TARGET_MINI_APP_REQUEST_HEADERS)),
+    masterHeaderHash: hash(JSON.stringify(TARGET_BOOKING_MASTER_HEADERS)),
     requestNonTargetValueHash: hashRowsExcluding(
       TARGET_MINI_APP_REQUEST_HEADERS,
       requestRows,
       new Set(['protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId']),
+      hash,
     ),
     masterNonTargetValueHash: hashRowsExcluding(
       TARGET_BOOKING_MASTER_HEADERS,
       masterRows,
       new Set(['recorderId', 'recorderName', 'recorderSource']),
+      hash,
     ),
-    requestPreservationFingerprint: snapshot.request.preservationFingerprint,
-    masterPreservationFingerprint: snapshot.master.preservationFingerprint,
+    requestPreservationFingerprint: tablePreservationHash(snapshot.request, requestRows.length, hash),
+    masterPreservationFingerprint: tablePreservationHash(snapshot.master, masterRows.length, hash),
   }
 }
 
@@ -192,20 +222,32 @@ export function verifyBookingAttributionMigrationReadback(
 ): void {
   if (!sameHeader(snapshot.request.headers, TARGET_MINI_APP_REQUEST_HEADERS)
     || !sameHeader(snapshot.master.headers, TARGET_BOOKING_MASTER_HEADERS)
-    || hashRows(snapshot.request.headers, snapshot.request.rows) !== plan.requestValueHash
-    || hashRows(snapshot.master.headers, snapshot.master.rows) !== plan.masterValueHash
+    || (snapshot.hashValue ?? stableHash)(JSON.stringify(snapshot.request.headers)) !== plan.requestHeaderHash
+    || (snapshot.hashValue ?? stableHash)(JSON.stringify(snapshot.master.headers)) !== plan.masterHeaderHash
+    || hashRows(snapshot.request.headers, snapshot.request.rows, snapshot.hashValue ?? stableHash) !== plan.requestValueHash
+    || hashRows(snapshot.master.headers, snapshot.master.rows, snapshot.hashValue ?? stableHash) !== plan.masterValueHash
     || hashRowsExcluding(
       snapshot.request.headers,
       snapshot.request.rows,
       new Set(['protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId']),
+      snapshot.hashValue ?? stableHash,
     ) !== plan.requestNonTargetValueHash
     || hashRowsExcluding(
       snapshot.master.headers,
       snapshot.master.rows,
       new Set(['recorderId', 'recorderName', 'recorderSource']),
+      snapshot.hashValue ?? stableHash,
     ) !== plan.masterNonTargetValueHash
-    || snapshot.request.preservationFingerprint !== plan.requestPreservationFingerprint
-    || snapshot.master.preservationFingerprint !== plan.masterPreservationFingerprint) {
+    || tablePreservationHash(
+      snapshot.request,
+      snapshot.request.rows.length,
+      snapshot.hashValue ?? stableHash,
+    ) !== plan.requestPreservationFingerprint
+    || tablePreservationHash(
+      snapshot.master,
+      snapshot.master.rows.length,
+      snapshot.hashValue ?? stableHash,
+    ) !== plan.masterPreservationFingerprint) {
     throw new Error('MIGRATION_READBACK_MISMATCH')
   }
 }
@@ -255,9 +297,11 @@ function migrateLegacyRequestRows(
     const staffId = text(record.staffId)
     const recorder = staffById.get(staffId)
     if (!recorder) throw new Error('LEGACY_REQUEST_STAFF_UNRESOLVED')
-    const oldAeName = text(record.aeName).trim()
-    const ae = oldAeName && oldAeName !== NO_AE ? legacyAeByName.get(oldAeName) : null
+    requireNonreservedAttribution(recorder)
+    const oldAeName = text(record.aeName)
+    const ae = oldAeName !== '' && oldAeName !== NO_AE ? legacyAeByName.get(oldAeName) : null
     if (oldAeName && oldAeName !== NO_AE && !ae) throw new Error('LEGACY_REQUEST_AE_UNRESOLVED')
+    if (ae) requireNonreservedAttribution(ae)
     return TARGET_MINI_APP_REQUEST_HEADERS.map((header) => {
       if (header === 'protocolVersion') return 1
       if (header === 'recorderName' || header === 'adminName') return recorder.name
@@ -288,18 +332,25 @@ function migrateLegacyMasterRows(
       if (request) {
         const exactStaff = staffById.get(text(request.staffId))
         if (!exactStaff) throw new Error('MINI_APP_RECORDER_UNRESOLVED')
+        requireNonreservedAttribution(exactStaff)
         recorderId = exactStaff.id
         recorderName = exactStaff.name
         recorderSource = 'VERIFIED_LINE'
       } else {
-        recorderId = text(record.adminId)
-        recorderName = text(record.adminName)
+        const assumed = staffById.get(text(record.adminId))
+        if (!assumed || assumed.name !== text(record.adminName)) {
+          throw new Error('LEGACY_ASSUMED_ADMIN_INVALID')
+        }
+        requireNonreservedAttribution(assumed)
+        recorderId = assumed.id
+        recorderName = assumed.name
         recorderSource = 'LEGACY_ASSUMED_ADMIN'
       }
     } else {
       const normalizedEmail = text(record.submitterEmail).trim().toLowerCase()
       const matches = staff.filter((item) => item.active && item.email.trim().toLowerCase() === normalizedEmail)
       if (normalizedEmail && matches.length === 1) {
+        requireNonreservedAttribution(matches[0])
         recorderId = matches[0].id
         recorderName = matches[0].name
         recorderSource = 'FORM_EMAIL_MATCH'
@@ -321,11 +372,22 @@ function correlateMiniAppRequest(
 ): Array<Record<string, unknown>> {
   const caseId = text(master.caseId)
   const formResponseId = text(master.formResponseId)
-  return requests.filter((request) => {
-    const requestId = text(request.requestId)
-    const requestCaseId = text(request.caseId)
-    return Boolean(caseId && requestCaseId === caseId) || formResponseId === `mini:${requestId}`
-  })
+  const legacyIdentity = /^mini:([^:]+)$/.exec(formResponseId)?.[1] ?? null
+  const byCase = caseId
+    ? requests.filter((request) => text(request.caseId) === caseId)
+    : []
+  const byForm = legacyIdentity
+    ? requests.filter((request) => text(request.requestId) === legacyIdentity)
+    : []
+  if (byCase.length > 1 || byForm.length > 1) throw new Error('AMBIGUOUS_MINI_APP_CORRELATION')
+  if (legacyIdentity && caseId) {
+    if (byCase.length === 0 && byForm.length === 0) return []
+    if (byCase.length !== 1 || byForm.length !== 1 || byCase[0] !== byForm[0]) {
+      throw new Error('CONTRADICTORY_MINI_APP_CORRELATION')
+    }
+    return byCase
+  }
+  return legacyIdentity ? byForm : byCase
 }
 
 function uniqueStaffById(staff: readonly AttributionStaffSnapshot[]): Map<string, AttributionStaffSnapshot> {
@@ -345,10 +407,15 @@ function uniqueEligibleAeByName(
   for (const item of staff) {
     if (!item.active || !item.canBeAe) continue
     const name = item.name.trim()
-    if (!name || name === NO_AE || result.has(name)) throw new Error('DUPLICATE_LEGACY_AE_NAME')
+    if (isReservedAttributionOption(item)) throw new Error('RESERVED_ATTRIBUTION_IDENTITY')
+    if (!name || result.has(name)) throw new Error('DUPLICATE_LEGACY_AE_NAME')
     result.set(name, item)
   }
   return result
+}
+
+function requireNonreservedAttribution(staff: AttributionStaffSnapshot): void {
+  if (isReservedAttributionOption(staff)) throw new Error('RESERVED_ATTRIBUTION_IDENTITY')
 }
 
 function exactSchema(
@@ -381,26 +448,55 @@ function copyRows(rows: readonly unknown[][]): unknown[][] {
   return rows.map((values) => [...values])
 }
 
-function hashRows(headers: readonly string[], rows: readonly unknown[][]): string {
-  return stableHash({ headers, rows })
+function hashRows(
+  headers: readonly string[],
+  rows: readonly unknown[][],
+  hash: (value: string) => string,
+): string {
+  return hash(JSON.stringify({ headers, rows }))
 }
 
-function hashRowsExcluding(headers: readonly string[], rows: readonly unknown[][], excluded: Set<string>): string {
+function hashRowsExcluding(
+  headers: readonly string[],
+  rows: readonly unknown[][],
+  excluded: Set<string>,
+  hash: (value: string) => string,
+): string {
   const indexes = headers.flatMap((header, index) => excluded.has(header) ? [] : [index])
-  return stableHash({
+  return hash(JSON.stringify({
     headers: indexes.map((index) => headers[index]),
     rows: rows.map((values) => indexes.map((index) => values[index] ?? '')),
-  })
+  }))
+}
+
+function tablePreservationHash(
+  table: AttributionMigrationTableSnapshot,
+  dataRowCount: number,
+  hash: (value: string) => string,
+): string {
+  if (table.preservationStructureFingerprint && table.preservationRowFingerprints) {
+    return hash(JSON.stringify({
+      structure: table.preservationStructureFingerprint,
+      rows: table.preservationRowFingerprints.slice(0, dataRowCount + 1),
+    }))
+  }
+  return table.preservationFingerprint
 }
 
 function stableHash(value: unknown): string {
-  const input = JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item)
-  let hash = 0x811c9dc5
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193)
+  const input = typeof value === 'string'
+    ? value
+    : JSON.stringify(value, (_key, item) => item instanceof Date ? item.toISOString() : item)
+  const chunks: string[] = []
+  for (let seed = 0; seed < 8; seed += 1) {
+    let hash = (0x811c9dc5 ^ seed) >>> 0
+    for (let index = 0; index < input.length; index += 1) {
+      hash ^= input.charCodeAt(index) + seed
+      hash = Math.imul(hash, 0x01000193)
+    }
+    chunks.push((hash >>> 0).toString(16).padStart(8, '0'))
   }
-  return (hash >>> 0).toString(16).padStart(8, '0')
+  return chunks.join('')
 }
 
 function text(value: unknown): string {

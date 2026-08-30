@@ -438,14 +438,16 @@ git commit -m "feat: persist recorder and selected attribution"
 - Modify: `apps/pmc-google-booking-ops/src/runtime.ts`
 - Modify: `apps/pmc-google-booking-ops/src/entrypoints.ts`
 - Modify: `apps/pmc-google-booking-ops/scripts/build.mjs`
+- Modify: `apps/pmc-google-booking-ops/appsscript.json`
 - Test: `apps/pmc-google-booking-ops/tests/attributionMigration.test.ts`
 - Test: `apps/pmc-google-booking-ops/tests/sheetMigration.test.ts`
 - Test: `apps/pmc-google-booking-ops/tests/miniAppRequestStateStore.test.ts`
+- Create: `apps/pmc-google-booking-ops/tests/helpers/attributionMigrationFakes.ts`
 
 **Interfaces:**
 - Produces: `planBookingAttributionMigration(snapshot): BookingAttributionMigrationPlan`.
 - Produces owner entrypoints: `previewPmcBookingAttributionMigration()` and `applyPmcBookingAttributionMigration()`.
-- Consumes injected `QueueGatePort` returning paused/state/task counts.
+- Consumes one immutable `QueueGatePort.readAttestation()` JSON snapshot plus a durable migration-manifest port.
 
 - [ ] **Step 1: Write failing pure migration tests**
 
@@ -460,7 +462,7 @@ expect(planBookingAttributionMigration(cleanLegacySnapshot())).toMatchObject({
 })
 ```
 
-Cover exact legacy/P2 headers, unknown headers, active tasks, duplicate legacy AE names, authoritative request correlation, assumed-admin source, Form email source, idempotent rerun, and no-write dry run.
+Cover exact legacy/P2 headers, unknown headers, active tasks, duplicate/reserved legacy identities, contradictory authoritative correlation, assumed-admin source, Form email source, durable manifest state, partial-write/fault boundaries, idempotent COMPLETE rerun, unmanifested target rejection, immutable queue attestation, normalized metadata drift, and no-write dry run.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -476,19 +478,16 @@ Expected: FAIL because the planner/workflow do not exist.
 
 ```ts
 export interface QueueGatePort {
-  state(): 'PAUSED' | 'RUNNING'
-  activeTaskCount(): number
+  readAttestation(): BookingQueueAttestation
 }
 
 export interface BookingAttributionMigrationResult {
-  backupCreated: true
-  requestRowsMigrated: number
-  bookingRowsMigrated: number
-  readbackVerified: true
+  status: 'COMPLETE' | 'RESTORE_REQUIRED'
+  readbackVerified: boolean
 }
 ```
 
-Apply under `LockService`; re-read and require the same fingerprint before mutation. Insert columns with exact zero-based ranges, write backfills, and verify header/value hashes. A second run performs zero mutations. Preview never creates a backup or writes.
+Apply under `LockService`; re-read and require the same Sheet/config fingerprint plus one fresh, whole queue attestation before mutation. Create and verify the native backup, then persist a SHA-256-bound `PREPARED` manifest before the first Sheet write. Insert columns/write backfills and verify target/non-target/preservation hashes; persist `COMPLETE` only after exact readback. Any `PREPARED`/failed partial state becomes or returns sanitized `RESTORE_REQUIRED` with no automatic writes. Only a valid `COMPLETE` manifest can take the idempotent no-lock/no-backup path for a non-empty target workbook. Preview never creates a backup, manifest, lock, or write. Enable Sheets v4 advanced metadata and normalize non-target presentation metadata; reject unsupported managed-tab objects before backup.
 
 - [ ] **Step 4: Run GREEN and build exported entrypoints**
 

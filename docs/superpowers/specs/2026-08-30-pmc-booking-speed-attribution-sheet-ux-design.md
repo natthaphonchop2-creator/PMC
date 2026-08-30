@@ -117,6 +117,10 @@ Before any live write:
 3. insert the new columns atomically and preserve formatting/validation;
 4. read back exact headers and unchanged non-target values.
 
+Because Google Sheets column insertion is not transactional, apply also uses one durable Script-Property manifest with `PREPARED`, `COMPLETE`, and `RESTORE_REQUIRED` states. The manifest binds the source fingerprint, verified native-backup identity, one immutable queue-attestation digest, and exact expected target/readback hashes. It is written as `PREPARED` after backup verification and before the first Sheet mutation, then changed to `COMPLETE` only after exact readback. Any rerun that sees `PREPARED`, `RESTORE_REQUIRED`, or an unmanifested non-empty target schema fails closed with a sanitized restore-required result; it never reports a generic idempotent success. Automatic repair/rollback is intentionally out of scope for this release.
+
+Queue state and task count come from one exact, SHA-256-bound attestation JSON read per preflight, never from separate mutable properties. Preservation verification uses normalized Sheets v4 metadata for non-target cell formats, validation, notes/rich text, row/column dimensions and hidden state, frozen/grid settings, merges, filters/filter views, banding, and conditional-format rules. Unsupported over-grid objects are rejected before backup/write and deferred to the later Sheet-UX maintenance plan.
+
 Backfill rules:
 
 - Existing confirmed/cancelled Mini App requests: recorder comes from the old `staffId`; backfill `adminId = old staffId`, resolve recorder/Admin name from that exact ID, and resolve `aeId` from the exact unique old AE name for historical compatibility.
