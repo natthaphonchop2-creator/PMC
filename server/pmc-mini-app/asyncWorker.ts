@@ -245,7 +245,7 @@ export function createAsyncBookingWorker(input: {
     )
     assertEvidenceLayout(context.bound, context.draft, true)
     emit('drive_copy_completed', {
-      requestId: context.draft.requestId, draftId: context.draft.draftId, attempt: context.taskAttempt,
+      route: 'worker', action: 'evidence_projection', status: 200, attempt: context.taskAttempt,
       state: context.draft.state, fileCount: context.draft.evidenceCount,
       elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
     })
@@ -280,8 +280,8 @@ export function createAsyncBookingWorker(input: {
       throw new AsyncBookingWorkerError('BOOKING_INGRESS_RETRY')
     }
     emit('booking_ingress_completed', {
-      requestId: context.draft.requestId, draftId: context.draft.draftId, caseId: result.caseId,
-      attempt: context.taskAttempt, state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+      route: 'worker', action: 'booking_ingress', status: 200, attempt: context.taskAttempt,
+      state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
     })
     return result
   }
@@ -319,8 +319,7 @@ export function createAsyncBookingWorker(input: {
     )
     context.draft = persisted
     if (targetState === 'RETRYING') emit('booking_worker_retrying', {
-      requestId: persisted.requestId, draftId: persisted.draftId, attempt: context.taskAttempt,
-      state: targetState, safeErrorCode: retry.safeErrorCode!,
+      route: 'worker', action: 'retry', status: 503, attempt: context.taskAttempt, state: targetState,
       elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
     })
     return targetState === 'NEEDS_REVIEW' ? terminalResult(persisted) : null
@@ -425,9 +424,9 @@ export function createAsyncBookingWorker(input: {
         if (terminalEvents.has(key)) return
         terminalEvents.add(key)
         emit(name, {
-          requestId: result.requestId, draftId: finalizeInput.draftId, attempt: finalizeInput.attempt,
-          state: result.state, ...(result.caseId ? { caseId: result.caseId } : {}),
-          ...(result.state === 'NEEDS_REVIEW' ? { safeErrorCode: 'RETRY_EXHAUSTED' as const } : {}),
+          route: 'worker', action: result.state === 'NEEDS_REVIEW' ? 'review' : 'complete',
+          status: result.state === 'NEEDS_REVIEW' ? 503 : 200,
+          attempt: finalizeInput.attempt, state: result.state,
           elapsedMs: Math.max(0, nowDate().getTime() - finalizeStartedAt),
         })
       }
@@ -505,7 +504,7 @@ export function createAsyncBookingWorker(input: {
 
       if (!lastDraft || !bound) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
       emit('booking_worker_claimed', {
-        requestId: lastDraft.requestId, draftId: lastDraft.draftId, attempt: finalizeInput.attempt,
+        route: 'worker', action: 'claim', status: 200, attempt: finalizeInput.attempt,
         state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - startedAt),
       })
       const context: WorkerContext = {

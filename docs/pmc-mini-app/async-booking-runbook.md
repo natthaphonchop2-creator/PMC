@@ -136,41 +136,63 @@ After this gate's deployed revision is verified, the owner may run the checker w
 
 ## Safe telemetry and log review
 
-Structured events are allowlisted: `evidence_stage_started`, `evidence_stage_completed`, `booking_task_enqueued`, `booking_worker_claimed`, `drive_copy_completed`, `booking_ingress_completed`, `booking_worker_retrying`, `booking_worker_completed`, and `booking_worker_needs_review`.
+Structured events are allowlisted: `prepare_completed`, `confirm_completed`, `evidence_stage_started`, `evidence_stage_completed`, `booking_task_enqueued`, `booking_worker_claimed`, `drive_copy_completed`, `booking_ingress_completed`, `booking_worker_retrying`, `booking_worker_completed`, and `booking_worker_needs_review`.
 
-Allowed fields are request/draft IDs, allocated Case ID, attempt, state, safe error code, elapsed milliseconds, and file count. The event builder rejects unknown fields plus values resembling Thai phones, URLs, bearer tokens, evidence content, and evidence-byte totals. Never add raw request bodies, customer fields, task/resource names, provider details, exception strings, or secrets to log queries or dashboards.
+Allowed fields are only `route`, `action`, numeric `status`, safe `state`, bounded `attempt`, bounded `fileCount`, and `elapsedMs`. Request/draft/Case IDs and safe error codes are no longer emitted. The event builders reject unknown fields, nested values, URLs, bearer tokens, evidence content/bytes, file names, customer/business fields, and non-finite or out-of-range numbers. Never add raw request bodies, DOM text/attributes/input values, task/resource names, provider details, exception strings, identifiers, or secrets to log queries or dashboards.
 
-Use Logs Explorer filters by event name and numeric `elapsedMs` only. Deduplicate aggregate rows by `event + requestId + draftId + attempt + state`; do not export source log entries.
+Use Logs Explorer filters by event name, route/action/status/state, and numeric `elapsedMs` only. Keep exported results aggregate-only; do not export source log entries.
 
 Documentation-only Log Analytics templates (the result must retain only aggregate values and time window):
 
 ```sql
-WITH deduped AS (
-  SELECT CAST(jsonPayload.elapsedMs AS INT64) AS elapsed_ms,
-    ROW_NUMBER() OVER (PARTITION BY jsonPayload.event, jsonPayload.requestId, jsonPayload.draftId, jsonPayload.attempt, jsonPayload.state ORDER BY timestamp DESC) AS rn
+WITH safe_events AS (
+  SELECT CAST(jsonPayload.elapsedMs AS INT64) AS elapsed_ms
   FROM `LOG_TABLE`
   WHERE jsonPayload.event = 'booking_task_enqueued'
+    AND jsonPayload.route = 'confirm'
+    AND jsonPayload.action = 'enqueue'
+    AND CAST(jsonPayload.status AS INT64) = 202
 )
 SELECT APPROX_QUANTILES(elapsed_ms, 100)[OFFSET(50)] AS ack_p50_ms,
   APPROX_QUANTILES(elapsed_ms, 100)[OFFSET(95)] AS ack_p95_ms
-FROM deduped
-WHERE rn = 1
+FROM safe_events
 ```
 
 ```sql
-WITH deduped AS (
+WITH safe_events AS (
   SELECT jsonPayload.event AS event, CAST(jsonPayload.elapsedMs AS INT64) AS elapsed_ms,
-    ROW_NUMBER() OVER (PARTITION BY jsonPayload.event, jsonPayload.requestId, jsonPayload.draftId, jsonPayload.attempt, jsonPayload.state ORDER BY timestamp DESC) AS rn
+    jsonPayload.action AS action
   FROM `LOG_TABLE`
   WHERE jsonPayload.event IN ('booking_worker_completed', 'booking_worker_retrying', 'booking_worker_needs_review')
 )
 SELECT APPROX_QUANTILES(IF(event = 'booking_worker_completed', elapsed_ms, NULL), 100)[OFFSET(50)] AS background_p50_ms,
   APPROX_QUANTILES(IF(event = 'booking_worker_completed', elapsed_ms, NULL), 100)[OFFSET(95)] AS background_p95_ms,
-  COUNTIF(event = 'booking_worker_retrying') AS retry_count,
-  COUNTIF(event = 'booking_worker_needs_review') AS needs_review_count
-FROM deduped
-WHERE rn = 1
+  COUNTIF(action = 'retry') AS retry_count,
+  COUNTIF(action = 'review') AS needs_review_count
+FROM safe_events
 ```
+
+## Local performance evidence gate
+
+Task 6 adds two offline-safe CLIs. `--help` and `--evaluate` do not import a browser, runner, or network client and do not send a Booking request.
+
+```bash
+node scripts/measure-pmc-booking-performance.mjs --help
+node scripts/measure-pmc-booking-performance.mjs --evaluate tests/fixtures/booking-performance-pass.json
+node scripts/measure-pmc-mini-app-inp.mjs --help
+```
+
+The failing threshold fixture must exit nonzero:
+
+```bash
+node scripts/measure-pmc-booking-performance.mjs --evaluate tests/fixtures/booking-performance-fail.json
+```
+
+The performance budget requires 30 retained successful runs after one discarded warm-up for async prepare, sync prepare, legacy sync prepare, and async confirm; seven exact bounded fixtures; then five concurrent clients. It fails for insufficient success runs, async prepare p95 above 3,000 ms, sync prepare median above 70% of the legacy median, async confirm p95 above 6,000 ms, any unavailable-route probe, any maximum-fixture failure, or any concurrency duplicate.
+
+The exact fixture labels are `payment-chat-2x500kb`, `five-files-2mb`, `twenty-files-max25mb`, `chunk-overflow`, `invalid-mime`, `partial-failure`, and `response-loss`. Artifacts retain only revision label, UTC/Bangkok timestamps, safe route/status, fixture label, count, p50/p95/max, and aggregate gate counts. Raw samples, URLs, IDs, rows, payloads, evidence metadata, and secrets are forbidden.
+
+**Stop for a new owner approval before live measurement.** Live mode additionally requires the literal `--owner-approved` flag, `PMC_BOOKING_PERFORMANCE_OWNER_GATE=APPROVED`, a reviewed `PMC_BOOKING_PERFORMANCE_REVISION` label, a separately reviewed runner module, and a new non-existing aggregate output path. The implementation task does not run this mode. INP/Long Animation Frame evidence records only `preview`/`confirm` categories and aggregate input-delay, processing, presentation, longest-frame, and longest-script durations. A p95 INP above 200 ms or a script duration above 50 ms records `routeSplittingGate=REQUIRED`; it does not authorize speculative lazy loading or route changes.
 
 ## Monthly cost check
 

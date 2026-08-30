@@ -66,12 +66,67 @@ export class MiniAppApiError extends Error {
   }
 }
 
+export type BrowserBookingTimingEventName =
+  | 'prepare_request_completed'
+  | 'confirm_request_completed'
+  | 'navigation_to_preview'
+  | 'navigation_to_home'
+
+export type BrowserBookingTimingFields = {
+  action: 'prepare' | 'confirm' | 'preview' | 'home'
+  status: number
+  elapsedMs: number
+}
+
+export type BrowserBookingTiming = (
+  name: BrowserBookingTimingEventName,
+  fields: BrowserBookingTimingFields,
+) => void
+
+const BROWSER_TIMING_ACTIONS: Record<BrowserBookingTimingEventName, BrowserBookingTimingFields['action']> = {
+  prepare_request_completed: 'prepare',
+  confirm_request_completed: 'confirm',
+  navigation_to_preview: 'preview',
+  navigation_to_home: 'home',
+}
+
+const BROWSER_TIMING_FIELDS = new Set(['action', 'status', 'elapsedMs'])
+
+export function bookingBrowserTimingEvent(
+  name: BrowserBookingTimingEventName,
+  fields: BrowserBookingTimingFields,
+): Record<string, string | number> {
+  if (!Object.hasOwn(BROWSER_TIMING_ACTIONS, name) || !plainRecord(fields)
+    || !Object.keys(fields).every((field) => BROWSER_TIMING_FIELDS.has(field))
+    || fields.action !== BROWSER_TIMING_ACTIONS[name]
+    || !safeBrowserStatus(fields.status)
+    || !safeBrowserDuration(fields.elapsedMs)) {
+    throw new Error('UNSAFE_BROWSER_BOOKING_TIMING_FIELD')
+  }
+  return { event: name, ...fields }
+}
+
+export function emitBrowserBookingTiming(
+  telemetry: BrowserBookingTiming | undefined,
+  name: BrowserBookingTimingEventName,
+  fields: BrowserBookingTimingFields,
+): void {
+  if (!telemetry) return
+  const event = bookingBrowserTimingEvent(name, fields)
+  try {
+    telemetry(name, { action: event.action as BrowserBookingTimingFields['action'], status: event.status as number, elapsedMs: event.elapsedMs as number })
+  } catch { /* passive telemetry cannot alter the user action */ }
+}
+
 export function createMiniAppApi(options: {
   fetch?: typeof globalThis.fetch
   liff?: MiniAppLiffPort
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
 } = {}): MiniAppBrowserApi {
   const request = options.fetch ?? globalThis.fetch
   const liffClient = options.liff ?? liff
+  const performanceNow = options.performanceNow ?? (() => globalThis.performance.now())
   let miniAppId = ''
   let activeBookingProtocol: BookingProtocolVersion = 1
   if (!request) throw new Error('Browser fetch is unavailable')
@@ -143,7 +198,8 @@ export function createMiniAppApi(options: {
         method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
       })
     },
-    prepare(idToken, draftId, version, input) {
+    async prepare(idToken, draftId, version, input) {
+      const startedAt = safeBrowserNow(performanceNow)
       const body = new FormData()
       body.append('input', JSON.stringify({
         protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
@@ -152,9 +208,20 @@ export function createMiniAppApi(options: {
       }))
       for (const file of input.paymentFiles) body.append('paymentFiles', file)
       for (const file of input.chatFiles) body.append('chatFiles', file)
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/prepare`, {
-        method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
-      })
+      try {
+        const prepared = await requestJson<BookingDraftProjection>(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/prepare`, {
+          method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
+        })
+        emitBrowserBookingTiming(options.bookingTiming, 'prepare_request_completed', {
+          action: 'prepare', status: 200, elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
+        })
+        return prepared
+      } catch (error) {
+        emitBrowserBookingTiming(options.bookingTiming, 'prepare_request_completed', {
+          action: 'prepare', status: browserErrorStatus(error), elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
+        })
+        throw error
+      }
     },
     save(idToken, draftId, version, input, protocolVersion = activeBookingProtocol) {
       const body = protocolVersion === 2
@@ -162,14 +229,27 @@ export function createMiniAppApi(options: {
         : { version, input }
       return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticatedJson(idToken, 'PATCH', body))
     },
-    confirm(idToken, draftId, version, protocolVersion = activeBookingProtocol) {
+    async confirm(idToken, draftId, version, protocolVersion = activeBookingProtocol) {
+      const startedAt = safeBrowserNow(performanceNow)
       const body = protocolVersion === 2 ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION, version } : { version }
-      return requestJson(
-        request,
-        `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`,
-        authenticatedJson(idToken, 'POST', body),
-        parseBookingConfirmationResponse,
-      )
+      try {
+        const confirmed = await requestJson(
+          request,
+          `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`,
+          authenticatedJson(idToken, 'POST', body),
+          parseBookingConfirmationResponse,
+        )
+        emitBrowserBookingTiming(options.bookingTiming, 'confirm_request_completed', {
+          action: 'confirm', status: 'requestId' in confirmed ? 202 : 200,
+          elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
+        })
+        return confirmed
+      } catch (error) {
+        emitBrowserBookingTiming(options.bookingTiming, 'confirm_request_completed', {
+          action: 'confirm', status: browserErrorStatus(error), elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
+        })
+        throw error
+      }
     },
     cancel(idToken, draftId, version, protocolVersion = activeBookingProtocol) {
       const body = protocolVersion === 2 ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION, version } : { version }
@@ -232,6 +312,36 @@ function exactBookingDraftInputV2(input: BookingDraftInputV2): BookingDraftInput
     depositAmount: input.depositAmount,
     channelId: input.channelId,
   }
+}
+
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function safeBrowserStatus(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && (value === 0 || value >= 100 && value <= 599)
+}
+
+function safeBrowserDuration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 86_400_000
+}
+
+function elapsedBrowserMs(now: () => number, startedAt: number): number {
+  const elapsed = safeBrowserNow(now) - startedAt
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+}
+
+function safeBrowserNow(now: () => number): number {
+  try {
+    const value = now()
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch { return 0 }
+}
+
+function browserErrorStatus(error: unknown): number {
+  return error instanceof MiniAppApiError && safeBrowserStatus(error.status) ? error.status : 0
 }
 
 function stockCommandRequest(command: StockClientCommand): { url: string; method: 'POST' | 'PATCH'; body: unknown } {

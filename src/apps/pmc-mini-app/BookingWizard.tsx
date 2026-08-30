@@ -22,6 +22,10 @@ import type {
   MiniAppSession,
 } from './contracts'
 import { bookingProtocolVersion } from './contracts'
+import {
+  emitBrowserBookingTiming,
+  type BrowserBookingTiming,
+} from './api'
 
 export interface BookingWizardAdapter {
   load(draftId: string): Promise<BookingDraftProjection>
@@ -46,6 +50,8 @@ export function BookingWizard({
   onExit,
   onQueued,
   onConfirmed,
+  bookingTiming,
+  performanceNow = () => globalThis.performance.now(),
 }: {
   session: MiniAppSession
   config: MiniAppConfig
@@ -55,6 +61,8 @@ export function BookingWizard({
   onExit?: () => void
   onQueued?: (projection: BookingDraftProjection) => void
   onConfirmed?: (result: BookingConfirmationResult) => void
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
 }) {
   const protocolVersion = bookingProtocolVersion(config)
   const initialSavedAttribution = recoveredAttribution(initialDraft, session, protocolVersion)
@@ -136,6 +144,7 @@ export function BookingWizard({
       setBusy(true)
       setFailure('')
       const input = bookingInput(state, protocolVersion)
+      const previewStartedAt = safeNow(performanceNow)
       try {
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
@@ -155,6 +164,9 @@ export function BookingWizard({
           replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, current.paymentEvidenceCount, dispatch)
           replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, current.chatEvidenceCount, dispatch)
           dispatch({ type: 'GO_TO_STEP', step: 4 })
+          emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
+            action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, previewStartedAt),
+          })
           return
         }
         if (newPayments.length > 0 || newChats.length > 0) {
@@ -173,6 +185,9 @@ export function BookingWizard({
         setDraft(current)
         setSavedAttribution(null)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
+        emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
+          action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, previewStartedAt),
+        })
       } catch (error) {
         if (errorCode(error) === 'STALE_DRAFT_VERSION' || errorCode(error) === 'DRAFT_NOT_UPLOADABLE') {
           try {
@@ -185,6 +200,9 @@ export function BookingWizard({
                 replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, latest.paymentEvidenceCount, dispatch)
                 replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, latest.chatEvidenceCount, dispatch)
                 dispatch({ type: 'GO_TO_STEP', step: 4 })
+                emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
+                  action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, previewStartedAt),
+                })
                 return
               }
             }
@@ -200,16 +218,23 @@ export function BookingWizard({
     }
   }
   const confirm = async () => {
+    const homeStartedAt = safeNow(performanceNow)
     setBusy(true)
     setFailure('')
     try {
       const confirmed = await adapter.confirm(draft.draftId, draft.version)
       if ('requestId' in confirmed) {
         onQueued?.(confirmed.projection)
+        emitBrowserBookingTiming(bookingTiming, 'navigation_to_home', {
+          action: 'home', status: 202, elapsedMs: safeElapsed(performanceNow, homeStartedAt),
+        })
         return
       }
       if (onConfirmed) {
         onConfirmed(confirmed)
+        emitBrowserBookingTiming(bookingTiming, 'navigation_to_home', {
+          action: 'home', status: 200, elapsedMs: safeElapsed(performanceNow, homeStartedAt),
+        })
         return
       }
       setResult(confirmed)
@@ -440,6 +465,18 @@ function draftSaveFailureMessage(error: unknown): string {
 
 function errorCode(error: unknown): string {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+}
+
+function safeElapsed(now: () => number, startedAt: number): number {
+  const elapsed = safeNow(now) - startedAt
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+}
+
+function safeNow(now: () => number): number {
+  try {
+    const value = now()
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch { return 0 }
 }
 
 function isPrepareCancelableState(state: BookingDraftProjection['state']): boolean {

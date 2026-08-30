@@ -38,6 +38,12 @@ import {
 import type { DraftStateIngressPort } from './draftStateIngressClient.js'
 import type { MiniAppDraftStateMutation, MiniAppDraftStateResult } from '../../shared/pmcMiniAppDraftState.js'
 import { validatedQueueFastPath, type SafeQueueProjection } from './queuedProjection.js'
+import type {
+  BookingPerformanceTelemetry,
+  BookingTimingAction,
+  BookingTimingEventName,
+  BookingTimingRoute,
+} from './bookingPerformanceTelemetry.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
@@ -56,6 +62,8 @@ export interface PmcMiniAppMiddlewareDependencies {
   stateIngress?: AsyncStateIngressPort
   draftStateIngress?: DraftStateIngressPort
   asyncTelemetry?: AsyncBookingTelemetry
+  bookingPerformanceTelemetry?: BookingPerformanceTelemetry
+  performanceNow?: () => number
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -190,6 +198,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
 
     const prepareRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/prepare$/.exec(pathname)
     if (prepareRoute) {
+      const requestStartedAt = timingNow(deps)
       if (!deps.config.bookingProtocol.prepare) {
         respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
         return
@@ -198,10 +207,17 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
         return
       }
-      const authenticated = await authenticate(req, res, deps)
-      if (!authenticated) return
-      if (!requireBookingRecorder(authenticated, res)) return
+      const authenticated = await authenticate(req, res, deps, { name: 'prepare_completed', route: 'prepare' })
+      if (!authenticated) {
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'request', responseStatus(res, 503), requestStartedAt)
+        return
+      }
+      if (!requireBookingRecorder(authenticated, res)) {
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'request', responseStatus(res, 403), requestStartedAt)
+        return
+      }
       await handleBookingPrepare(req, res, prepareRoute[1]!, authenticated, deps)
+      emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'request', responseStatus(res, 500), requestStartedAt)
       return
     }
 
@@ -257,10 +273,18 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
 
     const bookingRoute = bookingDraftRoute(pathname)
     if (bookingRoute) {
-      const authenticated = await authenticate(req, res, deps)
-      if (!authenticated) return
-      if (!requireBookingRecorder(authenticated, res)) return
+      const confirmStartedAt = bookingRoute.action === 'CONFIRM' ? timingNow(deps) : null
+      const authenticated = await authenticate(req, res, deps, confirmStartedAt === null ? undefined : { name: 'confirm_completed', route: 'confirm' })
+      if (!authenticated) {
+        if (confirmStartedAt !== null) emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'request', responseStatus(res, 503), confirmStartedAt)
+        return
+      }
+      if (!requireBookingRecorder(authenticated, res)) {
+        if (confirmStartedAt !== null) emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'request', responseStatus(res, 403), confirmStartedAt)
+        return
+      }
       await handleBookingDraftRoute(req, res, bookingRoute, authenticated, deps)
+      if (confirmStartedAt !== null) emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'request', responseStatus(res, 500), confirmStartedAt)
       return
     }
 
@@ -570,7 +594,11 @@ async function handleBookingDraftRoute(
   const mutation = parseBookingMutationEnvelope(route.action, body)
   if ('error' in mutation) return respond(res, mutation.status, { error: mutation.error })
 
+  const confirmDraftReadStartedAt = route.action === 'CONFIRM' ? timingNow(deps) : null
   const draft = await ownedDraft(route.draftId, authenticated.staffId, deps, res)
+  if (confirmDraftReadStartedAt !== null) {
+    emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'draft_read', responseStatus(res, draft ? 200 : 503), confirmDraftReadStartedAt, draft?.state)
+  }
   if (!draft) return
   const version = mutation.value.version
   if (typeof version !== 'number' || !Number.isSafeInteger(version)) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
@@ -718,6 +746,7 @@ async function handleBookingDraftRoute(
     const now = (deps.now ?? (() => new Date()))()
     const nowIso = now.toISOString()
     let task: Awaited<ReturnType<BookingTaskQueuePort['enqueue']>>
+    const taskEnqueueStartedAt = timingNow(deps)
     try {
       task = await deps.taskQueue.enqueue({
         requestId: draft.requestId,
@@ -727,9 +756,11 @@ async function handleBookingDraftRoute(
         scheduleAt: new Date(now.getTime() + 2_000),
       })
     } catch {
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'task_enqueue', 503, taskEnqueueStartedAt)
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
       return
     }
+    emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'task_enqueue', 202, taskEnqueueStartedAt, draft.state, draft.evidenceCount, draft.attemptCount)
     const queueMutation: MiniAppAsyncStateMutation = {
       operation: 'QUEUE', requestId: draft.requestId, draftId: draft.draftId, payloadHash,
       expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
@@ -749,18 +780,25 @@ async function handleBookingDraftRoute(
       baseAttempt: draft.attemptCount,
     }
     let trustedProjection: SafeQueueProjection | null = null
+    const stateIngressStartedAt = timingNow(deps)
     try {
       trustedProjection = validatedQueueFastPath(queueBinding, await deps.stateIngress.mutate(queueMutation))
-    } catch { /* persisted reread below resolves response loss */ }
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'state_ingress', 202, stateIngressStartedAt, trustedProjection?.state)
+    } catch {
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'state_ingress', 503, stateIngressStartedAt)
+      /* persisted reread below resolves response loss */
+    }
     let persisted = trustedProjection ? applyQueueProjection(draft, trustedProjection, nowIso) : null
     if (!persisted) {
+      const rereadStartedAt = timingNow(deps)
       try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
       if (!persisted || !validQueuedPersistence(draft, persisted, payloadHash, task.taskName)) persisted = null
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'recovery_reread', persisted ? 200 : 503, rereadStartedAt, persisted?.state)
     }
     if (persisted) {
       const terminal = confirmedWithRetryResult(persisted)
       emitAsyncTelemetry(deps, 'booking_task_enqueued', {
-        requestId: persisted.requestId, draftId: persisted.draftId,
+        route: 'confirm', action: 'enqueue', status: 202,
         attempt: Math.max(1, persisted.attemptCount), state: persisted.state,
         fileCount: persisted.evidenceCount, elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
       })
@@ -1227,6 +1265,46 @@ function emitAsyncTelemetry(
   try { deps.asyncTelemetry?.(name, fields) } catch { /* observability cannot alter the request outcome */ }
 }
 
+function emitBookingPerformance(
+  deps: PmcMiniAppMiddlewareDependencies,
+  name: BookingTimingEventName,
+  route: BookingTimingRoute,
+  action: BookingTimingAction,
+  status: number,
+  startedAt: number,
+  state?: string,
+  fileCount?: number,
+  attempt?: number,
+): void {
+  try {
+    deps.bookingPerformanceTelemetry?.(name, {
+      route,
+      action,
+      status,
+      ...(state ? { state } : {}),
+      ...(fileCount === undefined ? {} : { fileCount }),
+      ...(attempt === undefined ? {} : { attempt: Math.min(8, Math.max(0, attempt)) }),
+      elapsedMs: timingElapsed(deps, startedAt),
+    })
+  } catch { /* observability cannot alter the request outcome */ }
+}
+
+function timingNow(deps: PmcMiniAppMiddlewareDependencies): number {
+  try {
+    const value = (deps.performanceNow ?? (() => globalThis.performance.now()))()
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch { return 0 }
+}
+
+function timingElapsed(deps: PmcMiniAppMiddlewareDependencies, startedAt: number): number {
+  const elapsed = timingNow(deps) - startedAt
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+}
+
+function responseStatus(res: ServerResponse, fallback: number): number {
+  return Number.isSafeInteger(res.statusCode) && res.statusCode >= 100 && res.statusCode <= 599 ? res.statusCode : fallback
+}
+
 function safeBookingError(error: unknown): string {
   const code = error instanceof Error ? error.message : ''
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'INVALID_BOOKING_INPUT'
@@ -1255,7 +1333,9 @@ async function handleBookingPrepare(
     respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
     return
   }
+  const draftReadStartedAt = timingNow(deps)
   const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
+  emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'draft_read', responseStatus(res, draft ? 200 : 503), draftReadStartedAt, draft?.state)
   if (!draft) return
   if (draft.protocolVersion !== 2) {
     respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
@@ -1279,12 +1359,15 @@ async function handleBookingPrepare(
   let bookingContext: PersistPrepareEvidenceInput['bookingContext']
   if (!reserved) {
     let bookingConfig: Awaited<ReturnType<MiniAppStore['getActiveBookingConfig']>>
+    const configStartedAt = timingNow(deps)
     try {
       bookingConfig = await deps.store.getActiveBookingConfig()
     } catch {
+      emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'config_snapshot', 503, configStartedAt)
       respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
       return
     }
+    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'config_snapshot', 200, configStartedAt)
     bookingContext = {
       doctors: bookingConfig.doctors,
       services: bookingConfig.services,
@@ -1295,14 +1378,19 @@ async function handleBookingPrepare(
   }
 
   let parsed: Awaited<ReturnType<typeof consumeBookingPrepareMultipart>>
+  const multipartStartedAt = timingNow(deps)
   try {
     parsed = await consumeBookingPrepareMultipart(req, BOOKING_PREPARE_LIMITS)
   } catch (error) {
     const code = error instanceof MiniAppEvidenceError ? error.code : 'BOOKING_PREPARE_JSON_REQUIRED'
+    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'multipart_parse', evidenceStatus(code), multipartStartedAt)
     respond(res, evidenceStatus(code), { error: code })
     return
   }
+  const fileCount = parsed.paymentFiles.length + parsed.chatFiles.length
+  emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'multipart_parse', 200, multipartStartedAt, draft.state, fileCount, draft.attemptCount)
 
+  const persistStartedAt = timingNow(deps)
   try {
     const prepared = await persistPrepareEvidence({
       draft,
@@ -1316,14 +1404,19 @@ async function handleBookingPrepare(
       draftStateIngress: deps.draftStateIngress,
       now: () => currentIso(deps),
     })
+    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'persist', 200, persistStartedAt, prepared.draft.state, fileCount, prepared.draft.attemptCount)
     respond(res, 200, draftProjection(prepared.draft))
   } catch (error) {
     if (error instanceof BookingPreparePersistenceError) {
-      respond(res, error.code === 'BOOKING_PREPARE_CONFLICT' ? 409 : 503, { error: error.code })
+      const status = error.code === 'BOOKING_PREPARE_CONFLICT' ? 409 : 503
+      emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'persist', status, persistStartedAt, undefined, fileCount, draft.attemptCount)
+      respond(res, status, { error: error.code })
       return
     }
     const code = safeBookingError(error)
-    respond(res, bookingErrorStatus(error), { error: code })
+    const status = bookingErrorStatus(error)
+    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'persist', status, persistStartedAt, undefined, fileCount, draft.attemptCount)
+    respond(res, status, { error: code })
   }
 }
 
@@ -1433,7 +1526,7 @@ async function handleEvidenceBatchUpload(
       maxTotalBytes: asyncConfig.maxBatchBytes,
     })
     emitAsyncTelemetry(deps, 'evidence_stage_started', {
-      requestId: draft.requestId, draftId: draft.draftId,
+      route: 'evidence', action: 'stage', status: 102,
       fileCount: batch.paymentFiles.length + batch.chatFiles.length,
     })
     const staged = await stageEvidenceBatch(draft.draftId, batch, deps.evidenceStaging)
@@ -1445,7 +1538,7 @@ async function handleEvidenceBatchUpload(
       updatedAt: currentIso(deps),
     })
     emitAsyncTelemetry(deps, 'evidence_stage_completed', {
-      requestId: updated.requestId, draftId: updated.draftId, state: updated.state,
+      route: 'evidence', action: 'stage', status: 200, state: updated.state,
       fileCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length,
       elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
     })
@@ -1616,15 +1709,27 @@ async function authenticate(
   req: IncomingMessage,
   res: ServerResponse,
   deps: PmcMiniAppMiddlewareDependencies,
+  timing?: { name: BookingTimingEventName; route: BookingTimingRoute },
 ): Promise<AuthenticatedMiniAppContext | null> {
+  const lineVerifyStartedAt = timing ? timingNow(deps) : null
   const lineUserId = await authenticateLineIdentity(req, res, deps)
+  if (timing && lineVerifyStartedAt !== null) {
+    emitBookingPerformance(deps, timing.name, timing.route, 'line_verify', responseStatus(res, lineUserId ? 200 : 503), lineVerifyStartedAt)
+  }
   if (!lineUserId) return null
 
+  const staffSnapshotStartedAt = timing ? timingNow(deps) : null
   try {
     const staff = await deps.store.getActiveStaffByLineUserId(lineUserId)
     if (!staff) {
       respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
+      if (timing && staffSnapshotStartedAt !== null) {
+        emitBookingPerformance(deps, timing.name, timing.route, 'staff_snapshot', 403, staffSnapshotStartedAt)
+      }
       return null
+    }
+    if (timing && staffSnapshotStartedAt !== null) {
+      emitBookingPerformance(deps, timing.name, timing.route, 'staff_snapshot', 200, staffSnapshotStartedAt)
     }
     return {
       staffId: staff.id,
@@ -1638,6 +1743,9 @@ async function authenticate(
     }
   } catch {
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    if (timing && staffSnapshotStartedAt !== null) {
+      emitBookingPerformance(deps, timing.name, timing.route, 'staff_snapshot', 503, staffSnapshotStartedAt)
+    }
     return null
   }
 }

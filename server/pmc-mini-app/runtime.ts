@@ -13,6 +13,7 @@ import { createWorkerIdentityVerifier } from './workerAuth.js'
 import { createAsyncBookingWorker } from './asyncWorker.js'
 import { createAsyncStateIngressClient } from './asyncStateIngressClient.js'
 import { createAsyncBookingTelemetry } from './asyncTelemetry.js'
+import { createBookingPerformanceTelemetry } from './bookingPerformanceTelemetry.js'
 import { createDraftStateIngressClient } from './draftStateIngressClient.js'
 import { createStockIngressClient } from './stock/ingressClient.js'
 import { createStockReadStore } from './stock/readStore.js'
@@ -147,6 +148,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     } } : {}),
   } : undefined
   const asyncTelemetry = createAsyncBookingTelemetry()
+  const bookingPerformanceTelemetry = createBookingPerformanceTelemetry()
   const stock = {
     enabled: config.stockEnabled,
     managerPilotOnly: config.stockManagerPilotOnly,
@@ -204,6 +206,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     evidenceIngress,
     draftStateIngress,
     asyncTelemetry,
+    bookingPerformanceTelemetry,
     ...asyncDependencies,
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,

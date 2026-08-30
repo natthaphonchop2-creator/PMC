@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
+import { MiniAppApiError, type BrowserBookingTiming } from '../../src/apps/pmc-mini-app/api'
 import { BookingWizard, type BookingWizardAdapter } from '../../src/apps/pmc-mini-app/BookingWizard'
 import type { BookingConfirmationResult, BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
 
@@ -253,6 +253,59 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(screen.queryByText('PMC-202608-0001')).not.toBeInTheDocument()
   })
 
+  it('reports aggregate-only click-to-Home timing after the navigation callback', async () => {
+    const user = userEvent.setup()
+    const bookingTiming = vi.fn<BrowserBookingTiming>()
+    const onConfirmed = vi.fn()
+    const times = [100, 180]
+    renderWizard({
+      initialStep: 4,
+      onConfirmed,
+      bookingTiming,
+      performanceNow: () => times.shift()!,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(onConfirmed).toHaveBeenCalledOnce()
+    expect(bookingTiming).toHaveBeenCalledWith('navigation_to_home', {
+      action: 'home', status: 200, elapsedMs: 80,
+    })
+  })
+
+  it('reports aggregate-only click-to-preview timing after prepare completes', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.prepare).mockResolvedValueOnce({
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 2,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    })
+    const bookingTiming = vi.fn<BrowserBookingTiming>()
+    const times = [100, 820]
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+      bookingTiming,
+      performanceNow: () => times.shift()!,
+    })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })
+    expect(bookingTiming).toHaveBeenCalledWith('navigation_to_preview', {
+      action: 'preview', status: 200, elapsedMs: 720,
+    })
+  })
+
   it('does not send the same valid confirmation twice before React disables the submit button', () => {
     const app = adapter()
     renderWizard({ initialStep: 4, adapter: app })
@@ -473,6 +526,8 @@ function renderWizard(options: {
   onExit?: () => void
   onQueued?: (projection: BookingDraftProjection) => void
   onConfirmed?: (result: BookingConfirmationResult) => void
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
   config?: MiniAppConfig
 } = {}) {
   return render(<BookingWizard
@@ -484,6 +539,8 @@ function renderWizard(options: {
     onExit={options.onExit}
     onQueued={options.onQueued}
     onConfirmed={options.onConfirmed}
+    bookingTiming={options.bookingTiming}
+    performanceNow={options.performanceNow}
   />)
 }
 
