@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SHEET_SCHEMAS } from '../src/sheetSchema'
+import {
+  applyWorkbookPresentation,
+  createGoogleWorkbookPresentationGateway,
+  inspectWorkbookPresentationMetadata,
+  previewWorkbookPresentation,
+  translateWorkbookPresentationPlan,
+} from '../src/adapters/googleWorkbookPresentation'
+import type { WorkbookPresentationWorkflowPort } from '../src/ports'
 import {
   COLUMN_WIDTHS,
   KNOWN_HIDDEN_TAB_HEADERS,
@@ -285,6 +293,289 @@ describe('guarded Booking workbook presentation policy', () => {
   })
 })
 
+describe('Sheets-v4 Booking workbook presentation gateway', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('previews from one inspection without acquiring a lock, backing up, or mutating', () => {
+    const fake = workflowFake(canonicalSnapshot())
+
+    const result = previewWorkbookPresentation(fake.port)
+
+    expect(result).toMatchObject({
+      mutationCount: 0,
+      plannedActionCount: expect.any(Number),
+      sourceFingerprint: 'source-full-fingerprint',
+    })
+    expect(result.plannedActionCount).toBeGreaterThan(0)
+    expect(fake.events).toEqual(['inspect'])
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('locks, backs up, re-inspects, sends one safe batch, verifies readback, and releases', () => {
+    const fake = workflowFake(canonicalSnapshot())
+
+    const result = applyWorkbookPresentation(fake.port)
+
+    expect(result).toMatchObject({
+      status: 'APPLIED',
+      backupCreated: true,
+      batchApplied: true,
+      readbackVerified: true,
+    })
+    expect(fake.events).toEqual([
+      'lock:wait', 'inspect', 'backup', 'inspect', 'batch', 'inspect', 'lock:release',
+    ])
+    expect(fake.backupCount()).toBe(1)
+    expect(fake.batchCount()).toBe(1)
+  })
+
+  it('returns an idempotent no-op without a backup or batch and a second apply stays a no-op', () => {
+    const fake = workflowFake(canonicalSnapshot())
+    expect(applyWorkbookPresentation(fake.port).status).toBe('APPLIED')
+    const eventsAfterFirst = fake.events.length
+
+    const second = applyWorkbookPresentation(fake.port)
+
+    expect(second).toEqual({
+      status: 'NOOP',
+      plannedActionCount: 0,
+      backupCreated: false,
+      batchApplied: false,
+      readbackVerified: true,
+    })
+    expect(fake.events.slice(eventsAfterFirst)).toEqual(['lock:wait', 'inspect', 'lock:release'])
+    expect(fake.backupCount()).toBe(1)
+    expect(fake.batchCount()).toBe(1)
+  })
+
+  it('rejects a stale post-backup reinspection before the batch and releases the lock', () => {
+    const fake = workflowFake(canonicalSnapshot(), { staleOnInspection: 2 })
+
+    expect(() => applyWorkbookPresentation(fake.port)).toThrow('WORKBOOK_PRESENTATION_STALE')
+    expect(fake.events).toEqual(['lock:wait', 'inspect', 'backup', 'inspect', 'lock:release'])
+    expect(fake.backupCount()).toBe(1)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it.each(['backup', 'batch', 'readback'] as const)(
+    'releases the lock and never retries a failed %s phase',
+    (failurePhase) => {
+      const fake = workflowFake(canonicalSnapshot(), { failurePhase })
+
+      expect(() => applyWorkbookPresentation(fake.port)).toThrow()
+      expect(fake.events[fake.events.length - 1]).toBe('lock:release')
+      expect(fake.backupCount()).toBe(failurePhase === 'backup' ? 0 : 1)
+      expect(fake.batchCount()).toBe(failurePhase === 'backup' ? 0 : 1)
+      expect(fake.batchCount()).toBeLessThanOrEqual(1)
+    },
+  )
+
+  it('translates the reviewed plan into an exact presentation-only request allowlist', () => {
+    const plan = buildPlan(canonicalSnapshot())
+    const batch = translateWorkbookPresentationPlan(plan)
+    const allowed = new Set([
+      'updateSheetProperties', 'setBasicFilter', 'updateDimensionProperties',
+      'repeatCell', 'addConditionalFormatRule',
+    ])
+
+    expect(batch.requests.length).toBeGreaterThan(0)
+    for (const request of batch.requests) {
+      const keys = Object.keys(request)
+      expect(keys).toHaveLength(1)
+      expect(allowed.has(keys[0]!)).toBe(true)
+    }
+    const serialized = JSON.stringify(batch)
+    for (const forbidden of [
+      'delete', 'clear', 'dataValidation', 'protectedRange',
+      'filterView', 'insertDimension', 'appendDimension', 'autoResizeDimensions',
+      'addSheet', 'title',
+    ]) {
+      expect(serialized).not.toContain(forbidden)
+    }
+    for (const request of batch.requests.filter((request) => 'repeatCell' in request)) {
+      expect(Object.keys(request.repeatCell?.cell ?? {})).toEqual(['userEnteredFormat'])
+      expect(request.repeatCell?.cell?.userEnteredValue).toBeUndefined()
+      expect(request.repeatCell?.cell?.dataValidation).toBeUndefined()
+      expect(request.repeatCell?.cell?.note).toBeUndefined()
+    }
+    expect(batch.requests.filter((request) => 'setBasicFilter' in request)).toHaveLength(4)
+    expect(batch.requests.filter((request) => 'addConditionalFormatRule' in request)).toHaveLength(5)
+  })
+
+  it('rejects forged actions, styles, duplicate filters, and overlapping formats before translation', () => {
+    const snapshot = canonicalSnapshot()
+    const plan = buildPlan(snapshot)
+    const booking = sheet(snapshot, 'BOOKING_MASTER')
+    const filter = plan.actions.find((action) => action.kind === 'SET_BASIC_FILTER')!
+    const format = plan.actions.find((action) => action.kind === 'FORMAT_RANGE'
+      && action.range.sheetId === booking.sheetId)!
+
+    const cases: WorkbookPresentationPlan[] = [
+      { ...plan, actions: [...plan.actions, { kind: 'DELETE_SHEET', sheetId: booking.sheetId } as never] },
+      { ...plan, actions: [...plan.actions, { ...format, styleKey: 'UNKNOWN_STYLE' } as never] },
+      { ...plan, actions: [...plan.actions, filter] },
+      {
+        ...plan,
+        actions: [...plan.actions, {
+          kind: 'FORMAT_RANGE',
+          range: { ...('range' in format ? format.range : fullGrid(booking)), endColumnIndex: 2 },
+          styleKey: 'BODY',
+        }],
+      },
+    ]
+
+    for (const forged of cases) {
+      expect(() => translateWorkbookPresentationPlan(forged)).toThrow()
+    }
+  })
+
+  it('normalizes one Sheets-v4 response into structural metadata and hashes without returning cell values', () => {
+    const source = canonicalSnapshot()
+    const response = sheetsV4Response(source)
+    const booking = response.sheets!.find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    const rowData = booking.data![0]!.rowData!
+    rowData.push({
+      values: [
+        { userEnteredValue: { stringValue: 'private-customer-value' }, note: 'private-note' },
+        { userEnteredValue: { formulaValue: '=1+1' } },
+        { dataValidation: { condition: { type: 'ONE_OF_LIST', values: [{ userEnteredValue: 'YES' }] } } },
+      ],
+    })
+
+    const snapshot = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    const normalizedBooking = sheet(snapshot, 'BOOKING_MASTER')
+
+    expect(normalizedBooking.headers).toEqual(SHEET_SCHEMAS.BOOKING_MASTER)
+    expect(normalizedBooking.columnWidths).toEqual(Array(normalizedBooking.maxColumns).fill(100))
+    expect(normalizedBooking.valuesHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(normalizedBooking.formulasHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(normalizedBooking.validationsHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(snapshot.fingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.stringify(snapshot)).not.toContain('private-customer-value')
+    expect(JSON.stringify(snapshot)).not.toContain('private-note')
+
+    const changed = structuredClone(response)
+    const changedBooking = changed.sheets!.find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    changedBooking.data![0]!.rowData![1]!.values![0]!.userEnteredValue = { stringValue: 'changed' }
+    const changedSnapshot = inspectWorkbookPresentationMetadata(changed, sha256Hex)
+    expect(sheet(changedSnapshot, 'BOOKING_MASTER').valuesHash).not.toBe(normalizedBooking.valuesHash)
+    expect(changedSnapshot.fingerprint).not.toBe(snapshot.fingerprint)
+  })
+
+  it('fails closed on unsupported spreadsheet-level metadata before a plan can be built', () => {
+    const response = sheetsV4Response(canonicalSnapshot())
+    response.namedRanges = [{ name: 'private-operator-range' }]
+
+    expect(() => inspectWorkbookPresentationMetadata(response, sha256Hex))
+      .toThrow('UNSUPPORTED_PRESENTATION_METADATA')
+  })
+
+  it('recognizes only the exact adapter-owned cell style and actionable status rule', () => {
+    const source = canonicalSnapshot()
+    const booking = sheet(source, 'BOOKING_MASTER')
+    booking.maxRows = 14
+    booking.columnWidths = Array(booking.maxColumns).fill(100)
+    const response = sheetsV4Response(source)
+    const raw = response.sheets!.find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    raw.data![0]!.rowData = formattedBookingRows(booking)
+    raw.conditionalFormats = [bookingStatusRule(booking)]
+
+    const inspected = inspectWorkbookPresentationMetadata(response, sha256Hex)
+    const result = sheet(inspected, 'BOOKING_MASTER')
+
+    expect(result.managedFormats).toHaveLength(booking.headers.length + 1)
+    expect(result.statusRules).toContainEqual({
+      range: columnBody(booking, booking.headers.indexOf('status')),
+      ruleKey: 'BOOKING_STATUS',
+    })
+    expect(result.unsupportedMetadataCount).toBe(0)
+
+    const colorStyled = structuredClone(response)
+    const colorStyledRule = colorStyled.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .conditionalFormats![0]!
+    colorStyledRule.booleanRule!.format!.backgroundColorStyle = {
+      rgbColor: colorStyledRule.booleanRule!.format!.backgroundColor,
+    }
+    delete colorStyledRule.booleanRule!.format!.backgroundColor
+    colorStyledRule.booleanRule!.format!.textFormat!.foregroundColorStyle = {
+      rgbColor: colorStyledRule.booleanRule!.format!.textFormat!.foregroundColor,
+    }
+    delete colorStyledRule.booleanRule!.format!.textFormat!.foregroundColor
+    expect(sheet(
+      inspectWorkbookPresentationMetadata(colorStyled, sha256Hex),
+      'BOOKING_MASTER',
+    ).statusRules).toContainEqual({
+      range: columnBody(booking, booking.headers.indexOf('status')),
+      ruleKey: 'BOOKING_STATUS',
+    })
+
+    const altered = structuredClone(response)
+    const alteredBooking = altered.sheets!.find((item) => item.properties?.title === 'BOOKING_MASTER')!
+    alteredBooking.conditionalFormats![0]!.booleanRule!.condition!.type = 'TEXT_EQ'
+    const alteredResult = sheet(inspectWorkbookPresentationMetadata(altered, sha256Hex), 'BOOKING_MASTER')
+    expect(alteredResult.statusRules).toEqual([])
+    expect(alteredResult.unsupportedMetadataCount).toBe(1)
+  })
+
+  it('uses one Sheets batchUpdate and a bounded document lock in the production adapter', () => {
+    const batchUpdate = vi.fn()
+    const waitLock = vi.fn()
+    const releaseLock = vi.fn()
+    vi.stubGlobal('Sheets', { Spreadsheets: { batchUpdate, get: vi.fn() } })
+    vi.stubGlobal('LockService', { getDocumentLock: () => ({ waitLock, releaseLock }) })
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: 'spreadsheet-test-id',
+      backupFolderId: 'backup-folder-test-id',
+      sha256Hex,
+      lockTimeoutMs: 12_345,
+    })
+    const plan = buildPlan(canonicalSnapshot())
+
+    gateway.withDocumentLock(() => gateway.apply(plan))
+
+    expect(waitLock).toHaveBeenCalledOnce()
+    expect(waitLock).toHaveBeenCalledWith(12_345)
+    expect(releaseLock).toHaveBeenCalledOnce()
+    expect(batchUpdate).toHaveBeenCalledOnce()
+    expect(batchUpdate).toHaveBeenCalledWith(translateWorkbookPresentationPlan(plan), 'spreadsheet-test-id')
+  })
+
+  it('creates and verifies a private native copy in the exact private backup folder', () => {
+    const setSharing = vi.fn()
+    const backup = {
+      getId: () => 'backup-file-test-id',
+      getUrl: () => 'https://example.invalid/private-backup',
+      getMimeType: () => 'application/vnd.google-apps.spreadsheet',
+      getSharingAccess: () => 'PRIVATE',
+      setSharing,
+      getParents: () => parentIterator(['backup-folder-test-id']),
+    }
+    const makeCopy = vi.fn(() => backup)
+    vi.stubGlobal('DriveApp', {
+      Access: { PRIVATE: 'PRIVATE' },
+      Permission: { NONE: 'NONE' },
+      getFolderById: () => ({ getSharingAccess: () => 'PRIVATE' }),
+      getFileById: () => ({ makeCopy }),
+    })
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: 'spreadsheet-test-id',
+      backupFolderId: 'backup-folder-test-id',
+      sha256Hex,
+    })
+
+    expect(gateway.createPrivateNativeBackup('PMC Booking Presentation Backup')).toEqual({
+      fileId: 'backup-file-test-id',
+      url: 'https://example.invalid/private-backup',
+    })
+    expect(makeCopy).toHaveBeenCalledOnce()
+    expect(setSharing).toHaveBeenCalledWith('PRIVATE', 'NONE')
+  })
+})
+
 function canonicalSnapshot(): WorkbookMetadataSnapshot {
   const visible = VISIBLE_TAB_ORDER.map((title) => ({
     title,
@@ -475,4 +766,200 @@ function replaceRange<T extends { range: GridRangeSnapshot }>(
 
 function buildPlan(snapshot: WorkbookMetadataSnapshot): WorkbookPresentationPlan {
   return buildWorkbookPresentationPlan(snapshot, sha256Hex)
+}
+
+function workflowFake(
+  initial: WorkbookMetadataSnapshot,
+  options: {
+    staleOnInspection?: number
+    failurePhase?: 'backup' | 'batch' | 'readback'
+  } = {},
+): {
+  port: WorkbookPresentationWorkflowPort
+  events: string[]
+  backupCount(): number
+  batchCount(): number
+} {
+  let current = cloneSnapshot(initial)
+  let inspections = 0
+  let backups = 0
+  let batches = 0
+  const events: string[] = []
+  const port: WorkbookPresentationWorkflowPort = {
+    sha256Hex,
+    backupLabel: 'PMC Booking Presentation Backup',
+    withDocumentLock<T>(operation: () => T): T {
+      events.push('lock:wait')
+      try {
+        return operation()
+      } finally {
+        events.push('lock:release')
+      }
+    },
+    gateway: {
+      inspect() {
+        events.push('inspect')
+        inspections += 1
+        const result = cloneSnapshot(current)
+        if (options.staleOnInspection === inspections) result.fingerprint = 'stale-full-fingerprint'
+        if (options.failurePhase === 'readback' && inspections === 3) {
+          sheet(result, 'BOOKING_MASTER').valuesHash = 'changed-after-write'
+        }
+        return result
+      },
+      createPrivateNativeBackup() {
+        events.push('backup')
+        if (options.failurePhase === 'backup') throw new Error('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+        backups += 1
+        return { fileId: 'private-backup-id', url: 'https://example.invalid/private-backup' }
+      },
+      apply(plan) {
+        events.push('batch')
+        batches += 1
+        if (options.failurePhase === 'batch') throw new Error('WORKBOOK_PRESENTATION_BATCH_FAILED')
+        current = applyPlanForTest(current, plan)
+      },
+    },
+  }
+  return {
+    port,
+    events,
+    backupCount: () => backups,
+    batchCount: () => batches,
+  }
+}
+
+function sheetsV4Response(
+  source: WorkbookMetadataSnapshot,
+): GoogleAppsScript.Sheets.Schema.Spreadsheet {
+  return {
+    spreadsheetId: source.spreadsheetId,
+    sheets: source.sheets.map((item) => ({
+      properties: {
+        sheetId: item.sheetId,
+        title: item.title,
+        index: item.index,
+        hidden: item.hidden,
+        sheetType: 'GRID',
+        gridProperties: {
+          rowCount: item.maxRows,
+          columnCount: item.maxColumns,
+          frozenRowCount: item.frozenRows,
+          frozenColumnCount: item.frozenColumns,
+        },
+      },
+      data: [{
+        startRow: 0,
+        startColumn: 0,
+        rowData: [{
+          values: item.headers.map((header) => ({ userEnteredValue: { stringValue: header } })),
+        }],
+        rowMetadata: Array(item.maxRows).fill(null).map(() => ({})),
+        columnMetadata: item.columnWidths.map((pixelSize) => ({ pixelSize })),
+      }],
+      merges: [],
+      filterViews: [],
+      bandedRanges: [],
+      conditionalFormats: [],
+      protectedRanges: [],
+      charts: [],
+      tables: [],
+      developerMetadata: [],
+      rowGroups: [],
+      columnGroups: [],
+      basicFilter: item.basicFilter ? { range: structuredClone(item.basicFilter) } : undefined,
+    })),
+  }
+}
+
+function formattedBookingRows(
+  target: SheetPresentationSnapshot,
+): GoogleAppsScript.Sheets.Schema.RowData[] {
+  return Array.from({ length: target.maxRows }, (_, rowIndex) => ({
+    values: target.headers.map((header) => ({
+      userEnteredValue: rowIndex === 0 ? { stringValue: header } : undefined,
+      userEnteredFormat: testManagedStyle(rowIndex === 0 ? 'HEADER' : testBodyStyle(header)),
+    })),
+  }))
+}
+
+function testBodyStyle(header: string):
+  'BODY' | 'BODY_PLAIN_TEXT' | 'BODY_CURRENCY' | 'BODY_WRAP' | 'BODY_PLAIN_TEXT_WRAP' {
+  const normalized = header.toLowerCase()
+  const plain = normalized === 'id' || normalized.endsWith('id') || normalized.endsWith('ids')
+    || normalized.includes('hash') || normalized.includes('phone') || normalized.includes('url')
+    || normalized.endsWith('json')
+  const currency = ['depositAmount', 'jeraActualRevenue', 'commissionAmount'].includes(header)
+  const wrap = ['note', 'candidateCaseIds', 'reasonCode', 'reason'].includes(header)
+  if (plain && wrap) return 'BODY_PLAIN_TEXT_WRAP'
+  if (plain) return 'BODY_PLAIN_TEXT'
+  if (currency) return 'BODY_CURRENCY'
+  if (wrap) return 'BODY_WRAP'
+  return 'BODY'
+}
+
+function testManagedStyle(
+  styleKey: 'HEADER' | 'BODY' | 'BODY_PLAIN_TEXT' | 'BODY_CURRENCY' | 'BODY_WRAP' | 'BODY_PLAIN_TEXT_WRAP',
+): GoogleAppsScript.Sheets.Schema.CellFormat {
+  const header = styleKey === 'HEADER'
+  const plain = styleKey === 'BODY_PLAIN_TEXT' || styleKey === 'BODY_PLAIN_TEXT_WRAP'
+  const currency = styleKey === 'BODY_CURRENCY'
+  const wrap = styleKey === 'BODY_WRAP' || styleKey === 'BODY_PLAIN_TEXT_WRAP'
+  return {
+    backgroundColor: header
+      ? { red: 0.9568627451, green: 0.9607843137, blue: 0.9647058824 }
+      : { red: 1, green: 1, blue: 1 },
+    textFormat: {
+      bold: header,
+      foregroundColor: { red: 0.0666666667, green: 0.0666666667, blue: 0.0666666667 },
+    },
+    verticalAlignment: 'MIDDLE',
+    wrapStrategy: wrap || header ? 'WRAP' : 'CLIP',
+    borders: {
+      top: testBorder(), bottom: testBorder(), left: testBorder(), right: testBorder(),
+    },
+    numberFormat: plain
+      ? { type: 'TEXT', pattern: '@' }
+      : currency ? { type: 'NUMBER', pattern: '฿#,##0.00' } : undefined,
+  }
+}
+
+function testBorder(): GoogleAppsScript.Sheets.Schema.Border {
+  return {
+    style: 'SOLID',
+    color: { red: 0.8980392157, green: 0.9058823529, blue: 0.9215686275 },
+  }
+}
+
+function bookingStatusRule(
+  target: SheetPresentationSnapshot,
+): GoogleAppsScript.Sheets.Schema.ConditionalFormatRule {
+  const statusIndex = target.headers.indexOf('status')
+  return {
+    ranges: [columnBody(target, statusIndex)],
+    booleanRule: {
+      condition: {
+        type: 'CUSTOM_FORMULA',
+        values: [{
+          userEnteredValue: '=OR($C2="VALIDATION_ERROR",$C2="TIME_CONFLICT",$C2="CALL_OVERDUE",$C2="RECONCILIATION")',
+        }],
+      },
+      format: {
+        backgroundColor: { red: 0.9960784314, green: 0.9529411765, blue: 0.7803921569 },
+        textFormat: {
+          bold: true,
+          foregroundColor: { red: 0.5725490196, green: 0.2509803922, blue: 0.0549019608 },
+        },
+      },
+    },
+  }
+}
+
+function parentIterator(ids: readonly string[]): GoogleAppsScript.Drive.FolderIterator {
+  let index = 0
+  return {
+    getContinuationToken: () => '',
+    hasNext: () => index < ids.length,
+    next: () => ({ getId: () => ids[index++] }) as GoogleAppsScript.Drive.Folder,
+  }
 }

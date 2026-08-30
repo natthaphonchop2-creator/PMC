@@ -5,6 +5,11 @@ import type { PmcMiniAppTargetRequestRecord } from '../../../shared/pmcBookingRo
 import type { StockAuditEvent, StockDocumentSummary, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
 import type { ExpenseAuditEvent, ExpenseMonthlyProjection, ExpenseSubmission } from '../../../shared/pmcExpense'
 import type { ExpensePrivateAttachment, MiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress'
+import type {
+  WorkbookMetadataSnapshot,
+  WorkbookPresentationPlan,
+  WorkbookPresentationSha256,
+} from './domain/workbookPresentation'
 
 export interface Clock {
   nowIso(): string
@@ -12,6 +17,19 @@ export interface Clock {
 
 export interface LockPort {
   withLock<T>(operation: () => T): T
+}
+
+export interface WorkbookPresentationGateway {
+  inspect(): WorkbookMetadataSnapshot
+  createPrivateNativeBackup(label: string): { fileId: string; url: string }
+  apply(plan: WorkbookPresentationPlan): void
+}
+
+export interface WorkbookPresentationWorkflowPort {
+  gateway: WorkbookPresentationGateway
+  withDocumentLock<T>(operation: () => T): T
+  sha256Hex: WorkbookPresentationSha256
+  backupLabel: string
 }
 
 export interface ExpenseTopologyPort {

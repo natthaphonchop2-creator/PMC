@@ -76,9 +76,12 @@ describe('Apps Script bundle', () => {
       readFileSync('apps/pmc-google-booking-ops/dist/appsscript.json', 'utf8'),
     ) as { dependencies?: { enabledAdvancedServices?: Array<Record<string, string>> } }
 
-    expect(manifest.dependencies?.enabledAdvancedServices).toContainEqual({
+    const sheetsServices = manifest.dependencies?.enabledAdvancedServices?.filter(
+      (service) => service.userSymbol === 'Sheets' || service.serviceId === 'sheets',
+    ) ?? []
+    expect(sheetsServices).toEqual([{
       userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4',
-    })
+    }])
   })
 
   it('avoids structuredClone because the Apps Script V8 global is not guaranteed', () => {
