@@ -109,6 +109,32 @@ describe('PMC Booking prepare multipart parser', () => {
     request.end()
   })
 
+  it('rejects an already closed request immediately without attaching parser listeners', async () => {
+    const request = multipartStream('prepare-boundary')
+    const closed = once(request, 'close')
+    request.destroy()
+    await closed
+
+    await expect(settleWithin(parsePrepare(request))).rejects.toMatchObject({
+      code: 'BOOKING_PREPARE_JSON_REQUIRED',
+    })
+    expectParserRequestListenersRemoved(request)
+  })
+
+  it('rejects a destroyed request before close immediately without Busboy or listener leaks', async () => {
+    const request = multipartStream('prepare-boundary')
+    request.destroy()
+
+    const result = settleWithin(parsePrepare(request))
+    expectParserRequestListenersRemoved(request)
+    const closed = request.closed ? Promise.resolve() : once(request, 'close')
+
+    await expect(result).rejects.toMatchObject({ code: 'BOOKING_PREPARE_JSON_REQUIRED' })
+    await closed
+    await Promise.resolve()
+    expectParserRequestListenersRemoved(request)
+  })
+
   it('keeps the first raw-overflow error fixed while safely draining a late transport error', async () => {
     const request = multipartStream('prepare-boundary')
     const result = parsePrepare(request)
@@ -276,6 +302,20 @@ function writeRepeatedBytes(request: PassThrough, totalBytes: number): void {
     const bytes = Math.min(remaining, chunk.length)
     request.write(bytes === chunk.length ? chunk : chunk.subarray(0, bytes))
     remaining -= bytes
+  }
+}
+
+async function settleWithin<T>(promise: Promise<T>, milliseconds = 100): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('TEST_TIMEOUT')), milliseconds)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 

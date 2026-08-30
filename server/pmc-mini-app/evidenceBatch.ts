@@ -38,6 +38,10 @@ export function consumeBookingPrepareMultipart(
   limits: BookingPrepareLimits,
 ): Promise<ParsedBookingPrepare> {
   return new Promise((resolve, reject) => {
+    if (req.destroyed || req.closed || req.readableEnded || req.aborted) {
+      reject(new MiniAppEvidenceError('BOOKING_PREPARE_JSON_REQUIRED'))
+      return
+    }
     const invalidLimit = invalidBookingPrepareLimit(limits)
     if (invalidLimit) {
       reject(new MiniAppEvidenceError(invalidLimit))
