@@ -39,13 +39,11 @@ describe('read-only expense runtime checker', () => {
     })
   })
 
-  it('fails closed for enabled/incoherent flags, broadened reads, wrong lifecycle, route access, recovery, or headers', async () => {
+  it('fails closed for enabled flags, wrong lifecycle, route access, recovery, permission, or headers', async () => {
     const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
     const snapshot = validSnapshot()
     snapshot.flags.PMC_EXPENSE_CAPTURE_ENABLED = 'true'
-    snapshot.bindingNames = snapshot.bindingNames.filter((name) => name !== 'PMC_FINANCE_FOLDER_ID')
-    snapshot.submitOnly.history = { status: 200, error: null }
-    snapshot.financeRead.requestedMonths = ['2026-08', '2026-07']
+    snapshot.submitOnly.history = { status: 200, error: 'EXPENSE_FINANCE_PERMISSION_REQUIRED' }
     snapshot.staging.deleteAfterDays = 7
     snapshot.recovery.targetPath = '/internal/mini-app/recover-expenses?force=true'
     snapshot.recovery.audienceConfigured = false
@@ -55,9 +53,7 @@ describe('read-only expense runtime checker', () => {
 
     expect(report.ready).toBe(false)
     expect(report.flags).toMatchObject({ captureEnabled: true, coherent: false })
-    expect(report.bindings).toMatchObject({ presentCount: 6, coherent: false })
     expect(report.submitOnly.historyDenied).toBe(false)
-    expect(report.financeRead.oneSelectedMonthOnly).toBe(false)
     expect(report.staging.lifecycleReady).toBe(false)
     expect(report.recovery.ready).toBe(false)
     expect(report.topology.ready).toBe(false)
@@ -185,8 +181,40 @@ describe('read-only expense runtime checker', () => {
     const report = JSON.parse(serialized)
 
     expect(report.ready).toBe(false)
-    expect(report.bindings.coherent).toBe(false)
+    expect(report).toEqual({ mode: 'READ_ONLY', ready: false, snapshotSchema: { unknownKeyCount: 0, safe: false } })
     expect(serialized).not.toContain('must-not-print-binding-sentinel')
+  })
+
+  it.each([
+    ['malformed binding name', (snapshot: ReturnType<typeof validSnapshot>) => { snapshot.bindingNames[0] = 'PRIVATE_SECRET=sentinel' }],
+    ['duplicate binding name', (snapshot: ReturnType<typeof validSnapshot>) => { snapshot.bindingNames[0] = snapshot.bindingNames[1]! }],
+    ['malformed requested month', (snapshot: ReturnType<typeof validSnapshot>) => { snapshot.financeRead.requestedMonths[0] = 'private-month' }],
+    ['extra requested month', (snapshot: ReturnType<typeof validSnapshot>) => { snapshot.financeRead.requestedMonths.push('2026-07') }],
+  ])('rejects %s at the snapshot schema boundary', async (_label, mutate) => {
+    const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
+    const snapshot = validSnapshot()
+    mutate(snapshot)
+
+    expect(checker.inspectPmcExpenseRuntime(snapshot, inspectorOptions())).toEqual({
+      mode: 'READ_ONLY', ready: false, snapshotSchema: { unknownKeyCount: 0, safe: false },
+    })
+  })
+
+  it.each([
+    ['binding names', (snapshot: ReturnType<typeof validSnapshot>) => snapshot.bindingNames.push({ secret: 'binding-object-sentinel' } as never), 'binding-object-sentinel'],
+    ['requested months', (snapshot: ReturnType<typeof validSnapshot>) => snapshot.financeRead.requestedMonths.push({ token: 'month-object-sentinel' } as never), 'month-object-sentinel'],
+    ['staff headers', (snapshot: ReturnType<typeof validSnapshot>) => snapshot.topology.staff.push({ privateId: 'staff-object-sentinel' } as never), 'staff-object-sentinel'],
+    ['master headers', (snapshot: ReturnType<typeof validSnapshot>) => snapshot.topology.master.EXPENSE_AUDIT.push({ secret: 'header-object-sentinel' } as never), 'header-object-sentinel'],
+  ])('rejects private object payloads inside %s arrays before detailed inspection', async (_label, mutate, sentinel) => {
+    const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
+    const snapshot = validSnapshot()
+    mutate(snapshot)
+
+    const serialized = JSON.stringify(checker.inspectPmcExpenseRuntime(snapshot, inspectorOptions()))
+    const report = JSON.parse(serialized)
+
+    expect(report).toEqual({ mode: 'READ_ONLY', ready: false, snapshotSchema: { unknownKeyCount: 0, safe: false } })
+    expect(serialized).not.toContain(sentinel)
   })
 
   it('accepts only an explicit local snapshot file and prints sanitized JSON', async () => {
@@ -217,7 +245,10 @@ describe('read-only expense runtime checker', () => {
     await writeFile(snapshotPath, JSON.stringify({
       ...validSnapshot(),
       provenance: { ...validSnapshot().provenance, collectedAt: new Date().toISOString() },
-      privateProbeMetadata: { secret: 'must-not-print-secret-sentinel' },
+      financeRead: {
+        ...validSnapshot().financeRead,
+        requestedMonths: ['2026-08', { token: 'must-not-print-secret-sentinel' }],
+      },
     }))
     let stdout = ''
 

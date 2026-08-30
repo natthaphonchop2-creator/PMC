@@ -286,19 +286,51 @@ function snapshotSchemaReport(source) {
   check(source.topology?.master, Object.keys(EXPECTED_MASTER_HEADERS))
   check(source.topology?.month, Object.keys(EXPECTED_MONTH_HEADERS))
 
-  if (!Array.isArray(source.bindingNames)
-    || !Array.isArray(source.financeRead?.requestedMonths)
-    || !Array.isArray(source.topology?.staff)) safe = false
+  if (!stringArray(source.bindingNames)
+    || !stringArray(source.financeRead?.requestedMonths)
+    || !stringArray(source.topology?.staff)) safe = false
+  if (stringArray(source.bindingNames)) {
+    const bindings = new Set(source.bindingNames)
+    if (source.bindingNames.length !== REQUIRED_BINDINGS.length
+      || bindings.size !== REQUIRED_BINDINGS.length
+      || REQUIRED_BINDINGS.some((name) => !bindings.has(name))) safe = false
+  }
+  if (stringArray(source.financeRead?.requestedMonths)) {
+    if (source.financeRead.requestedMonths.length !== 1
+      || safeMonth(source.financeRead.requestedMonths[0]) === null
+      || source.financeRead.requestedMonths[0] !== source.financeRead.selectedMonth) safe = false
+  }
   for (const name of Object.keys(EXPECTED_MASTER_HEADERS)) {
-    if (!Array.isArray(source.topology?.master?.[name])) safe = false
+    if (!stringArray(source.topology?.master?.[name])) safe = false
   }
   for (const name of Object.keys(EXPECTED_MONTH_HEADERS)) {
-    if (!Array.isArray(source.topology?.month?.[name])) safe = false
+    if (!stringArray(source.topology?.month?.[name])) safe = false
   }
+
+  if (source.provenance?.schemaVersion !== 1
+    || typeof source.provenance?.profile !== 'string'
+    || typeof source.provenance?.target !== 'string'
+    || typeof source.provenance?.environment !== 'string'
+    || typeof source.provenance?.collectedAt !== 'string'
+    || REQUIRED_SOURCE_CHECKS.some((name) => typeof source.provenance?.sourceChecks?.[name] !== 'boolean')
+    || typeof source.healthStatus !== 'number'
+    || REQUIRED_CONFIG_BOOLEANS.some((name) => typeof source.clientConfig?.[name] !== 'boolean')
+    || typeof source.flags?.PMC_EXPENSE_CAPTURE_ENABLED !== 'string'
+    || typeof source.flags?.PMC_FINANCE_READS_ENABLED !== 'string'
+    || typeof source.submitOnly?.history?.status !== 'number'
+    || typeof source.submitOnly?.history?.error !== 'string'
+    || typeof source.submitOnly?.evidence?.status !== 'number'
+    || typeof source.submitOnly?.evidence?.error !== 'string'
+    || typeof source.financeRead?.selectedMonth !== 'string'
+    || typeof source.staging?.deleteAfterDays !== 'number'
+    || typeof source.recovery?.targetPath !== 'string'
+    || typeof source.recovery?.audienceConfigured !== 'boolean'
+    || typeof source.recovery?.identityConfigured !== 'boolean') safe = false
   return { unknownKeyCount, safe: safe && unknownKeyCount === 0 }
 }
 
 function isRecord(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value) }
+function stringArray(value) { return Array.isArray(value) && value.every((item) => typeof item === 'string') }
 function explicitBoolean(value) { return value === 'true' ? true : value === 'false' ? false : null }
 function safeStatus(value) { return Number.isSafeInteger(value) && value >= 100 && value <= 599 ? value : 0 }
 function safeNonnegative(value) { return Number.isSafeInteger(value) && value >= 0 ? value : 0 }

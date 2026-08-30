@@ -48,7 +48,7 @@ The operator collecting the snapshot must perform these read-only checks against
 7. Add provenance with `schemaVersion=1`, `profile=DISABLED_PREFLIGHT`, the approved logical target/environment, the UTC `collectedAt`, and all seven source checks set true only after their read completed. Do not copy tokens, secret values, URLs, bucket/workbook/folder/file IDs, provider payloads, or evidence into the snapshot.
 8. Run the checker before the fixed 900-second maximum age expires. Missing, future, stale, target-mismatched, environment-mismatched, or incomplete source provenance fails closed.
 
-The snapshot format is recursively allowlisted. Unknown or missing top-level/nested keys, extra binding payloads, debug metadata, tokens, secrets, URLs, or private IDs make strict readiness false. The checker reports only safe counts/booleans and never echoes an unknown value.
+The snapshot format is recursively allowlisted. Every array element must also match its exact primitive contract: binding names are the seven unique allowlisted names, requested months contain exactly the selected canonical `YYYY-MM`, and every topology header is a string. Unknown or missing top-level/nested keys, object payloads inside arrays, extra/malformed/duplicate bindings, extra months, debug metadata, tokens, secrets, URLs, or private IDs make strict readiness false before detailed inspection. The checker reports only safe counts/booleans and never echoes an unknown value.
 
 The checker verifies:
 
