@@ -61,8 +61,8 @@ Focused RED-to-GREEN gates:
 
 Serialized final matrix:
 
-- `npx vitest run --maxWorkers=1 --no-file-parallelism`: 183 files / 2,325 tests passed in 136.91 seconds.
-- `npm run booking:test`: 46 files / 522 tests passed.
+- `npx vitest run --maxWorkers=1 --no-file-parallelism`: 183 files / 2,365 tests passed after the targeted independent-review corrections.
+- `npm run booking:test`: 46 files / 534 tests passed.
 - `npm run ocr:test`: 18 files / 231 tests passed; no rerun was needed.
 - `npm run build`: exit 0 for client, OCR review, Mini App, and server.
 - `npx tsc -b --pretty false`: exit 0.
@@ -80,6 +80,22 @@ Build emitted the existing Vite chunk-size advisories only. These advisories and
 - `db76978 fix: fence expense evidence uploads`
 - `ccee7ea fix: add auditable expense resume reads`
 - `2585fd7 fix: harden expense client resilience`
+- `8b1256d fix: close expense resume and drive races`
+- `87ee2de fix: reconcile expense replay authority`
+
+## Targeted independent-review corrections
+
+Independent read-only verification after the first final matrix reproduced additional fail-closed edges. Commits `8b1256d` and `87ee2de` close them:
+
+- A two-process delayed Drive create now preserves each exact created descriptor, selects the registered winner on retry, and deletes a loser only after two current-claim reads prove the same non-null registered authority. Claim-read/register uncertainty never deletes a file.
+- A COMMITTED replay now loads the immutable registered slot claims, reconciles any surviving late loser through the same two-read fence, then performs strict attachment listing. Cleanup uncertainty can be retried without permanently blocking the durable receipt.
+- Resume persistence now fails closed before staging or submission when `sessionStorage` cannot write and read back exactly `{"version":1,"rootRequestId":"..."}`. Tests prove unavailable/quota storage causes zero expense network mutation.
+- Reservation-only resume derives the durable owner from the verified canonical command journal and denies other staff. COMMITTED resume rebinds request result, PREPARE/COMMIT commands, submission, and audit payloads before returning the exact receipt; swapped or corrupt results fail closed without history disclosure.
+- Resume receipts now require a real calendar date, month-bound `EXP-YYYYMM-*` identifier, canonical timestamp, exact lifecycle state/version, and category/scope consistency.
+- COMMITTED resume reconstructs the PREPARE business intent and recomputes the COMMIT attachment manifest against the original PREPARE hash before returning a receipt. Swapped request results, mutated command/audit attachments, or altered PREPARE business fields fail closed.
+- Shared ledger validation additionally rejects expense-ID month drift, unsupported payment methods, `updatedAt < committedAt`, successors whose predecessor is not COMMITTED, and reversed successor chronology.
+- A pending durable VOID audit blocks replacement commit before any successor write. Legacy audit-first VOID recovery re-checks the current effective authority before mutation and completes a conflict without voiding a superseded predecessor.
+- Focused post-review verification passed 22 expense test files / 341 tests, plus the final five-file Drive/resume/VOID matrix / 107 tests. The final serialized, Booking, OCR, build/type/lint, and browser matrices above were rerun from the exact final code.
 
 ## No-live and scope evidence
 
