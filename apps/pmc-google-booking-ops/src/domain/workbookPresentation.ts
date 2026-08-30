@@ -80,7 +80,9 @@ export interface WorkbookPresentationPlan {
   expectedPresentationFingerprint: string
 }
 
-export const VISIBLE_TAB_ORDER = [
+export type WorkbookPresentationSha256 = (canonicalValue: string) => string
+
+export const VISIBLE_TAB_ORDER = Object.freeze([
   'DASHBOARD',
   'BOOKING_MASTER',
   'CALL_QUEUE',
@@ -92,9 +94,9 @@ export const VISIBLE_TAB_ORDER = [
   'CONFIG_SERVICES',
   'CONFIG_CHANNELS',
   'CONFIG_RULES',
-] as const
+] as const)
 
-export const COLUMN_WIDTHS = {
+export const COLUMN_WIDTHS = deepFreeze({
   DASHBOARD: [220, 140, 130, 120, 130, 130, 180, 145],
   BOOKING_MASTER: {
     caseId: 150, formResponseId: 160, status: 135, recorderName: 135,
@@ -117,26 +119,44 @@ export const COLUMN_WIDTHS = {
     approvedBy: 140, approvedAt: 165, reason: 300,
   },
   CONFIG_DEFAULTS: { id: 140, name: 160, email: 220, url: 260, boolean: 105, timestamp: 165 },
-} as const
+} as const)
 
-export const WRAPPED_HEADERS = new Set([
+const WRAPPED_HEADERS = new Set([
   'note', 'candidateCaseIds', 'reasonCode', 'reason',
+])
+
+const CURRENCY_HEADERS = new Set([
+  'depositAmount', 'jeraActualRevenue', 'commissionAmount',
 ])
 
 const FILTER_TABS = new Set(['BOOKING_MASTER', 'CALL_QUEUE', 'RECONCILIATION', 'RETENTION_QUEUE'])
 const VISIBLE_TABS = new Set<string>(VISIBLE_TAB_ORDER)
 
-const HIDDEN_EXACT_HEADERS: Readonly<Record<string, readonly string[] | null>> = {
+const VISIBLE_EXACT_HEADERS: Readonly<Record<string, readonly string[]>> = deepFreeze({
+  DASHBOARD: ['KPI', 'Value'],
+  BOOKING_MASTER: [...SHEET_SCHEMAS.BOOKING_MASTER!],
+  CALL_QUEUE: [...SHEET_SCHEMAS.CALL_QUEUE!],
+  RECONCILIATION: [...SHEET_SCHEMAS.RECONCILIATION!],
+  RETENTION_QUEUE: [...SHEET_SCHEMAS.RETENTION_QUEUE!],
+  CONFIG_ADMINS: [...SHEET_SCHEMAS.CONFIG_ADMINS!],
+  CONFIG_STAFF: [...SHEET_SCHEMAS.CONFIG_STAFF!],
+  CONFIG_DOCTORS: [...SHEET_SCHEMAS.CONFIG_DOCTORS!],
+  CONFIG_SERVICES: [...SHEET_SCHEMAS.CONFIG_SERVICES!],
+  CONFIG_CHANNELS: [...SHEET_SCHEMAS.CONFIG_CHANNELS!],
+  CONFIG_RULES: [...SHEET_SCHEMAS.CONFIG_RULES!],
+})
+
+const HIDDEN_EXACT_HEADERS: Readonly<Record<string, readonly string[] | null>> = deepFreeze({
   FORM_RESPONSES: null,
-  JERA_IMPORT_RAW: SHEET_SCHEMAS.JERA_IMPORT_RAW!,
-  JERA_IMPORT_FILES: SHEET_SCHEMAS.JERA_IMPORT_FILES!,
-  FORM_RESPONSE_MAP: SHEET_SCHEMAS.FORM_RESPONSE_MAP!,
-  RETRY_QUEUE: SHEET_SCHEMAS.RETRY_QUEUE!,
-  AUDIT_LOG: SHEET_SCHEMAS.AUDIT_LOG!,
-  CONFIG_LINE_DIRECTORY: SHEET_SCHEMAS.CONFIG_LINE_DIRECTORY!,
-  LINE_INGRESS_NONCES: SHEET_SCHEMAS.LINE_INGRESS_NONCES!,
-  SYSTEM_SEQUENCES: SHEET_SCHEMAS.SYSTEM_SEQUENCES!,
-  MINI_APP_REQUESTS: PMC_MINI_APP_REQUEST_HEADERS_V2,
+  JERA_IMPORT_RAW: [...SHEET_SCHEMAS.JERA_IMPORT_RAW!],
+  JERA_IMPORT_FILES: [...SHEET_SCHEMAS.JERA_IMPORT_FILES!],
+  FORM_RESPONSE_MAP: [...SHEET_SCHEMAS.FORM_RESPONSE_MAP!],
+  RETRY_QUEUE: [...SHEET_SCHEMAS.RETRY_QUEUE!],
+  AUDIT_LOG: [...SHEET_SCHEMAS.AUDIT_LOG!],
+  CONFIG_LINE_DIRECTORY: [...SHEET_SCHEMAS.CONFIG_LINE_DIRECTORY!],
+  LINE_INGRESS_NONCES: [...SHEET_SCHEMAS.LINE_INGRESS_NONCES!],
+  SYSTEM_SEQUENCES: [...SHEET_SCHEMAS.SYSTEM_SEQUENCES!],
+  MINI_APP_REQUESTS: [...PMC_MINI_APP_REQUEST_HEADERS_V2],
   MINI_APP_LINK_ATTEMPTS: [
     'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
   ],
@@ -169,10 +189,10 @@ const HIDDEN_EXACT_HEADERS: Readonly<Record<string, readonly string[] | null>> =
     'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
     'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
   ],
-  STOCK_PRODUCTS: SHEET_SCHEMAS.STOCK_PRODUCTS!,
-  STOCK_LEDGER: SHEET_SCHEMAS.STOCK_LEDGER!,
-  STOCK_AUDIT: SHEET_SCHEMAS.STOCK_AUDIT!,
-}
+  STOCK_PRODUCTS: [...SHEET_SCHEMAS.STOCK_PRODUCTS!],
+  STOCK_LEDGER: [...SHEET_SCHEMAS.STOCK_LEDGER!],
+  STOCK_AUDIT: [...SHEET_SCHEMAS.STOCK_AUDIT!],
+})
 
 interface DesiredSheetPresentation {
   hidden: boolean
@@ -191,6 +211,7 @@ interface ValidatedWorkbook {
 
 export function buildWorkbookPresentationPlan(
   snapshot: WorkbookMetadataSnapshot,
+  sha256Hex: WorkbookPresentationSha256,
 ): WorkbookPresentationPlan {
   const validated = validateWorkbook(snapshot)
   const actions = buildActions(validated)
@@ -200,7 +221,7 @@ export function buildWorkbookPresentationPlan(
     sourceFingerprint: snapshot.fingerprint,
     visibleOrder: [...VISIBLE_TAB_ORDER],
     actions,
-    expectedPresentationFingerprint: workbookPresentationFingerprint(projected),
+    expectedPresentationFingerprint: workbookPresentationFingerprint(projected, sha256Hex),
   })
 }
 
@@ -208,26 +229,30 @@ export function verifyWorkbookPresentation(
   before: WorkbookMetadataSnapshot,
   after: WorkbookMetadataSnapshot,
   plan: WorkbookPresentationPlan,
+  sha256Hex: WorkbookPresentationSha256,
 ): void {
   validateWorkbook(before)
   validateWorkbook(after)
   if (before.fingerprint !== plan.sourceFingerprint) fail('SOURCE_FINGERPRINT_MISMATCH')
 
-  const expectedPlan = buildWorkbookPresentationPlan(before)
+  const expectedPlan = buildWorkbookPresentationPlan(before, sha256Hex)
   if (canonicalPlan(expectedPlan) !== canonicalPlan(plan)) fail('PRESENTATION_PLAN_CONFLICT')
 
   assertImmutableWorkbook(before, after)
-  const actualFingerprint = workbookPresentationFingerprint(after)
+  const actualFingerprint = workbookPresentationFingerprint(after, sha256Hex)
   if (actualFingerprint !== plan.expectedPresentationFingerprint) fail('PRESENTATION_FINGERPRINT_MISMATCH')
 
-  const readbackPlan = buildWorkbookPresentationPlan(after)
+  const readbackPlan = buildWorkbookPresentationPlan(after, sha256Hex)
   if (readbackPlan.actions.length !== 0
     || readbackPlan.expectedPresentationFingerprint !== plan.expectedPresentationFingerprint) {
     fail('PRESENTATION_READBACK_NOT_IDEMPOTENT')
   }
 }
 
-export function workbookPresentationFingerprint(snapshot: WorkbookMetadataSnapshot): string {
+export function workbookPresentationFingerprint(
+  snapshot: WorkbookMetadataSnapshot,
+  sha256Hex: WorkbookPresentationSha256,
+): string {
   const payload = snapshot.sheets
     .slice()
     .sort((left, right) => left.index - right.index)
@@ -243,7 +268,10 @@ export function workbookPresentationFingerprint(snapshot: WorkbookMetadataSnapsh
       managedFormats: sortFormats(sheet.managedFormats),
       statusRules: sortStatusRules(sheet.statusRules),
     }))
-  return `wp1-${stableHash(JSON.stringify(payload))}`
+  if (typeof sha256Hex !== 'function') fail('PRESENTATION_SHA256_REQUIRED')
+  const digest = sha256Hex(JSON.stringify(payload)).toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(digest)) fail('INVALID_PRESENTATION_SHA256')
+  return `wp1-${digest}`
 }
 
 function validateWorkbook(snapshot: WorkbookMetadataSnapshot): ValidatedWorkbook {
@@ -311,7 +339,7 @@ function validateSheetShape(sheet: SheetPresentationSnapshot): void {
 function validateHeaders(sheet: SheetPresentationSnapshot, classification: 'VISIBLE' | 'HIDDEN'): void {
   let expected: readonly string[] | null | undefined
   if (classification === 'VISIBLE') {
-    expected = sheet.title === 'DASHBOARD' ? ['KPI', 'Value'] : SHEET_SCHEMAS[sheet.title]
+    expected = VISIBLE_EXACT_HEADERS[sheet.title]
   } else {
     expected = HIDDEN_EXACT_HEADERS[sheet.title]
   }
@@ -367,10 +395,11 @@ function desiredPresentation(
   classification: 'VISIBLE' | 'HIDDEN',
 ): DesiredSheetPresentation {
   if (classification === 'HIDDEN') {
+    const sourceOwnedForm = sheet.title === 'FORM_RESPONSES'
     return {
       hidden: true,
-      frozenRows: sheet.frozenRows,
-      frozenColumns: sheet.frozenColumns,
+      frozenRows: sourceOwnedForm ? sheet.frozenRows : 1,
+      frozenColumns: sourceOwnedForm ? sheet.frozenColumns : 0,
       basicFilter: null,
       widths: new Map(),
       formats: [],
@@ -436,9 +465,12 @@ function configWidth(header: string): number | null {
 
 function desiredFormats(sheet: SheetPresentationSnapshot): readonly ManagedFormatSnapshot[] {
   if (sheet.title === 'DASHBOARD') {
+    if (sheet.maxRows < 14 || sheet.maxColumns < 8) fail('INVALID_DASHBOARD_GRID')
     return [
       { range: gridRange(sheet, 0, 1, 0, 2), styleKey: 'HEADER' },
-      { range: gridRange(sheet, 1, sheet.maxRows, 0, 8), styleKey: 'BODY' },
+      { range: gridRange(sheet, 1, 10, 0, 2), styleKey: 'BODY' },
+      { range: gridRange(sheet, 12, 13, 0, 8), styleKey: 'HEADER' },
+      { range: gridRange(sheet, 13, sheet.maxRows, 0, 8), styleKey: 'BODY' },
     ]
   }
   const formats: ManagedFormatSnapshot[] = [
@@ -476,10 +508,7 @@ function isPlainTextHeader(header: string): boolean {
 }
 
 function isCurrencyHeader(header: string): boolean {
-  const normalized = header.toLowerCase()
-  return normalized === 'depositamount'
-    || normalized.includes('revenue')
-    || normalized.includes('commission')
+  return CURRENCY_HEADERS.has(header)
 }
 
 function desiredStatusRules(sheet: SheetPresentationSnapshot): readonly StatusRuleSnapshot[] {
@@ -830,24 +859,25 @@ function canonicalPlan(plan: WorkbookPresentationPlan): string {
   })
 }
 
-function stableHash(value: string): string {
-  let left = 0x811c9dc5
-  let right = 0x9e3779b9
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index)
-    left = Math.imul(left ^ code, 0x01000193) >>> 0
-    right = Math.imul(right ^ code, 0x85ebca6b) >>> 0
-    right = ((right << 13) | (right >>> 19)) >>> 0
-  }
-  return `${left.toString(16).padStart(8, '0')}${right.toString(16).padStart(8, '0')}`
+function freezePlan(plan: WorkbookPresentationPlan): WorkbookPresentationPlan {
+  return deepFreeze({
+    ...plan,
+    visibleOrder: [...plan.visibleOrder],
+    actions: plan.actions.map(cloneAction),
+  })
 }
 
-function freezePlan(plan: WorkbookPresentationPlan): WorkbookPresentationPlan {
-  return Object.freeze({
-    ...plan,
-    visibleOrder: Object.freeze([...plan.visibleOrder]),
-    actions: Object.freeze(plan.actions.map((action) => Object.freeze(action))),
-  })
+function cloneAction(action: WorkbookPresentationAction): WorkbookPresentationAction {
+  if ('range' in action) return { ...action, range: cloneRange(action.range) }
+  return { ...action }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key])
+  }
+  return Object.isFrozen(value) ? value : Object.freeze(value)
 }
 
 function fail(code: string): never {

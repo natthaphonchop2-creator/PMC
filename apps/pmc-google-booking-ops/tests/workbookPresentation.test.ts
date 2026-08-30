@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { PMC_MINI_APP_REQUEST_HEADERS_V2 } from '../../../shared/pmcBookingRowContracts'
 import { SHEET_SCHEMAS } from '../src/sheetSchema'
@@ -13,35 +14,57 @@ import {
   type WorkbookPresentationPlan,
 } from '../src/domain/workbookPresentation'
 
-const HIDDEN_FIXTURES: ReadonlyArray<{ title: string; headers: readonly string[] }> = [
-  { title: 'FORM_RESPONSES', headers: ['Timestamp', 'Email'] },
-  { title: 'JERA_IMPORT_RAW', headers: SHEET_SCHEMAS.JERA_IMPORT_RAW! },
-  { title: 'RETRY_QUEUE', headers: SHEET_SCHEMAS.RETRY_QUEUE! },
-  { title: 'AUDIT_LOG', headers: SHEET_SCHEMAS.AUDIT_LOG! },
-  { title: 'MINI_APP_REQUESTS', headers: PMC_MINI_APP_REQUEST_HEADERS_V2 },
-  {
-    title: 'MINI_APP_LINK_ATTEMPTS',
-    headers: ['lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt'],
-  },
-  {
-    title: 'JERA_API_CACHE',
-    headers: [
-      'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'branchName', 'eventDate', 'patientUuid',
-      'patientCode', 'patientName', 'paymentCode', 'status', 'type', 'totalSatang', 'paidAmountSatang',
-      'refundAmountSatang', 'cashSatang', 'transferSatang', 'creditCardSatang', 'eWalletSatang',
-      'paymentLinkSatang', 'otherPaymentSatang', 'itemCode', 'itemName', 'quantity',
-      'remainingQuantity', 'remainingValueSatang', 'doctorName', 'salespersonName', 'sourceCreatedAt',
-      'sourceUpdatedAt', 'fetchedAt', 'sourceHash',
-    ],
-  },
-  { title: 'STOCK_PRODUCTS', headers: SHEET_SCHEMAS.STOCK_PRODUCTS! },
-]
+const MINI_APP_SYSTEM_HEADERS = {
+  MINI_APP_REQUESTS: PMC_MINI_APP_REQUEST_HEADERS_V2,
+  MINI_APP_LINK_ATTEMPTS: [
+    'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
+  ],
+  JERA_API_CACHE: [
+    'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'branchName', 'eventDate', 'patientUuid',
+    'patientCode', 'patientName', 'paymentCode', 'status', 'type', 'totalSatang', 'paidAmountSatang',
+    'refundAmountSatang', 'cashSatang', 'transferSatang', 'creditCardSatang', 'eWalletSatang',
+    'paymentLinkSatang', 'otherPaymentSatang', 'itemCode', 'itemName', 'quantity',
+    'remainingQuantity', 'remainingValueSatang', 'doctorName', 'salespersonName', 'sourceCreatedAt',
+    'sourceUpdatedAt', 'fetchedAt', 'sourceHash',
+  ],
+  JERA_SYNC_STATE: [
+    'cacheKey', 'reportType', 'filterHash', 'lastAttemptAt', 'lastManualAt', 'lastSuccessAt',
+    'lastSourceDate', 'status', 'recordCount', 'nextPage', 'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
+  ],
+  JERA_SYNC_AUDIT: [
+    'syncRunId', 'actorType', 'actorId', 'reportType', 'filterHash', 'startedAt', 'finishedAt',
+    'status', 'recordCount', 'safeErrorCode', 'correlationId',
+  ],
+  JERA_PAYMENT_DETAIL_CACHE: [
+    'detailKey', 'branchUuid', 'eventDate', 'paymentUuid', 'paymentSourceHash',
+    'detailSourceHash', 'detailFetchedAt', 'lineCount', 'truncated',
+  ],
+  JERA_PAYMENT_DETAIL_LINES: [
+    'detailKey', 'lineOrdinal', 'lineKind', 'itemCode', 'netLineSatang',
+  ],
+  JERA_ALLOCATION_COVERAGE: [
+    'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
+    'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
+    'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
+    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+  ],
+} as const
+
+const HIDDEN_FIXTURES: ReadonlyArray<{ title: string; headers: readonly string[] }> = Object.entries({
+  ...Object.fromEntries(Object.entries(SHEET_SCHEMAS).filter(([title]) => (
+    title !== 'DASHBOARD' && !VISIBLE_TAB_ORDER.includes(title as typeof VISIBLE_TAB_ORDER[number])
+  ))),
+  ...MINI_APP_SYSTEM_HEADERS,
+  FORM_RESPONSES: ['Timestamp', 'Email'],
+}).map(([title, headers]) => ({ title, headers }))
+
+const sha256Hex = (value: string): string => createHash('sha256').update(value).digest('hex')
 
 describe('guarded Booking workbook presentation policy', () => {
   it('builds the exact deterministic visible, hidden, freeze, filter, width, format, and status plan', () => {
     const snapshot = canonicalSnapshot()
-    const plan = buildWorkbookPresentationPlan(snapshot)
-    const replay = buildWorkbookPresentationPlan(cloneSnapshot(snapshot))
+    const plan = buildPlan(snapshot)
+    const replay = buildPlan(cloneSnapshot(snapshot))
 
     expect(plan.visibleOrder).toEqual([
       'DASHBOARD', 'BOOKING_MASTER', 'CALL_QUEUE', 'RECONCILIATION', 'RETENTION_QUEUE',
@@ -59,6 +82,7 @@ describe('guarded Booking workbook presentation policy', () => {
     ].includes(action.kind))).toBe(true)
 
     const hiddenIds = new Set(HIDDEN_FIXTURES.map(({ title }) => sheet(snapshot, title).sheetId))
+    expect(HIDDEN_FIXTURES).toHaveLength(20)
     expect(plan.actions.filter((action) => action.kind === 'SET_HIDDEN')).toEqual(
       expect.arrayContaining([...hiddenIds].map((sheetId) => ({ kind: 'SET_HIDDEN', sheetId, hidden: true }))),
     )
@@ -116,6 +140,13 @@ describe('guarded Booking workbook presentation policy', () => {
     }))
     expect(formats).toContainEqual(expect.objectContaining({
       range: expect.objectContaining({
+        sheetId: sheet(snapshot, 'BOOKING_MASTER').sheetId,
+        startColumnIndex: SHEET_SCHEMAS.BOOKING_MASTER!.indexOf('commissionEligibility'),
+      }),
+      styleKey: 'BODY',
+    }))
+    expect(formats).toContainEqual(expect.objectContaining({
+      range: expect.objectContaining({
         sheetId: sheet(snapshot, 'RECONCILIATION').sheetId,
         startColumnIndex: SHEET_SCHEMAS.RECONCILIATION!.indexOf('candidateCaseIds'),
       }),
@@ -127,7 +158,21 @@ describe('guarded Booking workbook presentation policy', () => {
       'BOOKING_STATUS', 'APPOINTMENT_STATUS', 'CALL_STATUS',
       'RECONCILIATION_STATUS', 'RETENTION_STATUS',
     ])
-    expect(plan.expectedPresentationFingerprint).toMatch(/^wp1-[0-9a-f]{16}$/)
+    const dashboard = sheet(snapshot, 'DASHBOARD')
+    expect(formats.filter((action) => action.range.sheetId === dashboard.sheetId)).toEqual([
+      { kind: 'FORMAT_RANGE', range: gridRange(dashboard, 0, 1, 0, 2), styleKey: 'HEADER' },
+      { kind: 'FORMAT_RANGE', range: gridRange(dashboard, 1, 10, 0, 2), styleKey: 'BODY' },
+      { kind: 'FORMAT_RANGE', range: gridRange(dashboard, 12, 13, 0, 8), styleKey: 'HEADER' },
+      { kind: 'FORMAT_RANGE', range: gridRange(dashboard, 13, dashboard.maxRows, 0, 8), styleKey: 'BODY' },
+    ])
+
+    expect(plan.actions).toContainEqual({
+      kind: 'SET_FROZEN', sheetId: sheet(snapshot, 'MINI_APP_REQUESTS').sheetId, rows: 1, columns: 0,
+    })
+    expect(plan.actions).not.toContainEqual(expect.objectContaining({
+      kind: 'SET_FROZEN', sheetId: sheet(snapshot, 'FORM_RESPONSES').sheetId,
+    }))
+    expect(plan.expectedPresentationFingerprint).toMatch(/^wp1-[0-9a-f]{64}$/)
   })
 
   it.each([
@@ -146,8 +191,18 @@ describe('guarded Booking workbook presentation policy', () => {
   ])('fails closed on %s before producing actions', (_label, mutate, errorCode) => {
     const snapshot = canonicalSnapshot()
     mutate(snapshot)
-    expect(() => buildWorkbookPresentationPlan(snapshot)).toThrow(errorCode)
+    expect(() => buildPlan(snapshot)).toThrow(errorCode)
   })
+
+  it.each(HIDDEN_FIXTURES.filter(({ title }) => title !== 'FORM_RESPONSES'))(
+    'rejects exact managed-header drift on hidden tab $title',
+    ({ title }) => {
+      const snapshot = canonicalSnapshot()
+      const target = sheet(snapshot, title)
+      target.headers = ['wrong', ...target.headers.slice(1)]
+      expect(() => buildPlan(snapshot)).toThrow('HEADER_MISMATCH')
+    },
+  )
 
   it('rejects duplicate or overlapping managed format and status metadata', () => {
     const snapshot = canonicalSnapshot()
@@ -156,7 +211,7 @@ describe('guarded Booking workbook presentation policy', () => {
       { range: columnBody(target, 0), styleKey: 'BODY_PLAIN_TEXT' },
       { range: { ...columnBody(target, 0), endColumnIndex: 2 }, styleKey: 'BODY' },
     ]
-    expect(() => buildWorkbookPresentationPlan(snapshot)).toThrow('PRESENTATION_METADATA_CONFLICT')
+    expect(() => buildPlan(snapshot)).toThrow('PRESENTATION_METADATA_CONFLICT')
 
     const statusConflict = canonicalSnapshot()
     const callQueue = sheet(statusConflict, 'CALL_QUEUE')
@@ -165,41 +220,41 @@ describe('guarded Booking workbook presentation policy', () => {
       { range: columnBody(callQueue, statusColumn), ruleKey: 'CALL_STATUS' },
       { range: columnBody(callQueue, statusColumn), ruleKey: 'CALL_STATUS' },
     ]
-    expect(() => buildWorkbookPresentationPlan(statusConflict)).toThrow('PRESENTATION_METADATA_CONFLICT')
+    expect(() => buildPlan(statusConflict)).toThrow('PRESENTATION_METADATA_CONFLICT')
   })
 
   it('verifies immutable content hashes and the exact planned presentation, then becomes idempotent', () => {
     const before = canonicalSnapshot()
-    const plan = buildWorkbookPresentationPlan(before)
+    const plan = buildPlan(before)
     const after = applyPlanForTest(before, plan)
 
-    expect(() => verifyWorkbookPresentation(before, after, plan)).not.toThrow()
-    expect(buildWorkbookPresentationPlan(after).actions).toEqual([])
-    expect(buildWorkbookPresentationPlan(after).expectedPresentationFingerprint)
+    expect(() => verifyWorkbookPresentation(before, after, plan, sha256Hex)).not.toThrow()
+    expect(buildPlan(after).actions).toEqual([])
+    expect(buildPlan(after).expectedPresentationFingerprint)
       .toBe(plan.expectedPresentationFingerprint)
 
     const changedValue = cloneSnapshot(after)
     sheet(changedValue, 'BOOKING_MASTER').valuesHash = 'changed-value-hash'
-    expect(() => verifyWorkbookPresentation(before, changedValue, plan)).toThrow('VALUES_HASH_CHANGED')
+    expect(() => verifyWorkbookPresentation(before, changedValue, plan, sha256Hex)).toThrow('VALUES_HASH_CHANGED')
 
     const changedFormula = cloneSnapshot(after)
     sheet(changedFormula, 'BOOKING_MASTER').formulasHash = 'changed-formula-hash'
-    expect(() => verifyWorkbookPresentation(before, changedFormula, plan)).toThrow('FORMULAS_HASH_CHANGED')
+    expect(() => verifyWorkbookPresentation(before, changedFormula, plan, sha256Hex)).toThrow('FORMULAS_HASH_CHANGED')
 
     const changedValidation = cloneSnapshot(after)
     sheet(changedValidation, 'BOOKING_MASTER').validationsHash = 'changed-validation-hash'
-    expect(() => verifyWorkbookPresentation(before, changedValidation, plan)).toThrow('VALIDATIONS_HASH_CHANGED')
+    expect(() => verifyWorkbookPresentation(before, changedValidation, plan, sha256Hex)).toThrow('VALIDATIONS_HASH_CHANGED')
 
     const changedProtection = cloneSnapshot(after)
     sheet(changedProtection, 'BOOKING_MASTER').protectionsHash = 'changed-protection-hash'
-    expect(() => verifyWorkbookPresentation(before, changedProtection, plan)).toThrow('PROTECTIONS_HASH_CHANGED')
+    expect(() => verifyWorkbookPresentation(before, changedProtection, plan, sha256Hex)).toThrow('PROTECTIONS_HASH_CHANGED')
   })
 
   it('fails verification for an incomplete result or a forged/conflicting plan', () => {
     const before = canonicalSnapshot()
-    const plan = buildWorkbookPresentationPlan(before)
+    const plan = buildPlan(before)
     const incomplete = cloneSnapshot(before)
-    expect(() => verifyWorkbookPresentation(before, incomplete, plan)).toThrow('PRESENTATION_FINGERPRINT_MISMATCH')
+    expect(() => verifyWorkbookPresentation(before, incomplete, plan, sha256Hex)).toThrow('PRESENTATION_FINGERPRINT_MISMATCH')
 
     const forged: WorkbookPresentationPlan = {
       ...plan,
@@ -213,8 +268,52 @@ describe('guarded Booking workbook presentation policy', () => {
         },
       ],
     }
-    expect(() => verifyWorkbookPresentation(before, applyPlanForTest(before, plan), forged))
+    expect(() => verifyWorkbookPresentation(before, applyPlanForTest(before, plan), forged, sha256Hex))
       .toThrow('PRESENTATION_PLAN_CONFLICT')
+  })
+
+  it('requires a valid injected SHA-256 implementation and has no weak production fallback', () => {
+    const snapshot = canonicalSnapshot()
+    expect(() => (buildWorkbookPresentationPlan as unknown as (
+      value: WorkbookMetadataSnapshot,
+    ) => WorkbookPresentationPlan)(snapshot)).toThrow('PRESENTATION_SHA256_REQUIRED')
+    expect(() => buildWorkbookPresentationPlan(snapshot, () => 'weak'))
+      .toThrow('INVALID_PRESENTATION_SHA256')
+  })
+
+  it('deep-freezes exported policy and every returned action range without changing later plans', () => {
+    const snapshot = canonicalSnapshot()
+    const before = buildPlan(snapshot)
+    const ranged = before.actions.find((action) => 'range' in action)
+    expect(ranged && 'range' in ranged && Object.isFrozen(ranged.range)).toBe(true)
+    expect(Object.isFrozen(before.actions)).toBe(true)
+    expect(Object.isFrozen(COLUMN_WIDTHS)).toBe(true)
+    expect(Object.isFrozen(COLUMN_WIDTHS.DASHBOARD)).toBe(true)
+    expect(Object.isFrozen(COLUMN_WIDTHS.BOOKING_MASTER)).toBe(true)
+    expect(Object.isFrozen(VISIBLE_TAB_ORDER)).toBe(true)
+
+    expect(() => { (VISIBLE_TAB_ORDER as unknown as string[])[0] = 'MUTATED' }).toThrow()
+    expect(() => { (COLUMN_WIDTHS.DASHBOARD as unknown as number[])[0] = 1 }).toThrow()
+    expect(() => {
+      if (ranged && 'range' in ranged) ranged.range.startRowIndex = 999
+    }).toThrow()
+
+    expect(buildPlan(cloneSnapshot(snapshot))).toEqual(before)
+  })
+
+  it('preserves the source-owned Form freeze while enforcing row one on every exact managed hidden table', () => {
+    const snapshot = canonicalSnapshot()
+    sheet(snapshot, 'FORM_RESPONSES').frozenRows = 2
+    sheet(snapshot, 'FORM_RESPONSES').frozenColumns = 1
+    const plan = buildPlan(snapshot)
+    expect(plan.actions).not.toContainEqual(expect.objectContaining({
+      kind: 'SET_FROZEN', sheetId: sheet(snapshot, 'FORM_RESPONSES').sheetId,
+    }))
+    for (const { title } of HIDDEN_FIXTURES.filter(({ title }) => title !== 'FORM_RESPONSES')) {
+      expect(plan.actions).toContainEqual({
+        kind: 'SET_FROZEN', sheetId: sheet(snapshot, title).sheetId, rows: 1, columns: 0,
+      })
+    }
   })
 })
 
@@ -276,6 +375,16 @@ function fullGrid(target: SheetPresentationSnapshot): GridRangeSnapshot {
     startColumnIndex: 0,
     endColumnIndex: target.headers.length,
   }
+}
+
+function gridRange(
+  target: SheetPresentationSnapshot,
+  startRowIndex: number,
+  endRowIndex: number,
+  startColumnIndex: number,
+  endColumnIndex: number,
+): GridRangeSnapshot {
+  return { sheetId: target.sheetId, startRowIndex, endRowIndex, startColumnIndex, endColumnIndex }
 }
 
 function columnBody(target: SheetPresentationSnapshot, columnIndex: number): GridRangeSnapshot {
@@ -394,4 +503,8 @@ function replaceRange<T extends { range: GridRangeSnapshot }>(
   replacement: T,
 ): T[] {
   return [...items.filter((item) => JSON.stringify(item.range) !== JSON.stringify(range)), replacement]
+}
+
+function buildPlan(snapshot: WorkbookMetadataSnapshot): WorkbookPresentationPlan {
+  return buildWorkbookPresentationPlan(snapshot, sha256Hex)
 }

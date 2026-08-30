@@ -13,17 +13,27 @@ Implemented locally on base `a4f31bb`. No Apps Script push, Google API call, liv
 - Added stable action ordering, duplicate/overlap conflict guards, deterministic projected presentation fingerprints, exact plan verification, unchanged value/formula/validation/protection hash checks, and idempotent readback verification.
 - Raw `FORM_RESPONSES` column names are explicitly preserved as unmanaged source headers; the policy validates and formats only the managed operator/config schemas and exact known system schemas.
 
+### Review fix round 1
+
+- Replaced substring currency detection with an exact numeric allowlist: `depositAmount`, `jeraActualRevenue`, and `commissionAmount`; `commissionEligibility` remains categorical body text.
+- Split Dashboard formatting into four non-overlapping regions: row 1 KPI header, rows 2–10 KPI body, row 13 operation header, and row 14 onward operation body. Rows 11–12 remain untouched.
+- Deep-froze exported policy data and recursively cloned/froze returned plans, actions, and nested ranges; later plans cannot be changed through a previously returned object.
+- Enforced frozen row 1 and zero frozen columns on all exact schema-owned hidden tables. `FORM_RESPONSES` is the sole explicit source-owned freeze exception.
+- Removed the custom 64-bit checksum. Plan building and verification now require a caller-injected portable SHA-256 hex function and reject missing or malformed digest implementations.
+- Expanded the canonical test topology to all 20 current hidden tabs (the 28-tab Booking workbook plus three optional Stock tabs), with per-tab managed-header drift checks and retained unknown-prefix rejection.
+
 ## TDD evidence
 
 RED was observed twice before the corresponding production behavior:
 
 1. The first focused run failed at import because `workbookPresentation.ts` did not exist.
 2. A later focused run failed `1` of `16` tests because a fabricated `MINI_APP_UNKNOWN` tab was accepted by an overly broad prefix classifier. The classifier was tightened to the explicit allowlist.
+3. Review fix round 1 first failed `4` of `19` focused tests on the categorical commission field, Dashboard split, injected SHA-256/deep immutability, and managed hidden-tab freeze requirements. Each behavior was then implemented and rerun.
 
 GREEN verification:
 
-- Focused presentation policy suite: `1` file, `16` tests passed.
-- Full Booking suite: `51` files, `712` tests passed.
+- Focused presentation policy suite: `1` file, `38` tests passed.
+- Full Booking suite: `51` files, `734` tests passed.
 - `npm run booking:typecheck`: passed.
 - `npm run booking:build`: passed.
 - Touched-path ESLint: passed with zero findings.
