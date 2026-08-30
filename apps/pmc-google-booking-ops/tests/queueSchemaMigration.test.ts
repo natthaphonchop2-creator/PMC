@@ -14,7 +14,7 @@ describe('booking appointment schema migration', () => {
 
     expect(bookingAppointmentMigrationPlan([...previous])).toEqual({
       kind: 'INSERT_APPOINTMENT_COLUMNS',
-      afterColumn: 10,
+      afterColumn: 13,
       headers: [
         'queueType',
         'appointmentStatus',

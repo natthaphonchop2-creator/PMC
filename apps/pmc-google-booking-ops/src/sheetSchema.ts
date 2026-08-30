@@ -1,6 +1,6 @@
 import type { BookingCase } from './domain/types'
 
-export const BOOKING_MASTER_COLUMNS = [
+export const BOOKING_MASTER_COLUMNS_V1 = [
   'caseId',
   'version',
   'status',
@@ -60,6 +60,14 @@ export const BOOKING_MASTER_COLUMNS = [
   'createdBy',
   'updatedAt',
   'updatedBy',
+] as const
+
+export const BOOKING_MASTER_COLUMNS = [
+  ...BOOKING_MASTER_COLUMNS_V1.slice(0, 4),
+  'recorderId',
+  'recorderName',
+  'recorderSource',
+  ...BOOKING_MASTER_COLUMNS_V1.slice(4),
 ] as const satisfies readonly (keyof BookingCase)[]
 
 export const STAFF_CONFIG_COLUMNS = [

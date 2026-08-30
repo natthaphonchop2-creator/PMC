@@ -12,6 +12,7 @@ import {
 } from './adapters/lineMessaging'
 import {
   createRuntime,
+  applyPmcBookingAttributionMigrationWorkflow,
   configureStaffProfileImagesWorkflow,
   configureStockManagersWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
@@ -28,6 +29,7 @@ import {
   runDailyOperationsWorkflow,
   runBookingRetriesWorkflow,
   runIntegrityAndBackupWorkflow,
+  previewPmcBookingAttributionMigrationWorkflow,
   runExpenseRecoveryWorkflow,
   sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
@@ -282,4 +284,12 @@ export function configurePmcSharedDoctorCalendar() {
     SpreadsheetApp.openById(spreadsheetId),
     SHARED_DOCTOR_CALENDAR_ID,
   )
+}
+
+export function previewPmcBookingAttributionMigration() {
+  return previewPmcBookingAttributionMigrationWorkflow()
+}
+
+export function applyPmcBookingAttributionMigration() {
+  return applyPmcBookingAttributionMigrationWorkflow()
 }

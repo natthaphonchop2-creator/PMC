@@ -1,18 +1,22 @@
 import {
-  MINI_APP_ASYNC_REQUEST_HEADERS,
+  MINI_APP_ASYNC_REQUEST_HEADERS_V1,
   type MiniAppAsyncRequestRecord,
   type MiniAppAsyncRequestState,
   type MiniAppAsyncConfirmationStatus,
 } from '../../../../shared/pmcMiniAppAsyncState'
 import { encodeSheetCell } from './googleSheets'
 import type { MiniAppRequestStatePort } from '../ports'
+import { TARGET_MINI_APP_REQUEST_HEADERS } from '../domain/attributionMigration'
 
 const TAB = 'MINI_APP_REQUESTS'
-const REQUEST_ROW_NUMBER_FORMATS = MINI_APP_ASYNC_REQUEST_HEADERS.map((header) => {
+function requestRowNumberFormats(headers: readonly string[]) {
+  return headers.map((header) => {
   if (header === 'version' || header === 'evidenceCount' || header === 'attemptCount') return '0'
+  if (header === 'protocolVersion') return '0'
   if (header === 'depositAmount') return '0.############'
   return '@'
-})
+  })
+}
 
 export function createGoogleMiniAppRequestStatePort(
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
@@ -23,27 +27,39 @@ export function createGoogleMiniAppRequestStatePort(
     return sheet
   }
 
-  function readRows(): Array<{ rowNumber: number; value: MiniAppAsyncRequestRecord }> {
+  function readRows(): {
+    headers: readonly string[]
+    rows: Array<{ rowNumber: number; value: MiniAppAsyncRequestRecord }>
+  } {
     const sheet = requireSheet()
     const columnCount = sheet.getLastColumn()
-    if (columnCount !== MINI_APP_ASYNC_REQUEST_HEADERS.length) throw new Error('MINI_APP_REQUESTS header mismatch')
     const headers = sheet.getRange(1, 1, 1, columnCount).getValues()[0].map(String)
-    if (headers.some((header, index) => header !== MINI_APP_ASYNC_REQUEST_HEADERS[index])) {
+    const schemaHeaders = exactRequestHeaders(headers)
+    if (sheet.getLastRow() < 2) return { headers: schemaHeaders, rows: [] }
+    return {
+      headers: schemaHeaders,
+      rows: sheet.getRange(2, 1, sheet.getLastRow() - 1, columnCount).getValues()
+        .map((row, index) => ({ rowNumber: index + 2, value: fromRow(row, schemaHeaders) })),
+    }
+  }
+
+  function exactRequestHeaders(headers: readonly string[]): readonly string[] {
+    if (sameHeader(headers, MINI_APP_ASYNC_REQUEST_HEADERS_V1)) return MINI_APP_ASYNC_REQUEST_HEADERS_V1
+    if (sameHeader(headers, TARGET_MINI_APP_REQUEST_HEADERS)) return TARGET_MINI_APP_REQUEST_HEADERS
+    {
       throw new Error('MINI_APP_REQUESTS header mismatch')
     }
-    if (sheet.getLastRow() < 2) return []
-    return sheet.getRange(2, 1, sheet.getLastRow() - 1, columnCount).getValues()
-      .map((row, index) => ({ rowNumber: index + 2, value: fromRow(row) }))
   }
 
   return {
     getByRequestId(requestId) {
-      const matches = readRows().filter(({ value }) => value.requestId === requestId)
+      const matches = readRows().rows.filter(({ value }) => value.requestId === requestId)
       if (matches.length > 1) throw new Error('duplicate mini app async request identity')
       return matches[0]?.value ?? null
     },
     updateByRequestId(requestId, expectedVersion, next) {
-      const matches = readRows().filter(({ value }) => value.requestId === requestId)
+      const table = readRows()
+      const matches = table.rows.filter(({ value }) => value.requestId === requestId)
       if (matches.length > 1) throw new Error('duplicate mini app async request identity')
       const row = matches[0]
       if (!row) throw new Error('mini app async request not found')
@@ -52,17 +68,17 @@ export function createGoogleMiniAppRequestStatePort(
         throw new Error('invalid mini app async row update')
       }
       const sheet = requireSheet()
-      const target = sheet.getRange(row.rowNumber, 1, 1, MINI_APP_ASYNC_REQUEST_HEADERS.length)
-      target.setNumberFormats([REQUEST_ROW_NUMBER_FORMATS])
-      target.setValues([toRow(next)])
+      const target = sheet.getRange(row.rowNumber, 1, 1, table.headers.length)
+      target.setNumberFormats([requestRowNumberFormats(table.headers)])
+      target.setValues([toRow(next, table.headers)])
       return JSON.parse(JSON.stringify(next)) as MiniAppAsyncRequestRecord
     },
   }
 }
 
-function fromRow(row: unknown[]): MiniAppAsyncRequestRecord {
-  const value = Object.fromEntries(MINI_APP_ASYNC_REQUEST_HEADERS.map((header, index) => [header, row[index] ?? '']))
-  return {
+function fromRow(row: unknown[], headers: readonly string[]): MiniAppAsyncRequestRecord {
+  const value = Object.fromEntries(headers.map((header, index) => [header, row[index] ?? '']))
+  const record = {
     requestId: text(value.requestId), draftId: text(value.draftId), staffId: text(value.staffId),
     lineUserIdHash: text(value.lineUserIdHash), state: text(value.state) as MiniAppAsyncRequestState,
     retentionState: text(value.retentionState) as MiniAppAsyncRequestRecord['retentionState'],
@@ -83,9 +99,19 @@ function fromRow(row: unknown[]): MiniAppAsyncRequestRecord {
     attemptCount: numberValue(value.attemptCount), processingOwnerToken: nullable(value.processingOwnerToken),
     evidenceProjectionHash: nullable(value.evidenceProjectionHash),
   }
+  if (sameHeader(headers, TARGET_MINI_APP_REQUEST_HEADERS)) {
+    Object.assign(record, {
+      protocolVersion: numberValue(value.protocolVersion),
+      recorderName: text(value.recorderName),
+      adminId: text(value.adminId),
+      adminName: text(value.adminName),
+      aeId: nullable(value.aeId),
+    })
+  }
+  return record
 }
 
-function toRow(record: MiniAppAsyncRequestRecord): Array<string | number | boolean> {
+function toRow(record: MiniAppAsyncRequestRecord, headers: readonly string[]): Array<string | number | boolean> {
   const mapped: Record<string, unknown> = {
     ...record,
     paymentEvidenceFileIdsJson: record.paymentEvidenceFileIds,
@@ -93,7 +119,11 @@ function toRow(record: MiniAppAsyncRequestRecord): Array<string | number | boole
     paymentEvidenceObjectKeysJson: record.paymentEvidenceObjectKeys,
     chatEvidenceObjectKeysJson: record.chatEvidenceObjectKeys,
   }
-  return MINI_APP_ASYNC_REQUEST_HEADERS.map((header) => encodeSheetCell(mapped[header]))
+  return headers.map((header) => encodeSheetCell(mapped[header]))
+}
+
+function sameHeader(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function text(value: unknown): string { return value === null || value === undefined ? '' : String(value) }

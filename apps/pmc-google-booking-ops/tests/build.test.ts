@@ -41,10 +41,15 @@ describe('Apps Script bundle', () => {
       'applyPmcExpensePermissions',
       'setupPmcExpenseFinanceStorage',
       'runPmcExpenseRecovery',
+      'previewPmcBookingAttributionMigration',
+      'applyPmcBookingAttributionMigration',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }
     expect(sandbox.refreshPmcCalendarPresentation0007).toBeUndefined()
+    expect(sandbox.planBookingAttributionMigration).toBeUndefined()
+    expect(sandbox.writeGoogleBookingAttributionMigration).toBeUndefined()
+    expect(sandbox.createPmcBookingAttributionMigrationRuntime).toBeUndefined()
   })
 
   it('does not recreate the paused legacy JERA polling trigger', () => {

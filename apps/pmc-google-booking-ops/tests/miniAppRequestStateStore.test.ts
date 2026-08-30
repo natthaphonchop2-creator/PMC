@@ -4,6 +4,7 @@ import {
   type MiniAppAsyncRequestRecord,
 } from '../../../shared/pmcMiniAppAsyncState'
 import { createGoogleMiniAppRequestStatePort } from '../src/adapters/miniAppRequestState'
+import { TARGET_MINI_APP_REQUEST_HEADERS } from '../src/domain/attributionMigration'
 
 describe('Apps Script Mini App request row store', () => {
   it('updates only the matched MINI_APP_REQUESTS row and preserves every other row', () => {
@@ -72,6 +73,53 @@ describe('Apps Script Mini App request row store', () => {
 
     expect(() => port.getByRequestId('request-1')).toThrow(/duplicate/i)
     expect(fake.setRanges).toEqual([])
+  })
+
+  it('reads and updates the exact attribution-v2 schema without losing recorder, Admin, or AE snapshots', () => {
+    const values = [targetRequestRow()]
+    const setRanges: Array<{ row: number; column: number; rows: number; columns: number }> = []
+    const sheet = {
+      getLastColumn: () => TARGET_MINI_APP_REQUEST_HEADERS.length,
+      getLastRow: () => 2,
+      getRange(row: number, column: number, rows = 1, columns = 1) {
+        return {
+          getValues() {
+            if (row === 1) return [[...TARGET_MINI_APP_REQUEST_HEADERS].slice(column - 1, column - 1 + columns)]
+            return values.slice(row - 2, row - 2 + rows).map((item) => item.slice(column - 1, column - 1 + columns))
+          },
+          setValues(next: unknown[][]) {
+            setRanges.push({ row, column, rows, columns })
+            values[row - 2] = [...next[0]]
+          },
+          setNumberFormats() { /* format preservation is asserted by the migration workflow */ },
+        }
+      },
+    }
+    const spreadsheet = {
+      getSheetByName: (name: string) => name === 'MINI_APP_REQUESTS' ? sheet : null,
+    } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet
+    const port = createGoogleMiniAppRequestStatePort(spreadsheet)
+
+    const current = port.getByRequestId('request-v2-1')!
+    expect(current).toMatchObject({
+      protocolVersion: 2,
+      staffId: 'staff-1', recorderName: 'มัส',
+      adminId: 'staff-2', adminName: 'แวว', aeId: 'ae-1', aeName: 'หมวย',
+    })
+
+    port.updateByRequestId(current.requestId, current.version, {
+      ...current, state: 'QUEUED', version: current.version + 1,
+    })
+
+    expect(setRanges).toEqual([{
+      row: 2, column: 1, rows: 1, columns: TARGET_MINI_APP_REQUEST_HEADERS.length,
+    }])
+    expect(port.getByRequestId('request-v2-1')).toMatchObject({
+      protocolVersion: 2,
+      staffId: 'staff-1', recorderName: 'มัส',
+      adminId: 'staff-2', adminName: 'แวว', aeId: 'ae-1', aeName: 'หมวย',
+      state: 'QUEUED', version: 2,
+    })
   })
 })
 
@@ -159,4 +207,21 @@ function toRow(record: MiniAppAsyncRequestRecord): unknown[] {
     chatEvidenceObjectKeysJson: JSON.stringify(record.chatEvidenceObjectKeys),
   }
   return MINI_APP_ASYNC_REQUEST_HEADERS.map((header) => mapped[header] ?? '')
+}
+
+function targetRequestRow(): unknown[] {
+  const legacy = requestRecord({ requestId: 'request-v2-1', draftId: 'draft-v2-1', aeName: 'หมวย' })
+  const mapped: Record<string, unknown> = {
+    ...legacy,
+    protocolVersion: 2,
+    recorderName: 'มัส',
+    adminId: 'staff-2',
+    adminName: 'แวว',
+    aeId: 'ae-1',
+    paymentEvidenceFileIdsJson: JSON.stringify(legacy.paymentEvidenceFileIds),
+    chatEvidenceFileIdsJson: JSON.stringify(legacy.chatEvidenceFileIds),
+    paymentEvidenceObjectKeysJson: JSON.stringify(legacy.paymentEvidenceObjectKeys),
+    chatEvidenceObjectKeysJson: JSON.stringify(legacy.chatEvidenceObjectKeys),
+  }
+  return TARGET_MINI_APP_REQUEST_HEADERS.map((header) => mapped[header] ?? '')
 }

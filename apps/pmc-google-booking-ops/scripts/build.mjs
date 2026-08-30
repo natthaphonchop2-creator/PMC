@@ -42,6 +42,8 @@ function configurePmcQueueModeForms() { return PmcBooking.configurePmcQueueModeF
 function pauseAndCutoverPmcBookingForm() { return PmcBooking.pauseAndCutoverPmcBookingForm(); }
 function resumePmcBookingFormAfterAeCutover() { return PmcBooking.resumePmcBookingFormAfterAeCutover(); }
 function configurePmcSharedDoctorCalendar() { return PmcBooking.configurePmcSharedDoctorCalendar(); }
+function previewPmcBookingAttributionMigration() { return PmcBooking.previewPmcBookingAttributionMigration(); }
+function applyPmcBookingAttributionMigration() { return PmcBooking.applyPmcBookingAttributionMigration(); }
 `,
   },
   format: 'iife',
