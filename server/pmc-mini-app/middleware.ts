@@ -150,6 +150,11 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         respond(res, 403, { error: 'FINANCE_FORBIDDEN' })
         return
       }
+      if (deps.config.financeReportsPilotOnly && pathname === '/api/mini-app/finance/monthly'
+        && !deps.config.financeMonthlyIncomeEnabled) {
+        respond(res, 403, { error: 'FINANCE_FORBIDDEN' })
+        return
+      }
       if (!deps.jera) {
         respond(res, 503, { error: 'JERA_REPORTING_UNAVAILABLE' })
         return
@@ -254,12 +259,19 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
 
     try {
       const bookingConfig = await deps.store.getActiveBookingConfig()
+      const financeReportsEnabled = deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled
+        && (!deps.config.financeReportsPilotOnly || authenticated.canViewFinance)
+      const financePilotEligible = financeReportsEnabled && deps.config.financeReportsPilotOnly
+        && authenticated.canViewFinance
       respond(res, 200, {
         fallbackFormUrl: deps.config.fallbackFormUrl,
         reportingEnabled: Boolean(deps.jera),
-        financeReportsEnabled: deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled
-          && (!deps.config.financeReportsPilotOnly || authenticated.canViewFinance),
+        financeReportsEnabled,
         financeUiPreviewEnabled: deps.config.financeUiPreviewEnabled,
+        ...(financePilotEligible ? {
+          financePilotDefaultDate: deps.config.financePilotDefaultDate,
+          financeMonthlyIncomeEnabled: deps.config.financeMonthlyIncomeEnabled,
+        } : {}),
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
         expenseCaptureEnabled: Boolean(deps.finance?.capture),
         financeReadsEnabled: Boolean(deps.finance?.reads),

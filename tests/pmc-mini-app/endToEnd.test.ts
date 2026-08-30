@@ -110,7 +110,7 @@ describe('PMC finance report server end-to-end flow', () => {
   })
 
   it('limits the live finance pilot to finance-authorized Admin accounts', async () => {
-    const system = financeServerSystem(true, true)
+    const system = financeServerSystem(true, true, true)
     const staffDaily = await system.request('staff-token', '/api/mini-app/finance/daily?startDate=2026-08-31&endDate=2026-08-31')
     const staffConfig = await system.request('staff-token', '/api/mini-app/config')
     const adminDaily = await system.request('finance-token', '/api/mini-app/finance/daily?startDate=2026-08-31&endDate=2026-08-31')
@@ -119,13 +119,36 @@ describe('PMC finance report server end-to-end flow', () => {
     expect({ status: staffDaily.status, body: await staffDaily.json() }).toEqual({
       status: 403, body: { error: 'FINANCE_FORBIDDEN' },
     })
-    expect(await staffConfig.json()).toMatchObject({ financeReportsEnabled: false })
+    const staffConfigBody = await staffConfig.json() as Record<string, unknown>
+    expect(staffConfigBody).toMatchObject({ financeReportsEnabled: false })
+    expect(staffConfigBody).not.toHaveProperty('financePilotDefaultDate')
+    expect(staffConfigBody).not.toHaveProperty('financeMonthlyIncomeEnabled')
     expect(adminDaily.status).toBe(200)
-    expect(await adminConfig.json()).toMatchObject({ financeReportsEnabled: true })
+    expect(await adminConfig.json()).toMatchObject({
+      financeReportsEnabled: true,
+      financePilotDefaultDate: '2026-08-22',
+      financeMonthlyIncomeEnabled: true,
+    })
+  })
+
+  it('denies the direct monthly finance API while the pilot monthly capability is off', async () => {
+    const system = financeServerSystem(true, true, false)
+
+    const response = await system.request('finance-token', '/api/mini-app/finance/monthly?year=2026&month=8')
+
+    expect({ status: response.status, body: await response.json() }).toEqual({
+      status: 403,
+      body: { error: 'FINANCE_FORBIDDEN' },
+    })
+    expect(system.coordinator.readCachedBatch).not.toHaveBeenCalled()
   })
 })
 
-function financeServerSystem(categoryMoneyEnabled: boolean, financeReportsPilotOnly = false) {
+function financeServerSystem(
+  categoryMoneyEnabled: boolean,
+  financeReportsPilotOnly = false,
+  financeMonthlyIncomeEnabled = false,
+) {
   const fixture = financeCacheFixture()
   const providerOrder: string[] = []
   let activeProviderCalls = 0
@@ -203,7 +226,9 @@ function financeServerSystem(categoryMoneyEnabled: boolean, financeReportsPilotO
     })),
     getActiveBookingConfig: vi.fn(async () => ({ doctors: [], services: [], channels: [], aes: [] })),
   } as unknown as MiniAppStore
-  const middleware = createPmcMiniAppMiddleware({ config: financeServerConfig(financeReportsPilotOnly), identity, store, jera })
+  const middleware = createPmcMiniAppMiddleware({
+    config: financeServerConfig(financeReportsPilotOnly, financeMonthlyIncomeEnabled), identity, store, jera,
+  })
   return {
     coordinator,
     allocationStore,
@@ -375,7 +400,10 @@ function financeUuid(prefix: number, day: number): string {
   return `${prefix}0000000-0000-4000-8000-${String(day).padStart(12, '0')}`
 }
 
-function financeServerConfig(financeReportsPilotOnly = false): PmcMiniAppServerConfig {
+function financeServerConfig(
+  financeReportsPilotOnly = false,
+  financeMonthlyIncomeEnabled = false,
+): PmcMiniAppServerConfig {
   return {
     enabled: true,
     miniAppId: '2001234567-mini-app',
@@ -393,6 +421,8 @@ function financeServerConfig(financeReportsPilotOnly = false): PmcMiniAppServerC
     financeReportsEnabled: true,
     financeUiPreviewEnabled: false,
     financeReportsPilotOnly,
+    financePilotDefaultDate: financeReportsPilotOnly ? '2026-08-22' : null,
+    financeMonthlyIncomeEnabled,
     stockEnabled: false,
     stockManagerPilotOnly: false,
   }

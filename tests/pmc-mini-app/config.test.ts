@@ -45,6 +45,8 @@ describe('PMC Mini App server configuration', () => {
       financeReportsEnabled: false,
       financeUiPreviewEnabled: false,
       financeReportsPilotOnly: false,
+      financePilotDefaultDate: null,
+      financeMonthlyIncomeEnabled: false,
     })
     expect(readPmcMiniAppConfig({ ...validEnvironment(), PMC_FINANCE_REPORTS_ENABLED: 'true' }))
       .toMatchObject({ financeReportsEnabled: true })
@@ -52,6 +54,27 @@ describe('PMC Mini App server configuration', () => {
       .toMatchObject({ financeUiPreviewEnabled: true })
     expect(readPmcMiniAppConfig({ ...validEnvironment(), PMC_FINANCE_REPORTS_PILOT_ONLY: 'true' }))
       .toMatchObject({ financeReportsPilotOnly: true })
+    expect(readPmcMiniAppConfig({ ...validEnvironment(), PMC_FINANCE_MONTHLY_INCOME_ENABLED: 'true' }))
+      .toMatchObject({ financeMonthlyIncomeEnabled: true })
+  })
+
+  it('requires one real Bangkok calendar date before an enabled finance pilot can start', () => {
+    const pilot = {
+      ...validEnvironment(),
+      PMC_FINANCE_REPORTS_ENABLED: 'true',
+      PMC_FINANCE_REPORTS_PILOT_ONLY: 'true',
+    }
+
+    expect(readPmcMiniAppConfig(pilot)).toBeNull()
+    expect(readPmcMiniAppConfig({ ...pilot, PMC_FINANCE_PILOT_DEFAULT_DATE: '2026-08-22' }))
+      .toMatchObject({
+        financePilotDefaultDate: '2026-08-22',
+        financeMonthlyIncomeEnabled: false,
+      })
+
+    // A full non-pilot rollout keeps the existing behavior and does not need a pinned pilot date.
+    expect(readPmcMiniAppConfig({ ...validEnvironment(), PMC_FINANCE_REPORTS_ENABLED: 'true' }))
+      .toMatchObject({ financeReportsEnabled: true, financePilotDefaultDate: null })
   })
 
   it('fails closed when enabled async booking configuration is incomplete', () => {
@@ -96,6 +119,9 @@ describe('PMC Mini App server configuration', () => {
     ['unknown finance reports value', { PMC_FINANCE_REPORTS_ENABLED: 'yes' }],
     ['unknown finance preview value', { PMC_FINANCE_UI_PREVIEW_ENABLED: 'yes' }],
     ['unknown finance pilot value', { PMC_FINANCE_REPORTS_PILOT_ONLY: 'yes' }],
+    ['unknown monthly income value', { PMC_FINANCE_MONTHLY_INCOME_ENABLED: 'yes' }],
+    ['impossible pilot date', { PMC_FINANCE_PILOT_DEFAULT_DATE: '2026-02-30' }],
+    ['non-canonical pilot date', { PMC_FINANCE_PILOT_DEFAULT_DATE: '2026-8-22' }],
   ])('rejects %s', (_name, patch) => {
     expect(readPmcMiniAppConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })
