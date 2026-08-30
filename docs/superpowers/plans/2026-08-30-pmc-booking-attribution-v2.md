@@ -543,7 +543,7 @@ expect(await mutateWithProtocol(1, minimum2Deps())).toMatchObject({
 expect(await loadTerminalProtocol1(minimum2Deps())).toMatchObject({ status: 200 })
 ```
 
-Cover legacy-reader/new-writer, new-reader/legacy-writer before cutover, cached client after cutover, no partial mutation, and exact zero-draft/task migration gate.
+Cover legacy-reader/new-writer, new-reader/legacy-writer before cutover, cached client after cutover, no partial mutation, protocol-floor enforcement on evidence routes, the Cloud Run Booking write barrier, 100%-serving revision verification, and exact zero-draft/task migration gate.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -556,7 +556,7 @@ Expected: FAIL on missing protocol floor/checker.
 
 - [ ] **Step 3: Implement config gate and no-value checker**
 
-The checker reads deployed env names, exact Sheet headers, nonterminal draft count, queue state/task count, Apps Script version, and bridge-client readiness without printing members, IDs, rows, or secrets. Runbook order is reader compatibility/minimum 1 → deploy bridge and require close/reopen → zero-state preflight → pause/backup/migrate → minimum 2 before resume → P2 mode → TTL cleanup.
+The checker reads exact values from the single revision serving 100% of traffic: enabled, supported/minimum protocol, prepare=false, bridge readiness, and Booking mutation-pause state. It also validates exact Sheet headers and every bounded request row through the shared V1/V2 row contract, nonterminal draft count, queue state/task count, Apps Script version, and migration manifest without printing members, IDs, rows, or secrets. Runbook order is reader compatibility/minimum 1 → deploy bridge and require close/reopen → zero-state preflight → deploy/verify 100% maintenance write barrier → pause queue → backup/migrate → deploy/verify minimum 2 while still paused → resume → P2 mode → TTL cleanup.
 
 - [ ] **Step 4: Run complete local gate**
 

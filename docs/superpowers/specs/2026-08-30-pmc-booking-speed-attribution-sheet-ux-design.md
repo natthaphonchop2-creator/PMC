@@ -137,9 +137,10 @@ Deployment order is mandatory:
 1. deploy backward-compatible Cloud Run and Apps Script readers that accept both old and new Sheet headers/rows and retain current protocol-1 behavior;
 2. deploy the dual-mode client while the minimum is 1, require staff to close/reopen LINE once, and verify it still emits exact protocol-1 mutations but already contains the persistent upgrade handler;
 3. wait until there are zero nonterminal legacy drafts and zero active Cloud Tasks; do not reinterpret an in-flight draft;
-4. pause mutations, create a private Sheet backup, run the guarded schema/backfill migration, and raise the minimum to 2 before resuming;
-5. freshly opened clients read minimum 2 and use the version-2 UI/protocol; an already-open bridge client that still attempts protocol 1 receives `CLIENT_UPGRADE_REQUIRED` and instructs the user to close/reopen LINE;
-6. keep protocol-1 read/idempotent terminal recovery until the active-draft TTL has elapsed, then remove it in a later release. A pre-bridge page cannot acquire new UI code retroactively, so the maintenance gate must verify the bridge deployment and staff refresh before migration.
+4. deploy a maintenance revision with an exact fail-closed Booking write barrier, route 100% of traffic to it, pause Cloud Tasks, and verify both barriers before creating a private Sheet backup or running migration; the barrier blocks create/save/cancel/confirm and every evidence write before body parsing or external effects;
+5. run the guarded schema/backfill migration, deploy the minimum-2 revision while the Booking write barrier remains active, and verify 100% serving traffic before resuming writes/tasks;
+6. freshly opened clients read minimum 2 and use the version-2 UI/protocol; an already-open bridge client that still attempts protocol 1 receives `CLIENT_UPGRADE_REQUIRED` and instructs the user to close/reopen LINE;
+7. keep protocol-1 read/idempotent terminal recovery until the active-draft TTL has elapsed, then remove it in a later release. A pre-bridge page cannot acquire new UI code retroactively, so the maintenance gate must verify the bridge deployment and staff refresh before migration.
 
 Strict readers must fail closed on unknown headers but explicitly normalize both the exact legacy and exact version-2 schemas during the rolling window. Both deployment directions require tests.
 
