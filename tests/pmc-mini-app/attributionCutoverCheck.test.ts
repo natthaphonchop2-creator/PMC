@@ -294,6 +294,51 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
     await expect(writePrivateBookingQueueAttestation(output, attestation)).rejects.toThrow('ATTESTATION_FILE_EXISTS')
   })
 
+  it('generates the initial private attestation with exit zero before properties exist, then enforces strict readiness after install', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pmc-attribution-gate-order-'))
+    temporaryDirectories.push(directory)
+    const propertiesFile = join(directory, 'properties.json')
+    const attestationFile = join(directory, 'queue-attestation.json')
+    const observations = legacyMigrationObservations()
+    const initialOutput: string[] = []
+    const baseArgs = checkerArguments(propertiesFile)
+
+    const initialCode = await runPmcBookingAttributionV2Check([
+      ...baseArgs, '--write-attestation', attestationFile,
+    ], {
+      collect: vi.fn(async () => observations),
+      io: { stdout: { write: (value: string) => initialOutput.push(value) }, stderr: { write: vi.fn() } },
+    })
+
+    expect(initialCode).toBe(0)
+    expect(JSON.parse(initialOutput.join(''))).toMatchObject({
+      ready: false,
+      safeStatus: 'PROPERTY_INSTALL_REQUIRED',
+      migration: { attestationEligible: true, attestationInstalled: false },
+    })
+    expect((await stat(attestationFile)).mode & 0o777).toBe(0o600)
+
+    const attestation = JSON.parse(await readFile(attestationFile, 'utf8')) as {
+      queueResourceDigest: string
+    }
+    observations.scriptProperties = {
+      PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION: await readFile(attestationFile, 'utf8'),
+      PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST: attestation.queueResourceDigest,
+    }
+    const strictOutput: string[] = []
+    const strictCode = await runPmcBookingAttributionV2Check([...baseArgs, '--strict'], {
+      collect: vi.fn(async () => observations),
+      io: { stdout: { write: (value: string) => strictOutput.push(value) }, stderr: { write: vi.fn() } },
+    })
+
+    expect(strictCode).toBe(0)
+    expect(JSON.parse(strictOutput.join(''))).toMatchObject({
+      ready: true,
+      safeStatus: 'READY',
+      migration: { attestationInstalled: true, expectedQueueDigestInstalled: true },
+    })
+  })
+
   it('prints help without collecting or mutating any external state', async () => {
     const output: string[] = []
     const collect = vi.fn()
@@ -401,8 +446,33 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
     expect(runbook).toContain('ไม่มี automatic rollback')
     expect(runbook).toContain('ห้าม resume queue ก่อนตั้ง minimum เป็น 2')
     expect(runbook).toContain('node scripts/check-pmc-booking-attribution-v2.mjs')
+
+    const gateB3 = runbook.slice(
+      runbook.indexOf('### Gate B3 — pause, check, attest, backup, and migrate'),
+      runbook.indexOf('### Gate B4 — minimum 2 before queue resume'),
+    )
+    const checkerCommands = [...gateB3.matchAll(/```bash\n([\s\S]*?)```/g)]
+      .map((match) => match[1])
+      .filter((command) => command.includes('node scripts/check-pmc-booking-attribution-v2.mjs'))
+    expect(checkerCommands).toHaveLength(2)
+    expect(checkerCommands[0]).toContain('--write-attestation')
+    expect(checkerCommands[0]).not.toContain('--strict')
+    expect(checkerCommands[1]).toContain('--strict')
+    expect(checkerCommands[1]).not.toContain('--write-attestation')
+    expect(gateB3.indexOf(checkerCommands[0])).toBeLessThan(gateB3.indexOf('PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION'))
+    expect(gateB3.indexOf('PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST')).toBeLessThan(gateB3.indexOf(checkerCommands[1]))
   })
 })
+
+function checkerArguments(propertiesFile: string): string[] {
+  return [
+    '--allow-readonly-production', '--expected-stage', 'MIGRATION',
+    '--project', 'project-id', '--region', 'asia-southeast1', '--service', 'service-id',
+    '--queue', 'queue-id', '--expected-revision', 'revision-id', '--apps-script-id', 'script-id',
+    '--apps-script-deployment-id', 'deployment-id', '--minimum-apps-script-version', '42',
+    '--script-properties-file', propertiesFile,
+  ]
+}
 
 function legacyMigrationObservations() {
   const privateSentinels = [

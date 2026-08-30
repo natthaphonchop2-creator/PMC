@@ -182,11 +182,47 @@ gcloud tasks list \
 ```
 
 ต้องได้ queue `PAUSED` และ active task count ศูนย์; queue pause อย่างเดียวไม่ถือว่า migration-ready.
-4. รัน checker stage `MIGRATION --strict` พร้อม `--write-attestation <absolute-new-private-file>`. Checker เขียนได้เฉพาะ exact whole queue-attestation JSON ไปยังไฟล์ใหม่ mode `0600`; ไม่ overwrite, ไม่พิมพ์ JSON/digest/path และไม่ติดตั้ง property.
+4. รัน checker stage `MIGRATION` พร้อม `--write-attestation` โดย **ไม่ใส่ `--strict`** ในรอบสร้างไฟล์ครั้งแรก:
+
+```bash
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage MIGRATION \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-paused-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-preinstall-property-snapshot> \
+  --write-attestation <absolute-new-private-file>
+```
+
+รอบนี้ต้อง exit `0`, รายงาน `attestationEligible=true`, `safeStatus=PROPERTY_INSTALL_REQUIRED`, `ready=false` และสร้างไฟล์ใหม่ mode `0600`. สถานะ `PROPERTY_INSTALL_REQUIRED` เป็นผลที่คาดไว้ก่อนติดตั้ง property ไม่ใช่ migration failure. Checker ไม่ overwrite, ไม่พิมพ์ JSON/digest/path และไม่ติดตั้ง property.
 5. Owner เปิด private attestation file แล้วติดตั้งด้วยตนเองใน Apps Script project ที่ถูกต้อง:
    - `PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION` = exact whole JSON ทั้งก้อน;
    - `PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST` = exact `queueResourceDigest` จาก JSON ก้อนเดียวกัน.
-6. สร้าง private `0600` property snapshot ใหม่ที่มีเฉพาะ property cutover ที่อนุญาต แล้วรัน checker stage `MIGRATION --strict` ซ้ำ. ต้องได้ `mutationsPaused=true`, queue paused/zero, `attestationInstalled=true`, `expectedQueueDigestInstalled=true`, `manifestStatus=ABSENT`, `safeStatus=READY`.
+6. สร้าง private `0600` property snapshot ใหม่ที่มีเฉพาะ property cutover ที่ติดตั้งแล้ว จากนั้นจึงรัน checker stage `MIGRATION --strict` โดยไม่ใช้ `--write-attestation` ซ้ำ:
+
+```bash
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage MIGRATION \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-paused-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-installed-property-snapshot> \
+  --strict
+```
+
+รอบ post-install นี้ต้อง exit `0` และได้ `mutationsPaused=true`, queue paused/zero, `attestationInstalled=true`, `expectedQueueDigestInstalled=true`, `manifestStatus=ABSENT`, `safeStatus=READY`, `ready=true`.
 7. เรียก `previewPmcBookingAttributionMigration()` แบบ read-only. Owner ตรวจ exact fingerprint/row-count summary แล้วจึงติดตั้ง `PMC_BOOKING_ATTRIBUTION_APPROVED_FINGERPRINT` ด้วยตนเอง. ห้ามเก็บ fingerprint ใน repository/chat/log.
 8. เรียก `applyPmcBookingAttributionMigration()` หนึ่งครั้ง. Workflow ต้องสร้างและตรวจ private native Spreadsheet backup ก่อนเขียน `PREPARED`, จากนั้นจึง insert/backfill/readback และเขียน `COMPLETE` เมื่อทุก hash ตรง. ตลอดข้อ 4–8 ต้องคงทั้ง Cloud Run write barrier และ queue pause.
 
