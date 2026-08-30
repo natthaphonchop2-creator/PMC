@@ -253,6 +253,32 @@ describe('PMC Mini App browser API', () => {
     })
   })
 
+  it('rejects a monthly expense projection returned for a different month', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, expenseProjection('2026-09')))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadMonthlyExpenses('raw-id-token', '2026-08')).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
+  it('rejects expense history rows returned for a different requested month', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, { expenses: [expenseHistoryRow('2026-09')], nextCursor: null }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadExpenseHistory('raw-id-token', '2026-08')).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
+  it('downloads evidence blobs with the current bearer token and viewer token', async () => {
+    const fetch = vi.fn(async () => new Response(new Blob(['image'], { type: 'image/png' }), {
+      status: 200, headers: { 'content-type': 'image/png' },
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.downloadExpenseEvidence('raw-id-token', 'payload.signature')).resolves.toMatchObject({ type: 'image/png', size: 5 })
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/finance/evidence?token=payload.signature', {
+      headers: { authorization: 'Bearer raw-id-token' },
+    })
+  })
+
   it('stages ordered expense files and submits the exact Task 7 browser payload with bearer auth', async () => {
     const committed = expenseReceipt()
     const fetch = vi.fn()
@@ -447,5 +473,20 @@ function expenseReceipt(overrides: Partial<ExpenseReceipt> = {}): ExpenseReceipt
     expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT', expenseDate: '2026-08-30', monthKey: '2026-08',
     category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: 120_000, recordState: 'COMMITTED', revision: 1,
     committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true, ...overrides,
+  }
+}
+
+function expenseProjection(monthKey: string) {
+  return {
+    monthKey, clinicCommittedSatang: 120_000, doctorPersonalCommittedSatang: 50_000,
+    clinicByCategorySatang: { BILL_DOCUMENT: 100_000, BOOK_CLINIC: 20_000 }, effectiveExpenseCount: 2, unreviewed: true,
+  }
+}
+
+function expenseHistoryRow(monthKey: string) {
+  return {
+    expenseId: `EXP-${monthKey.replace('-', '')}-BOOK-01`, expenseDate: `${monthKey}-29`, category: 'BOOK_CLINIC', scope: 'CLINIC',
+    amountSatang: 120_000, description: 'สมุดรายวัน', recordState: 'COMMITTED', revision: 2, submittedByName: 'มัส',
+    submittedAt: '2026-08-29T02:00:00.000Z', committedAt: '2026-08-29T02:01:00.000Z', attachments: [],
   }
 }

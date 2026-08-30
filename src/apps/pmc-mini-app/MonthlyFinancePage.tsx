@@ -71,7 +71,7 @@ export function MonthlyFinancePage({
       void expenseAdapter.load(monthValueForSelection(selection)).then((next) => {
         if (requestEpoch === requestEpochRef.current) {
           setLoadedExpenseProjection({ key: requestKey, value: next })
-          if (next.effectiveExpenseCount === 0) setExpenseError({ key: requestKey, value: 'EMPTY' })
+          setExpenseError(next.effectiveExpenseCount === 0 ? { key: requestKey, value: 'EMPTY' } : null)
         }
       }).catch(() => {
         if (requestEpoch === requestEpochRef.current) setExpenseError({ key: requestKey, value: 'UNAVAILABLE' })
@@ -109,6 +109,7 @@ export function MonthlyFinancePage({
           if (Number.isSafeInteger(year) && Number.isSafeInteger(month)) {
             requestEpochRef.current += 1
             setError('')
+            setExpenseError(null)
             setLoading(true)
             setSelection({ year: year!, month: month! })
           }

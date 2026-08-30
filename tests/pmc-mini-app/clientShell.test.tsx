@@ -82,7 +82,7 @@ describe('PMC LINE Mini App shell', () => {
     const user = userEvent.setup()
     const appConfig = {
       ...config, reportingEnabled: false, financeReportsEnabled: false,
-      expenseCaptureEnabled: true, canSubmitExpense: true,
+      expenseCaptureEnabled: true, canSubmitExpense: true, financeReadsEnabled: false, canViewFinance: false,
     }
     const view = render(<PmcMiniApp
       initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
@@ -207,13 +207,14 @@ describe('PMC LINE Mini App shell', () => {
     const financeApi = miniAppApi()
     render(<PmcMiniApp
       initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, financeReadsEnabled: true, canViewFinance: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, financeReadsEnabled: true, canViewFinance: true, expenseCaptureEnabled: false, canSubmitExpense: false }}
       api={financeApi}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
     expect(await screen.findByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
     expect(financeApi.loadMonthlyIncome).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร' })).not.toBeInTheDocument()
   })
 
   it('drills from a monthly trend into the selected daily range', async () => {

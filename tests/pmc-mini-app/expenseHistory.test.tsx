@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ExpenseHistory } from '../../src/apps/pmc-mini-app/expense/ExpenseHistory'
@@ -37,4 +37,95 @@ describe('ExpenseHistory', () => {
     expect(screen.getByText('ยกเลิกแล้ว')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'แทนที่ยอดเดิม' })).toBeNull()
   })
+
+  it('settles pagination when a manager starts a void while the next page is pending', async () => {
+    const user = userEvent.setup()
+    const more = deferred<typeof bookHistoryPage>()
+    const voided = deferred<void>()
+    const adapter = { replace: vi.fn(), loadMore: vi.fn(() => more.promise), void: vi.fn(() => voided.promise), issueEvidenceToken: vi.fn(), downloadEvidence: vi.fn() }
+    render(<ExpenseHistory monthKey="2026-08" canManageExpense page={{ ...bookHistoryPage, nextCursor: 'cursor-1' }} adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'โหลดเพิ่ม' }))
+    await user.click(screen.getByRole('button', { name: 'ยกเลิกรายการ' }))
+    await user.type(screen.getByLabelText('เหตุผลการยกเลิก'), 'ยอดรวมผิด')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันยกเลิก' }))
+    await act(async () => { voided.resolve(); more.resolve({ expenses: [], nextCursor: null }) })
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'โหลดเพิ่ม' })).toBeNull())
+    expect(screen.getByText('ยกเลิกแล้ว')).toBeVisible()
+  })
+
+  it('settles void controls when pagination starts while a void is pending', async () => {
+    const user = userEvent.setup()
+    const more = deferred<typeof bookHistoryPage>()
+    const voided = deferred<void>()
+    const adapter = { replace: vi.fn(), loadMore: vi.fn(() => more.promise), void: vi.fn(() => voided.promise), issueEvidenceToken: vi.fn(), downloadEvidence: vi.fn() }
+    render(<ExpenseHistory monthKey="2026-08" canManageExpense page={{ ...bookHistoryPage, nextCursor: 'cursor-1' }} adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'ยกเลิกรายการ' }))
+    await user.type(screen.getByLabelText('เหตุผลการยกเลิก'), 'ยอดรวมผิด')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันยกเลิก' }))
+    await user.click(screen.getByRole('button', { name: 'โหลดเพิ่ม' }))
+    await act(async () => { voided.resolve(); more.resolve({ expenses: [], nextCursor: null }) })
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ยืนยันยกเลิก' })).toBeNull())
+    expect(screen.getByText('ยกเลิกแล้ว')).toBeVisible()
+  })
+
+  it('submits an explicit void with the selected row revision and reason', async () => {
+    const user = userEvent.setup()
+    const adapter = { replace: vi.fn(), void: vi.fn(async () => undefined), issueEvidenceToken: vi.fn(), downloadEvidence: vi.fn() }
+    render(<ExpenseHistory monthKey="2026-08" canManageExpense page={bookHistoryPage} adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'ยกเลิกรายการ' }))
+    await user.type(screen.getByLabelText('เหตุผลการยกเลิก'), 'ยอดรวมผิด')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันยกเลิก' }))
+
+    await waitFor(() => expect(adapter.void).toHaveBeenCalledWith(bookHistoryPage.expenses[0], expect.objectContaining({ expectedRevision: 2, reason: 'ยอดรวมผิด' })))
+    expect(screen.getByText('ยกเลิกแล้ว')).toBeVisible()
+  })
+
+  it('revokes loaded evidence URLs when evidence is replaced or the view unmounts', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn(() => 'blob:evidence-1')
+    const revoke = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: create })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revoke })
+    const page = { expenses: [{ ...bookHistoryPage.expenses[0], attachments: [{
+      attachmentId: 'ATT-1', expenseId: 'EXP-202608-BOOK-01', ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'proof.jpg',
+    }] }], nextCursor: null }
+    const adapter = { replace: vi.fn(), void: vi.fn(async () => undefined), issueEvidenceToken: vi.fn(async () => 'token.signature'), downloadEvidence: vi.fn(async () => new Blob(['image'], { type: 'image/jpeg' })) }
+    const view = render(<ExpenseHistory key="before" monthKey="2026-08" canManageExpense page={page} adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'ดูหลักฐาน 1' }))
+    await screen.findByRole('img', { name: 'หลักฐาน 1: proof.jpg' })
+    view.rerender(<ExpenseHistory key="after" monthKey="2026-08" canManageExpense page={{ expenses: [], nextCursor: null }} adapter={adapter} />)
+    expect(revoke).toHaveBeenCalledWith('blob:evidence-1')
+    view.unmount()
+  })
+
+  it('does not create an object URL when an evidence response resolves after unmount', async () => {
+    const user = userEvent.setup()
+    const download = deferred<Blob>()
+    const create = vi.fn(() => 'blob:late')
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: create })
+    const page = { expenses: [{ ...bookHistoryPage.expenses[0], attachments: [{
+      attachmentId: 'ATT-1', expenseId: 'EXP-202608-BOOK-01', ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'proof.jpg',
+    }] }], nextCursor: null }
+    const adapter = { replace: vi.fn(), void: vi.fn(async () => undefined), issueEvidenceToken: vi.fn(async () => 'token.signature'), downloadEvidence: vi.fn(() => download.promise) }
+    const view = render(<ExpenseHistory monthKey="2026-08" canManageExpense page={page} adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'ดูหลักฐาน 1' }))
+    await waitFor(() => expect(adapter.downloadEvidence).toHaveBeenCalledWith('token.signature'))
+    view.unmount()
+    await act(async () => { download.resolve(new Blob(['image'], { type: 'image/jpeg' })) })
+
+    expect(create).not.toHaveBeenCalled()
+  })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((nextResolve) => { resolve = nextResolve })
+  return { promise, resolve }
+}

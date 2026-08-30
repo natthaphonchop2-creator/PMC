@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MonthlyFinancePage, type MonthlyIncomePageAdapter } from '../../src/apps/pmc-mini-app/MonthlyFinancePage'
+import { MonthlyFinancePage, type MonthlyExpensePageAdapter, type MonthlyIncomePageAdapter } from '../../src/apps/pmc-mini-app/MonthlyFinancePage'
 import type { MonthlyIncomeProjection } from '../../shared/pmcFinance'
 
 afterEach(cleanup)
@@ -147,6 +147,43 @@ describe('monthly finance report', () => {
     expect(adapter.load).not.toHaveBeenCalled()
     expect(view.container).not.toHaveTextContent(/(?:\d[\d,]*\s*บาท|฿)/)
   })
+
+  it('clears a prior expense read error when retrying the same month and keeps stale month results out', async () => {
+    const augustRetry = deferred<ReturnType<typeof expenseProjection>>()
+    const expenseAdapter = {
+      load: vi.fn()
+        .mockRejectedValueOnce(new Error('first unavailable'))
+        .mockResolvedValueOnce(expenseProjection('2026-07', 70_000))
+        .mockReturnValueOnce(augustRetry.promise),
+    } satisfies MonthlyExpensePageAdapter as MonthlyExpensePageAdapter & { load: ReturnType<typeof vi.fn> }
+    render(<MonthlyFinancePage canViewFinance bangkokDate="2026-08-29" adapter={monthlyAdapter()} expenseAdapter={expenseAdapter} onBack={vi.fn()} onDrillDown={vi.fn()} />)
+
+    expect(await screen.findByText('โหลดรายจ่ายที่บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง')).toBeVisible()
+    fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-07' } })
+    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('700.00 บาท'))
+    fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-08' } })
+    expect(screen.queryByText('โหลดรายจ่ายที่บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง')).not.toBeInTheDocument()
+    expect(await screen.findByText('กำลังโหลดรายจ่ายที่บันทึก')).toBeVisible()
+    await act(async () => { augustRetry.resolve(expenseProjection('2026-08', 120_000)) })
+
+    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('1,200.00 บาท'))
+    expect(screen.queryByText('โหลดรายจ่ายที่บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง')).not.toBeInTheDocument()
+  })
+
+  it('keeps an earlier month expense response from overwriting the latest selected month', async () => {
+    const august = deferred<ReturnType<typeof expenseProjection>>()
+    const july = deferred<ReturnType<typeof expenseProjection>>()
+    const expenseAdapter = { load: vi.fn().mockReturnValueOnce(august.promise).mockReturnValueOnce(july.promise) }
+    render(<MonthlyFinancePage canViewFinance bangkokDate="2026-08-29" adapter={monthlyAdapter()} expenseAdapter={expenseAdapter} onBack={vi.fn()} onDrillDown={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-07' } })
+    await act(async () => { july.resolve(expenseProjection('2026-07', 70_000)) })
+    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('700.00 บาท'))
+    await act(async () => { august.resolve(expenseProjection('2026-08', 120_000)) })
+
+    expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('700.00 บาท')
+    expect(screen.getByText('รายจ่ายคลินิก')).not.toHaveTextContent('1,200.00 บาท')
+  })
 })
 
 function monthlyAdapter(report = monthlyProjection()) {
@@ -181,4 +218,12 @@ function deferred<T>() {
   let reject!: (reason?: unknown) => void
   const promise = new Promise<T>((nextResolve, nextReject) => { resolve = nextResolve; reject = nextReject })
   return { promise, resolve, reject }
+}
+
+function expenseProjection(monthKey: string, clinicCommittedSatang = 0) {
+  return {
+    monthKey, clinicCommittedSatang, doctorPersonalCommittedSatang: 0,
+    clinicByCategorySatang: { BILL_DOCUMENT: clinicCommittedSatang, BOOK_CLINIC: 0 }, effectiveExpenseCount: clinicCommittedSatang ? 1 : 0,
+    unreviewed: true as const,
+  }
 }

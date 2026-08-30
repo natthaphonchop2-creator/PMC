@@ -179,12 +179,14 @@ export function createMiniAppApi(options: {
       return requestJson(request, `/api/mini-app/finance/monthly?${query}`, authenticated(idToken))
     },
     loadMonthlyExpenses(idToken, monthKey) {
-      return requestJson(request, `/api/mini-app/finance/months/${encodeURIComponent(monthKey)}/expenses`, authenticated(idToken), parseExpenseMonthlyProjection)
+      return requestJson(request, `/api/mini-app/finance/months/${encodeURIComponent(monthKey)}/expenses`, authenticated(idToken),
+        (body, status) => parseExpenseMonthlyProjection(body, status, monthKey))
     },
     loadExpenseHistory(idToken, monthKey, cursor) {
       const query = new URLSearchParams({ month: monthKey })
       if (cursor) query.set('cursor', cursor)
-      return requestJson(request, `/api/mini-app/finance/expenses?${query}`, authenticated(idToken), parseExpenseHistoryPage)
+      return requestJson(request, `/api/mini-app/finance/expenses?${query}`, authenticated(idToken),
+        (body, status) => parseExpenseHistoryPage(body, status, monthKey))
     },
     issueExpenseEvidenceToken(idToken, expenseId, attachmentId) {
       return requestJson(request,
@@ -367,13 +369,14 @@ function parseExpenseStagingResponse(body: unknown, status: number, expectedCoun
   return { stagingTokens: tokens as string[] }
 }
 
-function parseExpenseMonthlyProjection(body: unknown, status: number): ExpenseMonthlyProjection {
+function parseExpenseMonthlyProjection(body: unknown, status: number, expectedMonthKey: string): ExpenseMonthlyProjection {
   const expected = ['clinicByCategorySatang', 'clinicCommittedSatang', 'doctorPersonalCommittedSatang', 'effectiveExpenseCount', 'monthKey', 'unreviewed']
   if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== expected.join(',')) {
     throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   }
   const categories = body.clinicByCategorySatang
-  if (!validMonthKey(body.monthKey)
+  if (!validMonthKey(expectedMonthKey) || body.monthKey !== expectedMonthKey
+    || !validMonthKey(body.monthKey)
     || !positiveOrZeroInteger(body.clinicCommittedSatang)
     || !positiveOrZeroInteger(body.doctorPersonalCommittedSatang)
     || !positiveOrZeroInteger(body.effectiveExpenseCount)
@@ -394,22 +397,24 @@ function parseExpenseMonthlyProjection(body: unknown, status: number): ExpenseMo
   }
 }
 
-function parseExpenseHistoryPage(body: unknown, status: number): ExpenseHistoryPage {
+function parseExpenseHistoryPage(body: unknown, status: number, expectedMonthKey: string): ExpenseHistoryPage {
   if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== 'expenses,nextCursor'
     || !Array.isArray(body.expenses) || body.expenses.length > 25
     || !(body.nextCursor === null || (typeof body.nextCursor === 'string' && body.nextCursor.length >= 3 && body.nextCursor.length <= 256))
   ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
-  const expenses = body.expenses.map((row) => parseExpenseHistoryRow(row, status))
+  if (!validMonthKey(expectedMonthKey)) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  const expenses = body.expenses.map((row) => parseExpenseHistoryRow(row, status, expectedMonthKey))
   if (new Set(expenses.map(({ expenseId }) => expenseId)).size !== expenses.length) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   return { expenses, nextCursor: body.nextCursor }
 }
 
-function parseExpenseHistoryRow(value: unknown, status: number): ExpenseHistoryRow {
+function parseExpenseHistoryRow(value: unknown, status: number, expectedMonthKey: string): ExpenseHistoryRow {
   const expected = ['amountSatang', 'attachments', 'category', 'committedAt', 'description', 'expenseDate', 'expenseId', 'recordState', 'revision', 'scope', 'submittedAt', 'submittedByName']
   const category = isRecord(value) ? enabledExpenseCategory(value.category) : null
   if (!isRecord(value) || Object.keys(value).sort().join(',') !== expected.join(',')
     || typeof value.expenseId !== 'string' || !/^EXP-\d{6}-[A-Za-z0-9._:-]{1,107}$/.test(value.expenseId)
-    || typeof value.expenseDate !== 'string' || !validMonthKey(value.expenseDate.slice(0, 7))
+    || typeof value.expenseDate !== 'string' || value.expenseDate.slice(0, 7) !== expectedMonthKey || !validMonthKey(value.expenseDate.slice(0, 7))
+    || !new RegExp(`^EXP-${expectedMonthKey.replace('-', '')}-[A-Za-z0-9._:-]{1,107}$`).test(value.expenseId)
     || !category || value.scope !== deriveExpenseScope(category)
     || !positiveOrZeroInteger(value.amountSatang) || value.amountSatang < 1
     || typeof value.description !== 'string' || value.description.length > 500

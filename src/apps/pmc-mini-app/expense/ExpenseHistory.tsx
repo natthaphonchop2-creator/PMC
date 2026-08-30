@@ -35,39 +35,43 @@ export function ExpenseHistory({
   const [voiding, setVoiding] = useState<ExpenseHistoryRow | null>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
-  const requestEpochRef = useRef(0)
+  const loadMoreEpochRef = useRef(0)
+  const voidEpochRef = useRef(0)
 
-  useEffect(() => () => { requestEpochRef.current += 1 }, [])
+  useEffect(() => () => {
+    loadMoreEpochRef.current += 1
+    voidEpochRef.current += 1
+  }, [])
 
   const loadMore = async () => {
     if (!currentPage.nextCursor || !adapter.loadMore || loadingMore) return
-    const requestEpoch = ++requestEpochRef.current
+    const requestEpoch = ++loadMoreEpochRef.current
     setLoadingMore(true)
     setFailure('')
     try {
       const next = await adapter.loadMore(monthKey, currentPage.nextCursor)
-      if (requestEpoch !== requestEpochRef.current) return
+      if (requestEpoch !== loadMoreEpochRef.current) return
       setCurrentPage((current) => ({
         expenses: [...current.expenses, ...next.expenses], nextCursor: next.nextCursor,
       }))
     } catch {
-      if (requestEpoch !== requestEpochRef.current) return
+      if (requestEpoch !== loadMoreEpochRef.current) return
       setFailure('โหลดประวัติเพิ่มเติมไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
-      if (requestEpoch === requestEpochRef.current) setLoadingMore(false)
+      if (requestEpoch === loadMoreEpochRef.current) setLoadingMore(false)
     }
   }
 
   const confirmVoid = async () => {
     if (!voiding || busy || !reason.trim()) return
-    const requestEpoch = ++requestEpochRef.current
+    const requestEpoch = ++voidEpochRef.current
     setBusy(true)
     setFailure('')
     try {
       await adapter.void(voiding, {
         rootRequestId: globalThis.crypto.randomUUID(), expectedRevision: voiding.revision, reason: reason.trim(),
       })
-      if (requestEpoch !== requestEpochRef.current) return
+      if (requestEpoch !== voidEpochRef.current) return
       setCurrentPage((current) => ({
         ...current,
         expenses: current.expenses.map((row) => row.expenseId === voiding.expenseId ? { ...row, recordState: 'VOID' as const } : row),
@@ -75,10 +79,10 @@ export function ExpenseHistory({
       setVoiding(null)
       setReason('')
     } catch {
-      if (requestEpoch !== requestEpochRef.current) return
+      if (requestEpoch !== voidEpochRef.current) return
       setFailure('ยกเลิกรายการไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
-      if (requestEpoch === requestEpochRef.current) setBusy(false)
+      if (requestEpoch === voidEpochRef.current) setBusy(false)
     }
   }
 
