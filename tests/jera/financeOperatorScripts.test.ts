@@ -96,6 +96,9 @@ describe('read-only finance runtime checker', () => {
       if (joined.includes('run services get-iam-policy')) return JSON.stringify({
         bindings: [{ role: 'roles/run.invoker', members: ['serviceAccount:invoker@example.iam.gserviceaccount.com'] }],
       })
+      if (joined.includes('projects get-iam-policy')) return JSON.stringify({
+        bindings: [{ role: 'roles/viewer', members: ['user:owner@example.com'] }],
+      })
       if (joined.includes('scheduler jobs list')) return JSON.stringify([{
         state: 'ENABLED', httpTarget: { uri: 'https://private.example/internal/unrelated-job' },
       }])
@@ -134,7 +137,7 @@ describe('read-only finance runtime checker', () => {
       },
       scheduler: { matchingJobCount: 0, enabledJobCount: 0, oidcBindingPresent: false },
       tasks: { pendingCount: 1, validMetadataHashCount: 1, validAttemptCount: 1, invalidPayloadCount: 0 },
-      tabs: { exactHeaderCount: 3, requiredHeaderCount: 3 },
+      tabs: { exactHeaderCount: 3, requiredHeaderCount: 3, exactGridCapacityCount: 3, requiredGridCapacityCount: 3 },
       financePermissions: {
         expectedCount: 3, approvedViewerCount: 3, activeViewerCount: 3, exactApprovedSet: true,
         missingApprovedCount: 0, unlinkedApprovedCount: 0, extraViewerCount: 0, invalidStaffRowCount: 0,
@@ -230,6 +233,51 @@ describe('read-only finance runtime checker', () => {
 
     expect(code).toBe(1)
     expect(JSON.parse(stdout.text()).financePermissions).toMatchObject({ exactApprovedSet: false, ...expected })
+  })
+
+  it.each([
+    ['runtime Editor at project scope', { bindings: [{ role: 'roles/editor', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] }, { projectBroadRoleCount: 1 }],
+    ['invoker Owner at project scope', { bindings: [{ role: 'roles/owner', members: [`serviceAccount:${INVOKER}`] }] }, { projectBroadRoleCount: 1 }],
+    ['public project binding', { bindings: [{ role: 'roles/viewer', members: ['allAuthenticatedUsers'] }] }, { projectPublicMemberCount: 1 }],
+  ])('rejects %s even when resource-level IAM is exact', async (_case, projectIam, expected) => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({
+        service: cloudRunService({
+          flags: { reports: false, allocation: true, category: false },
+          latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+        }),
+        schedulerJobs: [],
+        projectIam,
+      }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).bindings).toMatchObject({ projectPolicySafe: false, ...expected })
+  })
+
+  it('rejects allocation readiness when a managed allocation tab has less than its bounded grid capacity', async () => {
+    const [check] = await loadScripts()
+    const state = googleState()
+    state.tabGridRows.JERA_PAYMENT_DETAIL_LINES = 1_000
+    const stdout = bufferWriter()
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({
+        service: cloudRunService({
+          flags: { reports: false, allocation: true, category: false },
+          latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+        }),
+        schedulerJobs: [],
+      }),
+      readGoogleState: vi.fn(async () => state), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text()).tabs).toMatchObject({ exactGridCapacityCount: 2, requiredGridCapacityCount: 3 })
   })
 
   it.each([
@@ -819,12 +867,14 @@ function runtimeExecute({
   queueIam = { bindings: [{ role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] },
   runIam = { bindings: [{ role: 'roles/run.invoker', members: [`serviceAccount:${INVOKER}`] }] },
   bucketIam = { bindings: [{ role: 'roles/storage.objectUser', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] },
+  projectIam = { bindings: [{ role: 'roles/viewer', members: ['user:owner@example.com'] }] },
 }: {
   service: unknown
   schedulerJobs: unknown[]
   queueIam?: unknown
   runIam?: unknown
   bucketIam?: unknown
+  projectIam?: unknown
 }) {
   return vi.fn(async (command: string[]) => {
     const joined = command.join(' ')
@@ -832,6 +882,7 @@ function runtimeExecute({
     if (joined.includes('tasks queues describe')) return JSON.stringify(queueDescription())
     if (joined.includes('tasks queues get-iam-policy')) return JSON.stringify(queueIam)
     if (joined.includes('run services get-iam-policy')) return JSON.stringify(runIam)
+    if (joined.includes('projects get-iam-policy')) return JSON.stringify(projectIam)
     if (joined.includes('scheduler jobs list')) return JSON.stringify(schedulerJobs)
     if (joined.includes('tasks list')) return JSON.stringify([{ httpRequest: { body: Buffer.from(JSON.stringify({
       branchUuid: '11111111-2222-4333-8444-555555555555', eventDate: APPROVED_DAY,
@@ -892,8 +943,13 @@ function googleState() {
         'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
         'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
         'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-        'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+        'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount', 'leaseFencingToken',
       ],
+    },
+    tabGridRows: {
+      JERA_PAYMENT_DETAIL_CACHE: 50_002,
+      JERA_PAYMENT_DETAIL_LINES: 200_002,
+      JERA_ALLOCATION_COVERAGE: 10_002,
     },
     staffRows: [
       { id: 'ADMIN_01', name: 'Owner', lineLinked: true, canViewFinance: true, active: true },

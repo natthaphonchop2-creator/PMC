@@ -73,6 +73,8 @@ Grant only the runtime identity permission to enqueue that queue, the verified O
 
 Every task must contain a valid `metadataSnapshotHash` and integer `attempt`. Each task processes at most 20 payment-detail attempts; the worker keeps one provider request in flight and waits at least 3,000 ms between attempts. Continuations for a day wait at least 60 seconds. This preserves the global ceiling of 20 `PAYMENT_DETAIL` requests per minute even while multiple days are pending.
 
+The allocation lease is global to the allocation Sheet store, not one lease per report day. This deliberately serializes row allocation across every day and Cloud Run instance. The worker and manual refresh path must both hold that generation-matched lease before queue or Sheet mutation, persist the current generation as `leaseFencingToken`, reject a lower generation, renew before the mutation guard, and use bounded Google write timeouts. Cached-detail cursor visits count toward the same 20-item worker budget even when no provider call is needed.
+
 ## Gate 3 — owner approval for managed allocation tabs
 
 With approval for the canonical workbook only, build the server and run `ensureMiniAppWorkbook()`. It may create or validate these tabs only:
@@ -84,6 +86,16 @@ JERA_ALLOCATION_COVERAGE
 ```
 
 Require exact header readback and frozen row 1 for all three. Stop on an incompatible header. Never rename, clear, delete, replace, or manually repair a tab to make setup pass.
+
+Require exact grid row-capacity readback after setup:
+
+```text
+JERA_PAYMENT_DETAIL_CACHE: 50,002 rows
+JERA_PAYMENT_DETAIL_LINES: 200,002 rows
+JERA_ALLOCATION_COVERAGE: 10,002 rows
+```
+
+The two extra rows are the header and overflow sentinel. The coverage header must end with `taskAttempt`, `productSalesRowCount`, and `leaseFencingToken`. Allocation stays disabled if any capacity or header is missing.
 
 ## Gate 4 — Apps Script owner/account/project/deployment approval
 
@@ -157,6 +169,8 @@ node scripts/check-finance-report-runtime.mjs \
 
 Require exact false/true/false flags, the approved project and region, exact queue/worker destination/invoker, queue and lease-bucket location/configuration, exact least-privilege queue/lease/Cloud Run policies with no public, broad, unexpected, or extra principal, a latest ready revision receiving zero traffic, three exact allocation headers, the exact three active LINE-linked immutable finance viewers, valid pending task hash/attempt fields, and no active lease older than 15 minutes. Scheduler absent or paused remains valid at this stage.
 
+The checker must also inspect project-level IAM. A public project member or any project-level role granted to the runtime or OIDC invoker identity blocks `ALLOCATION` and `READY`, even when each resource policy is exact. Unrelated human/project administration bindings are reported only as unrelated and do not expand either runtime identity.
+
 ## Gate 8 — owner approval for the one-day source comparison
 
 The approved comparison date is `2026-08-22`. Build the server and run exactly one seed:
@@ -171,6 +185,8 @@ node scripts/seed-finance-report-day.mjs \
 ```
 
 The script refreshes `PAYMENT`, `REFUND`, and `PRODUCT_SALES` sequentially, with at least 20 seconds between report types, then seeds allocation coverage and performs bounded status reads only. It never calls `PAYMENT_DETAIL` directly.
+
+If PAYMENT and item metadata hashes are unchanged but source success timestamps advance, refresh must rebind the existing COMPLETE coverage to those exact timestamps under the global fence without calling `PAYMENT_DETAIL` again. Until that rebind is durably stored, category money remains `CHECKING`.
 
 Compare the approved source export with cache and allocation evidence. Require payment count and received satang equality, refund count and satang equality, per-payment `service + product + unclassified = paidAmountSatang`, and day-level category equality with received money. Category amounts partition received money; they are never added to it. Stop on missing/ambiguous/truncated detail, metadata mismatch, stale source timestamps, or incomplete coverage. Record only safe aggregate counts, integer satang totals, timestamps, hash prefix, and safe codes.
 

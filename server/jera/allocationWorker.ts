@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { buildItemTypeMetadata } from './allocation.js'
 import { JeraReadError } from './client.js'
 import type { JeraNormalizedRow, JeraReadPort } from './contracts.js'
-import type { JeraAllocationLease, JeraAllocationLeasePort } from './allocationLeaseStore.js'
+import { JERA_ALLOCATION_STORE_LEASE_KEY, type JeraAllocationLease, type JeraAllocationLeasePort } from './allocationLeaseStore.js'
 import {
   buildCachedPaymentDetail,
   jeraAllocationDayKey,
@@ -22,7 +22,8 @@ import type { JeraReportStore } from './store.js'
 
 export const JERA_ALLOCATION_WORKER_MAX_RUN_MS = 240_000
 export const JERA_ALLOCATION_LEASE_TTL_MS = 270_000
-export const JERA_ALLOCATION_LEASE_RENEW_WINDOW_MS = 60_000
+export const JERA_ALLOCATION_LEASE_RENEW_WINDOW_MS = 90_000
+export const JERA_ALLOCATION_MUTATION_MIN_LEASE_MS = 60_000
 const JERA_ALLOCATION_REQUEST_RESERVE_MS = 10_000
 
 export interface JeraAllocationWorker {
@@ -60,15 +61,17 @@ export function createJeraAllocationWorker(options: {
       validateRunInput(input)
       const startedAt = now()
       const deadline = startedAt.getTime() + JERA_ALLOCATION_WORKER_MAX_RUN_MS
-      const dayKey = jeraAllocationDayKey(input.branchUuid, input.eventDate)
+      const coverageDayKey = jeraAllocationDayKey(input.branchUuid, input.eventDate)
+      const leaseKey = JERA_ALLOCATION_STORE_LEASE_KEY
       const claimed = await options.lease.claim({
-        dayKey, owner: input.workerId, now: instant(startedAt), ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
+        dayKey: leaseKey, owner: input.workerId, now: instant(startedAt), ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
       })
-      if (!validClaim(claimed, dayKey, input.workerId)) return skipped()
+      if (claimed === null) throw new Error('JERA_ALLOCATION_LEASE_BUSY')
+      if (!validClaim(claimed, leaseKey, input.workerId)) return skipped()
       let lease = claimed
       try {
         const runSession: JeraAllocationRunSession = await options.allocationStore.openRunSession()
-        const existingCoverage = await runSession.getCoverage(dayKey)
+        const existingCoverage = await runSession.getCoverage(coverageDayKey)
 
         async function assertLeaseForMutation(): Promise<void> {
           const checkedAt = now()
@@ -78,10 +81,12 @@ export function createJeraAllocationWorker(options: {
             const renewed = await options.lease.renew(lease, {
               now: instant(checkedAt), ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
             })
-            if (!validClaim(renewed, dayKey, input.workerId)) leaseLost()
+            if (!validClaim(renewed, leaseKey, input.workerId)) leaseLost()
             lease = renewed
           }
-          if (!await options.lease.assertCurrent(lease, instant(now()))) leaseLost()
+          const mutationAt = now()
+          if (Date.parse(lease.expiresAt) - mutationAt.getTime() <= JERA_ALLOCATION_MUTATION_MIN_LEASE_MS) leaseLost()
+          if (!await options.lease.assertCurrent(lease, instant(mutationAt))) leaseLost()
         }
 
         async function fencedMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -95,6 +100,7 @@ export function createJeraAllocationWorker(options: {
           await fencedMutation(async () => {
             value.leaseOwner = lease.owner
             value.leaseExpiresAt = lease.expiresAt
+            value.leaseFencingToken = lease.fencingToken
             await runSession.saveCoverage(value)
           })
         }
@@ -103,6 +109,7 @@ export function createJeraAllocationWorker(options: {
           await fencedMutation(async () => {
             value.leaseOwner = lease.owner
             value.leaseExpiresAt = lease.expiresAt
+            value.leaseFencingToken = lease.fencingToken
             await runSession.persistPaymentDetail({ detail, coverage: value })
           })
         }
@@ -152,7 +159,8 @@ export function createJeraAllocationWorker(options: {
           const retryCursor = coverageMatches(existingCoverage, currentPaymentSetHash, currentMetadataSnapshotHash) ? existingCoverage.cursor : 0
           const incomplete = coverageMatches(existingCoverage, currentPaymentSetHash, currentMetadataSnapshotHash)
             ? { ...existingCoverage, ...sourceEvidence, metadataSnapshotHash: metadata.snapshotHash, status: 'INCOMPLETE' as const,
-                safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE', leaseOwner: lease.owner, leaseExpiresAt: lease.expiresAt }
+                safeErrorCode: 'JERA_ALLOCATION_SOURCE_INCOMPLETE', leaseOwner: lease.owner, leaseExpiresAt: lease.expiresAt,
+                leaseFencingToken: lease.fencingToken }
             : { ...coverageBase({
                 input, lease, paymentSetHash: currentPaymentSetHash, paymentRowCount: payments.length,
                 metadataSnapshotHash: metadata.snapshotHash, sourceEvidence, cursor: retryCursor, successfulDetailCount: 0,
@@ -190,10 +198,11 @@ export function createJeraAllocationWorker(options: {
             })
         let cursor = Math.min(coverage.cursor, payments.length)
         let processed = 0
+        let examined = 0
         let details = [...read.details]
         let previousAttemptAt = coverage.lastAttemptAt ? Date.parse(coverage.lastAttemptAt) : null
 
-        while (cursor < payments.length && processed < options.maxDetailsPerRun) {
+        while (cursor < payments.length && examined < options.maxDetailsPerRun) {
           if (now().getTime() >= deadline) {
             coverage.taskAttempt = await enqueue(currentPaymentSetHash, currentMetadataSnapshotHash, cursor,
               previousTaskAttempt(input.attempt, coverage), options.continuationDelaySeconds)
@@ -201,6 +210,7 @@ export function createJeraAllocationWorker(options: {
             return { status: 'CONTINUED', processed, nextCursor: cursor }
           }
           const payment = payments[cursor]!
+          examined += 1
           if (hasCurrentDetail(details, payment)) {
             cursor += 1
             Object.assign(coverage, completionFields({ cursor, payments, details, metadataHash: metadata.snapshotHash, sourceEvidence, lease, now: now() }))
@@ -318,6 +328,7 @@ function completionFields(input: {
     cursor: input.cursor, paymentRowCount: input.payments.length, successfulDetailCount: matchingCount(input.details, input.payments),
     metadataSnapshotHash: input.metadataHash, ...input.sourceEvidence, status: complete ? 'COMPLETE' : 'INCOMPLETE',
     lastSuccessAt: instant(input.now), safeErrorCode: null, leaseOwner: input.lease.owner, leaseExpiresAt: input.lease.expiresAt,
+    leaseFencingToken: input.lease.fencingToken,
   }
 }
 
@@ -345,7 +356,7 @@ function coverageBase(input: {
     paymentRowCount: input.paymentRowCount, successfulDetailCount: input.successfulDetailCount,
     metadataSnapshotHash: input.metadataSnapshotHash, cursor: input.cursor, status: 'INCOMPLETE', lastAttemptAt: null,
     lastSuccessAt: null, safeErrorCode: null, leaseOwner: input.lease.owner, leaseExpiresAt: input.lease.expiresAt,
-    taskAttempt: input.input.attempt,
+    taskAttempt: input.input.attempt, leaseFencingToken: input.lease.fencingToken,
   }
 }
 

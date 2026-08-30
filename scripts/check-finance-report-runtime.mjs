@@ -21,8 +21,13 @@ const EXPECTED_HEADERS = {
     'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
     'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
     'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount', 'leaseFencingToken',
   ],
+}
+const EXPECTED_GRID_ROWS = {
+  JERA_PAYMENT_DETAIL_CACHE: 50_002,
+  JERA_PAYMENT_DETAIL_LINES: 200_002,
+  JERA_ALLOCATION_COVERAGE: 10_002,
 }
 
 export async function runFinanceRuntimeCheck(args, options = {}) {
@@ -48,12 +53,13 @@ export async function inspectFinanceRuntime(input, options = {}) {
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'queues', 'describe', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'queues', 'get-iam-policy', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', input.service, '--region', input.region, '--project', input.project, '--format=json']),
+    safeJson(execute, ['gcloud', 'projects', 'get-iam-policy', input.project, '--project', input.project, '--format=json']),
     safeJson(execute, ['gcloud', 'scheduler', 'jobs', 'list', '--location', input.region, '--project', input.project, '--format=json']),
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'list', '--queue', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     bucketName ? safeJson(execute, ['gcloud', 'storage', 'buckets', 'describe', `gs://${bucketName}`, '--project', input.project, '--format=json']) : null,
     bucketName ? safeJson(execute, ['gcloud', 'storage', 'buckets', 'get-iam-policy', `gs://${bucketName}`, '--project', input.project, '--format=json']) : null,
   ])
-  const [queue, queueIam, runIam, schedulerJobs, tasks, bucket, bucketIam] = commandResults
+  const [queue, queueIam, runIam, projectIam, schedulerJobs, tasks, bucket, bucketIam] = commandResults
   let googleState = null
   try {
     googleState = await (options.readGoogleState ?? readGoogleState)({ environment, now })
@@ -97,6 +103,7 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const queuePolicy = exactIamPolicy(queueIam, new Map([['roles/cloudtasks.enqueuer', new Set([runtimeIdentity].filter(Boolean))]]))
   const runPolicy = exactIamPolicy(runIam, new Map([['roles/run.invoker', new Set([invokerIdentity].filter(Boolean))]]))
   const bucketPolicy = exactIamPolicy(bucketIam, new Map([['roles/storage.objectUser', new Set([runtimeIdentity].filter(Boolean))]]))
+  const projectPolicy = projectIamReport(projectIam, new Set([runtimeIdentity, invokerIdentity].filter(Boolean)))
   const bindings = {
     queueEnqueuerPresent: hasBinding(queueIam, 'roles/cloudtasks.enqueuer', runtimeIdentity),
     oidcInvokerPresent: hasBinding(runIam, 'roles/run.invoker', invokerIdentity),
@@ -110,13 +117,18 @@ export async function inspectFinanceRuntime(input, options = {}) {
     extraPrincipalCount: queuePolicy.extraPrincipalCount + runPolicy.extraPrincipalCount + bucketPolicy.extraPrincipalCount,
     missingBindingCount: queuePolicy.missingBindingCount + runPolicy.missingBindingCount + bucketPolicy.missingBindingCount,
     invalidBindingCount: queuePolicy.invalidBindingCount + runPolicy.invalidBindingCount + bucketPolicy.invalidBindingCount,
+    projectPolicySafe: projectPolicy.safe,
+    projectPublicMemberCount: projectPolicy.publicMemberCount,
+    projectBroadRoleCount: projectPolicy.broadRoleCount,
+    projectUnexpectedRoleCount: projectPolicy.unexpectedRoleCount,
+    projectInvalidBindingCount: projectPolicy.invalidBindingCount,
   }
   const scheduler = schedulerReport(schedulerJobs, {
     seedUrl: input.expectedFinanceSeedUrl, oidcAudience: input.expectedOidcAudience,
     invoker: input.expectedInvoker,
   })
   const taskReport = tasksReport(tasks)
-  const tabs = tabsReport(googleState?.tabHeaders)
+  const tabs = tabsReport(googleState?.tabHeaders, googleState?.tabGridRows)
   const financePermissions = permissionReport(googleState?.staffRows, input.expectedFinanceViewers, input.approvedFinanceStaffIds)
   const leases = leaseReport(googleState?.coverageRows, now)
   const infrastructureReady = cloudRun.servicePresent
@@ -126,7 +138,9 @@ export async function inspectFinanceRuntime(input, options = {}) {
     && queueReport.maxDispatchesPerSecond === 0.016 && queueReport.leaseBucketLocationMatches
     && bindings.queueEnqueuerPresent && bindings.oidcInvokerPresent && bindings.leaseBucketObjectUserPresent
     && bindings.queuePolicyExact && bindings.runPolicyExact && bindings.leaseBucketPolicyExact
+    && bindings.projectPolicySafe
     && taskReport.invalidPayloadCount === 0 && tabs.exactHeaderCount === tabs.requiredHeaderCount
+    && tabs.exactGridCapacityCount === tabs.requiredGridCapacityCount
     && financePermissions.exactApprovedSet
     && leases.olderThan15MinutesCount === 0
   const expectedFlags = stageFlags(input.expectedStage)
@@ -205,17 +219,19 @@ async function readGoogleState({ environment }) {
   ])
   const sheets = createMiniAppGooglePorts({ spreadsheetId, intakeFolderId }).sheets
   const headerTabs = Object.keys(EXPECTED_HEADERS)
-  const ranges = [...headerTabs.map((tab) => `'${tab}'!1:1`), "'CONFIG_STAFF'!A2:L", "'JERA_ALLOCATION_COVERAGE'!A2:T"]
+  const ranges = [...headerTabs.map((tab) => `'${tab}'!1:1`), "'CONFIG_STAFF'!A2:L", "'JERA_ALLOCATION_COVERAGE'!A2:U"]
   const values = await sheets.batchGet(spreadsheetId, ranges)
+  const workbook = await sheets.getWorkbook(spreadsheetId)
   const tabHeaders = Object.fromEntries(headerTabs.map((tab) => [`${tab}`, (values[`'${tab}'!1:1`]?.[0] ?? []).map(String)]))
+  const tabGridRows = Object.fromEntries(headerTabs.map((tab) => [tab, workbook.find((sheet) => sheet.title === tab)?.rowCount ?? null]))
   const staffRows = (values["'CONFIG_STAFF'!A2:L"] ?? []).map((row) => ({
     id: text(row[0]), name: text(row[1]), lineLinked: text(row[3]).length > 0, active: bool(row[6]), canViewFinance: bool(row[10]),
   }))
-  const coverageRows = (values["'JERA_ALLOCATION_COVERAGE'!A2:T"] ?? []).map((row) => ({
+  const coverageRows = (values["'JERA_ALLOCATION_COVERAGE'!A2:U"] ?? []).map((row) => ({
     lastAttemptAt: text(row[13]), leaseOwner: text(row[16]), leaseExpiresAt: text(row[17]),
   }))
   void setup
-  return { tabHeaders, staffRows, coverageRows }
+  return { tabHeaders, tabGridRows, staffRows, coverageRows }
 }
 
 function cloudRunReport(service) {
@@ -264,10 +280,18 @@ function tasksReport(value) {
   }
   return { pendingCount: tasks.length, validMetadataHashCount, validAttemptCount, invalidPayloadCount }
 }
-function tabsReport(value) {
+function tabsReport(value, gridValue) {
   const headers = value && typeof value === 'object' ? value : {}
+  const gridRows = gridValue && typeof gridValue === 'object' ? gridValue : {}
   const exactHeaderCount = Object.entries(EXPECTED_HEADERS).filter(([tab, expected]) => same(headers[tab], expected)).length
-  return { exactHeaderCount, requiredHeaderCount: Object.keys(EXPECTED_HEADERS).length }
+  const exactGridCapacityCount = Object.entries(EXPECTED_GRID_ROWS)
+    .filter(([tab, expected]) => gridRows[tab] === expected).length
+  return {
+    exactHeaderCount,
+    requiredHeaderCount: Object.keys(EXPECTED_HEADERS).length,
+    exactGridCapacityCount,
+    requiredGridCapacityCount: Object.keys(EXPECTED_GRID_ROWS).length,
+  }
 }
 function permissionReport(value, expectedCount, approvedIds) {
   const rows = Array.isArray(value) ? value : []
@@ -350,6 +374,31 @@ function exactIamPolicy(policy, allowed) {
     exact: bindings.length > 0 && publicMemberCount === 0 && broadRoleCount === 0 && unexpectedRoleCount === 0
       && extraPrincipalCount === 0 && missingBindingCount === 0 && invalidBindingCount === 0,
     publicMemberCount, broadRoleCount, unexpectedRoleCount, extraPrincipalCount, missingBindingCount, invalidBindingCount,
+  }
+}
+function projectIamReport(policy, relevantMembers) {
+  const bindings = Array.isArray(policy?.bindings) ? policy.bindings : []
+  let publicMemberCount = 0
+  let broadRoleCount = 0
+  let unexpectedRoleCount = 0
+  let invalidBindingCount = Array.isArray(policy?.bindings) ? 0 : 1
+  for (const binding of bindings) {
+    const role = typeof binding?.role === 'string' ? binding.role : null
+    const members = Array.isArray(binding?.members) ? binding.members : null
+    if (!role || !members) { invalidBindingCount += 1; continue }
+    const relevant = members.filter((member) => relevantMembers.has(member))
+    for (const member of members) {
+      if (member === 'allUsers' || member === 'allAuthenticatedUsers') publicMemberCount += 1
+    }
+    if (relevant.length === 0) continue
+    if (binding.condition !== undefined) invalidBindingCount += 1
+    if (role === 'roles/owner' || role === 'roles/editor') broadRoleCount += relevant.length
+    unexpectedRoleCount += relevant.length
+  }
+  return {
+    safe: Array.isArray(policy?.bindings) && publicMemberCount === 0 && broadRoleCount === 0
+      && unexpectedRoleCount === 0 && invalidBindingCount === 0,
+    publicMemberCount, broadRoleCount, unexpectedRoleCount, invalidBindingCount,
   }
 }
 function serviceAccountMember(value) { const email = safeEmail(value); return email ? `serviceAccount:${email}` : null }

@@ -55,7 +55,7 @@ describe('PMC Mini App keyless Google ports', () => {
     expect(batchUpdate).toHaveBeenCalledWith({
       spreadsheetId: 'sheet-1',
       requestBody: { valueInputOption: 'RAW', data: [{ range: "'TAB_A'!A2:B2", values: [['x', 'y']] }] },
-    })
+    }, { timeout: 30_000 })
   })
 
   it('matches an open-ended requested range when Google returns its populated end row', async () => {
@@ -128,9 +128,9 @@ describe('PMC Mini App keyless Google ports', () => {
     })
   })
 
-  it('returns grid column capacity with workbook metadata', async () => {
+  it('returns grid row and column capacity with workbook metadata', async () => {
     const get = vi.fn(async () => ({ data: { sheets: [
-      { properties: { sheetId: 7, title: 'MINI_APP_REQUESTS', gridProperties: { columnCount: 36 } } },
+      { properties: { sheetId: 7, title: 'MINI_APP_REQUESTS', gridProperties: { columnCount: 36, rowCount: 1_000 } } },
     ] } }))
     const base = inertFactory()
     const ports = createMiniAppGooglePorts(
@@ -147,11 +147,11 @@ describe('PMC Mini App keyless Google ports', () => {
     )
 
     await expect(ports.sheets.getWorkbook('sheet-1')).resolves.toEqual([
-      { sheetId: 7, title: 'MINI_APP_REQUESTS', columnCount: 36 },
+      { sheetId: 7, title: 'MINI_APP_REQUESTS', columnCount: 36, rowCount: 1_000 },
     ])
     expect(get).toHaveBeenCalledWith({
       spreadsheetId: 'sheet-1',
-      fields: 'sheets.properties(sheetId,title,gridProperties.columnCount)',
+      fields: 'sheets.properties(sheetId,title,gridProperties(columnCount,rowCount))',
     })
   })
 

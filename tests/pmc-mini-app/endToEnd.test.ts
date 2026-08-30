@@ -146,10 +146,18 @@ function financeServerSystem(categoryMoneyEnabled: boolean) {
   const queue = {
     enqueue: vi.fn(async () => ({ taskName: 'finance-task-1', alreadyExists: false, live: true })),
   } satisfies JeraAllocationTaskQueuePort
+  const lease = {
+    claim: vi.fn(async (input: { dayKey: string; owner: string; now: string; ttlMs: number }) => ({
+      dayKey: input.dayKey, owner: input.owner, fencingToken: '77',
+      expiresAt: new Date(Date.parse(input.now) + input.ttlMs).toISOString(),
+    })),
+    renew: vi.fn(), assertCurrent: vi.fn(async () => true), release: vi.fn(async () => undefined),
+  }
   const service = createJeraFinanceService({
     coordinator,
     allocationStore,
     allocationQueue: queue,
+    lease,
     categoryMoneyEnabled,
     now: () => new Date('2026-08-31T12:00:00.000Z'),
   })
@@ -324,6 +332,7 @@ function financeCoverage(input: {
     safeErrorCode: null,
     leaseOwner: null,
     leaseExpiresAt: null,
+    leaseFencingToken: null,
     taskAttempt: 0,
   }
 }

@@ -129,7 +129,7 @@ describe('Google Sheets JERA allocation store', () => {
     expect(sheets.batchGets).toEqual([[
       `'JERA_PAYMENT_DETAIL_CACHE'!A1:I${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxDetailRows + 2}`,
       `'JERA_PAYMENT_DETAIL_LINES'!A1:E${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxLineRows + 2}`,
-      `'JERA_ALLOCATION_COVERAGE'!A1:T${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxCoverageRows + 2}`,
+      `'JERA_ALLOCATION_COVERAGE'!A1:U${JERA_ALLOCATION_SHEET_OPERATION_BUDGET.maxCoverageRows + 2}`,
     ]])
     const lines = sheets.tab('JERA_PAYMENT_DETAIL_LINES')
     lines[2]![1] = 3
@@ -201,6 +201,44 @@ describe('Google Sheets JERA allocation store', () => {
     timer.mockRestore()
     await expect(session.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') }))
       .resolves.toMatchObject({ coverage: { cursor: 20, status: 'COMPLETE' }, details: { length: 20 } })
+  })
+
+  it('rejects a stale independent run session before it can reuse an allocated row slot', async () => {
+    const sheets = fixture()
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    const current = await store.openRunSession()
+    const stale = await store.openRunSession()
+    const first = paymentDetailFor(1)
+    const second = paymentDetailFor(2)
+
+    await current.persistPaymentDetail({
+      detail: first,
+      coverage: coverageRow({ paymentRowCount: 2, successfulDetailCount: 1, cursor: 1 }),
+    })
+    await expect(stale.persistPaymentDetail({
+      detail: second,
+      coverage: coverageRow({ paymentRowCount: 2, successfulDetailCount: 1, cursor: 1 }),
+    })).rejects.toThrow('JERA_ALLOCATION_STORE_STALE_SESSION')
+
+    const fresh = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    await expect(fresh.readDay({ branchUuid: BRANCH, eventDate: DATE, paymentSetHash: hash('p') }))
+      .resolves.toMatchObject({ details: [first] })
+  })
+
+  it('rejects a lower Sheet-visible fencing token after a newer allocation generation is stored', async () => {
+    const sheets = fixture()
+    const store = createGoogleJeraAllocationStore({ spreadsheetId: 'sheet-1', sheets })
+    const session = await store.openRunSession()
+
+    await session.saveCoverage(coverageRow({
+      leaseOwner: 'worker-new', leaseExpiresAt: '2026-08-29T10:10:00.000Z', leaseFencingToken: '12',
+    }))
+    await expect(session.saveCoverage(coverageRow({
+      leaseOwner: 'worker-old', leaseExpiresAt: '2026-08-29T10:09:00.000Z', leaseFencingToken: '11',
+    }))).rejects.toThrow('JERA_ALLOCATION_STORE_STALE_FENCE')
+
+    await expect(store.getCoverage(jeraAllocationDayKey(BRANCH, DATE)))
+      .resolves.toMatchObject({ leaseOwner: 'worker-new', leaseFencingToken: '12' })
   })
 
   it('fails closed before hydrating allocation tables beyond their explicit row budgets', async () => {
@@ -275,7 +313,7 @@ function coverageRow(patch: Partial<JeraAllocationCoverage> = {}): JeraAllocatio
     paymentRowCount: 1, successfulDetailCount: 0, metadataSnapshotHash: hash('m'),
     paymentLastSuccessAt: '2026-08-29T10:00:00.000Z', productSalesLastSuccessAt: '2026-08-29T10:00:00.000Z',
     cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
-    taskAttempt: 0, productSalesRowCount: 1,
+    taskAttempt: 0, productSalesRowCount: 1, leaseFencingToken: null,
     ...patch,
   }
 }

@@ -4,6 +4,7 @@ export const MINI_APP_GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive',
 ] as const
+export const MINI_APP_GOOGLE_REQUEST_TIMEOUT_MS = 30_000
 
 interface GoogleResponse<T> { data: T }
 type GoogleMethod<T> = (input: Record<string, unknown>, options?: Record<string, unknown>) => Promise<GoogleResponse<T>>
@@ -15,7 +16,7 @@ interface MiniAppSheetsApi {
         properties?: {
           sheetId?: number | null
           title?: string | null
-          gridProperties?: { columnCount?: number | null }
+          gridProperties?: { columnCount?: number | null; rowCount?: number | null }
         }
       }>
     }>
@@ -54,7 +55,7 @@ export interface MiniAppSheetsPort {
   append(spreadsheetId: string, range: string, rows: unknown[][]): Promise<void>
   update(spreadsheetId: string, range: string, rows: unknown[][]): Promise<void>
   batchUpdate(spreadsheetId: string, data: Array<{ range: string; values: unknown[][] }>): Promise<void>
-  getWorkbook(spreadsheetId: string): Promise<Array<{ sheetId: number; title: string; columnCount?: number }>>
+  getWorkbook(spreadsheetId: string): Promise<Array<{ sheetId: number; title: string; columnCount?: number; rowCount?: number }>>
   applyWorkbookRequests(spreadsheetId: string, requests: Array<Record<string, unknown>>): Promise<void>
 }
 
@@ -145,37 +146,46 @@ export function createMiniAppGooglePorts(
         assertRange(range)
         await sheetsApi.spreadsheets.values.append({
           spreadsheetId, range, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values: rows },
-        })
+        }, { timeout: MINI_APP_GOOGLE_REQUEST_TIMEOUT_MS })
       },
       async update(candidate, range, rows) {
         assertSpreadsheet(candidate)
         assertRange(range)
         await sheetsApi.spreadsheets.values.update({
           spreadsheetId, range, valueInputOption: 'RAW', requestBody: { values: rows },
-        })
+        }, { timeout: MINI_APP_GOOGLE_REQUEST_TIMEOUT_MS })
       },
       async batchUpdate(candidate, data) {
         assertSpreadsheet(candidate)
         data.forEach(({ range }) => assertRange(range))
         await sheetsApi.spreadsheets.values.batchUpdate({
           spreadsheetId, requestBody: { valueInputOption: 'RAW', data },
-        })
+        }, { timeout: MINI_APP_GOOGLE_REQUEST_TIMEOUT_MS })
       },
       async getWorkbook(candidate) {
         assertSpreadsheet(candidate)
-        const response = await sheetsApi.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties(sheetId,title,gridProperties.columnCount)' })
+        const response = await sheetsApi.spreadsheets.get({
+          spreadsheetId,
+          fields: 'sheets.properties(sheetId,title,gridProperties(columnCount,rowCount))',
+        })
         return (response.data.sheets ?? []).flatMap(({ properties }) => {
           const sheetId = properties?.sheetId
           const title = properties?.title
           const columnCount = properties?.gridProperties?.columnCount
+          const rowCount = properties?.gridProperties?.rowCount
           return typeof sheetId === 'number' && typeof title === 'string'
-            ? [{ sheetId, title, ...(typeof columnCount === 'number' ? { columnCount } : {}) }]
+            ? [{
+                sheetId,
+                title,
+                ...(typeof columnCount === 'number' ? { columnCount } : {}),
+                ...(typeof rowCount === 'number' ? { rowCount } : {}),
+              }]
             : []
         })
       },
       async applyWorkbookRequests(candidate, requests) {
         assertSpreadsheet(candidate)
-        await sheetsApi.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } })
+        await sheetsApi.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests } }, { timeout: MINI_APP_GOOGLE_REQUEST_TIMEOUT_MS })
       },
     },
     drive: {

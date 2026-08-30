@@ -120,7 +120,7 @@ describe('PMC Mini App managed Sheet setup', () => {
     sheets.headers.set('MINI_APP_REQUESTS', ['wrong', 'columns'])
 
     await expect(ensureMiniAppWorkbook({ spreadsheetId: 'sheet-1', sheets })).rejects.toThrow('incompatible header: MINI_APP_REQUESTS')
-    expect(sheets.workbook).toEqual([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+    expect(sheets.workbook).toEqual([{ sheetId: 1, title: 'MINI_APP_REQUESTS', rowCount: 1_000 }])
     expect(sheets.frozenTabs).toEqual([])
   })
 
@@ -135,15 +135,31 @@ describe('PMC Mini App managed Sheet setup', () => {
     expect(sheets.deletedTabs).toEqual([])
   })
 
+  it('pre-provisions the three allocation tabs to their bounded data-row capacity', async () => {
+    const workbook = Object.keys(MANAGED_TAB_HEADERS).map((title, index) => ({
+      sheetId: index + 1,
+      title,
+      rowCount: 1_000,
+    }))
+    const sheets = new SetupSheets(workbook)
+    for (const [tab, headers] of Object.entries(MANAGED_TAB_HEADERS)) sheets.headers.set(tab, [...headers])
+
+    await ensureMiniAppWorkbook({ spreadsheetId: 'sheet-1', sheets })
+
+    expect(sheets.workbook.find(({ title }) => title === 'JERA_PAYMENT_DETAIL_CACHE')?.rowCount).toBe(50_002)
+    expect(sheets.workbook.find(({ title }) => title === 'JERA_PAYMENT_DETAIL_LINES')?.rowCount).toBe(200_002)
+    expect(sheets.workbook.find(({ title }) => title === 'JERA_ALLOCATION_COVERAGE')?.rowCount).toBe(10_002)
+  })
+
   it('appends only the exact freshness/task suffix for the legacy allocation coverage header', async () => {
     const workbook = Object.keys(MANAGED_TAB_HEADERS).map((title, index) => ({
       sheetId: index + 1,
       title,
-      ...(title === 'JERA_ALLOCATION_COVERAGE' ? { columnCount: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 2 } : {}),
+      ...(title === 'JERA_ALLOCATION_COVERAGE' ? { columnCount: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 3 } : {}),
     }))
     const sheets = new SetupSheets(workbook)
     for (const [tab, headers] of Object.entries(MANAGED_TAB_HEADERS)) {
-      sheets.headers.set(tab, tab === 'JERA_ALLOCATION_COVERAGE' ? [...headers.slice(0, -2)] : [...headers])
+      sheets.headers.set(tab, tab === 'JERA_ALLOCATION_COVERAGE' ? [...headers.slice(0, -3)] : [...headers])
     }
 
     await ensureMiniAppWorkbook({ spreadsheetId: 'sheet-1', sheets })
@@ -152,18 +168,19 @@ describe('PMC Mini App managed Sheet setup', () => {
     expect(sheets.workbookRequests[0]).toEqual([
       { appendDimension: {
         sheetId: workbook.find(({ title }) => title === 'JERA_ALLOCATION_COVERAGE')!.sheetId,
-        dimension: 'COLUMNS', length: 2,
+        dimension: 'COLUMNS', length: 3,
       } },
       { updateCells: {
         range: {
           sheetId: workbook.find(({ title }) => title === 'JERA_ALLOCATION_COVERAGE')!.sheetId,
           startRowIndex: 0, endRowIndex: 1,
-          startColumnIndex: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 2,
+          startColumnIndex: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length - 3,
           endColumnIndex: MANAGED_TAB_HEADERS.JERA_ALLOCATION_COVERAGE.length,
         },
         rows: [{ values: [
           { userEnteredValue: { stringValue: 'taskAttempt' } },
           { userEnteredValue: { stringValue: 'productSalesRowCount' } },
+          { userEnteredValue: { stringValue: 'leaseFencingToken' } },
         ] }],
         fields: 'userEnteredValue',
       } },
@@ -195,6 +212,7 @@ describe('PMC Mini App managed Sheet setup', () => {
       'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
       'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
       'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+      'leaseFencingToken',
     ])
   })
 
@@ -219,7 +237,7 @@ describe('PMC Mini App managed Sheet setup', () => {
 })
 
 class SetupSheets implements MiniAppSheetsPort {
-  readonly workbook: Array<{ sheetId: number; title: string; columnCount?: number }>
+  readonly workbook: Array<{ sheetId: number; title: string; columnCount?: number; rowCount?: number }>
   readonly headers = new Map<string, unknown[]>()
   readonly frozenTabs: string[] = []
   readonly deletedTabs: string[] = []
@@ -228,8 +246,8 @@ class SetupSheets implements MiniAppSheetsPort {
   readonly workbookRequests: Array<Array<Record<string, unknown>>> = []
   private nextSheetId: number
 
-  constructor(workbook: Array<{ sheetId: number; title: string; columnCount?: number }>) {
-    this.workbook = structuredClone(workbook)
+  constructor(workbook: Array<{ sheetId: number; title: string; columnCount?: number; rowCount?: number }>) {
+    this.workbook = structuredClone(workbook.map((sheet) => ({ rowCount: 1_000, ...sheet })))
     this.nextSheetId = Math.max(0, ...workbook.map(({ sheetId }) => sheetId)) + 1
   }
 
@@ -254,16 +272,20 @@ class SetupSheets implements MiniAppSheetsPort {
 
   async batchUpdate(): Promise<void> { return undefined }
 
-  async getWorkbook(): Promise<Array<{ sheetId: number; title: string; columnCount?: number }>> {
+  async getWorkbook(): Promise<Array<{ sheetId: number; title: string; columnCount?: number; rowCount?: number }>> {
     return structuredClone(this.workbook)
   }
 
   async applyWorkbookRequests(_spreadsheetId: string, requests: Array<Record<string, unknown>>): Promise<void> {
     this.workbookRequests.push(structuredClone(requests))
     for (const request of requests) {
-      const addSheet = request.addSheet as { properties?: { title?: string } } | undefined
+      const addSheet = request.addSheet as { properties?: { title?: string; gridProperties?: { columnCount?: number; rowCount?: number } } } | undefined
       if (addSheet?.properties?.title) {
-        this.workbook.push({ sheetId: this.nextSheetId++, title: addSheet.properties.title })
+        this.workbook.push({
+          sheetId: this.nextSheetId++, title: addSheet.properties.title,
+          columnCount: addSheet.properties.gridProperties?.columnCount,
+          rowCount: addSheet.properties.gridProperties?.rowCount ?? 1_000,
+        })
         continue
       }
       const update = request.updateSheetProperties as { properties?: { sheetId?: number; gridProperties?: { frozenRowCount?: number } } } | undefined
@@ -281,6 +303,11 @@ class SetupSheets implements MiniAppSheetsPort {
       if (appendDimension?.dimension === 'COLUMNS' && typeof appendDimension.sheetId === 'number' && typeof appendDimension.length === 'number') {
         const sheet = this.workbook.find(({ sheetId }) => sheetId === appendDimension.sheetId)
         if (sheet) sheet.columnCount = (sheet.columnCount ?? 0) + appendDimension.length
+        continue
+      }
+      if (appendDimension?.dimension === 'ROWS' && typeof appendDimension.sheetId === 'number' && typeof appendDimension.length === 'number') {
+        const sheet = this.workbook.find(({ sheetId }) => sheetId === appendDimension.sheetId)
+        if (sheet) sheet.rowCount = (sheet.rowCount ?? 0) + appendDimension.length
         continue
       }
       const updateCells = request.updateCells as {

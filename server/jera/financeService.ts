@@ -19,6 +19,11 @@ import {
   type FinanceDaySourceSnapshot,
 } from './financeReports.js'
 import type { JeraSyncCoordinator, JeraSyncQuery } from './syncCoordinator.js'
+import {
+  JERA_ALLOCATION_STORE_LEASE_KEY,
+  type JeraAllocationLease,
+  type JeraAllocationLeasePort,
+} from './allocationLeaseStore.js'
 
 export interface JeraFinanceService {
   readDaily(input: { branchUuid: string; startDate: string; endDate: string }): Promise<DailyIncomeProjection>
@@ -43,11 +48,14 @@ export class JeraFinanceServiceError extends Error {
 }
 
 const FINANCE_REPORT_TYPES = ['PAYMENT', 'REFUND', 'PRODUCT_SALES'] as const
+export const JERA_FINANCE_REFRESH_LEASE_TTL_MS = 90_000
+export const JERA_FINANCE_ALLOCATION_START_DELAY_MS = 5_000
 
 export function createJeraFinanceService(options: {
   coordinator: JeraSyncCoordinator
   allocationStore: JeraAllocationStore
   allocationQueue: JeraAllocationTaskQueuePort
+  lease: JeraAllocationLeasePort
   categoryMoneyEnabled: boolean
   now?: () => Date
 }): JeraFinanceService {
@@ -139,7 +147,6 @@ export function createJeraFinanceService(options: {
       const retryAfterSeconds: number[] = []
       try {
         const dayKey = jeraAllocationDayKey(branchUuid, eventDate)
-        const existingCoverage = await options.allocationStore.getCoverage(dayKey)
         for (const reportType of FINANCE_REPORT_TYPES) {
           const result = await options.coordinator.manualRefresh(exactQuery(reportType, branchUuid, eventDate), actorId)
           retryAfterSeconds.push(safeRetry(result.retryAfterSeconds))
@@ -158,9 +165,72 @@ export function createJeraFinanceService(options: {
           itemCode: row.itemCode, type: row.type, sourceHash: row.sourceHash,
         })))
         const hash = paymentSetHash(payments)
+        const claimedAt = validNow(now())
+        const leaseOwner = financeRefreshLeaseOwner(actorId, eventDate, claimedAt)
+        const claimedLease = await options.lease.claim({
+          dayKey: JERA_ALLOCATION_STORE_LEASE_KEY,
+          owner: leaseOwner,
+          now: claimedAt.toISOString(),
+          ttlMs: JERA_FINANCE_REFRESH_LEASE_TTL_MS,
+        })
+        if (!validFinanceLease(claimedLease, leaseOwner, claimedAt)) {
+          throw new JeraFinanceServiceError('FINANCE_REFRESH_UNAVAILABLE', 60)
+        }
+        let lease: JeraAllocationLease = claimedLease
+        try {
+          async function assertLeaseForMutation(): Promise<void> {
+            const checkedAt = validNow(now())
+            if (Date.parse(lease.expiresAt) - checkedAt.getTime() <= 60_000) {
+              const renewed = await options.lease.renew(lease, {
+                now: checkedAt.toISOString(), ttlMs: JERA_FINANCE_REFRESH_LEASE_TTL_MS,
+              })
+              if (!validFinanceLease(renewed, leaseOwner, checkedAt)) {
+                throw new JeraFinanceServiceError('FINANCE_REFRESH_UNAVAILABLE', 60)
+              }
+              lease = renewed
+            }
+            if (!await options.lease.assertCurrent(lease, checkedAt.toISOString())) {
+              throw new JeraFinanceServiceError('FINANCE_REFRESH_UNAVAILABLE', 60)
+            }
+          }
+
+          async function fencedMutation<T>(operation: () => Promise<T>): Promise<T> {
+            await assertLeaseForMutation()
+            const result = await operation()
+            if (!await options.lease.assertCurrent(lease, validNow(now()).toISOString())) {
+              throw new JeraFinanceServiceError('FINANCE_REFRESH_UNAVAILABLE', 60)
+            }
+            return result
+          }
+
+          function bindCoverageFence(value: JeraAllocationCoverage): void {
+            value.leaseOwner = lease.owner
+            value.leaseExpiresAt = lease.expiresAt
+            value.leaseFencingToken = lease.fencingToken
+          }
+
+          const existingCoverage = await options.allocationStore.getCoverage(dayKey)
         const sameSourceCoverage = existingCoverage?.paymentSetHash === hash
           && existingCoverage.metadataSnapshotHash === metadata.snapshotHash
         if (sameSourceCoverage && existingCoverage.status === 'COMPLETE') {
+          const reboundCoverage: JeraAllocationCoverage = {
+            ...existingCoverage,
+            paymentCacheKey: jeraCacheKey('PAYMENT', queries[0]!.filters),
+            productSalesCacheKey: jeraCacheKey('PRODUCT_SALES', queries[2]!.filters),
+            paymentRowCount: payments.length,
+            productSalesRowCount: productSalesRows.length,
+            paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
+            productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
+            leaseOwner: lease.owner,
+            leaseExpiresAt: lease.expiresAt,
+            leaseFencingToken: lease.fencingToken,
+          }
+          if (coverageSourceBindingChanged(existingCoverage, reboundCoverage)) {
+            await fencedMutation(async () => {
+              bindCoverageFence(reboundCoverage)
+              await options.allocationStore.saveCoverage(reboundCoverage)
+            })
+          }
           return {
             accepted: true,
             allocationQueued: false,
@@ -168,11 +238,11 @@ export function createJeraFinanceService(options: {
           }
         }
         const cursor = sameSourceCoverage ? existingCoverage.cursor : 0
-        const queued = await enqueueJeraAllocationTaskGeneration(options.allocationQueue, {
+        const queued = await fencedMutation(() => enqueueJeraAllocationTaskGeneration(options.allocationQueue, {
           branchUuid, eventDate, paymentSetHash: hash, metadataSnapshotHash: metadata.snapshotHash,
           cursor, previousTaskAttempt: sameSourceCoverage ? existingCoverage.taskAttempt : -1,
-          scheduleAt: validNow(now()),
-        })
+          scheduleAt: new Date(Date.parse(lease.expiresAt) + JERA_FINANCE_ALLOCATION_START_DELAY_MS),
+        }))
         const coverage: JeraAllocationCoverage = sameSourceCoverage
           ? {
               ...existingCoverage,
@@ -180,7 +250,8 @@ export function createJeraFinanceService(options: {
               productSalesRowCount: productSalesRows.length,
               paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
               productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
-              status: 'INCOMPLETE', safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
+              status: 'INCOMPLETE', safeErrorCode: null, leaseOwner: lease.owner, leaseExpiresAt: lease.expiresAt,
+              leaseFencingToken: lease.fencingToken,
               taskAttempt: queued.taskAttempt,
             }
           : {
@@ -193,13 +264,20 @@ export function createJeraFinanceService(options: {
               paymentLastSuccessAt: envelopes[0]!.lastSuccessAt,
               productSalesLastSuccessAt: envelopes[2]!.lastSuccessAt,
               cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null, lastSuccessAt: null,
-              safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, taskAttempt: queued.taskAttempt,
+              safeErrorCode: null, leaseOwner: lease.owner, leaseExpiresAt: lease.expiresAt,
+              taskAttempt: queued.taskAttempt, leaseFencingToken: lease.fencingToken,
             }
-        await options.allocationStore.saveCoverage(coverage)
+        await fencedMutation(async () => {
+          bindCoverageFence(coverage)
+          await options.allocationStore.saveCoverage(coverage)
+        })
         return {
           accepted: true,
           allocationQueued: queued.created,
           retryAfterSeconds: Math.max(...retryAfterSeconds),
+        }
+        } finally {
+          await options.lease.release(lease)
         }
       } catch (error) {
         if (error instanceof JeraFinanceServiceError) throw error
@@ -207,6 +285,24 @@ export function createJeraFinanceService(options: {
       }
     },
   }
+}
+
+function financeRefreshLeaseOwner(actorId: string, eventDate: string, now: Date): string {
+  return `finance-refresh:${createHash('sha256').update(JSON.stringify([actorId, eventDate, now.toISOString()])).digest('hex')}`
+}
+
+function validFinanceLease(lease: JeraAllocationLease | null, owner: string, now: Date): lease is JeraAllocationLease {
+  return Boolean(lease && lease.dayKey === JERA_ALLOCATION_STORE_LEASE_KEY && lease.owner === owner
+    && /^[1-9]\d*$/.test(lease.fencingToken) && Date.parse(lease.expiresAt) - now.getTime() >= 60_000)
+}
+
+function coverageSourceBindingChanged(current: JeraAllocationCoverage, next: JeraAllocationCoverage): boolean {
+  return current.paymentCacheKey !== next.paymentCacheKey
+    || current.productSalesCacheKey !== next.productSalesCacheKey
+    || current.paymentRowCount !== next.paymentRowCount
+    || current.productSalesRowCount !== next.productSalesRowCount
+    || current.paymentLastSuccessAt !== next.paymentLastSuccessAt
+    || current.productSalesLastSuccessAt !== next.productSalesLastSuccessAt
 }
 
 function exactQuery(reportType: JeraSourceReportType, branchUuid: string, eventDate: string): JeraSyncQuery {

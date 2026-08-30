@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { Storage, type FileMetadata } from '@google-cloud/storage'
 
 const PREFIX = 'jera-allocation-leases'
 const DAY_KEY = /^[a-f0-9]{64}$/
 const OWNER = /^[A-Za-z0-9._:-]{1,256}$/
+export const JERA_ALLOCATION_STORE_LEASE_KEY = createHash('sha256').update('JERA_ALLOCATION_STORE_V1').digest('hex')
 
 export interface JeraAllocationLease {
   dayKey: string
