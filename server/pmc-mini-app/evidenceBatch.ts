@@ -70,13 +70,22 @@ export function consumeBookingPrepareMultipart(
     const paymentFiles: EvidenceBatchFile[] = []
     const chatFiles: EvidenceBatchFile[] = []
 
-    const removeRequestListeners = () => {
+    const removeStreamingListeners = () => {
       req.off('data', countRawChunk)
       req.off('aborted', onAborted)
+    }
+    const removeRequestListeners = () => {
+      removeStreamingListeners()
       req.off('error', onRequestError)
+      req.off('end', onRequestTerminal)
+      req.off('close', onRequestTerminal)
+    }
+    const onRequestTerminal = () => {
+      removeRequestListeners()
     }
     const stop = () => {
-      removeRequestListeners()
+      removeStreamingListeners()
+      if (req.readableEnded || req.closed) onRequestTerminal()
       if (parser) {
         const activeParser = parser
         req.unpipe(activeParser)
@@ -109,6 +118,8 @@ export function consumeBookingPrepareMultipart(
     req.on('data', countRawChunk)
     req.on('aborted', onAborted)
     req.on('error', onRequestError)
+    req.once('end', onRequestTerminal)
+    req.once('close', onRequestTerminal)
 
     try {
       parser = Busboy({
@@ -223,7 +234,7 @@ export function consumeBookingPrepareMultipart(
     parser.on('close', () => {
       if (settled) return
       settled = true
-      removeRequestListeners()
+      if (req.readableEnded || req.closed) onRequestTerminal()
       if (!inputSeen || !parsedInput) {
         reject(new MiniAppEvidenceError('BOOKING_PREPARE_JSON_REQUIRED'))
         return

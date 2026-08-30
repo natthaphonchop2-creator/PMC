@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'node:http'
+import { once } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import type { BookingDraftInputV2 } from '../../src/apps/pmc-mini-app/contracts'
@@ -108,7 +109,7 @@ describe('PMC Booking prepare multipart parser', () => {
     request.end()
   })
 
-  it('stops and cleans up immediately when a chunked body exceeds 26,000,000 raw bytes', async () => {
+  it('keeps the first raw-overflow error fixed while safely draining a late transport error', async () => {
     const request = multipartStream('prepare-boundary')
     const result = parsePrepare(request)
 
@@ -117,11 +118,16 @@ describe('PMC Booking prepare multipart parser', () => {
     await expect(result).rejects.toMatchObject({ code: 'EVIDENCE_BATCH_TOO_LARGE' })
     expect(request.listenerCount('data')).toBe(0)
     expect(request.listenerCount('aborted')).toBe(0)
-    expect(request.listenerCount('error')).toBe(0)
-    request.end()
+    expect(request.listenerCount('error')).toBeGreaterThan(0)
+    expect(() => request.emit('error', new Error('late transport error'))).not.toThrow()
+
+    const closed = once(request, 'close')
+    request.destroy()
+    await closed
+    expectParserRequestListenersRemoved(request)
   })
 
-  it('settles once and removes request listeners after an aborted multipart body', async () => {
+  it('keeps the first abort error fixed while safely draining a late request error', async () => {
     const request = multipartStream('prepare-boundary')
     const result = parsePrepare(request)
 
@@ -130,8 +136,51 @@ describe('PMC Booking prepare multipart parser', () => {
     await expect(result).rejects.toMatchObject({ code: 'BOOKING_PREPARE_JSON_REQUIRED' })
     expect(request.listenerCount('data')).toBe(0)
     expect(request.listenerCount('aborted')).toBe(0)
-    expect(request.listenerCount('error')).toBe(0)
+    expect(request.listenerCount('error')).toBeGreaterThan(0)
+    expect(() => request.emit('error', new Error('late aborted request error'))).not.toThrow()
+
+    const ended = once(request, 'end')
     request.end()
+    await ended
+    expectParserRequestListenersRemoved(request)
+  })
+
+  it('accepts exactly ten payment and ten chat files', async () => {
+    const boundary = 'prepare-boundary'
+    const request = multipartRequest(boundary, [
+      inputPart(boundary),
+      ...Array.from({ length: 10 }, (_, index) => filePart(
+        boundary, 'paymentFiles', `payment-${index}.png`, 'image/png', pngBytes(9, index),
+      )),
+      ...Array.from({ length: 10 }, (_, index) => filePart(
+        boundary, 'chatFiles', `chat-${index}.jpg`, 'image/jpeg', jpegBytes(5, index),
+      )),
+      closingPart(boundary),
+    ])
+
+    const parsed = await parsePrepare(request)
+
+    expect(parsed.paymentFiles).toHaveLength(10)
+    expect(parsed.chatFiles).toHaveLength(10)
+  })
+
+  it('accepts an exactly 26,000,000-byte raw multipart body', async () => {
+    const boundary = 'prepare-boundary'
+    const request = multipartStream(boundary, { 'content-length': '26000000' })
+    const parts = [
+      inputPart(boundary),
+      filePart(boundary, 'paymentFiles', 'payment.png', 'image/png', pngBytes(9)),
+      filePart(boundary, 'chatFiles', 'chat.jpg', 'image/jpeg', jpegBytes(5)),
+      closingPart(boundary),
+    ]
+    const baseBytes = parts.reduce((total, part) => total + part.length, 0)
+    const result = parsePrepare(request)
+
+    for (const part of parts) request.write(part)
+    writeRepeatedBytes(request, 26_000_000 - baseBytes)
+    request.end()
+
+    await expect(result).resolves.toMatchObject({ protocolVersion: 2, version: 4 })
   })
 
   it('accepts exact file and decoded-byte boundaries and preserves per-kind order', async () => {
@@ -210,6 +259,24 @@ function multipartStream(boundary: string, headers: Record<string, string> = {})
   return Object.assign(new PassThrough(), {
     headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, ...headers },
   }) as IncomingMessage & PassThrough
+}
+
+function expectParserRequestListenersRemoved(request: IncomingMessage): void {
+  expect(request.listenerCount('data')).toBe(0)
+  expect(request.listenerCount('aborted')).toBe(0)
+  expect(request.listenerCount('error')).toBe(0)
+  expect(request.listenerCount('end')).toBe(0)
+  expect(request.listenerCount('close')).toBe(0)
+}
+
+function writeRepeatedBytes(request: PassThrough, totalBytes: number): void {
+  const chunk = Buffer.alloc(64 * 1024)
+  let remaining = totalBytes
+  while (remaining > 0) {
+    const bytes = Math.min(remaining, chunk.length)
+    request.write(bytes === chunk.length ? chunk : chunk.subarray(0, bytes))
+    remaining -= bytes
+  }
 }
 
 function filePart(boundary: string, fieldName: string, fileName: string, mimeType: string, bytes: Buffer): Buffer {
