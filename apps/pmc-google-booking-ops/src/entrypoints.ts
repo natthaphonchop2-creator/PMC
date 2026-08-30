@@ -216,7 +216,9 @@ export function migratePmcFinancePermissionColumns() {
 }
 
 export function preparePmcExpensePermissions() {
-  return prepareExpensePermissionsWorkflow()
+  const roster = prepareExpensePermissionsWorkflow()
+  console.log(JSON.stringify(roster))
+  return roster
 }
 
 export function applyPmcExpensePermissions() {
