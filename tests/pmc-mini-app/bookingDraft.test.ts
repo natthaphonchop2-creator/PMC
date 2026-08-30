@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   bookingPayloadHash,
   parseBookingDraft,
+  parseBookingDraftV2,
   transitionDraft,
   type BookingDraftContext,
+  type BookingDraftContextV2,
 } from '../../server/pmc-mini-app/bookingDraft'
 
 describe('PMC Mini App booking draft validation', () => {
@@ -54,6 +56,39 @@ describe('PMC Mini App booking draft validation', () => {
     expect(() => parseBookingDraft({ ...validInput(), adminName: 'ผู้ปลอมแปลง' }, context())).toThrow('UNKNOWN_BOOKING_FIELD')
   })
 
+  it('keeps recorder immutable and resolves Admin and AE snapshots by exact ID', () => {
+    const draft = parseBookingDraftV2(validInputV2({ adminId: 'ADMIN_02', aeId: 'ADMIN_03' }), contextV2())
+
+    expect(draft).toMatchObject({
+      protocolVersion: 2,
+      staffId: 'ADMIN_01',
+      recorderName: 'มัส',
+      adminId: 'ADMIN_02',
+      adminName: 'แวว',
+      aeId: 'ADMIN_03',
+      aeName: 'หมวย',
+    })
+  })
+
+  it('keeps duplicate display names distinct by ID and supports a null AE', () => {
+    const draft = parseBookingDraftV2(validInputV2({ adminId: 'ADMIN_04', aeId: null }), contextV2())
+
+    expect(draft).toMatchObject({ adminId: 'ADMIN_04', adminName: 'แวว', aeId: null, aeName: 'ไม่ระบุ' })
+  })
+
+  it.each([
+    ['unknown Admin', { adminId: 'ADMIN_UNKNOWN', aeId: null }, 'ADMIN_NOT_ALLOWED'],
+    ['inactive Admin', { adminId: 'ADMIN_INACTIVE', aeId: null }, 'ADMIN_NOT_ALLOWED'],
+    ['unknown AE', { adminId: 'ADMIN_02', aeId: 'ADMIN_UNKNOWN' }, 'AE_NOT_ALLOWED'],
+  ])('rejects %s', (_name, attribution, code) => {
+    expect(() => parseBookingDraftV2(validInputV2(attribution), contextV2())).toThrow(code)
+  })
+
+  it('rejects browser-supplied attribution names in protocol 2', () => {
+    expect(() => parseBookingDraftV2({ ...validInputV2(), adminName: 'ปลอม' }, contextV2())).toThrow('UNKNOWN_BOOKING_FIELD')
+    expect(() => parseBookingDraftV2({ ...validInputV2(), recorderName: 'ปลอม' }, contextV2())).toThrow('UNKNOWN_BOOKING_FIELD')
+  })
+
   it('requires one to ten files for each evidence kind', () => {
     expect(() => parseBookingDraft(validInput(), context({ paymentEvidenceFileIds: [] }))).toThrow('PAYMENT_EVIDENCE_REQUIRED')
     expect(() => parseBookingDraft(validInput(), context({ chatEvidenceFileIds: [] }))).toThrow('CHAT_EVIDENCE_REQUIRED')
@@ -96,6 +131,15 @@ describe('PMC Mini App booking draft validation', () => {
 
     expect(bookingPayloadHash(later)).toBe(bookingPayloadHash(first))
     expect(bookingPayloadHash(reordered)).not.toBe(bookingPayloadHash(first))
+  })
+
+  it('binds every protocol-2 attribution snapshot into the payload hash', () => {
+    const draft = parseBookingDraftV2(validInputV2({ adminId: 'ADMIN_02', aeId: 'ADMIN_03' }), contextV2())
+
+    expect(bookingPayloadHash({ ...draft, adminId: 'ADMIN_04' })).not.toBe(bookingPayloadHash(draft))
+    expect(bookingPayloadHash({ ...draft, adminName: 'ปลอม' })).not.toBe(bookingPayloadHash(draft))
+    expect(bookingPayloadHash({ ...draft, aeId: null, aeName: 'ไม่ระบุ' })).not.toBe(bookingPayloadHash(draft))
+    expect(bookingPayloadHash({ ...draft, recorderName: 'คนอื่น' })).not.toBe(bookingPayloadHash(draft))
   })
 
   it('binds ordered staging object keys before any Drive file IDs exist', () => {
@@ -155,10 +199,38 @@ function validInput(patch: Record<string, unknown> = {}) {
   }
 }
 
+function validInputV2(patch: Record<string, unknown> = {}) {
+  const { aeName: _aeName, ...base } = validInput()
+  return { ...base, adminId: 'ADMIN_02', aeId: null, ...patch }
+}
+
 function context(patch: Partial<BookingDraftContext> = {}): BookingDraftContext {
   return {
     draftId: 'draft-1', staffId: 'staff-1', lineUserIdHash: 'line-user-hash',
     doctorIds: ['doctor-1'], serviceIds: ['service-1'], channelIds: ['channel-1'], eligibleAeNames: ['ไม่ระบุ', 'มัส'],
+    paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
+    paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], asyncEvidence: false,
+    now: '2026-08-27T10:00:00.000Z',
+    ...patch,
+  }
+}
+
+function contextV2(patch: Partial<BookingDraftContextV2> = {}): BookingDraftContextV2 {
+  return {
+    draftId: 'draft-1', staffId: 'ADMIN_01', recorderName: 'มัส', lineUserIdHash: 'line-user-hash',
+    doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
+    services: [{ id: 'service-1', name: 'เติมไขมัน' }],
+    channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+    admins: [
+      { id: 'ADMIN_02', name: 'แวว' },
+      { id: 'ADMIN_03', name: 'หมวย' },
+      { id: 'ADMIN_04', name: 'แวว' },
+    ],
+    aes: [
+      { id: 'ADMIN_02', name: 'แวว' },
+      { id: 'ADMIN_03', name: 'หมวย' },
+      { id: 'ADMIN_04', name: 'แวว' },
+    ],
     paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
     paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], asyncEvidence: false,
     now: '2026-08-27T10:00:00.000Z',

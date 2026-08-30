@@ -8,7 +8,7 @@ import type {
   LineIdentityPort,
   StockServerDependencies,
 } from './contracts.js'
-import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
+import { bookingPayloadHash, parseBookingDraft, parseBookingDraftV2 } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
 import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBatch.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
@@ -177,6 +177,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       }
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
       await handleEvidenceBatchUpload(req, res, evidenceBatchRoute[1]!, authenticated, deps)
       return
     }
@@ -185,6 +186,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       if (!requireGet(req, res)) return
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
       if (!deps.config.asyncBooking || !deps.config.asyncBooking.ownerStaffIds.has(authenticated.staffId)) {
         respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
         return
@@ -211,6 +213,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       }
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
       await handleEvidenceUpload(req, res, url, evidenceRoute[1]!, authenticated, deps)
       return
     }
@@ -219,6 +222,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     if (bookingRoute) {
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
       await handleBookingDraftRoute(req, res, bookingRoute, authenticated, deps)
       return
     }
@@ -257,7 +261,8 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         doctors: bookingConfig.doctors,
         services: bookingConfig.services,
         channels: bookingConfig.channels,
-        aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, ...bookingConfig.aes.filter(({ id }) => id !== 'NONE')],
+        admins: bookingConfig.admins ?? bookingConfig.aes,
+        aes: bookingConfig.aes,
       })
     } catch {
       respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
@@ -425,7 +430,8 @@ async function handleBookingDraftRoute(
     const requestId = deps.requestId?.() ?? `request-${randomUUID()}`
     const draftId = deps.draftId?.() ?? `draft-${randomUUID()}`
     const draft: MiniAppRequestRecord = {
-      requestId, draftId, staffId: authenticated.staffId,
+      requestId, draftId, protocolVersion: 1, staffId: authenticated.staffId,
+      recorderName: '', adminId: authenticated.staffId, adminName: '', aeId: null,
       lineUserIdHash: createHmac('sha256', deps.config.signingSecret).update(authenticated.lineUserId).digest('base64url'),
       state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
       phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
@@ -496,18 +502,34 @@ async function handleBookingDraftRoute(
     let config
     try { config = await deps.store.getActiveBookingConfig() } catch { return respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' }) }
     try {
-      const parsed = parseBookingDraft(body.input, {
+      const commonContext = {
         draftId: draft.draftId, staffId: draft.staffId, lineUserIdHash: draft.lineUserIdHash,
-        doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
-        channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
         paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
         paymentEvidenceObjectKeys: draft.paymentEvidenceObjectKeys, chatEvidenceObjectKeys: draft.chatEvidenceObjectKeys,
         asyncEvidence: Boolean(deps.config.asyncBooking?.ownerStaffIds.has(draft.staffId)),
         now: currentIso(deps),
-      })
+      }
+      const parsed = draft.protocolVersion === 2
+        ? parseBookingDraftV2(body.input, {
+          ...commonContext,
+          recorderName: draft.recorderName || authenticated.displayName,
+          doctors: config.doctors,
+          services: config.services,
+          channels: config.channels,
+          admins: config.admins,
+          aes: config.aes,
+        })
+        : parseBookingDraft(body.input, {
+          ...commonContext,
+          doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
+          channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
+        })
       if (parsed.requestId !== draft.requestId) throw new Error('REQUEST_ID_MISMATCH')
       const updated = await deps.store.updateDraft(draft.draftId, draft.version, {
-        state: 'READY_TO_CONFIRM', payloadHash: null, aeName: parsed.aeName, customerName: parsed.customerName,
+        state: 'READY_TO_CONFIRM', payloadHash: null,
+        protocolVersion: parsed.protocolVersion, recorderName: parsed.recorderName,
+        adminId: parsed.adminId, adminName: parsed.adminName, aeId: parsed.aeId, aeName: parsed.aeName,
+        customerName: parsed.customerName,
         facebookName: parsed.facebookName, phoneNormalized: parsed.phoneNormalized, doctorId: parsed.doctorId,
         serviceId: parsed.serviceId, queueType: parsed.queueType, appointmentDate: parsed.appointmentDate,
         appointmentTime: parsed.appointmentTime, depositAmount: parsed.depositAmount, channelId: parsed.channelId,
@@ -635,7 +657,10 @@ function validQueuedPersistence(
 ): boolean {
   return persisted.requestId === before.requestId && persisted.draftId === before.draftId
     && persisted.payloadHash === payloadHash && bookingPayloadHash(persisted) === payloadHash
-    && persisted.staffId === before.staffId && persisted.aeName === before.aeName
+    && persisted.protocolVersion === before.protocolVersion
+    && persisted.staffId === before.staffId && persisted.recorderName === before.recorderName
+    && persisted.adminId === before.adminId && persisted.adminName === before.adminName
+    && persisted.aeId === before.aeId && persisted.aeName === before.aeName
     && persisted.customerName === before.customerName && persisted.facebookName === before.facebookName
     && persisted.phoneNormalized === before.phoneNormalized && persisted.doctorId === before.doctorId
     && persisted.serviceId === before.serviceId && persisted.queueType === before.queueType
@@ -693,7 +718,9 @@ function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
     retentionState: draft.retentionState,
     version: draft.version,
     input: hasInput ? {
-      requestId: draft.requestId, aeName: draft.aeName, customerName: draft.customerName, facebookName: draft.facebookName,
+      requestId: draft.requestId,
+      ...(draft.protocolVersion === 2 ? { adminId: draft.adminId, aeId: draft.aeId } : { aeName: draft.aeName }),
+      customerName: draft.customerName, facebookName: draft.facebookName,
       phone: draft.phoneNormalized, doctorId: draft.doctorId, serviceId: draft.serviceId, queueType: draft.queueType,
       appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
       channelId: draft.channelId,
@@ -786,7 +813,7 @@ function matchesSavedDraftInput(draft: MiniAppRequestRecord, candidate: unknown)
   const input = candidate as Record<string, unknown>
   const expected: Record<string, unknown> = {
     requestId: draft.requestId,
-    aeName: draft.aeName,
+    ...(draft.protocolVersion === 2 ? { adminId: draft.adminId, aeId: draft.aeId } : { aeName: draft.aeName }),
     customerName: draft.customerName,
     facebookName: draft.facebookName,
     phone: draft.phoneNormalized,
@@ -1052,6 +1079,7 @@ async function authenticate(
       staffId: staff.id,
       displayName: staff.name,
       lineUserId,
+      canCloseBooking: staff.canCloseBooking === true,
       canManageStock: staff.canManageStock === true,
       canSubmitExpense: staff.canSubmitExpense === true,
       canViewFinance: staff.canViewFinance === true,
@@ -1061,6 +1089,12 @@ async function authenticate(
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     return null
   }
+}
+
+function requireBookingRecorder(authenticated: AuthenticatedMiniAppContext, res: ServerResponse): boolean {
+  if (authenticated.canCloseBooking) return true
+  respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
+  return false
 }
 
 async function authenticateLineIdentity(

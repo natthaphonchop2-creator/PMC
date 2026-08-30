@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
 import { bookingPayloadHash } from '../../server/pmc-mini-app/bookingDraft'
 import {
+  ATTRIBUTION_V2_REQUEST_HEADERS,
   createGoogleMiniAppStore,
   type MiniAppRequestRecord,
 } from '../../server/pmc-mini-app/store'
+import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState'
 
 describe('PMC Mini App Sheet store', () => {
   it('round-trips asynchronous booking request fields', async () => {
@@ -25,7 +27,14 @@ describe('PMC Mini App Sheet store', () => {
 
     await store.createDraft(draft)
 
+    expect(sheets.rows('MINI_APP_REQUESTS')[0]).toHaveLength(ATTRIBUTION_V2_REQUEST_HEADERS.length)
     expect(await createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getDraft('draft-1')).toMatchObject({
+      protocolVersion: 2,
+      recorderName: 'มัส',
+      adminId: 'staff-admin',
+      adminName: 'แวว',
+      aeId: 'staff-ae',
+      aeName: 'หมวย',
       paymentEvidenceObjectKeys: ['payments/request-1/payment-1.jpg'],
       chatEvidenceObjectKeys: ['chats/request-1/chat-1.jpg'],
       taskName: 'projects/p/tasks/123',
@@ -41,6 +50,7 @@ describe('PMC Mini App Sheet store', () => {
 
   it('normalizes missing asynchronous fields from a legacy request row', async () => {
     const sheets = new MemorySheets()
+    sheets.setRequestHeaders(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
     sheets.setTab('MINI_APP_REQUESTS', [[
       'request-1', 'draft-1', 'staff-active', 'line-user-hash', 'READY_TO_CONFIRM', '', 1, '',
       'ไม่ระบุ', 'ลูกค้า ทดสอบ', 'Facebook Test', '0812345678', 'doctor-1', 'service-1', 'NORMAL',
@@ -51,11 +61,42 @@ describe('PMC Mini App Sheet store', () => {
     const draft = await createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getDraft('draft-1')
 
     expect(draft).toMatchObject({
+      protocolVersion: 1, recorderName: '', adminId: 'staff-active', adminName: '', aeId: null, aeName: 'ไม่ระบุ',
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
       processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
       processingOwnerToken: null,
       evidenceProjectionHash: null,
     })
+  })
+
+  it('writes protocol 1 with the actual legacy schema before migration', async () => {
+    const sheets = new MemorySheets()
+    sheets.setRequestHeaders(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await store.createDraft(validDraft({
+      protocolVersion: 1,
+      recorderName: '',
+      adminId: 'staff-active',
+      adminName: '',
+      aeId: null,
+      aeName: 'ไม่ระบุ',
+    }))
+
+    expect(sheets.rows('MINI_APP_REQUESTS')[0]).toHaveLength(MINI_APP_ASYNC_REQUEST_HEADERS_V1.length)
+    await expect(store.getDraft('draft-1')).resolves.toMatchObject({
+      protocolVersion: 1, staffId: 'staff-active', adminId: 'staff-active', aeName: 'ไม่ระบุ',
+    })
+  })
+
+  it('rejects an unknown request header instead of shifting booking fields', async () => {
+    const sheets = new MemorySheets()
+    const unknown = [...ATTRIBUTION_V2_REQUEST_HEADERS]
+    unknown[4] = 'spoofedRecorderName'
+    sheets.setRequestHeaders(unknown)
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getDraft('draft-1'))
+      .rejects.toThrow('incompatible header: MINI_APP_REQUESTS')
   })
 
   it('claims one confirmation and returns the persisted case after a restart', async () => {
@@ -385,6 +426,7 @@ describe('PMC Mini App Sheet store', () => {
     sheets.setTab('CONFIG_STAFF', [
       ['staff-ae', 'มัส', 'private@example.com', 'Uprivate', true, true, true, 'https://example.com/private.png'],
       ['staff-unlinked-ae', 'หมวย', 'unlinked@example.com', '', true, true, true, ''],
+      ['staff-duplicate-name', 'มัส', 'duplicate@example.com', '', false, true, true, ''],
       ['staff-old', 'เก่า', 'old@example.com', 'Uold', true, true, false, ''],
     ])
     sheets.setTab('CONFIG_DOCTORS', [
@@ -405,8 +447,20 @@ describe('PMC Mini App Sheet store', () => {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
-      aes: [{ id: 'staff-ae', name: 'มัส' }, { id: 'staff-unlinked-ae', name: 'หมวย' }],
+      admins: [
+        { id: 'staff-ae', name: 'มัส' },
+        { id: 'staff-unlinked-ae', name: 'หมวย' },
+        { id: 'staff-duplicate-name', name: 'มัส' },
+      ],
+      aes: [
+        { id: 'staff-ae', name: 'มัส' },
+        { id: 'staff-unlinked-ae', name: 'หมวย' },
+        { id: 'staff-duplicate-name', name: 'มัส' },
+      ],
     })
+    const config = await store.getActiveBookingConfig()
+    expect(config.admins).toEqual(config.aes)
+    expect(config.admins.every(({ id }) => id !== 'NONE')).toBe(true)
   })
 
   it('keeps allowlisted Thai names as canonical doctor, service, and channel IDs', async () => {
@@ -426,8 +480,9 @@ describe('PMC Mini App Sheet store', () => {
 
 function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {
   return {
-    requestId: 'request-1', draftId: 'draft-1', staffId: 'staff-active', lineUserIdHash: 'line-user-hash',
-    state: 'READY_TO_CONFIRM', retentionState: '', version: 1, payloadHash: null, aeName: 'ไม่ระบุ',
+    requestId: 'request-1', draftId: 'draft-1', protocolVersion: 2, staffId: 'staff-active', recorderName: 'มัส',
+    adminId: 'staff-admin', adminName: 'แวว', lineUserIdHash: 'line-user-hash', aeId: 'staff-ae',
+    state: 'READY_TO_CONFIRM', retentionState: '', version: 1, payloadHash: null, aeName: 'หมวย',
     customerName: 'ลูกค้า ทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678',
     doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01',
     appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
@@ -444,15 +499,22 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
 
 class MemorySheets implements MiniAppSheetsPort {
   private readonly tabs = new Map<string, unknown[][]>()
+  private requestHeaders: unknown[] = [...ATTRIBUTION_V2_REQUEST_HEADERS]
   private updates = 0
   private failUpdate = false
 
   setTab(tab: string, rows: unknown[][]): void { this.tabs.set(tab, structuredClone(rows)) }
+  setRequestHeaders(headers: readonly unknown[]): void { this.requestHeaders = structuredClone([...headers]) }
+  rows(tab: string): unknown[][] { return structuredClone(this.tabs.get(tab) ?? []) }
   updateCount(): number { return this.updates }
   failNextUpdate(): void { this.failUpdate = true }
 
   async batchGet(_spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
-    return Object.fromEntries(ranges.map((range) => [range, structuredClone(this.tabs.get(tabName(range)) ?? [])]))
+    return Object.fromEntries(ranges.map((range) => [range,
+      tabName(range) === 'MINI_APP_REQUESTS' && range.endsWith('!1:1')
+        ? [structuredClone(this.requestHeaders)]
+        : structuredClone(this.tabs.get(tabName(range)) ?? []),
+    ]))
   }
 
   async append(_spreadsheetId: string, range: string, rows: unknown[][]): Promise<void> {

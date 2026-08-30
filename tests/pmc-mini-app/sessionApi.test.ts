@@ -46,6 +46,26 @@ describe('PMC Mini App session and configuration API', () => {
     })
   })
 
+  it('keeps booking recorder authorization behind canCloseBooking', async () => {
+    const deps = dependencies()
+    deps.store.getActiveStaffByLineUserId = vi.fn(async () => ({
+      id: 'finance-only', name: 'การเงิน', email: '', lineUserId: 'Uactive',
+      canCloseBooking: false, canBeAe: true, canManageStock: false,
+      canSubmitExpense: true, canViewFinance: true, canManageExpense: true,
+      active: true as const, profileImageUrl: null,
+    }))
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/booking-drafts', {
+      method: 'POST',
+      headers: { authorization: 'Bearer valid-token', 'content-type': 'application/json' },
+      body: '{}',
+    })
+
+    expect({ status: response.status, body: await response.json() }).toEqual({
+      status: 403, body: { error: 'STAFF_NOT_ALLOWED' },
+    })
+  })
+
   it('links an unknown LINE account once with a valid company PIN', async () => {
     const middleware = createPmcMiniAppMiddleware(enrollmentDependencies())
     const options = await invoke(middleware, '/api/mini-app/enrollment-options', {
@@ -79,7 +99,7 @@ describe('PMC Mini App session and configuration API', () => {
     })
   })
 
-  it('returns only active public booking choices and the explicit no-AE option', async () => {
+  it('returns identical active Admin and AE choices without a server NONE row', async () => {
     const response = await invoke(createPmcMiniAppMiddleware(dependencies()), '/api/mini-app/config', {
       headers: { authorization: 'Bearer valid-token' },
     })
@@ -99,7 +119,8 @@ describe('PMC Mini App session and configuration API', () => {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
-      aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-1', name: 'มัส' }],
+      admins: [{ id: 'staff-1', name: 'มัส' }],
+      aes: [{ id: 'staff-1', name: 'มัส' }],
     })
     const serialized = JSON.stringify(body)
     expect(serialized).not.toContain('private@example.com')
@@ -150,6 +171,7 @@ function dependencies(): {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+      admins: [{ id: 'staff-1', name: 'มัส' }],
       aes: [{ id: 'staff-1', name: 'มัส' }],
     })),
   } as unknown as MiniAppStore

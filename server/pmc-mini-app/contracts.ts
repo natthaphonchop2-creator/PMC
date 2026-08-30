@@ -29,10 +29,16 @@ export interface AuthenticatedMiniAppContext {
   staffId: string
   displayName: string
   lineUserId: string
+  canCloseBooking: boolean
   canManageStock: boolean
   canSubmitExpense: boolean
   canViewFinance: boolean
   canManageExpense: boolean
+}
+
+export interface MiniAppAttributionOption {
+  id: string
+  name: string
 }
 
 export interface StockProductProjection {

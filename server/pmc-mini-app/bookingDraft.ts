@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts.js'
 import type { MiniAppRequestRecord, MiniAppRequestState } from './store.js'
+import type { MiniAppAttributionOption } from './contracts.js'
 import {
   canonicalMiniAppAsyncIdentity,
   canonicalMiniAppEvidenceProjection,
@@ -23,6 +24,24 @@ export interface BookingDraftContext {
   now: string
 }
 
+export interface BookingDraftContextV2 {
+  draftId: string
+  staffId: string
+  recorderName: string
+  lineUserIdHash: string
+  doctors: readonly MiniAppAttributionOption[]
+  services: readonly MiniAppAttributionOption[]
+  channels: readonly MiniAppAttributionOption[]
+  admins: readonly MiniAppAttributionOption[]
+  aes: readonly MiniAppAttributionOption[]
+  paymentEvidenceFileIds: readonly string[]
+  chatEvidenceFileIds: readonly string[]
+  paymentEvidenceObjectKeys?: readonly string[]
+  chatEvidenceObjectKeys?: readonly string[]
+  asyncEvidence?: boolean
+  now: string
+}
+
 export type BookingDraftAction = {
   type: 'SET_STATE'
   state: MiniAppRequestState
@@ -31,6 +50,11 @@ export type BookingDraftAction = {
 
 const BOOKING_INPUT_KEYS = new Set([
   'requestId', 'aeName', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId',
+  'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
+])
+
+const BOOKING_INPUT_KEYS_V2 = new Set([
+  'requestId', 'adminId', 'aeId', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
 ])
 
@@ -86,12 +110,17 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   return {
     requestId,
     draftId,
+    protocolVersion: 1,
     staffId,
+    recorderName: '',
+    adminId: staffId,
+    adminName: '',
     lineUserIdHash,
     state: 'READY_TO_CONFIRM',
     retentionState: '',
     version: 1,
     payloadHash: null,
+    aeId: null,
     aeName,
     customerName,
     facebookName,
@@ -127,8 +156,54 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   }
 }
 
+export function parseBookingDraftV2(input: unknown, context: BookingDraftContextV2): MiniAppRequestRecord {
+  if (!isPlainRecord(input)) throw new Error('INVALID_BOOKING_INPUT')
+  for (const key of Object.keys(input)) if (!BOOKING_INPUT_KEYS_V2.has(key)) throw new Error('UNKNOWN_BOOKING_FIELD')
+
+  const admin = attributionById(input.adminId, context.admins, 'ADMIN_NOT_ALLOWED')
+  const ae = input.aeId === null ? null : attributionById(input.aeId, context.aes, 'AE_NOT_ALLOWED')
+  const recorderName = requiredText(context.recorderName, 120, 'RECORDER_NAME_REQUIRED')
+  const { adminId: _adminId, aeId: _aeId, ...legacyInput } = input
+  const base = parseBookingDraft({ ...legacyInput, aeName: ae?.name ?? 'ไม่ระบุ' }, {
+    draftId: context.draftId,
+    staffId: context.staffId,
+    lineUserIdHash: context.lineUserIdHash,
+    doctorIds: context.doctors.map(({ id }) => id),
+    serviceIds: context.services.map(({ id }) => id),
+    channelIds: context.channels.map(({ id }) => id),
+    eligibleAeNames: ['ไม่ระบุ', ...context.aes.map(({ name }) => name)],
+    paymentEvidenceFileIds: context.paymentEvidenceFileIds,
+    chatEvidenceFileIds: context.chatEvidenceFileIds,
+    paymentEvidenceObjectKeys: context.paymentEvidenceObjectKeys,
+    chatEvidenceObjectKeys: context.chatEvidenceObjectKeys,
+    asyncEvidence: context.asyncEvidence,
+    now: context.now,
+  })
+
+  return {
+    ...base,
+    protocolVersion: 2,
+    recorderName,
+    adminId: admin.id,
+    adminName: admin.name,
+    aeId: ae?.id ?? null,
+    aeName: ae?.name ?? 'ไม่ระบุ',
+  }
+}
+
 export function bookingPayloadHash(draft: MiniAppRequestRecord): string {
-  return createHash('sha256').update(canonicalMiniAppAsyncIdentity(draft), 'utf8').digest('base64url')
+  const legacyIdentity = canonicalMiniAppAsyncIdentity(draft)
+  const canonical = draft.protocolVersion !== 2 ? legacyIdentity : JSON.stringify({
+    protocolVersion: draft.protocolVersion,
+    staffId: draft.staffId,
+    recorderName: draft.recorderName,
+    adminId: draft.adminId,
+    adminName: draft.adminName,
+    aeId: draft.aeId,
+    aeName: draft.aeName,
+    booking: JSON.parse(legacyIdentity) as unknown,
+  })
+  return createHash('sha256').update(canonical, 'utf8').digest('base64url')
 }
 
 export function evidenceProjectionHash(binding: MiniAppEvidenceProjectionBinding): string {
@@ -173,6 +248,17 @@ function normalizeThaiPhone(value: unknown): string {
   if (digits.startsWith('66') && digits.length >= 11) digits = `0${digits.slice(2)}`
   if (!/^0\d{8,9}$/.test(digits)) throw new Error('INVALID_THAI_PHONE')
   return digits
+}
+
+function attributionById(
+  value: unknown,
+  options: readonly MiniAppAttributionOption[],
+  errorCode: 'ADMIN_NOT_ALLOWED' | 'AE_NOT_ALLOWED',
+): MiniAppAttributionOption {
+  if (typeof value !== 'string') throw new Error(errorCode)
+  const match = options.find(({ id }) => id === value)
+  if (!match) throw new Error(errorCode)
+  return match
 }
 
 function evidenceIds(values: readonly string[], kind: 'PAYMENT' | 'CHAT', required = true): string[] {

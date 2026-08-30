@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
 import { ensureMiniAppWorkbook, MANAGED_TAB_HEADERS, migrateMiniAppAsyncRequestColumns } from '../../server/pmc-mini-app/setup'
-import { MINI_APP_REQUEST_HEADERS } from '../../server/pmc-mini-app/store'
+import { ATTRIBUTION_V2_REQUEST_HEADERS, MINI_APP_REQUEST_HEADERS } from '../../server/pmc-mini-app/store'
+import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState'
 
 describe('PMC Mini App managed Sheet setup', () => {
   it('atomically grows the grid and appends every asynchronous header to the valid legacy header', async () => {
     const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 36 }])
-    const legacyHeaders = MINI_APP_REQUEST_HEADERS.slice(0, 28)
+    const legacyHeaders = MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, 28)
     sheets.headers.set('MINI_APP_REQUESTS', [...legacyHeaders])
 
     await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
@@ -17,13 +18,13 @@ describe('PMC Mini App managed Sheet setup', () => {
       ],
     })
 
-    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
     expect(sheets.workbookRequests).toEqual([[
       { appendDimension: { sheetId: 1, dimension: 'COLUMNS', length: 2 } },
       {
         updateCells: {
           range: { sheetId: 1, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 28, endColumnIndex: 38 },
-          rows: [{ values: MINI_APP_REQUEST_HEADERS.slice(28).map((stringValue) => ({ userEnteredValue: { stringValue } })) }],
+          rows: [{ values: MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(28).map((stringValue) => ({ userEnteredValue: { stringValue } })) }],
           fields: 'userEnteredValue',
         },
       },
@@ -33,7 +34,7 @@ describe('PMC Mini App managed Sheet setup', () => {
 
   it('rejects a changed legacy request header without writes', async () => {
     const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
-    const legacyHeaders = MINI_APP_REQUEST_HEADERS.slice(0, 28)
+    const legacyHeaders = MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, 28)
     legacyHeaders[4] = 'changedState'
     sheets.headers.set('MINI_APP_REQUESTS', legacyHeaders)
 
@@ -46,12 +47,12 @@ describe('PMC Mini App managed Sheet setup', () => {
 
   it('grows the grid for the two current asynchronous headers missing from a 36-column sheet', async () => {
     const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 36 }])
-    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -2))
+    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, -2))
 
     await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
       appendedColumns: ['processingOwnerToken', 'evidenceProjectionHash'],
     })
-    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
     expect(sheets.workbookRequests).toEqual([[
       { appendDimension: { sheetId: 1, dimension: 'COLUMNS', length: 2 } },
       {
@@ -69,12 +70,12 @@ describe('PMC Mini App managed Sheet setup', () => {
 
   it('appends only the final asynchronous header when spare grid capacity exists', async () => {
     const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 38 }])
-    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -1))
+    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, -1))
 
     await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
       appendedColumns: ['evidenceProjectionHash'],
     })
-    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_REQUEST_HEADERS)
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
     expect(sheets.workbookRequests).toEqual([[
       {
         updateCells: {
@@ -88,7 +89,7 @@ describe('PMC Mini App managed Sheet setup', () => {
 
   it('makes no additional workbook requests on a second migration call', async () => {
     const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS', columnCount: 38 }])
-    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_REQUEST_HEADERS.slice(0, -1))
+    sheets.headers.set('MINI_APP_REQUESTS', MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, -1))
 
     await expect(migrateMiniAppAsyncRequestColumns({ spreadsheetId: 'sheet-1', sheets })).resolves.toEqual({
       appendedColumns: ['evidenceProjectionHash'],
@@ -133,6 +134,21 @@ describe('PMC Mini App managed Sheet setup', () => {
 
     expect(sheets.headerWrites).toEqual([])
     expect(sheets.deletedTabs).toEqual([])
+  })
+
+  it('accepts the exact legacy request header without migrating it', async () => {
+    const sheets = new SetupSheets([{ sheetId: 1, title: 'MINI_APP_REQUESTS' }])
+    sheets.headers.set('MINI_APP_REQUESTS', [...MINI_APP_ASYNC_REQUEST_HEADERS_V1])
+
+    await ensureMiniAppWorkbook({ spreadsheetId: 'sheet-1', sheets })
+
+    expect(sheets.headers.get('MINI_APP_REQUESTS')).toEqual(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
+    expect(sheets.headerWrites).not.toContain('MINI_APP_REQUESTS')
+  })
+
+  it('uses the exact attribution-v2 request header for newly managed workbooks', () => {
+    expect(MINI_APP_REQUEST_HEADERS).toEqual(ATTRIBUTION_V2_REQUEST_HEADERS)
+    expect(MANAGED_TAB_HEADERS.MINI_APP_REQUESTS).toEqual(ATTRIBUTION_V2_REQUEST_HEADERS)
   })
 
   it('appends only the exact freshness/task suffix for the legacy allocation coverage header', async () => {
