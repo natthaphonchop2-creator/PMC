@@ -8,6 +8,7 @@ import {
   type MiniAppEvidenceProjectionBinding,
 } from '../../shared/pmcMiniAppAsyncState.js'
 import { canonicalMiniAppP2BookingIdentity } from '../../shared/pmcMiniAppDraftState.js'
+import { miniAppEvidenceUploadIdV2 } from '../../shared/pmcMiniAppEvidence.js'
 
 export interface BookingDraftContext {
   draftId: string
@@ -272,10 +273,23 @@ function stagingObjectKeys(
 ): string[] {
   if (!Array.isArray(values) || required && values.length === 0) throw new Error(`${kind}_EVIDENCE_REQUIRED`)
   if (values.length > 10) throw new Error(`${kind}_EVIDENCE_LIMIT`)
-  const result = values.map((value) => {
+  const result = values.map((value, ordinal) => {
     if (typeof value !== 'string') throw new Error(`${kind}_EVIDENCE_INVALID`)
-    const match = /^drafts\/([A-Za-z0-9_-]{1,124})\/(PAYMENT|CHAT)\/[a-f0-9]{64}\.(?:jpg|png)$/.exec(value)
-    if (!match || match[1] !== draftId || match[2] !== kind) throw new Error(`${kind}_EVIDENCE_INVALID`)
+    const legacy = /^drafts\/([A-Za-z0-9_-]{1,124})\/(PAYMENT|CHAT)\/[a-f0-9]{64}\.(?:jpg|png)$/.exec(value)
+    if (legacy) {
+      if (legacy[1] !== draftId || legacy[2] !== kind) throw new Error(`${kind}_EVIDENCE_INVALID`)
+      return value
+    }
+    const v2 = /^drafts\/v2\/([A-Za-z0-9._:-]{1,124})\/([A-Za-z0-9._:-]{1,124})\/(PAYMENT|CHAT)\/([0-9])\/([a-f0-9]{64})\/([a-f0-9]{64})\.(jpg|png)$/.exec(value)
+    if (!v2 || v2[2] !== draftId || v2[3] !== kind || Number(v2[4]) !== ordinal) {
+      throw new Error(`${kind}_EVIDENCE_INVALID`)
+    }
+    const mimeType = v2[7] === 'jpg' ? 'image/jpeg' as const : 'image/png' as const
+    const expectedUploadId = miniAppEvidenceUploadIdV2({
+      requestId: v2[1]!, draftId: v2[2]!, evidenceKind: v2[3] as 'PAYMENT' | 'CHAT',
+      ordinal, mimeType, contentSha256: v2[6]!,
+    }, (canonical) => createHash('sha256').update(canonical, 'utf8').digest('hex'))
+    if (v2[5] !== expectedUploadId) throw new Error(`${kind}_EVIDENCE_INVALID`)
     return value
   })
   if (new Set(result).size !== result.length) throw new Error(`${kind}_EVIDENCE_DUPLICATE`)

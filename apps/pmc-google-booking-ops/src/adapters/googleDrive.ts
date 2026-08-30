@@ -98,8 +98,9 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
       created.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
       return { id: created.getId(), name }
     },
-    createEvidenceFile(folderId, name, mimeType, bytes) {
+    createEvidenceFile(folderId, name, mimeType, bytes, marker) {
       const created = folder(folderId).createFile(Utilities.newBlob(bytes, mimeType, name))
+      if (marker !== undefined) created.setDescription(marker)
       created.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
       return created.getId()
     },
@@ -107,6 +108,26 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
     findFileByName(folderId, name) {
       const files = folder(folderId).getFilesByName(name)
       return files.hasNext() ? files.next().getId() : null
+    },
+    findEvidenceFile(folderId, name, mimeType, marker) {
+      const files = folder(folderId).getFilesByName(name)
+      let exactId: string | null = null
+      while (files.hasNext()) {
+        const file = files.next()
+        const parents = file.getParents()
+        let parentCount = 0
+        let exactParent = false
+        while (parents.hasNext()) {
+          const parent = parents.next()
+          parentCount += 1
+          exactParent ||= parent.getId() === folderId
+        }
+        if (!exactParent || parentCount !== 1 || file.getName() !== name
+          || file.getMimeType() !== mimeType || file.getDescription() !== marker) continue
+        if (exactId !== null) throw new Error('duplicate exact mini app evidence file')
+        exactId = file.getId()
+      }
+      return exactId
     },
     moveAndRenameFile(fileId, folderId, name) {
       const file = DriveApp.getFileById(fileId)

@@ -400,6 +400,7 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
     crypto: {
       hmacSha256Hex: (value, secret) => createHmac('sha256', secret).update(value).digest('hex'),
       sha256Hex: (value) => createHash('sha256').update(value).digest('hex'),
+      sha256BytesHex: (value) => createHash('sha256').update(Buffer.from(value)).digest('hex'),
       sha256Base64Url: (value) => createHash('sha256').update(value).digest('base64url'),
       base64UrlUtf8: (value) => Buffer.from(value, 'utf8').toString('base64url'),
       base64Decode: (value) => [...Buffer.from(value, 'base64')],
@@ -654,6 +655,8 @@ export function validBookingIntake(patch: Partial<BookingIntake> = {}): BookingI
 export interface FakeDrivePort extends DrivePort {
   createdFolderCount(): number
   createdEvidenceFileIds(): string[]
+  createdEvidenceFiles(): Array<{ id: string; folderId: string; name: string; mimeType: string; marker: string | null }>
+  seedEvidenceFile(input: { id: string; folderId: string; name: string; mimeType: string; marker: string | null }): void
   movedFileCount(): number
   publicLinks(): string[]
   trashedFolderIds(): string[]
@@ -665,7 +668,7 @@ export function createFakeDrive(
   initiallyFailing = false,
 ): FakeDrivePort {
   const folders = new Map<string, { parentId: string; name: string; marker: string }>()
-  const files = new Map<string, { name: string; folderId: string | null }>([
+  const files = new Map<string, { name: string; folderId: string | null; mimeType?: string; marker?: string | null }>([
     ['payment-file-1', { name: 'payment.jpg', folderId: null }],
     ['chat-file-1', { name: 'chat.jpg', folderId: null }],
     ['chat-file-2', { name: 'chat.png', folderId: null }],
@@ -690,11 +693,10 @@ export function createFakeDrive(
       folders.set(id, { parentId, name, marker })
       return { id, name }
     },
-    createEvidenceFile(folderId, name, mimeType, bytes) {
-      void mimeType
+    createEvidenceFile(folderId, name, mimeType, bytes, marker?: string) {
       void bytes
       const id = `uploaded-evidence-${createdEvidence.length + 1}`
-      files.set(id, { name, folderId })
+      files.set(id, { name, folderId, mimeType, marker: marker ?? null })
       createdEvidence.push(id)
       return id
     },
@@ -705,6 +707,12 @@ export function createFakeDrive(
     },
     findFileByName(folderId, name) {
       return [...files.entries()].find(([, file]) => file.folderId === folderId && file.name === name)?.[0] ?? null
+    },
+    findEvidenceFile(folderId, name, mimeType, marker) {
+      const matches = [...files.entries()].filter(([, file]) => file.folderId === folderId && file.name === name
+        && file.mimeType === mimeType && file.marker === marker)
+      if (matches.length > 1) throw new Error('duplicate exact evidence file')
+      return matches[0]?.[0] ?? null
     },
     moveAndRenameFile(fileId, folderId, name) {
       if (moveFails) throw new Error('Drive move failed')
@@ -721,6 +729,15 @@ export function createFakeDrive(
     },
     createdFolderCount: () => folders.size,
     createdEvidenceFileIds: () => [...createdEvidence],
+    createdEvidenceFiles: () => createdEvidence.map((id) => {
+      const file = files.get(id)!
+      return { id, folderId: file.folderId!, name: file.name, mimeType: file.mimeType!, marker: file.marker ?? null }
+    }),
+    seedEvidenceFile(input) {
+      files.set(input.id, {
+        folderId: input.folderId, name: input.name, mimeType: input.mimeType, marker: input.marker,
+      })
+    },
     movedFileCount: () => moved,
     publicLinks: () => [],
     trashedFolderIds: () => [...trashed],

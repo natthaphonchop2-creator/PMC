@@ -33,6 +33,18 @@ describe('Apps Script Mini App booking ingress', () => {
     })
   })
 
+  it('confirms protocol-2 booking ingress with two distinct same-kind Drive slots', () => {
+    const paymentIds = ['ordinal-payment-file-0', 'ordinal-payment-file-1']
+    const ports = createTestPorts({ extraDriveFileIds: paymentIds })
+
+    const result = processBookingDoPost(event(signedEnvelopeV2({
+      payload: { paymentEvidenceFileIds: paymentIds },
+    })), ports)
+
+    expect(result).toMatchObject({ caseId: 'PMC-202608-0001', status: 'CONFIRMED', driveState: 'OK' })
+    expect(ports.bookings.list()).toEqual([expect.objectContaining({ paymentEvidenceCount: 2 })])
+  })
+
   it.each([
     ['recorder name', { recorderName: 'ปลอม' }],
     ['Admin name', { adminName: 'ปลอม' }],

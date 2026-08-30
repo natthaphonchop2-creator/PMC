@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createAsyncBookingWorker } from '../../server/pmc-mini-app/asyncWorker'
 import { bookingPayloadHash, evidenceProjectionHash } from '../../server/pmc-mini-app/bookingDraft'
@@ -7,7 +8,7 @@ import {
   type BookingIngressPort,
 } from '../../server/pmc-mini-app/bookingIngressClient'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
-import type { EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
+import type { EvidenceStagingCleanupDescriptor, EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
 import type { MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
 import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState'
 
@@ -78,8 +79,8 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.staging.deleteVerified).toHaveBeenCalledTimes(2)
     expect(fixture.staging.get).toHaveBeenNthCalledWith(1, paymentKey)
     expect(fixture.staging.get).toHaveBeenNthCalledWith(2, chatKey)
-    expect(fixture.staging.deleteVerified).toHaveBeenNthCalledWith(1, paymentKey)
-    expect(fixture.staging.deleteVerified).toHaveBeenNthCalledWith(2, chatKey)
+    expect(fixture.staging.deleteVerified).toHaveBeenNthCalledWith(1, expect.objectContaining({ objectKey: paymentKey }))
+    expect(fixture.staging.deleteVerified).toHaveBeenNthCalledWith(2, expect.objectContaining({ objectKey: chatKey }))
     expect(fixture.state.read()).toMatchObject({
       state: 'CONFIRMED', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
       processingOwnerToken: null,
@@ -118,6 +119,75 @@ describe('PMC async worker through Apps Script state ingress', () => {
         aeName: 'หมวย',
       },
     })
+  })
+
+  it('projects identical same-kind bytes through distinct protocol-2 ordinals before confirmation', async () => {
+    const repeatedBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7])
+    const paymentKeys = [
+      v2ObjectKey('PAYMENT', 0, repeatedBytes),
+      v2ObjectKey('PAYMENT', 1, repeatedBytes),
+    ]
+    const chatBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 8])
+    const chatObjectKey = v2ObjectKey('CHAT', 0, chatBytes)
+    const fixture = workerFixture({
+      responseLossOperation: 'PROJECT',
+      draft: queuedDraft({
+        protocolVersion: 2,
+        paymentEvidenceObjectKeys: paymentKeys,
+        chatEvidenceObjectKeys: [chatObjectKey],
+        evidenceCount: 3,
+      }),
+      stagedBytesByKey: new Map([
+        [paymentKeys[0]!, repeatedBytes], [paymentKeys[1]!, repeatedBytes], [chatObjectKey, chatBytes],
+      ]),
+      evidenceFileId: ({ kind, ordinal }) => kind === 'PAYMENT'
+        ? `owner-drive-payment-${ordinal}`
+        : `owner-drive-chat-${ordinal}`,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(1, fixture.state.read()))).resolves.toMatchObject({
+      state: 'CONFIRMED',
+    })
+    expect(fixture.evidenceIngress.upload).toHaveBeenNthCalledWith(1, expect.objectContaining({ kind: 'PAYMENT', ordinal: 0 }))
+    expect(fixture.evidenceIngress.upload).toHaveBeenNthCalledWith(2, expect.objectContaining({ kind: 'PAYMENT', ordinal: 1 }))
+    expect(fixture.evidenceIngress.upload).toHaveBeenNthCalledWith(3, expect.objectContaining({ kind: 'CHAT', ordinal: 0 }))
+    expect(fixture.state.read()).toMatchObject({
+      paymentEvidenceFileIds: ['owner-drive-payment-0', 'owner-drive-payment-1'],
+      chatEvidenceFileIds: ['owner-drive-chat-0'], evidenceCount: 3,
+    })
+  })
+
+  it('resumes an identical-byte worker projection at the missing ordinal and cleans every exact descriptor', async () => {
+    const repeatedBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7])
+    const paymentKeys = [v2ObjectKey('PAYMENT', 0, repeatedBytes), v2ObjectKey('PAYMENT', 1, repeatedBytes)]
+    const chatBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 8])
+    const chatObjectKey = v2ObjectKey('CHAT', 0, chatBytes)
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        protocolVersion: 2,
+        paymentEvidenceObjectKeys: paymentKeys,
+        chatEvidenceObjectKeys: [chatObjectKey],
+        paymentEvidenceFileIds: ['owner-drive-payment-0'],
+        evidenceCount: 3,
+      }),
+      stagedBytesByKey: new Map([
+        [paymentKeys[0]!, repeatedBytes], [paymentKeys[1]!, repeatedBytes], [chatObjectKey, chatBytes],
+      ]),
+      evidenceFileId: ({ kind, ordinal }) => kind === 'PAYMENT'
+        ? `owner-drive-payment-${ordinal}`
+        : `owner-drive-chat-${ordinal}`,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(1, fixture.state.read()))).resolves.toMatchObject({ state: 'CONFIRMED' })
+
+    expect(fixture.staging.get).not.toHaveBeenCalledWith(paymentKeys[0])
+    expect(fixture.evidenceIngress.upload).toHaveBeenNthCalledWith(1, expect.objectContaining({ kind: 'PAYMENT', ordinal: 1 }))
+    expect(fixture.state.read()).toMatchObject({
+      paymentEvidenceFileIds: ['owner-drive-payment-0', 'owner-drive-payment-1'],
+      chatEvidenceFileIds: ['owner-drive-chat-0'], evidenceCount: 3,
+    })
+    expect(fixture.staging.describe).toHaveBeenCalledWith(paymentKeys[0])
+    expect(fixture.staging.deleteVerified).toHaveBeenCalledTimes(3)
   })
 
   it('reuses exact existing Drive IDs by ordinal without rereading or reuploading staged bytes', async () => {
@@ -523,6 +593,8 @@ function workerFixture(options: {
   deleteFailure?: Error
   telemetry?: ReturnType<typeof vi.fn>
   productionIngressCapture?: (body: unknown) => void
+  stagedBytesByKey?: Map<string, Buffer>
+  evidenceFileId?: (input: Parameters<EvidenceIngressPort['upload']>[0]) => string
 } = {}) {
   const clock = new TestClock(fixedNow)
   let remainingReadFailures = options.transientReadFailures ?? 0
@@ -564,20 +636,29 @@ function workerFixture(options: {
         remainingReadFailures += options.transientReadFailuresAfterExternalError ?? 0
         throw options.stagingFailure
       }
+      const bytes = options.stagedBytesByKey?.get(key)
+        ?? Buffer.from(key === paymentKey ? [0x89, 0x50, 0x4e, 0x47, 1] : [0x89, 0x50, 0x4e, 0x47, 2])
       return {
-        bytes: Buffer.from(key === paymentKey ? [0x89, 0x50, 0x4e, 0x47, 1] : [0x89, 0x50, 0x4e, 0x47, 2]),
+        bytes,
         mimeType: 'image/png' as const,
+        cleanupDescriptor: stagingDescriptor(key, bytes),
       }
+    }),
+    describe: vi.fn(async (key: string) => {
+      const bytes = options.stagedBytesByKey?.get(key)
+        ?? Buffer.from(key === paymentKey ? [0x89, 0x50, 0x4e, 0x47, 1] : [0x89, 0x50, 0x4e, 0x47, 2])
+      return stagingDescriptor(key, bytes)
     }),
     deleteVerified: vi.fn(async () => {
       if (options.deleteFailure) throw options.deleteFailure
     }),
   }
   const evidenceIngress: EvidenceIngressPort = {
-    upload: vi.fn(async ({ kind }) => {
+    upload: vi.fn(async (uploadInput) => {
       clock.advance(options.advanceOnEvidenceUploadMs ?? 0)
       options.afterEvidenceUpload?.()
-      return kind === 'PAYMENT' ? 'owner-drive-payment-1' : 'owner-drive-chat-1'
+      return options.evidenceFileId?.(uploadInput)
+        ?? (uploadInput.kind === 'PAYMENT' ? 'owner-drive-payment-1' : 'owner-drive-chat-1')
     }),
   }
   const bookingResults = [...(options.bookingResults ?? [{
@@ -781,6 +862,33 @@ function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestR
     payloadHash: patch.payloadHash === undefined
       ? bookingPayloadHash(draft)
       : patch.payloadHash,
+  }
+}
+
+function v2ObjectKey(kind: 'PAYMENT' | 'CHAT', ordinal: number, bytes: Buffer): string {
+  const contentSha256 = createHash('sha256').update(bytes).digest('hex')
+  const uploadId = createHash('sha256').update(JSON.stringify({
+    version: 2, requestId: 'request-1', draftId: 'draft-1', evidenceKind: kind,
+    ordinal, mimeType: 'image/png', contentSha256,
+  })).digest('hex')
+  return `drafts/v2/request-1/draft-1/${kind}/${ordinal}/${uploadId}/${contentSha256}.png`
+}
+
+function stagingDescriptor(objectKey: string, bytes: Buffer): EvidenceStagingCleanupDescriptor {
+  const v2 = /^drafts\/v2\/([^/]+)\/([^/]+)\/(PAYMENT|CHAT)\/([0-9])\/([a-f0-9]{64})\/([a-f0-9]{64})\.(jpg|png)$/.exec(objectKey)
+  if (v2) {
+    return {
+      version: 2, objectKey, requestId: v2[1]!, draftId: v2[2]!, kind: v2[3] as 'PAYMENT' | 'CHAT',
+      ordinal: Number(v2[4]), uploadId: v2[5]!, contentSha256: v2[6]!,
+      mimeType: v2[7] === 'jpg' ? 'image/jpeg' : 'image/png', size: bytes.length, generation: '1',
+    }
+  }
+  const legacy = /^drafts\/([^/]+)\/(PAYMENT|CHAT)\/([a-f0-9]{64})\.(jpg|png)$/.exec(objectKey)
+  if (!legacy) throw new Error('invalid staging key fixture')
+  return {
+    version: 1, objectKey, draftId: legacy[1]!, kind: legacy[2] as 'PAYMENT' | 'CHAT',
+    contentSha256: legacy[3]!, mimeType: legacy[4] === 'jpg' ? 'image/jpeg' : 'image/png',
+    size: bytes.length, generation: '1',
   }
 }
 

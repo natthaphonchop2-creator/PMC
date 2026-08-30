@@ -14,6 +14,10 @@ import {
   type UnsignedMiniAppDraftStateEnvelope,
 } from '../../../../shared/pmcMiniAppDraftState'
 import type { PmcMiniAppTargetRequestRecord } from '../../../../shared/pmcBookingRowContracts'
+import {
+  miniAppEvidenceObjectKeyV2,
+  miniAppEvidenceUploadIdV2,
+} from '../../../../shared/pmcMiniAppEvidence'
 import type { BookingPorts, MiniAppRequestStateRecord, StaffConfig } from '../ports'
 
 type P2Record = PmcMiniAppTargetRequestRecord & { protocolVersion: 2 }
@@ -73,7 +77,7 @@ function verifyEnvelope(input: unknown, ports: BookingPorts): MiniAppDraftStateE
     || typeof input.signature !== 'string' || !/^[a-f0-9]{64}$/.test(input.signature)
     || !isRecord(input.payload)) throw new Error('invalid mini app draft state envelope')
   const payload = input.payload as unknown as MiniAppDraftStateMutation
-  validatePayload(payload)
+  validatePayload(payload, ports)
   const unsigned: UnsignedMiniAppDraftStateEnvelope = {
     kind: 'MINI_APP_DRAFT_STATE', version: 1, timestamp: input.timestamp as number, nonce: input.nonce, payload,
   }
@@ -86,7 +90,7 @@ function verifyEnvelope(input: unknown, ports: BookingPorts): MiniAppDraftStateE
   return { ...unsigned, signature: input.signature }
 }
 
-function validatePayload(payload: MiniAppDraftStateMutation): void {
+function validatePayload(payload: MiniAppDraftStateMutation, ports: BookingPorts): void {
   if (!isRecord(payload) || !safeId(payload.requestId) || !safeId(payload.draftId)
     || !Number.isSafeInteger(payload.expectedVersion) || payload.expectedVersion < 1
     || !Number.isSafeInteger(payload.expectedAttempt) || payload.expectedAttempt < 0 || !validIso(payload.nowIso)) {
@@ -122,7 +126,7 @@ function validatePayload(payload: MiniAppDraftStateMutation): void {
     || !/^[A-Za-z0-9_-]{43}$/.test(payload.prepareBindingHash)
     || !validNormalizedInput(payload.input, payload.requestId)) throw new Error('invalid mini app draft prepare payload')
   if (payload.operation === 'PREPARE_BEGIN') validateEvidenceManifest(payload.evidence)
-  else validateEvidence(payload)
+  else validateEvidence(payload, ports)
 }
 
 function validateEvidenceManifest(values: MiniAppDraftPrepareBeginMutation['evidence']): void {
@@ -130,13 +134,13 @@ function validateEvidenceManifest(values: MiniAppDraftPrepareBeginMutation['evid
   validateEvidenceShape(values, ['kind', 'ordinal', 'contentSha256', 'mimeType', 'storage'])
 }
 
-function validateEvidence(payload: MiniAppDraftPrepareMutation): void {
+function validateEvidence(payload: MiniAppDraftPrepareMutation, ports: BookingPorts): void {
   if (!Array.isArray(payload.evidence) || payload.evidence.length < 2 || payload.evidence.length > 20) {
     throw new Error('invalid mini app draft evidence')
   }
   validateEvidenceShape(payload.evidence, EVIDENCE_KEYS)
   for (const item of payload.evidence) {
-    if (item.value !== null && !validEvidenceValue(item, payload.draftId)) throw new Error('invalid mini app draft evidence reference')
+    if (item.value !== null && !validEvidenceValue(item, payload, ports)) throw new Error('invalid mini app draft evidence reference')
   }
   const persisted = payload.evidence.filter(({ value }) => value !== null).length
   if (payload.operation === 'PREPARE_READY' ? persisted !== payload.evidence.length : persisted < 1 || persisted >= payload.evidence.length) {
@@ -201,7 +205,7 @@ function applyPrepare(current: P2Record, payload: MiniAppDraftPrepareMutation, p
   if (current.evidenceProjectionHash !== bindingHash) {
     throw new Error('mini app draft prepare binding conflict')
   }
-  const evidence = mergeEvidence(current, payload)
+  const evidence = mergeEvidence(current, payload, ports)
   if (current.state === 'CANCELLED' || current.state === 'EXPIRED') {
     return applyTerminalEvidence(current, evidence, bindingHash, payload.nowIso)
   }
@@ -396,14 +400,14 @@ function requireStaff(value: StaffConfig | null, label: string): StaffConfig {
   return value
 }
 
-function mergeEvidence(current: P2Record, payload: MiniAppDraftPrepareMutation) {
+function mergeEvidence(current: P2Record, payload: MiniAppDraftPrepareMutation, ports: BookingPorts) {
   const storage = payload.evidence[0]!.storage
   if (storage === 'STAGED_OBJECT' && (current.paymentEvidenceFileIds.length > 0 || current.chatEvidenceFileIds.length > 0)
     || storage === 'DRIVE_FILE' && (current.paymentEvidenceObjectKeys.length > 0 || current.chatEvidenceObjectKeys.length > 0)) {
     throw new Error('mini app draft evidence storage conflict')
   }
-  const payment = mergedKind(current, payload, 'PAYMENT', storage)
-  const chat = mergedKind(current, payload, 'CHAT', storage)
+  const payment = mergedKind(current, payload, 'PAYMENT', storage, ports)
+  const chat = mergedKind(current, payload, 'CHAT', storage, ports)
   return {
     paymentEvidenceFileIds: storage === 'DRIVE_FILE' ? payment : [],
     chatEvidenceFileIds: storage === 'DRIVE_FILE' ? chat : [],
@@ -418,6 +422,7 @@ function mergedKind(
   payload: MiniAppDraftPrepareMutation,
   kind: 'PAYMENT' | 'CHAT',
   storage: 'STAGED_OBJECT' | 'DRIVE_FILE',
+  ports: BookingPorts,
 ): string[] {
   const items = payload.evidence.filter((item) => item.kind === kind).sort((left, right) => left.ordinal - right.ordinal)
   const previous = storage === 'STAGED_OBJECT'
@@ -426,7 +431,8 @@ function mergedKind(
   const slots: Array<string | null> = items.map(() => null)
   if (storage === 'STAGED_OBJECT') {
     for (const value of previous) {
-      const index = items.findIndex((item) => item.value === value || expectedStagedValue(item, payload.draftId) === value)
+      const index = items.findIndex((item) => item.value === value
+        || expectedStagedValues(item, payload, ports).includes(value))
       if (index < 0) throw new Error('mini app draft evidence binding conflict')
       slots[index] = value
     }
@@ -538,13 +544,27 @@ function validNormalizedInput(value: MiniAppNormalizedBookingInputV2, requestId:
       : value.queueType === 'NORMAL' && validDate(value.appointmentDate) && validTime(value.appointmentTime))
 }
 
-function validEvidenceValue(item: MiniAppDraftEvidenceItem, draftId: string): boolean {
+function validEvidenceValue(
+  item: MiniAppDraftEvidenceItem,
+  payload: MiniAppDraftPrepareMutation,
+  ports: BookingPorts,
+): boolean {
   if (typeof item.value !== 'string') return false
   return item.storage === 'DRIVE_FILE' ? /^[A-Za-z0-9_-]{10,256}$/.test(item.value)
-    : item.value === expectedStagedValue(item, draftId)
+    : expectedStagedValues(item, payload, ports).includes(item.value)
 }
-function expectedStagedValue(item: MiniAppDraftEvidenceItem, draftId: string): string {
-  return `drafts/${draftId}/${item.kind}/${item.contentSha256}.${item.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`
+function expectedStagedValues(
+  item: MiniAppDraftEvidenceItem,
+  payload: MiniAppDraftPrepareMutation,
+  ports: BookingPorts,
+): string[] {
+  const legacy = `drafts/${payload.draftId}/${item.kind}/${item.contentSha256}.${item.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`
+  const slot = {
+    requestId: payload.requestId, draftId: payload.draftId, evidenceKind: item.kind,
+    ordinal: item.ordinal, mimeType: item.mimeType, contentSha256: item.contentSha256,
+  }
+  const uploadId = miniAppEvidenceUploadIdV2(slot, ports.crypto.sha256Hex)
+  return [legacy, miniAppEvidenceObjectKeyV2(slot, uploadId)]
 }
 function referenceCount(record: P2Record): number {
   return record.paymentEvidenceFileIds.length + record.chatEvidenceFileIds.length

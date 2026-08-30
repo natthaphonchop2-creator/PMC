@@ -9,6 +9,19 @@ afterEach(() => {
 })
 
 describe('Apps Script crypto adapter', () => {
+  it('hashes decoded evidence bytes without converting them to text', () => {
+    globalThis.Utilities = {
+      DigestAlgorithm: { SHA_256: Symbol('SHA_256') },
+      computeDigest(_algorithm: symbol, value: number[]) {
+        return [...createHash('sha256').update(Buffer.from(value.map((byte) => byte & 0xff))).digest()]
+      },
+    } as unknown as GoogleAppsScript.Utilities.Utilities
+
+    expect(createAppsScriptCryptoPort().sha256BytesHex([-1, -40, -1, -32, 0, 16])).toBe(
+      'fc16d7dcee9cae83ef3923222a81ccd8fe96c9d25fdb7f504d66f1011e0cd870',
+    )
+  })
+
   it('hashes Thai canonical identity text as UTF-8', () => {
     const utf8 = Symbol('UTF_8')
     globalThis.Utilities = {

@@ -124,6 +124,30 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     })
   })
 
+  it('persists two protocol-2 staged slots with identical same-kind hashes in ordinal order', () => {
+    const fixture = draftStateFixture(draft())
+    const evidence = [
+      stagedV2(0, 'PAYMENT', 'a'),
+      stagedV2(1, 'PAYMENT', 'a'),
+      stagedV2(0, 'CHAT', 'b'),
+    ]
+    const begin = beginMutation(draft(), evidence)
+    processBookingDoPost(event(envelope(begin, 'nonce-v2-staged-begin')), fixture.ports)
+    const ready = processBookingDoPost(event(envelope({
+      ...prepareMutation('PREPARE_READY', fixture.requests.read()!, evidence),
+      prepareBindingHash: begin.prepareBindingHash,
+      expectedVersion: 1,
+    }, 'nonce-v2-staged-ready')), fixture.ports)
+
+    expect(ready).toMatchObject({ state: 'READY_TO_CONFIRM', outcome: 'APPLIED' })
+    expect(fixture.requests.read()).toMatchObject({
+      paymentEvidenceObjectKeys: [evidence[0]!.value, evidence[1]!.value],
+      chatEvidenceObjectKeys: [evidence[2]!.value],
+      evidenceCount: 3,
+    })
+    expect(evidence[0]!.value).not.toBe(evidence[1]!.value)
+  })
+
   it('keeps the first prepare binding authoritative under the owner lock', () => {
     const fixture = draftStateFixture(draft())
     const first = prepareMutation('PREPARE_PARTIAL', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)])
@@ -422,6 +446,19 @@ function staged(
   return {
     kind, ordinal, contentSha256: hash, mimeType: 'image/png', storage: 'STAGED_OBJECT',
     value: value === undefined ? objectKey : value,
+  }
+}
+
+function stagedV2(ordinal: number, kind: 'PAYMENT' | 'CHAT', marker: string): MiniAppDraftEvidenceItem {
+  const contentSha256 = marker.repeat(64)
+  const mimeType = 'image/png' as const
+  const uploadId = createHash('sha256').update(JSON.stringify({
+    version: 2, requestId: 'request-1', draftId: 'draft-1', evidenceKind: kind,
+    ordinal, mimeType, contentSha256,
+  })).digest('hex')
+  return {
+    kind, ordinal, contentSha256, mimeType, storage: 'STAGED_OBJECT',
+    value: `drafts/v2/request-1/draft-1/${kind}/${ordinal}/${uploadId}/${contentSha256}.png`,
   }
 }
 

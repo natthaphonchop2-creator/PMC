@@ -21,6 +21,8 @@ type EvidenceKind = 'PAYMENT' | 'CHAT'
 type EvidenceMime = 'image/jpeg' | 'image/png'
 
 export interface EvidenceReference {
+  kind: EvidenceKind
+  ordinal: number
   deterministicUploadId: string
   storage: 'STAGED_OBJECT' | 'DRIVE_FILE'
   value: string
@@ -120,12 +122,16 @@ function descriptor(draft: MiniAppRequestRecord, kind: EvidenceKind, ordinal: nu
   const mimeType = validateEvidence(file.bytes, file.advertisedMime)
   if (mimeType !== file.advertisedMime) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   const rawContentSha256 = createHash('sha256').update(file.bytes).digest('hex')
-  const stagedUploadId = createHash('sha256').update(`${draft.draftId}\0${kind}\0${rawContentSha256}`, 'utf8').digest('hex')
-  const drive = miniAppEvidenceIngressIdentity({ draftId: draft.draftId, requestId: draft.requestId, kind, mimeType, bytes: file.bytes })
+  const drive = miniAppEvidenceIngressIdentity({
+    draftId: draft.draftId, requestId: draft.requestId, kind, ordinal, mimeType, bytes: file.bytes,
+  })
   return {
-    kind, ordinal, file, mimeType, rawContentSha256, stagedUploadId,
+    kind, ordinal, file, mimeType, rawContentSha256, stagedUploadId: drive.deterministicUploadId,
     driveUploadId: drive.deterministicUploadId, remoteContentSha256: drive.contentSha256,
-    objectKey: evidenceObjectKey({ draftId: draft.draftId, kind, contentSha256: rawContentSha256, mimeType }),
+    objectKey: evidenceObjectKey({
+      requestId: draft.requestId, draftId: draft.draftId, kind, ordinal,
+      contentSha256: rawContentSha256, mimeType, uploadId: drive.deterministicUploadId,
+    }),
   }
 }
 function prepareBindingHash(
@@ -155,7 +161,7 @@ function normalizedInputFromDraft(draft: MiniAppRequestRecord): MiniAppNormalize
 }
 function placeholderReferences(type: 'ASYNC' | 'SYNC', descriptors: readonly EvidenceDescriptor[]): PersistedReferences {
   return splitReferences(descriptors.map((item) => reference(
-    item, type === 'ASYNC' ? 'STAGED_OBJECT' : 'DRIVE_FILE', type === 'ASYNC' ? item.objectKey : item.rawContentSha256,
+    item, type === 'ASYNC' ? 'STAGED_OBJECT' : 'DRIVE_FILE', type === 'ASYNC' ? item.objectKey : item.driveUploadId,
   )), descriptors.filter(({ kind }) => kind === 'PAYMENT').length)
 }
 function parsedDraft(input: PersistPrepareEvidenceInput, descriptors: readonly EvidenceDescriptor[], persisted: PersistedReferences): MiniAppRequestRecord {
@@ -226,18 +232,22 @@ async function persistAsync(input: PersistPrepareEvidenceInput, descriptors: rea
   if (input.persistence.type !== 'ASYNC') throw new Error('unreachable')
   const staging = input.persistence.staging
   const existing = asyncExistingReferences(input.draft, descriptors)
-  const completed = new Map(existing.map((item) => [item.value, item]))
-  const missing = descriptors.filter(({ objectKey }) => !completed.has(objectKey))
+  const completed = new Map(existing.map((item) => [slotKey(item), item]))
+  const missing = descriptors.filter((item) => !completed.has(slotKey(item)))
   let cursor = 0; let failure: unknown
   const worker = async () => {
     while (failure === undefined) {
       const item = missing[cursor++]
       if (!item) return
       try {
-        const staged = await staging.put({ draftId: input.draft.draftId, kind: item.kind, mimeType: item.mimeType, bytes: item.file.bytes })
+        const staged = await staging.put({
+          requestId: input.draft.requestId, draftId: input.draft.draftId, kind: item.kind,
+          ordinal: item.ordinal, mimeType: item.mimeType, bytes: item.file.bytes,
+        })
         if (staged.objectKey !== item.objectKey || staged.size !== item.file.bytes.length
-          || staged.contentSha256 !== item.rawContentSha256) throw new Error('INVALID_STAGE_RESULT')
-        completed.set(item.objectKey, reference(item, 'STAGED_OBJECT', item.objectKey))
+          || staged.contentSha256 !== item.rawContentSha256
+          || staged.uploadId !== item.stagedUploadId) throw new Error('INVALID_STAGE_RESULT')
+        completed.set(slotKey(item), reference(item, 'STAGED_OBJECT', item.objectKey))
       } catch (error) { failure ??= error }
     }
   }
@@ -256,7 +266,7 @@ async function persistSync(input: PersistPrepareEvidenceInput, descriptors: read
     try {
       const fileId = await input.persistence.ingress.upload({
         draftId: input.draft.draftId, requestId: input.draft.requestId, kind: item.kind,
-        mimeType: item.mimeType, bytes: item.file.bytes,
+        ordinal: item.ordinal, mimeType: item.mimeType, bytes: item.file.bytes,
       })
       if (!/^[A-Za-z0-9_-]{10,256}$/.test(fileId)) throw new Error('INVALID_INGRESS_RESULT')
       all[index] = reference(item, 'DRIVE_FILE', fileId)
@@ -379,11 +389,10 @@ function draftStateMutation(
   normalizedInput: MiniAppNormalizedBookingInputV2,
   operation: 'PREPARE_READY' | 'PREPARE_PARTIAL',
 ): MiniAppDraftStateMutation {
-  const objectValues = new Map([...persisted.payment, ...persisted.chat].map((item) => [item.value, item]))
   const evidence: MiniAppDraftEvidenceItem[] = descriptors.map((item) => {
     const storage = input.persistence.type === 'ASYNC' ? 'STAGED_OBJECT' : 'DRIVE_FILE'
-    const persistedRef = storage === 'STAGED_OBJECT' ? objectValues.get(item.objectKey)
-      : (item.kind === 'PAYMENT' ? persisted.payment[item.ordinal] : persisted.chat[item.ordinal])
+    const persistedRef = (item.kind === 'PAYMENT' ? persisted.payment : persisted.chat)
+      .find((candidate) => candidate.ordinal === item.ordinal)
     return {
       kind: item.kind, ordinal: item.ordinal, contentSha256: item.rawContentSha256,
       mimeType: item.mimeType, storage, value: persistedRef?.value ?? null,
@@ -404,7 +413,7 @@ function expectedOwnerProjection(
   operation: 'PREPARE_READY' | 'PREPARE_PARTIAL',
 ): MiniAppRequestRecord {
   const draft = structuredClone(input.draft)
-  const merged = mergeExpectedReferences(draft, persisted, descriptors, input.persistence.type)
+  const merged = mergeExpectedReferences(draft, persisted, input.persistence.type)
   const terminal = draft.state === 'CANCELLED' || draft.state === 'EXPIRED'
   if (terminal) return nextIfChanged(draft, { retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: bindingHash, ...merged, updatedAt: input.now() })
   if (operation === 'PREPARE_PARTIAL') return nextIfChanged(draft, {
@@ -420,12 +429,10 @@ function expectedOwnerProjection(
     depositAmount: parsed.depositAmount, channelId: parsed.channelId, ...merged, updatedAt: input.now(),
   })
 }
-function mergeExpectedReferences(draft: MiniAppRequestRecord, persisted: PersistedReferences, descriptors: readonly EvidenceDescriptor[], type: 'ASYNC' | 'SYNC') {
+function mergeExpectedReferences(draft: MiniAppRequestRecord, persisted: PersistedReferences, type: 'ASYNC' | 'SYNC') {
   if (type === 'ASYNC') {
-    const all = new Set([...draft.paymentEvidenceObjectKeys, ...draft.chatEvidenceObjectKeys,
-      ...persisted.payment.map(({ value }) => value), ...persisted.chat.map(({ value }) => value)])
-    const paymentEvidenceObjectKeys = descriptors.filter(({ kind, objectKey }) => kind === 'PAYMENT' && all.has(objectKey)).map(({ objectKey }) => objectKey)
-    const chatEvidenceObjectKeys = descriptors.filter(({ kind, objectKey }) => kind === 'CHAT' && all.has(objectKey)).map(({ objectKey }) => objectKey)
+    const paymentEvidenceObjectKeys = persisted.payment.map(({ value }) => value)
+    const chatEvidenceObjectKeys = persisted.chat.map(({ value }) => value)
     return { paymentEvidenceFileIds: [], chatEvidenceFileIds: [], paymentEvidenceObjectKeys, chatEvidenceObjectKeys,
       evidenceCount: paymentEvidenceObjectKeys.length + chatEvidenceObjectKeys.length }
   }
@@ -489,16 +496,22 @@ function projection(draft: MiniAppRequestRecord): MiniAppDraftProjection {
 
 function referencesInDescriptorOrder(descriptors: readonly EvidenceDescriptor[], completed: Map<string, EvidenceReference>): PersistedReferences {
   return {
-    payment: descriptors.filter(({ kind }) => kind === 'PAYMENT').flatMap((item) => completed.get(item.objectKey) ? [completed.get(item.objectKey)!] : []),
-    chat: descriptors.filter(({ kind }) => kind === 'CHAT').flatMap((item) => completed.get(item.objectKey) ? [completed.get(item.objectKey)!] : []),
+    payment: descriptors.filter(({ kind }) => kind === 'PAYMENT').flatMap((item) => completed.get(slotKey(item)) ? [completed.get(slotKey(item))!] : []),
+    chat: descriptors.filter(({ kind }) => kind === 'CHAT').flatMap((item) => completed.get(slotKey(item)) ? [completed.get(slotKey(item))!] : []),
   }
 }
 function asyncExistingReferences(draft: MiniAppRequestRecord, descriptors: readonly EvidenceDescriptor[]): EvidenceReference[] {
   if (draft.paymentEvidenceFileIds.length || draft.chatEvidenceFileIds.length) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   const expected = new Map(descriptors.map((item) => [item.objectKey, item]))
+  const legacy = new Map<string, EvidenceDescriptor[]>()
+  for (const item of descriptors) legacy.set(legacyObjectKey(item), [...(legacy.get(legacyObjectKey(item)) ?? []), item])
+  const seen = new Set<string>()
   return [...draft.paymentEvidenceObjectKeys, ...draft.chatEvidenceObjectKeys].map((value) => {
-    const item = expected.get(value)
-    if (!item) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+    const exact = expected.get(value)
+    const legacyMatches = legacy.get(value) ?? []
+    const item = exact ?? (legacyMatches.length === 1 ? legacyMatches[0] : undefined)
+    if (!item || seen.has(slotKey(item))) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+    seen.add(slotKey(item))
     return reference(item, 'STAGED_OBJECT', value)
   })
 }
@@ -519,7 +532,8 @@ function referencesFromDraft(draft: MiniAppRequestRecord, descriptors: readonly 
   return refs
 }
 function reference(item: EvidenceDescriptor, storage: EvidenceReference['storage'], value: string): EvidenceReference {
-  return { deterministicUploadId: storage === 'DRIVE_FILE' ? item.driveUploadId : item.stagedUploadId,
+  return { kind: item.kind, ordinal: item.ordinal,
+    deterministicUploadId: storage === 'DRIVE_FILE' ? item.driveUploadId : item.stagedUploadId,
     storage, value, contentSha256: storage === 'DRIVE_FILE' ? item.remoteContentSha256 : item.rawContentSha256 }
 }
 function splitReferences(values: readonly EvidenceReference[], paymentCount: number): PersistedReferences {
@@ -550,6 +564,17 @@ function referenceCountFromDraft(draft: MiniAppRequestRecord): number {
 }
 function isSubset(values: readonly string[], expected: readonly string[]): boolean {
   const set = new Set(expected); return values.every((value) => set.has(value))
+}
+function slotKey(item: Pick<EvidenceDescriptor | EvidenceReference, 'kind' | 'ordinal'>): string {
+  return `${item.kind}:${item.ordinal}`
+}
+function legacyObjectKey(item: EvidenceDescriptor): string {
+  return `drafts/${extractDraftId(item.objectKey)}/${item.kind}/${item.rawContentSha256}.${item.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`
+}
+function extractDraftId(objectKey: string): string {
+  const match = /^drafts\/v2\/[^/]+\/([^/]+)\//.exec(objectKey)
+  if (!match) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  return match[1]!
 }
 async function safeReadDraft(store: Pick<MiniAppStore, 'getDraft'>, draftId: string) {
   try { return await store.getDraft(draftId) } catch { return null }

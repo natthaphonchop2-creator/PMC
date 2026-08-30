@@ -299,9 +299,10 @@ export interface ExpenseRepository {
 export interface DrivePort {
   rootFolderId(): string
   ensureChildFolder(parentId: string, name: string, marker: string): { id: string; name: string }
-  createEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', bytes: number[]): string
+  createEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', bytes: number[], marker?: string): string
   fileName(fileId: string): string
   findFileByName(folderId: string, name: string): string | null
+  findEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', marker: string): string | null
   moveAndRenameFile(fileId: string, folderId: string, name: string): string
   folderUrl(folderId: string): string
   trashFolder(folderId: string): void
@@ -399,6 +400,7 @@ export interface SecretsPort {
 export interface CryptoPort {
   hmacSha256Hex(value: string, secret: string): string
   sha256Hex(value: string): string
+  sha256BytesHex(value: number[]): string
   sha256Base64Url(value: string): string
   base64UrlUtf8(value: string): string
   base64Decode(value: string): number[]

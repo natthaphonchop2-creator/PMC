@@ -5,7 +5,7 @@ import { bookingPayloadHash, evidenceProjectionHash } from './bookingDraft.js'
 import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { BookingIngressPort } from './bookingIngressClient.js'
 import type { EvidenceIngressPort } from './evidenceIngressClient.js'
-import type { EvidenceStagingPort } from './stagingStore.js'
+import type { EvidenceStagingCleanupDescriptor, EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 
@@ -44,6 +44,7 @@ type WorkerContext = {
   taskAttempt: number
   startedAt: number
   terminalOutcome: TerminalOutcome
+  cleanupDescriptors: Map<string, EvidenceStagingCleanupDescriptor>
 }
 
 type OwnerMutationRead = { draft: MiniAppRequestRecord; result: MiniAppAsyncStateIngressResult | null }
@@ -267,10 +268,12 @@ export function createAsyncBookingWorker(input: {
     const fileIds = [...existingFileIds]
     for (let ordinal = fileIds.length; ordinal < objectKeys.length; ordinal += 1) {
       const staged = await fencedAwait(context, () => input.staging.get(objectKeys[ordinal]!))
+      context.cleanupDescriptors.set(objectKeys[ordinal]!, staged.cleanupDescriptor)
       const fileId = await fencedAwait(context, () => input.evidenceIngress.upload({
         draftId: context.draft.draftId,
         requestId: context.draft.requestId,
         kind,
+        ordinal,
         mimeType: staged.mimeType,
         bytes: staged.bytes,
       }))
@@ -427,15 +430,12 @@ export function createAsyncBookingWorker(input: {
     return exhaust(current, snapshot, operationDeadline, terminalOutcome, expectedEvidence)
   }
 
-  async function cleanupVerifiedStaging(
-    draft: MiniAppRequestRecord,
-    snapshot: TaskSnapshot,
-    deadline: FinalAttemptDeadline | null,
-  ): Promise<void> {
-    if (!validTerminal(snapshot, draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
-    for (const objectKey of [...draft.paymentEvidenceObjectKeys, ...draft.chatEvidenceObjectKeys]) {
-      if (deadline !== null) requireFinalTime(deadline)
-      await input.staging.deleteVerified(objectKey)
+  async function cleanupVerifiedStaging(context: WorkerContext): Promise<void> {
+    if (!validTerminal(context.snapshot, context.draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
+    for (const objectKey of [...context.draft.paymentEvidenceObjectKeys, ...context.draft.chatEvidenceObjectKeys]) {
+      if (context.deadline !== null) requireFinalTime(context.deadline)
+      const descriptor = context.cleanupDescriptors.get(objectKey) ?? await input.staging.describe(objectKey)
+      await input.staging.deleteVerified(descriptor)
     }
   }
 
@@ -539,6 +539,7 @@ export function createAsyncBookingWorker(input: {
         taskAttempt: finalizeInput.attempt,
         startedAt,
         terminalOutcome,
+        cleanupDescriptors: new Map(),
       }
       const convergeAfterProcessing = (
         current: MiniAppRequestRecord,
@@ -562,7 +563,7 @@ export function createAsyncBookingWorker(input: {
           throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
         }
         try {
-          await cleanupVerifiedStaging(context.draft, snapshot, context.deadline)
+          await cleanupVerifiedStaging(context)
         } catch { /* retain staging after terminal */ }
         return terminal
       } catch (error) {

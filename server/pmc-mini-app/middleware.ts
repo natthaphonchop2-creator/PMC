@@ -1327,7 +1327,8 @@ function timedPreparePersistence(
           }
         },
         get: (objectKey) => staging.get(objectKey),
-        deleteVerified: (objectKey) => staging.deleteVerified(objectKey),
+        describe: (objectKey) => staging.describe(objectKey),
+        deleteVerified: (descriptor) => staging.deleteVerified(descriptor),
       },
     }
   }

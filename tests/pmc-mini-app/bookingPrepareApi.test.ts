@@ -22,6 +22,81 @@ import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 
 describe('PMC Mini App Booking prepare persistence', () => {
+  it.each(['ASYNC', 'SYNC'] as const)(
+    'keeps identical same-kind bytes in distinct ordinal slots for %s prepare',
+    async (mode) => {
+      const fixture = prepareFixture(mode)
+      const repeated = png(1)
+
+      const result = await persistPrepareEvidence(fixture.input({
+        paymentFiles: [repeated, { ...repeated, originalName: 'same-bytes-second.png' }],
+        chatFiles: [jpeg(2)],
+      }))
+
+      const paymentValues = result.payment.map(({ value }) => value)
+      const paymentUploadIds = result.payment.map(({ deterministicUploadId }) => deterministicUploadId)
+      expect(paymentValues).toHaveLength(2)
+      expect(new Set(paymentValues).size).toBe(2)
+      expect(new Set(paymentUploadIds).size).toBe(2)
+      expect(result.draft.evidenceCount).toBe(3)
+      if (mode === 'ASYNC') expect(fixture.staging!.createdCount()).toBe(3)
+      else expect(fixture.ingress!.createdCount()).toBe(3)
+    },
+  )
+
+  it.each(['ASYNC', 'SYNC'] as const)(
+    'replays identical same-kind %s slots after owner response loss without duplicate remote identities',
+    async (mode) => {
+      const fixture = prepareFixture(mode)
+      const repeated = png(1)
+      const input = fixture.input({ paymentFiles: [repeated, { ...repeated, originalName: 'second.png' }] })
+      fixture.draftStateIngress.loseNextResponse()
+
+      const first = await persistPrepareEvidence(input)
+      const replay = await persistPrepareEvidence({ ...input, draft: fixture.store.read() })
+
+      expect(replay.draft).toEqual(first.draft)
+      expect(replay.payment.map(({ value }) => value)).toEqual(first.payment.map(({ value }) => value))
+      expect(mode === 'ASYNC' ? fixture.staging!.createdCount() : fixture.ingress!.createdCount()).toBe(3)
+    },
+  )
+
+  it.each(['ASYNC', 'SYNC'] as const)(
+    'recovers an identical same-kind %s partial without collapsing or recreating completed slots',
+    async (mode) => {
+      const fixture = prepareFixture(mode)
+      const repeated = png(1)
+      const input = fixture.input({ paymentFiles: [repeated, { ...repeated, originalName: 'second.png' }] })
+      if (mode === 'ASYNC') fixture.staging!.failOnce(objectKey('PAYMENT', repeated.bytes, 1))
+      else fixture.ingress!.failOnceAt(2)
+
+      await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+      const partial = fixture.store.read()
+      const recovered = await persistPrepareEvidence({ ...input, draft: partial })
+
+      expect(recovered.payment).toHaveLength(2)
+      expect(new Set(recovered.payment.map(({ value }) => value)).size).toBe(2)
+      expect(mode === 'ASYNC' ? fixture.staging!.createdCount() : fixture.ingress!.createdCount()).toBe(3)
+    },
+  )
+
+  it('continues an exact legacy-key partial row through the V2 prepare writer without restaging completed slots', async () => {
+    const fixture = prepareFixture('ASYNC')
+    const input = fixture.input({ paymentFiles: [png(1), png(2)], chatFiles: [jpeg(3)] })
+    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes, 1))
+    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    fixture.store.rewriteStagedKeysToLegacy()
+    const partial = fixture.store.read()
+    const callsBeforeRetry = fixture.staging!.putCount()
+    const completedBeforeRetry = partial.evidenceCount
+
+    const recovered = await persistPrepareEvidence({ ...input, draft: partial })
+
+    expect(recovered.draft).toMatchObject({ state: 'READY_TO_CONFIRM', evidenceCount: 3 })
+    expect(fixture.staging!.putCount() - callsBeforeRetry).toBe(3 - completedBeforeRetry)
+    expect(recovered.payment[0]!.value).toMatch(/^drafts\/draft-1\/PAYMENT\/[a-f0-9]{64}\.png$/)
+  })
+
   it('stages async evidence with at most four concurrent puts and writes one ordered ready draft', async () => {
     const fixture = prepareFixture('ASYNC')
 
@@ -37,11 +112,11 @@ describe('PMC Mini App Booking prepare persistence', () => {
       customerName: 'ลูกค้า ทดสอบ', facebookName: 'Facebook Test', evidenceCount: 8,
     })
     expect(result.payment.map(({ value }) => value)).toEqual([
-      objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
-      objectKey('PAYMENT', png(4).bytes), objectKey('PAYMENT', png(5).bytes),
+      objectKey('PAYMENT', png(1).bytes, 0), objectKey('PAYMENT', png(2).bytes, 1), objectKey('PAYMENT', png(3).bytes, 2),
+      objectKey('PAYMENT', png(4).bytes, 3), objectKey('PAYMENT', png(5).bytes, 4),
     ])
     expect(result.chat.map(({ value }) => value)).toEqual([
-      objectKey('CHAT', jpeg(6).bytes), objectKey('CHAT', jpeg(7).bytes), objectKey('CHAT', jpeg(8).bytes),
+      objectKey('CHAT', jpeg(6).bytes, 0), objectKey('CHAT', jpeg(7).bytes, 1), objectKey('CHAT', jpeg(8).bytes, 2),
     ])
     expect(result.payment[0]?.deterministicUploadId).toBe(stagedUploadId('PAYMENT', png(1).bytes))
     expect(fixture.staging?.maxActive()).toBe(4)
@@ -102,7 +177,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     async (mode) => {
       const fixture = prepareFixture(mode)
       const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
-      if (mode === 'ASYNC') fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+      if (mode === 'ASYNC') fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes, 1))
       else fixture.ingress!.failOnceAt(2)
       await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
       const partial = fixture.store.read()
@@ -182,7 +257,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('persists only partial async references as non-ready retention state and reuses them on retry', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
-    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes, 1))
 
     await expect(persistPrepareEvidence(input)).rejects.toMatchObject({
       code: 'BOOKING_PREPARE_RETRY', persistedReferenceCount: expect.any(Number),
@@ -208,7 +283,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('rejects changed input against a partially persisted binding before retrying remote evidence', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)] })
-    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes, 1))
     await expect(persistPrepareEvidence(input)).rejects.toBeInstanceOf(BookingPreparePersistenceError)
     const puts = fixture.staging!.putCount()
 
@@ -253,7 +328,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('keeps a partial base-version binding authoritative over a changed recovery version', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)] })
-    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes, 1))
     await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
     const authoritative = fixture.store.read()
     const puts = fixture.staging!.putCount()
@@ -347,9 +422,9 @@ describe('PMC Mini App Booking prepare persistence', () => {
       customerName: '', facebookName: '', adminId: 'ADMIN_02', adminName: 'แวว',
     })
     expect(terminal.paymentEvidenceObjectKeys).toEqual([
-      objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
+      objectKey('PAYMENT', png(1).bytes, 0), objectKey('PAYMENT', png(2).bytes, 1), objectKey('PAYMENT', png(3).bytes, 2),
     ])
-    expect(terminal.chatEvidenceObjectKeys).toEqual([objectKey('CHAT', jpeg(4).bytes)])
+    expect(terminal.chatEvidenceObjectKeys).toEqual([objectKey('CHAT', jpeg(4).bytes, 0)])
     expect(fixture.staging!.createdCount()).toBe(4)
     const puts = fixture.staging!.putCount()
     const writes = fixture.store.writeCount()
@@ -680,6 +755,17 @@ class PrepareStore implements MiniAppStore {
     }
     this.writes += 1
   }
+  rewriteStagedKeysToLegacy(): void {
+    const legacy = (value: string) => {
+      const match = /^drafts\/v2\/[^/]+\/([^/]+)\/(PAYMENT|CHAT)\/[0-9]\/[a-f0-9]{64}\/([a-f0-9]{64})\.(jpg|png)$/.exec(value)
+      return match ? `drafts/${match[1]}/${match[2]}/${match[3]}.${match[4]}` : value
+    }
+    this.current = {
+      ...this.current,
+      paymentEvidenceObjectKeys: this.current.paymentEvidenceObjectKeys.map(legacy),
+      chatEvidenceObjectKeys: this.current.chatEvidenceObjectKeys.map(legacy),
+    }
+  }
   async getActiveStaffByLineUserId(lineUserId: string) {
     this.staffReads += 1
     return { id: 'ADMIN_01', name: 'มัส', email: '', lineUserId, canCloseBooking: true, canBeAe: true,
@@ -909,7 +995,7 @@ class PrepareStaging implements EvidenceStagingPort {
     this.calls += 1
     this.active += 1
     this.highWater = Math.max(this.highWater, this.active)
-    const key = objectKey(input.kind, input.bytes)
+    const key = objectKey(input.kind, input.bytes, input.ordinal ?? 0, input.requestId ?? 'request-1')
     try {
       await new Promise((resolve) => setTimeout(resolve, 4))
       if (this.oneTimeFailures.delete(key)) throw new Error('CONTROLLED_STAGE_FAILURE')
@@ -919,12 +1005,16 @@ class PrepareStaging implements EvidenceStagingPort {
         this.firstCreateHook = null
         hook()
       }
-      return { objectKey: key, size: input.bytes.length, contentSha256: sha256(input.bytes) }
+      return {
+        objectKey: key, size: input.bytes.length, contentSha256: sha256(input.bytes),
+        uploadId: stagedUploadId(input.kind, input.bytes, input.ordinal ?? 0, input.requestId ?? 'request-1'),
+      }
     } finally {
       this.active -= 1
     }
   }
   async get(): Promise<never> { throw new Error('not used') }
+  async describe(): Promise<never> { throw new Error('not used') }
   async deleteVerified(): Promise<void> { throw new Error('must retain for approval') }
 }
 
@@ -972,7 +1062,7 @@ class PrepareIngress implements EvidenceIngressPort {
         this.failAt = null
         throw new Error('CONTROLLED_INGRESS_FAILURE')
       }
-      const identity = `${input.draftId}:${input.kind}:${sha256(input.bytes)}`
+      const identity = `${input.requestId}:${input.draftId}:${input.kind}:${input.ordinal}:${sha256(input.bytes)}`
       const existing = this.filesByIdentity.get(identity)
       if (existing) return existing
       const fileId = `drive-file-${String(this.filesByIdentity.size + 1).padStart(2, '0')}`
@@ -1017,14 +1107,19 @@ function jpeg(marker: number) {
   return { bytes: Buffer.from([0xff, 0xd8, 0xff, 0xe0, marker]), advertisedMime: 'image/jpeg', originalName: 'evidence.jpg' }
 }
 
-function objectKey(kind: 'PAYMENT' | 'CHAT', bytes: Buffer): string {
-  return `drafts/draft-1/${kind}/${sha256(bytes)}.${bytes[0] === 0xff ? 'jpg' : 'png'}`
+function objectKey(kind: 'PAYMENT' | 'CHAT', bytes: Buffer, ordinal = 0, requestId = 'request-1'): string {
+  const contentSha256 = sha256(bytes)
+  const uploadId = stagedUploadId(kind, bytes, ordinal, requestId)
+  return `drafts/v2/${requestId}/draft-1/${kind}/${ordinal}/${uploadId}/${contentSha256}.${bytes[0] === 0xff ? 'jpg' : 'png'}`
 }
 
 function sha256(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex') }
 
-function stagedUploadId(kind: 'PAYMENT' | 'CHAT', bytes: Buffer): string {
-  return createHash('sha256').update(`draft-1\0${kind}\0${sha256(bytes)}`, 'utf8').digest('hex')
+function stagedUploadId(kind: 'PAYMENT' | 'CHAT', bytes: Buffer, ordinal = 0, requestId = 'request-1'): string {
+  return createHash('sha256').update(JSON.stringify({
+    version: 2, requestId, draftId: 'draft-1', evidenceKind: kind, ordinal,
+    mimeType: bytes[0] === 0xff ? 'image/jpeg' : 'image/png', contentSha256: sha256(bytes),
+  }), 'utf8').digest('hex')
 }
 
 function routeConfig(mode: 'SYNC' | 'ASYNC'): PmcMiniAppServerConfig {
