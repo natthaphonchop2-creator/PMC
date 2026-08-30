@@ -12,6 +12,8 @@ export interface MiniAppConfig {
   reportingEnabled: boolean
   financeReportsEnabled: boolean
   stockEnabled: boolean
+  expenseCaptureEnabled?: boolean
+  financeReadsEnabled?: boolean
   canManageStock: boolean
   canSubmitExpense: boolean
   canViewFinance: boolean

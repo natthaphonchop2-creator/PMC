@@ -5,6 +5,16 @@ import type {
   StockDocumentSummary,
   StockHistoryPage,
 } from '../../shared/pmcStock.js'
+import type {
+  EnabledExpenseCategory,
+  ExpenseHistoryPage,
+  ExpenseMonthlyProjection,
+  ExpenseRecordState,
+  ExpenseScope,
+} from '../../shared/pmcExpense.js'
+import type { ExpenseIngressClient } from './finance/ingressClient.js'
+import type { ExpenseStagingPort } from './finance/stagingStore.js'
+import type { ExpenseSubmissionService } from './finance/submissionService.js'
 
 export type MiniAppSafeErrorCode =
   | 'MINI_APP_UNAUTHORIZED'
@@ -53,4 +63,39 @@ export interface StockServerDependencies {
   managerPilotOnly: boolean
   readStore: StockReadStore
   ingress: StockIngressClient
+}
+
+export interface ExpenseMutationContext {
+  expenseId: string
+  expenseDate: string
+  monthKey: string
+  category: EnabledExpenseCategory
+  scope: ExpenseScope
+  bookDailyKey: string | null
+  recordState: Extract<ExpenseRecordState, 'COMMITTED'>
+  revision: number
+  version: number
+}
+
+export interface FinanceReadStore {
+  loadMonthlyExpenses(monthKey: string): Promise<ExpenseMonthlyProjection>
+  listExpenseHistory(monthKey: string, cursor: string | null, limit: 25): Promise<ExpenseHistoryPage>
+  getEvidence(monthKey: string, expenseId: string, attachmentId: string): Promise<{
+    bytes: Buffer
+    mimeType: 'image/jpeg' | 'image/png'
+  } | null>
+  getExpenseMutationContext(monthKey: string, expenseId: string): Promise<ExpenseMutationContext | null>
+}
+
+export interface FinanceServerDependencies {
+  signingSecret: string
+  now?: () => number
+  reads?: {
+    readStore: FinanceReadStore
+  }
+  capture?: {
+    staging: ExpenseStagingPort
+    submission: ExpenseSubmissionService
+    ingress: ExpenseIngressClient
+  }
 }

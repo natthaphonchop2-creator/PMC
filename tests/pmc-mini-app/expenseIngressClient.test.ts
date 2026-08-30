@@ -50,6 +50,24 @@ describe('signed private expense ingress client', () => {
     ])
   })
 
+  it('sends and strictly parses the manager-only VOID result variant', async () => {
+    const request = vi.fn(async () => response(200, { ok: true, result: voidResult() }))
+    const client = clientWith(request)
+
+    await expect(client.void(voidCommand())).resolves.toEqual(voidResult())
+    const sent = JSON.parse(String(request.mock.calls[0]?.[1].body)) as {
+      command: MiniAppExpenseCommand
+    }
+    expect(sent.command).toEqual(voidCommand())
+
+    const malformed = clientWith(vi.fn(async () => response(200, {
+      ok: true, result: { ...voidResult(), approvalState: 'APPROVED' },
+    })))
+    await expect(malformed.void(voidCommand())).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+  })
+
   it.each([
     ['success with an extra key', { ok: true, result: prepareResult(), private: 'detail' }],
     ['PREPARE with COMMIT result', { ok: true, result: commitResult() }],
@@ -191,6 +209,20 @@ function commitCommand(): Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_
   }
 }
 
+function voidCommand(): Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }> {
+  return {
+    rootRequestId: 'expense-void-1',
+    commandIdempotencyKey: 'expense-void-1:void',
+    staffId: 'ADMIN_01',
+    commandType: 'VOID_EXPENSE',
+    payload: {
+      expenseId: 'EXP-202608-0001',
+      expectedVersion: 2,
+      reason: 'ยอดรวมบันทึกผิด',
+    },
+  }
+}
+
 function prepareResult(): Extract<ExpenseCommandResult, { commandType: 'PREPARE_EXPENSE' }> {
   return {
     commandType: 'PREPARE_EXPENSE',
@@ -218,6 +250,16 @@ function commitResult(): Extract<ExpenseCommandResult, { commandType: 'COMMIT_EX
     revision: 1,
     committedAt: '2026-08-29T10:02:00.000Z',
     unreviewed: true,
+  }
+}
+
+function voidResult(): Extract<ExpenseCommandResult, { commandType: 'VOID_EXPENSE' }> {
+  return {
+    commandType: 'VOID_EXPENSE',
+    expenseId: 'EXP-202608-0001',
+    recordState: 'VOID',
+    version: 3,
+    updatedAt: '2026-08-29T10:03:00.000Z',
   }
 }
 

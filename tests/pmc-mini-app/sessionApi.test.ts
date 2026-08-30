@@ -90,6 +90,8 @@ describe('PMC Mini App session and configuration API', () => {
       reportingEnabled: false,
       financeReportsEnabled: false,
       stockEnabled: false,
+      expenseCaptureEnabled: false,
+      financeReadsEnabled: false,
       canManageStock: false,
       canSubmitExpense: true,
       canViewFinance: false,

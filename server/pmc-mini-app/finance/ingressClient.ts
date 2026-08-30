@@ -8,6 +8,7 @@ import {
   canonicalMiniAppExpenseIngress,
   isMiniAppExpenseSafeErrorCode,
   type ExpensePrepareResult,
+  type ExpenseCommandResult,
   type MiniAppExpenseCommand,
   type MiniAppExpenseIngressEnvelope,
   type MiniAppExpenseSafeErrorCode,
@@ -32,6 +33,8 @@ type IngressFetch = (
 
 type PrepareCommand = Extract<MiniAppExpenseCommand, { commandType: 'PREPARE_EXPENSE' }>
 type CommitCommand = Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }>
+type VoidCommand = Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }>
+type VoidResult = Extract<ExpenseCommandResult, { commandType: 'VOID_EXPENSE' }>
 
 export interface ExpenseIngressClientOptions {
   url: string
@@ -45,6 +48,7 @@ export interface ExpenseIngressClientOptions {
 export interface ExpenseIngressClient {
   prepare(command: PrepareCommand): Promise<ExpensePrepareResult>
   commit(command: CommitCommand): Promise<ExpenseReceipt>
+  void(command: VoidCommand): Promise<VoidResult>
 }
 
 export class ExpenseIngressClientError extends Error {
@@ -112,7 +116,8 @@ export function createExpenseIngressClient(
 
   async function send(command: PrepareCommand): Promise<ExpensePrepareResult>
   async function send(command: CommitCommand): Promise<ExpenseReceipt>
-  async function send(command: PrepareCommand | CommitCommand): Promise<ExpensePrepareResult | ExpenseReceipt> {
+  async function send(command: VoidCommand): Promise<VoidResult>
+  async function send(command: PrepareCommand | CommitCommand | VoidCommand): Promise<ExpensePrepareResult | ExpenseReceipt | VoidResult> {
     const built = buildMiniAppExpenseIngress(command, { timestamp: now(), nonce: nonce() }, secret)
     const controller = new AbortController()
     let timedOut = false
@@ -135,9 +140,9 @@ export function createExpenseIngressClient(
         throw unavailable()
       }
       if (hasExactKeys(body, ['ok', 'result']) && body.ok === true) {
-        return command.commandType === 'PREPARE_EXPENSE'
-          ? parsePrepareResult(body.result, command)
-          : parseCommitResult(body.result, command)
+        if (command.commandType === 'PREPARE_EXPENSE') return parsePrepareResult(body.result, command)
+        if (command.commandType === 'COMMIT_EXPENSE') return parseCommitResult(body.result, command)
+        return parseVoidResult(body.result, command)
       }
       if (
         hasExactKeys(body, ['ok', 'error'])
@@ -157,6 +162,7 @@ export function createExpenseIngressClient(
   return {
     prepare(command) { return send(command) },
     commit(command) { return send(command) },
+    void(command) { return send(command) },
   }
 }
 
@@ -237,6 +243,27 @@ function parseCommitResult(value: unknown, command: CommitCommand): ExpenseRecei
     revision: value.revision,
     committedAt: value.committedAt,
     unreviewed: true,
+  }
+}
+
+function parseVoidResult(value: unknown, command: VoidCommand): VoidResult {
+  if (
+    !hasExactKeys(value, ['commandType', 'expenseId', 'recordState', 'version', 'updatedAt'])
+    || value.commandType !== 'VOID_EXPENSE'
+    || value.expenseId !== command.payload.expenseId
+    || value.recordState !== 'VOID'
+    || typeof value.version !== 'number'
+    || !Number.isSafeInteger(value.version)
+    || value.version !== command.payload.expectedVersion + 1
+    || typeof value.updatedAt !== 'string'
+    || !Number.isFinite(Date.parse(value.updatedAt))
+  ) throw unavailable()
+  return {
+    commandType: 'VOID_EXPENSE',
+    expenseId: value.expenseId,
+    recordState: 'VOID',
+    version: value.version,
+    updatedAt: value.updatedAt,
   }
 }
 

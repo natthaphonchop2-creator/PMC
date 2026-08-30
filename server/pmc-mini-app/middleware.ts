@@ -2,7 +2,12 @@ import { createHmac, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ProductionMiddleware } from '../productionApp.js'
 import type { PmcMiniAppServerConfig } from './config.js'
-import type { AuthenticatedMiniAppContext, LineIdentityPort, StockServerDependencies } from './contracts.js'
+import type {
+  AuthenticatedMiniAppContext,
+  FinanceServerDependencies,
+  LineIdentityPort,
+  StockServerDependencies,
+} from './contracts.js'
 import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
 import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBatch.js'
@@ -18,6 +23,7 @@ import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 import { handleStockMiniAppApi, isStockMiniAppApiPath } from './stock/middleware.js'
+import { handleFinanceMiniAppApi, isFinanceMiniAppApiPath } from './finance/middleware.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
@@ -50,6 +56,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   enrollment?: EnrollmentService
   jera?: JeraMiniAppApi
   stock?: StockServerDependencies
+  finance?: FinanceServerDependencies
 }
 
 export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencies): ProductionMiddleware {
@@ -155,6 +162,13 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       return
     }
 
+    if (isFinanceMiniAppApiPath(pathname)) {
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      await handleFinanceMiniAppApi(req, res, url, authenticated, deps.finance)
+      return
+    }
+
     const evidenceBatchRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/evidence-batch$/.exec(pathname)
     if (evidenceBatchRoute) {
       if (req.method !== 'POST') {
@@ -234,6 +248,8 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         reportingEnabled: Boolean(deps.jera),
         financeReportsEnabled: deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled,
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
+        expenseCaptureEnabled: Boolean(deps.finance?.capture),
+        financeReadsEnabled: Boolean(deps.finance?.reads),
         canManageStock: authenticated.canManageStock,
         canSubmitExpense: authenticated.canSubmitExpense,
         canViewFinance: authenticated.canViewFinance,

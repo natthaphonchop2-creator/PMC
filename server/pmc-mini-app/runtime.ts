@@ -36,6 +36,7 @@ import {
   createExpenseSubmissionService,
   type ExpenseSubmissionService,
 } from './finance/submissionService.js'
+import { createFinanceReadStore } from './finance/readStore.js'
 
 export interface PmcFinanceRuntime {
   config: PmcFinanceConfig
@@ -128,6 +129,18 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     secret: config.bookingIngressSecret,
   })
   const now = () => new Date()
+  const finance = expenseFinance ? {
+    signingSecret: config.signingSecret,
+    now: () => now().getTime(),
+    ...(expenseFinance.reads ? {
+      reads: { readStore: createFinanceReadStore({ finance: expenseFinance.reads.finance }) },
+    } : {}),
+    ...(expenseFinance.capture ? { capture: {
+      staging: expenseFinance.capture.staging,
+      submission: expenseFinance.capture.submission,
+      ingress: expenseFinance.capture.ingress,
+    } } : {}),
+  } : undefined
   const asyncTelemetry = createAsyncBookingTelemetry()
   const stock = {
     enabled: config.stockEnabled,
@@ -189,6 +202,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     ...(enrollment ? { enrollment } : {}),
     jera: jera?.api,
     stock,
+    ...(finance ? { finance } : {}),
     now,
   })
   return Object.assign(middleware, expenseFinance ? { expenseFinance } : {})
