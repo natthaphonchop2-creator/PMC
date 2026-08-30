@@ -15,6 +15,67 @@ const RETRY_CREATED_AT = '2026-08-30T04:00:00.000Z'
 const SECRET = 'a staff-bound staging secret that is at least thirty two bytes'
 
 describe('expense GCS staging', () => {
+  it('fences one manifest owner, permits expired CAS takeover, and rejects the stale generation', async () => {
+    const fake = fakeStorage()
+    let now = Date.parse(CREATED_AT)
+    const firstProcess = createGoogleExpenseStagingPort({
+      bucketName: 'pmc-expense-stage', storage: fake.storage,
+      now: () => new Date(now).toISOString(),
+    })
+    const secondProcess = createGoogleExpenseStagingPort({
+      bucketName: 'pmc-expense-stage', storage: fake.storage,
+      now: () => new Date(now).toISOString(),
+    })
+    const intent = submissionLeaseIntent()
+
+    const firstLease = await firstProcess.acquireSubmissionLease({
+      ...intent,
+      ownerId: 'lease-owner-process-a',
+    })
+    expect(firstLease).toMatchObject({
+      ...intent,
+      ownerId: 'lease-owner-process-a',
+      state: 'ACTIVE',
+      generation: '4',
+      objectKey: 'expense-submission-leases/EXP-202608-0001.json',
+    })
+    await expect(secondProcess.acquireSubmissionLease({
+      ...intent,
+      ownerId: 'lease-owner-process-b',
+    })).rejects.toThrow('EXPENSE_SUBMISSION_LEASE_UNAVAILABLE')
+    await expect(secondProcess.acquireSubmissionLease({
+      ...intent,
+      expectedManifestHash: 'f'.repeat(64),
+      ownerId: 'lease-owner-process-b',
+    })).rejects.toThrow('EXPENSE_SUBMISSION_LEASE_CONFLICT')
+
+    now = Date.parse(firstLease.expiresAt) + 1
+    const takeover = await secondProcess.acquireSubmissionLease({
+      ...intent,
+      ownerId: 'lease-owner-process-b',
+    })
+    expect(takeover).toMatchObject({
+      ownerId: 'lease-owner-process-b',
+      state: 'ACTIVE',
+      generation: '5',
+    })
+    await expect(firstProcess.assertSubmissionLease(firstLease))
+      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
+    await expect(firstProcess.renewSubmissionLease(firstLease))
+      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
+    await expect(firstProcess.commitSubmissionLease(firstLease))
+      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
+
+    const renewed = await secondProcess.renewSubmissionLease(takeover)
+    await expect(secondProcess.assertSubmissionLease(renewed)).resolves.toBeUndefined()
+    const committed = await secondProcess.commitSubmissionLease(renewed)
+    expect(committed).toMatchObject({ state: 'COMMITTED', generation: '7' })
+    await expect(firstProcess.acquireSubmissionLease({
+      ...intent,
+      ownerId: 'lease-owner-process-c',
+    })).resolves.toEqual(committed)
+  })
+
   it('atomically claims one Drive slot across processes and rejects a conflicting fingerprint', async () => {
     const fake = fakeStorage()
     const firstProcess = createGoogleExpenseStagingPort({
@@ -182,6 +243,29 @@ function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).jpeg().toBuffer()
 }
 
+function submissionLeaseIntent() {
+  return {
+    rootRequestId: ROOT_REQUEST_ID,
+    expenseId: 'EXP-202608-0001',
+    expectedManifestHash: 'e'.repeat(64),
+    staffId: 'ADMIN_01',
+    slots: [
+      {
+        ordinal: 1,
+        sha256: 'a'.repeat(64),
+        mimeType: 'image/jpeg' as const,
+        deterministicName: `001-${'a'.repeat(64)}.jpg`,
+      },
+      {
+        ordinal: 2,
+        sha256: 'b'.repeat(64),
+        mimeType: 'image/png' as const,
+        deterministicName: `002-${'b'.repeat(64)}.png`,
+      },
+    ],
+  }
+}
+
 function metadataFor(input: { bytes: Buffer; sha256: string; generation?: string; createdAt?: string }) {
   return {
     bytes: input.bytes, contentType: 'image/jpeg', cacheControl: 'no-store', generation: input.generation ?? '4',
@@ -202,10 +286,27 @@ function fakeStorage() {
     return selectedGeneration ? objects.get(objectKey)?.get(selectedGeneration) : undefined
   }
   const file = (objectKey: string, options?: { generation?: string }) => ({
-    async save(bytes: Buffer, options: { metadata: { contentType: string; cacheControl: string; metadata: Record<string, string> } }) {
+    async save(bytes: Buffer, options: {
+      preconditionOpts: { ifGenerationMatch: string | number }
+      metadata: { contentType: string; cacheControl: string; metadata: Record<string, string> }
+    }) {
       uploads.push({ objectKey, bytes, options })
-      if (latestGeneration.has(objectKey)) throw Object.assign(new Error('already exists'), { code: 412 })
-      putObject(objectKey, { bytes, contentType: options.metadata.contentType, cacheControl: options.metadata.cacheControl, generation: '4', metadata: options.metadata.metadata })
+      const existingGeneration = latestGeneration.get(objectKey)
+      const expectedGeneration = String(options.preconditionOpts.ifGenerationMatch)
+      if (
+        expectedGeneration === '0' && existingGeneration
+        || expectedGeneration !== '0' && existingGeneration !== expectedGeneration
+      ) throw Object.assign(new Error('generation precondition failed'), { code: 412 })
+      const generation = existingGeneration
+        ? String(Number(existingGeneration) + 1)
+        : '4'
+      putObject(objectKey, {
+        bytes,
+        contentType: options.metadata.contentType,
+        cacheControl: options.metadata.cacheControl,
+        generation,
+        metadata: options.metadata.metadata,
+      })
     },
     async getMetadata() {
       const object = objectAt(objectKey, options?.generation)

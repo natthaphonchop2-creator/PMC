@@ -9,7 +9,10 @@ import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ing
 import type {
   ExpenseDriveSlotClaim,
   ExpenseStagingReceipt,
+  ExpenseSubmissionLease,
+  ExpenseSubmissionLeaseIntent,
 } from '../../server/pmc-mini-app/finance/stagingStore'
+import { ExpenseStagingError } from '../../server/pmc-mini-app/finance/stagingStore'
 import {
   createExpenseSubmissionService,
   expenseAttachmentManifestHash,
@@ -24,11 +27,17 @@ describe('expense submission orchestration', () => {
     await expect(fixture.service.submit(fixture.input)).resolves.toEqual(fixture.receipt)
     expect(events).toEqual([
       'prepare',
-      'claim-1', 'claim-2',
+      'lease-acquire',
+      'lease-renew', 'claim-1', 'lease-assert',
+      'lease-renew', 'claim-2', 'lease-assert',
+      'lease-renew', 'lease-assert',
       'ensure-folder',
-      'staging-get-1', 'upload-1', 'verify-1',
-      'staging-get-2', 'upload-2', 'verify-2',
-      'commit',
+      'lease-renew', 'lease-assert',
+      'staging-get-1', 'upload-1', 'verify-1', 'lease-assert',
+      'lease-renew', 'lease-assert',
+      'staging-get-2', 'upload-2', 'verify-2', 'lease-assert',
+      'lease-renew', 'lease-assert',
+      'commit', 'lease-assert', 'lease-commit',
       'staging-delete-1', 'staging-delete-2',
     ])
 
@@ -170,6 +179,46 @@ describe('expense submission orchestration', () => {
     expect(state.driveAttachments).toHaveLength(2)
   })
 
+  it('takes over an expired partial manifest, blocks the stale owner, and completes missing slots once', async () => {
+    const state = serviceState()
+    state.failUploadOrdinalOnce = 2
+    const firstProcess = serviceFixture([], state, 'lease-owner-process-a')
+
+    await expect(firstProcess.service.submit(firstProcess.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(state.driveAttachments).toHaveLength(1)
+    expect(state.lease).toMatchObject({ ownerId: 'lease-owner-process-a', state: 'ACTIVE' })
+
+    const secondProcess = serviceFixture([], state, 'lease-owner-process-b')
+    await expect(secondProcess.service.submit(secondProcess.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(secondProcess.finance.ensureExpenseFolder).not.toHaveBeenCalled()
+    expect(secondProcess.finance.uploadExpenseImage).not.toHaveBeenCalled()
+
+    state.now = Date.parse(state.lease!.expiresAt) + 1
+    await secondProcess.staging.acquireSubmissionLease({
+      ...leaseIntent(state.lease!),
+      ownerId: 'lease-owner-process-b',
+    })
+    await expect(firstProcess.service.submit(firstProcess.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(firstProcess.ingress.commit).not.toHaveBeenCalled()
+
+    await expect(secondProcess.service.submit(secondProcess.input)).resolves.toEqual(secondProcess.receipt)
+    expect(state.lease).toMatchObject({ ownerId: 'lease-owner-process-b', state: 'COMMITTED' })
+    expect(state.driveAttachments).toHaveLength(2)
+    expect(new Set(state.driveAttachments.map(({ privateFileId }) => privateFileId)).size).toBe(2)
+
+    const replayProcess = serviceFixture([], state, 'lease-owner-process-c')
+    await expect(replayProcess.service.submit(replayProcess.input)).resolves.toEqual(replayProcess.receipt)
+    expect(replayProcess.finance.uploadExpenseImage).not.toHaveBeenCalled()
+    expect(JSON.stringify(replayProcess.ingress.commit.mock.calls[0]?.[0].payload.attachments))
+      .toBe(JSON.stringify(secondProcess.ingress.commit.mock.calls[0]?.[0].payload.attachments))
+  })
+
   it('fails safely when staged bytes or the returned receipt do not match the prepared intent', async () => {
     const poisoned = serviceFixture()
     poisoned.staging.get.mockResolvedValueOnce({
@@ -192,7 +241,11 @@ describe('expense submission orchestration', () => {
   })
 })
 
-function serviceFixture(events: string[] = [], state = serviceState()) {
+function serviceFixture(
+  events: string[] = [],
+  state = serviceState(),
+  ownerId = 'lease-owner-process-a',
+) {
   const stagingReceipts = stagedReceipts()
   const prepared: ExpensePrepareResult = {
     commandType: 'PREPARE_EXPENSE',
@@ -239,11 +292,18 @@ function serviceFixture(events: string[] = [], state = serviceState()) {
       uploadedAt: string
       attachmentId: string
       slotClaim: { claimId: string; created: boolean }
+      allowClaimReplayCreate?: boolean
     }) => {
       events.push(`upload-${input.ordinal}`)
+      if (state.failUploadOrdinalOnce === input.ordinal) {
+        state.failUploadOrdinalOnce = null
+        throw new Error('controlled partial upload failure')
+      }
       const existing = state.driveAttachments.find(({ ordinal }) => ordinal === input.ordinal)
       if (existing) return { ...existing }
-      if (!input.slotClaim.created) throw new Error('claim owner has not created the Drive file')
+      if (!input.slotClaim.created && input.allowClaimReplayCreate !== true) {
+        throw new Error('claim owner has not created the Drive file')
+      }
       const attachment: ExpensePrivateAttachment = {
         attachmentId: input.attachmentId,
         expenseId: input.expenseId,
@@ -313,6 +373,38 @@ function serviceFixture(events: string[] = [], state = serviceState()) {
       state.claims.set(key, claim)
       return { ...claim }
     }),
+    acquireSubmissionLease: vi.fn(async (
+      request: ExpenseSubmissionLeaseIntent & { ownerId: string },
+    ) => {
+      events.push('lease-acquire')
+      return acquireFakeLease(state, request)
+    }),
+    renewSubmissionLease: vi.fn(async (lease: ExpenseSubmissionLease) => {
+      events.push('lease-renew')
+      assertFakeLease(state, lease)
+      state.lease = {
+        ...lease,
+        generation: String(Number(lease.generation) + 1),
+        updatedAt: new Date(state.now).toISOString(),
+        expiresAt: new Date(state.now + 300_000).toISOString(),
+      }
+      return { ...state.lease }
+    }),
+    assertSubmissionLease: vi.fn(async (lease: ExpenseSubmissionLease) => {
+      events.push('lease-assert')
+      assertFakeLease(state, lease)
+    }),
+    commitSubmissionLease: vi.fn(async (lease: ExpenseSubmissionLease) => {
+      events.push('lease-commit')
+      assertFakeLease(state, lease)
+      state.lease = {
+        ...lease,
+        state: 'COMMITTED',
+        generation: String(Number(lease.generation) + 1),
+        updatedAt: new Date(state.now).toISOString(),
+      }
+      return { ...state.lease }
+    }),
   }
   const input: ExpenseSubmissionInput = {
     rootRequestId: 'expense-request-1',
@@ -327,7 +419,7 @@ function serviceFixture(events: string[] = [], state = serviceState()) {
     stagingReceipts,
   }
   return {
-    service: createExpenseSubmissionService({ ingress, finance, staging }),
+    service: createExpenseSubmissionService({ ingress, finance, staging }, { ownerId }),
     input,
     stagingReceipts,
     prepared,
@@ -342,11 +434,86 @@ function serviceState(): {
   claims: Map<string, ExpenseDriveSlotClaim>
   driveAttachments: ExpensePrivateAttachment[]
   deletedObjectKeys: Set<string>
+  now: number
+  lease: ExpenseSubmissionLease | null
+  failUploadOrdinalOnce: number | null
 } {
   return {
     claims: new Map(),
     driveAttachments: [],
     deletedObjectKeys: new Set(),
+    now: Date.parse('2026-08-29T10:00:00.000Z'),
+    lease: null,
+    failUploadOrdinalOnce: null,
+  }
+}
+
+function acquireFakeLease(
+  state: ReturnType<typeof serviceState>,
+  request: ExpenseSubmissionLeaseIntent & { ownerId: string },
+): ExpenseSubmissionLease {
+  const intent = {
+    rootRequestId: request.rootRequestId,
+    expenseId: request.expenseId,
+    expectedManifestHash: request.expectedManifestHash,
+    staffId: request.staffId,
+    slots: request.slots.map((slot) => ({ ...slot })),
+  }
+  const leaseId = `LEASE-${createHash('sha256').update(JSON.stringify(intent), 'utf8').digest('hex')}`
+  if (!state.lease) {
+    const capturedAt = new Date(state.now).toISOString()
+    state.lease = {
+      objectKey: `expense-submission-leases/${request.expenseId}.json`,
+      leaseId,
+      ...intent,
+      ownerId: request.ownerId,
+      state: 'ACTIVE',
+      generation: '4',
+      createdAt: capturedAt,
+      updatedAt: capturedAt,
+      expiresAt: new Date(state.now + 300_000).toISOString(),
+    }
+    return { ...state.lease }
+  }
+  if (state.lease.leaseId !== leaseId) {
+    throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_CONFLICT')
+  }
+  if (state.lease.state === 'COMMITTED') return { ...state.lease }
+  if (Date.parse(state.lease.expiresAt) > state.now && state.lease.ownerId !== request.ownerId) {
+    throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_UNAVAILABLE')
+  }
+  if (Date.parse(state.lease.expiresAt) <= state.now) {
+    state.lease = {
+      ...state.lease,
+      ownerId: request.ownerId,
+      generation: String(Number(state.lease.generation) + 1),
+      updatedAt: new Date(state.now).toISOString(),
+      expiresAt: new Date(state.now + 300_000).toISOString(),
+    }
+  }
+  return { ...state.lease }
+}
+
+function assertFakeLease(
+  state: ReturnType<typeof serviceState>,
+  expected: ExpenseSubmissionLease,
+): void {
+  if (
+    !state.lease
+    || state.lease.generation !== expected.generation
+    || state.lease.ownerId !== expected.ownerId
+    || state.lease.state !== 'ACTIVE'
+    || Date.parse(state.lease.expiresAt) <= state.now
+  ) throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_STALE')
+}
+
+function leaseIntent(lease: ExpenseSubmissionLease): ExpenseSubmissionLeaseIntent {
+  return {
+    rootRequestId: lease.rootRequestId,
+    expenseId: lease.expenseId,
+    expectedManifestHash: lease.expectedManifestHash,
+    staffId: lease.staffId,
+    slots: lease.slots.map((slot) => ({ ...slot })),
   }
 }
 

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   deriveBookDailyKey,
   deriveExpenseScope,
@@ -23,6 +23,8 @@ import {
   type ExpenseDriveSlotClaim,
   type ExpenseStagingPort,
   type ExpenseStagingReceipt,
+  type ExpenseSubmissionLease,
+  type ExpenseSubmissionLeaseIntent,
 } from './stagingStore.js'
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,124}$/
@@ -66,12 +68,13 @@ export class ExpenseSubmissionError extends Error {
 
 export function createExpenseSubmissionService(
   dependencies: ExpenseSubmissionDependencies,
+  options: { ownerId?: string } = {},
 ): ExpenseSubmissionService {
   const flights = new Map<string, {
     fingerprint: string
     promise: Promise<ExpenseReceipt>
   }>()
-  const ownedClaims = new Map<string, ExpenseDriveSlotClaim[]>()
+  const ownerId = options.ownerId ?? `lease-${randomUUID()}`
   return {
     submit(input) {
       let fingerprint: string
@@ -86,7 +89,7 @@ export function createExpenseSubmissionService(
           ? current.promise
           : Promise.reject(new ExpenseSubmissionError('EXPENSE_IDEMPOTENCY_CONFLICT'))
       }
-      const promise = submitExpense(input, dependencies, ownedClaims).finally(() => {
+      const promise = submitExpense(input, dependencies, ownerId).finally(() => {
         if (flights.get(input.rootRequestId)?.promise === promise) {
           flights.delete(input.rootRequestId)
         }
@@ -100,7 +103,7 @@ export function createExpenseSubmissionService(
 export async function submitExpense(
   input: ExpenseSubmissionInput,
   dependencies: ExpenseSubmissionDependencies,
-  ownedClaims: Map<string, ExpenseDriveSlotClaim[]> = new Map(),
+  ownerId = `lease-${randomUUID()}`,
 ): Promise<ExpenseReceipt> {
   try {
     const validated = validateSubmission(input)
@@ -125,9 +128,11 @@ export async function submitExpense(
     }
     const prepared = await dependencies.ingress.prepare(prepareCommand)
     validatePrepared(prepared, validated)
-    const cachedClaims = ownedClaims.get(validated.rootRequestId)
-    const claims = cachedClaims ?? await claimExpenseSlots(validated, prepared, dependencies.staging)
-    if (claims === null) {
+    let lease = await dependencies.staging.acquireSubmissionLease({
+      ...submissionLeaseIntent(validated, prepared),
+      ownerId,
+    })
+    if (lease.state === 'COMMITTED') {
       const recovered = await dependencies.finance.listVerifiedExpenseImages(
         prepared.monthKey,
         prepared.expenseId,
@@ -142,14 +147,24 @@ export async function submitExpense(
       await cleanupStaging(validated.stagingReceipts, dependencies.staging)
       return receipt
     }
-    validateOwnedClaims(claims, prepared, validated)
-    ownedClaims.set(validated.rootRequestId, claims)
+    const claimed = await claimExpenseSlotsWithLease(
+      validated,
+      prepared,
+      lease,
+      dependencies.staging,
+    )
+    lease = claimed.lease
+    const claims = claimed.claims
+    lease = await dependencies.staging.renewSubmissionLease(lease)
+    await dependencies.staging.assertSubmissionLease(lease)
     const folderId = await dependencies.finance.ensureExpenseFolder(
       prepared.monthKey,
       prepared.expenseId,
     )
     const attachments: ExpensePrivateAttachment[] = []
     for (const [index, receipt] of validated.stagingReceipts.entries()) {
+      lease = await dependencies.staging.renewSubmissionLease(lease)
+      await dependencies.staging.assertSubmissionLease(lease)
       const staged = await dependencies.staging.get(receipt.objectKey)
       verifyStagedReceipt(receipt, staged)
       const deterministicName = deterministicNameFor(receipt)
@@ -173,6 +188,7 @@ export async function submitExpense(
         originalFileName: receipt.originalFileName,
         attachmentId,
         slotClaim: claims[index]!,
+        allowClaimReplayCreate: true,
       })
       await dependencies.finance.verifyExpenseFile({
         monthKey: prepared.monthKey,
@@ -180,16 +196,23 @@ export async function submitExpense(
         fileId: attachment.privateFileId,
         expectedAttachment: attachment,
       })
+      await dependencies.staging.assertSubmissionLease(lease)
       attachments.push(attachment)
     }
+    lease = await dependencies.staging.renewSubmissionLease(lease)
+    await dependencies.staging.assertSubmissionLease(lease)
     const receipt = await commitPreparedExpense(
       prepared,
       validated,
       attachments,
       dependencies.ingress,
     )
+    await dependencies.staging.assertSubmissionLease(lease)
+    const committedLease = await dependencies.staging.commitSubmissionLease(lease)
+    if (committedLease.state !== 'COMMITTED') {
+      throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+    }
     await cleanupStaging(validated.stagingReceipts, dependencies.staging)
-    ownedClaims.delete(validated.rootRequestId)
     return receipt
   } catch (error) {
     throw safeSubmissionError(error)
@@ -208,23 +231,34 @@ export function expenseAttachmentManifestHash(
   return createHash('sha256').update(canonical, 'utf8').digest('hex')
 }
 
-async function claimExpenseSlots(
+function submissionLeaseIntent(
   input: ExpenseSubmissionInput,
   prepared: ExpensePrepareResult,
-  staging: ExpenseStagingPort,
-): Promise<ExpenseDriveSlotClaim[] | null> {
-  const firstReceipt = input.stagingReceipts[0]!
-  const first = await staging.claimDriveSlot({
+): ExpenseSubmissionLeaseIntent {
+  return {
     rootRequestId: input.rootRequestId,
     expenseId: prepared.expenseId,
-    ordinal: firstReceipt.ordinal,
-    sha256: firstReceipt.sha256,
-    mimeType: firstReceipt.mimeType,
-    deterministicName: deterministicNameFor(firstReceipt),
-  })
-  if (!first.created) return null
-  const claims = [first]
-  for (const receipt of input.stagingReceipts.slice(1)) {
+    expectedManifestHash: prepared.expectedManifestHash,
+    staffId: input.staffId,
+    slots: input.stagingReceipts.map((receipt) => ({
+      ordinal: receipt.ordinal,
+      sha256: receipt.sha256,
+      mimeType: receipt.mimeType,
+      deterministicName: deterministicNameFor(receipt),
+    })),
+  }
+}
+
+async function claimExpenseSlotsWithLease(
+  input: ExpenseSubmissionInput,
+  prepared: ExpensePrepareResult,
+  initialLease: ExpenseSubmissionLease,
+  staging: ExpenseStagingPort,
+): Promise<{ lease: ExpenseSubmissionLease; claims: ExpenseDriveSlotClaim[] }> {
+  let lease = initialLease
+  const claims: ExpenseDriveSlotClaim[] = []
+  for (const receipt of input.stagingReceipts) {
+    lease = await staging.renewSubmissionLease(lease)
     const claim = await staging.claimDriveSlot({
       rootRequestId: input.rootRequestId,
       expenseId: prepared.expenseId,
@@ -233,32 +267,10 @@ async function claimExpenseSlots(
       mimeType: receipt.mimeType,
       deterministicName: deterministicNameFor(receipt),
     })
-    if (!claim.created) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+    await staging.assertSubmissionLease(lease)
     claims.push(claim)
   }
-  return claims
-}
-
-function validateOwnedClaims(
-  claims: ExpenseDriveSlotClaim[],
-  prepared: ExpensePrepareResult,
-  input: ExpenseSubmissionInput,
-): void {
-  if (claims.length !== input.stagingReceipts.length) {
-    throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
-  }
-  claims.forEach((claim, index) => {
-    const receipt = input.stagingReceipts[index]!
-    if (
-      claim.created !== true
-      || claim.rootRequestId !== input.rootRequestId
-      || claim.expenseId !== prepared.expenseId
-      || claim.ordinal !== receipt.ordinal
-      || claim.sha256 !== receipt.sha256
-      || claim.mimeType !== receipt.mimeType
-      || claim.deterministicName !== deterministicNameFor(receipt)
-    ) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
-  })
+  return { lease, claims }
 }
 
 function validateRecoveredAttachments(
@@ -527,6 +539,7 @@ function safeSubmissionError(error: unknown): ExpenseSubmissionError | ExpenseIn
   if (error instanceof ExpenseStagingError) {
     return new ExpenseSubmissionError(
       error.code === 'EXPENSE_DRIVE_SLOT_CONFLICT'
+        || error.code === 'EXPENSE_SUBMISSION_LEASE_CONFLICT'
         ? 'EXPENSE_IDEMPOTENCY_CONFLICT'
         : 'EXPENSE_STORAGE_UNAVAILABLE',
     )

@@ -110,6 +110,8 @@ describe('private finance runtime configuration', () => {
     }
     const staging = {
       put: vi.fn(), get: vi.fn(), deleteVerified: vi.fn(), claimDriveSlot: vi.fn(),
+      acquireSubmissionLease: vi.fn(), renewSubmissionLease: vi.fn(),
+      assertSubmissionLease: vi.fn(), commitSubmissionLease: vi.fn(),
     }
     const ingress = { prepare: vi.fn(), commit: vi.fn() }
     const submission = { submit: vi.fn() }

@@ -690,12 +690,13 @@ function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
     const response = advancedDrive.Files.list({
       q: `'${folderId}' in parents and trashed = false`,
       spaces: 'drive',
-      fields: 'nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,appProperties,permissions(id,type,role,deleted))',
+      fields: 'incompleteSearch,nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,appProperties,permissions(id,type,role,deleted))',
       pageSize: 100,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
       ...(pageToken ? { pageToken } : {}),
     })
+    if (response.incompleteSearch !== false) throw new Error('invalid')
     const nextFiles = response.files ?? []
     if (!Array.isArray(nextFiles)) throw new Error('invalid')
     files.push(...nextFiles)

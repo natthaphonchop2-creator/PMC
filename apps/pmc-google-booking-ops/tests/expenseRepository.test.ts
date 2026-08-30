@@ -299,7 +299,7 @@ describe('Apps Script expense repository and command journal', () => {
 })
 
 describe('Google expense repository containment and literal text', () => {
-  it.each(['bytes', 'version', 'duplicate'] as const)(
+  it.each(['bytes', 'version', 'duplicate', 'incomplete-true', 'incomplete-missing'] as const)(
     'rejects a %s mutation before COMMIT audit or effective totals',
     (mutation) => {
       const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
@@ -343,8 +343,10 @@ describe('Google expense repository containment and literal text', () => {
         })
       } else if (mutation === 'version') {
         environment.mutateExpenseFile(attachment.privateFileId, { version: '8' })
-      } else {
+      } else if (mutation === 'duplicate') {
         environment.duplicateExpenseAttachment(attachment, bytes)
+      } else {
+        environment.setIncompleteSearch(mutation === 'incomplete-true' ? true : undefined)
       }
 
       expect(() => executeExpenseCommand(commitCommand({

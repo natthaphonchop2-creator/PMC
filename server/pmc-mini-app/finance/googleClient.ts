@@ -21,7 +21,7 @@ const SAFE_EXPENSE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const VERSION = /^[1-9]\d*$/
 const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,appProperties,permissions(id,type,role,deleted)'
-const DRIVE_LIST_FIELDS = `nextPageToken,files(${DRIVE_FIELDS})`
+const DRIVE_LIST_FIELDS = `incompleteSearch,nextPageToken,files(${DRIVE_FIELDS})`
 const MASTER_TABS = new Set(['EXPENSE_MONTHLY_INDEX', 'EXPENSE_REQUESTS', 'EXPENSE_AUDIT'])
 const MONTH_TABS = new Set(['EXPENSE_SUBMISSIONS', 'EXPENSE_ATTACHMENTS', 'MONTHLY_SUMMARY'])
 
@@ -64,7 +64,11 @@ interface DriveMetadata {
 interface FinanceDriveApi {
   files: {
     get: GoogleMethod<DriveMetadata | ArrayBuffer>
-    list: GoogleMethod<{ files?: DriveMetadata[]; nextPageToken?: string | null }>
+    list: GoogleMethod<{
+      files?: DriveMetadata[]
+      nextPageToken?: string | null
+      incompleteSearch?: boolean | null
+    }>
     create: GoogleMethod<DriveMetadata>
   }
 }
@@ -102,6 +106,7 @@ export interface FinanceGoogleCapturePorts {
     originalFileName: string
     attachmentId: string
     slotClaim: ExpenseDriveSlotClaim
+    allowClaimReplayCreate?: boolean
   }): Promise<ExpensePrivateAttachment>
   verifyExpenseFile(input: {
     monthKey: string
@@ -271,7 +276,11 @@ export function createFinanceGooglePorts(
     const seenIds = new Set<string>()
     let pageToken: string | undefined
     for (let page = 0; page < 100; page += 1) {
-      let response: GoogleResponse<{ files?: DriveMetadata[]; nextPageToken?: string | null }>
+      let response: GoogleResponse<{
+        files?: DriveMetadata[]
+        nextPageToken?: string | null
+        incompleteSearch?: boolean | null
+      }>
       try {
         response = await driveApi.files.list({
           q: `'${safeParentId}' in parents and trashed = false`,
@@ -286,6 +295,7 @@ export function createFinanceGooglePorts(
         throw safeGoogleError(error, code)
       }
       if (!isRecord(response.data)) throw new FinanceGoogleError(code)
+      if (response.data.incompleteSearch !== false) throw new FinanceGoogleError(code)
       const files = response.data.files ?? []
       if (!Array.isArray(files)) throw new FinanceGoogleError(code)
       for (const file of files) {
@@ -630,7 +640,7 @@ export function createFinanceGooglePorts(
         fileId,
       })).attachment
     }
-    if (input.slotClaim.created !== true) {
+    if (input.slotClaim.created !== true && input.allowClaimReplayCreate !== true) {
       throw new FinanceGoogleError('EXPENSE_STORAGE_UNAVAILABLE')
     }
 

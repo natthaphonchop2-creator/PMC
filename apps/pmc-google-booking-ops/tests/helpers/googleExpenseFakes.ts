@@ -179,6 +179,7 @@ export interface GoogleExpenseFakeEnvironment {
   addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
+  setIncompleteSearch(value: boolean | undefined): void
 }
 
 export function installGoogleExpenseFakes(options: {
@@ -231,6 +232,7 @@ export function installGoogleExpenseFakes(options: {
     [master.id, master],
     [ledger.id, ledger],
   ])
+  let incompleteSearch: boolean | undefined = false
 
   vi.stubGlobal('DriveApp', {
     Access: { PRIVATE: 'PRIVATE' },
@@ -243,6 +245,7 @@ export function installGoogleExpenseFakes(options: {
       list: (input: { q?: string }) => {
         const parentId = /'([^']+)'\s+in\s+parents/.exec(input.q ?? '')?.[1]
         return {
+          incompleteSearch,
           files: [...files.values()]
             .filter((file) => !parentId || file.parentFolders.some(({ id }) => id === parentId))
             .map(advancedFile),
@@ -311,6 +314,7 @@ export function installGoogleExpenseFakes(options: {
       if (patch.bytes) file.bytes = [...patch.bytes]
       if (patch.version) file.version = patch.version
     },
+    setIncompleteSearch(value) { incompleteSearch = value },
   }
 }
 

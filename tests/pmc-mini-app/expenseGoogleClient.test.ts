@@ -10,6 +10,51 @@ const MONTH_KEY = '2026-08'
 const EXPENSE_ID = 'EXP-202608-0001'
 
 describe('private finance Google ports', () => {
+  it.each([true, undefined])(
+    'rejects incompleteSearch=%s before trusting unique expense folders',
+    async (incompleteSearch) => {
+      const fake = financeGoogleFake()
+      fake.setIncompleteSearch(incompleteSearch)
+      await expect(createFinanceGooglePorts(config(), fake.factory)
+        .ensureExpenseFolder(MONTH_KEY, EXPENSE_ID))
+        .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+      expect(fake.driveCreates).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([true, undefined])(
+    'rejects incompleteSearch=%s before trusting unique upload slots',
+    async (incompleteSearch) => {
+      const fake = financeGoogleFake()
+      const ports = createFinanceGooglePorts(config(), fake.factory)
+      const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+      const bytes = await jpeg()
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      fake.setIncompleteSearch(incompleteSearch)
+      await expect(ports.uploadExpenseImage(claimedUpload({
+        parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+      }))).rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+      expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(0)
+    },
+  )
+
+  it.each([true, undefined])(
+    'rejects incompleteSearch=%s before trusting reconstructed siblings',
+    async (incompleteSearch) => {
+      const fake = financeGoogleFake()
+      const ports = createFinanceGooglePorts(config(), fake.factory)
+      const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+      const bytes = await jpeg()
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      await ports.uploadExpenseImage(claimedUpload({
+        parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+      }))
+      fake.setIncompleteSearch(incompleteSearch)
+      await expect(ports.listVerifiedExpenseImages(MONTH_KEY, EXPENSE_ID))
+        .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+    },
+  )
+
   it('uses ADC scopes and resolves every master/month read from configured private containment and the master index', async () => {
     const fake = financeGoogleFake()
     const ports = createFinanceGooglePorts(config(), fake.factory)
@@ -270,6 +315,7 @@ function financeGoogleFake() {
   ]]
   let sequence = 0
   let afterMediaRead: (() => void) | undefined
+  let incompleteSearch: boolean | undefined = false
 
   const add = (item: FakeItem) => { items.set(item.id, item); return item }
   add({
@@ -319,6 +365,7 @@ function financeGoogleFake() {
     const parent = /'([^']+)'\s+in\s+parents/.exec(input.q ?? '')?.[1]
     return {
       data: {
+        incompleteSearch,
         files: [...items.values()]
           .filter((candidate) => !parent || candidate.parents.includes(parent))
           .map(driveMetadata),
@@ -384,6 +431,7 @@ function financeGoogleFake() {
     },
     get afterMediaRead() { return afterMediaRead },
     set afterMediaRead(callback: (() => void) | undefined) { afterMediaRead = callback },
+    setIncompleteSearch(value: boolean | undefined) { incompleteSearch = value },
   }
 }
 
