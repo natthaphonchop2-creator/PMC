@@ -27,7 +27,7 @@
 Run this plan after the Attribution V2 and Save/Confirm Performance plans have completed their local gates. Before Task 1:
 
 ```bash
-test "$(git log -1 --pretty=%s)" = "test: measure Booking Save and Confirm performance"
+test "$(git log -1 --pretty=%s)" = "fix: align Booking performance fixtures"
 PROGRAM_BASE="$(git rev-parse HEAD)"
 test -n "$PROGRAM_BASE"
 test -z "$(git status --porcelain)"
