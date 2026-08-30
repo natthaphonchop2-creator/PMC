@@ -14,6 +14,7 @@ import {
 } from '../../server/pmc-mini-app/finance/evidenceToken'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
+import { FinanceReadStoreError } from '../../server/pmc-mini-app/finance/readStore'
 import {
   createGoogleMiniAppStore,
   type MiniAppStaffRecord,
@@ -179,6 +180,50 @@ describe('finance API permission and evidence boundary', () => {
     vi.mocked(deps.finance!.reads!.readStore.getEvidence).mockResolvedValueOnce(null)
     const disappeared = await request(middleware, 'GET', `/api/mini-app/finance/evidence?token=${encodeURIComponent(token)}`, null, 'finance-token')
     expect(disappeared).toMatchObject({ status: 404, body: { error: 'EXPENSE_EVIDENCE_NOT_FOUND' } })
+  })
+
+  it('fails token issue and download safely when the committed evidence descriptor no longer matches Drive', async () => {
+    const issueFailure = dependencies()
+    vi.mocked(issueFailure.finance!.reads!.readStore.getEvidence).mockRejectedValueOnce(
+      new FinanceReadStoreError('EXPENSE_PRIVATE_FILE_INVALID'),
+    )
+    const failedIssue = await request(
+      createPmcMiniAppMiddleware(issueFailure),
+      'POST',
+      `/api/mini-app/finance/expenses/${EXPENSE_ID}/evidence/${ATTACHMENT_ID}/token`,
+      null,
+      'finance-token',
+    )
+    expect(failedIssue).toMatchObject({
+      status: 503,
+      body: { error: 'EXPENSE_PRIVATE_FILE_INVALID' },
+    })
+
+    const downloadFailure = dependencies()
+    const middleware = createPmcMiniAppMiddleware(downloadFailure)
+    const issued = await request(
+      middleware,
+      'POST',
+      `/api/mini-app/finance/expenses/${EXPENSE_ID}/evidence/${ATTACHMENT_ID}/token`,
+      null,
+      'finance-token',
+    )
+    vi.mocked(downloadFailure.finance!.reads!.readStore.getEvidence).mockRejectedValueOnce(
+      new FinanceReadStoreError('EXPENSE_PRIVATE_FILE_INVALID'),
+    )
+    const token = String((issued.body as Record<string, unknown>).token)
+    const failedDownload = await request(
+      middleware,
+      'GET',
+      `/api/mini-app/finance/evidence?token=${encodeURIComponent(token)}`,
+      null,
+      'finance-token',
+    )
+    expect(failedDownload).toMatchObject({
+      status: 503,
+      body: { error: 'EXPENSE_PRIVATE_FILE_INVALID' },
+    })
+    expect(JSON.stringify([failedIssue.body, failedDownload.body])).not.toContain('private-file')
   })
 
   it('returns safe capability and permission booleans without finance identity or resource values', async () => {

@@ -108,6 +108,38 @@ describe('finance expense read store', () => {
     expect(overflow.readMonth).toHaveBeenCalledWith(MONTH_KEY, [SUBMISSIONS_RANGE])
   })
 
+  it('accepts an abandoned PREPARED recovery row as VOID without committedAt and keeps it ineffective', async () => {
+    const abandoned = financePort({ submissions: [submissionRow({
+      expenseId: 'EXP-202608-ABANDONED', recordState: 'VOID', committedAt: '', version: 2,
+    })] })
+    const store = createFinanceReadStore({ finance: abandoned })
+
+    await expect(store.loadMonthlyExpenses(MONTH_KEY)).resolves.toEqual({
+      monthKey: MONTH_KEY,
+      clinicCommittedSatang: 0,
+      doctorPersonalCommittedSatang: 0,
+      clinicByCategorySatang: { BILL_DOCUMENT: 0, BOOK_CLINIC: 0 },
+      effectiveExpenseCount: 0,
+      unreviewed: true,
+    })
+    await expect(store.listExpenseHistory(MONTH_KEY, null, 25)).resolves.toEqual({
+      expenses: [], nextCursor: null,
+    })
+
+    const incompleteCommit = financePort({ submissions: [submissionRow({
+      expenseId: 'EXP-202608-INCOMPLETE', recordState: 'COMMITTED', committedAt: '',
+    })] })
+    await expect(createFinanceReadStore({ finance: incompleteCommit }).loadMonthlyExpenses(MONTH_KEY))
+      .rejects.toEqual(expect.objectContaining({ code: 'EXPENSE_DATA_INTEGRITY_ERROR' }))
+  })
+
+  it('keeps locale-formatted numeric strings invalid instead of coercing financial cells', async () => {
+    const finance = financePort({ submissions: [submissionRow({ amountSatang: '12,000' })] })
+
+    await expect(createFinanceReadStore({ finance }).loadMonthlyExpenses(MONTH_KEY))
+      .rejects.toEqual(expect.objectContaining({ code: 'EXPENSE_DATA_INTEGRITY_ERROR' }))
+  })
+
   it('re-proves effective attachment membership before each private byte download', async () => {
     const finance = financePort({
       submissions: [
@@ -136,6 +168,14 @@ describe('finance expense read store', () => {
     expect(finance.downloadExpenseFile).toHaveBeenCalledOnce()
     expect(finance.downloadExpenseFile).toHaveBeenCalledWith({
       monthKey: MONTH_KEY, expenseId: 'EXP-202608-NEW', fileId: 'file-new',
+      expectedAttachment: {
+        attachmentId: 'ATT-NEW', expenseId: 'EXP-202608-NEW', rootRequestId: 'root-private',
+        ordinal: 1, mediaType: 'image/jpeg', originalFileName: 'receipt.jpg',
+        privateFileId: 'file-new', deterministicName: `001-${'a'.repeat(64)}.jpg`,
+        sizeBytes: 13, driveVersion: '1', slotClaimId: `SLOT-${'b'.repeat(64)}`,
+        sha256: 'a'.repeat(64), uploadedByStaffId: 'STAFF_PRIVATE',
+        uploadedAt: '2026-08-29T03:00:00.000Z',
+      },
     })
   })
 

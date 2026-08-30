@@ -86,6 +86,7 @@ export interface FinanceGoogleReadPorts {
     monthKey: string
     expenseId: string
     fileId: string
+    expectedAttachment: ExpensePrivateAttachment
   }): Promise<{ bytes: Buffer; mimeType: ExpenseImageMimeType }>
 }
 
@@ -321,7 +322,12 @@ export function createFinanceGooglePorts(
       valueRanges?: Array<{ range?: string | null; values?: unknown[][] }>
     }>
     try {
-      response = await sheetsApi.spreadsheets.values.batchGet({ spreadsheetId, ranges })
+      response = await sheetsApi.spreadsheets.values.batchGet({
+        spreadsheetId,
+        ranges,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+        dateTimeRenderOption: 'FORMATTED_STRING',
+      })
     } catch (error) {
       throw safeGoogleError(error, 'EXPENSE_STORAGE_UNAVAILABLE')
     }

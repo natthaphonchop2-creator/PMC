@@ -65,6 +65,7 @@ export async function handleFinanceMiniAppApi(
   if (monthlyRoute) {
     if (!requirePermission(authenticated.canViewFinance, res, 'EXPENSE_FINANCE_PERMISSION_REQUIRED')) return
     if (req.method !== 'GET') return methodNotAllowed(res)
+    if (rejectFramedGetBody(req, res)) return
     if (!noQuery(url)) return invalidField(res)
     if (!finance?.reads) return routeNotFound(res)
     const monthKey = validMonthKey(monthlyRoute[1]!)
@@ -80,6 +81,7 @@ export async function handleFinanceMiniAppApi(
   if (pathname === `${FINANCE_PREFIX}/expenses`) {
     if (!requirePermission(authenticated.canViewFinance, res, 'EXPENSE_FINANCE_PERMISSION_REQUIRED')) return
     if (req.method !== 'GET') return methodNotAllowed(res)
+    if (rejectFramedGetBody(req, res)) return
     if (!finance?.reads) return routeNotFound(res)
     const query = exactHistoryQuery(url)
     if (!query) return invalidField(res)
@@ -129,6 +131,7 @@ export async function handleFinanceMiniAppApi(
   if (pathname === `${FINANCE_PREFIX}/evidence`) {
     if (!requirePermission(authenticated.canViewFinance, res, 'EXPENSE_FINANCE_PERMISSION_REQUIRED')) return
     if (req.method !== 'GET') return methodNotAllowed(res)
+    if (rejectFramedGetBody(req, res)) return
     if (!finance?.reads) return routeNotFound(res)
     const tokens = url.searchParams.getAll('token')
     if (
@@ -707,11 +710,36 @@ function emptyBody(req: IncomingMessage): boolean {
     && (contentLength === null ? req.headers['content-length'] === undefined : contentLength === '0')
 }
 
-function singleHeader(req: IncomingMessage, name: string): string | null {
+function rejectFramedGetBody(req: IncomingMessage, res: ServerResponse): boolean {
+  const contentLengths = rawHeaderValues(req, 'content-length')
+  const transferEncodings = rawHeaderValues(req, 'transfer-encoding')
+  const expects = rawHeaderValues(req, 'expect')
+  const invalid = transferEncodings.length > 0
+    || expects.length > 0
+    || contentLengths.length > 1
+    || contentLengths.length === 1 && contentLengths[0] !== '0'
+  if (!invalid) return false
+
+  req.on('error', () => undefined)
+  req.resume()
+  res.setHeader('connection', 'close')
+  res.once('finish', () => {
+    if (!req.complete) req.destroy()
+  })
+  invalidRequest(res)
+  return true
+}
+
+function rawHeaderValues(req: IncomingMessage, name: string): string[] {
   const values: string[] = []
   for (let index = 0; index < req.rawHeaders.length; index += 2) {
     if (req.rawHeaders[index]?.toLowerCase() === name) values.push(req.rawHeaders[index + 1] ?? '')
   }
+  return values
+}
+
+function singleHeader(req: IncomingMessage, name: string): string | null {
+  const values = rawHeaderValues(req, name)
   return values.length === 1 ? values[0]! : null
 }
 

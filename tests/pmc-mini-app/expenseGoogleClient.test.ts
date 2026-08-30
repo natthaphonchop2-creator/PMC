@@ -5,6 +5,8 @@ import {
   createFinanceGooglePorts,
   type FinanceGoogleFactory,
 } from '../../server/pmc-mini-app/finance/googleClient'
+import { createFinanceReadStore } from '../../server/pmc-mini-app/finance/readStore'
+import type { ExpensePrivateAttachment } from '../../shared/pmcMiniAppExpenseIngress'
 
 const MONTH_KEY = '2026-08'
 const EXPENSE_ID = 'EXP-202608-0001'
@@ -76,6 +78,24 @@ describe('private finance Google ports', () => {
       'ledger-2026-08',
     ])
     expect(JSON.stringify(fake.sheetReads.mock.calls)).not.toContain('callerSpreadsheetId')
+  })
+
+  it('requests unformatted Sheet values and preserves live-like numeric cells for strict expense parsing', async () => {
+    const fake = financeGoogleFake()
+    fake.setMonthRows('EXPENSE_SUBMISSIONS', [committedSubmissionRow()])
+    const store = createFinanceReadStore({ finance: createFinanceGooglePorts(config(), fake.factory) })
+
+    await expect(store.loadMonthlyExpenses(MONTH_KEY)).resolves.toMatchObject({
+      clinicCommittedSatang: 12_000,
+      effectiveExpenseCount: 1,
+    })
+    expect(fake.sheetReads.mock.calls).not.toHaveLength(0)
+    for (const [request] of fake.sheetReads.mock.calls) {
+      expect(request).toMatchObject({
+        valueRenderOption: 'UNFORMATTED_VALUE',
+        dateTimeRenderOption: 'FORMATTED_STRING',
+      })
+    }
   })
 
   it('fails closed for duplicate index rows or any non-private/wrong direct ancestor resource', async () => {
@@ -258,11 +278,15 @@ describe('private finance Google ports', () => {
       monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId, expectedAttachment: attachment,
     }))
       .resolves.toBeUndefined()
-    await expect(ports.downloadExpenseFile({ monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId }))
+    await expect(ports.downloadExpenseFile({
+      monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId, expectedAttachment: attachment,
+    }))
       .resolves.toEqual({ bytes, mimeType: 'image/jpeg' })
 
     fake.afterMediaRead = () => { fake.item(fileId).version = '2' }
-    await expect(ports.downloadExpenseFile({ monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId }))
+    await expect(ports.downloadExpenseFile({
+      monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId, expectedAttachment: attachment,
+    }))
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
 
     fake.afterMediaRead = undefined
@@ -272,6 +296,49 @@ describe('private finance Google ports', () => {
     }))
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
   })
+
+  it.each(['version', 'bytes', 'metadata'] as const)(
+    'rejects a post-commit %s replacement against the pinned ledger attachment descriptor',
+    async (mutation) => {
+      const fake = financeGoogleFake()
+      const ports = createFinanceGooglePorts(config(), fake.factory)
+      const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+      const bytes = await jpeg()
+      const sha256 = createHash('sha256').update(bytes).digest('hex')
+      const attachment = await ports.uploadExpenseImage(claimedUpload({
+        parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+      }))
+      fake.setMonthRows('EXPENSE_SUBMISSIONS', [committedSubmissionRow()])
+      fake.setMonthRows('EXPENSE_ATTACHMENTS', [committedAttachmentRow(attachment)])
+
+      const file = fake.item(attachment.privateFileId)
+      if (mutation === 'version') {
+        file.version = '2'
+      } else if (mutation === 'bytes') {
+        const replacement = await jpeg(3, 2)
+        const replacementHash = createHash('sha256').update(replacement).digest('hex')
+        file.bytes = replacement
+        file.size = String(replacement.length)
+        file.name = `001-${replacementHash}.jpg`
+        file.appProperties.pmcExpenseSha256 = replacementHash
+      } else {
+        const description = JSON.stringify({
+          originalFileName: 'replacement.jpg',
+          uploadedAt: attachment.uploadedAt,
+        })
+        file.description = description
+        file.appProperties.pmcExpenseMetadataSha256 = createHash('sha256')
+          .update(description, 'utf8')
+          .digest('hex')
+      }
+
+      await expect(createFinanceReadStore({ finance: ports }).getEvidence(
+        MONTH_KEY,
+        EXPENSE_ID,
+        attachment.attachmentId,
+      )).rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+    },
+  )
 })
 
 function config() {
@@ -316,6 +383,11 @@ function financeGoogleFake() {
   let sequence = 0
   let afterMediaRead: (() => void) | undefined
   let incompleteSearch: boolean | undefined = false
+  const monthRows = new Map<string, unknown[][]>([
+    ['EXPENSE_SUBMISSIONS', [['EXP-202608-0001']]],
+    ['EXPENSE_ATTACHMENTS', []],
+    ['MONTHLY_SUMMARY', []],
+  ])
 
   const add = (item: FakeItem) => { items.set(item.id, item); return item }
   add({
@@ -335,7 +407,12 @@ function financeGoogleFake() {
     parents: ['month-2026-08'], trashed: false, appProperties: {}, permissions: privatePermissions(), version: '1',
   })
 
-  const sheetReads = vi.fn(async (input: { spreadsheetId: string; ranges: string[] }) => ({
+  const sheetReads = vi.fn(async (input: {
+    spreadsheetId: string
+    ranges: string[]
+    valueRenderOption?: string
+    dateTimeRenderOption?: string
+  }) => ({
     data: {
       valueRanges: input.ranges.map((range) => ({
         range,
@@ -343,7 +420,7 @@ function financeGoogleFake() {
           ? indexRows
           : input.spreadsheetId === 'finance-master'
             ? [['request-1']]
-            : [['EXP-202608-0001']],
+            : monthRows.get(/'([A-Z_]+)'!/.exec(range)?.[1] ?? '') ?? [],
       })),
     },
   }))
@@ -432,11 +509,42 @@ function financeGoogleFake() {
     get afterMediaRead() { return afterMediaRead },
     set afterMediaRead(callback: (() => void) | undefined) { afterMediaRead = callback },
     setIncompleteSearch(value: boolean | undefined) { incompleteSearch = value },
+    setMonthRows(tab: 'EXPENSE_SUBMISSIONS' | 'EXPENSE_ATTACHMENTS' | 'MONTHLY_SUMMARY', rows: unknown[][]) {
+      monthRows.set(tab, rows)
+    },
   }
 }
 
-function jpeg(): Promise<Buffer> {
-  return sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).jpeg().toBuffer()
+function jpeg(width = 2, height = 2): Promise<Buffer> {
+  return sharp({ create: { width, height, channels: 3, background: 'white' } }).jpeg().toBuffer()
+}
+
+function committedSubmissionRow(): unknown[] {
+  return [
+    EXPENSE_ID, '2026-08-29', MONTH_KEY, 'BILL_DOCUMENT', 'CLINIC', 12_000,
+    'ร้านทดสอบ', 'ค่าใช้จ่าย', 'TRANSFER', 'COMMITTED', '', 1, '',
+    'ADMIN_01', 'มัส', '2026-08-29T10:00:00.000Z', '2026-08-29T10:02:00.000Z',
+    '2026-08-29T10:02:00.000Z', 2, 'expense-request-1',
+  ]
+}
+
+function committedAttachmentRow(attachment: ExpensePrivateAttachment): unknown[] {
+  return [
+    attachment.attachmentId,
+    attachment.expenseId,
+    attachment.rootRequestId,
+    attachment.ordinal,
+    attachment.mediaType,
+    attachment.originalFileName,
+    attachment.privateFileId,
+    attachment.deterministicName,
+    attachment.sizeBytes,
+    attachment.driveVersion,
+    attachment.slotClaimId,
+    attachment.sha256,
+    attachment.uploadedByStaffId,
+    attachment.uploadedAt,
+  ]
 }
 
 function claimedUpload(input: {

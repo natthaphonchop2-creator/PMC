@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http'
 import type { AddressInfo } from 'node:net'
 import sharp from 'sharp'
 import { describe, expect, it, vi } from 'vitest'
@@ -151,6 +156,41 @@ describe('finance read and correction APIs', () => {
     const extra = await request(middleware, 'GET', '/api/mini-app/finance/months/2026-08/expenses?all=true', null, 'finance-token')
     expect(repeatedMonth.status).toBe(400)
     expect(extra.status).toBe(400)
+  })
+
+  it('rejects fixed and slow chunked GET bodies before finance capability or store access', async () => {
+    const paths = [
+      '/api/mini-app/finance/months/2026-08/expenses',
+      '/api/mini-app/finance/expenses?month=2026-08',
+      '/api/mini-app/finance/evidence?token=framed-body-token',
+    ]
+
+    const missingCapabilities = dependencies({ finance: undefined })
+    for (const path of paths) {
+      await expect(framedGet(
+        createPmcMiniAppMiddleware(missingCapabilities),
+        path,
+        'content-length',
+      )).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'EXPENSE_INVALID_REQUEST', retryable: false },
+      })
+    }
+
+    const configured = dependencies()
+    for (const path of paths) {
+      await expect(framedGet(
+        createPmcMiniAppMiddleware(configured),
+        path,
+        'slow-chunked',
+      )).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'EXPENSE_INVALID_REQUEST', retryable: false },
+      })
+    }
+    expect(configured.finance.reads?.readStore.loadMonthlyExpenses).not.toHaveBeenCalled()
+    expect(configured.finance.reads?.readStore.listExpenseHistory).not.toHaveBeenCalled()
+    expect(configured.finance.reads?.readStore.getEvidence).not.toHaveBeenCalled()
   })
 
   it('replaces only the current book revision without allowing date/category/scope boundary changes', async () => {
@@ -400,5 +440,62 @@ async function request(
     return { status: response.status, body: parsed, bytes, headers: response.headers }
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+}
+
+async function framedGet(
+  middleware: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  path: string,
+  framing: 'content-length' | 'slow-chunked',
+): Promise<{ status: number; body: unknown }> {
+  const server = createServer(middleware)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  let client: ReturnType<typeof httpRequest> | undefined
+  try {
+    return await new Promise<{ status: number; body: unknown }>((resolve, reject) => {
+      let responseStarted = false
+      const timeout = setTimeout(() => {
+        client?.destroy()
+        reject(new Error('framed GET test timed out'))
+      }, 5_000)
+      client = httpRequest({
+        hostname: '127.0.0.1',
+        port: address.port,
+        method: 'GET',
+        path,
+        headers: {
+          authorization: 'Bearer finance-token',
+          connection: 'close',
+          ...(framing === 'content-length'
+            ? { 'content-length': '1' }
+            : { 'transfer-encoding': 'chunked' }),
+        },
+      }, (response) => {
+        responseStarted = true
+        const chunks: Buffer[] = []
+        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)))
+        response.on('end', () => {
+          clearTimeout(timeout)
+          const bytes = Buffer.concat(chunks)
+          const body = response.headers['content-type']?.startsWith('application/json')
+            ? JSON.parse(bytes.toString('utf8')) as unknown
+            : null
+          resolve({ status: response.statusCode ?? 0, body })
+        })
+      })
+      client.on('error', (error) => {
+        if (!responseStarted) {
+          clearTimeout(timeout)
+          reject(error)
+        }
+      })
+      client.write('x')
+      if (framing === 'content-length') client.end()
+    })
+  } finally {
+    client?.destroy()
+    server.closeAllConnections()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 }

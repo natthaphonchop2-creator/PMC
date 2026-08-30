@@ -109,6 +109,7 @@ export function createFinanceReadStore(input: {
           monthKey,
           expenseId,
           fileId: attachment.privateFileId,
+          expectedAttachment: { ...attachment },
         })
         if (
           !Buffer.isBuffer(downloaded.bytes)
@@ -237,7 +238,8 @@ function parseSubmission(row: unknown[]): ExpenseSubmission {
       parseExpenseDate(expenseDate).monthKey !== monthKey
       || !safeExpenseIdForMonth(expenseId, monthKey)
       || bookDailyKey !== deriveBookDailyKey(category, expenseDate)
-      || (recordState === 'PREPARED' ? committedAt !== null : committedAt === null)
+      || (recordState === 'PREPARED' && committedAt !== null)
+      || (recordState === 'COMMITTED' && committedAt === null)
       || (category === 'BILL_DOCUMENT' && (!counterpartyName?.trim() || paymentMethod === null || revision !== 1))
       || (category !== 'BILL_DOCUMENT' && (counterpartyName !== null || paymentMethod !== null))
     ) throw integrity()
