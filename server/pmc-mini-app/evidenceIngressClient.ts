@@ -21,6 +21,12 @@ export interface EvidenceIngressPort {
   upload(input: EvidenceIngressUploadInput): Promise<string>
 }
 
+export interface EvidenceIngressIdentity {
+  deterministicUploadId: string
+  contentSha256: string
+  fileName: string
+}
+
 interface IngressResponse {
   ok: boolean
   status: number
@@ -56,20 +62,12 @@ export function buildMiniAppEvidenceIngress(
   context: { timestamp: number; nonce: string },
   secret: string,
 ): { body: MiniAppEvidenceIngressEnvelope; headers: { 'content-type': 'application/json' } } {
-  if (!safeId(input.draftId) || !safeId(input.requestId) || !Buffer.isBuffer(input.bytes) || input.bytes.length === 0) {
-    throw new EvidenceIngressClientError('EVIDENCE_INGRESS_INVALID_INPUT')
-  }
-  if (input.bytes.length > MAX_EVIDENCE_BYTES) throw new EvidenceIngressClientError('EVIDENCE_TOO_LARGE')
+  assertEvidenceIngressUploadInput(input)
   if (!Number.isSafeInteger(context.timestamp) || context.timestamp <= 0 || !safeNonce(context.nonce) || !secret) {
     throw new EvidenceIngressClientError('EVIDENCE_INGRESS_INVALID_INPUT')
   }
   const bytesBase64 = input.bytes.toString('base64')
-  const contentSha256 = createHash('sha256').update(bytesBase64, 'utf8').digest('hex')
-  const uploadId = createHash('sha256')
-    .update(`${input.draftId}\0${input.kind}\0${contentSha256}`, 'utf8')
-    .digest('hex')
-  const extension = input.mimeType === 'image/jpeg' ? 'jpg' : 'png'
-  const fileName = `${input.kind.toLowerCase()}-${uploadId}.${extension}`
+  const identity = evidenceIngressIdentityFromBase64(input, bytesBase64)
   const unsigned: UnsignedMiniAppEvidenceIngressEnvelope = {
     kind: 'MINI_APP_EVIDENCE',
     version: 1,
@@ -79,17 +77,47 @@ export function buildMiniAppEvidenceIngress(
       draftId: input.draftId,
       requestId: input.requestId,
       evidenceKind: input.kind,
-      uploadId,
-      fileName,
+      uploadId: identity.deterministicUploadId,
+      fileName: identity.fileName,
       mimeType: input.mimeType,
       bytesBase64,
-      contentSha256,
+      contentSha256: identity.contentSha256,
     },
   }
   const signature = createHmac('sha256', secret)
     .update(canonicalMiniAppEvidenceIngress(unsigned), 'utf8')
     .digest('hex')
   return { body: { ...unsigned, signature }, headers: { 'content-type': 'application/json' } }
+}
+
+export function miniAppEvidenceIngressIdentity(input: EvidenceIngressUploadInput): EvidenceIngressIdentity {
+  assertEvidenceIngressUploadInput(input)
+  return evidenceIngressIdentityFromBase64(input, input.bytes.toString('base64'))
+}
+
+function evidenceIngressIdentityFromBase64(
+  input: EvidenceIngressUploadInput,
+  bytesBase64: string,
+): EvidenceIngressIdentity {
+  const contentSha256 = createHash('sha256').update(bytesBase64, 'utf8').digest('hex')
+  const deterministicUploadId = createHash('sha256')
+    .update(`${input.draftId}\0${input.kind}\0${contentSha256}`, 'utf8')
+    .digest('hex')
+  const extension = input.mimeType === 'image/jpeg' ? 'jpg' : 'png'
+  return {
+    deterministicUploadId,
+    contentSha256,
+    fileName: `${input.kind.toLowerCase()}-${deterministicUploadId}.${extension}`,
+  }
+}
+
+function assertEvidenceIngressUploadInput(input: EvidenceIngressUploadInput): void {
+  if (!safeId(input.draftId) || !safeId(input.requestId) || !Buffer.isBuffer(input.bytes) || input.bytes.length === 0
+    || (input.kind !== 'PAYMENT' && input.kind !== 'CHAT')
+    || (input.mimeType !== 'image/jpeg' && input.mimeType !== 'image/png')) {
+    throw new EvidenceIngressClientError('EVIDENCE_INGRESS_INVALID_INPUT')
+  }
+  if (input.bytes.length > MAX_EVIDENCE_BYTES) throw new EvidenceIngressClientError('EVIDENCE_TOO_LARGE')
 }
 
 export function createEvidenceIngressClient(options: EvidenceIngressClientOptions): EvidenceIngressPort {

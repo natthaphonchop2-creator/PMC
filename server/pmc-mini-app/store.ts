@@ -124,6 +124,7 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'processingLeaseUntil'
   | 'lastProgressAt'
   | 'attemptCount'
+  | 'evidenceProjectionHash'
   | 'confirmedAt'
   | 'caseId'
   | 'safeErrorCode'

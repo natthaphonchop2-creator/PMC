@@ -212,6 +212,44 @@ export function evidenceProjectionHash(binding: MiniAppEvidenceProjectionBinding
   return createHash('sha256').update(canonicalMiniAppEvidenceProjection(binding), 'utf8').digest('base64url')
 }
 
+export function bookingPrepareBindingHash(input: {
+  draft: MiniAppRequestRecord
+  baseVersion: number
+  paymentContentSha256: readonly string[]
+  chatContentSha256: readonly string[]
+}): string {
+  if (input.draft.protocolVersion !== 2 || !Number.isSafeInteger(input.baseVersion) || input.baseVersion < 1
+    || !validContentHashes(input.paymentContentSha256) || !validContentHashes(input.chatContentSha256)) {
+    throw new Error('INVALID_BOOKING_PREPARE_BINDING')
+  }
+  const draft = input.draft
+  const canonical = JSON.stringify({
+    protocolVersion: 2,
+    requestId: draft.requestId,
+    draftId: draft.draftId,
+    baseVersion: input.baseVersion,
+    staffId: draft.staffId,
+    recorderName: draft.recorderName,
+    adminId: draft.adminId,
+    adminName: draft.adminName,
+    aeId: draft.aeId,
+    aeName: draft.aeName,
+    customerName: draft.customerName,
+    facebookName: draft.facebookName,
+    phoneNormalized: draft.phoneNormalized,
+    doctorId: draft.doctorId,
+    serviceId: draft.serviceId,
+    queueType: draft.queueType,
+    appointmentDate: draft.appointmentDate,
+    appointmentTime: draft.appointmentTime,
+    depositAmount: draft.depositAmount,
+    channelId: draft.channelId,
+    paymentContentSha256: input.paymentContentSha256,
+    chatContentSha256: input.chatContentSha256,
+  })
+  return createHash('sha256').update(canonical, 'utf8').digest('base64url')
+}
+
 export function transitionDraft(draft: MiniAppRequestRecord, action: BookingDraftAction): MiniAppRequestRecord {
   if (action.type !== 'SET_STATE' || !ALLOWED[draft.state].includes(action.state)) throw new Error('INVALID_DRAFT_TRANSITION')
   const updatedAt = isoTimestamp(action.updatedAt)
@@ -334,6 +372,11 @@ function validDate(value: string): boolean {
   if (!match) return false
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
   return date.toISOString().slice(0, 10) === value
+}
+
+function validContentHashes(values: readonly string[]): boolean {
+  return Array.isArray(values) && values.length >= 1 && values.length <= 10
+    && values.every((value) => /^[a-f0-9]{64}$/.test(value))
 }
 
 function isoTimestamp(value: string): string {
