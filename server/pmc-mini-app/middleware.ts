@@ -425,15 +425,23 @@ async function handleBookingDraftRoute(
     if (req.method !== 'POST') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
     const body = await readRequiredJson(req, res)
     if (!body) return
-    if (!hasExactKeys(body, [])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+    let requestedProtocol: 1 | 2
+    if (hasExactKeys(body, [])) requestedProtocol = 1
+    else if (hasExactKeys(body, ['protocolVersion'])) {
+      if (body.protocolVersion !== 2) return respond(res, 400, { error: 'INVALID_BOOKING_PROTOCOL_VERSION' })
+      requestedProtocol = 2
+    } else return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
     const now = currentIso(deps)
     const requestId = deps.requestId?.() ?? `request-${randomUUID()}`
     const draftId = deps.draftId?.() ?? `draft-${randomUUID()}`
     const draft: MiniAppRequestRecord = {
-      requestId, draftId, protocolVersion: 1, staffId: authenticated.staffId,
-      recorderName: '', adminId: authenticated.staffId, adminName: '', aeId: null,
+      requestId, draftId, protocolVersion: requestedProtocol, staffId: authenticated.staffId,
+      recorderName: requestedProtocol === 2 ? authenticated.displayName : '',
+      adminId: requestedProtocol === 2 ? '' : authenticated.staffId,
+      adminName: '', aeId: null,
       lineUserIdHash: createHmac('sha256', deps.config.signingSecret).update(authenticated.lineUserId).digest('base64url'),
-      state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
+      state: 'DRAFT', retentionState: '', version: 1, payloadHash: null,
+      aeName: requestedProtocol === 2 ? 'ไม่ระบุ' : '', customerName: '', facebookName: '',
       phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
       depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null, processingStartedAt: null,
@@ -444,8 +452,10 @@ async function handleBookingDraftRoute(
     }
     try {
       respond(res, 201, draftProjection(await deps.store.createDraft(draft)))
-    } catch {
-      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    } catch (error) {
+      if (error instanceof Error && error.message === 'BOOKING_PROTOCOL_SCHEMA_MISMATCH') {
+        respond(res, 409, { error: 'BOOKING_PROTOCOL_SCHEMA_MISMATCH' })
+      } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     }
     return
   }

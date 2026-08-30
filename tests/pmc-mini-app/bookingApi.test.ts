@@ -214,6 +214,70 @@ describe('PMC Mini App booking draft API', () => {
     expect(deps.storeFixture.count()).toBe(0)
   })
 
+  it('creates only the exact legacy envelope on a v1 request schema', async () => {
+    const deps = dependencies({ requestSchemaVersion: 1 })
+
+    const created = await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', {})
+
+    expect(created.status).toBe(201)
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({
+      protocolVersion: 1, staffId: 'staff-1', recorderName: '', adminId: 'staff-1', adminName: '', aeId: null,
+    })
+  })
+
+  it('creates protocol 2 on a v2 request schema and snapshots the immutable recorder', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2 })
+
+    const created = await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+
+    expect(created.status).toBe(201)
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({
+      protocolVersion: 2, state: 'DRAFT', staffId: 'staff-1', recorderName: 'มัส',
+      adminId: '', adminName: '', aeId: null, aeName: 'ไม่ระบุ',
+    })
+  })
+
+  it.each([
+    ['protocol 2 on v1 schema', 1, { protocolVersion: 2 }],
+    ['legacy protocol on v2 schema', 2, {}],
+  ] as const)('rejects cross-schema create: %s', async (_label, requestSchemaVersion, body) => {
+    const deps = dependencies({ requestSchemaVersion })
+
+    const response = await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', body)
+
+    expect(response).toEqual({ status: 409, body: { error: 'BOOKING_PROTOCOL_SCHEMA_MISMATCH' } })
+    expect(deps.storeFixture.count()).toBe(0)
+  })
+
+  it('rejects extra fields on a protocol-2 create envelope', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2 })
+
+    const response = await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', {
+      protocolVersion: 2, adminName: 'ปลอม',
+    })
+
+    expect(response).toEqual({ status: 400, body: { error: 'UNKNOWN_BOOKING_FIELD' } })
+    expect(deps.storeFixture.count()).toBe(0)
+  })
+
+  it('saves canonical Admin and AE snapshots after a protocol-2 create', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2 })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+    deps.storeFixture.attachEvidence('draft-1')
+
+    const saved = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      version: 1,
+      input: validInputV2({ requestId: created.body.requestId, adminId: 'staff-admin', aeId: 'staff-ae' }),
+    })
+
+    expect(saved).toMatchObject({ status: 200, body: { state: 'READY_TO_CONFIRM', version: 2 } })
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({
+      protocolVersion: 2, staffId: 'staff-1', recorderName: 'มัส',
+      adminId: 'staff-admin', adminName: 'แวว', aeId: 'staff-ae', aeName: 'หมวย',
+    })
+  })
+
   it('returns 202 after enqueue and Sheet state without calling Apps Script inline for an owner pilot', async () => {
     const events: string[] = []
     const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])), events })
@@ -495,8 +559,9 @@ function dependencies(options: {
   ingressStatus?: 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT'
   asyncBooking?: PmcAsyncBookingConfig | null
   events?: string[]
+  requestSchemaVersion?: 1 | 2
 } = {}) {
-  const storeFixture = new TestStore()
+  const storeFixture = new TestStore(options.requestSchemaVersion ?? 1)
   const identity: LineIdentityPort = {
     async verify(token) {
       if (token === 'valid-token') return { lineUserId: 'Uactive' }
@@ -555,6 +620,8 @@ class TestStore implements MiniAppStore {
   private queueWrites = 0
   private queueWriteHook: () => void = () => undefined
 
+  constructor(private readonly requestSchemaVersion: 1 | 2) {}
+
   count(): number { return this.drafts.size }
   writeCount(): number { return this.writes }
   queueWriteCount(): number { return this.queueWrites }
@@ -592,10 +659,15 @@ class TestStore implements MiniAppStore {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
-      aes: [{ id: 'staff-1', name: 'มัส' }],
+      admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
+      aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
     }
   }
-  async createDraft(draft: MiniAppRequestRecord) { this.drafts.set(draft.draftId, structuredClone(draft)); return structuredClone(draft) }
+  async createDraft(draft: MiniAppRequestRecord) {
+    if (draft.protocolVersion !== this.requestSchemaVersion) throw new Error('BOOKING_PROTOCOL_SCHEMA_MISMATCH')
+    this.drafts.set(draft.draftId, structuredClone(draft))
+    return structuredClone(draft)
+  }
   async getDraft(draftId: string) { return this.read(draftId) }
   async getLatestActiveDraftByStaff(staffId: string) {
     return [...this.drafts.values()]
@@ -713,6 +785,11 @@ function validInput(patch: Record<string, unknown> = {}) {
     phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL',
     appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1', ...patch,
   }
+}
+
+function validInputV2(patch: Record<string, unknown> = {}) {
+  const { aeName: _aeName, ...base } = validInput()
+  return { ...base, adminId: 'staff-admin', aeId: null, ...patch }
 }
 
 function queuedBody(draft: MiniAppRequestRecord) {

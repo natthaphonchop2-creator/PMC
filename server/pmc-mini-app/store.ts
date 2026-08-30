@@ -282,7 +282,7 @@ export function createGoogleMiniAppStore(input: {
       const response = await sheets.batchGet(spreadsheetId, ranges)
       const attributionChoices = (response[STAFF_RANGE] ?? [])
         .map(staffCandidateFromRow)
-        .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canBeAe))
+        .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canBeAe && !isReservedAttributionOption(staff)))
         .map(({ id, name }) => ({ id, name }))
       const doctors = (response[DOCTORS_RANGE] ?? []).flatMap((row) => {
         const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[4])
@@ -461,7 +461,7 @@ function sameHeader(left: readonly string[], right: readonly string[]): boolean 
 
 function requestToRow(value: MiniAppRequestRecord, schema: RequestSchema): unknown[] {
   if (schema === 'V1' && value.protocolVersion !== 1 || schema === 'V2' && value.protocolVersion !== 2) {
-    throw new Error('MINI_APP_REQUEST_PROTOCOL_SCHEMA_MISMATCH')
+    throw new Error('BOOKING_PROTOCOL_SCHEMA_MISMATCH')
   }
   return requestHeaders(schema).map((header) => requestCell(value, header))
 }
@@ -556,9 +556,18 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
   if (!safeId(value.requestId) || !safeId(value.draftId) || !safeId(value.staffId)) throw new Error('INVALID_DRAFT_ID')
   if (value.protocolVersion !== 1 && value.protocolVersion !== 2) throw new Error('INVALID_BOOKING_PROTOCOL_VERSION')
   if (value.protocolVersion === 2) {
-    if (!safeId(value.adminId) || (value.aeId !== null && !safeId(value.aeId))) throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
-    for (const snapshot of [value.recorderName, value.adminName]) {
-      if (typeof snapshot !== 'string' || !snapshot || snapshot.length > 120) throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
+    const canOmitPreSaveAdmin = ['DRAFT', 'UPLOADING', 'CANCELLED', 'EXPIRED'].includes(value.state)
+      && value.payloadHash === null
+    const missingAdmin = value.adminId === '' && value.adminName === ''
+    if (!value.recorderName || value.recorderName.length > 120) throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
+    if (missingAdmin && !canOmitPreSaveAdmin) throw new Error('BOOKING_ADMIN_REQUIRED')
+    if (!missingAdmin && (!safeId(value.adminId) || isReservedAttributionId(value.adminId)
+      || !value.adminName || value.adminName.length > 120)) throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
+    if (value.aeId === null) {
+      if (value.aeName !== 'ไม่ระบุ') throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
+    } else if (!safeId(value.aeId) || isReservedAttributionId(value.aeId)
+      || !value.aeName || value.aeName === 'ไม่ระบุ' || value.aeName.length > 120) {
+      throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
     }
   }
   if (!safeHash(value.lineUserIdHash)) throw new Error('INVALID_LINE_USER_HASH')
@@ -613,6 +622,14 @@ function staffCandidateFromRow(row: unknown[]): MiniAppStaffRecord | null {
     canManageExpense: financePermissionValue(canManageExpense),
     profileImageUrl: nullableText(profileImageUrl),
   }
+}
+
+function isReservedAttributionOption(staff: Pick<MiniAppStaffRecord, 'id' | 'name'>): boolean {
+  return isReservedAttributionId(staff.id) || staff.name.trim() === 'ไม่ระบุ'
+}
+
+function isReservedAttributionId(value: string): boolean {
+  return value.trim().toUpperCase() === 'NONE'
 }
 
 function enrollmentAttemptFromRow(row: unknown[]): EnrollmentAttemptRecord | null {

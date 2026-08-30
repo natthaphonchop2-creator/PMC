@@ -89,6 +89,41 @@ describe('PMC Mini App Sheet store', () => {
     })
   })
 
+  it('permits an initial protocol-2 draft without selected Admin or AE on the v2 schema', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+
+    await store.createDraft(validDraft({
+      state: 'DRAFT', recorderName: 'มัส', adminId: '', adminName: '', aeId: null, aeName: 'ไม่ระบุ',
+      customerName: '', facebookName: '', phoneNormalized: '', doctorId: '', serviceId: '',
+      appointmentDate: null, appointmentTime: null, depositAmount: 0, channelId: '',
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
+    }))
+
+    await expect(store.getDraft('draft-1')).resolves.toMatchObject({
+      protocolVersion: 2, state: 'DRAFT', recorderName: 'มัส', adminId: '', adminName: '', aeId: null, aeName: 'ไม่ระบุ',
+    })
+    await expect(store.updateDraft('draft-1', 1, { state: 'READY_TO_CONFIRM' })).rejects.toThrow('BOOKING_ADMIN_REQUIRED')
+    await expect(store.updateDraft('draft-1', 1, {
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: '2026-08-27T10:01:00.000Z',
+    })).resolves.toMatchObject({ state: 'CANCELLED', adminId: '', adminName: '' })
+  })
+
+  it.each([
+    ['protocol 1 on v2 schema', 2, 1],
+    ['protocol 2 on v1 schema', 1, 2],
+  ] as const)('rejects %s', async (_label, schemaVersion, protocolVersion) => {
+    const sheets = new MemorySheets()
+    if (schemaVersion === 1) sheets.setRequestHeaders(MINI_APP_ASYNC_REQUEST_HEADERS_V1)
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const draft = protocolVersion === 1
+      ? validDraft({ protocolVersion: 1, recorderName: '', adminId: 'staff-active', adminName: '', aeId: null, aeName: 'ไม่ระบุ' })
+      : validDraft()
+
+    await expect(store.createDraft(draft)).rejects.toThrow('BOOKING_PROTOCOL_SCHEMA_MISMATCH')
+    expect(sheets.rows('MINI_APP_REQUESTS')).toEqual([])
+  })
+
   it('rejects an unknown request header instead of shifting booking fields', async () => {
     const sheets = new MemorySheets()
     const unknown = [...ATTRIBUTION_V2_REQUEST_HEADERS]
@@ -425,6 +460,7 @@ describe('PMC Mini App Sheet store', () => {
     const sheets = new MemorySheets()
     sheets.setTab('CONFIG_STAFF', [
       ['staff-ae', 'มัส', 'private@example.com', 'Uprivate', true, true, true, 'https://example.com/private.png'],
+      ['NONE', 'ไม่ระบุ', 'none@example.com', '', false, true, true, ''],
       ['staff-unlinked-ae', 'หมวย', 'unlinked@example.com', '', true, true, true, ''],
       ['staff-duplicate-name', 'มัส', 'duplicate@example.com', '', false, true, true, ''],
       ['staff-old', 'เก่า', 'old@example.com', 'Uold', true, true, false, ''],
