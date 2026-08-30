@@ -64,3 +64,38 @@ GREEN evidence:
 ## Runbook and stop point
 
 The async Booking runbook now documents the identifier-free telemetry contract, aggregate-only log queries, offline commands, exact thresholds/fixtures, INP follow-up gate, and the separate owner approval required before live measurement. This task stops before canary, real owner timing, worker evidence optimization, traffic, deployment, or all-staff async expansion.
+
+---
+
+## Fix round 1 — Trustworthy client boundaries, owner-applied lifecycle, and exact evidence
+
+The first review found five observability/evidence gaps. All were reproduced before production changes: the production composition supplied no browser sink; preview/Home events fired before React commits and confirm errors had no terminal timing; duplicate/response-loss worker deliveries emitted duplicate terminal lifecycle events; zero Event Timing samples produced a false `CLEAR`; worker/prepare phases were collapsed; and runner fixture attestations could drift from MIME/magic/transfer requirements.
+
+Corrections:
+
+- `PmcMiniApp` now constructs one local privacy-safe `pmc:booking-performance` `CustomEvent` sink and passes the same sink/clock to the default API factory and Wizard. The sink makes no network request and its exact event payload is revalidated before local dispatch.
+- Preview timing uses a one-shot pending ref consumed by a post-commit Wizard effect only after the review UI exists. Successful confirm passes a safe start/status marker to the parent; the parent consumes it once after Home commits. Confirm failure uses a separate post-commit effect after the error UI exists. Re-renders do not duplicate events, and an unmounted Wizard emits no pending preview event.
+- A throwing browser sink cannot alter API results or Home navigation. Composition tests prove the default factory receives the real sink, CustomEvent detail contains only event/action/status/elapsedMs, and callbacks observe the committed target UI.
+- Worker terminal lifecycle events now require an exact owner result with `outcome=APPLIED` that matches the durable terminal projection. A second delivery that only observes terminal state emits nothing. COMPLETE response loss followed by terminal reread/replay also emits no lifecycle event because the invocation never received APPLIED proof. Private IDs remain internal for business idempotency and are never emitted.
+- Worker claim, evidence projection, booking ingress, and completion mutation use distinct allowlisted events/actions with clocks started immediately before each phase. Prepare evidence writes and owner draft-state writes are wrapped separately as `evidence_persist` and `draft_write`; failures remain non-blocking and identifier-free.
+- INP rows now carry an observed Event Timing count. Every controlled preview/confirm row must observe at least one Event Timing entry and both categories must exist, otherwise aggregation/live evaluation fails with the safe `INSUFFICIENT_DATA` code. Optional Long Animation Frames may still be zero when unsupported. Artifacts add only aggregate `observedEventCount`.
+- Every fixture descriptor is now self-contained: exact payment/chat counts, decoded bytes per file, advertised JPEG/PNG MIME, JPEG/PNG magic profile, fixed-Content-Length or chunked-without-Content-Length mode, raw overflow bound, fault mode, expected status, and expected outcome. The harness parses and compares the reviewed runner's exact descriptor/status/outcome attestation; any safe drift or duplicate becomes a fixture failure, while extra/private fields fail closed.
+- The runbook now documents the local browser sink/post-commit boundary, owner-APPLIED terminal semantics, identifier-free aggregation, immediate worker phase query, exact runner attestation, and INP insufficient-data rule.
+
+Fix-round TDD and verification:
+
+- RED review reproduction: **6 files, 19 expected failures** covering all findings.
+- Focused performance/async/Wizard/composition/prepare gate: **11 files, 338 tests passed**.
+- Full Mini App suite: **75 files, 1,110 tests passed**.
+- Full Apps Script Booking suite: **49 files, 693 tests passed**.
+- Full repository suite with bounded four-worker scheduling: **187 files, 2,647 tests passed**.
+- `npm run booking:typecheck`: passed.
+- Full `npm run build`: passed; the existing main-client large-chunk advisory remains unchanged.
+- Full `npm run lint`: zero errors and one pre-existing generated `dist-server/server/pmc-mini-app/taskQueue.js` unused-disable warning.
+- Touched-path ESLint: passed with zero findings.
+- Both measurement scripts passed `node --check`.
+- Booking harness `--help` and passing/failing offline aggregate evaluations produced the expected exit behavior and exact safe labels.
+- INP `--help` remained offline; an injected no-browser/no-network test double proved zero Event Timing returns `INSUFFICIENT_DATA` and closes the harness safely.
+- `git diff --check`: passed.
+
+No real browser was launched and no live request, deploy, traffic change, external service call, Sheet/Drive/GCS/Apps Script/LINE/Calendar/JERA/Cloud Task mutation, credential operation, or async allowlist expansion was performed.

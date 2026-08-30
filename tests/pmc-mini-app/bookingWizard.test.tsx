@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MiniAppApiError, type BrowserBookingTiming } from '../../src/apps/pmc-mini-app/api'
@@ -249,11 +249,14 @@ describe('PMC Mini App mobile booking wizard', () => {
 
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
-    expect(onConfirmed).toHaveBeenCalledWith({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+    expect(onConfirmed).toHaveBeenCalledWith(
+      { caseId: 'PMC-202608-0001', status: 'CONFIRMED' },
+      expect.objectContaining({ status: 200, startedAt: expect.any(Number) }),
+    )
     expect(screen.queryByText('PMC-202608-0001')).not.toBeInTheDocument()
   })
 
-  it('reports aggregate-only click-to-Home timing after the navigation callback', async () => {
+  it('hands the confirm start marker to the parent without ending Home timing before parent commit', async () => {
     const user = userEvent.setup()
     const bookingTiming = vi.fn<BrowserBookingTiming>()
     const onConfirmed = vi.fn()
@@ -267,10 +270,11 @@ describe('PMC Mini App mobile booking wizard', () => {
 
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
-    expect(onConfirmed).toHaveBeenCalledOnce()
-    expect(bookingTiming).toHaveBeenCalledWith('navigation_to_home', {
-      action: 'home', status: 200, elapsedMs: 80,
-    })
+    expect(onConfirmed).toHaveBeenCalledWith(
+      { caseId: 'PMC-202608-0001', status: 'CONFIRMED' },
+      { status: 200, startedAt: 100 },
+    )
+    expect(bookingTiming).not.toHaveBeenCalledWith('navigation_to_home', expect.anything())
   })
 
   it('reports aggregate-only click-to-preview timing after prepare completes', async () => {
@@ -285,7 +289,11 @@ describe('PMC Mini App mobile booking wizard', () => {
       paymentEvidenceCount: 1,
       chatEvidenceCount: 1,
     })
-    const bookingTiming = vi.fn<BrowserBookingTiming>()
+    const bookingTiming = vi.fn<BrowserBookingTiming>((name) => {
+      if (name === 'navigation_to_preview') {
+        expect(screen.getByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+      }
+    })
     const times = [100, 820]
     renderWizard({
       initialStep: 3,
@@ -304,6 +312,63 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(bookingTiming).toHaveBeenCalledWith('navigation_to_preview', {
       action: 'preview', status: 200, elapsedMs: 720,
     })
+    expect(bookingTiming.mock.calls.filter(([name]) => name === 'navigation_to_preview')).toHaveLength(1)
+  })
+
+  it('ends failed-confirm timing only after the terminal error UI commits', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.confirm).mockRejectedValueOnce(new MiniAppApiError('MINI_APP_STORAGE_UNAVAILABLE', 503))
+    const bookingTiming = vi.fn<BrowserBookingTiming>((name) => {
+      if (name === 'confirm_terminal_error') {
+        expect(screen.getByRole('alert')).toHaveTextContent('ยืนยันการจองไม่สำเร็จ')
+      }
+    })
+    const times = [100, 460]
+    renderWizard({
+      initialStep: 4,
+      adapter: app,
+      bookingTiming,
+      performanceNow: () => times.shift()!,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    await waitFor(() => expect(bookingTiming).toHaveBeenCalledWith('confirm_terminal_error', {
+      action: 'error', status: 503, elapsedMs: 360,
+    }))
+    expect(bookingTiming.mock.calls.filter(([name]) => name === 'confirm_terminal_error')).toHaveLength(1)
+  })
+
+  it('does not emit a pending preview timing after the Wizard unmounts', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    let resolvePrepare!: (value: BookingDraftProjection) => void
+    vi.mocked(app.prepare).mockImplementationOnce(() => new Promise((resolve) => { resolvePrepare = resolve }))
+    const bookingTiming = vi.fn<BrowserBookingTiming>()
+    const view = renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+      bookingTiming,
+    })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    view.unmount()
+
+    await act(async () => resolvePrepare({
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 2,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    }))
+
+    expect(bookingTiming).not.toHaveBeenCalled()
   })
 
   it('does not send the same valid confirmation twice before React disables the submit button', () => {
@@ -330,7 +395,10 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
     expect(app.confirm).toHaveBeenCalledWith('draft-1', 1)
-    await waitFor(() => expect(onQueued).toHaveBeenCalledWith(projection))
+    await waitFor(() => expect(onQueued).toHaveBeenCalledWith(
+      projection,
+      expect.objectContaining({ status: 202, startedAt: expect.any(Number) }),
+    ))
   })
 
   it('cancels the server draft before leaving the first step', async () => {

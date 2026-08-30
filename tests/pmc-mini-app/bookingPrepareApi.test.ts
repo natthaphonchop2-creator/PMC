@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BookingPreparePersistenceError,
   persistPrepareEvidence,
@@ -402,6 +402,27 @@ describe('PMC Mini App Booking prepare persistence', () => {
 })
 
 describe('PMC Mini App Booking prepare HTTP route', () => {
+  it('emits distinct identifier-free evidence persistence and owner draft-write phases', async () => {
+    const fixture = prepareFixture('SYNC')
+    const telemetry = vi.fn()
+    const response = await invokePrepare(createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'), identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store, evidenceIngress: fixture.ingress!, draftStateIngress: fixture.draftStateIngress,
+      bookingPerformanceTelemetry: telemetry,
+      now: () => new Date('2026-08-30T10:00:00.000Z'),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(telemetry.mock.calls.map((call) => call[1].action)).toEqual(expect.arrayContaining([
+      'evidence_persist', 'draft_write',
+    ]))
+    for (const call of telemetry.mock.calls) {
+      const fields = call[1]
+      expect(fields).not.toHaveProperty('requestId')
+      expect(fields).not.toHaveProperty('draftId')
+    }
+  })
+
   it.each(['SYNC', 'ASYNC'] as const)('authenticates and snapshots once before one owner-prepared %s response', async (mode) => {
     const fixture = prepareFixture(mode)
     const identity: LineIdentityPort = { verify: async () => ({ lineUserId: 'Uactive' }) }

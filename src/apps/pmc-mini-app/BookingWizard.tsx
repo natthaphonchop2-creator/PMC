@@ -23,6 +23,7 @@ import type {
 } from './contracts'
 import { bookingProtocolVersion } from './contracts'
 import {
+  browserBookingErrorStatus,
   emitBrowserBookingTiming,
   type BrowserBookingTiming,
 } from './api'
@@ -39,6 +40,11 @@ export interface BookingWizardAdapter {
   save(draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(draftId: string, version: number): Promise<BookingQueuedResult | BookingConfirmationResult>
   cancel(draftId: string, version: number): Promise<BookingDraftProjection>
+}
+
+export interface BookingHomeTimingStart {
+  startedAt: number
+  status: 200 | 202
 }
 
 export function BookingWizard({
@@ -59,8 +65,8 @@ export function BookingWizard({
   adapter: BookingWizardAdapter
   initialStep?: number
   onExit?: () => void
-  onQueued?: (projection: BookingDraftProjection) => void
-  onConfirmed?: (result: BookingConfirmationResult) => void
+  onQueued?: (projection: BookingDraftProjection, timing: BookingHomeTimingStart) => void
+  onConfirmed?: (result: BookingConfirmationResult, timing: BookingHomeTimingStart) => void
   bookingTiming?: BrowserBookingTiming
   performanceNow?: () => number
 }) {
@@ -80,8 +86,28 @@ export function BookingWizard({
   const preview = useMemo(() => safePreview(state, config, protocolVersion), [state, config, protocolVersion])
   const evidenceRef = useRef(state.evidence)
   const saveInFlightRef = useRef(false)
+  const pendingPreviewTimingRef = useRef<number | null>(null)
+  const pendingConfirmErrorTimingRef = useRef<{ startedAt: number; status: number } | null>(null)
 
   useEffect(() => { evidenceRef.current = state.evidence }, [state.evidence])
+
+  useEffect(() => {
+    if (state.step !== 4 || pendingPreviewTimingRef.current === null) return
+    const startedAt = pendingPreviewTimingRef.current
+    pendingPreviewTimingRef.current = null
+    emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
+      action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, startedAt),
+    })
+  }, [bookingTiming, performanceNow, state.step])
+
+  useEffect(() => {
+    const pending = pendingConfirmErrorTimingRef.current
+    if (!failure || !pending) return
+    pendingConfirmErrorTimingRef.current = null
+    emitBrowserBookingTiming(bookingTiming, 'confirm_terminal_error', {
+      action: 'error', status: pending.status, elapsedMs: safeElapsed(performanceNow, pending.startedAt),
+    })
+  }, [bookingTiming, failure, performanceNow])
 
   useEffect(() => () => {
     for (const item of [...evidenceRef.current.PAYMENT, ...evidenceRef.current.CHAT]) {
@@ -144,7 +170,7 @@ export function BookingWizard({
       setBusy(true)
       setFailure('')
       const input = bookingInput(state, protocolVersion)
-      const previewStartedAt = safeNow(performanceNow)
+      pendingPreviewTimingRef.current = safeNow(performanceNow)
       try {
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
@@ -154,6 +180,7 @@ export function BookingWizard({
           if (!('adminId' in input) || newPayments.length !== state.evidence.PAYMENT.length
             || newChats.length !== state.evidence.CHAT.length) {
             setFailure('กรุณาแนบรูปหลักฐานทั้งหมดใหม่ก่อนตรวจสอบข้อมูล')
+            pendingPreviewTimingRef.current = null
             return
           }
           current = await adapter.prepare(current.draftId, current.version, {
@@ -164,9 +191,6 @@ export function BookingWizard({
           replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, current.paymentEvidenceCount, dispatch)
           replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, current.chatEvidenceCount, dispatch)
           dispatch({ type: 'GO_TO_STEP', step: 4 })
-          emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
-            action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, previewStartedAt),
-          })
           return
         }
         if (newPayments.length > 0 || newChats.length > 0) {
@@ -185,9 +209,6 @@ export function BookingWizard({
         setDraft(current)
         setSavedAttribution(null)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
-        emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
-          action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, previewStartedAt),
-        })
       } catch (error) {
         if (errorCode(error) === 'STALE_DRAFT_VERSION' || errorCode(error) === 'DRAFT_NOT_UPLOADABLE') {
           try {
@@ -200,9 +221,6 @@ export function BookingWizard({
                 replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, latest.paymentEvidenceCount, dispatch)
                 replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, latest.chatEvidenceCount, dispatch)
                 dispatch({ type: 'GO_TO_STEP', step: 4 })
-                emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
-                  action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, previewStartedAt),
-                })
                 return
               }
             }
@@ -210,6 +228,7 @@ export function BookingWizard({
             // Fall through to the safe generic message below.
           }
         }
+        pendingPreviewTimingRef.current = null
         setFailure(draftSaveFailureMessage(error))
       } finally {
         saveInFlightRef.current = false
@@ -219,27 +238,23 @@ export function BookingWizard({
   }
   const confirm = async () => {
     const homeStartedAt = safeNow(performanceNow)
+    pendingConfirmErrorTimingRef.current = null
     setBusy(true)
     setFailure('')
     try {
       const confirmed = await adapter.confirm(draft.draftId, draft.version)
       if ('requestId' in confirmed) {
-        onQueued?.(confirmed.projection)
-        emitBrowserBookingTiming(bookingTiming, 'navigation_to_home', {
-          action: 'home', status: 202, elapsedMs: safeElapsed(performanceNow, homeStartedAt),
-        })
+        onQueued?.(confirmed.projection, { startedAt: homeStartedAt, status: 202 })
         return
       }
       if (onConfirmed) {
-        onConfirmed(confirmed)
-        emitBrowserBookingTiming(bookingTiming, 'navigation_to_home', {
-          action: 'home', status: 200, elapsedMs: safeElapsed(performanceNow, homeStartedAt),
-        })
+        onConfirmed(confirmed, { startedAt: homeStartedAt, status: 200 })
         return
       }
       setResult(confirmed)
       dispatch({ type: 'GO_TO_STEP', step: 5 })
-    } catch {
+    } catch (error) {
+      pendingConfirmErrorTimingRef.current = { startedAt: homeStartedAt, status: browserBookingErrorStatus(error) }
       setFailure('ยืนยันการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
       setBusy(false)

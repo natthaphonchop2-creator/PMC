@@ -13,6 +13,16 @@ describe('PMC async booking telemetry', () => {
     })
   })
 
+  it('allows a distinct completion-mutation phase without private identifiers', () => {
+    expect(asyncBookingEvent('booking_completion_mutation_completed', {
+      route: 'worker', action: 'completion_mutation', status: 200,
+      attempt: 1, state: 'CONFIRMED', elapsedMs: 310,
+    })).toEqual({
+      event: 'booking_completion_mutation_completed', route: 'worker', action: 'completion_mutation',
+      status: 200, attempt: 1, state: 'CONFIRMED', elapsedMs: 310,
+    })
+  })
+
   it.each([
     ['unknown field', { route: 'worker', action: 'retry', status: 503, customerName: 'private' }],
     ['evidence byte total', { route: 'worker', action: 'retry', status: 503, totalBytes: 123 }],

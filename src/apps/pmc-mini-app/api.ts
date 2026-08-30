@@ -71,9 +71,10 @@ export type BrowserBookingTimingEventName =
   | 'confirm_request_completed'
   | 'navigation_to_preview'
   | 'navigation_to_home'
+  | 'confirm_terminal_error'
 
 export type BrowserBookingTimingFields = {
-  action: 'prepare' | 'confirm' | 'preview' | 'home'
+  action: 'prepare' | 'confirm' | 'preview' | 'home' | 'error'
   status: number
   elapsedMs: number
 }
@@ -88,9 +89,20 @@ const BROWSER_TIMING_ACTIONS: Record<BrowserBookingTimingEventName, BrowserBooki
   confirm_request_completed: 'confirm',
   navigation_to_preview: 'preview',
   navigation_to_home: 'home',
+  confirm_terminal_error: 'error',
 }
 
 const BROWSER_TIMING_FIELDS = new Set(['action', 'status', 'elapsedMs'])
+export const PMC_BOOKING_TIMING_EVENT = 'pmc:booking-performance'
+
+export interface MiniAppApiFactoryOptions {
+  fetch?: typeof globalThis.fetch
+  liff?: MiniAppLiffPort
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
+}
+
+export type MiniAppApiFactory = (options?: MiniAppApiFactoryOptions) => MiniAppBrowserApi
 
 export function bookingBrowserTimingEvent(
   name: BrowserBookingTimingEventName,
@@ -118,12 +130,16 @@ export function emitBrowserBookingTiming(
   } catch { /* passive telemetry cannot alter the user action */ }
 }
 
-export function createMiniAppApi(options: {
-  fetch?: typeof globalThis.fetch
-  liff?: MiniAppLiffPort
-  bookingTiming?: BrowserBookingTiming
-  performanceNow?: () => number
-} = {}): MiniAppBrowserApi {
+export function createBrowserBookingTimingSink(target?: EventTarget): BrowserBookingTiming {
+  const destination = target ?? (typeof window === 'undefined' ? undefined : window)
+  return (name, fields) => {
+    if (!destination || typeof CustomEvent !== 'function') return
+    const detail = bookingBrowserTimingEvent(name, fields)
+    destination.dispatchEvent(new CustomEvent(PMC_BOOKING_TIMING_EVENT, { detail }))
+  }
+}
+
+export function createMiniAppApi(options: MiniAppApiFactoryOptions = {}): MiniAppBrowserApi {
   const request = options.fetch ?? globalThis.fetch
   const liffClient = options.liff ?? liff
   const performanceNow = options.performanceNow ?? (() => globalThis.performance.now())
@@ -218,7 +234,7 @@ export function createMiniAppApi(options: {
         return prepared
       } catch (error) {
         emitBrowserBookingTiming(options.bookingTiming, 'prepare_request_completed', {
-          action: 'prepare', status: browserErrorStatus(error), elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
+          action: 'prepare', status: browserBookingErrorStatus(error), elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
         })
         throw error
       }
@@ -246,7 +262,7 @@ export function createMiniAppApi(options: {
         return confirmed
       } catch (error) {
         emitBrowserBookingTiming(options.bookingTiming, 'confirm_request_completed', {
-          action: 'confirm', status: browserErrorStatus(error), elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
+          action: 'confirm', status: browserBookingErrorStatus(error), elapsedMs: elapsedBrowserMs(performanceNow, startedAt),
         })
         throw error
       }
@@ -340,7 +356,7 @@ function safeBrowserNow(now: () => number): number {
   } catch { return 0 }
 }
 
-function browserErrorStatus(error: unknown): number {
+export function browserBookingErrorStatus(error: unknown): number {
   return error instanceof MiniAppApiError && safeBrowserStatus(error.status) ? error.status : 0
 }
 

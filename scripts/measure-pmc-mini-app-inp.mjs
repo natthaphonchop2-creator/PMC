@@ -20,12 +20,17 @@ export function aggregateMiniAppInteractionTimings(value) {
     throw new Error('INVALID_MINI_APP_INTERACTION_TIMING')
   }
   const parsed = value.map(parseInteractionTiming)
+  if (parsed.some((item) => item.eventCount === 0)
+    || CATEGORIES.some((category) => !parsed.some((item) => item.category === category))) {
+    throw new Error('INSUFFICIENT_DATA')
+  }
   const interactions = CATEGORIES.flatMap((category) => {
     const items = parsed.filter((item) => item.category === category)
     if (items.length === 0) return []
     return [{
       category,
       count: items.length,
+      observedEventCount: items.reduce((total, item) => total + item.eventCount, 0),
       inp: durationSummary(items.map((item) => item.inputDelayMs + item.processingDurationMs + item.presentationDelayMs)),
       inputDelay: durationSummary(items.map((item) => item.inputDelayMs)),
       processing: durationSummary(items.map((item) => item.processingDurationMs)),
@@ -63,8 +68,13 @@ export async function runMiniAppInpCli(argv, dependencies = {}) {
       const measurements = await measureSupportedBrowserFlow(flow, await importBrowser())
       write(JSON.stringify(aggregateMiniAppInteractionTimings(measurements)))
       return 0
-    } catch {
-      write(JSON.stringify({ pass: false, error: 'LIVE_INP_MEASUREMENT_FAILED' }))
+    } catch (error) {
+      write(JSON.stringify({
+        pass: false,
+        error: error instanceof Error && error.message === 'INSUFFICIENT_DATA'
+          ? 'INSUFFICIENT_DATA'
+          : 'LIVE_INP_MEASUREMENT_FAILED',
+      }))
       return 2
     }
   }
@@ -145,14 +155,22 @@ async function finishBrowserMeasurement(page) {
     const longestScriptMs = bucket.frames.reduce((maximum, frame) => Math.max(maximum, frame.longestScript), 0)
     delete globalThis.__pmcBookingPerformanceBucket
     delete globalThis.__pmcBookingPerformanceObservers
-    return { inputDelayMs, processingDurationMs, presentationDelayMs, longestFrameMs, longestScriptMs }
+    return {
+      eventCount: bucket.events.length,
+      inputDelayMs,
+      processingDurationMs,
+      presentationDelayMs,
+      longestFrameMs,
+      longestScriptMs,
+    }
   })
 }
 
 function parseInteractionTiming(value) {
   if (!plainRecord(value)
-    || Object.keys(value).sort().join(',') !== 'category,inputDelayMs,longestFrameMs,longestScriptMs,presentationDelayMs,processingDurationMs'
+    || Object.keys(value).sort().join(',') !== 'category,eventCount,inputDelayMs,longestFrameMs,longestScriptMs,presentationDelayMs,processingDurationMs'
     || !CATEGORIES.includes(value.category)
+    || !safeCount(value.eventCount)
     || !safeDuration(value.inputDelayMs)
     || !safeDuration(value.processingDurationMs)
     || !safeDuration(value.presentationDelayMs)
@@ -162,6 +180,7 @@ function parseInteractionTiming(value) {
   }
   return {
     category: value.category,
+    eventCount: value.eventCount,
     inputDelayMs: value.inputDelayMs,
     processingDurationMs: value.processingDurationMs,
     presentationDelayMs: value.presentationDelayMs,
@@ -185,6 +204,10 @@ function percentile(sorted, quantile) {
 
 function safeDuration(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 86_400_000
+}
+
+function safeCount(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 1_000
 }
 
 function plainRecord(value) {

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDays, FileChartColumn, House, PackageOpen, UserRound } from 'lucide-react'
-import { createMiniAppApi, type MiniAppBrowserApi } from './api'
+import {
+  createBrowserBookingTimingSink,
+  createMiniAppApi,
+  emitBrowserBookingTiming,
+  type BrowserBookingTiming,
+  type MiniAppApiFactory,
+  type MiniAppBrowserApi,
+} from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
 import { BookingProcessing, type BookingProcessingAdapter } from './BookingProcessing'
 import {
@@ -40,17 +47,32 @@ import {
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
 type FinanceView = 'FINANCE_HOME' | FinanceReportView
+const defaultPerformanceNow = () => globalThis.performance.now()
 
 export function PmcMiniApp({
   initialSession,
   initialConfig,
   api: suppliedApi,
+  bookingTiming: suppliedBookingTiming,
+  performanceNow: suppliedPerformanceNow,
+  createApi = createMiniAppApi,
 }: {
   initialSession?: MiniAppSession
   initialConfig?: MiniAppConfig
   api?: PmcMiniAppApi
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
+  createApi?: MiniAppApiFactory
 }) {
-  const api = useMemo(() => suppliedApi ?? createMiniAppApi(), [suppliedApi])
+  const performanceNow = suppliedPerformanceNow ?? defaultPerformanceNow
+  const bookingTiming = useMemo(
+    () => suppliedBookingTiming ?? createBrowserBookingTimingSink(),
+    [suppliedBookingTiming],
+  )
+  const api = useMemo(
+    () => suppliedApi ?? createApi({ bookingTiming, performanceNow }),
+    [bookingTiming, createApi, performanceNow, suppliedApi],
+  )
   const [session, setSession] = useState<MiniAppSession | null>(initialSession ?? null)
   const [config, setConfig] = useState<MiniAppConfig | null>(initialConfig ?? null)
   const [idToken, setIdToken] = useState(initialSession ? 'preview-token' : '')
@@ -76,6 +98,7 @@ export function PmcMiniApp({
   const [stockHistoryLoadingMore, setStockHistoryLoadingMore] = useState(false)
   const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
+  const pendingHomeTimingRef = useRef<{ startedAt: number; status: 200 | 202 } | null>(null)
   const activeBookingProtocol = config ? bookingProtocolVersion(config) : 1
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
@@ -95,6 +118,15 @@ export function PmcMiniApp({
     const timeout = setTimeout(() => setMessage(''), 3_000)
     return () => clearTimeout(timeout)
   }, [message, messageTone])
+
+  useEffect(() => {
+    const pending = pendingHomeTimingRef.current
+    if (view !== 'HOME' || !pending) return
+    pendingHomeTimingRef.current = null
+    emitBrowserBookingTiming(bookingTiming, 'navigation_to_home', {
+      action: 'home', status: pending.status, elapsedMs: safeTimingElapsed(performanceNow, pending.startedAt),
+    })
+  }, [bookingTiming, performanceNow, view])
 
   useEffect(() => {
     if (initialSession) return
@@ -345,13 +377,17 @@ export function PmcMiniApp({
       draft={draft}
       adapter={bookingAdapter}
       initialStep={draft.state === 'READY_TO_CONFIRM' ? 4 : 0}
-      onQueued={() => {
+      bookingTiming={bookingTiming}
+      performanceNow={performanceNow}
+      onQueued={(_projection, timing) => {
+        pendingHomeTimingRef.current = timing
         navigateTo('HOME')
         setDraft(null)
         setMessageTone('SUCCESS')
         setMessage('ทำรายการเรียบร้อย ระบบจะบันทึกภายใน 5 นาที')
       }}
-      onConfirmed={() => {
+      onConfirmed={(_result, timing) => {
+        pendingHomeTimingRef.current = timing
         navigateTo('HOME')
         setDraft(null)
         setMessageTone('SUCCESS')
@@ -570,6 +606,13 @@ function safeRetryAfterSeconds(error: unknown): number {
   if (!error || typeof error !== 'object' || !('retryAfterSeconds' in error)) return 0
   const value = Number(error.retryAfterSeconds)
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function safeTimingElapsed(now: () => number, startedAt: number): number {
+  try {
+    const elapsed = now() - startedAt
+    return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+  } catch { return 0 }
 }
 
 function appendHistoryPage(current: StockHistoryPage, next: StockHistoryPage): StockHistoryPage {

@@ -8,7 +8,8 @@ export type BookingTimingAction =
   | 'draft_read'
   | 'config_snapshot'
   | 'multipart_parse'
-  | 'persist'
+  | 'evidence_persist'
+  | 'draft_write'
   | 'task_enqueue'
   | 'state_ingress'
   | 'recovery_reread'
@@ -32,7 +33,7 @@ const EVENT_ROUTES: Record<BookingTimingEventName, BookingTimingRoute> = {
 }
 
 const ROUTE_ACTIONS: Record<BookingTimingRoute, ReadonlySet<BookingTimingAction>> = {
-  prepare: new Set(['line_verify', 'staff_snapshot', 'draft_read', 'config_snapshot', 'multipart_parse', 'persist', 'request']),
+  prepare: new Set(['line_verify', 'staff_snapshot', 'draft_read', 'config_snapshot', 'multipart_parse', 'evidence_persist', 'draft_write', 'request']),
   confirm: new Set(['line_verify', 'staff_snapshot', 'draft_read', 'task_enqueue', 'state_ingress', 'recovery_reread', 'request']),
 }
 

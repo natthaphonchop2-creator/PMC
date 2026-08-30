@@ -5,13 +5,14 @@ export type AsyncBookingEventName =
   | 'booking_worker_claimed'
   | 'drive_copy_completed'
   | 'booking_ingress_completed'
+  | 'booking_completion_mutation_completed'
   | 'booking_worker_retrying'
   | 'booking_worker_completed'
   | 'booking_worker_needs_review'
 
 export type AsyncBookingEventFields = {
   route: 'evidence' | 'confirm' | 'worker'
-  action: 'stage' | 'enqueue' | 'claim' | 'evidence_projection' | 'booking_ingress' | 'retry' | 'complete' | 'review'
+  action: 'stage' | 'enqueue' | 'claim' | 'evidence_projection' | 'booking_ingress' | 'completion_mutation' | 'retry' | 'complete' | 'review'
   status: number
   attempt?: number
   state?: string
@@ -24,7 +25,7 @@ export type AsyncBookingTelemetry = (name: AsyncBookingEventName, fields: AsyncB
 const EVENT_NAMES = new Set<AsyncBookingEventName>([
   'evidence_stage_started', 'evidence_stage_completed', 'booking_task_enqueued', 'booking_worker_claimed',
   'drive_copy_completed', 'booking_ingress_completed', 'booking_worker_retrying', 'booking_worker_completed',
-  'booking_worker_needs_review',
+  'booking_worker_needs_review', 'booking_completion_mutation_completed',
 ])
 const EVENT_CONTEXT: Record<AsyncBookingEventName, { route: AsyncBookingEventFields['route']; action: AsyncBookingEventFields['action'] }> = {
   evidence_stage_started: { route: 'evidence', action: 'stage' },
@@ -33,6 +34,7 @@ const EVENT_CONTEXT: Record<AsyncBookingEventName, { route: AsyncBookingEventFie
   booking_worker_claimed: { route: 'worker', action: 'claim' },
   drive_copy_completed: { route: 'worker', action: 'evidence_projection' },
   booking_ingress_completed: { route: 'worker', action: 'booking_ingress' },
+  booking_completion_mutation_completed: { route: 'worker', action: 'completion_mutation' },
   booking_worker_retrying: { route: 'worker', action: 'retry' },
   booking_worker_completed: { route: 'worker', action: 'complete' },
   booking_worker_needs_review: { route: 'worker', action: 'review' },
@@ -41,7 +43,7 @@ const FIELD_NAMES = new Set(['route', 'action', 'status', 'attempt', 'state', 'e
 const ROUTE_ACTIONS = {
   evidence: new Set<string>(['stage']),
   confirm: new Set<string>(['enqueue']),
-  worker: new Set<string>(['claim', 'evidence_projection', 'booking_ingress', 'retry', 'complete', 'review']),
+  worker: new Set<string>(['claim', 'evidence_projection', 'booking_ingress', 'completion_mutation', 'retry', 'complete', 'review']),
 } as const
 const ASYNC_STATES = new Set([
   'DRAFT', 'UPLOADING', 'READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMING',

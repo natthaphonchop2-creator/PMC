@@ -3,7 +3,12 @@ import '@testing-library/jest-dom/vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
+import {
+  MiniAppApiError,
+  PMC_BOOKING_TIMING_EVENT,
+  type BrowserBookingTiming,
+  type MiniAppApiFactory,
+} from '../../src/apps/pmc-mini-app/api'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
@@ -327,6 +332,72 @@ describe('PMC LINE Mini App shell', () => {
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), { timeout: 3_500 })
   })
 
+  it('wires one default privacy-safe timing sink through the API factory and Wizard, then emits Home after commit', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const ready = readyDraft()
+    api.createDraft = vi.fn(async () => ready)
+    api.confirm = vi.fn(async () => ({
+      requestId: ready.requestId,
+      status: 'QUEUED' as const,
+      projection: { ...ready, state: 'QUEUED' as const, version: 4, input: null, queuedAt: '2026-08-29T10:00:00.000Z' },
+    }))
+    const createApi = vi.fn<MiniAppApiFactory>(() => api)
+    const events: unknown[] = []
+    const listener = (event: Event) => {
+      events.push((event as CustomEvent).detail)
+      if ((event as CustomEvent).detail?.event === 'navigation_to_home') {
+        expect(screen.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+      }
+    }
+    window.addEventListener(PMC_BOOKING_TIMING_EVENT, listener)
+
+    try {
+      render(<PmcMiniApp
+        initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+        initialConfig={config}
+        createApi={createApi}
+      />)
+      expect(createApi).toHaveBeenCalledOnce()
+      const sink = createApi.mock.calls[0]![0].bookingTiming
+      expect(typeof sink).toBe('function')
+
+      await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+      await user.click(await screen.findByRole('button', { name: 'ยืนยันบันทึก' }))
+
+      await waitFor(() => expect(events).toContainEqual({
+        event: 'navigation_to_home', action: 'home', status: 202, elapsedMs: expect.any(Number),
+      }))
+      expect(events.find((value) => (value as { event?: string }).event === 'navigation_to_home'))
+        .not.toHaveProperty('requestId')
+      expect(events.filter((value) => (value as { event?: string }).event === 'navigation_to_home')).toHaveLength(1)
+    } finally {
+      window.removeEventListener(PMC_BOOKING_TIMING_EVENT, listener)
+    }
+  })
+
+  it('keeps request results and Home navigation intact when the composed timing sink throws', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const ready = readyDraft()
+    api.createDraft = vi.fn(async () => ready)
+    api.confirm = vi.fn(async () => ({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const }))
+    const throwingTiming = vi.fn<BrowserBookingTiming>(() => { throw new Error('private telemetry failure') })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+      bookingTiming={throwingTiming}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    await user.click(await screen.findByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(api.confirm).toHaveBeenCalledOnce()
+    expect(throwingTiming).toHaveBeenCalledWith('navigation_to_home', expect.objectContaining({ action: 'home', status: 200 }))
+  })
+
   it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -569,6 +640,20 @@ function savedAttribution() {
     recorder: { id: 'ADMIN_01', name: 'มัส' },
     admin: { id: 'staff-admin', name: 'แวว' },
     ae: null,
+  }
+}
+
+function readyDraft() {
+  const input = {
+    requestId: 'request-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+    phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+    appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+  }
+  return {
+    draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM' as const, retentionState: '' as const,
+    version: 3, input, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 2, chatEvidenceCount: 1,
+    attribution: savedAttribution(),
+    confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
   }
 }
 

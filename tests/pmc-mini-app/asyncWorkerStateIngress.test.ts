@@ -27,6 +27,44 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(terminalEvents[0]![1]).toMatchObject({ elapsedMs: 2_500, state: 'CONFIRMED' })
   })
 
+  it('emits one terminal lifecycle event only for the delivery that receives owner APPLIED', async () => {
+    const telemetry = vi.fn()
+    const fixture = workerFixture({ telemetry })
+
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({ state: 'CONFIRMED' })
+    await expect(fixture.worker.finalize(taskInput(2, fixture.state.read()))).resolves.toMatchObject({ state: 'CONFIRMED' })
+
+    expect(telemetry.mock.calls.filter(([name]) => name === 'booking_worker_completed')).toHaveLength(1)
+  })
+
+  it('does not invent a terminal lifecycle event when COMPLETE response loss prevents owner APPLIED proof', async () => {
+    const telemetry = vi.fn()
+    const fixture = workerFixture({ telemetry, responseLossOperation: 'COMPLETE' })
+
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({ state: 'CONFIRMED' })
+    await expect(fixture.worker.finalize(taskInput(2, fixture.state.read()))).resolves.toMatchObject({ state: 'CONFIRMED' })
+
+    expect(telemetry.mock.calls.filter(([name]) => name === 'booking_worker_completed')).toHaveLength(0)
+  })
+
+  it('measures worker phases from their immediate starts with a distinct completion mutation event', async () => {
+    const telemetry = vi.fn()
+    const fixture = workerFixture({
+      telemetry,
+      advanceOnClaimSendMs: 100,
+      advanceOnStagingGetMs: 50,
+      advanceOnBookingIngressMs: 200,
+      advanceOnCompleteSendMs: 300,
+    })
+
+    await expect(fixture.worker.finalize(taskInput(1))).resolves.toMatchObject({ state: 'CONFIRMED' })
+
+    expect(telemetry).toHaveBeenCalledWith('booking_worker_claimed', expect.objectContaining({ action: 'claim', elapsedMs: 100 }))
+    expect(telemetry).toHaveBeenCalledWith('drive_copy_completed', expect.objectContaining({ action: 'evidence_projection', elapsedMs: 100 }))
+    expect(telemetry).toHaveBeenCalledWith('booking_ingress_completed', expect.objectContaining({ action: 'booking_ingress', elapsedMs: 200 }))
+    expect(telemetry).toHaveBeenCalledWith('booking_completion_mutation_completed', expect.objectContaining({ action: 'completion_mutation', elapsedMs: 300 }))
+  })
+
   it('uses state ingress exclusively and validates reread state before booking and cleanup', async () => {
     const fixture = workerFixture()
 
@@ -478,6 +516,8 @@ function workerFixture(options: {
   failReadsAfterExhaust?: boolean
   advanceOnStagingGetMs?: number
   advanceOnEvidenceUploadMs?: number
+  advanceOnBookingIngressMs?: number
+  advanceOnCompleteSendMs?: number
   stagingFailure?: Error
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
@@ -565,6 +605,7 @@ function workerFixture(options: {
     : null
   const bookingIngress: BookingIngressPort & { send: ReturnType<typeof vi.fn> } = {
     send: vi.fn(async (draft) => {
+      clock.advance(options.advanceOnBookingIngressMs ?? 0)
       if (productionIngress) return productionIngress.send(draft)
       const result = bookingResults.shift()
       if (!result) throw new Error('missing fake booking result')
@@ -606,6 +647,7 @@ class StateIngressFixture implements AsyncStateIngressPort {
       afterExhaust?: () => void
       advanceOnClaimSendMs?: number
       advanceOnExhaustSendMs?: number
+      advanceOnCompleteSendMs?: number
       exhaustFailure?: Error
     },
   ) { this.draft = structuredClone(draft) }
@@ -625,6 +667,7 @@ class StateIngressFixture implements AsyncStateIngressPort {
   async mutate(input: MiniAppAsyncStateMutation) {
     this.calls.push(structuredClone(input))
     if (input.operation === 'CLAIM') this.clock.advance(this.options.advanceOnClaimSendMs ?? 0)
+    if (input.operation === 'COMPLETE') this.clock.advance(this.options.advanceOnCompleteSendMs ?? 0)
     if (input.operation === 'CLAIM' && this.options.alwaysBusyClaim) {
       return result(this.draft, 'BUSY')
     }

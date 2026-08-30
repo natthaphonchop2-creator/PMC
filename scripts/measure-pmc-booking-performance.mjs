@@ -12,13 +12,13 @@ export const BOOKING_PERFORMANCE_FAILURES = Object.freeze([
 ])
 
 export const BOOKING_PERFORMANCE_FIXTURE_SPECS = Object.freeze([
-  Object.freeze({ label: 'payment-chat-2x500kb', paymentFiles: 1, chatFiles: 1, fileBytes: 500_000, totalDecodedBytes: 1_000_000, expected: 'SUCCESS' }),
-  Object.freeze({ label: 'five-files-2mb', paymentFiles: 3, chatFiles: 2, fileBytes: 2_000_000, totalDecodedBytes: 10_000_000, expected: 'SUCCESS' }),
-  Object.freeze({ label: 'twenty-files-max25mb', paymentFiles: 10, chatFiles: 10, fileBytes: 1_250_000, totalDecodedBytes: 25_000_000, expected: 'SUCCESS' }),
-  Object.freeze({ label: 'chunk-overflow', rawMultipartBytes: 26_000_001, expected: 'EVIDENCE_BATCH_TOO_LARGE' }),
-  Object.freeze({ label: 'invalid-mime', mimeType: 'application/octet-stream', expected: 'UNSUPPORTED_EVIDENCE' }),
-  Object.freeze({ label: 'partial-failure', failAfterPersistedFiles: 2, expected: 'RETRY_WITHOUT_DUPLICATE' }),
-  Object.freeze({ label: 'response-loss', loseResponseAfterApply: true, expected: 'IDEMPOTENT_RECOVERY' }),
+  freezeFixture(fixtureSpec('payment-chat-2x500kb', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
+  freezeFixture(fixtureSpec('five-files-2mb', [fileProfile('PAYMENT', 3, 2_000_000, 'image/png', 'PNG'), fileProfile('CHAT', 2, 2_000_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
+  freezeFixture(fixtureSpec('twenty-files-max25mb', [fileProfile('PAYMENT', 10, 1_250_000, 'image/png', 'PNG'), fileProfile('CHAT', 10, 1_250_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
+  freezeFixture(fixtureSpec('chunk-overflow', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], { mode: 'CHUNKED', contentLength: 'OMITTED', rawMultipartBytes: 26_000_001 }, { type: 'NONE' }, 413, 'EVIDENCE_BATCH_TOO_LARGE')),
+  freezeFixture(fixtureSpec('invalid-mime', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'JPEG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 415, 'UNSUPPORTED_EVIDENCE')),
+  freezeFixture(fixtureSpec('partial-failure', [fileProfile('PAYMENT', 2, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 2, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'REMOTE_FAILURE_AFTER_PERSISTED_FILES', afterPersistedFiles: 2 }, 503, 'BOOKING_PREPARE_RETRY')),
+  freezeFixture(fixtureSpec('response-loss', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'RESPONSE_LOSS_AFTER_APPLY' }, 200, 'IDEMPOTENT_RECOVERY')),
 ])
 
 export const BOOKING_PERFORMANCE_FIXTURES = Object.freeze(
@@ -87,9 +87,8 @@ export async function measureBookingPerformance(runner, options) {
   }
 
   for (const fixture of BOOKING_PERFORMANCE_FIXTURE_SPECS) {
-    const result = parseFixtureResult(await runner.runFixture(fixture))
+    const result = parseFixtureResult(await runner.runFixture(fixture), fixture)
     if (!result.passed) maximumFixtureFailures += 1
-    maximumFixtureFailures += result.fixtureFailures
     unavailableRouteProbeCount += result.unavailableRouteProbeCount
   }
 
@@ -245,16 +244,92 @@ function parseRunResult(value) {
   }
 }
 
-function parseFixtureResult(value) {
-  if (!plainRecord(value) || !allowedKeys(value, ['passed', 'unavailableRouteProbeCount', 'fixtureFailures'])
-    || typeof value.passed !== 'boolean') {
+function parseFixtureResult(value, expectedFixture) {
+  if (!plainRecord(value)
+    || exactKeys(value) !== 'duplicateCount,fixture,outcome,status,unavailableRouteProbeCount'
+    || !safeStatus(value.status)
+    || typeof value.outcome !== 'string'
+    || !/^[A-Z][A-Z0-9_]{1,79}$/.test(value.outcome)
+    || !safeInteger(value.duplicateCount, 0, 1_000)) {
+    throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  }
+  const fixture = parseFixtureDescriptor(value.fixture)
+  return {
+    passed: JSON.stringify(fixture) === JSON.stringify(expectedFixture)
+      && value.status === expectedFixture.expected.status
+      && value.outcome === expectedFixture.expected.outcome
+      && value.duplicateCount === 0,
+    unavailableRouteProbeCount: optionalCount(value.unavailableRouteProbeCount),
+  }
+}
+
+function parseFixtureDescriptor(value) {
+  if (!plainRecord(value) || exactKeys(value) !== 'expected,fault,files,label,transfer'
+    || !safeLabel(value.label) || !Array.isArray(value.files) || value.files.length < 1 || value.files.length > 2) {
+    throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  }
+  const files = value.files.map(parseFixtureFileProfile)
+  if (new Set(files.map(({ kind }) => kind)).size !== files.length
+    || files.reduce((total, file) => total + file.count, 0) > 20) {
+    throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  }
+  const transfer = parseFixtureTransfer(value.transfer)
+  const fault = parseFixtureFault(value.fault)
+  const expected = parseFixtureExpected(value.expected)
+  return { label: value.label, files, transfer, fault, expected }
+}
+
+function parseFixtureFileProfile(value) {
+  if (!plainRecord(value)
+    || exactKeys(value) !== 'advertisedMime,count,decodedBytesEach,kind,magicProfile'
+    || (value.kind !== 'PAYMENT' && value.kind !== 'CHAT')
+    || !safeInteger(value.count, 1, 10)
+    || !safeInteger(value.decodedBytesEach, 1, 10_000_000)
+    || (value.advertisedMime !== 'image/png' && value.advertisedMime !== 'image/jpeg')
+    || (value.magicProfile !== 'PNG' && value.magicProfile !== 'JPEG')) {
     throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
   }
   return {
-    passed: value.passed,
-    unavailableRouteProbeCount: optionalCount(value.unavailableRouteProbeCount),
-    fixtureFailures: optionalCount(value.fixtureFailures),
+    kind: value.kind,
+    count: value.count,
+    decodedBytesEach: value.decodedBytesEach,
+    advertisedMime: value.advertisedMime,
+    magicProfile: value.magicProfile,
   }
+}
+
+function parseFixtureTransfer(value) {
+  if (!plainRecord(value) || exactKeys(value) !== 'contentLength,mode,rawMultipartBytes') {
+    throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  }
+  const fixed = value.mode === 'CONTENT_LENGTH' && value.contentLength === 'PRESENT_EXACT'
+    && value.rawMultipartBytes === null
+  const chunked = value.mode === 'CHUNKED' && value.contentLength === 'OMITTED'
+    && safeInteger(value.rawMultipartBytes, 1, 100_000_000)
+  if (!fixed && !chunked) throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  return { mode: value.mode, contentLength: value.contentLength, rawMultipartBytes: value.rawMultipartBytes }
+}
+
+function parseFixtureFault(value) {
+  if (!plainRecord(value)) throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  if (exactKeys(value) === 'type' && (value.type === 'NONE' || value.type === 'RESPONSE_LOSS_AFTER_APPLY')) {
+    return { type: value.type }
+  }
+  if (exactKeys(value) === 'afterPersistedFiles,type'
+    && value.type === 'REMOTE_FAILURE_AFTER_PERSISTED_FILES'
+    && safeInteger(value.afterPersistedFiles, 1, 19)) {
+    return { type: value.type, afterPersistedFiles: value.afterPersistedFiles }
+  }
+  throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+}
+
+function parseFixtureExpected(value) {
+  if (!plainRecord(value) || exactKeys(value) !== 'outcome,status'
+    || !safeStatus(value.status) || typeof value.outcome !== 'string'
+    || !/^[A-Z][A-Z0-9_]{1,79}$/.test(value.outcome)) {
+    throw new Error('INVALID_BOOKING_PERFORMANCE_RESULT')
+  }
+  return { status: value.status, outcome: value.outcome }
 }
 
 function parseConcurrentResult(value) {
@@ -285,6 +360,27 @@ function metric(route, status, samples) {
     p95Ms: percentile(sorted, 0.95),
     maxMs: sorted.at(-1) ?? 0,
   }
+}
+
+function fileProfile(kind, count, decodedBytesEach, advertisedMime, magicProfile) {
+  return { kind, count, decodedBytesEach, advertisedMime, magicProfile }
+}
+
+function fixedTransfer() {
+  return { mode: 'CONTENT_LENGTH', contentLength: 'PRESENT_EXACT', rawMultipartBytes: null }
+}
+
+function fixtureSpec(label, files, transfer, fault, status, outcome) {
+  return { label, files, transfer, fault, expected: { status, outcome } }
+}
+
+function freezeFixture(value) {
+  for (const file of value.files) Object.freeze(file)
+  Object.freeze(value.files)
+  Object.freeze(value.transfer)
+  Object.freeze(value.fault)
+  Object.freeze(value.expected)
+  return Object.freeze(value)
 }
 
 function percentile(sorted, quantile) {

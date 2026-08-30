@@ -136,11 +136,15 @@ After this gate's deployed revision is verified, the owner may run the checker w
 
 ## Safe telemetry and log review
 
-Structured events are allowlisted: `prepare_completed`, `confirm_completed`, `evidence_stage_started`, `evidence_stage_completed`, `booking_task_enqueued`, `booking_worker_claimed`, `drive_copy_completed`, `booking_ingress_completed`, `booking_worker_retrying`, `booking_worker_completed`, and `booking_worker_needs_review`.
+Structured events are allowlisted: `prepare_completed`, `confirm_completed`, `evidence_stage_started`, `evidence_stage_completed`, `booking_task_enqueued`, `booking_worker_claimed`, `drive_copy_completed`, `booking_ingress_completed`, `booking_completion_mutation_completed`, `booking_worker_retrying`, `booking_worker_completed`, and `booking_worker_needs_review`.
 
 Allowed fields are only `route`, `action`, numeric `status`, safe `state`, bounded `attempt`, bounded `fileCount`, and `elapsedMs`. Request/draft/Case IDs and safe error codes are no longer emitted. The event builders reject unknown fields, nested values, URLs, bearer tokens, evidence content/bytes, file names, customer/business fields, and non-finite or out-of-range numbers. Never add raw request bodies, DOM text/attributes/input values, task/resource names, provider details, exception strings, identifiers, or secrets to log queries or dashboards.
 
 Use Logs Explorer filters by event name, route/action/status/state, and numeric `elapsedMs` only. Keep exported results aggregate-only; do not export source log entries.
+
+Browser timings use one local `pmc:booking-performance` `CustomEvent` sink shared by the default API and Wizard composition. It performs no network request. Preview, Home, and terminal-error durations end from post-commit effects after the corresponding UI is present. Pending markers are consumed once and disappear safely on unmount.
+
+Worker terminal lifecycle events are emitted only when that invocation receives an exact owner `APPLIED` result for the durable terminal transition. An idempotent/terminal replay or a response-loss recovery emits no terminal lifecycle event, so aggregate queries must not try to deduplicate using forbidden business IDs. Phase events remain separate from lifecycle events.
 
 Documentation-only Log Analytics templates (the result must retain only aggregate values and time window):
 
@@ -156,6 +160,22 @@ WITH safe_events AS (
 SELECT APPROX_QUANTILES(elapsed_ms, 100)[OFFSET(50)] AS ack_p50_ms,
   APPROX_QUANTILES(elapsed_ms, 100)[OFFSET(95)] AS ack_p95_ms
 FROM safe_events
+```
+
+Worker phase attribution uses immediate phase starts:
+
+```sql
+SELECT jsonPayload.action AS action,
+  APPROX_QUANTILES(CAST(jsonPayload.elapsedMs AS INT64), 100)[OFFSET(50)] AS p50_ms,
+  APPROX_QUANTILES(CAST(jsonPayload.elapsedMs AS INT64), 100)[OFFSET(95)] AS p95_ms
+FROM `LOG_TABLE`
+WHERE jsonPayload.event IN (
+  'booking_worker_claimed',
+  'drive_copy_completed',
+  'booking_ingress_completed',
+  'booking_completion_mutation_completed'
+)
+GROUP BY action
 ```
 
 ```sql
@@ -190,9 +210,9 @@ node scripts/measure-pmc-booking-performance.mjs --evaluate tests/fixtures/booki
 
 The performance budget requires 30 retained successful runs after one discarded warm-up for async prepare, sync prepare, legacy sync prepare, and async confirm; seven exact bounded fixtures; then five concurrent clients. It fails for insufficient success runs, async prepare p95 above 3,000 ms, sync prepare median above 70% of the legacy median, async confirm p95 above 6,000 ms, any unavailable-route probe, any maximum-fixture failure, or any concurrency duplicate.
 
-The exact fixture labels are `payment-chat-2x500kb`, `five-files-2mb`, `twenty-files-max25mb`, `chunk-overflow`, `invalid-mime`, `partial-failure`, and `response-loss`. Artifacts retain only revision label, UTC/Bangkok timestamps, safe route/status, fixture label, count, p50/p95/max, and aggregate gate counts. Raw samples, URLs, IDs, rows, payloads, evidence metadata, and secrets are forbidden.
+The exact fixture labels are `payment-chat-2x500kb`, `five-files-2mb`, `twenty-files-max25mb`, `chunk-overflow`, `invalid-mime`, `partial-failure`, and `response-loss`. Each reviewed runner result must attest the exact per-kind count, decoded bytes per file, advertised JPEG/PNG MIME, matching or intentionally mismatched JPEG/PNG magic profile, fixed `Content-Length` or chunked-without-`Content-Length` transfer mode, fault mode, status, and expected outcome. Descriptor drift counts as a fixture failure. Artifacts retain only revision label, UTC/Bangkok timestamps, safe route/status, fixture label, count, p50/p95/max, and aggregate gate counts. Raw samples, URLs, IDs, rows, payloads, evidence metadata, and secrets are forbidden.
 
-**Stop for a new owner approval before live measurement.** Live mode additionally requires the literal `--owner-approved` flag, `PMC_BOOKING_PERFORMANCE_OWNER_GATE=APPROVED`, a reviewed `PMC_BOOKING_PERFORMANCE_REVISION` label, a separately reviewed runner module, and a new non-existing aggregate output path. The implementation task does not run this mode. INP/Long Animation Frame evidence records only `preview`/`confirm` categories and aggregate input-delay, processing, presentation, longest-frame, and longest-script durations. A p95 INP above 200 ms or a script duration above 50 ms records `routeSplittingGate=REQUIRED`; it does not authorize speculative lazy loading or route changes.
+**Stop for a new owner approval before live measurement.** Live mode additionally requires the literal `--owner-approved` flag, `PMC_BOOKING_PERFORMANCE_OWNER_GATE=APPROVED`, a reviewed `PMC_BOOKING_PERFORMANCE_REVISION` label, a separately reviewed runner module, and a new non-existing aggregate output path. The implementation task does not run this mode. INP/Long Animation Frame evidence records only `preview`/`confirm` categories, observed Event Timing counts, and aggregate input-delay, processing, presentation, longest-frame, and longest-script durations. Missing Event Timing evidence for either category fails with `INSUFFICIENT_DATA`; only optional Long Animation Frames may degrade to zero. A p95 INP above 200 ms or a script duration above 50 ms records `routeSplittingGate=REQUIRED`; it does not authorize speculative lazy loading or route changes.
 
 ## Monthly cost check
 

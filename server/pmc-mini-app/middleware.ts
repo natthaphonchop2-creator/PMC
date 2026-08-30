@@ -1305,6 +1305,72 @@ function responseStatus(res: ServerResponse, fallback: number): number {
   return Number.isSafeInteger(res.statusCode) && res.statusCode >= 100 && res.statusCode <= 599 ? res.statusCode : fallback
 }
 
+function timedPreparePersistence(
+  persistence: PersistPrepareEvidenceInput['persistence'],
+  deps: PmcMiniAppMiddlewareDependencies,
+  draft: MiniAppRequestRecord,
+): PersistPrepareEvidenceInput['persistence'] {
+  if (persistence.type === 'ASYNC') {
+    const staging = persistence.staging
+    return {
+      type: 'ASYNC',
+      staging: {
+        async put(input) {
+          const startedAt = timingNow(deps)
+          try {
+            const result = await staging.put(input)
+            emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 200, startedAt, draft.state, 1, draft.attemptCount)
+            return result
+          } catch (error) {
+            emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 503, startedAt, draft.state, 1, draft.attemptCount)
+            throw error
+          }
+        },
+        get: (objectKey) => staging.get(objectKey),
+        deleteVerified: (objectKey) => staging.deleteVerified(objectKey),
+      },
+    }
+  }
+  const ingress = persistence.ingress
+  return {
+    type: 'SYNC',
+    ingress: {
+      async upload(input) {
+        const startedAt = timingNow(deps)
+        try {
+          const result = await ingress.upload(input)
+          emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 200, startedAt, draft.state, 1, draft.attemptCount)
+          return result
+        } catch (error) {
+          emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 503, startedAt, draft.state, 1, draft.attemptCount)
+          throw error
+        }
+      },
+    },
+  }
+}
+
+function timedPrepareDraftStateIngress(
+  ingress: DraftStateIngressPort,
+  deps: PmcMiniAppMiddlewareDependencies,
+  draft: MiniAppRequestRecord,
+  fileCount: number,
+): DraftStateIngressPort {
+  return {
+    async mutate(input) {
+      const startedAt = timingNow(deps)
+      try {
+        const result = await ingress.mutate(input)
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'draft_write', 200, startedAt, result.state, fileCount, draft.attemptCount)
+        return result
+      } catch (error) {
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'draft_write', 503, startedAt, undefined, fileCount, draft.attemptCount)
+        throw error
+      }
+    },
+  }
+}
+
 function safeBookingError(error: unknown): string {
   const code = error instanceof Error ? error.message : ''
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'INVALID_BOOKING_INPUT'
@@ -1390,7 +1456,6 @@ async function handleBookingPrepare(
   const fileCount = parsed.paymentFiles.length + parsed.chatFiles.length
   emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'multipart_parse', 200, multipartStartedAt, draft.state, fileCount, draft.attemptCount)
 
-  const persistStartedAt = timingNow(deps)
   try {
     const prepared = await persistPrepareEvidence({
       draft,
@@ -1399,23 +1464,20 @@ async function handleBookingPrepare(
       paymentFiles: parsed.paymentFiles,
       chatFiles: parsed.chatFiles,
       bookingContext,
-      persistence,
+      persistence: timedPreparePersistence(persistence, deps, draft),
       store: deps.store,
-      draftStateIngress: deps.draftStateIngress,
+      draftStateIngress: timedPrepareDraftStateIngress(deps.draftStateIngress, deps, draft, fileCount),
       now: () => currentIso(deps),
     })
-    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'persist', 200, persistStartedAt, prepared.draft.state, fileCount, prepared.draft.attemptCount)
     respond(res, 200, draftProjection(prepared.draft))
   } catch (error) {
     if (error instanceof BookingPreparePersistenceError) {
       const status = error.code === 'BOOKING_PREPARE_CONFLICT' ? 409 : 503
-      emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'persist', status, persistStartedAt, undefined, fileCount, draft.attemptCount)
       respond(res, status, { error: error.code })
       return
     }
     const code = safeBookingError(error)
     const status = bookingErrorStatus(error)
-    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'persist', status, persistStartedAt, undefined, fileCount, draft.attemptCount)
     respond(res, status, { error: code })
   }
 }
