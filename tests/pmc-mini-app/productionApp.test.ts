@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -26,6 +26,12 @@ afterEach(async () => {
 })
 
 describe('production PMC Mini App route isolation', () => {
+  it('uses explicit Node ESM extensions across the shared expense runtime boundary', async () => {
+    const source = await readFile(join(process.cwd(), 'shared', 'pmcMiniAppExpenseIngress.ts'), 'utf8')
+    expect(source.match(/from '\.\/pmcExpense\.js'/g)).toHaveLength(2)
+    expect(source).not.toContain("from './pmcExpense'")
+  })
+
   it('keeps Booking, OCR, health, and legacy routes available when Mini App config is absent', async () => {
     const app = handler({ pmcMiniApp: undefined })
 

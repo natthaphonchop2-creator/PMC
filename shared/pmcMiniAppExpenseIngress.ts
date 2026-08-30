@@ -3,12 +3,12 @@ import {
   isExpenseIdForMonth,
   isValidExpenseOriginalFileName,
   parseExpenseDate,
-} from './pmcExpense'
+} from './pmcExpense.js'
 import type {
   EnabledExpenseCategory,
   ExpensePaymentMethod,
   ExpenseReceipt,
-} from './pmcExpense'
+} from './pmcExpense.js'
 
 export interface ExpensePrivateAttachment {
   attachmentId: string
