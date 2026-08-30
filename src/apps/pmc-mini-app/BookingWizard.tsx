@@ -231,8 +231,15 @@ export function BookingWizard({
 
 function CustomerStep({ session, config, state, errors, update }: StepProps & { session: MiniAppSession; config: MiniAppConfig }) {
   return <section className="pmc-step"><StepHeading title="ข้อมูลลูกค้า" description="กรอกข้อมูลที่ใช้ค้นหาและติดต่อ" />
-    <Field label="Admin" error=""><input value={session.displayName} disabled /></Field>
-    <Field label="AE" error={errors.aeName}><select value={state.aeName} onChange={(event) => update('aeName', event.target.value)}>{config.aes.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></Field>
+    <Field label="ผู้บันทึก" error=""><input value={session.displayName} disabled /></Field>
+    <Field label="Admin" error={errors.adminId}><select
+      name="adminId" value={state.adminId} required aria-invalid={Boolean(errors.adminId)}
+      onChange={(event) => update('adminId', event.target.value)}
+    ><option value="" disabled>เลือก Admin</option>{config.admins.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+    <Field label="AE" error={errors.aeId}><select
+      name="aeId" value={state.aeId} aria-invalid={Boolean(errors.aeId)}
+      onChange={(event) => update('aeId', event.target.value)}
+    ><option value="">ไม่ระบุ</option>{config.aes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
     <Field label="ชื่อลูกค้า" error={errors.customerName}><input name="customerName" value={state.customerName} onChange={(event) => update('customerName', event.target.value)} autoComplete="name" required /></Field>
     <Field label="ชื่อ Facebook" hint="ถ้าไม่มี ให้กรอกคำว่า ไม่มี" error={errors.facebookName}><input name="facebookName" value={state.facebookName} onChange={(event) => update('facebookName', event.target.value)} required /></Field>
     <Field label="เบอร์มือถือ" error={errors.phone}><input name="phone" value={state.phone} onChange={(event) => update('phone', event.target.value)} inputMode="tel" autoComplete="tel" required /></Field>
@@ -293,7 +300,7 @@ function EvidencePicker({ label, inputLabel, kind, items, error, onAdd, onRemove
 function PreviewStep({ session, preview, evidence }: { session: MiniAppSession; preview: ReturnType<typeof safePreview>; evidence: { PAYMENT: BookingEvidenceItem[]; CHAT: BookingEvidenceItem[] } }) {
   return <section className="pmc-step"><StepHeading title="ตรวจสอบก่อนยืนยัน" description="ตรวจข้อมูลให้ครบก่อนบันทึกเข้าระบบ" />
     <dl className="pmc-preview-list">
-      <PreviewRow label="Admin" value={session.displayName} /><PreviewRow label="AE" value={preview.ae} />
+      <PreviewRow label="ผู้บันทึก" value={session.displayName} /><PreviewRow label="Admin" value={preview.admin} /><PreviewRow label="AE" value={preview.ae} />
       <PreviewRow label="ลูกค้า" value={preview.customerName} /><PreviewRow label="Facebook" value={preview.facebookName} />
       <PreviewRow label="โทร" value={preview.phone} /><PreviewRow label="แพทย์" value={preview.doctor} />
       <PreviewRow label="โปรแกรม" value={preview.service} /><PreviewRow label="ช่องทาง" value={preview.channel} />
@@ -314,7 +321,12 @@ function initialDraftState(draft: BookingDraftProjection, initialStep: number) {
   const state = initialBooking(draft.requestId)
   state.step = Math.max(0, Math.min(4, initialStep))
   if (draft.input) {
-    state.values = { ...state.values, ...draft.input, depositAmount: String(draft.input.depositAmount) }
+    state.values = {
+      ...state.values,
+      ...draft.input,
+      aeId: draft.input.aeId ?? '',
+      depositAmount: String(draft.input.depositAmount),
+    }
   }
   state.evidence.PAYMENT = savedEvidenceItems('PAYMENT', draft.paymentEvidenceIds, draft.paymentEvidenceCount)
   state.evidence.CHAT = savedEvidenceItems('CHAT', draft.chatEvidenceIds, draft.chatEvidenceCount)
@@ -323,7 +335,7 @@ function initialDraftState(draft: BookingDraftProjection, initialStep: number) {
 
 function safePreview(state: ReturnType<typeof initialBooking>, config: MiniAppConfig) {
   try { return previewBooking(state, config) } catch {
-    return { customerName: '', facebookName: '', phone: '', ae: state.values.aeName, doctor: '', service: '', channel: '', queueType: state.values.queueType, appointmentDate: state.values.appointmentDate, appointmentTime: state.values.appointmentTime, depositAmount: 0, paymentCount: state.evidence.PAYMENT.length, chatCount: state.evidence.CHAT.length }
+    return { customerName: '', facebookName: '', phone: '', admin: '', ae: 'ไม่ระบุ', doctor: '', service: '', channel: '', queueType: state.values.queueType, appointmentDate: state.values.appointmentDate, appointmentTime: state.values.appointmentTime, depositAmount: 0, paymentCount: state.evidence.PAYMENT.length, chatCount: state.evidence.CHAT.length }
   }
 }
 
@@ -348,7 +360,7 @@ function errorCode(error: unknown): string {
 function sameBookingInput(left: BookingDraftInput | null, right: BookingDraftInput): boolean {
   if (!left) return false
   const keys: Array<keyof BookingDraftInput> = [
-    'requestId', 'aeName', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId', 'queueType',
+    'requestId', 'adminId', 'aeId', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId', 'queueType',
     'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
   ]
   return keys.every((key) => left[key] === right[key])

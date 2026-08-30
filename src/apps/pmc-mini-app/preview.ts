@@ -35,7 +35,8 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
     { id: 'eyelid', name: 'ทำตาสองชั้น', durationMinutes: 60 },
   ],
   channels: [{ id: 'page-tab', name: 'เพจTAB' }, { id: 'page-main', name: 'เพจหลัก' }],
-  aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
+  admins: [{ id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
+  aes: [{ id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
 }
 
 export function createPreviewMiniAppConfig(options: {

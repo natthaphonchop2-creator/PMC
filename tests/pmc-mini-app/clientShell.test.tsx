@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
@@ -153,6 +154,25 @@ describe('PMC LINE Mini App shell', () => {
 
     expect(api.createDraft).toHaveBeenCalledOnce()
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+  })
+
+  it('shows one persistent close-and-reopen instruction for a cached booking client', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    vi.mocked(api.createDraft).mockRejectedValueOnce(new MiniAppApiError('CLIENT_UPGRADE_REQUIRED', 409))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+
+    const instruction = await screen.findByRole('alert')
+    expect(instruction).toHaveTextContent('กรุณาปิดหน้าต่างนี้ แล้วเปิด Mini App จาก LINE ใหม่อีกครั้ง')
+    expect(screen.queryByRole('heading', { name: 'สวัสดี, มัส' })).not.toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(api.createDraft).toHaveBeenCalledOnce()
   })
 
   it('starts on Home and opens the latest active request only after a booking action', async () => {
@@ -452,7 +472,9 @@ const config: MiniAppConfig = {
   financeReportsEnabled: false, stockEnabled: false, canManageStock: false,
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
-  channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
+  channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+  admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
+  aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
 }
 
 function miniAppApi(): PmcMiniAppApi {

@@ -11,7 +11,8 @@ export interface BookingEvidenceItem {
 
 export interface BookingValues {
   requestId: string
-  aeName: string
+  adminId: string
+  aeId: string
   customerName: string
   facebookName: string
   phone: string
@@ -44,7 +45,8 @@ export function initialBooking(requestId = ''): BookingWizardState {
     step: 0,
     values: {
       requestId,
-      aeName: 'ไม่ระบุ',
+      adminId: '',
+      aeId: '',
       customerName: '',
       facebookName: '',
       phone: '',
@@ -103,12 +105,13 @@ export function validateBookingStep(
   const errors: Record<string, string> = {}
   const values = state.values
   if (step === 0 || step === 4) {
+    if (!config.admins.some(({ id }) => id === values.adminId)) errors.adminId = 'กรุณาเลือก Admin'
+    if (values.aeId && !config.aes.some(({ id }) => id === values.aeId)) errors.aeId = 'กรุณาเลือก AE'
     if (!values.customerName.trim()) errors.customerName = 'กรุณากรอกชื่อลูกค้า'
     if (!values.facebookName.trim()) errors.facebookName = 'กรุณากรอกชื่อ Facebook หรือคำว่า ไม่มี'
     try { normalizeThaiPhoneInput(values.phone) } catch { errors.phone = 'กรุณากรอกเบอร์มือถือให้ถูกต้อง' }
   }
   if (step === 1 || step === 4) {
-    if (!config.aes.some(({ name }) => name === values.aeName)) errors.aeName = 'กรุณาเลือก AE'
     if (!config.doctors.some(({ id }) => id === values.doctorId)) errors.doctorId = 'กรุณาเลือกแพทย์'
     if (!config.services.some(({ id }) => id === values.serviceId)) errors.serviceId = 'กรุณาเลือกโปรแกรม'
     if (!config.channels.some(({ id }) => id === values.channelId)) errors.channelId = 'กรุณาเลือกช่องทาง'
@@ -138,7 +141,8 @@ export function normalizeThaiPhoneInput(value: string): string {
 export function bookingInput(state: BookingWizardState): BookingDraftInput {
   return {
     requestId: state.values.requestId,
-    aeName: state.values.aeName,
+    adminId: state.values.adminId,
+    aeId: state.values.aeId || null,
     customerName: state.values.customerName.trim(),
     facebookName: state.values.facebookName.trim(),
     phone: normalizeThaiPhoneInput(state.values.phone),
@@ -157,7 +161,10 @@ export function previewBooking(state: BookingWizardState, config: MiniAppConfig)
     customerName: state.values.customerName.trim(),
     facebookName: state.values.facebookName.trim(),
     phone: normalizeThaiPhoneInput(state.values.phone),
-    ae: state.values.aeName,
+    admin: config.admins.find(({ id }) => id === state.values.adminId)?.name ?? '',
+    ae: state.values.aeId
+      ? config.aes.find(({ id }) => id === state.values.aeId)?.name ?? ''
+      : 'ไม่ระบุ',
     doctor: config.doctors.find(({ id }) => id === state.values.doctorId)?.name ?? '',
     service: config.services.find(({ id }) => id === state.values.serviceId)?.name ?? '',
     channel: config.channels.find(({ id }) => id === state.values.channelId)?.name ?? '',

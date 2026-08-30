@@ -13,6 +13,7 @@ import { monthSelectionToSearch, type FinanceDailyFilter, type FinanceMonthSelec
 import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
 import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '../../../shared/pmcStock'
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
+import { PMC_BOOKING_PROTOCOL_VERSION } from '../../../shared/pmcBookingProtocol'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -96,7 +97,9 @@ export function createMiniAppApi(options: {
       return { miniAppId, ...config }
     },
     createDraft(idToken) {
-      return requestJson(request, '/api/mini-app/booking-drafts', authenticatedJson(idToken, 'POST', {}))
+      return requestJson(request, '/api/mini-app/booking-drafts', authenticatedJson(idToken, 'POST', {
+        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
+      }))
     },
     async loadLatestActiveDraft(idToken) {
       try {
@@ -125,13 +128,23 @@ export function createMiniAppApi(options: {
       })
     },
     save(idToken, draftId, version, input) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticatedJson(idToken, 'PATCH', { version, input }))
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticatedJson(idToken, 'PATCH', {
+        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
+        version,
+        input,
+      }))
     },
     confirm(idToken, draftId, version) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', { version }), parseBookingConfirmationResponse)
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', {
+        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
+        version,
+      }), parseBookingConfirmationResponse)
     },
     cancel(idToken, draftId, version) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/cancel`, authenticatedJson(idToken, 'POST', { version }))
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/cancel`, authenticatedJson(idToken, 'POST', {
+        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
+        version,
+      }))
     },
     loadReport(idToken, reportType, filters) {
       const query = buildReportSearchParams(reportType, filters)

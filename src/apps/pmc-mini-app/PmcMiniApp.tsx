@@ -58,6 +58,7 @@ export function PmcMiniApp({
   const [loading, setLoading] = useState(!initialSession)
   const [message, setMessage] = useState('')
   const [messageTone, setMessageTone] = useState<'ERROR' | 'SUCCESS'>('ERROR')
+  const [clientUpgradeRequired, setClientUpgradeRequired] = useState(false)
   const [enrollmentStaff, setEnrollmentStaff] = useState<Array<{ id: string; name: string }> | null>(null)
   const [enrollmentBusy, setEnrollmentBusy] = useState(false)
   const [enrollmentMessage, setEnrollmentMessage] = useState('')
@@ -77,6 +78,15 @@ export function PmcMiniApp({
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
   useEffect(() => { saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters) }, [financeFilterStorage, financeFilters])
+
+  const runBookingMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation()
+    } catch (error) {
+      if (safeErrorCode(error) === 'CLIENT_UPGRADE_REQUIRED') setClientUpgradeRequired(true)
+      throw error
+    }
+  }, [])
 
   useEffect(() => {
     if (!message || messageTone !== 'SUCCESS') return
@@ -123,10 +133,10 @@ export function PmcMiniApp({
     load: (draftId) => api.loadDraft(idToken, draftId),
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
     uploadEvidenceBatch: (draftId, input) => api.uploadEvidenceBatch(idToken, draftId, input),
-    save: (draftId, version, input) => api.save(idToken, draftId, version, input),
-    confirm: (draftId, version) => api.confirm(idToken, draftId, version),
-    cancel: (draftId, version) => api.cancel(idToken, draftId, version),
-  }), [api, idToken])
+    save: (draftId, version, input) => runBookingMutation(() => api.save(idToken, draftId, version, input)),
+    confirm: (draftId, version) => runBookingMutation(() => api.confirm(idToken, draftId, version)),
+    cancel: (draftId, version) => runBookingMutation(() => api.cancel(idToken, draftId, version)),
+  }), [api, idToken, runBookingMutation])
 
   const processingAdapter = useMemo<BookingProcessingAdapter>(() => ({
     load: (draftId, signal) => api.loadDraft(idToken, draftId, signal),
@@ -184,12 +194,15 @@ export function PmcMiniApp({
       setMessage('')
       try {
         const activeDraft = await api.loadLatestActiveDraft(idToken)
-        const nextDraft = activeDraft ? await hydrateActiveDraft(api, idToken, activeDraft) : await api.createDraft(idToken)
+        const nextDraft = activeDraft
+          ? await hydrateActiveDraft(api, idToken, activeDraft)
+          : await runBookingMutation(() => api.createDraft(idToken))
         if (requestEpoch !== navigationEpochRef.current) return
         setDraft(nextDraft)
         setView('BOOKING')
-      } catch {
+      } catch (error) {
         if (requestEpoch === navigationEpochRef.current) {
+          if (safeErrorCode(error) === 'CLIENT_UPGRADE_REQUIRED') return
           setMessageTone('ERROR')
           setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
         }
@@ -313,6 +326,7 @@ export function PmcMiniApp({
     onSubmit={linkAccount}
   />
   if (!session) return <Notice>{message || 'รอผู้ดูแลอนุมัติ'}</Notice>
+  if (clientUpgradeRequired) return <ClientUpgradeNotice />
   if (view === 'BOOKING' && config && draft) {
     if (isAsyncBookingState(draft.state) || isBookingTerminalState(draft.state)) {
       return <BookingProcessing
@@ -519,6 +533,13 @@ function AccountPage({ session, fallbackFormUrl }: { session: MiniAppSession; fa
 
 function Notice({ children }: { children: string }) {
   return <main className="pmc-mini-app-notice" aria-live="polite"><p>{children}</p></main>
+}
+
+function ClientUpgradeNotice() {
+  return <main className="pmc-mini-app-notice" role="alert">
+    <h1>กรุณาเปิดระบบใหม่</h1>
+    <p>กรุณาปิดหน้าต่างนี้ แล้วเปิด Mini App จาก LINE ใหม่อีกครั้ง เพื่ออัปเดตระบบ</p>
+  </main>
 }
 
 function isAdditionalReport(value: ReportSelection): boolean {

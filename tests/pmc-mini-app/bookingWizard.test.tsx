@@ -10,14 +10,67 @@ import type { BookingConfirmationResult, BookingDraftProjection, MiniAppConfig, 
 afterEach(cleanup)
 
 describe('PMC Mini App mobile booking wizard', () => {
-  it('shows locked Admin, editable AE, and no final confirmation on the first step', () => {
+  it('shows recorder, required Admin, and optional AE in the exact attribution order', () => {
     renderWizard()
 
-    expect(screen.getByLabelText('Admin')).toHaveValue('มัส')
-    expect(screen.getByLabelText('Admin')).toBeDisabled()
-    expect(screen.getByLabelText('AE')).toBeEnabled()
+    const recorder = screen.getByLabelText('ผู้บันทึก')
+    const admin = screen.getByLabelText('Admin')
+    const ae = screen.getByLabelText('AE')
+    expect(recorder).toHaveValue('มัส')
+    expect(recorder).toBeDisabled()
+    expect(admin).toBeRequired()
+    expect(ae).not.toBeRequired()
+    expect(admin).toHaveValue('')
+    expect(ae).toHaveValue('')
+    expect(recorder.compareDocumentPosition(admin) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(admin.compareDocumentPosition(ae) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'ยืนยันบันทึก' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+  })
+
+  it('blocks the first step until a valid Admin ID is selected', async () => {
+    const user = userEvent.setup()
+    renderWizard({ draft: { ...draft, input: completeInput({ adminId: '' }) } })
+
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('กรุณาเลือก Admin')
+    expect(screen.getByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+  })
+
+  it('submits canonical Admin and nullable AE IDs without browser-owned names', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const current = {
+      ...draft,
+      input: completeInput(),
+      paymentEvidenceIds: ['payment-1'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    renderWizard({ draft: current, adapter: app })
+
+    await user.selectOptions(screen.getByLabelText('Admin'), 'staff-admin')
+    await user.selectOptions(screen.getByLabelText('AE'), '')
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    await waitFor(() => expect(app.save).toHaveBeenCalledOnce())
+    const submitted = vi.mocked(app.save).mock.calls[0]![2]
+    expect(submitted).toMatchObject({ adminId: 'staff-admin', aeId: null })
+    expect(submitted).not.toHaveProperty('adminName')
+    expect(submitted).not.toHaveProperty('aeName')
+    expect(submitted).not.toHaveProperty('recorderName')
+  })
+
+  it('previews recorder, Admin, and AE labels in the same exact order', () => {
+    const view = renderWizard({ initialStep: 4, draft: { ...draft, input: completeInput() } })
+    const labels = [...view.container.querySelectorAll('.pmc-preview-list dt')].map((element) => element.textContent)
+    const values = [...view.container.querySelectorAll('.pmc-preview-list dd')].map((element) => element.textContent)
+
+    expect(labels.slice(0, 3)).toEqual(['ผู้บันทึก', 'Admin', 'AE'])
+    expect(values.slice(0, 3)).toEqual(['มัส', 'แวว', 'ไม่ระบุ'])
   })
 
   it('shows date and time for a normal queue and removes them for an automatic queue', async () => {
@@ -241,7 +294,9 @@ const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
   stockEnabled: false, canManageStock: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
-  channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-1', name: 'มัส' }],
+  channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+  admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
+  aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
 }
 const draft: BookingDraftProjection = {
   draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
@@ -260,9 +315,13 @@ function adapter(): BookingWizardAdapter {
   }
 }
 
-function completeInput() {
+function completeInput(patch: Partial<ReturnType<typeof completeInputBase>> = {}) {
+  return { ...completeInputBase(), ...patch }
+}
+
+function completeInputBase() {
   return {
-    requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+    requestId: 'request-1', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
     phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
     appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
   }

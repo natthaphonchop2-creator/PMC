@@ -21,6 +21,7 @@ export interface MiniAppConfig {
   doctors: Array<{ id: string; name: string }>
   services: Array<{ id: string; name: string; durationMinutes: number }>
   channels: Array<{ id: string; name: string }>
+  admins: Array<{ id: string; name: string }>
   aes: Array<{ id: string; name: string }>
 }
 
@@ -43,9 +44,10 @@ export interface MiniAppEnrollmentOptions {
 
 export type BookingQueueType = 'NORMAL' | 'AUTO'
 
-export interface BookingDraftInput {
+export interface BookingDraftInputV2 {
   requestId: string
-  aeName: string
+  adminId: string
+  aeId: string | null
   customerName: string
   facebookName: string
   phone: string
@@ -57,6 +59,8 @@ export interface BookingDraftInput {
   depositAmount: number
   channelId: string
 }
+
+export type BookingDraftInput = BookingDraftInputV2
 
 export type BookingDraftState =
   | 'DRAFT'
