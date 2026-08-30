@@ -144,6 +144,37 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
   })
 
+  it('opens revenue UX previews without calling any live revenue adapter', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={{
+        ...config,
+        financeReportsEnabled: false,
+        financeUiPreviewEnabled: true,
+        expenseCaptureEnabled: true,
+        canSubmitExpense: true,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+    expect(screen.getByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
+    expect(screen.getByText('ยังไม่เชื่อมข้อมูลรายรับจริง')).toBeVisible()
+    expect(api.loadDailyIncome).not.toHaveBeenCalled()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'กลับไปรายงาน' }))
+    await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
+    expect(screen.getByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
+    expect(api.loadDailyIncome).not.toHaveBeenCalled()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+  })
+
   it('routes expense form to a validated durable receipt and clears form state on return', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -753,7 +784,7 @@ describe('PMC LINE Mini App shell', () => {
 
 const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
-  financeReportsEnabled: false, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
+  financeReportsEnabled: false, financeUiPreviewEnabled: false, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],

@@ -14,6 +14,7 @@ import { EnrollmentPage } from './EnrollmentPage'
 import { Home } from './Home'
 import { DailyIncomePage, type DailyIncomePageAdapter } from './DailyIncomePage'
 import { FinanceReportHome, type FinanceReportView } from './FinanceReportHome'
+import { FinanceReportPreviewPage } from './FinanceReportPreviewPage'
 import { MonthlyFinancePage, type MonthlyExpensePageAdapter, type MonthlyIncomePageAdapter } from './MonthlyFinancePage'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
@@ -96,7 +97,7 @@ export function PmcMiniApp({
   const navigationEpochRef = useRef(0)
   const financeReadAccess = Boolean(config?.financeReadsEnabled && config?.canViewFinance)
   const canManageExpense = Boolean(financeReadAccess && config?.expenseCaptureEnabled && config?.canManageExpense)
-  const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.expenseCaptureEnabled || config?.financeReadsEnabled)
+  const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.financeUiPreviewEnabled || config?.expenseCaptureEnabled || config?.financeReadsEnabled)
   const reportNavigationEnabled = Boolean(config?.reportingEnabled || financeShellEnabled)
 
   const leaveExpenseResumeWithoutReceipt = useCallback(() => {
@@ -609,7 +610,10 @@ export function PmcMiniApp({
         }}
       />}
       {view === 'REPORTS' && (financeShellEnabled
-        ? config?.financeReportsEnabled && financeView === 'DAILY_INCOME'
+        ? config?.financeUiPreviewEnabled && !config.financeReportsEnabled
+          && (financeView === 'DAILY_INCOME' || financeView === 'MONTHLY_INCOME')
+          ? <FinanceReportPreviewPage view={financeView} onBack={() => setFinanceView('FINANCE_HOME')} />
+          : config?.financeReportsEnabled && financeView === 'DAILY_INCOME'
           ? <DailyIncomePage
             bangkokDate={bangkokDate}
             initialFilter={financeFilters.daily}
@@ -633,6 +637,7 @@ export function PmcMiniApp({
             : <FinanceReportHome
               canViewFinance={financeReadAccess}
               financeReportsEnabled={Boolean(config?.financeReportsEnabled)}
+              financeUiPreviewEnabled={Boolean(config?.financeUiPreviewEnabled)}
               financeReadsEnabled={Boolean(config?.financeReadsEnabled)}
               expenseCaptureEnabled={Boolean(config?.expenseCaptureEnabled)}
               canSubmitExpense={Boolean(config?.canSubmitExpense)}

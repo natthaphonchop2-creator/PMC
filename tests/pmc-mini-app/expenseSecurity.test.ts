@@ -327,7 +327,7 @@ function config(): PmcMiniAppServerConfig {
     intakeFolderId: 'folder-1', bookingIngressUrl: 'https://example.test/booking',
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'booking-secret',
     signingSecret: SECRET, enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
-    asyncBooking: null, financeReportsEnabled: false, stockEnabled: false, stockManagerPilotOnly: false,
+    asyncBooking: null, financeReportsEnabled: false, financeUiPreviewEnabled: false, stockEnabled: false, stockManagerPilotOnly: false,
     finance: null,
   }
 }

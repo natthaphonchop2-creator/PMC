@@ -251,6 +251,7 @@ const config: PmcMiniAppServerConfig = {
     maxBatchBytes: 25_000_000,
   },
   financeReportsEnabled: false,
+  financeUiPreviewEnabled: false,
   stockEnabled: false,
   stockManagerPilotOnly: false,
   finance: null,

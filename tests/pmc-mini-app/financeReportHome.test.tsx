@@ -76,6 +76,25 @@ describe('finance-first report home', () => {
     expect(onSelect).toHaveBeenCalledWith('MONTHLY_INCOME')
   })
 
+  it('shows both revenue structure entries with an explicit preview label while live revenue stays off', async () => {
+    const user = userEvent.setup()
+    const onSelect = vi.fn()
+    render(<FinanceReportHome
+      financeReportsEnabled={false}
+      financeUiPreviewEnabled
+      canViewFinance
+      expenseCaptureEnabled
+      canSubmitExpense
+      onSelect={onSelect}
+    />)
+
+    expect(screen.getByText('ตัวอย่าง UX/UI — ยังไม่เชื่อมข้อมูลรายรับจริง')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+    await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
+    expect(onSelect).toHaveBeenNthCalledWith(1, 'DAILY_INCOME')
+    expect(onSelect).toHaveBeenNthCalledWith(2, 'MONTHLY_INCOME')
+  })
+
   it('keeps every deferred expense area compact, unavailable, and free of create actions', () => {
     render(<FinanceReportHome canViewFinance onSelect={vi.fn()} />)
 

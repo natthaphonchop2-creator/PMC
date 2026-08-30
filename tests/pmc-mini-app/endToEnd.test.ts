@@ -366,6 +366,7 @@ function financeServerConfig(): PmcMiniAppServerConfig {
     maxFilesPerKind: 10,
     asyncBooking: null,
     financeReportsEnabled: true,
+    financeUiPreviewEnabled: false,
     stockEnabled: false,
     stockManagerPilotOnly: false,
   }

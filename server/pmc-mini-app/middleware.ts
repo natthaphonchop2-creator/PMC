@@ -254,6 +254,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         fallbackFormUrl: deps.config.fallbackFormUrl,
         reportingEnabled: Boolean(deps.jera),
         financeReportsEnabled: deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled,
+        financeUiPreviewEnabled: deps.config.financeUiPreviewEnabled,
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
         expenseCaptureEnabled: Boolean(deps.finance?.capture),
         financeReadsEnabled: Boolean(deps.finance?.reads),

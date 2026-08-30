@@ -41,9 +41,14 @@ describe('PMC Mini App server configuration', () => {
   })
 
   it('keeps finance reports disabled by default and enables them only with an exact flag', () => {
-    expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({ financeReportsEnabled: false })
+    expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({
+      financeReportsEnabled: false,
+      financeUiPreviewEnabled: false,
+    })
     expect(readPmcMiniAppConfig({ ...validEnvironment(), PMC_FINANCE_REPORTS_ENABLED: 'true' }))
       .toMatchObject({ financeReportsEnabled: true })
+    expect(readPmcMiniAppConfig({ ...validEnvironment(), PMC_FINANCE_UI_PREVIEW_ENABLED: 'true' }))
+      .toMatchObject({ financeUiPreviewEnabled: true })
   })
 
   it('fails closed when enabled async booking configuration is incomplete', () => {
@@ -86,6 +91,7 @@ describe('PMC Mini App server configuration', () => {
     ['unknown Stock enabled value', { PMC_STOCK_ENABLED: 'yes' }],
     ['unknown Stock pilot value', { PMC_STOCK_MANAGER_PILOT_ONLY: 'yes' }],
     ['unknown finance reports value', { PMC_FINANCE_REPORTS_ENABLED: 'yes' }],
+    ['unknown finance preview value', { PMC_FINANCE_UI_PREVIEW_ENABLED: 'yes' }],
   ])('rejects %s', (_name, patch) => {
     expect(readPmcMiniAppConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })

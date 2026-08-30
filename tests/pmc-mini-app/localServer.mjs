@@ -60,6 +60,7 @@ function permissionDependencies() {
       maxFilesPerKind: 10,
       asyncBooking: null,
       financeReportsEnabled: false,
+      financeUiPreviewEnabled: false,
       stockEnabled: false,
       stockManagerPilotOnly: false,
       finance: null,

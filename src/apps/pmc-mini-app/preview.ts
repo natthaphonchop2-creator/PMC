@@ -29,6 +29,7 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   fallbackFormUrl: 'https://docs.google.com/forms/',
   reportingEnabled: false,
   financeReportsEnabled: false,
+  financeUiPreviewEnabled: false,
   stockEnabled: false,
   expenseCaptureEnabled: false,
   financeReadsEnabled: false,
@@ -49,6 +50,7 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
 export function createPreviewMiniAppConfig(options: {
   reportingEnabled?: boolean
   financeReportsEnabled?: boolean
+  financeUiPreviewEnabled?: boolean
   canViewFinance?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean
@@ -61,6 +63,7 @@ export function createPreviewMiniAppConfig(options: {
     ...PREVIEW_CONFIG,
     reportingEnabled: options.reportingEnabled === true,
     financeReportsEnabled: options.financeReportsEnabled === true,
+    financeUiPreviewEnabled: options.financeUiPreviewEnabled === true,
     canViewFinance: (options.financeReportsEnabled === true || options.financeReadsEnabled === true)
       && options.canViewFinance === true,
     stockEnabled: options.stockEnabled === true,
@@ -76,6 +79,7 @@ export function createPreviewMiniAppApi(options: {
   staffAllowed?: boolean
   reportingEnabled?: boolean
   financeReportsEnabled?: boolean
+  financeUiPreviewEnabled?: boolean
   canViewFinance?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean

@@ -15,6 +15,7 @@ export interface MiniAppConfig {
   fallbackFormUrl: string
   reportingEnabled: boolean
   financeReportsEnabled: boolean
+  financeUiPreviewEnabled: boolean
   stockEnabled: boolean
   expenseCaptureEnabled?: boolean
   financeReadsEnabled?: boolean
