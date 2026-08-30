@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import {
   BookingPreparePersistenceError,
@@ -15,6 +17,9 @@ import {
   type MiniAppDraftStateResult,
 } from '../../shared/pmcMiniAppDraftState'
 import type { MiniAppDraftPatch, MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
+import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
+import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
+import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 
 describe('PMC Mini App Booking prepare persistence', () => {
   it('stages async evidence with at most four concurrent puts and writes one ordered ready draft', async () => {
@@ -338,6 +343,112 @@ describe('PMC Mini App Booking prepare persistence', () => {
   })
 })
 
+describe('PMC Mini App Booking prepare HTTP route', () => {
+  it.each(['SYNC', 'ASYNC'] as const)('authenticates and snapshots once before one owner-prepared %s response', async (mode) => {
+    const fixture = prepareFixture(mode)
+    const identity: LineIdentityPort = { verify: async () => ({ lineUserId: 'Uactive' }) }
+    const response = await invokePrepare(createPmcMiniAppMiddleware({
+      config: routeConfig(mode), identity, store: fixture.store,
+      evidenceIngress: fixture.ingress ?? undefined,
+      evidenceStaging: fixture.staging ?? undefined,
+      draftStateIngress: fixture.draftStateIngress,
+      now: () => new Date('2026-08-30T10:00:00.000Z'),
+    }))
+
+    expect(response).toMatchObject({ status: 200, body: { state: 'READY_TO_CONFIRM', version: 3 } })
+    expect(fixture.store.staffReadCount()).toBe(1)
+    expect(fixture.store.draftReadCount()).toBe(1)
+    expect(fixture.store.configReadCount()).toBe(1)
+    expect(fixture.store.directWriteCount()).toBe(0)
+    expect(fixture.draftStateIngress.operations()).toEqual(['PREPARE_BEGIN', 'PREPARE_READY'])
+  })
+
+  it('keeps the route unavailable when prepare capability is false without consuming the body', async () => {
+    const fixture = prepareFixture('SYNC')
+    const config = routeConfig('SYNC')
+    config.bookingProtocol.prepare = false
+    const response = await invokePrepare(createPmcMiniAppMiddleware({
+      config,
+      identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store,
+      evidenceIngress: fixture.ingress!,
+      draftStateIngress: fixture.draftStateIngress,
+    }))
+
+    expect(response).toEqual({ status: 404, body: { error: 'MINI_APP_ROUTE_NOT_FOUND' } })
+    expect(fixture.store.staffReadCount()).toBe(0)
+    expect(fixture.store.draftReadCount()).toBe(0)
+    expect(fixture.ingress!.callCount()).toBe(0)
+  })
+
+  it('applies the maintenance barrier before authentication, multipart parsing, or external effects', async () => {
+    const fixture = prepareFixture('SYNC')
+    const config = routeConfig('SYNC')
+    config.bookingMutationsPaused = true
+    const response = await invokePrepare(createPmcMiniAppMiddleware({
+      config,
+      identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store,
+      evidenceIngress: fixture.ingress!,
+      draftStateIngress: fixture.draftStateIngress,
+    }))
+
+    expect(response).toEqual({ status: 503, body: { error: 'BOOKING_MUTATIONS_PAUSED' } })
+    expect(fixture.store.staffReadCount()).toBe(0)
+    expect(fixture.store.draftReadCount()).toBe(0)
+    expect(fixture.ingress!.callCount()).toBe(0)
+  })
+
+  it('serializes protocol-2 cancellation through the owner ingress and recovers a lost response', async () => {
+    const fixture = prepareFixture('SYNC')
+    fixture.draftStateIngress.loseNextResponse()
+    const response = await invokeRequest(createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'),
+      identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store,
+      evidenceIngress: fixture.ingress!,
+      draftStateIngress: fixture.draftStateIngress,
+      now: () => new Date('2026-08-30T10:00:00.000Z'),
+    }), '/api/mini-app/booking-drafts/draft-1/cancel', {
+      method: 'POST',
+      headers: { authorization: 'Bearer valid-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ protocolVersion: 2, version: 1 }),
+    })
+
+    expect(response).toMatchObject({ status: 200, body: { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' } })
+    expect(fixture.draftStateIngress.operations()).toEqual(['CANCEL'])
+    expect(fixture.store.directWriteCount()).toBe(0)
+    expect(fixture.store.draftReadCount()).toBe(2)
+  })
+
+  it.each([
+    ['PATCH', '/api/mini-app/booking-drafts/draft-1', JSON.stringify({ protocolVersion: 2, version: 1, input: bookingInput() })],
+    ['POST', '/api/mini-app/booking-drafts/draft-1/evidence?kind=PAYMENT', new FormData()],
+    ['POST', '/api/mini-app/booking-drafts/draft-1/evidence-batch', new FormData()],
+  ] as const)('blocks a new protocol-2 legacy %s writer before config, evidence, or Sheet effects', async (method, path, body) => {
+    const fixture = prepareFixture('SYNC')
+    if (body instanceof FormData) body.append('files', new Blob([png(1).bytes], { type: 'image/png' }), 'evidence.png')
+    const response = await invokeRequest(createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'),
+      identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store,
+      evidenceIngress: fixture.ingress!,
+      draftStateIngress: fixture.draftStateIngress,
+    }), path, {
+      method,
+      headers: body instanceof FormData
+        ? { authorization: 'Bearer valid-token' }
+        : { authorization: 'Bearer valid-token', 'content-type': 'application/json' },
+      body,
+    })
+
+    expect(response).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(fixture.store.configReadCount()).toBe(0)
+    expect(fixture.store.directWriteCount()).toBe(0)
+    expect(fixture.ingress!.callCount()).toBe(0)
+  })
+})
+
 function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppRequestRecord> = {}) {
   const store = new PrepareStore(draft(draftPatch))
   const staging = mode === 'ASYNC' ? new PrepareStaging() : null
@@ -378,11 +489,17 @@ class PrepareStore implements MiniAppStore {
   private current: MiniAppRequestRecord
   private writes = 0
   private directWrites = 0
+  private staffReads = 0
+  private draftReads = 0
+  private configReads = 0
 
   constructor(initial: MiniAppRequestRecord) { this.current = structuredClone(initial) }
   read(): MiniAppRequestRecord { return structuredClone(this.current) }
   writeCount(): number { return this.writes }
   directWriteCount(): number { return this.directWrites }
+  staffReadCount(): number { return this.staffReads }
+  draftReadCount(): number { return this.draftReads }
+  configReadCount(): number { return this.configReads }
   commitTerminal(state: 'CANCELLED' | 'EXPIRED'): void {
     this.current = {
       ...this.current,
@@ -393,10 +510,23 @@ class PrepareStore implements MiniAppStore {
     }
     this.writes += 1
   }
-  async getActiveStaffByLineUserId(): Promise<never> { throw new Error('not used') }
-  async getActiveBookingConfig(): Promise<never> { throw new Error('not used') }
+  async getActiveStaffByLineUserId(lineUserId: string) {
+    this.staffReads += 1
+    return { id: 'ADMIN_01', name: 'มัส', email: '', lineUserId, canCloseBooking: true, canBeAe: true,
+      active: true as const, profileImageUrl: null }
+  }
+  async getActiveBookingConfig() {
+    this.configReads += 1
+    return {
+      doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
+      services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
+      channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+      admins: [{ id: 'ADMIN_02', name: 'แวว' }, { id: 'ADMIN_03', name: 'หมวย' }],
+      aes: [{ id: 'ADMIN_02', name: 'แวว' }, { id: 'ADMIN_03', name: 'หมวย' }],
+    }
+  }
   async createDraft(value: MiniAppRequestRecord) { this.current = structuredClone(value); return this.read() }
-  async getDraft(draftId: string) { return draftId === this.current.draftId ? this.read() : null }
+  async getDraft(draftId: string) { this.draftReads += 1; return draftId === this.current.draftId ? this.read() : null }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {
     if (draftId !== this.current.draftId) throw new Error('DRAFT_NOT_FOUND')
     if (expectedVersion !== this.current.version) throw new Error('STALE_DRAFT_VERSION')
@@ -712,4 +842,57 @@ function sha256(bytes: Buffer): string { return createHash('sha256').update(byte
 
 function stagedUploadId(kind: 'PAYMENT' | 'CHAT', bytes: Buffer): string {
   return createHash('sha256').update(`draft-1\0${kind}\0${sha256(bytes)}`, 'utf8').digest('hex')
+}
+
+function routeConfig(mode: 'SYNC' | 'ASYNC'): PmcMiniAppServerConfig {
+  return {
+    enabled: true, miniAppId: '2001234567-mini-app', lineChannelId: '2001234567', spreadsheetId: 'sheet-1',
+    intakeFolderId: 'folder-1', bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
+    fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'ingress-secret',
+    signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true }, bookingMutationsPaused: false,
+    asyncBooking: mode === 'ASYNC' ? {
+      enabled: true, projectId: 'pmc-project', location: 'asia-southeast1', bucketName: 'pmc-private-stage',
+      queueName: 'pmc-bookings', workerUrl: 'https://worker.example.test/run', workerAudience: 'https://worker.example.test',
+      taskInvokerEmail: 'worker@pmc-project.iam.gserviceaccount.com', ownerStaffIds: new Set(['ADMIN_01']),
+      maxBatchBytes: 25_000_000,
+    } : null,
+    financeReportsEnabled: false, stockEnabled: false, stockManagerPilotOnly: false, finance: null,
+  }
+}
+
+async function invokePrepare(
+  middleware: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const form = new FormData()
+  form.append('input', JSON.stringify({ protocolVersion: 2, version: 1, input: bookingInput() }))
+  form.append('paymentFiles', new Blob([png(1).bytes], { type: 'image/png' }), 'payment.png')
+  form.append('chatFiles', new Blob([jpeg(2).bytes], { type: 'image/jpeg' }), 'chat.jpg')
+  const server = createServer(middleware)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/mini-app/booking-drafts/draft-1/prepare`, {
+      method: 'POST', headers: { authorization: 'Bearer valid-token' }, body: form,
+    })
+    return { status: response.status, body: await response.json() as Record<string, unknown> }
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+}
+
+async function invokeRequest(
+  middleware: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  path: string,
+  init: RequestInit,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const server = createServer(middleware)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}${path}`, init)
+    return { status: response.status, body: await response.json() as Record<string, unknown> }
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
 }

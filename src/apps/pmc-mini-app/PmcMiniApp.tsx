@@ -133,6 +133,7 @@ export function PmcMiniApp({
 
   const bookingAdapter = useMemo<BookingWizardAdapter>(() => ({
     load: (draftId) => api.loadDraft(idToken, draftId),
+    prepare: (draftId, version, input) => runBookingMutation(() => api.prepare(idToken, draftId, version, input)),
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
     uploadEvidenceBatch: (draftId, input) => api.uploadEvidenceBatch(idToken, draftId, input),
     save: (draftId, version, input) => runBookingMutation(() => api.save(idToken, draftId, version, input, activeBookingProtocol)),

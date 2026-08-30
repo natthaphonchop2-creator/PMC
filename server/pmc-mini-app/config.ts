@@ -15,7 +15,7 @@ export interface PmcMiniAppServerConfig {
   enrollmentPin: string | null
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
-  bookingProtocol: BookingPrepareCapability & { prepare: false }
+  bookingProtocol: BookingPrepareCapability
   bookingMutationsPaused: boolean
   asyncBooking: PmcAsyncBookingConfig | null
   financeReportsEnabled: boolean
@@ -61,6 +61,8 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   if (!validOptionalFlag(env.PMC_FINANCE_REPORTS_ENABLED)) return null
   const minimumMutation = bookingProtocolMinimum(env.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION)
   if (minimumMutation === null) return null
+  const prepareEnabled = exactOptionalBoolean(env.PMC_BOOKING_PREPARE_ENABLED)
+  if (prepareEnabled === null || prepareEnabled && minimumMutation !== 2) return null
   const bookingMutationsPaused = exactOptionalBoolean(env.PMC_BOOKING_MUTATIONS_PAUSED)
   if (bookingMutationsPaused === null) return null
   const enrollmentPin = env.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
@@ -84,7 +86,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     enrollmentPin,
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
-    bookingProtocol: { supported: 2, minimumMutation, prepare: false },
+    bookingProtocol: { supported: 2, minimumMutation, prepare: prepareEnabled },
     bookingMutationsPaused,
     asyncBooking,
     financeReportsEnabled: env.PMC_FINANCE_REPORTS_ENABLED === 'true',

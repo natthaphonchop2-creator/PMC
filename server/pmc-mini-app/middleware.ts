@@ -10,7 +10,12 @@ import type {
 } from './contracts.js'
 import { bookingPayloadHash, parseBookingDraft, parseBookingDraftV2 } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
-import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBatch.js'
+import {
+  BOOKING_PREPARE_LIMITS,
+  consumeBookingPrepareMultipart,
+  consumeEvidenceBatchMultipart,
+  type EvidenceBatch,
+} from './evidenceBatch.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppResumeStore, MiniAppStore } from './store.js'
@@ -24,6 +29,13 @@ import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncStat
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 import { handleStockMiniAppApi, isStockMiniAppApiPath } from './stock/middleware.js'
 import { handleFinanceMiniAppApi, isFinanceMiniAppApiPath } from './finance/middleware.js'
+import {
+  BookingPreparePersistenceError,
+  persistPrepareEvidence,
+  projectionDigest,
+} from './bookingPrepare.js'
+import type { DraftStateIngressPort } from './draftStateIngressClient.js'
+import type { MiniAppDraftStateResult } from '../../shared/pmcMiniAppDraftState.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
@@ -40,6 +52,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   workerIdentity?: WorkerIdentityVerifier
   asyncWorker?: AsyncBookingWorker
   stateIngress?: AsyncStateIngressPort
+  draftStateIngress?: DraftStateIngressPort
   asyncTelemetry?: AsyncBookingTelemetry
   now?: () => Date
   randomId?: () => string
@@ -170,6 +183,23 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
       await handleFinanceMiniAppApi(req, res, url, authenticated, deps.finance)
+      return
+    }
+
+    const prepareRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/prepare$/.exec(pathname)
+    if (prepareRoute) {
+      if (!deps.config.bookingProtocol.prepare) {
+        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+        return
+      }
+      if (req.method !== 'POST') {
+        respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+        return
+      }
+      const authenticated = await authenticate(req, res, deps)
+      if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
+      await handleBookingPrepare(req, res, prepareRoute[1]!, authenticated, deps)
       return
     }
 
@@ -413,7 +443,7 @@ function isUserBookingMutation(pathname: string, method: string | undefined): bo
   if (method === 'POST' && pathname === '/api/mini-app/booking-drafts') return true
   if (method === 'PATCH' && /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}$/.test(pathname)) return true
   if (method !== 'POST') return false
-  return /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}\/(?:confirm|cancel|evidence|evidence-batch)$/.test(pathname)
+  return /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}\/(?:confirm|cancel|evidence|evidence-batch|prepare)$/.test(pathname)
 }
 
 function bookingDraftRoute(pathname: string): BookingDraftRoute | null {
@@ -553,6 +583,14 @@ async function handleBookingDraftRoute(
     && !isProtocol1Recovery(route.action, draft, mutation.value, asyncOwner)) {
     return respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
   }
+  if (route.action === 'PATCH' && deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+    if (version < draft.version && matchesSavedDraftInput(draft, mutation.value.input)) {
+      respond(res, 200, draftProjection(draft))
+    } else {
+      respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    }
+    return
+  }
   if (
     route.action === 'CONFIRM'
     && version <= draft.version
@@ -629,6 +667,10 @@ async function handleBookingDraftRoute(
   if (route.action === 'CANCEL') {
     if (!['DRAFT', 'UPLOADING', 'READY_TO_CONFIRM', 'FAILED_RETRYABLE'].includes(draft.state)) {
       return respond(res, 409, { error: 'INVALID_DRAFT_TRANSITION' })
+    }
+    if (deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+      await cancelP2Draft(draft, deps, res)
+      return
     }
     try {
       const cancelled = await deps.store.updateDraft(draft.draftId, draft.version, {
@@ -949,6 +991,140 @@ function safeIngressError(error: unknown): string {
   return /^BOOKING_INGRESS_[A-Z_]{1,60}$/.test(code) ? code : 'BOOKING_INGRESS_FAILED'
 }
 
+async function handleBookingPrepare(
+  req: IncomingMessage,
+  res: ServerResponse,
+  draftId: string,
+  authenticated: AuthenticatedMiniAppContext,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  if (deps.config.bookingProtocol.minimumMutation !== 2 || !deps.draftStateIngress) {
+    respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
+    return
+  }
+  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
+  if (!draft) return
+  if (draft.protocolVersion !== 2) {
+    respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    return
+  }
+  const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(draft.staffId))
+  const persistence = asyncOwner
+    ? deps.evidenceStaging ? { type: 'ASYNC' as const, staging: deps.evidenceStaging } : null
+    : deps.evidenceIngress ? { type: 'SYNC' as const, ingress: deps.evidenceIngress } : null
+  if (!persistence) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+
+  let bookingConfig: Awaited<ReturnType<MiniAppStore['getActiveBookingConfig']>>
+  try {
+    bookingConfig = await deps.store.getActiveBookingConfig()
+  } catch {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+
+  let parsed: Awaited<ReturnType<typeof consumeBookingPrepareMultipart>>
+  try {
+    parsed = await consumeBookingPrepareMultipart(req, BOOKING_PREPARE_LIMITS)
+  } catch (error) {
+    const code = error instanceof MiniAppEvidenceError ? error.code : 'BOOKING_PREPARE_JSON_REQUIRED'
+    respond(res, evidenceStatus(code), { error: code })
+    return
+  }
+
+  try {
+    const prepared = await persistPrepareEvidence({
+      draft,
+      version: parsed.version,
+      input: parsed.input,
+      paymentFiles: parsed.paymentFiles,
+      chatFiles: parsed.chatFiles,
+      bookingContext: {
+        doctors: bookingConfig.doctors,
+        services: bookingConfig.services,
+        channels: bookingConfig.channels,
+        admins: bookingConfig.admins ?? bookingConfig.aes,
+        aes: bookingConfig.aes,
+      },
+      persistence,
+      store: deps.store,
+      draftStateIngress: deps.draftStateIngress,
+      now: () => currentIso(deps),
+    })
+    respond(res, 200, draftProjection(prepared.draft))
+  } catch (error) {
+    if (error instanceof BookingPreparePersistenceError) {
+      respond(res, error.code === 'BOOKING_PREPARE_CONFLICT' ? 409 : 503, { error: error.code })
+      return
+    }
+    const code = safeBookingError(error)
+    respond(res, bookingErrorStatus(error), { error: code })
+  }
+}
+
+async function cancelP2Draft(
+  draft: MiniAppRequestRecord,
+  deps: PmcMiniAppMiddlewareDependencies,
+  res: ServerResponse,
+): Promise<void> {
+  if (!deps.draftStateIngress) {
+    respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
+    return
+  }
+  const nowIso = currentIso(deps)
+  const mutation = {
+    operation: 'CANCEL' as const,
+    requestId: draft.requestId,
+    draftId: draft.draftId,
+    expectedVersion: draft.version,
+    expectedAttempt: draft.attemptCount,
+    nowIso,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(draft),
+    state: 'CANCELLED',
+    retentionState: 'PENDING_APPROVAL',
+    updatedAt: nowIso,
+    version: draft.version + 1,
+  }
+  const trusted = (result: MiniAppDraftStateResult): boolean => result.requestId === expected.requestId
+    && result.draftId === expected.draftId && result.state === expected.state && result.version === expected.version
+    && result.projectionDigest === projectionDigest(expected)
+    && (result.outcome === 'APPLIED' || result.outcome === 'IDEMPOTENT')
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trusted(result)) {
+      respond(res, 200, draftProjection(expected))
+      return
+    }
+  } catch { /* authoritative recovery below */ }
+
+  let reread: MiniAppRequestRecord | null
+  try { reread = await deps.store.getDraft(draft.draftId) } catch { reread = null }
+  if (!reread || reread.staffId !== draft.staffId) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+  if (reread.state === 'CANCELLED' && reread.retentionState === 'PENDING_APPROVAL') {
+    respond(res, 200, draftProjection(reread))
+    return
+  }
+  if (projectionDigest(reread) !== projectionDigest(draft)) {
+    respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+    return
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trusted(result)) {
+      respond(res, 200, draftProjection(expected))
+      return
+    }
+  } catch { /* no uncertain acknowledgement */ }
+  respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+}
+
 async function handleEvidenceBatchUpload(
   req: IncomingMessage,
   res: ServerResponse,
@@ -957,6 +1133,12 @@ async function handleEvidenceBatchUpload(
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<void> {
   const handlerStartedAt = (deps.now ?? (() => new Date()))().getTime()
+  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
+  if (!draft) return
+  if (deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+    respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    return
+  }
   const asyncConfig = deps.config.asyncBooking
   if (!asyncConfig || !asyncConfig.ownerStaffIds.has(authenticated.staffId)) {
     respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
@@ -967,8 +1149,6 @@ async function handleEvidenceBatchUpload(
     return
   }
 
-  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
-  if (!draft) return
   if (draft.protocolVersion < deps.config.bookingProtocol.minimumMutation) {
     respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
     return
@@ -1054,10 +1234,6 @@ async function handleEvidenceUpload(
   authenticated: AuthenticatedMiniAppContext,
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<void> {
-  if (!deps.drive) {
-    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
-    return
-  }
   const kinds = url.searchParams.getAll('kind')
   const kind = kinds.length === 1 && (kinds[0] === 'PAYMENT' || kinds[0] === 'CHAT') ? kinds[0] as MiniAppEvidenceKind : null
   if (!kind) {
@@ -1074,6 +1250,14 @@ async function handleEvidenceUpload(
     }
     if (draft.protocolVersion < deps.config.bookingProtocol.minimumMutation) {
       respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+      return
+    }
+    if (deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+      respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+      return
+    }
+    if (!deps.drive && !deps.evidenceIngress) {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
       return
     }
     if (draft.state !== 'DRAFT' && draft.state !== 'UPLOADING') {

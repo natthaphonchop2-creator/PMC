@@ -418,7 +418,7 @@ function attestsApplied(
     && isSubset(persisted.chat.map(({ value }) => value), chat)
     && (projectionDigest(draft) === projectionDigest(expected) || operation === 'PREPARE_PARTIAL' || terminal)
 }
-function projectionDigest(draft: MiniAppRequestRecord): string {
+export function projectionDigest(draft: MiniAppRequestRecord): string {
   return createHash('sha256').update(canonicalMiniAppDraftProjection(projection(draft))).digest('base64url')
 }
 function projection(draft: MiniAppRequestRecord): MiniAppDraftProjection {

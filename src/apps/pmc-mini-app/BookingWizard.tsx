@@ -25,6 +25,11 @@ import { bookingProtocolVersion } from './contracts'
 
 export interface BookingWizardAdapter {
   load(draftId: string): Promise<BookingDraftProjection>
+  prepare(draftId: string, version: number, input: {
+    input: Extract<BookingDraftInput, { adminId: string }>
+    paymentFiles: File[]
+    chatFiles: File[]
+  }): Promise<BookingDraftProjection>
   upload(draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   uploadEvidenceBatch(draftId: string, input: { paymentFiles: File[]; chatFiles: File[] }): Promise<BookingDraftProjection>
   save(draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
@@ -66,6 +71,7 @@ export function BookingWizard({
   const [result, setResult] = useState<BookingConfirmationResult | null>(null)
   const preview = useMemo(() => safePreview(state, config, protocolVersion), [state, config, protocolVersion])
   const evidenceRef = useRef(state.evidence)
+  const saveInFlightRef = useRef(false)
 
   useEffect(() => { evidenceRef.current = state.evidence }, [state.evidence])
 
@@ -107,6 +113,8 @@ export function BookingWizard({
       return
     }
     if (state.step === 3) {
+      if (saveInFlightRef.current) return
+      saveInFlightRef.current = true
       setBusy(true)
       setFailure('')
       const input = bookingInput(state, protocolVersion)
@@ -114,6 +122,23 @@ export function BookingWizard({
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
         const newChats = state.evidence.CHAT.flatMap(({ file }) => file ? [file] : [])
+        const usePrepare = protocolVersion === 2 && config.bookingProtocol?.prepare === true
+        if (usePrepare) {
+          if (!('adminId' in input) || newPayments.length !== state.evidence.PAYMENT.length
+            || newChats.length !== state.evidence.CHAT.length) {
+            setFailure('กรุณาแนบรูปหลักฐานทั้งหมดใหม่ก่อนตรวจสอบข้อมูล')
+            return
+          }
+          current = await adapter.prepare(current.draftId, current.version, {
+            input, paymentFiles: newPayments, chatFiles: newChats,
+          })
+          setDraft(current)
+          setSavedAttribution(recoveredAttribution(current, session, protocolVersion))
+          replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, current.paymentEvidenceCount, dispatch)
+          replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, current.chatEvidenceCount, dispatch)
+          dispatch({ type: 'GO_TO_STEP', step: 4 })
+          return
+        }
         if (newPayments.length > 0 || newChats.length > 0) {
           try {
             current = await adapter.uploadEvidenceBatch(current.draftId, { paymentFiles: newPayments, chatFiles: newChats })
@@ -151,6 +176,7 @@ export function BookingWizard({
         }
         setFailure(draftSaveFailureMessage(error))
       } finally {
+        saveInFlightRef.current = false
         setBusy(false)
       }
     }

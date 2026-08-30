@@ -13,6 +13,7 @@ import { createWorkerIdentityVerifier } from './workerAuth.js'
 import { createAsyncBookingWorker } from './asyncWorker.js'
 import { createAsyncStateIngressClient } from './asyncStateIngressClient.js'
 import { createAsyncBookingTelemetry } from './asyncTelemetry.js'
+import { createDraftStateIngressClient } from './draftStateIngressClient.js'
 import { createStockIngressClient } from './stock/ingressClient.js'
 import { createStockReadStore } from './stock/readStore.js'
 import type { PmcFinanceConfig } from './finance/config.js'
@@ -128,6 +129,10 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     url: config.bookingIngressUrl,
     secret: config.bookingIngressSecret,
   })
+  const draftStateIngress = createDraftStateIngressClient({
+    url: config.bookingIngressUrl,
+    secret: config.bookingIngressSecret,
+  })
   const now = () => new Date()
   const finance = expenseFinance ? {
     signingSecret: config.signingSecret,
@@ -197,6 +202,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     drive: google.drive,
     ingress,
     evidenceIngress,
+    draftStateIngress,
     asyncTelemetry,
     ...asyncDependencies,
     ...(enrollment ? { enrollment } : {}),

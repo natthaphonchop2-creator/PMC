@@ -66,6 +66,46 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(prepare).not.toHaveBeenCalled()
   })
 
+  it('uses one advertised prepare request for canonical input and all evidence without legacy probes', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const prepared: BookingDraftProjection = {
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 3,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    }
+    vi.mocked(app.prepare).mockResolvedValueOnce(prepared)
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+    })
+    const payment = new File([pngBytes()], 'slip.png', { type: 'image/png' })
+    const chat = new File([pngBytes()], 'chat.png', { type: 'image/png' })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), payment)
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), chat)
+
+    const submit = screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' })
+    fireEvent.click(submit)
+    fireEvent.click(submit)
+
+    await waitFor(() => expect(app.prepare).toHaveBeenCalledOnce())
+    expect(app.prepare).toHaveBeenCalledWith('draft-1', 1, {
+      input: completeInput(), paymentFiles: [payment], chatFiles: [chat],
+    })
+    expect(app.uploadEvidenceBatch).not.toHaveBeenCalled()
+    expect(app.upload).not.toHaveBeenCalled()
+    expect(app.save).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    const values = [...document.querySelectorAll('.pmc-preview-list dd')].map((element) => element.textContent)
+    expect(values.slice(0, 3)).toEqual(['มัส', 'แวว', 'ไม่ระบุ'])
+  })
+
   it('previews recorder, Admin, and AE labels in the same exact order', () => {
     const view = renderWizard({ initialStep: 4, draft: { ...draft, input: completeInput() } })
     const labels = [...view.container.querySelectorAll('.pmc-preview-list dt')].map((element) => element.textContent)
@@ -407,6 +447,7 @@ const draft: BookingDraftProjection = {
 function adapter(): BookingWizardAdapter {
   return {
     load: vi.fn(async () => draft),
+    prepare: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),
     upload: vi.fn(async () => draft),
     uploadEvidenceBatch: vi.fn(async () => draft),
     save: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),

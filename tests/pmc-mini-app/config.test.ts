@@ -44,6 +44,26 @@ describe('PMC Mini App server configuration', () => {
     })
   })
 
+  it('advertises the combined prepare route only behind the exact flag and protocol-2 floor', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '2',
+      PMC_BOOKING_PREPARE_ENABLED: 'true',
+    })).toMatchObject({
+      bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true },
+    })
+
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PREPARE_ENABLED: 'true',
+    })).toBeNull()
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '2',
+      PMC_BOOKING_PREPARE_ENABLED: 'yes',
+    })).toBeNull()
+  })
+
   it('keeps the synchronous configuration unchanged when async booking is disabled', () => {
     expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({ asyncBooking: null })
   })
@@ -114,6 +134,7 @@ describe('PMC Mini App server configuration', () => {
     ['blank configured Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '' }],
     ['unknown Booking mutation pause value', { PMC_BOOKING_MUTATIONS_PAUSED: 'yes' }],
     ['blank Booking mutation pause value', { PMC_BOOKING_MUTATIONS_PAUSED: '' }],
+    ['blank Booking prepare flag', { PMC_BOOKING_PREPARE_ENABLED: '' }],
   ])('rejects %s', (_name, patch) => {
     expect(readPmcMiniAppConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })
