@@ -76,6 +76,10 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     }
 
     const pathname = url.pathname
+    if (deps.config.bookingMutationsPaused && isUserBookingMutation(pathname, req.method)) {
+      respond(res, 503, { error: 'BOOKING_MUTATIONS_PAUSED' })
+      return
+    }
     if (pathname === '/internal/mini-app/jera-sync' || pathname === '/internal/mini-app/jera-allocation-worker'
       || pathname === '/internal/mini-app/finance-daily-seed') {
       if (!deps.jera) {
@@ -404,6 +408,13 @@ function safeWorkerId(value: string): boolean {
 type BookingDraftRoute =
   | { action: 'CREATE' }
   | { action: 'GET' | 'PATCH' | 'CONFIRM' | 'CANCEL'; draftId: string }
+
+function isUserBookingMutation(pathname: string, method: string | undefined): boolean {
+  if (method === 'POST' && pathname === '/api/mini-app/booking-drafts') return true
+  if (method === 'PATCH' && /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}$/.test(pathname)) return true
+  if (method !== 'POST') return false
+  return /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}\/(?:confirm|cancel|evidence|evidence-batch)$/.test(pathname)
+}
 
 function bookingDraftRoute(pathname: string): BookingDraftRoute | null {
   if (pathname === '/api/mini-app/booking-drafts') return { action: 'CREATE' }
@@ -958,6 +969,10 @@ async function handleEvidenceBatchUpload(
 
   const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
   if (!draft) return
+  if (draft.protocolVersion < deps.config.bookingProtocol.minimumMutation) {
+    respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    return
+  }
   if (draft.state !== 'DRAFT') {
     respond(res, 409, { error: 'DRAFT_NOT_UPLOADABLE' })
     return
@@ -1055,6 +1070,10 @@ async function handleEvidenceUpload(
     const draft = await deps.store.getDraft(draftId)
     if (!draft || draft.staffId !== authenticated.staffId) {
       respond(res, 404, { error: 'DRAFT_NOT_FOUND' })
+      return
+    }
+    if (draft.protocolVersion < deps.config.bookingProtocol.minimumMutation) {
+      respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
       return
     }
     if (draft.state !== 'DRAFT' && draft.state !== 'UPLOADING') {

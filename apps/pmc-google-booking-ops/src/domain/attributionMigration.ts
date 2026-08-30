@@ -2,6 +2,11 @@ import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../../../shared/pmcMiniApp
 import { BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1 } from '../sheetSchema'
 import { isReservedAttributionOption } from './staffDirectory'
 import { PMC_MINI_APP_REQUEST_HEADERS_V2 } from '../../../../shared/pmcBookingRowContracts'
+import {
+  parseExactPmcMiniAppRequestRows,
+  PMC_TERMINAL_PROTOCOL1_STATES,
+  type ExactPmcMiniAppRequestRow,
+} from '../../../../shared/pmcBookingRequestRowValidation.mjs'
 
 export const LEGACY_MINI_APP_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS_V1
 
@@ -10,9 +15,6 @@ export const TARGET_MINI_APP_REQUEST_HEADERS = PMC_MINI_APP_REQUEST_HEADERS_V2
 export const LEGACY_BOOKING_MASTER_HEADERS = BOOKING_MASTER_COLUMNS_V1
 export const TARGET_BOOKING_MASTER_HEADERS = BOOKING_MASTER_COLUMNS
 
-const TERMINAL_LEGACY_STATES = new Set([
-  'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED',
-])
 const NO_AE = 'ไม่ระบุ'
 
 export interface AttributionStaffSnapshot {
@@ -102,7 +104,11 @@ export function planBookingAttributionMigration(
     TARGET_BOOKING_MASTER_HEADERS,
     'UNKNOWN_MASTER_HEADERS',
   )
-  if (requestSchema === 'TARGET') validateTargetRequestVersions(snapshot.request.rows)
+  const exactRequests = parseExactPmcMiniAppRequestRows(
+    snapshot.request.headers,
+    snapshot.request.rows,
+    requestSchema === 'LEGACY' ? 'V1' : 'V2',
+  )
   const preflightFingerprint = migrationSnapshotFingerprint(snapshot)
   const hash = snapshot.hashValue ?? stableHash
 
@@ -133,7 +139,7 @@ export function planBookingAttributionMigration(
     }
   }
 
-  requireMigrationPreconditions(snapshot)
+  requireMigrationPreconditions(snapshot, exactRequests)
   const staffById = uniqueStaffById(snapshot.staff)
   const legacyAeByName = uniqueEligibleAeByName(snapshot.staff)
 
@@ -242,7 +248,10 @@ export function verifyBookingAttributionMigrationReadback(
   }
 }
 
-function requireMigrationPreconditions(snapshot: AttributionMigrationSheetSnapshot): void {
+function requireMigrationPreconditions(
+  snapshot: AttributionMigrationSheetSnapshot,
+  requests: readonly ExactPmcMiniAppRequestRow[],
+): void {
   if (snapshot.queueState !== 'PAUSED') throw new Error('QUEUE_NOT_PAUSED')
   if (!Number.isSafeInteger(snapshot.activeTaskCount) || snapshot.activeTaskCount !== 0) {
     throw new Error('ACTIVE_BOOKING_TASKS')
@@ -253,27 +262,9 @@ function requireMigrationPreconditions(snapshot: AttributionMigrationSheetSnapsh
   if (!validBound(snapshot.masterRowLimit) || snapshot.master.rows.length > snapshot.masterRowLimit) {
     throw new Error('MASTER_ROW_LIMIT_EXCEEDED')
   }
-  if (sameHeader(snapshot.request.headers, LEGACY_MINI_APP_REQUEST_HEADERS)) {
-    const legacy = objects(LEGACY_MINI_APP_REQUEST_HEADERS, snapshot.request.rows)
-    if (legacy.some((record) => !TERMINAL_LEGACY_STATES.has(text(record.state)))) {
+  for (const record of requests) {
+    if (record.protocolVersion === 1 && !PMC_TERMINAL_PROTOCOL1_STATES.has(record.state)) {
       throw new Error('NONTERMINAL_LEGACY_DRAFTS')
-    }
-  } else {
-    const target = objects(TARGET_MINI_APP_REQUEST_HEADERS, snapshot.request.rows)
-    for (const record of target) {
-      const protocolVersion = Number(record.protocolVersion)
-      if (protocolVersion === 1 && !TERMINAL_LEGACY_STATES.has(text(record.state))) {
-        throw new Error('NONTERMINAL_LEGACY_DRAFTS')
-      }
-    }
-  }
-}
-
-function validateTargetRequestVersions(rows: readonly unknown[][]): void {
-  for (const record of objects(TARGET_MINI_APP_REQUEST_HEADERS, rows)) {
-    const protocolVersion = Number(record.protocolVersion)
-    if (protocolVersion !== 1 && protocolVersion !== 2) {
-      throw new Error('UNKNOWN_REQUEST_PROTOCOL_VERSION')
     }
   }
 }

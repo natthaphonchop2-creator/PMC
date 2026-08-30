@@ -5,10 +5,15 @@ import { open, readFile, stat } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
+import {
+  parseExactPmcMiniAppRequestRows,
+  PMC_TERMINAL_PROTOCOL1_STATES,
+} from '../shared/pmcBookingRequestRowValidation.mjs'
 
 const executeFile = promisify(execFile)
 
 export const BOOKING_ATTRIBUTION_CHECKER_VERSION = 'pmc-booking-attribution-v2/1'
+export const BOOKING_ATTRIBUTION_REQUEST_ROW_LIMIT = 10_000
 
 export const CHECKER_MINI_APP_REQUEST_HEADERS_V1 = [
   'requestId', 'draftId', 'staffId', 'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash',
@@ -54,11 +59,9 @@ const REQUIRED_DEPLOYED_ENV_NAMES = [
   'PMC_MINI_APP_ENABLED', 'PMC_MINI_APP_ID', 'PMC_MINI_APP_LIFF_CHANNEL_ID',
   'PMC_SPREADSHEET_ID', 'PMC_DRIVE_INTAKE_FOLDER_ID', 'PMC_BOOKING_INGRESS_URL',
   'PMC_BOOKING_FALLBACK_FORM_URL', 'PMC_BOOKING_INGRESS_SECRET', 'PMC_MINI_APP_SIGNING_SECRET',
-  'PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION',
+  'PMC_BOOKING_PROTOCOL_SUPPORTED', 'PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION',
+  'PMC_BOOKING_PREPARE_ENABLED', 'PMC_BOOKING_BRIDGE_READY', 'PMC_BOOKING_MUTATIONS_PAUSED',
 ]
-const TERMINAL_PROTOCOL1_STATES = new Set([
-  'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED',
-])
 const ALLOWED_STAGES = new Set(['BRIDGE', 'MIGRATION', 'CUTOVER'])
 const QUEUE_ATTESTATION_PROPERTY = 'PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION'
 const EXPECTED_QUEUE_DIGEST_PROPERTY = 'PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST'
@@ -73,21 +76,29 @@ const ALLOWED_PROPERTY_KEYS = new Set([
 export function inspectBookingAttributionCutover(observations, options) {
   const stage = ALLOWED_STAGES.has(options?.expectedStage) ? options.expectedStage : 'INVALID'
   const environment = isRecord(observations?.deployedEnvironment) ? observations.deployedEnvironment : {}
-  const minimum = environment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION === undefined
+  const minimum = environment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION === '1'
     ? 1
-    : environment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION === '1'
-      ? 1
-      : environment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION === '2' ? 2 : 0
-  const supportedV2 = observations?.serverSupportedProtocol === undefined
-    ? true
-    : observations.serverSupportedProtocol === 2
-  const prepareDisabled = observations?.prepareEnabled !== true
+    : environment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION === '2' ? 2 : 0
+  const supportedV2 = environment.PMC_BOOKING_PROTOCOL_SUPPORTED === '2'
+  const prepareDisabled = environment.PMC_BOOKING_PREPARE_ENABLED === 'false'
+  const bridgeReady = environment.PMC_BOOKING_BRIDGE_READY === 'true'
+  const mutationsPaused = environment.PMC_BOOKING_MUTATIONS_PAUSED === 'true'
+  const mutationPauseKnown = environment.PMC_BOOKING_MUTATIONS_PAUSED === 'true'
+    || environment.PMC_BOOKING_MUTATIONS_PAUSED === 'false'
+  const miniAppEnabled = environment.PMC_MINI_APP_ENABLED === 'true'
   const serviceReady = observations?.service?.exists === true
-  const revisionReady = serviceReady
-    && safeOpaque(observations?.service?.latestReadyRevision)
-    && observations.service.latestReadyRevision === observations.expectedRevision
+  const revisionDescribed = observations?.revision?.exists === true
+    && safeOpaque(observations?.revision?.name)
+    && observations.revision.name === observations.expectedRevision
+  const traffic = servingTraffic(observations?.service?.traffic, observations?.expectedRevision)
+  const trafficAt100Percent = traffic.status === 'FULL'
+  const explicitNoTrafficPrecheck = stage === 'BRIDGE'
+    && options?.allowNoTrafficPrecheck === true
+    && traffic.status === 'NO_TRAFFIC'
+  const revisionReady = serviceReady && revisionDescribed && (trafficAt100Percent || explicitNoTrafficPrecheck)
   const requiredEnvironmentNamesPresent = REQUIRED_DEPLOYED_ENV_NAMES.every((name) => presentEnvironmentBinding(environment[name]))
-  const targetRevisionCompatible = revisionReady && supportedV2 && prepareDisabled
+  const targetRevisionCompatible = revisionReady && miniAppEnabled && supportedV2 && prepareDisabled
+    && bridgeReady && mutationPauseKnown && (minimum === 1 || minimum === 2)
 
   const legacyHeaders = sameArray(observations?.requestHeaders, CHECKER_MINI_APP_REQUEST_HEADERS_V1)
     && sameArray(observations?.masterHeaders, CHECKER_BOOKING_MASTER_HEADERS_V1)
@@ -95,8 +106,24 @@ export function inspectBookingAttributionCutover(observations, options) {
     && sameArray(observations?.masterHeaders, CHECKER_BOOKING_MASTER_HEADERS_V2)
   const schemaStatus = legacyHeaders ? 'LEGACY' : targetHeaders ? 'TARGET' : 'UNKNOWN'
   const exactHeaders = schemaStatus !== 'UNKNOWN'
-  const zeroNonterminalProtocol1Drafts = exactHeaders
-    && countNonterminalProtocol1(observations.requestHeaders, observations.requestRows) === 0
+  const withinRowLimit = Array.isArray(observations?.requestRows)
+    && observations.requestRows.length <= BOOKING_ATTRIBUTION_REQUEST_ROW_LIMIT
+    && observations?.requestRowsOverflow !== true
+  let requestRecords = []
+  let exactRows = false
+  if (exactHeaders && withinRowLimit) {
+    try {
+      requestRecords = parseExactPmcMiniAppRequestRows(
+        observations.requestHeaders,
+        observations.requestRows,
+        legacyHeaders ? 'V1' : 'V2',
+      )
+      exactRows = true
+    } catch { /* exact row evidence fails closed */ }
+  }
+  const zeroNonterminalProtocol1Drafts = exactRows
+    && requestRecords.every((record) => record.protocolVersion !== 1
+      || PMC_TERMINAL_PROTOCOL1_STATES.has(record.state))
 
   const queueStatus = observations?.queue?.state === 'PAUSED'
     ? 'PAUSED'
@@ -129,10 +156,12 @@ export function inspectBookingAttributionCutover(observations, options) {
   const sheetStageReady = stage === 'CUTOVER' ? targetHeaders : legacyHeaders
   const queueStageReady = stage === 'BRIDGE' || queuePaused && zeroActiveTasks
   const draftStageReady = stage === 'BRIDGE' || zeroNonterminalProtocol1Drafts
+  const mutationPauseStageReady = stage === 'BRIDGE' ? !mutationsPaused : mutationsPaused
   const manifestStageReady = stage === 'CUTOVER' ? manifestStatus === 'COMPLETE' : manifestStatus === 'ABSENT'
   const baseReady = stage !== 'INVALID' && serviceReady && requiredEnvironmentNamesPresent
     && revisionReady && targetRevisionCompatible && supportedV2 && prepareDisabled
-    && protocolStageReady && sheetStageReady && queueStageReady && draftStageReady
+    && bridgeReady && protocolStageReady && sheetStageReady && withinRowLimit && exactRows
+    && queueStageReady && draftStageReady && mutationPauseStageReady
     && deploymentPresent && versionCompatible && dualReaderReady && manifestStageReady
   const attestationEligible = stage === 'MIGRATION' && baseReady
   const propertiesReady = stage !== 'MIGRATION' || attestationInstalled && expectedQueueDigestInstalled
@@ -145,10 +174,17 @@ export function inspectBookingAttributionCutover(observations, options) {
     targetRevisionCompatible,
     supportedV2,
     prepareDisabled,
+    bridgeReady,
+    miniAppEnabled,
+    trafficAt100Percent,
+    explicitNoTrafficPrecheck,
     protocolStageReady,
     exactHeaders,
     sheetStageReady,
+    withinRowLimit,
+    exactRows,
     zeroNonterminalProtocol1Drafts,
+    mutationPauseStageReady,
     queueStageReady,
     deploymentPresent,
     versionCompatible,
@@ -166,15 +202,18 @@ export function inspectBookingAttributionCutover(observations, options) {
       serviceReady,
       requiredEnvironmentNamesPresent,
       bridgeRevisionReady: revisionReady,
+      trafficAt100Percent,
       targetRevisionCompatible,
+      mutationsPaused,
     },
     protocol: {
       supportedV2,
       minimumIs1: minimum === 1,
       minimumIs2: minimum === 2,
       prepareDisabled,
+      bridgeReady,
     },
-    sheets: { schemaStatus, exactHeaders, zeroNonterminalProtocol1Drafts },
+    sheets: { schemaStatus, exactHeaders, exactRows, withinRowLimit, zeroNonterminalProtocol1Drafts },
     queue: { status: queueStatus, paused: queuePaused, zeroActiveTasks },
     appsScript: { deploymentPresent, versionCompatible, dualReaderReady },
     migration: {
@@ -238,12 +277,15 @@ export async function runPmcBookingAttributionV2Check(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout, stderr: process.stderr }
   if (parsed.help) {
-    io.stdout.write('Usage: check-pmc-booking-attribution-v2 --allow-readonly-production --expected-stage BRIDGE|MIGRATION|CUTOVER --project <id> --region <region> --service <name> --queue <name> --expected-revision <name> --apps-script-id <id> --apps-script-deployment-id <id> --minimum-apps-script-version <number> --script-properties-file <absolute-private-file> [--write-attestation <absolute-new-file>] [--strict]\n')
+    io.stdout.write('Usage: check-pmc-booking-attribution-v2 --allow-readonly-production --expected-stage BRIDGE|MIGRATION|CUTOVER --project <id> --region <region> --service <name> --queue <name> --expected-revision <name> --apps-script-id <id> --apps-script-deployment-id <id> --minimum-apps-script-version <number> --script-properties-file <absolute-private-file> [--allow-no-traffic-precheck] [--write-attestation <absolute-new-file>] [--strict]\n')
     return 0
   }
   const collect = options.collect ?? collectLiveObservations
   const observations = await collect(parsed, options)
-  const result = inspectBookingAttributionCutover(observations, { expectedStage: parsed.expectedStage })
+  const result = inspectBookingAttributionCutover(observations, {
+    expectedStage: parsed.expectedStage,
+    allowNoTrafficPrecheck: parsed.allowNoTrafficPrecheck,
+  })
   if (parsed.writeAttestation !== null) {
     if (!result.report.migration.attestationEligible || result.attestation === null) throw new Error('ATTESTATION_NOT_ELIGIBLE')
     await writePrivateBookingQueueAttestation(parsed.writeAttestation, result.attestation)
@@ -252,7 +294,7 @@ export async function runPmcBookingAttributionV2Check(args, options = {}) {
   return parsed.strict && !result.report.ready ? 1 : 0
 }
 
-async function collectLiveObservations(parsed, options = {}) {
+export async function collectLiveObservations(parsed, options = {}) {
   const execute = options.execute ?? runExternal
   const [service, queue, tasks, deployments, scriptProperties] = await Promise.all([
     safeJson(execute, ['gcloud', 'run', 'services', 'describe', parsed.service, '--region', parsed.region, '--project', parsed.project, '--format=json']),
@@ -261,8 +303,12 @@ async function collectLiveObservations(parsed, options = {}) {
     safeText(execute, ['npx', 'clasp', 'deployments', parsed.appsScriptId]),
     readPrivatePropertySnapshot(parsed.scriptPropertiesFile),
   ])
-  const deployedEnvironment = deployedEnvironmentFrom(service)
-  const googleState = await (options.readGoogleState ?? readGoogleState)(deployedEnvironment)
+  const revision = await safeJson(execute, [
+    'gcloud', 'run', 'revisions', 'describe', parsed.expectedRevision,
+    '--region', parsed.region, '--project', parsed.project, '--format=json',
+  ])
+  const deployedEnvironment = deployedEnvironmentFromRevision(revision)
+  const googleState = await safeGoogleState(options.readGoogleState ?? readGoogleState, deployedEnvironment)
   const deploymentVersion = appsScriptDeploymentVersion(deployments, parsed.appsScriptDeploymentId)
   return {
     now: new Date(),
@@ -272,11 +318,17 @@ async function collectLiveObservations(parsed, options = {}) {
       exists: service !== null,
       latestReadyRevision: typeof service?.status?.latestReadyRevisionName === 'string'
         ? service.status.latestReadyRevisionName : null,
+      traffic: deployedTrafficFrom(service),
+    },
+    revision: {
+      exists: revision !== null,
+      name: revisionName(revision),
     },
     deployedEnvironment,
     requestHeaders: googleState.requestHeaders,
     masterHeaders: googleState.masterHeaders,
     requestRows: googleState.requestRows,
+    requestRowsOverflow: googleState.requestRowsOverflow,
     queue: { state: queue?.state, tasks: Array.isArray(tasks) ? tasks : null },
     appsScript: {
       deploymentPresent: deploymentVersion !== null,
@@ -288,19 +340,26 @@ async function collectLiveObservations(parsed, options = {}) {
   }
 }
 
-async function readGoogleState(environment) {
+export async function readGoogleState(environment, options = {}) {
   const spreadsheetId = opaqueEnvironmentValue(environment.PMC_SPREADSHEET_ID)
   const intakeFolderId = opaqueEnvironmentValue(environment.PMC_DRIVE_INTAKE_FOLDER_ID)
-  const { createMiniAppGooglePorts } = await import('../dist-server/server/pmc-mini-app/googleClient.js')
+  const createMiniAppGooglePorts = options.createGooglePorts ?? await loadMiniAppGooglePorts()
   const sheets = createMiniAppGooglePorts({ spreadsheetId, intakeFolderId }).sheets
-  const values = await sheets.batchGet(spreadsheetId, ["'MINI_APP_REQUESTS'!1:10001", "'BOOKING_MASTER'!1:1"])
-  const request = values["'MINI_APP_REQUESTS'!1:10001"] ?? []
+  const requestRange = `'MINI_APP_REQUESTS'!1:${BOOKING_ATTRIBUTION_REQUEST_ROW_LIMIT + 2}`
+  const values = await sheets.batchGet(spreadsheetId, [requestRange, "'BOOKING_MASTER'!1:1"])
+  const request = values[requestRange] ?? []
   const master = values["'BOOKING_MASTER'!1:1"] ?? []
   return {
     requestHeaders: (request[0] ?? []).map(String),
-    requestRows: request.slice(1),
+    requestRows: request.slice(1, BOOKING_ATTRIBUTION_REQUEST_ROW_LIMIT + 1),
+    requestRowsOverflow: request.length > BOOKING_ATTRIBUTION_REQUEST_ROW_LIMIT + 1,
     masterHeaders: (master[0] ?? []).map(String),
   }
+}
+
+async function loadMiniAppGooglePorts() {
+  const module = await import('../dist-server/server/pmc-mini-app/googleClient.js')
+  return module.createMiniAppGooglePorts
 }
 
 function parseArguments(args) {
@@ -310,6 +369,7 @@ function parseArguments(args) {
   const parsed = {
     help: false,
     allowReadonlyProduction: false,
+    allowNoTrafficPrecheck: false,
     expectedStage: null,
     project: null,
     region: null,
@@ -334,6 +394,7 @@ function parseArguments(args) {
     const argument = args[index]
     if (argument === '--help' || argument === '-h') parsed.help = true
     else if (argument === '--allow-readonly-production') parsed.allowReadonlyProduction = true
+    else if (argument === '--allow-no-traffic-precheck') parsed.allowNoTrafficPrecheck = true
     else if (argument === '--strict') parsed.strict = true
     else if (valueFlags.has(argument) && args[index + 1] !== undefined) parsed[valueFlags.get(argument)] = args[++index]
     else throw new Error('INVALID_CUTOVER_CHECK_ARGUMENT')
@@ -341,6 +402,7 @@ function parseArguments(args) {
   if (parsed.help) return parsed
   if (!parsed.allowReadonlyProduction) throw new Error('READONLY_PRODUCTION_APPROVAL_REQUIRED')
   if (!ALLOWED_STAGES.has(parsed.expectedStage)) throw new Error('INVALID_CUTOVER_STAGE')
+  if (parsed.allowNoTrafficPrecheck && parsed.expectedStage !== 'BRIDGE') throw new Error('INVALID_CUTOVER_CHECK_ARGUMENT')
   for (const key of ['project', 'region', 'service', 'queue', 'expectedRevision', 'appsScriptId', 'appsScriptDeploymentId']) {
     if (!safeOpaque(parsed[key])) throw new Error('INVALID_CUTOVER_CHECK_ARGUMENT')
   }
@@ -358,30 +420,42 @@ function parseArguments(args) {
 function readinessStatus(value) {
   if (value.stage === 'INVALID') return 'INVALID_STAGE'
   if (value.manifestStatus === 'PREPARED' || value.manifestStatus === 'RESTORE_REQUIRED' || value.manifestStatus === 'INVALID') return 'RESTORE_REQUIRED'
+  if (!value.serviceReady || !value.requiredEnvironmentNamesPresent || !value.revisionReady
+    || !value.targetRevisionCompatible || !value.supportedV2 || !value.prepareDisabled
+    || !value.bridgeReady || !value.miniAppEnabled
+    || !value.trafficAt100Percent && !value.explicitNoTrafficPrecheck) return 'DEPLOYMENT_INCOMPATIBLE'
   if (!value.protocolStageReady) return 'PROTOCOL_STAGE_MISMATCH'
   if (!value.exactHeaders || !value.sheetStageReady) return 'SHEET_SCHEMA_MISMATCH'
+  if (!value.withinRowLimit) return 'REQUEST_ROW_LIMIT_EXCEEDED'
+  if (!value.exactRows) return 'SHEET_ROWS_INVALID'
   if (!value.zeroNonterminalProtocol1Drafts && value.stage !== 'BRIDGE') return 'NONTERMINAL_PROTOCOL1_DRAFTS'
+  if (!value.mutationPauseStageReady) return value.stage === 'BRIDGE'
+    ? 'BOOKING_MUTATIONS_PAUSE_MISMATCH'
+    : 'BOOKING_MUTATIONS_NOT_PAUSED'
   if (!value.queueStageReady) return 'QUEUE_NOT_DRAINED'
-  if (!value.serviceReady || !value.requiredEnvironmentNamesPresent || !value.revisionReady
-    || !value.targetRevisionCompatible || !value.supportedV2 || !value.prepareDisabled) return 'DEPLOYMENT_INCOMPATIBLE'
   if (!value.deploymentPresent || !value.versionCompatible || !value.dualReaderReady) return 'APPS_SCRIPT_INCOMPATIBLE'
   if (!value.manifestStageReady) return 'MIGRATION_STATE_MISMATCH'
   if (!value.propertiesReady) return 'PROPERTY_INSTALL_REQUIRED'
   return 'READY'
 }
 
-function countNonterminalProtocol1(headers, rows) {
-  if (!Array.isArray(headers) || !Array.isArray(rows)) return Number.POSITIVE_INFINITY
-  const stateIndex = headers.indexOf('state')
-  const protocolIndex = headers.indexOf('protocolVersion')
-  if (stateIndex < 0) return Number.POSITIVE_INFINITY
-  let count = 0
-  for (const row of rows) {
-    if (!Array.isArray(row) || row.every((cell) => String(cell ?? '').trim() === '')) continue
-    const protocol = protocolIndex < 0 ? 1 : Number(row[protocolIndex])
-    if (protocol === 1 && !TERMINAL_PROTOCOL1_STATES.has(String(row[stateIndex] ?? ''))) count += 1
+function servingTraffic(value, expectedRevision) {
+  if (!Array.isArray(value) || !safeOpaque(expectedRevision)) return { status: 'UNKNOWN' }
+  const entries = []
+  for (const item of value) {
+    if (!isRecord(item) || !safeOpaque(item.revisionName)
+      || !Number.isSafeInteger(item.percent) || item.percent < 0 || item.percent > 100) {
+      return { status: 'UNKNOWN' }
+    }
+    entries.push({ revisionName: item.revisionName, percent: item.percent })
   }
-  return count
+  const positive = entries.filter(({ percent }) => percent > 0)
+  if (positive.reduce((sum, { percent }) => sum + percent, 0) !== 100) return { status: 'UNKNOWN' }
+  if (positive.length === 1 && positive[0].revisionName === expectedRevision && positive[0].percent === 100) {
+    return { status: 'FULL' }
+  }
+  if (!positive.some(({ revisionName }) => revisionName === expectedRevision)) return { status: 'NO_TRAFFIC' }
+  return { status: 'PARTIAL' }
 }
 
 function installedQueueAttestation(raw, expectedQueueDigest, now) {
@@ -510,12 +584,27 @@ function queueDigest(value) {
   return sha256(JSON.stringify({ project: value.project, region: value.region, queue: value.queue }))
 }
 
-function deployedEnvironmentFrom(service) {
-  const containers = service?.spec?.template?.spec?.containers
+function deployedEnvironmentFromRevision(revision) {
+  const containers = revision?.spec?.containers ?? revision?.spec?.template?.spec?.containers
   const entries = Array.isArray(containers) ? containers.flatMap((container) => Array.isArray(container?.env) ? container.env : []) : []
   return Object.fromEntries(entries
     .filter((entry) => typeof entry?.name === 'string')
     .map((entry) => [entry.name, typeof entry.value === 'string' ? entry.value : entry.valueFrom ? '__BOUND__' : '']))
+}
+
+function deployedTrafficFrom(service) {
+  const traffic = service?.status?.traffic
+  if (!Array.isArray(traffic)) return null
+  return traffic.map((item) => ({
+    revisionName: typeof item?.revisionName === 'string' ? item.revisionName : null,
+    percent: item?.percent,
+  }))
+}
+
+function revisionName(revision) {
+  if (typeof revision?.metadata?.name === 'string') return revision.metadata.name
+  if (typeof revision?.name === 'string') return revision.name
+  return null
 }
 
 function appsScriptDeploymentVersion(output, deploymentId) {
@@ -549,6 +638,21 @@ async function safeJson(execute, command) {
 
 async function safeText(execute, command) {
   try { return await execute(command) } catch { return null }
+}
+
+async function safeGoogleState(read, environment) {
+  try {
+    const value = await read(environment)
+    if (!isRecord(value)) throw new Error('GOOGLE_STATE_UNAVAILABLE')
+    return {
+      requestHeaders: Array.isArray(value.requestHeaders) ? value.requestHeaders : [],
+      requestRows: Array.isArray(value.requestRows) ? value.requestRows : [],
+      requestRowsOverflow: value.requestRowsOverflow === true,
+      masterHeaders: Array.isArray(value.masterHeaders) ? value.masterHeaders : [],
+    }
+  } catch {
+    return { requestHeaders: [], requestRows: [], requestRowsOverflow: true, masterHeaders: [] }
+  }
 }
 
 async function runExternal(args) {

@@ -123,6 +123,29 @@ describe('PMC Mini App evidence batch API', () => {
     expect(nonOwner.drive.uploadEvidence).toHaveBeenCalledOnce()
   })
 
+  it('rejects protocol-1 legacy evidence at the protocol-2 floor before multipart, Drive, or draft writes', async () => {
+    const deps = dependencies({ asyncBooking: null })
+    deps.config.bookingProtocol.minimumMutation = 2
+
+    const response = await uploadLegacy(deps, 'valid-token')
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: 'CLIENT_UPGRADE_REQUIRED' })
+    expect(deps.drive.uploadEvidence).not.toHaveBeenCalled()
+    expect(deps.storeFixture.writeCount()).toBe(0)
+  })
+
+  it('rejects protocol-1 evidence batches at the protocol-2 floor before multipart, staging, or draft writes', async () => {
+    const deps = dependencies()
+    deps.config.bookingProtocol.minimumMutation = 2
+
+    const response = await uploadBatch(deps, [pngBytes(1)], [jpegBytes(2)])
+
+    expect(response).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(deps.stagingFixture.putCount()).toBe(0)
+    expect(deps.storeFixture.writeCount()).toBe(0)
+  })
+
   it('marks cancellation with staged keys pending approval without deleting staged objects', async () => {
     const deps = dependencies()
     const uploaded = await uploadBatch(deps, [pngBytes(1)], [jpegBytes(2)])

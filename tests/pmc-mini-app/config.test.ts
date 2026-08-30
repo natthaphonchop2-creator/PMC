@@ -16,10 +16,23 @@ describe('PMC Mini App server configuration', () => {
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
       bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
+      bookingMutationsPaused: false,
       enrollmentPin: null,
       bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
     })
+  })
+
+  it('enables the Booking write barrier only for the exact maintenance value', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_MUTATIONS_PAUSED: 'true',
+    })).toMatchObject({ bookingMutationsPaused: true })
+
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_MUTATIONS_PAUSED: 'false',
+    })).toMatchObject({ bookingMutationsPaused: false })
   })
 
   it('raises the Booking mutation floor only for the exact protocol-2 value', () => {
@@ -99,6 +112,8 @@ describe('PMC Mini App server configuration', () => {
     ['unknown Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '3' }],
     ['non-exact Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: ' 2 ' }],
     ['blank configured Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '' }],
+    ['unknown Booking mutation pause value', { PMC_BOOKING_MUTATIONS_PAUSED: 'yes' }],
+    ['blank Booking mutation pause value', { PMC_BOOKING_MUTATIONS_PAUSED: '' }],
   ])('rejects %s', (_name, patch) => {
     expect(readPmcMiniAppConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })
