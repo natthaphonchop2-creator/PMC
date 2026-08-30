@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   canonicalMiniAppBookingIngress,
-  type MiniAppBookingIngressEnvelope,
+  type MiniAppBookingIngressEnvelopeV1,
   type MiniAppBookingIngressEnvelopeV2,
 } from '../../../shared/pmcMiniAppBooking'
 import { parseAndVerifyMiniAppIngress } from '../src/domain/miniAppIngress'
@@ -119,12 +119,12 @@ describe('Apps Script Mini App booking ingress', () => {
   })
 })
 
-function envelope(): MiniAppBookingIngressEnvelope {
+function envelope(): MiniAppBookingIngressEnvelopeV1 {
   return signedEnvelope()
 }
 
-function signedEnvelope(overrides: Partial<Omit<MiniAppBookingIngressEnvelope, 'signature'>> = {}): MiniAppBookingIngressEnvelope {
-  const base: Omit<MiniAppBookingIngressEnvelope, 'signature'> = {
+function signedEnvelope(overrides: Partial<Omit<MiniAppBookingIngressEnvelopeV1, 'signature'>> = {}): MiniAppBookingIngressEnvelopeV1 {
+  const base: Omit<MiniAppBookingIngressEnvelopeV1, 'signature'> = {
     kind: 'MINI_APP_BOOKING',
     version: 1,
     timestamp: Math.floor(Date.parse('2026-08-20T09:00:00+07:00') / 1000),

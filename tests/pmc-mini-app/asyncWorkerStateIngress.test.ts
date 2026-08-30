@@ -1,16 +1,15 @@
-import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { createAsyncBookingWorker } from '../../server/pmc-mini-app/asyncWorker'
-import { evidenceProjectionHash } from '../../server/pmc-mini-app/bookingDraft'
+import { bookingPayloadHash, evidenceProjectionHash } from '../../server/pmc-mini-app/bookingDraft'
 import type { AsyncStateIngressPort } from '../../server/pmc-mini-app/asyncStateIngressClient'
-import type { BookingIngressPort } from '../../server/pmc-mini-app/bookingIngressClient'
+import {
+  createBookingIngressClient,
+  type BookingIngressPort,
+} from '../../server/pmc-mini-app/bookingIngressClient'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
 import type { EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
 import type { MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
-import {
-  canonicalMiniAppAsyncIdentity,
-  type MiniAppAsyncStateMutation,
-} from '../../shared/pmcMiniAppAsyncState'
+import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState'
 
 const fixedNow = new Date('2026-08-28T04:00:00.000Z')
 const paymentKey = `drafts/draft-1/PAYMENT/${'a'.repeat(64)}.png`
@@ -46,6 +45,40 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.state.read()).toMatchObject({
       state: 'CONFIRMED', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
       processingOwnerToken: null,
+    })
+  })
+
+  it('passes the protocol-2 recorder, Admin, and AE snapshots through the real ingress client', async () => {
+    const envelopes: unknown[] = []
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        protocolVersion: 2,
+        staffId: 'recorder-1',
+        recorderName: 'มัส',
+        adminId: 'admin-2',
+        adminName: 'แวว',
+        aeId: 'ae-1',
+        aeName: 'หมวย',
+      }),
+      productionIngressCapture: (body) => envelopes.push(body),
+    })
+
+    await expect(fixture.worker.finalize(taskInput(1, fixture.state.read()))).resolves.toMatchObject({
+      state: 'CONFIRMED',
+    })
+
+    expect(envelopes).toHaveLength(1)
+    expect(envelopes[0]).toMatchObject({
+      version: 2,
+      payload: {
+        protocolVersion: 2,
+        staffId: 'recorder-1',
+        recorderName: 'มัส',
+        adminId: 'admin-2',
+        adminName: 'แวว',
+        aeId: 'ae-1',
+        aeName: 'หมวย',
+      },
     })
   })
 
@@ -449,6 +482,7 @@ function workerFixture(options: {
   bookingResults?: Array<Error | { caseId: string; status: 'CONFIRMED' }>
   deleteFailure?: Error
   telemetry?: ReturnType<typeof vi.fn>
+  productionIngressCapture?: (body: unknown) => void
 } = {}) {
   const clock = new TestClock(fixedNow)
   let remainingReadFailures = options.transientReadFailures ?? 0
@@ -510,8 +544,28 @@ function workerFixture(options: {
     caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const,
     driveState: 'OK' as const, calendarState: 'OK' as const, lineState: 'OK' as const,
   }])]
+  const productionIngress = options.productionIngressCapture
+    ? createBookingIngressClient({
+        url: 'https://script.google.com/macros/s/deployment/exec',
+        secret: 'server-secret',
+        now: () => 1_800_000_000,
+        nonce: () => 'nonce-worker-123456',
+        fetch: async (_url, init) => {
+          options.productionIngressCapture?.(JSON.parse(init.body) as unknown)
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+              driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+            }),
+          }
+        },
+      })
+    : null
   const bookingIngress: BookingIngressPort & { send: ReturnType<typeof vi.fn> } = {
-    send: vi.fn(async () => {
+    send: vi.fn(async (draft) => {
+      if (productionIngress) return productionIngress.send(draft)
       const result = bookingResults.shift()
       if (!result) throw new Error('missing fake booking result')
       if (result instanceof Error) throw result
@@ -666,8 +720,9 @@ class TestClock {
 
 function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {
   const draft = {
-    requestId: 'request-1', draftId: 'draft-1', staffId: 'staff-1', lineUserIdHash: 'line-user-hash',
-    state: 'QUEUED' as const, retentionState: '' as const, version: 3, payloadHash: null, aeName: 'เอม',
+    requestId: 'request-1', draftId: 'draft-1', protocolVersion: 1 as const,
+    staffId: 'staff-1', recorderName: '', adminId: 'staff-1', adminName: '', lineUserIdHash: 'line-user-hash',
+    state: 'QUEUED' as const, retentionState: '' as const, version: 3, payloadHash: null, aeId: null, aeName: 'เอม',
     customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678',
     doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const, appointmentDate: '2026-09-01',
     appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1', paymentEvidenceFileIds: [],
@@ -681,13 +736,12 @@ function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestR
   return {
     ...draft,
     payloadHash: patch.payloadHash === undefined
-      ? createHash('sha256').update(canonicalMiniAppAsyncIdentity(draft)).digest('base64url')
+      ? bookingPayloadHash(draft)
       : patch.payloadHash,
   }
 }
 
-function taskInput(attempt: number) {
-  const draft = queuedDraft()
+function taskInput(attempt: number, draft = queuedDraft()) {
   return {
     requestId: draft.requestId,
     draftId: draft.draftId,

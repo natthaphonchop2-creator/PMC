@@ -19,6 +19,103 @@ describe('PMC Mini App signed booking ingress client', () => {
     expect(JSON.stringify(request.body)).not.toContain('server-secret')
     const { signature, ...unsigned } = request.body
     expect(signature).toBe(createHmac('sha256', 'server-secret').update(canonicalMiniAppBookingIngress(unsigned)).digest('hex'))
+    expect(request.body.version).toBe(1)
+    expect(Object.keys(request.body.payload).sort()).toEqual([
+      'aeName', 'appointmentDate', 'appointmentTime', 'channelId', 'chatEvidenceFileIds', 'customerName',
+      'depositAmount', 'doctorId', 'facebookName', 'payloadHash', 'paymentEvidenceFileIds', 'phoneNormalized',
+      'queueType', 'requestId', 'serviceId', 'staffId',
+    ].sort())
+  })
+
+  it('signs the exact protocol-2 selected Admin, recorder, and selected AE envelope', () => {
+    const request = buildMiniAppIngress(protocol2ConfirmedDraft(), {
+      timestamp: 1_800_000_000,
+      nonce: 'nonce-v2-123456',
+    }, 'server-secret')
+
+    expect(request.body.version).toBe(2)
+    if (request.body.version !== 2) throw new Error('expected protocol 2')
+    expect(request.body.payload).toMatchObject({
+      protocolVersion: 2,
+      staffId: 'recorder-1',
+      recorderName: 'มัส',
+      adminId: 'admin-2',
+      adminName: 'แวว',
+      aeId: 'ae-1',
+      aeName: 'หมวย',
+    })
+    expect(Object.keys(request.body.payload).sort()).toEqual([
+      'protocolVersion', 'requestId', 'payloadHash', 'staffId', 'recorderName', 'adminId', 'adminName',
+      'aeId', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
+      'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
+      'paymentEvidenceFileIds', 'chatEvidenceFileIds',
+    ].sort())
+    const { signature, ...unsigned } = request.body
+    expect(signature).toBe(createHmac('sha256', 'server-secret')
+      .update(canonicalMiniAppBookingIngress(unsigned)).digest('hex'))
+  })
+
+  it('converts the stored protocol-2 null-AE sentinel to exact ingress nulls', () => {
+    const request = buildMiniAppIngress(protocol2ConfirmedDraft({ aeId: null, aeName: 'ไม่ระบุ' }), {
+      timestamp: 1_800_000_000,
+      nonce: 'nonce-v2-123456',
+    }, 'server-secret')
+
+    expect(request.body.version).toBe(2)
+    if (request.body.version !== 2) throw new Error('expected protocol 2')
+    expect(request.body.payload.aeId).toBeNull()
+    expect(request.body.payload.aeName).toBeNull()
+  })
+
+  it.each([
+    ['blank recorder snapshot', { recorderName: '' }],
+    ['blank Admin ID', { adminId: '' }],
+    ['blank Admin snapshot', { adminName: '' }],
+    ['unsafe Admin ID', { adminId: 'admin/2' }],
+    ['null AE with a selected snapshot', { aeId: null, aeName: 'หมวย' }],
+    ['selected AE with the null sentinel', { aeId: 'ae-1', aeName: 'ไม่ระบุ' }],
+    ['unsafe AE ID', { aeId: 'ae/1', aeName: 'หมวย' }],
+  ])('rejects an impossible protocol-2 %s before fetch', async (_label, patch) => {
+    const fetch = vi.fn(async () => response(200, {
+      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+      driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+    }))
+    const client = createBookingIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+      now: () => 1_800_000_000, nonce: () => 'nonce-v2-123456', fetch,
+    })
+
+    await expect(client.send(protocol2ConfirmedDraft(patch))).rejects.toMatchObject({
+      code: 'BOOKING_INGRESS_FAILED',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('posts the production protocol-2 envelope rather than a compatibility downgrade', async () => {
+    const fetch = vi.fn(async () => response(200, {
+      caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+      driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+    }))
+    const client = createBookingIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+      now: () => 1_800_000_000, nonce: () => 'nonce-v2-123456', fetch,
+    })
+
+    await client.send(protocol2ConfirmedDraft())
+
+    const sent = JSON.parse(String(fetch.mock.calls[0]?.[1].body)) as Record<string, unknown>
+    expect(sent).toMatchObject({
+      version: 2,
+      payload: {
+        protocolVersion: 2,
+        staffId: 'recorder-1',
+        recorderName: 'มัส',
+        adminId: 'admin-2',
+        adminName: 'แวว',
+        aeId: 'ae-1',
+        aeName: 'หมวย',
+      },
+    })
   })
 
   it('posts a signed envelope and accepts only the exact safe result projection', async () => {
@@ -134,15 +231,31 @@ describe('PMC Mini App signed booking ingress client', () => {
 
 function confirmedDraft(): MiniAppRequestRecord {
   return {
-    requestId: 'request-1', draftId: 'draft-1', staffId: 'admin-1', lineUserIdHash: 'line-user-hash',
-    state: 'CONFIRMING', retentionState: '', version: 2, payloadHash: 'payload-hash-1', aeName: 'เอม',
+    requestId: 'request-1', draftId: 'draft-1', protocolVersion: 1,
+    staffId: 'admin-1', recorderName: '', adminId: 'admin-1', adminName: '', lineUserIdHash: 'line-user-hash',
+    state: 'CONFIRMING', retentionState: '', version: 2, payloadHash: 'payload-hash-1', aeId: null, aeName: 'เอม',
     customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678', doctorId: 'doctor-1',
     serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01', appointmentTime: '13:00',
     depositAmount: 900, channelId: 'เพจหลัก', paymentEvidenceFileIds: ['payment-1'], chatEvidenceFileIds: ['chat-1'],
     evidenceCount: 2, paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null,
     processingStartedAt: null, processingLeaseUntil: null, lastProgressAt: null, attemptCount: 0,
+    processingOwnerToken: null, evidenceProjectionHash: null,
     createdAt: '2026-08-27T10:00:00.000Z', confirmedAt: null, caseId: null, confirmationStatus: null,
     safeErrorCode: null, updatedAt: '2026-08-27T10:01:00.000Z',
+  }
+}
+
+function protocol2ConfirmedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRecord {
+  return {
+    ...confirmedDraft(),
+    protocolVersion: 2,
+    staffId: 'recorder-1',
+    recorderName: 'มัส',
+    adminId: 'admin-2',
+    adminName: 'แวว',
+    aeId: 'ae-1',
+    aeName: 'หมวย',
+    ...patch,
   }
 }
 

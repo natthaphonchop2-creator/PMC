@@ -279,6 +279,35 @@ describe('PMC Mini App booking draft API', () => {
     })
   })
 
+  it('passes canonical protocol-2 recorder, Admin, and AE snapshots into synchronous confirmation', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+    deps.storeFixture.attachEvidence('draft-1')
+    const saved = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2,
+      version: 1,
+      input: validInputV2({ requestId: created.body.requestId, adminId: 'staff-admin', aeId: 'staff-ae' }),
+    })
+
+    const confirmed = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      protocolVersion: 2,
+      version: saved.body.version,
+    })
+
+    expect(confirmed.status).toBe(200)
+    expect(deps.ingress.send).toHaveBeenCalledWith(expect.objectContaining({
+      protocolVersion: 2,
+      state: 'CONFIRMING',
+      staffId: 'staff-1',
+      recorderName: 'มัส',
+      adminId: 'staff-admin',
+      adminName: 'แวว',
+      aeId: 'staff-ae',
+      aeName: 'หมวย',
+    }))
+  })
+
   it('projects only browser-safe persisted attribution snapshots for a protocol-2 review', async () => {
     const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
     const middleware = createPmcMiniAppMiddleware(deps)

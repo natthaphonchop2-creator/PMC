@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
-import type { MiniAppBookingIngressPayloadV1, MiniAppBookingIngressPayloadV2 } from '../../shared/pmcMiniAppBooking'
 import { bookingPayloadHash, parseBookingDraft } from '../../server/pmc-mini-app/bookingDraft'
+import {
+  createBookingIngressClient,
+  type BookingIngressPort,
+} from '../../server/pmc-mini-app/bookingIngressClient'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
@@ -18,7 +21,11 @@ import type { JeraSyncCoordinator, JeraSyncQuery } from '../../server/jera/syncC
 import { jeraCacheKey } from '../../server/jera/cacheKey'
 import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts'
 import { submitMiniAppBooking } from '../../apps/pmc-google-booking-ops/src/workflows/miniAppSubmit'
-import { createTestPorts } from '../../apps/pmc-google-booking-ops/tests/helpers/fakes'
+import { parseAndVerifyMiniAppIngress } from '../../apps/pmc-google-booking-ops/src/domain/miniAppIngress'
+import {
+  createTestPorts,
+  type TestPorts,
+} from '../../apps/pmc-google-booking-ops/tests/helpers/fakes'
 
 describe('PMC Mini App deterministic end-to-end booking flow', () => {
   it('submits one normal and one automatic booking without duplicate Case IDs', async () => {
@@ -65,7 +72,13 @@ describe('PMC Mini App deterministic end-to-end booking flow', () => {
     expect(rejectedCreate).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
     expect(created.status).toBe(201)
     expect(rejectedCachedConfirm).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
-    expect(confirmed).toEqual({ status: 200, body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' } })
+    expect(confirmed).toEqual({
+      status: 200,
+      body: {
+        caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+        driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+      },
+    })
     expect(system.bookings()).toEqual([expect.objectContaining({
       recorderId: 'admin-1', recorderName: 'Admin A', adminId: 'staff-ae', adminName: 'เอม',
       aeId: 'admin-1', aeName: 'Admin A',
@@ -433,6 +446,7 @@ function miniAppTestSystem() {
   ports.config.findChannel = (id) => id === 'channel-1'
     ? { id: 'channel-1', name: 'เพจหลัก', active: true }
     : originalFindChannel(id)
+  const ingress = localProductionBookingIngress(ports)
 
   return {
     async submit(input: BookingDraftInput, evidence = evidenceFor(input.requestId)) {
@@ -450,7 +464,8 @@ function miniAppTestSystem() {
         const booking = ports.bookings.getByCaseId(claim.caseId!)!
         return { caseId: booking.caseId, status: claim.status!, booking }
       }
-      const booking = submitMiniAppBooking(ingressPayload(claim.draft), ports)
+      const result = await ingress.send(claim.draft)
+      const booking = ports.bookings.getByCaseId(result.caseId)!
       await store.completeConfirmation(input.requestId, booking.caseId, ports.clock.nowIso(), booking.appointmentStatus)
       return { caseId: booking.caseId, status: booking.appointmentStatus, booking }
     },
@@ -492,12 +507,7 @@ function protocol2HttpSystem() {
     requestId: () => 'request-1',
     draftId: () => 'draft-1',
     now: () => new Date('2026-08-30T09:00:00.000Z'),
-    ingress: {
-      async send(draft) {
-        const booking = submitMiniAppBooking(ingressPayload(draft), ports)
-        return { caseId: booking.caseId, status: booking.appointmentStatus }
-      },
-    },
+    ingress: localProductionBookingIngress(ports),
   })
   return {
     async json(method: string, path: string, body: Record<string, unknown>) {
@@ -513,38 +523,41 @@ function protocol2HttpSystem() {
   }
 }
 
-function ingressPayload(draft: MiniAppRequestRecord): MiniAppBookingIngressPayloadV1 | MiniAppBookingIngressPayloadV2 {
-  if (draft.protocolVersion === 2) {
-    return {
-      protocolVersion: 2,
-      requestId: draft.requestId,
-      payloadHash: draft.payloadHash!,
-      staffId: draft.staffId,
-      recorderName: draft.recorderName,
-      adminId: draft.adminId,
-      adminName: draft.adminName,
-      aeId: draft.aeId,
-      aeName: draft.aeId === null ? null : draft.aeName,
-      customerName: draft.customerName,
-      facebookName: draft.facebookName,
-      phoneNormalized: draft.phoneNormalized,
-      doctorId: draft.doctorId,
-      serviceId: draft.serviceId,
-      queueType: draft.queueType,
-      appointmentDate: draft.appointmentDate,
-      appointmentTime: draft.appointmentTime,
-      depositAmount: draft.depositAmount,
-      channelId: draft.channelId,
-      paymentEvidenceFileIds: draft.paymentEvidenceFileIds,
-      chatEvidenceFileIds: draft.chatEvidenceFileIds,
-    }
-  }
+function localProductionBookingIngress(ports: TestPorts): BookingIngressPort {
+  let nonceCounter = 0
+  return createBookingIngressClient({
+    url: 'https://script.google.com/macros/s/deployment/exec',
+    secret: ports.secrets.bookingIngressSecret(),
+    now: () => Math.floor(Date.parse(ports.clock.nowIso()) / 1_000),
+    nonce: () => `nonce-e2e-${String(++nonceCounter).padStart(8, '0')}`,
+    fetch: async (_url, init) => {
+      const envelope = JSON.parse(init.body) as unknown
+      const payload = parseAndVerifyMiniAppIngress(appsScriptEvent(envelope), ports)
+      const booking = submitMiniAppBooking(payload, ports)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          caseId: booking.caseId,
+          status: booking.appointmentStatus,
+          driveState: booking.driveState,
+          calendarState: booking.calendarState,
+          lineState: booking.lineState,
+        }),
+      }
+    },
+  })
+}
+
+function appsScriptEvent(payload: unknown) {
+  const contents = JSON.stringify(payload)
   return {
-    requestId: draft.requestId, payloadHash: draft.payloadHash!, staffId: draft.staffId, aeName: draft.aeName,
-    customerName: draft.customerName, facebookName: draft.facebookName, phoneNormalized: draft.phoneNormalized,
-    doctorId: draft.doctorId, serviceId: draft.serviceId, queueType: draft.queueType,
-    appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
-    channelId: draft.channelId, paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
+    postData: {
+      contents,
+      length: contents.length,
+      name: 'postData',
+      type: 'application/json',
+    },
   }
 }
 

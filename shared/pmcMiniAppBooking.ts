@@ -1,15 +1,15 @@
 export {
   canonicalMiniAppBookingIngress,
-  type MiniAppBookingIngressEnvelopeV1 as MiniAppBookingIngressEnvelope,
+  type MiniAppBookingIngressEnvelope,
   type MiniAppBookingIngressEnvelopeV1,
   type MiniAppBookingIngressEnvelopeV2,
-  type MiniAppBookingIngressPayloadV1 as MiniAppBookingIngressPayload,
+  type MiniAppBookingIngressPayload,
   type MiniAppBookingIngressPayloadV1,
   type MiniAppBookingIngressPayloadV2,
   type MiniAppBookingIngressResult,
   type MiniAppIngressQueueType,
   type MiniAppIngressStatus,
-  type UnsignedMiniAppBookingIngressEnvelopeV1 as UnsignedMiniAppBookingIngressEnvelope,
+  type UnsignedMiniAppBookingIngressEnvelope,
   type UnsignedMiniAppBookingIngressEnvelopeV1,
   type UnsignedMiniAppBookingIngressEnvelopeV2,
 } from './pmcBookingProtocol.js'

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type {
-  MiniAppBookingIngressPayload,
+  MiniAppBookingIngressPayloadV1,
   MiniAppBookingIngressPayloadV2,
 } from '../../../shared/pmcMiniAppBooking'
 import type { BookingCase } from '../src/domain/types'
@@ -452,7 +452,7 @@ describe('Mini App canonical booking submission', () => {
   })
 })
 
-function validMiniAppInput(patch: Partial<MiniAppBookingIngressPayload> = {}): MiniAppBookingIngressPayload {
+function validMiniAppInput(patch: Partial<MiniAppBookingIngressPayloadV1> = {}): MiniAppBookingIngressPayloadV1 {
   return {
     requestId: 'request-1', payloadHash: 'payload-hash-1', staffId: 'admin-1', aeName: 'Admin A',
     customerName: 'ลูกค้าทดสอบ', facebookName: 'PMC Beauty', phoneNormalized: '0812345678', doctorId: 'doctor-1',
@@ -504,7 +504,7 @@ function failMiniIngressAuditOnce(ports: ReturnType<typeof createTestPorts>): vo
 }
 
 function recoverableLineRetry(
-  input: MiniAppBookingIngressPayload,
+  input: MiniAppBookingIngressPayloadV1,
   operation: 'ADMIN_BOOKING_LINE_BATCH' | 'DOCTOR_LINE' | 'ADMIN_EVIDENCE_LINE' | 'ADMIN_AUTOMATIC_LINE_BATCH',
   patch: Record<string, unknown> = {},
   bookingPatch: Partial<BookingCase> = {},

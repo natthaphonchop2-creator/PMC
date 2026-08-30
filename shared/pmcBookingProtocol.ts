@@ -65,6 +65,10 @@ export type MiniAppBookingIngressPayloadV2 = Omit<
   aeName: string | null
 }
 
+export type MiniAppBookingIngressPayload =
+  | MiniAppBookingIngressPayloadV1
+  | MiniAppBookingIngressPayloadV2
+
 export interface UnsignedMiniAppBookingIngressEnvelopeV1 {
   kind: 'MINI_APP_BOOKING'
   version: 1
@@ -100,10 +104,14 @@ export interface MiniAppBookingIngressResult {
 export function parseBookingAttributionSelection(input: unknown): BookingAttributionSelectionParseResult {
   if (!isRecord(input)) return { ok: false, code: 'INVALID_BOOKING_ATTRIBUTION_SELECTION' }
   if (!hasExactKeys(input, ['adminId', 'aeId'])) return { ok: false, code: 'UNKNOWN_BOOKING_FIELD' }
-  if (typeof input.adminId !== 'string' || !input.adminId || (input.aeId !== null && typeof input.aeId !== 'string')) {
+  if (!safeAttributionId(input.adminId) || (input.aeId !== null && !safeAttributionId(input.aeId))) {
     return { ok: false, code: 'INVALID_BOOKING_ATTRIBUTION_SELECTION' }
   }
   return { ok: true, value: { adminId: input.adminId, aeId: input.aeId } }
+}
+
+function safeAttributionId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,124}$/.test(value)
 }
 
 export function canonicalMiniAppBookingIngress(envelope: UnsignedMiniAppBookingIngressEnvelope): string {

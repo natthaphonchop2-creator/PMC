@@ -22,6 +22,12 @@ describe('booking Form workflow', () => {
     })
   })
 
+  it('fails closed when reserved filtering leaves no canonical Admin or AE choices', () => {
+    expect(() => bookingAttributionFormChoices([
+      reservedStaff({ id: 'NONE', name: 'ไม่ระบุ' }),
+    ])).toThrow('no active booking attribution staff')
+  })
+
   it('treats a legacy response with no queue type as NORMAL', () => {
     const intake = parseBookingFormEvent({
       responseKey: 'legacy-normal:2',

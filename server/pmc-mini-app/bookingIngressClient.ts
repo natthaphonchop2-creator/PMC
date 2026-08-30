@@ -4,6 +4,8 @@ import {
   type MiniAppBookingIngressEnvelope,
   type MiniAppBookingIngressResult,
   type UnsignedMiniAppBookingIngressEnvelope,
+  type UnsignedMiniAppBookingIngressEnvelopeV1,
+  type UnsignedMiniAppBookingIngressEnvelopeV2,
 } from '../../shared/pmcMiniAppBooking.js'
 import type { MiniAppRequestRecord } from './store.js'
 
@@ -52,32 +54,88 @@ export function buildMiniAppIngress(
   if (!Number.isSafeInteger(context.timestamp) || context.timestamp <= 0 || !safeNonce(context.nonce) || !secret) {
     throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
   }
-  const unsigned: UnsignedMiniAppBookingIngressEnvelope = {
+  const unsigned = unsignedIngress(draft, context)
+  const signature = createHmac('sha256', secret).update(canonicalMiniAppBookingIngress(unsigned), 'utf8').digest('hex')
+  return { body: { ...unsigned, signature }, headers: { 'content-type': 'application/json' } }
+}
+
+function unsignedIngress(
+  draft: MiniAppRequestRecord,
+  context: { timestamp: number; nonce: string },
+): UnsignedMiniAppBookingIngressEnvelope {
+  const common = {
+    requestId: draft.requestId,
+    payloadHash: draft.payloadHash!,
+    staffId: draft.staffId,
+    customerName: draft.customerName,
+    facebookName: draft.facebookName,
+    phoneNormalized: draft.phoneNormalized,
+    doctorId: draft.doctorId,
+    serviceId: draft.serviceId,
+    queueType: draft.queueType,
+    appointmentDate: draft.appointmentDate,
+    appointmentTime: draft.appointmentTime,
+    depositAmount: draft.depositAmount,
+    channelId: draft.channelId,
+    paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds],
+    chatEvidenceFileIds: [...draft.chatEvidenceFileIds],
+  }
+  if (draft.protocolVersion === 1) {
+    return {
+      kind: 'MINI_APP_BOOKING',
+      version: 1,
+      timestamp: context.timestamp,
+      nonce: context.nonce,
+      payload: { ...common, aeName: draft.aeName },
+    } satisfies UnsignedMiniAppBookingIngressEnvelopeV1
+  }
+  if (draft.protocolVersion !== 2) throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
+  assertProtocol2Attribution(draft)
+  return {
     kind: 'MINI_APP_BOOKING',
-    version: 1,
+    version: 2,
     timestamp: context.timestamp,
     nonce: context.nonce,
     payload: {
-      requestId: draft.requestId,
-      payloadHash: draft.payloadHash,
-      staffId: draft.staffId,
-      aeName: draft.aeName,
-      customerName: draft.customerName,
-      facebookName: draft.facebookName,
-      phoneNormalized: draft.phoneNormalized,
-      doctorId: draft.doctorId,
-      serviceId: draft.serviceId,
-      queueType: draft.queueType,
-      appointmentDate: draft.appointmentDate,
-      appointmentTime: draft.appointmentTime,
-      depositAmount: draft.depositAmount,
-      channelId: draft.channelId,
-      paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds],
-      chatEvidenceFileIds: [...draft.chatEvidenceFileIds],
+      protocolVersion: 2,
+      ...common,
+      recorderName: draft.recorderName,
+      adminId: draft.adminId,
+      adminName: draft.adminName,
+      aeId: draft.aeId,
+      aeName: draft.aeId === null ? null : draft.aeName,
     },
+  } satisfies UnsignedMiniAppBookingIngressEnvelopeV2
+}
+
+function assertProtocol2Attribution(draft: MiniAppRequestRecord): void {
+  if (!safeAttributionId(draft.staffId) || !safeSnapshot(draft.recorderName)) {
+    throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
   }
-  const signature = createHmac('sha256', secret).update(canonicalMiniAppBookingIngress(unsigned), 'utf8').digest('hex')
-  return { body: { ...unsigned, signature }, headers: { 'content-type': 'application/json' } }
+  if (!safeAttributionId(draft.adminId) || reservedAttributionId(draft.adminId)
+    || !safeSnapshot(draft.adminName) || draft.adminName === 'ไม่ระบุ') {
+    throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
+  }
+  if (draft.aeId === null) {
+    if (draft.aeName !== 'ไม่ระบุ') throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
+    return
+  }
+  if (!safeAttributionId(draft.aeId) || reservedAttributionId(draft.aeId)
+    || !safeSnapshot(draft.aeName) || draft.aeName === 'ไม่ระบุ') {
+    throw new BookingIngressClientError('BOOKING_INGRESS_FAILED')
+  }
+}
+
+function safeAttributionId(value: string): boolean {
+  return /^[A-Za-z0-9._:-]{1,124}$/.test(value)
+}
+
+function reservedAttributionId(value: string): boolean {
+  return value.trim().toUpperCase() === 'NONE'
+}
+
+function safeSnapshot(value: string): boolean {
+  return value === value.trim() && value.length > 0 && value.length <= 120
 }
 
 export function createBookingIngressClient(options: BookingIngressClientOptions): BookingIngressPort {

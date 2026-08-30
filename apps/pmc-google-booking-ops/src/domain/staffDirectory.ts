@@ -123,6 +123,7 @@ export function bookingAttributionFormChoices(staff: StaffConfig[]): {
   aes: string[]
 } {
   const names = activeAttributionStaff(staff).map((item) => item.name.trim())
+  if (!names.length) throw new Error('no active booking attribution staff')
   return { admins: [...names], aes: [...names] }
 }
 
