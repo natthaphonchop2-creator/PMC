@@ -12,4 +12,4 @@ export {
   type UnsignedMiniAppBookingIngressEnvelopeV1 as UnsignedMiniAppBookingIngressEnvelope,
   type UnsignedMiniAppBookingIngressEnvelopeV1,
   type UnsignedMiniAppBookingIngressEnvelopeV2,
-} from './pmcBookingProtocol'
+} from './pmcBookingProtocol.js'
