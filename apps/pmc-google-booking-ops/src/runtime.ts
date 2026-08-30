@@ -962,9 +962,15 @@ export function bootstrapExpenseMonthWorkflow(monthKey: string): {
         monthKey,
         properties[SCRIPT_PROPERTY_KEYS.expenseMonthBootstrapApproved] ?? '',
         {
-          ensureMonth: (selectedMonth) => { repository.ensureMonth(selectedMonth, bangkokNow()) },
+          ensureMonth: (selectedMonth) => {
+            console.log('expense-bootstrap:ensure:start')
+            repository.ensureMonth(selectedMonth, bangkokNow())
+            console.log('expense-bootstrap:ensure:done')
+          },
           verifyMonth: (selectedMonth) => {
+            console.log('expense-bootstrap:verify:start')
             repository.listMonth(selectedMonth)
+            console.log('expense-bootstrap:verify:done')
             return true
           },
         },

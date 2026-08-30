@@ -674,8 +674,10 @@ function createGoogleExpenseRepositoryBackend(
   return {
     ensureMonth(monthKey, createdAt) {
       const master = masterSpreadsheet()
+      console.log('expense-bootstrap:master:ready')
       const existing = readRows(master, 'EXPENSE_MONTHLY_INDEX', EXPENSE_MASTER_SCHEMAS.EXPENSE_MONTHLY_INDEX)
         .filter((row) => row.monthKey === monthKey)
+      console.log(`expense-bootstrap:index-count:${existing.length}`)
       if (existing.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
       if (existing[0]) {
         const context = monthContext(monthKey)
@@ -686,17 +688,23 @@ function createGoogleExpenseRepositoryBackend(
       }
 
       const root = financeFolder()
+      console.log('expense-bootstrap:root:ready')
       const monthFolder = uniqueOrCreateFolder(root, `PMC Expenses ${monthKey}`)
+      console.log('expense-bootstrap:folder:ready')
       const spreadsheetName = `PMC Expenses ${monthKey}`
       const spreadsheet = uniqueOrCreateSpreadsheet(monthFolder, spreadsheetName)
+      console.log('expense-bootstrap:spreadsheet:ready')
       const spreadsheetFile = DriveApp.getFileById(spreadsheet.getId())
       if (
         spreadsheetFile.isTrashed()
         || spreadsheetFile.getSharingAccess() !== DriveApp.Access.PRIVATE
         || !hasDirectParent(spreadsheetFile.getParents(), monthFolder.getId())
       ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      console.log('expense-bootstrap:sharing:ready')
       ensureExpenseMonthTopology(createGoogleExpenseTopologyPort(spreadsheet))
+      console.log('expense-bootstrap:topology:ready')
       validateSchemas(spreadsheet, EXPENSE_MONTH_SCHEMAS)
+      console.log('expense-bootstrap:schema:ready')
       appendRows(master, 'EXPENSE_MONTHLY_INDEX', EXPENSE_MASTER_SCHEMAS.EXPENSE_MONTHLY_INDEX, [{
         monthKey,
         ledgerSpreadsheetId: spreadsheet.getId(),
@@ -704,6 +712,7 @@ function createGoogleExpenseRepositoryBackend(
         createdAt,
         updatedAt: createdAt,
       }])
+      console.log('expense-bootstrap:index:appended')
       return { ledgerSpreadsheetId: spreadsheet.getId(), monthFolderId: monthFolder.getId() }
     },
     readMaster(tab) {
