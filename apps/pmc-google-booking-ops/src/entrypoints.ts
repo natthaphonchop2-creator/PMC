@@ -222,7 +222,9 @@ export function preparePmcExpensePermissions() {
 }
 
 export function applyPmcExpensePermissions() {
-  return applyExpensePermissionsWorkflow()
+  const result = applyExpensePermissionsWorkflow()
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function setupPmcExpenseFinanceStorage() {
@@ -231,6 +233,13 @@ export function setupPmcExpenseFinanceStorage() {
 
 export function bootstrapPmcExpenseMonth(monthKey: string) {
   return bootstrapExpenseMonthWorkflow(monthKey)
+}
+
+export function bootstrapCurrentPmcExpenseMonth() {
+  const monthKey = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM')
+  const result = bootstrapExpenseMonthWorkflow(monthKey)
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function runPmcExpenseRecovery() {
