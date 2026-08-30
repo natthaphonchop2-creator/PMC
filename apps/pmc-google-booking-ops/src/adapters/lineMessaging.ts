@@ -91,6 +91,9 @@ export function bookingTeamProfiles(
   config: ConfigPort,
 ): TeamProfileImages {
   return {
+    recorder: booking.recorderId
+      ? safeProfileUrl(config.findStaffById(booking.recorderId)?.profileImageUrl)
+      : null,
     closer: booking.adminId
       ? safeProfileUrl(config.findStaffById(booking.adminId)?.profileImageUrl)
       : null,

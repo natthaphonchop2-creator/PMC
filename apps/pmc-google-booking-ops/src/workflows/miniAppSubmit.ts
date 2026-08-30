@@ -1,8 +1,31 @@
-import type { MiniAppBookingIngressPayload } from '../../../../shared/pmcMiniAppBooking'
+import type {
+  MiniAppBookingIngressPayloadV1,
+  MiniAppBookingIngressPayloadV2,
+} from '../../../../shared/pmcMiniAppBooking'
 import type { AuditEvent, BookingCase, BookingIntake } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { NO_AE_OPTION } from '../config'
+import {
+  resolveEligibleAeById,
+  resolveEligibleAeByName,
+  resolveSelectableAdminById,
+} from '../domain/staffDirectory'
 import { submitBookingIntake } from './formSubmit'
+
+type MiniAppBookingIngressPayload =
+  | MiniAppBookingIngressPayloadV1
+  | MiniAppBookingIngressPayloadV2
+
+interface MiniAppAttribution {
+  recorderId: string
+  recorderName: string
+  recorderSource: 'VERIFIED_LINE'
+  recorderEmail: string
+  adminId: string
+  adminName: string
+  aeId: string | null
+  aeName: string | null
+}
 
 export function submitMiniAppBooking(input: MiniAppBookingIngressPayload, ports: BookingPorts): BookingCase {
   const identity = miniAppFormIdentity(input, ports)
@@ -10,15 +33,14 @@ export function submitMiniAppBooking(input: MiniAppBookingIngressPayload, ports:
   if (existing) return finalizeIngressAudit(existing, input, ports)
   const formResponseId = identity.current
 
-  const staff = ports.config.findStaffById(input.staffId)
-  if (!staff?.active || !staff.canCloseBooking) throw new Error('mini app staff is not active or eligible')
-  const actorEmail = staff.email.trim().toLowerCase() || 'mini-app@internal.invalid'
+  const attribution = resolveMiniAppAttribution(input, ports)
+  const actorEmail = attribution.recorderEmail || 'mini-app@internal.invalid'
   const intake: BookingIntake = {
     formResponseId,
     submittedAt: ports.clock.nowIso(),
     submitterEmail: actorEmail,
-    closerName: staff.name,
-    aeName: input.aeName,
+    closerName: attribution.adminName,
+    aeName: attribution.aeName ?? NO_AE_OPTION,
     customerName: input.customerName,
     facebookName: input.facebookName,
     phone: input.phoneNormalized,
@@ -39,6 +61,16 @@ export function submitMiniAppBooking(input: MiniAppBookingIngressPayload, ports:
       collisionPrefix: identity.prefix,
       conflictingFormResponseIds: [identity.legacy],
       convergeExact: true,
+      trustedAttribution: {
+        protocolVersion: isProtocol2(input) ? 2 : 1,
+        recorderId: attribution.recorderId,
+        recorderName: attribution.recorderName,
+        recorderSource: attribution.recorderSource,
+        adminId: attribution.adminId,
+        adminName: attribution.adminName,
+        aeId: attribution.aeId,
+        aeName: attribution.aeName,
+      },
     })
   } catch (error) {
     const raced = ports.repositories.bookings.findByFormResponseId(formResponseId)
@@ -100,11 +132,13 @@ function matchesRecoverableInput(
   input: MiniAppBookingIngressPayload,
   ports: BookingPorts,
 ): boolean {
-  const staff = ports.config.findStaffById(input.staffId)
-  if (!staff?.active || !staff.canCloseBooking) return false
-  const ae = input.aeName === NO_AE_OPTION ? null : ports.config.findEligibleAeByName(input.aeName)
-  if (input.aeName !== NO_AE_OPTION && (!ae?.active || !ae.canBeAe)) return false
-  const actorEmail = staff.email.trim().toLowerCase() || 'mini-app@internal.invalid'
+  let attribution: MiniAppAttribution
+  try {
+    attribution = resolveMiniAppAttribution(input, ports)
+  } catch {
+    return false
+  }
+  const actorEmail = attribution.recorderEmail || 'mini-app@internal.invalid'
   const appointmentStart = input.queueType === 'NORMAL' && input.appointmentDate && input.appointmentTime
     ? `${input.appointmentDate}T${input.appointmentTime}:00+07:00`
     : null
@@ -112,12 +146,26 @@ function matchesRecoverableInput(
     ? input.appointmentDate === null && input.appointmentTime === null
     : appointmentStart !== null && booking.appointmentStart === appointmentStart
   const identity = miniAppFormIdentity(input, ports)
+  const recorderFieldsPresent = typeof booking.recorderName === 'string'
+    && typeof booking.recorderSource === 'string'
+    && (typeof booking.recorderId === 'string' || booking.recorderId === null)
+  const recorderMatches = recorderFieldsPresent
+    ? booking.recorderId === attribution.recorderId
+      && booking.recorderName === attribution.recorderName
+      && (
+        booking.recorderSource === attribution.recorderSource
+        || !isProtocol2(input) && booking.recorderSource === 'LEGACY_ASSUMED_ADMIN'
+      )
+    : !isProtocol2(input)
+      && booking.adminId === attribution.recorderId
+      && booking.adminName === attribution.recorderName
   return (booking.formResponseId === identity.current || booking.formResponseId === identity.legacy)
-    && booking.adminId === input.staffId
-    && booking.adminName === staff.name
+    && recorderMatches
+    && booking.adminId === attribution.adminId
+    && booking.adminName === attribution.adminName
     && booking.submitterEmail === actorEmail
-    && booking.aeId === (ae?.id ?? null)
-    && booking.aeName === (ae?.name ?? NO_AE_OPTION)
+    && booking.aeId === attribution.aeId
+    && booking.aeName === attribution.aeName
     && booking.customerName === input.customerName.trim()
     && booking.facebookName === input.facebookName.trim()
     && booking.phoneNormalized === input.phoneNormalized
@@ -129,6 +177,66 @@ function matchesRecoverableInput(
     && booking.depositAmount === input.depositAmount
     && booking.paymentEvidenceCount === input.paymentEvidenceFileIds.length
     && booking.chatEvidenceCount === input.chatEvidenceFileIds.length
+}
+
+function resolveMiniAppAttribution(
+  input: MiniAppBookingIngressPayload,
+  ports: BookingPorts,
+): MiniAppAttribution {
+  const staffRows = ports.config.listStaff()
+  const recorderMatches = staffRows.filter((item) => item.id === input.staffId)
+  const recorder = recorderMatches[0]
+  if (recorderMatches.length !== 1 || !recorder?.active || !recorder.canCloseBooking) {
+    throw new Error('mini app staff is not active or eligible')
+  }
+
+  if (isProtocol2(input)) {
+    if (input.recorderName !== recorder.name) throw new Error('mini app recorder snapshot mismatch')
+    const admin = resolveSelectableAdminById(staffRows, input.adminId)
+    if (!admin || input.adminName !== admin.name) {
+      throw new Error('mini app Admin is not active, eligible, or current')
+    }
+    if ((input.aeId === null) !== (input.aeName === null)) {
+      throw new Error('mini app AE snapshot mismatch')
+    }
+    const ae = input.aeId === null ? null : resolveEligibleAeById(staffRows, input.aeId)
+    if (input.aeId !== null && (!ae || input.aeName !== ae.name)) {
+      throw new Error('mini app AE is not active, eligible, or current')
+    }
+    return {
+      recorderId: recorder.id,
+      recorderName: recorder.name,
+      recorderSource: 'VERIFIED_LINE',
+      recorderEmail: recorder.email.trim().toLowerCase(),
+      adminId: admin.id,
+      adminName: admin.name,
+      aeId: ae?.id ?? null,
+      aeName: ae?.name ?? null,
+    }
+  }
+
+  const ae = input.aeName === NO_AE_OPTION
+    ? null
+    : resolveEligibleAeByName(staffRows, input.aeName)
+  if (input.aeName !== NO_AE_OPTION && !ae) {
+    throw new Error('mini app AE is not active or eligible')
+  }
+  return {
+    recorderId: recorder.id,
+    recorderName: recorder.name,
+    recorderSource: 'VERIFIED_LINE',
+    recorderEmail: recorder.email.trim().toLowerCase(),
+    adminId: recorder.id,
+    adminName: recorder.name,
+    aeId: ae?.id ?? null,
+    aeName: ae?.name ?? NO_AE_OPTION,
+  }
+}
+
+function isProtocol2(
+  input: MiniAppBookingIngressPayload,
+): input is MiniAppBookingIngressPayloadV2 {
+  return 'protocolVersion' in input && input.protocolVersion === 2
 }
 
 function miniAppFormIdentity(input: MiniAppBookingIngressPayload, ports: BookingPorts) {

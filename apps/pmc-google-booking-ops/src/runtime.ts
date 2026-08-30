@@ -31,6 +31,7 @@ import {
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import { BOOKING_FORM_LABELS, NO_AE_OPTION } from './config'
 import {
+  activeAttributionStaff,
   resolveCloserByEmail,
   resolveCloserByName,
   resolveEligibleAeByName,
@@ -689,8 +690,8 @@ export function setupSystem(): {
   ensureSheetTopology(spreadsheet)
   const runtime = createRuntime()
   const staff = runtime.config.listStaff().filter((item) => item.active)
-  const aes = runtime.config.listEligibleAes()
-  const { activeClosers } = validateStaffDirectory(staff)
+  const aes = activeAttributionStaff(staff)
+  validateStaffDirectory(staff)
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   const doctors = runtime.config.listDoctors().filter((doctor) => doctor.active)
   const services = runtime.config.listServices().filter((service) => service.active)
@@ -713,7 +714,7 @@ export function setupSystem(): {
   runtime.forms.ensureCloserField()
   runtime.forms.ensureFacebookNameField()
   runtime.forms.syncBookingChoices(
-    activeClosers.map((closer) => closer.name),
+    aes.map((ae) => ae.name),
     aes.map((ae) => ae.name),
     doctors.map((doctor) => doctor.id),
     services.map((service) => service.id),
@@ -1364,19 +1365,20 @@ export function pauseAndCutoverBookingFormWorkflow(): {
   syncedAes: number
 } {
   const runtime = createRuntime()
-  const { activeClosers, activeAes } = validateStaffDirectory(runtime.config.listStaff())
+  validateStaffDirectory(runtime.config.listStaff())
+  const activeAes = activeAttributionStaff(runtime.config.listStaff())
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   runtime.forms.pauseBookingResponses()
   runtime.forms.renameAdminFieldToAe()
   runtime.forms.ensureCloserField()
   runtime.forms.syncBookingChoices(
-    activeClosers.map((closer) => closer.name),
+    activeAes.map((ae) => ae.name),
     activeAes.map((ae) => ae.name),
     runtime.config.listDoctors().filter((doctor) => doctor.active).map((doctor) => doctor.id),
     runtime.config.listServices().filter((service) => service.active).map((service) => service.id),
     runtime.config.listChannels().filter((channel) => channel.active).map((channel) => channel.id),
   )
-  return { paused: true, syncedClosers: activeClosers.length, syncedAes: activeAes.length }
+  return { paused: true, syncedClosers: activeAes.length, syncedAes: activeAes.length }
 }
 
 export function resumeBookingFormAfterAeCutoverWorkflow(): { acceptingResponses: true } {

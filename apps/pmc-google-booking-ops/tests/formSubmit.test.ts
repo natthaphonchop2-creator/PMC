@@ -247,6 +247,9 @@ describe('booking Form workflow', () => {
       ports,
     )
     expect(result).toMatchObject({
+      recorderId: 'admin-1',
+      recorderName: 'Admin A',
+      recorderSource: 'FORM_EMAIL_MATCH',
       adminId: 'admin-1',
       adminName: 'Admin A',
       adminIdentityStatus: 'SELECTED_ADMIN',
@@ -254,6 +257,51 @@ describe('booking Form workflow', () => {
       aeName: 'เอม',
       callOwnerAdminId: 'admin-1',
     })
+  })
+
+  it('uses an unresolved Google Form recorder without inventing a Staff identity', () => {
+    const result = submitBookingIntake(
+      validBookingIntake({ submitterEmail: 'unknown@example.com' }),
+      createTestPorts(),
+    )
+
+    expect(result).toMatchObject({
+      recorderId: null,
+      recorderName: 'Google Form',
+      recorderSource: 'FORM_UNRESOLVED',
+      adminId: 'admin-1',
+      callOwnerAdminId: 'admin-1',
+    })
+  })
+
+  it('allows an active AE-eligible non-closer to be selected as Admin', () => {
+    const result = submitBookingIntake(
+      validBookingIntake({ closerName: 'เอม', aeName: 'ไม่ระบุ' }),
+      createTestPorts(),
+    )
+
+    expect(result).toMatchObject({
+      recorderId: 'admin-1',
+      adminId: 'staff-ae',
+      adminName: 'เอม',
+      aeId: null,
+      callOwnerAdminId: 'staff-ae',
+    })
+  })
+
+  it('rejects duplicate active eligible Form names before any booking side effect', () => {
+    const ports = createTestPorts()
+    const original = ports.config.listStaff()
+    ports.config.listStaff = () => [
+      ...original,
+      { ...original[0], id: 'admin-duplicate', email: 'duplicate@example.com' },
+    ]
+
+    expect(() => submitBookingIntake(validBookingIntake(), ports))
+      .toThrow('duplicate active attribution staff name')
+    expect(ports.bookings.list()).toEqual([])
+    expect(ports.calendar.createdEvents()).toEqual([])
+    expect(ports.line.adminMessages()).toEqual([])
   })
 
   it('uses the selected Admin even when the submitter uses the former shared email', () => {
@@ -318,7 +366,7 @@ describe('booking Form workflow', () => {
 
   it('accepts a selected Admin that differs from the submitter email mapping', () => {
     const ports = createTestPorts()
-    ports.config.findCloserByName = () => ({
+    const adminB = {
       id: 'admin-2',
       name: 'Admin B',
       email: 'admin-b@example.com',
@@ -330,7 +378,8 @@ describe('booking Form workflow', () => {
       canViewFinance: false,
       canManageExpense: false,
       active: true,
-    })
+    }
+    ports.config.listStaff = () => [...createTestPorts().config.listStaff(), adminB]
 
     const result = submitBookingIntake(
       validBookingIntake({ submitterEmail: 'admin@example.com', closerName: 'Admin B' }),

@@ -2,7 +2,13 @@ import { addCalendarMonths, addMinutesInBangkok, deriveCallWindow } from '../dom
 import { formatCaseId } from '../domain/caseId'
 import { maskThaiPhone, normalizeCustomerName, normalizeThaiPhone } from '../domain/normalize'
 import { NO_AE_OPTION } from '../config'
-import type { BookingCase, BookingIntake } from '../domain/types'
+import {
+  activeAttributionStaff,
+  resolveActiveStaffByEmail,
+  resolveEligibleAeById,
+  resolveSelectableAdminById,
+} from '../domain/staffDirectory'
+import type { BookingCase, BookingIntake, BookingRecorderFields } from '../domain/types'
 import type { BookingPorts } from '../ports'
 import { ensureCaseEvidenceFolder } from '../adapters/googleDrive'
 import { ensureDoctorCalendarEvent } from '../adapters/googleCalendar'
@@ -23,6 +29,13 @@ export interface BookingIntakeReservationOptions {
   collisionPrefix?: string
   conflictingFormResponseIds?: string[]
   convergeExact?: boolean
+  trustedAttribution?: BookingRecorderFields & {
+    protocolVersion: 1 | 2
+    adminId: string
+    adminName: string
+    aeId: string | null
+    aeName: string | null
+  }
 }
 
 export function submitBookingIntake(
@@ -48,11 +61,67 @@ export function submitBookingIntake(
     throw new Error('form response already processed')
   }
 
-  const closer = ports.config.findCloserByName(intake.closerName)
-  if (!closer) throw new Error('selected closer is not active or eligible')
-  const aeNotSpecified = intake.aeName === NO_AE_OPTION
-  const ae = aeNotSpecified ? null : ports.config.findEligibleAeByName(intake.aeName)
-  if (!aeNotSpecified && !ae) throw new Error('selected AE is not active or eligible')
+  const attribution = reservation.trustedAttribution ? (() => {
+    const trusted = reservation.trustedAttribution
+    const staff = ports.config.listStaff()
+    const recorderMatches = staff.filter((item) => item.id === trusted.recorderId)
+    const recorder = recorderMatches[0]
+    if (
+      trusted.recorderSource !== 'VERIFIED_LINE' ||
+      recorderMatches.length !== 1 ||
+      !recorder?.active ||
+      !recorder.canCloseBooking ||
+      trusted.recorderName !== recorder.name
+    ) {
+      throw new Error('trusted recorder attribution is not current')
+    }
+    const admin = trusted.protocolVersion === 2
+      ? resolveSelectableAdminById(staff, trusted.adminId)
+      : trusted.adminId === recorder.id ? recorder : null
+    if (!admin || trusted.adminName !== admin.name) {
+      throw new Error('trusted Admin attribution is not current')
+    }
+    if ((trusted.aeId === null) !== (trusted.aeName === null || trusted.aeName === NO_AE_OPTION)) {
+      throw new Error('trusted AE attribution is not current')
+    }
+    const ae = trusted.aeId === null ? null : resolveEligibleAeById(staff, trusted.aeId)
+    if (trusted.aeId !== null && (!ae || trusted.aeName !== ae.name)) {
+      throw new Error('trusted AE attribution is not current')
+    }
+    return {
+      recorderId: recorder.id,
+      recorderName: recorder.name,
+      recorderSource: 'VERIFIED_LINE' as const,
+      adminId: admin.id,
+      adminName: admin.name,
+      aeId: ae?.id ?? null,
+      aeName: ae?.name ?? (trusted.protocolVersion === 1 ? NO_AE_OPTION : null),
+    }
+  })() : (() => {
+    const staff = ports.config.listStaff()
+    const selectable = activeAttributionStaff(staff)
+    const adminMatches = selectable.filter((item) => item.name.trim() === intake.closerName.trim())
+    if (adminMatches.length !== 1) throw new Error('selected closer is not active or eligible')
+    const admin = adminMatches[0]
+    const aeNotSpecified = intake.aeName === NO_AE_OPTION
+    const aeMatches = aeNotSpecified
+      ? []
+      : selectable.filter((item) => item.name.trim() === intake.aeName.trim())
+    if (!aeNotSpecified && aeMatches.length !== 1) {
+      throw new Error('selected AE is not active or eligible')
+    }
+    const ae = aeMatches[0] ?? null
+    const recorder = resolveActiveStaffByEmail(staff, intake.submitterEmail)
+    return {
+      recorderId: recorder?.id ?? null,
+      recorderName: recorder?.name ?? 'Google Form',
+      recorderSource: recorder ? 'FORM_EMAIL_MATCH' as const : 'FORM_UNRESOLVED' as const,
+      adminId: admin.id,
+      adminName: admin.name,
+      aeId: ae?.id ?? null,
+      aeName: ae?.name ?? NO_AE_OPTION,
+    }
+  })()
   const doctor = ports.config.findDoctor(intake.doctorId)
   if (!doctor?.active) throw new Error('selected doctor is not active')
   const service = ports.config.findService(intake.serviceId)
@@ -78,12 +147,15 @@ export function submitBookingIntake(
     version: 1,
     status: 'FORM_SUBMITTED',
     formResponseId: intake.formResponseId,
-    adminId: closer.id,
-    adminName: closer.name,
+    recorderId: attribution.recorderId,
+    recorderName: attribution.recorderName,
+    recorderSource: attribution.recorderSource,
+    adminId: attribution.adminId,
+    adminName: attribution.adminName,
     submitterEmail: intake.submitterEmail.trim().toLowerCase(),
     adminIdentityStatus: 'SELECTED_ADMIN',
-    aeId: ae?.id ?? null,
-    aeName: ae?.name ?? NO_AE_OPTION,
+    aeId: attribution.aeId,
+    aeName: attribution.aeName,
     queueType: intake.queueType,
     appointmentStatus: intake.queueType === 'NORMAL' ? 'CONFIRMED' : 'AWAITING_ADMIN_SLOT',
     appointmentProposedAt: null,
@@ -118,7 +190,7 @@ export function submitBookingIntake(
     firstCallWindowEnd: callWindow?.end ?? null,
     nextCallAt: intake.appointmentDate ? `${intake.appointmentDate}T09:00:00+07:00` : null,
     lastCallAt: null,
-    callOwnerAdminId: closer.id,
+    callOwnerAdminId: attribution.adminId,
     jeraPaymentId: null,
     jeraStatus: null,
     jeraClosedAt: null,
@@ -150,7 +222,11 @@ export function submitBookingIntake(
       action: 'BOOKING_CREATED',
       target: 'BOOKING_MASTER',
       before: null,
-      after: { status: 'FORM_SUBMITTED', adminId: closer.id, aeId: ae?.id ?? null },
+      after: {
+        status: 'FORM_SUBMITTED',
+        adminId: attribution.adminId,
+        aeId: attribution.aeId,
+      },
       reason: 'Google Form submission',
       timestamp: ports.clock.nowIso(),
       correlationId: intake.formResponseId,

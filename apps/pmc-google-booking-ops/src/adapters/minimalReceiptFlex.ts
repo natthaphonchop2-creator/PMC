@@ -25,11 +25,12 @@ const THAI_MONTHS = [
 type FlexComponent = Record<string, unknown>
 
 export interface TeamProfileImages {
+  recorder?: string | null
   closer: string | null
   ae: string | null
 }
 
-const EMPTY_TEAM_PROFILES: TeamProfileImages = { closer: null, ae: null }
+const EMPTY_TEAM_PROFILES: TeamProfileImages = { recorder: null, closer: null, ae: null }
 
 export function formatThaiAppointment(value: string): { date: string; time: string } {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value)
@@ -241,11 +242,21 @@ function teamSection(
   booking: BookingCase,
   profiles: TeamProfileImages = EMPTY_TEAM_PROFILES,
 ): FlexComponent[] {
+  const aeName = booking.aeName ?? (
+    booking.recorderSource === 'LEGACY_ASSUMED_ADMIN' || !booking.recorderSource
+      ? 'ไม่ระบุ (เคสเดิม)'
+      : 'ไม่ระบุ'
+  )
   return [
     separator(),
     sectionTitle('ทีมผู้ดูแล'),
+    teamMemberRow(
+      'ผู้บันทึก',
+      String(booking.recorderName ?? '').trim() || booking.adminName || 'ไม่ทราบ (เคสเดิม)',
+      profiles.recorder ?? null,
+    ),
     teamMemberRow('Admin', booking.adminName, profiles.closer),
-    teamMemberRow('AE', booking.aeName ?? 'ไม่ระบุ (เคสเดิม)', profiles.ae),
+    teamMemberRow('AE', aeName, profiles.ae),
   ]
 }
 

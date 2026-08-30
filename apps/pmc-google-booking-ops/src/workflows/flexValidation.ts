@@ -38,6 +38,9 @@ export function buildProductionFlexValidationMessages(
     version: 1,
     status: 'BOOKING_CONFIRMED',
     formResponseId: 'synthetic-flex-validation',
+    recorderId: 'validation-closer',
+    recorderName: 'มัส',
+    recorderSource: 'LEGACY_ASSUMED_ADMIN',
     adminId: 'validation-closer',
     adminName: 'มัส',
     submitterEmail: 'synthetic@example.invalid',
@@ -94,7 +97,11 @@ export function buildProductionFlexValidationMessages(
     updatedAt: '2026-08-21T09:00:00+07:00',
     updatedBy: 'system-validation',
   } satisfies BookingCase
-  const teamProfiles = { closer: profileUrl('มัส'), ae: profileUrl('แวว') }
+  const teamProfiles = {
+    recorder: profileUrl('มัส'),
+    closer: profileUrl('มัส'),
+    ae: profileUrl('แวว'),
+  }
   const callTiming = callReminderTiming('2026-08-21T09:00:00+07:00', '2026-08-21T09:00:00+07:00')
   const callCards = Array.from({ length: 10 }, (_, index) => {
     const caseId = `PMC-VALIDATION-${String(index + 1).padStart(2, '0')}`

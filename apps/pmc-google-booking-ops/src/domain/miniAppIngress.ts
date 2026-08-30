@@ -1,23 +1,40 @@
 import {
   canonicalMiniAppBookingIngress,
-  type MiniAppBookingIngressPayload,
-  type UnsignedMiniAppBookingIngressEnvelope,
+  type MiniAppBookingIngressPayloadV1,
+  type MiniAppBookingIngressPayloadV2,
+  type UnsignedMiniAppBookingIngressEnvelopeV1,
+  type UnsignedMiniAppBookingIngressEnvelopeV2,
 } from '../../../../shared/pmcMiniAppBooking'
 import { NO_AE_OPTION } from '../config'
 import type { AppsScriptDoPostEvent } from '../adapters/lineMessaging'
 import type { BookingPorts } from '../ports'
+import {
+  resolveEligibleAeById,
+  resolveEligibleAeByName,
+  resolveSelectableAdminById,
+} from './staffDirectory'
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'payload', 'signature'] as const
-const PAYLOAD_KEYS = [
+const PAYLOAD_KEYS_V1 = [
   'requestId', 'payloadHash', 'staffId', 'aeName', 'customerName', 'facebookName', 'phoneNormalized',
   'doctorId', 'serviceId', 'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
   'paymentEvidenceFileIds', 'chatEvidenceFileIds',
 ] as const
+const PAYLOAD_KEYS_V2 = [
+  'protocolVersion', 'requestId', 'payloadHash', 'staffId', 'recorderName', 'adminId', 'adminName',
+  'aeId', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
+  'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
+  'paymentEvidenceFileIds', 'chatEvidenceFileIds',
+] as const
+
+export type VerifiedMiniAppBookingIngressPayload =
+  | MiniAppBookingIngressPayloadV1
+  | MiniAppBookingIngressPayloadV2
 
 export function parseAndVerifyMiniAppIngress(
   event: AppsScriptDoPostEvent,
   ports: BookingPorts,
-): MiniAppBookingIngressPayload {
+): VerifiedMiniAppBookingIngressPayload {
   return verifyMiniAppIngressPayload(parseAppsScriptDoPostBody(event), ports)
 }
 
@@ -28,19 +45,40 @@ export function parseAppsScriptDoPostBody(event: AppsScriptDoPostEvent, maxLengt
   try { return JSON.parse(event.postData.contents) } catch { throw new Error('invalid mini app ingress JSON') }
 }
 
-export function verifyMiniAppIngressPayload(input: unknown, ports: BookingPorts): MiniAppBookingIngressPayload {
+export function verifyMiniAppIngressPayload(
+  input: unknown,
+  ports: BookingPorts,
+): VerifiedMiniAppBookingIngressPayload {
   if (!isRecord(input) || !hasExactKeys(input, ENVELOPE_KEYS)) throw new Error('invalid mini app ingress envelope')
-  if (input.kind !== 'MINI_APP_BOOKING' || input.version !== 1 || !Number.isSafeInteger(input.timestamp)) {
+  if (
+    input.kind !== 'MINI_APP_BOOKING' ||
+    (input.version !== 1 && input.version !== 2) ||
+    !Number.isSafeInteger(input.timestamp)
+  ) {
     throw new Error('invalid mini app ingress envelope')
   }
   if (typeof input.nonce !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(input.nonce)) throw new Error('invalid mini app ingress nonce')
   if (typeof input.signature !== 'string' || !/^[a-f0-9]{64}$/.test(input.signature)) throw new Error('invalid mini app ingress signature')
-  if (!isRecord(input.payload) || !hasExactKeys(input.payload, PAYLOAD_KEYS)) throw new Error('invalid mini app ingress payload')
+  if (!isRecord(input.payload)) throw new Error('invalid mini app ingress payload')
+  const version = input.version as 1 | 2
+  const expectedPayloadKeys = version === 1 ? PAYLOAD_KEYS_V1 : PAYLOAD_KEYS_V2
+  if (!hasExactKeys(input.payload, expectedPayloadKeys)) throw new Error('invalid mini app ingress payload')
 
-  const unsigned: UnsignedMiniAppBookingIngressEnvelope = {
-    kind: 'MINI_APP_BOOKING', version: 1, timestamp: input.timestamp as number, nonce: input.nonce,
-    payload: input.payload as unknown as MiniAppBookingIngressPayload,
-  }
+  const unsigned = version === 1
+    ? {
+        kind: 'MINI_APP_BOOKING' as const,
+        version: 1 as const,
+        timestamp: input.timestamp as number,
+        nonce: input.nonce,
+        payload: input.payload as unknown as MiniAppBookingIngressPayloadV1,
+      } satisfies UnsignedMiniAppBookingIngressEnvelopeV1
+    : {
+        kind: 'MINI_APP_BOOKING' as const,
+        version: 2 as const,
+        timestamp: input.timestamp as number,
+        nonce: input.nonce,
+        payload: input.payload as unknown as MiniAppBookingIngressPayloadV2,
+      } satisfies UnsignedMiniAppBookingIngressEnvelopeV2
   const expected = ports.crypto.hmacSha256Hex(canonicalMiniAppBookingIngress(unsigned), ports.secrets.bookingIngressSecret())
   if (!constantTimeEqual(input.signature, expected)) throw new Error('invalid mini app ingress signature')
 
@@ -53,12 +91,37 @@ export function verifyMiniAppIngressPayload(input: unknown, ports: BookingPorts)
   return clonePayload(unsigned.payload)
 }
 
-function validatePayload(payload: MiniAppBookingIngressPayload, ports: BookingPorts): void {
+function validatePayload(payload: VerifiedMiniAppBookingIngressPayload, ports: BookingPorts): void {
   if (!/^[A-Za-z0-9._:-]{1,124}$/.test(payload.requestId)) throw new Error('invalid mini app request ID')
   if (!/^[A-Za-z0-9_-]{4,128}$/.test(payload.payloadHash)) throw new Error('invalid mini app payload hash')
-  const staff = ports.config.findStaffById(payload.staffId)
-  if (!staff?.active || !staff.canCloseBooking) throw new Error('mini app staff is not active or eligible')
-  if (payload.aeName !== NO_AE_OPTION && !ports.config.findEligibleAeByName(payload.aeName)) throw new Error('mini app AE is not active or eligible')
+  const staffRows = ports.config.listStaff()
+  const recorder = staffRows.filter((item) => item.id === payload.staffId)
+  if (recorder.length !== 1 || !recorder[0].active || !recorder[0].canCloseBooking) {
+    throw new Error('mini app staff is not active or eligible')
+  }
+  if ('protocolVersion' in payload) {
+    if (payload.protocolVersion !== 2 || payload.recorderName !== recorder[0].name) {
+      throw new Error('mini app recorder snapshot mismatch')
+    }
+    const admin = resolveSelectableAdminById(staffRows, payload.adminId)
+    if (!admin || payload.adminName !== admin.name) {
+      throw new Error('mini app Admin is not active, eligible, or current')
+    }
+    if ((payload.aeId === null) !== (payload.aeName === null)) {
+      throw new Error('mini app AE snapshot mismatch')
+    }
+    if (payload.aeId !== null) {
+      const ae = resolveEligibleAeById(staffRows, payload.aeId)
+      if (!ae || payload.aeName !== ae.name) {
+        throw new Error('mini app AE is not active, eligible, or current')
+      }
+    }
+  } else if (
+    payload.aeName !== NO_AE_OPTION &&
+    !resolveEligibleAeByName(staffRows, payload.aeName)
+  ) {
+    throw new Error('mini app AE is not active or eligible')
+  }
   if (!requiredText(payload.customerName, 160) || !requiredText(payload.facebookName, 160)) throw new Error('invalid mini app customer')
   if (!/^0\d{8,9}$/.test(payload.phoneNormalized)) throw new Error('invalid mini app phone')
   if (!ports.config.findDoctor(payload.doctorId)?.active) throw new Error('mini app doctor is not active')
@@ -107,6 +170,6 @@ function constantTimeEqual(left: string, right: string): boolean {
   for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index)
   return difference === 0
 }
-function clonePayload(payload: MiniAppBookingIngressPayload): MiniAppBookingIngressPayload {
-  return JSON.parse(JSON.stringify(payload)) as MiniAppBookingIngressPayload
+function clonePayload(payload: VerifiedMiniAppBookingIngressPayload): VerifiedMiniAppBookingIngressPayload {
+  return JSON.parse(JSON.stringify(payload)) as VerifiedMiniAppBookingIngressPayload
 }

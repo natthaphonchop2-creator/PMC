@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMiniAppBookingIngress,
   type MiniAppBookingIngressEnvelope,
+  type MiniAppBookingIngressEnvelopeV2,
 } from '../../../shared/pmcMiniAppBooking'
 import { parseAndVerifyMiniAppIngress } from '../src/domain/miniAppIngress'
 import { processBookingDoPost } from '../src/entrypoints'
@@ -16,6 +17,43 @@ describe('Apps Script Mini App booking ingress', () => {
       requestId: 'request-1', staffId: 'admin-1', doctorId: 'doctor-1', serviceId: 'service-1', channelId: 'เพจหลัก',
     })
     expect(ports.repositories.lineDirectory.hasNonce('nonce-123456')).toBe(true)
+  })
+
+  it('accepts signed protocol-2 recorder, Admin, and AE pairs while Admin is not a closer', () => {
+    const ports = createTestPorts()
+
+    expect(parseAndVerifyMiniAppIngress(event(signedEnvelopeV2()), ports)).toMatchObject({
+      protocolVersion: 2,
+      staffId: 'admin-1',
+      recorderName: 'Admin A',
+      adminId: 'staff-ae',
+      adminName: 'เอม',
+      aeId: 'admin-1',
+      aeName: 'Admin A',
+    })
+  })
+
+  it.each([
+    ['recorder name', { recorderName: 'ปลอม' }],
+    ['Admin name', { adminName: 'ปลอม' }],
+    ['AE name', { aeName: 'ปลอม' }],
+    ['non-canonical Admin ID', { adminId: ' staff-ae' }],
+  ])('rejects a signed protocol-2 %s snapshot that does not match current Staff', (_label, patch) => {
+    expect(() => parseAndVerifyMiniAppIngress(
+      event(signedEnvelopeV2({ payload: patch })),
+      createTestPorts(),
+    )).toThrow()
+  })
+
+  it('rejects a protocol-2 recorder who can be selected but cannot close bookings', () => {
+    expect(() => parseAndVerifyMiniAppIngress(event(signedEnvelopeV2({
+      payload: {
+        staffId: 'staff-ae',
+        recorderName: 'เอม',
+        adminId: 'admin-1',
+        adminName: 'Admin A',
+      },
+    })), createTestPorts())).toThrow('mini app staff is not active or eligible')
   })
 
   it('returns the exact safe booking projection for an initial submission and verified duplicate', () => {
@@ -84,6 +122,51 @@ function signedEnvelope(overrides: Partial<Omit<MiniAppBookingIngressEnvelope, '
   return {
     ...unsigned,
     signature: createHmac('sha256', 'ingress-secret').update(canonicalMiniAppBookingIngress(unsigned)).digest('hex'),
+  }
+}
+
+function signedEnvelopeV2(
+  overrides: {
+    timestamp?: number
+    nonce?: string
+    payload?: Partial<MiniAppBookingIngressEnvelopeV2['payload']>
+  } = {},
+): MiniAppBookingIngressEnvelopeV2 {
+  const unsigned: Omit<MiniAppBookingIngressEnvelopeV2, 'signature'> = {
+    kind: 'MINI_APP_BOOKING',
+    version: 2,
+    timestamp: overrides.timestamp ?? Math.floor(Date.parse('2026-08-20T09:00:00+07:00') / 1000),
+    nonce: overrides.nonce ?? 'nonce-v2-123456',
+    payload: {
+      protocolVersion: 2,
+      requestId: 'request-v2-1',
+      payloadHash: 'payload-hash-v2-1',
+      staffId: 'admin-1',
+      recorderName: 'Admin A',
+      adminId: 'staff-ae',
+      adminName: 'เอม',
+      aeId: 'admin-1',
+      aeName: 'Admin A',
+      customerName: 'ลูกค้าทดสอบ',
+      facebookName: 'Facebook Test',
+      phoneNormalized: '0812345678',
+      doctorId: 'doctor-1',
+      serviceId: 'service-1',
+      queueType: 'NORMAL',
+      appointmentDate: '2026-09-01',
+      appointmentTime: '13:00',
+      depositAmount: 900,
+      channelId: 'เพจหลัก',
+      paymentEvidenceFileIds: ['payment-file-1'],
+      chatEvidenceFileIds: ['chat-file-1'],
+      ...(overrides.payload ?? {}),
+    },
+  }
+  return {
+    ...unsigned,
+    signature: createHmac('sha256', 'ingress-secret')
+      .update(canonicalMiniAppBookingIngress(unsigned))
+      .digest('hex'),
   }
 }
 
