@@ -13,7 +13,13 @@ import type {
   BookingMigrationManifestPayload,
   BookingQueueAttestation,
 } from '../domain/attributionMigrationState'
-import { isReservedAttributionOption } from '../domain/staffDirectory'
+import {
+  assertPmcBookingTargetCorrelation,
+  assertUniquePmcBookingMasterTargetRecords,
+  assertUniquePmcMiniAppTargetRequestRecords,
+  parsePmcBookingMasterTargetRow,
+  parsePmcMiniAppTargetRequestRow,
+} from '../../../../shared/pmcBookingRowContracts'
 
 export interface QueueGatePort {
   readAttestation(): BookingQueueAttestation
@@ -303,56 +309,14 @@ function verifyCompletedManifest(
 }
 
 function validateTargetRows(snapshot: AttributionMigrationSheetSnapshot): void {
-  const requestStaffIdIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('staffId')
-  const requestProtocolIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('protocolVersion')
-  const requestStateIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('state')
-  const requestPayloadHashIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('payloadHash')
-  const requestRecorderIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('recorderName')
-  const requestAdminIdIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('adminId')
-  const requestAdminNameIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('adminName')
-  const requestAeIdIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('aeId')
-  const requestAeNameIndex = TARGET_MINI_APP_REQUEST_HEADERS.indexOf('aeName')
-  for (const row of snapshot.request.rows) {
-    const protocol = Number(row[requestProtocolIndex])
-    const recorder = { id: text(row[requestStaffIdIndex]), name: text(row[requestRecorderIndex]) }
-    const admin = { id: text(row[requestAdminIdIndex]), name: text(row[requestAdminNameIndex]) }
-    const ae = { id: text(row[requestAeIdIndex]), name: text(row[requestAeNameIndex]) }
-    const mayOmitAdmin = protocol === 2
-      && ['DRAFT', 'UPLOADING', 'CANCELLED', 'EXPIRED'].includes(text(row[requestStateIndex]))
-      && text(row[requestPayloadHashIndex]) === ''
-    const validAdmin = mayOmitAdmin && admin.id === '' && admin.name === ''
-      || Boolean(admin.id && admin.name && !isReservedAttributionOption(admin))
-    if ((protocol !== 1 && protocol !== 2)
-      || !recorder.id || !recorder.name || isReservedAttributionOption(recorder)
-      || !validAdmin
-      || ae.id === '' && ae.name !== '' && ae.name !== 'ไม่ระบุ'
-      || ae.id !== '' && (!ae.name || isReservedAttributionOption(ae))) {
-      throw new Error('COMPLETE_MANIFEST_READBACK_MISMATCH')
-    }
-  }
-  const sourceIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('recorderSource')
-  const recorderIdIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('recorderId')
-  const recorderNameIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('recorderName')
-  const adminIdIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('adminId')
-  const adminNameIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('adminName')
-  const aeIdIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('aeId')
-  const aeNameIndex = TARGET_BOOKING_MASTER_HEADERS.indexOf('aeName')
-  for (const row of snapshot.master.rows) {
-    const source = text(row[sourceIndex])
-    const recorderId = text(row[recorderIdIndex])
-    const recorderName = text(row[recorderNameIndex])
-    const admin = { id: text(row[adminIdIndex]), name: text(row[adminNameIndex]) }
-    const ae = { id: text(row[aeIdIndex]), name: text(row[aeNameIndex]) }
-    if (!['VERIFIED_LINE', 'LEGACY_ASSUMED_ADMIN', 'FORM_EMAIL_MATCH', 'FORM_UNRESOLVED'].includes(source)
-      || source === 'FORM_UNRESOLVED' && (recorderId !== '' || recorderName !== 'Google Form')
-      || source !== 'FORM_UNRESOLVED' && (!recorderId || !recorderName)
-      || source !== 'FORM_UNRESOLVED' && isReservedAttributionOption({ id: recorderId, name: recorderName })
-      || !admin.id || !admin.name || isReservedAttributionOption(admin)
-      || source === 'LEGACY_ASSUMED_ADMIN' && (recorderId !== admin.id || recorderName !== admin.name)
-      || ae.id === '' && ae.name !== '' && ae.name !== 'ไม่ระบุ'
-      || ae.id !== '' && (!ae.name || isReservedAttributionOption(ae))) {
-      throw new Error('COMPLETE_MANIFEST_READBACK_MISMATCH')
-    }
+  try {
+    const requests = snapshot.request.rows.map(parsePmcMiniAppTargetRequestRow)
+    const masters = snapshot.master.rows.map(parsePmcBookingMasterTargetRow)
+    assertUniquePmcMiniAppTargetRequestRecords(requests)
+    assertUniquePmcBookingMasterTargetRecords(masters)
+    assertPmcBookingTargetCorrelation(requests, masters)
+  } catch {
+    throw new Error('COMPLETE_MANIFEST_READBACK_MISMATCH')
   }
 }
 
@@ -375,8 +339,24 @@ function safeMigrationError(error: unknown): Error {
 }
 
 function withoutDigest(manifest: BookingMigrationManifest): BookingMigrationManifestPayload {
-  const { digest: _digest, ...payload } = manifest
-  return { ...payload, expected: { ...payload.expected } }
+  return {
+    version: manifest.version,
+    migration: manifest.migration,
+    state: manifest.state,
+    sourceFingerprint: manifest.sourceFingerprint,
+    backupFileId: manifest.backupFileId,
+    backupMimeType: manifest.backupMimeType,
+    backupParentId: manifest.backupParentId,
+    backupSourceFingerprint: manifest.backupSourceFingerprint,
+    expected: { ...manifest.expected },
+    requestRowCount: manifest.requestRowCount,
+    masterRowCount: manifest.masterRowCount,
+    queueAttestationDigest: manifest.queueAttestationDigest,
+    preparedAt: manifest.preparedAt,
+    updatedAt: manifest.updatedAt,
+    completedAt: manifest.completedAt,
+    safeFailureCode: manifest.safeFailureCode,
+  }
 }
 
 function completeResult(): BookingAttributionMigrationResult {
@@ -389,8 +369,4 @@ function restoreRequiredResult(): BookingAttributionMigrationResult {
 
 function sameHeader(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
-}
-
-function text(value: unknown): string {
-  return value === null || value === undefined ? '' : String(value).trim()
 }

@@ -71,12 +71,14 @@ export const MINI_APP_ASYNC_REQUEST_HEADERS_V1 = [
 export const MINI_APP_ASYNC_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS_V1
 
 export const MINI_APP_ASYNC_REQUEST_HEADERS_V2 = [
-  'requestId', 'draftId', 'staffId', 'lineUserIdHash', 'state', 'retentionState', 'version', 'protocolVersion', 'payloadHash',
-  'recorderName', 'adminId', 'adminName', 'aeId', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId',
-  'serviceId', 'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
-  'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode',
-  'updatedAt', 'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt', 'processingStartedAt',
-  'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken', 'evidenceProjectionHash',
+  'requestId', 'draftId', 'protocolVersion', 'staffId', 'recorderName', 'adminId', 'adminName',
+  'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash', 'aeId', 'aeName',
+  'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
+  'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
+  'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus',
+  'safeErrorCode', 'updatedAt', 'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson',
+  'taskName', 'queuedAt', 'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount',
+  'processingOwnerToken', 'evidenceProjectionHash',
 ] as const
 
 export interface MiniAppEvidenceProjectionBinding {

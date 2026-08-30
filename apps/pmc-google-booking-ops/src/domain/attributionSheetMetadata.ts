@@ -65,13 +65,59 @@ function rejectUnstableFormulaReferences(value: unknown, sheetTitle: string): vo
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     if ((key === 'userEnteredValue' || key === 'formulaValue')
       && typeof item === 'string' && item.startsWith('=')) {
-      const quotedTitle = `'${sheetTitle.replace(/'/g, "''")}'!`
-      if (!item.includes('!') || item.includes(`${sheetTitle}!`) || item.includes(quotedTitle)) {
+      if (hasUnsafeSheetReference(item, sheetTitle)) {
         throw new Error('UNSUPPORTED_SHEETS_METADATA')
       }
     }
     rejectUnstableFormulaReferences(item, sheetTitle)
   }
+}
+
+function hasUnsafeSheetReference(formula: string, currentSheetTitle: string): boolean {
+  const source = stripDoubleQuotedStrings(formula)
+  const r1c1 = String.raw`R(?:(?:\[-?\d+\])|\d+)?C(?:(?:\[-?\d+\])|\d+)?`
+  const a1Cell = String.raw`\$?[A-Z]{1,3}\$?\d+`
+  const a1ColumnRange = String.raw`\$?[A-Z]{1,3}:\$?[A-Z]{1,3}`
+  const a1RowRange = String.raw`\$?\d+:\$?\d+`
+  const reference = String.raw`(?:${r1c1})(?::(?:${r1c1}))?|(?:${a1Cell})(?::(?:${a1Cell}))?|(?:${a1ColumnRange})|(?:${a1RowRange})`
+  const pattern = new RegExp(
+    String.raw`(?:(?:'((?:[^']|'')+)'|([A-Z_][A-Z0-9_.]*))!)?(${reference})`,
+    'giu',
+  )
+  for (const match of source.matchAll(pattern)) {
+    const start = match.index ?? 0
+    const end = start + match[0].length
+    const previous = source[start - 1] ?? ''
+    const next = source[end] ?? ''
+    if (/[A-Z0-9_.]/iu.test(previous) || /[A-Z0-9_]/iu.test(next)) continue
+    if (!match[1] && !match[2] && next === '(') continue
+    const qualifier = (match[1] ?? match[2] ?? '').replace(/''/g, "'")
+    if (!qualifier || qualifier.toLocaleLowerCase() === currentSheetTitle.toLocaleLowerCase()) {
+      return true
+    }
+  }
+  return false
+}
+
+function stripDoubleQuotedStrings(value: string): string {
+  let output = ''
+  let quoted = false
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index]
+    if (character === '"') {
+      if (quoted && value[index + 1] === '"') {
+        output += '  '
+        index += 1
+        continue
+      }
+      quoted = !quoted
+      output += ' '
+      continue
+    }
+    output += quoted ? ' ' : character
+  }
+  if (quoted) throw new Error('UNSUPPORTED_SHEETS_METADATA')
+  return output
 }
 
 function normalizeGridData(value: unknown, inserted: readonly number[]): {

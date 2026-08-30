@@ -2,6 +2,10 @@ import type { MiniAppSheetsPort } from './googleClient.js'
 import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState.js'
 import type { BookingProtocolVersion } from '../../shared/pmcBookingProtocol.js'
 import type { MiniAppAttributionOption } from './contracts.js'
+import {
+  PMC_MINI_APP_REQUEST_HEADERS_V2,
+  parsePmcMiniAppTargetRequestRow,
+} from '../../shared/pmcBookingRowContracts.js'
 
 export type MiniAppRequestState =
   | 'DRAFT'
@@ -152,16 +156,7 @@ export interface MiniAppEnrollmentStore {
   ): Promise<{ allowed: boolean; retryAfterSeconds: number }>
 }
 
-const legacyAeNameIndex = MINI_APP_ASYNC_REQUEST_HEADERS_V1.indexOf('aeName')
-export const ATTRIBUTION_V2_REQUEST_HEADERS = [
-  ...MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, 2),
-  'protocolVersion',
-  MINI_APP_ASYNC_REQUEST_HEADERS_V1[2],
-  'recorderName', 'adminId', 'adminName',
-  ...MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(3, legacyAeNameIndex),
-  'aeId',
-  ...MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(legacyAeNameIndex),
-] as const
+export const ATTRIBUTION_V2_REQUEST_HEADERS = PMC_MINI_APP_REQUEST_HEADERS_V2
 
 export const MINI_APP_REQUEST_HEADERS = ATTRIBUTION_V2_REQUEST_HEADERS
 
@@ -518,6 +513,7 @@ function requestCell(value: MiniAppRequestRecord, header: string): unknown {
 
 function requestFromRow(row: unknown[], schema: RequestSchema): MiniAppRequestRecord {
   if (row.length === 0) throw new Error('MINI_APP_STORE_CORRUPT_ROW')
+  if (schema === 'V2') return parsePmcMiniAppTargetRequestRow(row) as MiniAppRequestRecord
   const headers = requestHeaders(schema)
   const cell = (header: string): unknown => row[headers.indexOf(header)]
   const staffId = text(cell('staffId'))

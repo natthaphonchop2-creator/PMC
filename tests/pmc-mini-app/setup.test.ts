@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MiniAppSheetsPort } from '../../server/pmc-mini-app/googleClient'
 import { ensureMiniAppWorkbook, MANAGED_TAB_HEADERS, migrateMiniAppAsyncRequestColumns } from '../../server/pmc-mini-app/setup'
 import { ATTRIBUTION_V2_REQUEST_HEADERS, MINI_APP_REQUEST_HEADERS } from '../../server/pmc-mini-app/store'
+import { MINI_APP_ASYNC_REQUEST_HEADERS_V2 } from '../../shared/pmcMiniAppAsyncState'
 import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState'
 
 describe('PMC Mini App managed Sheet setup', () => {
@@ -148,6 +149,7 @@ describe('PMC Mini App managed Sheet setup', () => {
 
   it('uses the exact attribution-v2 request header for newly managed workbooks', () => {
     expect(MINI_APP_REQUEST_HEADERS).toEqual(ATTRIBUTION_V2_REQUEST_HEADERS)
+    expect(MINI_APP_ASYNC_REQUEST_HEADERS_V2).toEqual(ATTRIBUTION_V2_REQUEST_HEADERS)
     expect(MANAGED_TAB_HEADERS.MINI_APP_REQUESTS).toEqual(ATTRIBUTION_V2_REQUEST_HEADERS)
   })
 

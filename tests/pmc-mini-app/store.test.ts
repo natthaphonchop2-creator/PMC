@@ -165,7 +165,6 @@ describe('PMC Mini App Sheet store', () => {
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
     await store.createDraft(validDraft({ draftId: 'draft-old', requestId: 'request-old', state: 'DRAFT', updatedAt: '2026-08-27T10:00:00.000Z' }))
     await store.createDraft(validDraft({ draftId: 'draft-other', requestId: 'request-other', staffId: 'staff-other', updatedAt: '2026-08-28T12:00:00.000Z' }))
-    await store.createDraft(validDraft({ draftId: 'draft-invalid', requestId: 'request-invalid', state: 'QUEUED', updatedAt: 'not-a-date' }))
     await store.createDraft(validDraft({ draftId: 'draft-terminal', requestId: 'request-terminal', state: 'CONFIRMED', updatedAt: '2026-08-29T12:00:00.000Z' }))
     await store.createDraft(validDraft({ draftId: 'draft-review', requestId: 'request-review', state: 'NEEDS_REVIEW', updatedAt: '2026-08-28T11:00:00.000Z' }))
 
@@ -173,6 +172,16 @@ describe('PMC Mini App Sheet store', () => {
       draftId: 'draft-review', requestId: 'request-review', staffId: 'staff-active', state: 'NEEDS_REVIEW',
     })
     await expect(store.getLatestActiveDraftByStaff('staff-missing')).resolves.toBeNull()
+  })
+
+  it('fails closed when the exact target reader encounters a malformed persisted draft date', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      draftId: 'draft-invalid', requestId: 'request-invalid', state: 'QUEUED', updatedAt: 'not-a-date',
+    }))
+
+    await expect(store.getLatestActiveDraftByStaff('staff-active')).rejects.toThrow('INVALID_DRAFT_DATE')
   })
 
   it('exposes no direct distributed async mutation authority from Cloud Run', () => {

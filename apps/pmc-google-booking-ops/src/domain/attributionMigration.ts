@@ -1,21 +1,11 @@
 import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../../../shared/pmcMiniAppAsyncState'
 import { BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1 } from '../sheetSchema'
 import { isReservedAttributionOption } from './staffDirectory'
+import { PMC_MINI_APP_REQUEST_HEADERS_V2 } from '../../../../shared/pmcBookingRowContracts'
 
 export const LEGACY_MINI_APP_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS_V1
 
-const legacyAeNameIndex = LEGACY_MINI_APP_REQUEST_HEADERS.indexOf('aeName')
-export const TARGET_MINI_APP_REQUEST_HEADERS = [
-  ...LEGACY_MINI_APP_REQUEST_HEADERS.slice(0, 2),
-  'protocolVersion',
-  LEGACY_MINI_APP_REQUEST_HEADERS[2],
-  'recorderName',
-  'adminId',
-  'adminName',
-  ...LEGACY_MINI_APP_REQUEST_HEADERS.slice(3, legacyAeNameIndex),
-  'aeId',
-  ...LEGACY_MINI_APP_REQUEST_HEADERS.slice(legacyAeNameIndex),
-] as const
+export const TARGET_MINI_APP_REQUEST_HEADERS = PMC_MINI_APP_REQUEST_HEADERS_V2
 
 export const LEGACY_BOOKING_MASTER_HEADERS = BOOKING_MASTER_COLUMNS_V1
 export const TARGET_BOOKING_MASTER_HEADERS = BOOKING_MASTER_COLUMNS

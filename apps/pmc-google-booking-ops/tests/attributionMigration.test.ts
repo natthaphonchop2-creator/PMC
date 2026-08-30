@@ -287,6 +287,26 @@ describe('Booking attribution migration workflow', () => {
     expect(fake.effects).not.toContain('manifest.createPrepared')
   })
 
+  it('rejects mixed-reference metadata during initial snapshot before lock, backup, manifest, or Sheet effects', () => {
+    const fake = workflowFake([legacySnapshot()])
+    const metadata = advancedMetadataFixture()
+    const data = (metadata.data as Array<Record<string, unknown>>)[0]
+    const rows = data.rowData as Array<{ values: Array<Record<string, unknown>> }>
+    rows[1].values[1].userEnteredValue = { formulaValue: '=CONFIG_STAFF!A1 + H1' }
+    fake.ports.readSnapshot = () => {
+      fake.effects.push('sheet.read')
+      normalizeAttributionSheetMetadata(metadata, [])
+      return legacySnapshot()
+    }
+
+    expect(() => applyBookingAttributionMigration(fake.ports)).toThrow('UNSUPPORTED_SHEETS_METADATA')
+    expect(fake.effects).toEqual(['manifest.read', 'queue.read', 'sheet.read'])
+    expect(fake.effects).not.toContain('lock.enter')
+    expect(fake.effects).not.toContain('backup.createVerified')
+    expect(fake.effects).not.toContain('manifest.createPrepared')
+    expect(fake.effects).not.toContain('sheet.write')
+  })
+
   it('marks RESTORE_REQUIRED after a readback mismatch and reruns with zero Sheet writes', () => {
     const source = legacySnapshot()
     const plan = planBookingAttributionMigration(source)
@@ -350,6 +370,7 @@ describe('Booking attribution migration workflow', () => {
     target.request.rows[1][target.request.headers.indexOf('caseId')] = 'PMC-202608-0099'
     target.master.rows.push([...target.master.rows[0]])
     target.master.rows[3][target.master.headers.indexOf('caseId')] = 'PMC-202608-0099'
+    target.master.rows[3][target.master.headers.indexOf('formResponseId')] = 'mini:request-new'
     const fake = workflowFake([target, target], { manifest: manifestForPlan(plan, 'COMPLETE') })
 
     expect(applyBookingAttributionMigration(fake.ports)).toEqual({
@@ -383,6 +404,77 @@ describe('Booking attribution migration workflow', () => {
       status: 'COMPLETE', readbackVerified: true,
     })
     expect(fake.effects).toEqual(['manifest.read', 'sheet.read'])
+  })
+
+  it.each([
+    ['blank request/draft and malformed Staff ID', (target: AttributionMigrationSheetSnapshot) => {
+      const row = [...target.request.rows[0]]
+      row[target.request.headers.indexOf('requestId')] = ''
+      row[target.request.headers.indexOf('draftId')] = ''
+      row[target.request.headers.indexOf('staffId')] = 'bad id'
+      target.request.rows.push(row)
+    }],
+    ['invalid JSON evidence array', (target: AttributionMigrationSheetSnapshot) => {
+      const row = [...target.request.rows[0]]
+      row[target.request.headers.indexOf('requestId')] = 'request-new'
+      row[target.request.headers.indexOf('draftId')] = 'draft-new'
+      row[target.request.headers.indexOf('paymentEvidenceFileIdsJson')] = 'not-json'
+      target.request.rows.push(row)
+    }],
+    ['invalid payload hash', (target: AttributionMigrationSheetSnapshot) => {
+      const row = appendedRequestRow(target, 'hash')
+      row[target.request.headers.indexOf('payloadHash')] = 'bad hash'
+      target.request.rows.push(row)
+    }],
+    ['invalid request state', (target: AttributionMigrationSheetSnapshot) => {
+      const row = appendedRequestRow(target, 'state')
+      row[target.request.headers.indexOf('state')] = 'UNKNOWN'
+      target.request.rows.push(row)
+    }],
+    ['invalid evidence count', (target: AttributionMigrationSheetSnapshot) => {
+      const row = appendedRequestRow(target, 'evidence')
+      row[target.request.headers.indexOf('evidenceCount')] = 21
+      target.request.rows.push(row)
+    }],
+    ['invalid deposit number', (target: AttributionMigrationSheetSnapshot) => {
+      const row = appendedRequestRow(target, 'deposit')
+      row[target.request.headers.indexOf('depositAmount')] = -1
+      target.request.rows.push(row)
+    }],
+    ['mismatched nullable AE pair', (target: AttributionMigrationSheetSnapshot) => {
+      const row = appendedRequestRow(target, 'ae-pair')
+      row[target.request.headers.indexOf('aeId')] = ''
+      row[target.request.headers.indexOf('aeName')] = 'หมวย'
+      target.request.rows.push(row)
+    }],
+    ['extra-width request row', (target: AttributionMigrationSheetSnapshot) => {
+      target.request.rows.push([...target.request.rows[0], 'unexpected'])
+    }],
+    ['duplicate request and draft identities', (target: AttributionMigrationSheetSnapshot) => {
+      target.request.rows.push([...target.request.rows[0]])
+    }],
+    ['duplicate master case and form identities', (target: AttributionMigrationSheetSnapshot) => {
+      target.master.rows.push([...target.master.rows[0]])
+    }],
+    ['missing required request-to-master correlation', (target: AttributionMigrationSheetSnapshot) => {
+      const row = [...target.request.rows[0]]
+      row[target.request.headers.indexOf('requestId')] = 'request-orphan'
+      row[target.request.headers.indexOf('draftId')] = 'draft-orphan'
+      row[target.request.headers.indexOf('caseId')] = 'PMC-202608-0099'
+      target.request.rows.push(row)
+    }],
+  ] as const)('marks RESTORE_REQUIRED for appended target rows with %s', (_label, mutate) => {
+    const plan = planBookingAttributionMigration(legacySnapshot())
+    if (plan.kind !== 'MIGRATE') throw new Error('expected migration')
+    const target = targetSnapshotFrom(plan)
+    mutate(target)
+    const fake = workflowFake([target, target], { manifest: manifestForPlan(plan, 'COMPLETE') })
+
+    expect(applyBookingAttributionMigration(fake.ports)).toEqual({
+      status: 'RESTORE_REQUIRED', readbackVerified: false,
+    })
+    expect(fake.manifest()?.state).toBe('RESTORE_REQUIRED')
+    expect(fake.effects).not.toContain('sheet.write')
   })
 
   it('conservatively marks RESTORE_REQUIRED when a COMPLETE manifest no longer matches target structure', () => {
@@ -620,6 +712,47 @@ describe('Advanced Sheets attribution metadata normalization', () => {
     }
     expect(() => normalizeAttributionSheetMetadata(fixture, [])).toThrow('UNSUPPORTED_SHEETS_METADATA')
   })
+
+  it.each([
+    '=CONFIG_STAFF!A1 + H1',
+    '=CONFIG_STAFF!R1C1 + RC[-1]',
+    '=BOOKING_MASTER!A1',
+    "='BOOKING_MASTER'!R1C1",
+  ])('rejects each mixed external plus unqualified reference in %s', (formula) => {
+    const fixture = advancedMetadataFixture()
+    const data = (fixture.data as Array<Record<string, unknown>>)[0]
+    const rows = data.rowData as Array<{ values: Array<Record<string, unknown>> }>
+    rows[1].values[1].userEnteredValue = { formulaValue: formula }
+    expect(() => normalizeAttributionSheetMetadata(fixture, [])).toThrow('UNSUPPORTED_SHEETS_METADATA')
+  })
+
+  it.each([
+    "='Config Staff'!$A$1 + CONFIG_STAFF!R1C1",
+    '="escaped ""H1""" & CONFIG_STAFF!A1',
+    '=SUM(CONFIG_STAFF!A1:A9) + CONFIG_STAFF!R[1]C[-1]',
+  ])('accepts explicitly external A1/R1C1 references outside quoted strings: %s', (formula) => {
+    const fixture = advancedMetadataFixture()
+    const data = (fixture.data as Array<Record<string, unknown>>)[0]
+    const rows = data.rowData as Array<{ values: Array<Record<string, unknown>> }>
+    rows[1].values[1].userEnteredValue = { formulaValue: formula }
+    expect(() => normalizeAttributionSheetMetadata(fixture, [])).not.toThrow()
+  })
+
+  it.each(['validation', 'conditional'])('rejects mixed references recursively in %s formulas', (surface) => {
+    const fixture = advancedMetadataFixture()
+    if (surface === 'validation') {
+      const data = (fixture.data as Array<Record<string, unknown>>)[0]
+      const rows = data.rowData as Array<{ values: Array<Record<string, unknown>> }>
+      rows[1].values[1].dataValidation = {
+        condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: '=CONFIG_STAFF!A1 + H1' }] },
+      }
+    } else {
+      ;(fixture.conditionalFormats as Array<Record<string, unknown>>)[0].booleanRule = {
+        condition: { type: 'CUSTOM_FORMULA', values: [{ userEnteredValue: '=CONFIG_STAFF!A1 + H1' }] },
+      }
+    }
+    expect(() => normalizeAttributionSheetMetadata(fixture, [])).toThrow('UNSUPPORTED_SHEETS_METADATA')
+  })
 })
 
 function legacySnapshot(): AttributionMigrationSheetSnapshot {
@@ -679,8 +812,25 @@ function masterRow(patch: Record<string, unknown>): unknown[] {
     aeId: '', aeName: 'ไม่ระบุ', queueType: 'NORMAL', appointmentStatus: 'CONFIRMED',
     customerName: 'ลูกค้า', facebookName: 'FB', phoneNormalized: '0812345678', phoneMasked: '081-xxx-5678',
     doctorId: 'doctor-1', serviceId: 'service-1', channelId: 'channel-1', depositAmount: 900,
+    depositReceivedAt: '2026-08-01T10:00:00+07:00',
+    depositExpiresAt: '2027-02-01T10:00:00+07:00',
+    createdAt: '2026-08-01T10:00:00+07:00', createdBy: 'system',
+    updatedAt: '2026-08-01T10:01:00+07:00', updatedBy: 'system',
     ...patch,
   })
+}
+
+function appendedRequestRow(
+  target: AttributionMigrationSheetSnapshot,
+  suffix: string,
+): unknown[] {
+  const row = [...target.request.rows[0]]
+  row[target.request.headers.indexOf('requestId')] = `request-${suffix}`
+  row[target.request.headers.indexOf('draftId')] = `draft-${suffix}`
+  row[target.request.headers.indexOf('protocolVersion')] = 2
+  row[target.request.headers.indexOf('state')] = 'READY_TO_CONFIRM'
+  row[target.request.headers.indexOf('caseId')] = ''
+  return row
 }
 
 function targetSnapshotFrom(plan: BookingAttributionMigrationPlan): AttributionMigrationSheetSnapshot {

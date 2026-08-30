@@ -7,6 +7,7 @@ import {
 import { encodeSheetCell } from './googleSheets'
 import type { MiniAppRequestStatePort } from '../ports'
 import { TARGET_MINI_APP_REQUEST_HEADERS } from '../domain/attributionMigration'
+import { parsePmcMiniAppTargetRequestRow } from '../../../../shared/pmcBookingRowContracts'
 
 const TAB = 'MINI_APP_REQUESTS'
 function requestRowNumberFormats(headers: readonly string[]) {
@@ -77,6 +78,9 @@ export function createGoogleMiniAppRequestStatePort(
 }
 
 function fromRow(row: unknown[], headers: readonly string[]): MiniAppAsyncRequestRecord {
+  if (sameHeader(headers, TARGET_MINI_APP_REQUEST_HEADERS)) {
+    return parsePmcMiniAppTargetRequestRow(row) as unknown as MiniAppAsyncRequestRecord
+  }
   const value = Object.fromEntries(headers.map((header, index) => [header, row[index] ?? '']))
   const record = {
     requestId: text(value.requestId), draftId: text(value.draftId), staffId: text(value.staffId),
@@ -98,15 +102,6 @@ function fromRow(row: unknown[], headers: readonly string[]): MiniAppAsyncReques
     processingLeaseUntil: nullable(value.processingLeaseUntil), lastProgressAt: nullable(value.lastProgressAt),
     attemptCount: numberValue(value.attemptCount), processingOwnerToken: nullable(value.processingOwnerToken),
     evidenceProjectionHash: nullable(value.evidenceProjectionHash),
-  }
-  if (sameHeader(headers, TARGET_MINI_APP_REQUEST_HEADERS)) {
-    Object.assign(record, {
-      protocolVersion: numberValue(value.protocolVersion),
-      recorderName: text(value.recorderName),
-      adminId: text(value.adminId),
-      adminName: text(value.adminName),
-      aeId: nullable(value.aeId),
-    })
   }
   return record
 }

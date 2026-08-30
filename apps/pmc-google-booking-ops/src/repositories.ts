@@ -1,5 +1,6 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { BookingRepositories, Clock, InitialBookingReservation, LockPort, MutationContext } from './ports'
+import { assertPmcBookingMasterTargetRecord } from '../../../shared/pmcBookingRowContracts'
 
 export { createStockRepository } from './stock/repository'
 
@@ -48,6 +49,9 @@ function storedThaiPhone(value: unknown): string {
 }
 
 function asBooking(row: SheetRow): BookingCase {
+  if (Object.prototype.hasOwnProperty.call(row, 'recorderSource')) {
+    assertPmcBookingMasterTargetRecord(row)
+  }
   return {
     ...row,
     aeId: nullableString(row.aeId),
