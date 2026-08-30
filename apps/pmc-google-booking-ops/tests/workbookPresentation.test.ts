@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { PMC_MINI_APP_REQUEST_HEADERS_V2 } from '../../../shared/pmcBookingRowContracts'
 import { SHEET_SCHEMAS } from '../src/sheetSchema'
 import {
   COLUMN_WIDTHS,
+  KNOWN_HIDDEN_TAB_HEADERS,
   VISIBLE_TAB_ORDER,
   buildWorkbookPresentationPlan,
   verifyWorkbookPresentation,
@@ -14,49 +14,12 @@ import {
   type WorkbookPresentationPlan,
 } from '../src/domain/workbookPresentation'
 
-const MINI_APP_SYSTEM_HEADERS = {
-  MINI_APP_REQUESTS: PMC_MINI_APP_REQUEST_HEADERS_V2,
-  MINI_APP_LINK_ATTEMPTS: [
-    'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
-  ],
-  JERA_API_CACHE: [
-    'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'branchName', 'eventDate', 'patientUuid',
-    'patientCode', 'patientName', 'paymentCode', 'status', 'type', 'totalSatang', 'paidAmountSatang',
-    'refundAmountSatang', 'cashSatang', 'transferSatang', 'creditCardSatang', 'eWalletSatang',
-    'paymentLinkSatang', 'otherPaymentSatang', 'itemCode', 'itemName', 'quantity',
-    'remainingQuantity', 'remainingValueSatang', 'doctorName', 'salespersonName', 'sourceCreatedAt',
-    'sourceUpdatedAt', 'fetchedAt', 'sourceHash',
-  ],
-  JERA_SYNC_STATE: [
-    'cacheKey', 'reportType', 'filterHash', 'lastAttemptAt', 'lastManualAt', 'lastSuccessAt',
-    'lastSourceDate', 'status', 'recordCount', 'nextPage', 'safeErrorCode', 'leaseOwner', 'leaseExpiresAt',
-  ],
-  JERA_SYNC_AUDIT: [
-    'syncRunId', 'actorType', 'actorId', 'reportType', 'filterHash', 'startedAt', 'finishedAt',
-    'status', 'recordCount', 'safeErrorCode', 'correlationId',
-  ],
-  JERA_PAYMENT_DETAIL_CACHE: [
-    'detailKey', 'branchUuid', 'eventDate', 'paymentUuid', 'paymentSourceHash',
-    'detailSourceHash', 'detailFetchedAt', 'lineCount', 'truncated',
-  ],
-  JERA_PAYMENT_DETAIL_LINES: [
-    'detailKey', 'lineOrdinal', 'lineKind', 'itemCode', 'netLineSatang',
-  ],
-  JERA_ALLOCATION_COVERAGE: [
-    'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
-    'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
-    'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
-  ],
-} as const
-
-const HIDDEN_FIXTURES: ReadonlyArray<{ title: string; headers: readonly string[] }> = Object.entries({
-  ...Object.fromEntries(Object.entries(SHEET_SCHEMAS).filter(([title]) => (
-    title !== 'DASHBOARD' && !VISIBLE_TAB_ORDER.includes(title as typeof VISIBLE_TAB_ORDER[number])
-  ))),
-  ...MINI_APP_SYSTEM_HEADERS,
-  FORM_RESPONSES: ['Timestamp', 'Email'],
-}).map(([title, headers]) => ({ title, headers }))
+const HIDDEN_FIXTURES: ReadonlyArray<{ title: string; headers: readonly string[] }> = Object.entries(
+  KNOWN_HIDDEN_TAB_HEADERS,
+).map(([title, headers]) => ({
+  title,
+  headers: headers ?? ['Timestamp', 'Email'],
+}))
 
 const sha256Hex = (value: string): string => createHash('sha256').update(value).digest('hex')
 
@@ -291,9 +254,14 @@ describe('guarded Booking workbook presentation policy', () => {
     expect(Object.isFrozen(COLUMN_WIDTHS.DASHBOARD)).toBe(true)
     expect(Object.isFrozen(COLUMN_WIDTHS.BOOKING_MASTER)).toBe(true)
     expect(Object.isFrozen(VISIBLE_TAB_ORDER)).toBe(true)
+    expect(Object.isFrozen(KNOWN_HIDDEN_TAB_HEADERS)).toBe(true)
+    expect(Object.isFrozen(KNOWN_HIDDEN_TAB_HEADERS.MINI_APP_REQUESTS)).toBe(true)
 
     expect(() => { (VISIBLE_TAB_ORDER as unknown as string[])[0] = 'MUTATED' }).toThrow()
     expect(() => { (COLUMN_WIDTHS.DASHBOARD as unknown as number[])[0] = 1 }).toThrow()
+    expect(() => {
+      (KNOWN_HIDDEN_TAB_HEADERS.MINI_APP_REQUESTS as unknown as string[])[0] = 'MUTATED'
+    }).toThrow()
     expect(() => {
       if (ranged && 'range' in ranged) ranged.range.startRowIndex = 999
     }).toThrow()

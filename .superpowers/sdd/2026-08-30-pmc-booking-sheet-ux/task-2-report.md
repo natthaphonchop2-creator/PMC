@@ -22,6 +22,12 @@ Implemented locally on base `a4f31bb`. No Apps Script push, Google API call, liv
 - Removed the custom 64-bit checksum. Plan building and verification now require a caller-injected portable SHA-256 hex function and reject missing or malformed digest implementations.
 - Expanded the canonical test topology to all 20 current hidden tabs (the 28-tab Booking workbook plus three optional Stock tabs), with per-tab managed-header drift checks and retained unknown-prefix rejection.
 
+### Review fix round 2
+
+- Exported one deeply frozen `KNOWN_HIDDEN_TAB_HEADERS` policy map for the pure planner, policy tests, and the upcoming Task 3 gateway.
+- Removed the duplicated Mini App/JERA header declarations from the test fixture; the full 20-hidden-tab fixture now derives directly from the shared authoritative policy map, while `FORM_RESPONSES` still supplies only source-owned sample headers.
+- Added immutability checks for both the exported map and its nested header arrays, retaining the per-managed-tab header-drift checks.
+
 ## TDD evidence
 
 RED was observed twice before the corresponding production behavior:
@@ -29,6 +35,7 @@ RED was observed twice before the corresponding production behavior:
 1. The first focused run failed at import because `workbookPresentation.ts` did not exist.
 2. A later focused run failed `1` of `16` tests because a fabricated `MINI_APP_UNKNOWN` tab was accepted by an overly broad prefix classifier. The classifier was tightened to the explicit allowlist.
 3. Review fix round 1 first failed `4` of `19` focused tests on the categorical commission field, Dashboard split, injected SHA-256/deep immutability, and managed hidden-tab freeze requirements. Each behavior was then implemented and rerun.
+4. Review fix round 2 first failed during module setup because the shared known-tab map export did not yet exist; the fixture passed after the policy map became the single source.
 
 GREEN verification:
 

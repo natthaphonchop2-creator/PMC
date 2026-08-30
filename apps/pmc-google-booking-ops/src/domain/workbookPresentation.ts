@@ -146,7 +146,7 @@ const VISIBLE_EXACT_HEADERS: Readonly<Record<string, readonly string[]>> = deepF
   CONFIG_RULES: [...SHEET_SCHEMAS.CONFIG_RULES!],
 })
 
-const HIDDEN_EXACT_HEADERS: Readonly<Record<string, readonly string[] | null>> = deepFreeze({
+export const KNOWN_HIDDEN_TAB_HEADERS: Readonly<Record<string, readonly string[] | null>> = deepFreeze({
   FORM_RESPONSES: null,
   JERA_IMPORT_RAW: [...SHEET_SCHEMAS.JERA_IMPORT_RAW!],
   JERA_IMPORT_FILES: [...SHEET_SCHEMAS.JERA_IMPORT_FILES!],
@@ -341,7 +341,7 @@ function validateHeaders(sheet: SheetPresentationSnapshot, classification: 'VISI
   if (classification === 'VISIBLE') {
     expected = VISIBLE_EXACT_HEADERS[sheet.title]
   } else {
-    expected = HIDDEN_EXACT_HEADERS[sheet.title]
+    expected = KNOWN_HIDDEN_TAB_HEADERS[sheet.title]
   }
   if (expected !== undefined && expected !== null && !sameArray(sheet.headers, expected)) fail('HEADER_MISMATCH')
 }
@@ -727,7 +727,7 @@ function assertImmutableWorkbook(before: WorkbookMetadataSnapshot, after: Workbo
 
 function classifyTab(title: string): 'VISIBLE' | 'HIDDEN' | 'UNKNOWN' {
   if (VISIBLE_TABS.has(title)) return 'VISIBLE'
-  if (Object.prototype.hasOwnProperty.call(HIDDEN_EXACT_HEADERS, title)) return 'HIDDEN'
+  if (Object.prototype.hasOwnProperty.call(KNOWN_HIDDEN_TAB_HEADERS, title)) return 'HIDDEN'
   return 'UNKNOWN'
 }
 
