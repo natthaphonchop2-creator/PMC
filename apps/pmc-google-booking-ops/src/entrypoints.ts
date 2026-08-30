@@ -13,6 +13,7 @@ import {
 import {
   createRuntime,
   applyPmcBookingAttributionMigrationWorkflow,
+  applyPmcBookingWorkbookPresentationWorkflow,
   configureStaffProfileImagesWorkflow,
   configureStockManagersWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
@@ -30,6 +31,7 @@ import {
   runBookingRetriesWorkflow,
   runIntegrityAndBackupWorkflow,
   previewPmcBookingAttributionMigrationWorkflow,
+  previewPmcBookingWorkbookPresentationWorkflow,
   runExpenseRecoveryWorkflow,
   sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
@@ -296,4 +298,12 @@ export function previewPmcBookingAttributionMigration() {
 
 export function applyPmcBookingAttributionMigration() {
   return applyPmcBookingAttributionMigrationWorkflow()
+}
+
+export function previewPmcBookingWorkbookPresentation() {
+  return previewPmcBookingWorkbookPresentationWorkflow()
+}
+
+export function applyPmcBookingWorkbookPresentation() {
+  return applyPmcBookingWorkbookPresentationWorkflow()
 }

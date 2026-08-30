@@ -294,3 +294,40 @@ The repository Calendar builder now produces this full-identity/color contract. 
 - Deployed Apps Script version `13`: Calendar event keys now combine Case ID with the immutable Form response ID; new Calendar retries retain evidence file IDs and continue through call-task creation plus Admin/doctor LINE delivery.
 - Ran the explicit retry-only operator once. Readback confirmed `BOOKING_CONFIRMED`, `driveState=OK`, `calendarState=OK`, `lineState=OK`, a Calendar event ID, doctor notification time, one pending call task, and zero pending retries.
 - The recovered legacy retry row predated the new evidence payload, so its Admin recovery card may use the approved no-image fallback. Future Calendar retries created by version `13` retain evidence IDs and can render the evidence thumbnails.
+
+## Owner-gated Booking workbook presentation maintenance
+
+This workflow changes presentation metadata only. Hiding a tab is a convenience for operators and is **not access control**; every person who can edit the workbook may still unhide tabs. Do not use this workflow to protect confidential data.
+
+Only the owner may run the two manual functions below. Neither function is an installed Form or time trigger:
+
+- `previewPmcBookingWorkbookPresentation()` — read-only inspection and planning;
+- `applyPmcBookingWorkbookPresentation()` — explicitly approved apply under the bounded script lock.
+
+### Exact maintenance order
+
+Perform these steps in order. Stop immediately if any step fails or any digest changes.
+
+1. Deploy the reviewed Apps Script version. Do not run either presentation function from an unreviewed draft.
+2. Pause the exact production Booking queue and generate one fresh whole-queue attestation proving `PAUSED` with `activeTaskCount=0`. Verify its environment, queue identity digest, checker version, signature digest, and freshness. Do not infer queue state from separate properties or partial task lists.
+3. Read and verify `PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST`. Its signed state must be exactly `COMPLETE`; `PREPARED`, `RESTORE_REQUIRED`, missing, or invalid is an abort.
+4. Run `previewPmcBookingWorkbookPresentation()` once. It must report `preflightPassed=true`, `queuePausedAndEmpty=true`, `migrationComplete=true`, `readyForOwnerApproval=true`, `backupCreated=false`, and `liveWrites=false`.
+5. Review the complete safe preview: visible tab order, every tab hidden by policy, action count and action-type counts, source digest, plan digest, queue-attestation digest, migration-manifest digest, and review digest. Confirm again that tab hiding is presentation only.
+6. Install the exact reviewed `reviewDigest` as Script Property `PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST`. Do not approve a copied, shortened, stale, or manually recomputed value.
+7. Run `applyPmcBookingWorkbookPresentation()` once. A source, queue-attestation, migration-manifest, or approval digest that changed since the reviewed preview must fail before backup or presentation batch. The function never pauses/resumes the queue and never performs automatic rollback.
+8. Require a safe result with `status=APPLIED` or the explicitly reviewed `NOOP`, matching source/plan/review digests, `approvalMatched=true`, and `readbackVerified=true`. For `APPLIED`, require `backupCreated=true` and the reviewed action count. Never record the private backup identity or URL in general evidence.
+9. Compare the returned source, plan, and review SHA-256 digests with the approved preview. Independently verify that immutable value, formula, validation, protection, row-metadata, and presentation readback hashes passed.
+10. At browser zoom 100%, capture privacy-safe 1280×720 screenshots of exactly these four tabs: `DASHBOARD`, `BOOKING_MASTER`, `CALL_QUEUE`, and `RECONCILIATION`. Crop or mask any customer data before placing screenshots in the evidence register.
+11. Only after digest/readback verification and all four screenshots are accepted may the owner resume the exact queue. Generate a new queue-state attestation after resume; do not reuse it as presentation approval.
+
+### Abort and manual recovery
+
+- Before apply: remove or leave unused the approval property, keep the queue paused, correct the failed precondition, generate a new attestation, and run a new preview. Never reuse the old review digest.
+- If apply fails before `backupCreated=true`: no presentation backup or batch is claimed. Keep the queue paused and investigate the fixed safe error code.
+- If a private backup was created and apply or readback then fails: keep the queue paused, do not rerun automatically, do not delete tabs/data, and do not claim rollback. The owner must locate the newly created private native backup in the approved private folder, compare it manually with the workbook, and choose either a reviewed manual restoration or a newly reviewed retry.
+- If the result is ambiguous: treat it as not verified, keep the queue paused, inspect Apps Script execution status and workbook metadata read-only, then follow the same manual-recovery path.
+- Resume is forbidden while readback is unverified, any migration manifest is not `COMPLETE`, or any queue task remains active.
+
+### Evidence hygiene
+
+Store only safe status labels, tab names, action counts/types, SHA-256 digests, boolean gate results, timestamps, and redacted screenshots. Do not record customer names, phone numbers, evidence images, cell values, Spreadsheet/Drive/backup IDs, URLs, queue resource names, principals, tokens, Script Property secret values, or unrestricted links.

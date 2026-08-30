@@ -45,7 +45,15 @@ import { migrateAppointmentRows } from './domain/appointmentMigration'
 import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
-import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
+import type {
+  BookingPorts,
+  ChannelConfig,
+  ConfigPort,
+  DoctorConfig,
+  ServiceConfig,
+  StaffConfig,
+  WorkbookPresentationWorkflowPort,
+} from './ports'
 import {
   createBookingRepositories,
   createStockRepository,
@@ -99,7 +107,18 @@ import {
   parseBookingMigrationManifestJson,
   parseBookingQueueAttestationJson,
   validateBookingMigrationManifestTransition,
+  type BookingMigrationManifest,
+  type BookingQueueAttestation,
 } from './domain/attributionMigrationState'
+import {
+  applyWorkbookPresentation,
+  createGoogleWorkbookPresentationGateway,
+} from './adapters/googleWorkbookPresentation'
+import {
+  buildWorkbookPresentationPlan,
+  type WorkbookMetadataSnapshot,
+  type WorkbookPresentationAction,
+} from './domain/workbookPresentation'
 
 const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.spreadsheetId,
@@ -125,6 +144,24 @@ const ATTRIBUTION_MIGRATION_ENVIRONMENT = 'production'
 const ATTRIBUTION_MIGRATION_CHECKER_VERSION = 'pmc-booking-attribution-v2/1'
 const ATTRIBUTION_REQUEST_ROW_LIMIT = 10_000
 const ATTRIBUTION_MASTER_ROW_LIMIT = 100_000
+const WORKBOOK_PRESENTATION_OWNER_APPROVAL = 'PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST'
+
+export const BOOKING_AUTOMATION_TRIGGER_HANDLERS = Object.freeze([
+  'onBookingFormSubmit',
+  'onCallResultSubmit',
+  'runDailyOperations',
+  'runIntegrityChecks',
+] as const)
+
+const WORKBOOK_PRESENTATION_ACTION_ORDER: readonly WorkbookPresentationAction['kind'][] = Object.freeze([
+  'MOVE_SHEET',
+  'SET_HIDDEN',
+  'SET_FROZEN',
+  'SET_BASIC_FILTER',
+  'SET_COLUMN_WIDTH',
+  'FORMAT_RANGE',
+  'ADD_STATUS_RULE',
+])
 
 export function validateRuntimeProperties(properties: Record<string, string | undefined>): void {
   const missing = REQUIRED_PROPERTIES.filter((key) => !properties[key]?.trim())
@@ -327,6 +364,222 @@ export function applyPmcBookingAttributionMigrationWorkflow(): {
   readbackVerified: boolean
 } {
   return applyBookingAttributionMigration(createPmcBookingAttributionMigrationRuntime())
+}
+
+export interface PmcBookingWorkbookPresentationRuntime extends WorkbookPresentationWorkflowPort {
+  readQueueAttestation(): BookingQueueAttestation
+  readMigrationManifest(): BookingMigrationManifest | null
+  readOwnerApprovedPreviewDigest(): string | null
+}
+
+export interface PmcBookingWorkbookPresentationPreview {
+  status: 'PREVIEWED'
+  actionCount: number
+  actionTypes: readonly { type: WorkbookPresentationAction['kind']; count: number }[]
+  visibleTabs: readonly string[]
+  tabsHiddenByPolicy: readonly string[]
+  sourceDigest: string
+  planDigest: string
+  queueAttestationDigest: string
+  migrationManifestDigest: string | null
+  reviewDigest: string
+  preflightPassed: true
+  queuePausedAndEmpty: boolean
+  migrationComplete: boolean
+  readyForOwnerApproval: boolean
+  backupCreated: false
+  liveWrites: false
+}
+
+export type PmcBookingWorkbookPresentationApply = {
+  status: 'APPLIED' | 'NOOP'
+  actionCount: number
+  backupCreated: boolean
+  readbackVerified: true
+  sourceDigest: string
+  planDigest: string
+  reviewDigest: string
+  queuePausedAndEmpty: true
+  migrationComplete: true
+  approvalMatched: true
+}
+
+interface OwnerPresentationInspection {
+  snapshot: WorkbookMetadataSnapshot
+  preview: PmcBookingWorkbookPresentationPreview
+}
+
+export function previewPmcBookingWorkbookPresentationWorkflow(
+  runtime: PmcBookingWorkbookPresentationRuntime = createPmcBookingWorkbookPresentationRuntime(),
+): PmcBookingWorkbookPresentationPreview {
+  const queue = runtime.readQueueAttestation()
+  const manifest = runtime.readMigrationManifest()
+  return inspectOwnerWorkbookPresentation(runtime, queue, manifest).preview
+}
+
+export function applyPmcBookingWorkbookPresentationWorkflow(
+  runtime: PmcBookingWorkbookPresentationRuntime = createPmcBookingWorkbookPresentationRuntime(),
+): PmcBookingWorkbookPresentationApply {
+  return runtime.withDocumentLock(() => {
+    const queue = runtime.readQueueAttestation()
+    if (queue.state !== 'PAUSED' || queue.activeTaskCount !== 0) {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_QUEUE_NOT_PAUSED')
+    }
+    const manifest = runtime.readMigrationManifest()
+    if (!manifest || manifest.state !== 'COMPLETE') {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_MIGRATION_NOT_COMPLETE')
+    }
+
+    const inspected = inspectOwnerWorkbookPresentation(runtime, queue, manifest)
+    const approval = runtime.readOwnerApprovedPreviewDigest()?.trim() ?? ''
+    if (!isSha256Digest(approval) || approval !== inspected.preview.reviewDigest) {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
+    }
+
+    let firstInspection = true
+    const applied = applyWorkbookPresentation({
+      sha256Hex: runtime.sha256Hex,
+      backupLabel: runtime.backupLabel,
+      withDocumentLock<T>(operation: () => T): T { return operation() },
+      gateway: {
+        inspect() {
+          if (firstInspection) {
+            firstInspection = false
+            return inspected.snapshot
+          }
+          return runtime.gateway.inspect()
+        },
+        createPrivateNativeBackup: (label) => runtime.gateway.createPrivateNativeBackup(label),
+        apply: (plan) => runtime.gateway.apply(plan),
+      },
+    })
+    return {
+      status: applied.status,
+      actionCount: applied.plannedActionCount,
+      backupCreated: applied.backupCreated,
+      readbackVerified: applied.readbackVerified,
+      sourceDigest: inspected.preview.sourceDigest,
+      planDigest: inspected.preview.planDigest,
+      reviewDigest: inspected.preview.reviewDigest,
+      queuePausedAndEmpty: true,
+      migrationComplete: true,
+      approvalMatched: true,
+    }
+  })
+}
+
+export function createPmcBookingWorkbookPresentationRuntime(): PmcBookingWorkbookPresentationRuntime {
+  const scriptProperties = PropertiesService.getScriptProperties()
+  const spreadsheetId = scriptProperties.getProperty(SCRIPT_PROPERTY_KEYS.spreadsheetId)?.trim() ?? ''
+  const backupFolderId = scriptProperties.getProperty(SCRIPT_PROPERTY_KEYS.backupFolderId)?.trim() ?? ''
+  if (!spreadsheetId || !backupFolderId) {
+    throw new Error('WORKBOOK_PRESENTATION_CONFIG_INVALID')
+  }
+  const presentationCrypto = createAppsScriptCryptoPort()
+  const gateway = createGoogleWorkbookPresentationGateway({
+    spreadsheetId,
+    backupFolderId,
+    sha256Hex: presentationCrypto.sha256Hex,
+  })
+  return {
+    gateway,
+    sha256Hex: presentationCrypto.sha256Hex,
+    backupLabel: `PMC Booking Pre-Presentation ${new Date().toISOString()}`,
+    withDocumentLock<T>(operation: () => T): T {
+      return gateway.withDocumentLock(operation)
+    },
+    readQueueAttestation() {
+      const expectedQueueDigest = scriptProperties
+        .getProperty(ATTRIBUTION_MIGRATION_EXPECTED_QUEUE_DIGEST)?.trim() ?? ''
+      if (!isSha256Digest(expectedQueueDigest)) {
+        throw new Error('BOOKING_QUEUE_EXPECTED_IDENTITY_INVALID')
+      }
+      const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_QUEUE_ATTESTATION)
+      if (raw === null) throw new Error('QUEUE_ATTESTATION_INVALID')
+      return parseBookingQueueAttestationJson(raw, {
+        nowMs: Date.now(),
+        maxAgeMs: ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS,
+        environment: ATTRIBUTION_MIGRATION_ENVIRONMENT,
+        queueResourceDigest: expectedQueueDigest,
+        checkerVersion: ATTRIBUTION_MIGRATION_CHECKER_VERSION,
+        sha256: presentationCrypto.sha256Hex,
+      })
+    },
+    readMigrationManifest() {
+      const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_MANIFEST)
+      return raw === null || raw.trim() === ''
+        ? null
+        : parseBookingMigrationManifestJson(raw, presentationCrypto.sha256Hex)
+    },
+    readOwnerApprovedPreviewDigest() {
+      return scriptProperties.getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)
+    },
+  }
+}
+
+function inspectOwnerWorkbookPresentation(
+  runtime: PmcBookingWorkbookPresentationRuntime,
+  queue: BookingQueueAttestation,
+  manifest: BookingMigrationManifest | null,
+): OwnerPresentationInspection {
+  const snapshot = runtime.gateway.inspect()
+  const plan = buildWorkbookPresentationPlan(snapshot, runtime.sha256Hex)
+  const sourceDigest = safePresentationDigest(runtime, `source:${plan.sourceFingerprint}`)
+  const planDigest = safePresentationDigest(runtime, JSON.stringify(plan))
+  const migrationManifestDigest = manifest?.digest ?? null
+  const reviewDigest = safePresentationDigest(runtime, JSON.stringify({
+    version: 1,
+    sourceDigest,
+    planDigest,
+    queueAttestationDigest: queue.digest,
+    migrationManifestDigest,
+  }))
+  const visible = new Set(plan.visibleOrder)
+  const actionTypes = WORKBOOK_PRESENTATION_ACTION_ORDER
+    .map((type) => ({
+      type,
+      count: plan.actions.filter((action) => action.kind === type).length,
+    }))
+    .filter(({ count }) => count > 0)
+  const queuePausedAndEmpty = queue.state === 'PAUSED' && queue.activeTaskCount === 0
+  const migrationComplete = manifest?.state === 'COMPLETE'
+  return {
+    snapshot,
+    preview: {
+      status: 'PREVIEWED',
+      actionCount: plan.actions.length,
+      actionTypes,
+      visibleTabs: [...plan.visibleOrder],
+      tabsHiddenByPolicy: snapshot.sheets
+        .filter((sheet) => !visible.has(sheet.title))
+        .sort((left, right) => left.index - right.index)
+        .map((sheet) => sheet.title),
+      sourceDigest,
+      planDigest,
+      queueAttestationDigest: queue.digest,
+      migrationManifestDigest,
+      reviewDigest,
+      preflightPassed: true,
+      queuePausedAndEmpty,
+      migrationComplete,
+      readyForOwnerApproval: queuePausedAndEmpty && migrationComplete,
+      backupCreated: false,
+      liveWrites: false,
+    },
+  }
+}
+
+function safePresentationDigest(
+  runtime: PmcBookingWorkbookPresentationRuntime,
+  value: string,
+): string {
+  const digest = runtime.sha256Hex(value)
+  if (!isSha256Digest(digest)) throw new Error('BOOKING_WORKBOOK_PRESENTATION_DIGEST_INVALID')
+  return digest
+}
+
+function isSha256Digest(value: string): boolean {
+  return /^[a-f0-9]{64}$/.test(value)
 }
 
 export function createPmcBookingAttributionMigrationRuntime(): BookingAttributionMigrationPorts {
@@ -961,10 +1214,22 @@ export function setupSystem(): {
   ]
   runtime.forms.syncCallResultChoices(callResults)
   const created = [
-    ensureFormTrigger('onBookingFormSubmit', properties[SCRIPT_PROPERTY_KEYS.bookingFormId]),
-    ensureFormTrigger('onCallResultSubmit', properties[SCRIPT_PROPERTY_KEYS.callResultFormId]),
-    ensureClockTrigger('runDailyOperations', (builder) => builder.everyDays(1).atHour(9).create()),
-    ensureClockTrigger('runIntegrityChecks', (builder) => builder.everyDays(1).atHour(2).create()),
+    ensureFormTrigger(
+      BOOKING_AUTOMATION_TRIGGER_HANDLERS[0],
+      properties[SCRIPT_PROPERTY_KEYS.bookingFormId],
+    ),
+    ensureFormTrigger(
+      BOOKING_AUTOMATION_TRIGGER_HANDLERS[1],
+      properties[SCRIPT_PROPERTY_KEYS.callResultFormId],
+    ),
+    ensureClockTrigger(
+      BOOKING_AUTOMATION_TRIGGER_HANDLERS[2],
+      (builder) => builder.everyDays(1).atHour(9).create(),
+    ),
+    ensureClockTrigger(
+      BOOKING_AUTOMATION_TRIGGER_HANDLERS[3],
+      (builder) => builder.everyDays(1).atHour(2).create(),
+    ),
   ].filter(Boolean).length
   return {
     createdTriggers: created,

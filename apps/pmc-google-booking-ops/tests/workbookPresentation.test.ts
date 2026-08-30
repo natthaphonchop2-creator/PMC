@@ -21,6 +21,19 @@ import {
   type WorkbookPresentationAction,
   type WorkbookPresentationPlan,
 } from '../src/domain/workbookPresentation'
+import {
+  applyPmcBookingWorkbookPresentationWorkflow,
+  previewPmcBookingWorkbookPresentationWorkflow,
+  type PmcBookingWorkbookPresentationRuntime,
+} from '../src/runtime'
+import {
+  canonicalBookingQueueAttestation,
+  createBookingMigrationManifestEnvelope,
+  type BookingMigrationManifest,
+  type BookingMigrationManifestState,
+  type BookingQueueAttestation,
+  type UnsignedBookingQueueAttestation,
+} from '../src/domain/attributionMigrationState'
 
 const HIDDEN_FIXTURES: ReadonlyArray<{ title: string; headers: readonly string[] }> = Object.entries(
   KNOWN_HIDDEN_TAB_HEADERS,
@@ -960,6 +973,145 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
   })
 })
 
+describe('owner-gated Booking workbook presentation entrypoint workflows', () => {
+  it('previews safe names, counts, digests, and readiness without a lock, backup, or batch', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot())
+
+    const result = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+
+    expect(result).toMatchObject({
+      status: 'PREVIEWED',
+      actionCount: expect.any(Number),
+      preflightPassed: true,
+      queuePausedAndEmpty: true,
+      migrationComplete: true,
+      readyForOwnerApproval: true,
+      backupCreated: false,
+      liveWrites: false,
+      visibleTabs: VISIBLE_TAB_ORDER,
+      tabsHiddenByPolicy: expect.arrayContaining(HIDDEN_FIXTURES.map(({ title }) => title)),
+    })
+    expect(result.actionCount).toBeGreaterThan(0)
+    expect(result.actionTypes).toEqual(expect.arrayContaining([
+      { type: 'MOVE_SHEET', count: expect.any(Number) },
+      { type: 'SET_HIDDEN', count: expect.any(Number) },
+      { type: 'FORMAT_RANGE', count: expect.any(Number) },
+    ]))
+    for (const digest of [
+      result.sourceDigest,
+      result.planDigest,
+      result.queueAttestationDigest,
+      result.migrationManifestDigest,
+      result.reviewDigest,
+    ]) expect(digest).toMatch(/^[a-f0-9]{64}$/)
+    expect(fake.events).toEqual(['queue:read', 'manifest:read', 'inspect'])
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('spreadsheet-test-id')
+    expect(serialized).not.toContain('private-backup-id')
+    expect(serialized).not.toContain('example.invalid')
+    expect(serialized).not.toContain('sheetId')
+  })
+
+  it('applies the exact approved preview under one lock and returns no Google resource identity', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot())
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+    const eventOffset = fake.events.length
+
+    const result = applyPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+
+    expect(result).toEqual({
+      status: 'APPLIED',
+      actionCount: preview.actionCount,
+      backupCreated: true,
+      readbackVerified: true,
+      sourceDigest: preview.sourceDigest,
+      planDigest: preview.planDigest,
+      reviewDigest: preview.reviewDigest,
+      queuePausedAndEmpty: true,
+      migrationComplete: true,
+      approvalMatched: true,
+    })
+    expect(fake.events.slice(eventOffset)).toEqual([
+      'lock:wait', 'queue:read', 'manifest:read', 'inspect', 'approval:read',
+      'backup', 'inspect', 'batch', 'inspect', 'lock:release',
+    ])
+    expect(fake.backupCount()).toBe(1)
+    expect(fake.batchCount()).toBe(1)
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('spreadsheet-test-id')
+    expect(serialized).not.toContain('private-backup-id')
+    expect(serialized).not.toContain('example.invalid')
+  })
+
+  it.each([
+    ['running queue', ownerQueueAttestation({ state: 'RUNNING' }), 'COMPLETE'],
+    ['nonempty queue', ownerQueueAttestation({ activeTaskCount: 1 }), 'COMPLETE'],
+    ['prepared migration', ownerQueueAttestation(), 'PREPARED'],
+    ['restore-required migration', ownerQueueAttestation(), 'RESTORE_REQUIRED'],
+  ] as const)('rejects %s before inspection, backup, or write', (_label, queue, manifestState) => {
+    const fake = ownerWorkflowFake(canonicalSnapshot(), { queue, manifestState })
+    fake.approve('a'.repeat(64))
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime)).toThrow(
+      manifestState === 'COMPLETE'
+        ? 'BOOKING_WORKBOOK_PRESENTATION_QUEUE_NOT_PAUSED'
+        : 'BOOKING_WORKBOOK_PRESENTATION_MIGRATION_NOT_COMPLETE',
+    )
+    expect(fake.events).not.toContain('inspect')
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('rejects a missing or mismatched owner approval before backup or write', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot())
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
+    expect(fake.events).toContain('inspect')
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('rejects a source digest changed after preview before backup or write', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot())
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+    fake.changeSourceFingerprint('changed-source-fingerprint')
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('rejects a fresh queue attestation changed after preview before backup or write', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot())
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+    fake.setQueue(ownerQueueAttestation({ attestationId: 'attestation-0002' }))
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('rejects a completed migration manifest changed after preview before backup or write', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot())
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+    fake.setManifest(ownerMigrationManifest('COMPLETE', 1))
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+})
+
 function canonicalSnapshot(): WorkbookMetadataSnapshot {
   const visible = VISIBLE_TAB_ORDER.map((title) => ({
     title,
@@ -1212,6 +1364,128 @@ function workflowFake(
     backupCount: () => backups,
     batchCount: () => batches,
   }
+}
+
+function ownerWorkflowFake(
+  initial: WorkbookMetadataSnapshot,
+  options: {
+    queue?: BookingQueueAttestation
+    manifestState?: BookingMigrationManifestState
+  } = {},
+): {
+  runtime: PmcBookingWorkbookPresentationRuntime
+  events: string[]
+  approve(digest: string): void
+  setQueue(queue: BookingQueueAttestation): void
+  setManifest(manifest: BookingMigrationManifest): void
+  changeSourceFingerprint(fingerprint: string): void
+  backupCount(): number
+  batchCount(): number
+} {
+  let current = cloneSnapshot(initial)
+  let queue = options.queue ?? ownerQueueAttestation()
+  let manifest = ownerMigrationManifest(options.manifestState ?? 'COMPLETE')
+  let approval: string | null = null
+  let backups = 0
+  let batches = 0
+  const events: string[] = []
+  const runtime: PmcBookingWorkbookPresentationRuntime = {
+    sha256Hex,
+    backupLabel: 'PMC Booking Presentation Backup',
+    readQueueAttestation() {
+      events.push('queue:read')
+      return structuredClone(queue)
+    },
+    readMigrationManifest() {
+      events.push('manifest:read')
+      return structuredClone(manifest)
+    },
+    readOwnerApprovedPreviewDigest() {
+      events.push('approval:read')
+      return approval
+    },
+    withDocumentLock<T>(operation: () => T): T {
+      events.push('lock:wait')
+      try { return operation() } finally { events.push('lock:release') }
+    },
+    gateway: {
+      inspect() {
+        events.push('inspect')
+        return cloneSnapshot(current)
+      },
+      createPrivateNativeBackup() {
+        events.push('backup')
+        backups += 1
+        return { fileId: 'private-backup-id', url: 'https://example.invalid/private-backup' }
+      },
+      apply(plan) {
+        events.push('batch')
+        batches += 1
+        current = applyPlanForTest(current, plan)
+      },
+    },
+  }
+  return {
+    runtime,
+    events,
+    approve(digest) { approval = digest },
+    setQueue(next) { queue = structuredClone(next) },
+    setManifest(next) { manifest = structuredClone(next) },
+    changeSourceFingerprint(fingerprint) { current.fingerprint = fingerprint },
+    backupCount: () => backups,
+    batchCount: () => batches,
+  }
+}
+
+function ownerQueueAttestation(
+  patch: Partial<UnsignedBookingQueueAttestation> = {},
+): BookingQueueAttestation {
+  const unsigned: UnsignedBookingQueueAttestation = {
+    version: 1,
+    environment: 'production',
+    queueResourceDigest: '1'.repeat(64),
+    state: 'PAUSED',
+    activeTaskCount: 0,
+    verifiedAt: '2026-08-31T00:00:00.000Z',
+    checkerVersion: 'pmc-booking-attribution-v2/1',
+    attestationId: 'attestation-0001',
+    ...patch,
+  }
+  return { ...unsigned, digest: sha256Hex(canonicalBookingQueueAttestation(unsigned)) }
+}
+
+function ownerMigrationManifest(
+  state: BookingMigrationManifestState,
+  requestRowCount = 0,
+): BookingMigrationManifest {
+  const source = '2'.repeat(64)
+  return createBookingMigrationManifestEnvelope({
+    version: 1,
+    migration: 'PMC_BOOKING_ATTRIBUTION_V2',
+    state,
+    sourceFingerprint: source,
+    backupFileId: 'backup_file_0001',
+    backupMimeType: 'application/vnd.google-apps.spreadsheet',
+    backupParentId: 'backup_folder_0001',
+    backupSourceFingerprint: source,
+    expected: {
+      requestHeaderHash: '3'.repeat(64),
+      masterHeaderHash: '4'.repeat(64),
+      requestValueHash: '5'.repeat(64),
+      masterValueHash: '6'.repeat(64),
+      requestNonTargetValueHash: '7'.repeat(64),
+      masterNonTargetValueHash: '8'.repeat(64),
+      requestPreservationHash: '9'.repeat(64),
+      masterPreservationHash: 'a'.repeat(64),
+    },
+    requestRowCount,
+    masterRowCount: 0,
+    queueAttestationDigest: 'b'.repeat(64),
+    preparedAt: '2026-08-30T23:50:00.000Z',
+    updatedAt: '2026-08-31T00:00:00.000Z',
+    completedAt: state === 'COMPLETE' ? '2026-08-31T00:00:00.000Z' : null,
+    safeFailureCode: state === 'RESTORE_REQUIRED' ? 'MIGRATION_APPLY_FAILED' : null,
+  }, sha256Hex)
 }
 
 function sheetsV4Response(
