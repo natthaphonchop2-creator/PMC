@@ -15,9 +15,71 @@ import { createAsyncStateIngressClient } from './asyncStateIngressClient.js'
 import { createAsyncBookingTelemetry } from './asyncTelemetry.js'
 import { createStockIngressClient } from './stock/ingressClient.js'
 import { createStockReadStore } from './stock/readStore.js'
+import type { PmcFinanceConfig } from './finance/config.js'
+import {
+  createFinanceGooglePorts,
+  type FinanceGooglePorts,
+} from './finance/googleClient.js'
+import {
+  createExpenseIngressClient,
+  type ExpenseIngressClient,
+} from './finance/ingressClient.js'
+import {
+  createGoogleExpenseStagingPort,
+  type ExpenseStagingPort,
+} from './finance/stagingStore.js'
+import {
+  createExpenseSubmissionService,
+  type ExpenseSubmissionService,
+} from './finance/submissionService.js'
 
-export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware>
+export interface PmcFinanceRuntime {
+  config: PmcFinanceConfig
+  finance: FinanceGooglePorts
+  staging: ExpenseStagingPort
+  ingress: ExpenseIngressClient
+  submission: ExpenseSubmissionService
+}
+
+export interface PmcFinanceRuntimeFactories {
+  createGoogle(input: { masterSpreadsheetId: string; folderId: string }): FinanceGooglePorts
+  createStaging(input: { bucketName: string }): ExpenseStagingPort
+  createIngress(input: { url: string; secret: string }): ExpenseIngressClient
+  createSubmission(input: {
+    ingress: ExpenseIngressClient
+    finance: FinanceGooglePorts
+    staging: ExpenseStagingPort
+  }): ExpenseSubmissionService
+}
+
+export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware> & {
+  expenseFinance?: PmcFinanceRuntime
+}
 export type PmcMiniAppRuntimeConstructor = (config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv) => PmcMiniAppRuntimeMiddleware
+
+const realFinanceFactories: PmcFinanceRuntimeFactories = {
+  createGoogle: createFinanceGooglePorts,
+  createStaging: createGoogleExpenseStagingPort,
+  createIngress: createExpenseIngressClient,
+  createSubmission: createExpenseSubmissionService,
+}
+
+export function createPmcFinanceRuntime(
+  config: PmcFinanceConfig,
+  factories: PmcFinanceRuntimeFactories = realFinanceFactories,
+): PmcFinanceRuntime {
+  const finance = factories.createGoogle({
+    masterSpreadsheetId: config.masterSpreadsheetId,
+    folderId: config.folderId,
+  })
+  const staging = factories.createStaging({ bucketName: config.stagingBucketName })
+  const ingress = factories.createIngress({
+    url: config.expenseIngressUrl,
+    secret: config.expenseIngressSecret,
+  })
+  const submission = factories.createSubmission({ ingress, finance, staging })
+  return { config, finance, staging, ingress, submission }
+}
 
 export function createPmcMiniAppRuntime(
   env: NodeJS.ProcessEnv,
@@ -33,6 +95,7 @@ export function createPmcMiniAppRuntime(
 }
 
 function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.ProcessEnv): PmcMiniAppRuntimeMiddleware {
+  const expenseFinance = config.finance ? safeFinanceRuntime(config.finance) : undefined
   const google = createMiniAppGooglePorts({
     spreadsheetId: config.spreadsheetId,
     intakeFolderId: config.intakeFolderId,
@@ -97,7 +160,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
       }),
     }
   })() : {}
-  return createPmcMiniAppMiddleware({
+  const middleware = createPmcMiniAppMiddleware({
     config,
     store,
     identity,
@@ -111,4 +174,13 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     stock,
     now,
   })
+  return Object.assign(middleware, expenseFinance ? { expenseFinance } : {})
+}
+
+function safeFinanceRuntime(config: PmcFinanceConfig): PmcFinanceRuntime | undefined {
+  try {
+    return createPmcFinanceRuntime(config)
+  } catch {
+    return undefined
+  }
 }

@@ -1,4 +1,5 @@
 import { readPmcAsyncBookingConfig, type PmcAsyncBookingConfig } from './asyncConfig.js'
+import { readPmcFinanceConfig, type PmcFinanceConfig } from './finance/config.js'
 
 export interface PmcMiniAppServerConfig {
   enabled: true
@@ -17,6 +18,7 @@ export interface PmcMiniAppServerConfig {
   financeReportsEnabled: boolean
   stockEnabled: boolean
   stockManagerPilotOnly: boolean
+  finance: PmcFinanceConfig | null
 }
 
 const REQUIRED = [
@@ -79,6 +81,7 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     financeReportsEnabled: env.PMC_FINANCE_REPORTS_ENABLED === 'true',
     stockEnabled: env.PMC_STOCK_ENABLED === 'true',
     stockManagerPilotOnly: env.PMC_STOCK_MANAGER_PILOT_ONLY === 'true',
+    finance: readPmcFinanceConfig(env),
   }
 }
 
