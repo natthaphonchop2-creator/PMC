@@ -428,10 +428,8 @@ class PrepareStore implements MiniAppStore {
       return fakeResult(this.current,
         this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED' ? 'TERMINAL' : 'IDEMPOTENT')
     }
-    if (this.current.evidenceProjectionHash === null) {
-      const terminal = this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
-      if (this.current.version !== input.expectedVersion + (terminal ? 1 : 0)) throw new Error('BOOKING_PREPARE_CONFLICT')
-    } else if (this.current.evidenceProjectionHash !== input.prepareBindingHash) throw new Error('BOOKING_PREPARE_CONFLICT')
+    if (this.current.evidenceProjectionHash === null) throw new Error('BOOKING_PREPARE_RESERVATION_REQUIRED')
+    if (this.current.evidenceProjectionHash !== input.prepareBindingHash) throw new Error('BOOKING_PREPARE_CONFLICT')
     const merged = fakeMergedEvidence(this.current, input)
     const terminal = this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
     let candidate: MiniAppRequestRecord

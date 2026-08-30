@@ -199,3 +199,24 @@ Fix-round-4 verification:
 - Touched-path ESLint and `git diff --check`: passed.
 
 No route, capability, runtime switch, deployment, live upload or external production mutation was performed. Task 4 still owns wiring the sibling client for every staff member and moving P2 cancellation to owner `CANCEL` before `prepare=true`.
+
+---
+
+## Fix round 5 — Mandatory reservation guard
+
+`PREPARE_READY` and `PREPARE_PARTIAL` now require the persisted row to carry a non-null `evidenceProjectionHash` exactly equal to the binding recomputed under the owner lock. A null binding raises the explicit reservation-required conflict with no repository write. Only `PREPARE_BEGIN` may claim a null binding.
+
+All valid domain flows now execute BEGIN first. Direct READY and PARTIAL bypass tests were RED before the guard and now prove both operations fail without changing the row. Same-binding partial replay/promotion, terminal retention, READY/CANCEL ordering, five-subset union and exact retry remain green.
+
+Fix-round-5 verification:
+
+- Focused draft-state client/domain, prepare, legacy async-state, worker, evidence and store regressions: **8 files, 163 tests passed**.
+- Full Mini App suite: **72 files, 978 tests passed**.
+- Full Apps Script Booking suite: **49 files, 684 tests passed**.
+- `npm run build:server`: passed.
+- `npm run booking:typecheck`: passed.
+- `npm run booking:build`: passed.
+- `npm run build:mini-app`: passed.
+- Touched-path ESLint and `git diff --check`: passed.
+
+No route, capability, runtime switch, deployment or live mutation was performed.

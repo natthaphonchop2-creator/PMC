@@ -152,11 +152,9 @@ function applyPrepare(current: P2Record, payload: MiniAppDraftPrepareMutation, p
   if (current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft prepare attempt')
   const { snapshots, bindingHash } = resolvePrepare(current, payload, ports)
   if (current.evidenceProjectionHash === null) {
-    const terminalWon = current.state === 'CANCELLED' || current.state === 'EXPIRED'
-    if ((!terminalWon && current.state !== 'DRAFT')
-      || current.version !== payload.expectedVersion + (terminalWon ? 1 : 0)
-      || referenceCount(current) !== 0) throw new Error('stale mini app draft prepare version')
-  } else if (current.evidenceProjectionHash !== bindingHash) {
+    throw new Error('mini app draft prepare reservation required')
+  }
+  if (current.evidenceProjectionHash !== bindingHash) {
     throw new Error('mini app draft prepare binding conflict')
   }
   const evidence = mergeEvidence(current, payload)

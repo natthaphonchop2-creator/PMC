@@ -14,6 +14,24 @@ import type { BookingPorts } from '../src/ports'
 import { createTestPorts } from './helpers/fakes'
 
 describe('Apps Script Mini App draft-state owner ingress', () => {
+  it.each(['PREPARE_READY', 'PREPARE_PARTIAL'] as const)(
+    'rejects direct %s that bypasses PREPARE_BEGIN without a row write',
+    (operation) => {
+      const fixture = draftStateFixture(draft())
+      const evidence = operation === 'PREPARE_READY'
+        ? [staged(0, 'PAYMENT'), staged(0, 'CHAT')]
+        : [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)]
+      const before = fixture.requests.read()
+
+      expect(() => processBookingDoPost(event(envelope(
+        prepareMutation(operation, draft(), evidence),
+        `nonce-bypass-${operation.toLowerCase()}`,
+      )), fixture.ports)).toThrow(/begin|reservation|binding|conflict/i)
+      expect(fixture.requests.read()).toEqual(before)
+      expect(fixture.requests.writeCount).toBe(0)
+    },
+  )
+
   it('PREPARE_BEGIN reserves only binding/version and replays without customer or reference mutation', () => {
     const fixture = draftStateFixture(draft())
     const begin = beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')])
@@ -50,6 +68,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
   it('persists partial refs without input, replays idempotently, then promotes the same binding to ready', () => {
     const fixture = draftStateFixture(draft())
     const partial = prepareMutation('PREPARE_PARTIAL', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)])
+    processBookingDoPost(event(envelope(beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)]), 'nonce-partial-begin')), fixture.ports)
     const first = processBookingDoPost(event(envelope(partial, 'nonce-draft-partial')), fixture.ports)
     const replay = processBookingDoPost(event(envelope(partial, 'nonce-draft-replay')), fixture.ports)
     const readyPayload = prepareMutation('PREPARE_READY', fixture.requests.read()!, [staged(0, 'PAYMENT'), staged(0, 'CHAT')], {
@@ -58,9 +77,9 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     })
     const ready = processBookingDoPost(event(envelope(readyPayload, 'nonce-draft-ready')), fixture.ports)
 
-    expect(first).toMatchObject({ state: 'DRAFT', version: 2, outcome: 'APPLIED' })
-    expect(replay).toMatchObject({ state: 'DRAFT', version: 2, outcome: 'IDEMPOTENT' })
-    expect(ready).toMatchObject({ state: 'READY_TO_CONFIRM', version: 3, outcome: 'APPLIED' })
+    expect(first).toMatchObject({ state: 'DRAFT', version: 3, outcome: 'APPLIED' })
+    expect(replay).toMatchObject({ state: 'DRAFT', version: 3, outcome: 'IDEMPOTENT' })
+    expect(ready).toMatchObject({ state: 'READY_TO_CONFIRM', version: 4, outcome: 'APPLIED' })
     expect(fixture.requests.read()).toMatchObject({
       state: 'READY_TO_CONFIRM', retentionState: '', evidenceProjectionHash: partial.prepareBindingHash,
       adminId: 'admin-1', adminName: 'Admin A', aeId: 'staff-ae', aeName: 'เอม',
@@ -72,6 +91,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
   it('keeps the first prepare binding authoritative under the owner lock', () => {
     const fixture = draftStateFixture(draft())
     const first = prepareMutation('PREPARE_PARTIAL', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)])
+    processBookingDoPost(event(envelope(beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)]), 'nonce-binding-begin')), fixture.ports)
     processBookingDoPost(event(envelope(first, 'nonce-binding-first')), fixture.ports)
     const authoritative = fixture.requests.read()
     const different = prepareMutation('PREPARE_READY', authoritative!, [staged(0, 'PAYMENT', undefined, 'c'), staged(0, 'CHAT')], {
@@ -86,17 +106,19 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
   it('serializes READY before CANCEL so stale cancel cannot overwrite ready', () => {
     const fixture = draftStateFixture(draft())
     const ready = prepareMutation('PREPARE_READY', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')])
+    processBookingDoPost(event(envelope(beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]), 'nonce-ready-begin')), fixture.ports)
     processBookingDoPost(event(envelope(ready, 'nonce-ready-first')), fixture.ports)
 
     expect(() => processBookingDoPost(event(envelope(cancelMutation(1), 'nonce-cancel-late')), fixture.ports))
       .toThrow(/stale|conflict/i)
-    expect(fixture.requests.read()).toMatchObject({ state: 'READY_TO_CONFIRM', version: 2 })
+    expect(fixture.requests.read()).toMatchObject({ state: 'READY_TO_CONFIRM', version: 3 })
   })
 
-  it('serializes CANCEL before READY and attaches every durable ref without reopening', () => {
+  it('serializes CANCEL after BEGIN before READY and attaches every durable ref without reopening', () => {
     const fixture = draftStateFixture(draft())
-    processBookingDoPost(event(envelope(cancelMutation(1), 'nonce-cancel-first')), fixture.ports)
     const ready = prepareMutation('PREPARE_READY', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')])
+    processBookingDoPost(event(envelope(beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]), 'nonce-cancel-begin')), fixture.ports)
+    processBookingDoPost(event(envelope(cancelMutation(2), 'nonce-cancel-first')), fixture.ports)
     const result = processBookingDoPost(event(envelope(ready, 'nonce-ready-late')), fixture.ports)
 
     expect(result).toMatchObject({ state: 'CANCELLED', outcome: 'APPLIED' })
@@ -108,9 +130,11 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
   })
 
   it('canonical-unions five same-binding terminal subsets without orphaning a durable ref', () => {
-    const fixture = draftStateFixture(draft({ state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2 }))
+    const fixture = draftStateFixture(draft())
     const all = [0, 1, 2, 3, 4].map((ordinal) => staged(ordinal, 'PAYMENT', undefined, ordinal.toString(16)))
     const base = prepareMutation('PREPARE_READY', draft(), [...all, staged(0, 'CHAT')])
+    processBookingDoPost(event(envelope(beginMutation(draft(), [...all, staged(0, 'CHAT')]), 'nonce-five-begin')), fixture.ports)
+    processBookingDoPost(event(envelope(cancelMutation(2), 'nonce-five-cancel')), fixture.ports)
 
     all.forEach((item, index) => {
       const evidence = [...all.map((candidate) => ({ ...candidate, value: candidate.ordinal === item.ordinal ? candidate.value : null })), staged(0, 'CHAT', null)]
@@ -134,7 +158,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     const before = fixture.requests.read()
 
     expect(() => processBookingDoPost(event(envelope(
-      prepareMutation('PREPARE_READY', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]),
+      beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]),
       'nonce-inactive-admin',
     )), fixture.ports)).toThrow(/admin|config|active/i)
     expect(fixture.requests.read()).toEqual(before)
@@ -143,6 +167,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
 
   it('returns only safe state metadata and a recomputable projection digest', () => {
     const fixture = draftStateFixture(draft())
+    processBookingDoPost(event(envelope(beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]), 'nonce-safe-begin')), fixture.ports)
     const result = processBookingDoPost(event(envelope(
       prepareMutation('PREPARE_READY', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]),
       'nonce-safe-result',
@@ -157,7 +182,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
 
   it('rejects unknown fields, altered signatures, and nonce replay before a second mutation', () => {
     const fixture = draftStateFixture(draft())
-    const signed = envelope(prepareMutation('PREPARE_READY', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]), 'nonce-security')
+    const signed = envelope(beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')]), 'nonce-security')
     const unknown = { ...signed, payload: { ...signed.payload, taskName: 'forbidden' } }
     const altered = { ...signed, payload: { ...signed.payload, expectedVersion: 99 } }
 
