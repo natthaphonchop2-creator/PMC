@@ -306,114 +306,130 @@ Only the owner may run the two manual functions below. Neither function is an in
 
 ### Private operator workspace
 
-Run from the reviewed repository root. Use a new private directory outside the repository for all command output and Script Property snapshots. Do not replace the placeholders in this document inside source control.
+Before opening the maintenance shell, owner creates one environment file outside the repository, sets it to mode `0600`, and populates all values privately. The file must define `PMC_OPERATOR_PROJECT`, `PMC_OPERATOR_REGION`, `PMC_OPERATOR_SERVICE`, `PMC_OPERATOR_QUEUE`, `PMC_OPERATOR_REVISION`, `PMC_OPERATOR_SCRIPT_ID`, `PMC_OPERATOR_DEPLOYMENT_ID`, `PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION`, `PMC_OPERATOR_CLASP_PROFILE`, `PMC_OPERATOR_CLASP_PROJECT_FILE`, `PMC_OPERATOR_PRIVATE_DIR`, `PMC_OPERATOR_PROPERTIES_PREINSTALL`, `PMC_OPERATOR_PROPERTIES_INSTALLED`, `PMC_OPERATOR_ATTESTATION_FILE`, `PMC_OPERATOR_REVIEWED_COMMIT`, `PMC_OPERATOR_REVIEWED_CODE_SHA256`, and `PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION`.
+
+The secure launcher supplies only the environment-file path as `PMC_BOOKING_PRESENTATION_ENV_FILE`. Do not type resolved project, queue, revision, script, deployment, account, or filesystem values into copied commands. Start from the reviewed repository root, disable tracing and history before sourcing, and validate every required variable:
 
 ```bash
+set +x
+set +o history
 umask 077
-PMC_PRESENTATION_PRIVATE_DIR="$(mktemp -d)"
-chmod 700 "$PMC_PRESENTATION_PRIVATE_DIR"
+test -n "${PMC_BOOKING_PRESENTATION_ENV_FILE:-}"
+chmod 600 "$PMC_BOOKING_PRESENTATION_ENV_FILE"
+source "$PMC_BOOKING_PRESENTATION_ENV_FILE"
+: "${PMC_OPERATOR_PROJECT:?missing PMC_OPERATOR_PROJECT}"
+: "${PMC_OPERATOR_REGION:?missing PMC_OPERATOR_REGION}"
+: "${PMC_OPERATOR_SERVICE:?missing PMC_OPERATOR_SERVICE}"
+: "${PMC_OPERATOR_QUEUE:?missing PMC_OPERATOR_QUEUE}"
+: "${PMC_OPERATOR_REVISION:?missing PMC_OPERATOR_REVISION}"
+: "${PMC_OPERATOR_SCRIPT_ID:?missing PMC_OPERATOR_SCRIPT_ID}"
+: "${PMC_OPERATOR_DEPLOYMENT_ID:?missing PMC_OPERATOR_DEPLOYMENT_ID}"
+: "${PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION:?missing PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION}"
+: "${PMC_OPERATOR_CLASP_PROFILE:?missing PMC_OPERATOR_CLASP_PROFILE}"
+: "${PMC_OPERATOR_CLASP_PROJECT_FILE:?missing PMC_OPERATOR_CLASP_PROJECT_FILE}"
+: "${PMC_OPERATOR_PRIVATE_DIR:?missing PMC_OPERATOR_PRIVATE_DIR}"
+: "${PMC_OPERATOR_PROPERTIES_PREINSTALL:?missing PMC_OPERATOR_PROPERTIES_PREINSTALL}"
+: "${PMC_OPERATOR_PROPERTIES_INSTALLED:?missing PMC_OPERATOR_PROPERTIES_INSTALLED}"
+: "${PMC_OPERATOR_ATTESTATION_FILE:?missing PMC_OPERATOR_ATTESTATION_FILE}"
+: "${PMC_OPERATOR_REVIEWED_COMMIT:?missing PMC_OPERATOR_REVIEWED_COMMIT}"
+: "${PMC_OPERATOR_REVIEWED_CODE_SHA256:?missing PMC_OPERATOR_REVIEWED_CODE_SHA256}"
+: "${PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION:?missing PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION}"
+test -d "$PMC_OPERATOR_PRIVATE_DIR"
+chmod 700 "$PMC_OPERATOR_PRIVATE_DIR"
+test ! -e "$PMC_OPERATOR_ATTESTATION_FILE"
 ```
 
-Every file created below must remain mode `0600`. Never `cat`, `echo`, paste, or upload an attestation, property value, account identity, project/deployment identity, backup identity, or unrestricted URL into terminal history, chat, screenshots, logs, or rollout evidence.
+Every generated file remains mode `0600`. Never `cat`, `echo`, paste, or upload an attestation, property value, account identity, project/deployment identity, backup identity, or unrestricted URL into terminal history, chat, screenshots, logs, or rollout evidence.
 
 ### Exact maintenance order
 
 Perform these steps in order. Stop immediately if a command fails, a placeholder is unresolved, an identity is wrong, a trigger gate fails, or any digest changes.
 
-1. Deploy the reviewed Apps Script version. Pin the exact reviewed commit and generated `Code.js` SHA-256 before any push. Verify the authorized Google account, Apps Script project ID, and deployment ID privately; do not copy their values into the evidence register.
+1. Deploy the reviewed Apps Script version. Pin the exact reviewed commit and generated `Code.js` SHA-256 before any push. Verify the authorized Google account, Apps Script project ID, deployment ID, and private clasp project binding without allowing their output into the normal transcript.
 
 ```bash
-PMC_REVIEWED_COMMIT="<reviewed-commit-sha>"
-PMC_REVIEWED_CODE_SHA256="<reviewed-Code.js-sha256>"
-test "$(git rev-parse HEAD)" = "$PMC_REVIEWED_COMMIT"
+test "$(git rev-parse HEAD)" = "$PMC_OPERATOR_REVIEWED_COMMIT"
 test -z "$(git status --porcelain)"
 npm run booking:build
-shasum -a 256 apps/pmc-google-booking-ops/dist/Code.js > "$PMC_PRESENTATION_PRIVATE_DIR/Code.js.sha256"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/Code.js.sha256"
-test "$(awk '{print $1}' "$PMC_PRESENTATION_PRIVATE_DIR/Code.js.sha256")" = "$PMC_REVIEWED_CODE_SHA256"
-npx clasp --user <operator-private-clasp-profile> show-authorized-user > "$PMC_PRESENTATION_PRIVATE_DIR/clasp-account.txt"
-npx clasp --user <operator-private-clasp-profile> deployments <operator-private-script-id> > "$PMC_PRESENTATION_PRIVATE_DIR/deployments-before.txt"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/clasp-account.txt" "$PMC_PRESENTATION_PRIVATE_DIR/deployments-before.txt"
+shasum -a 256 apps/pmc-google-booking-ops/dist/Code.js > "$PMC_OPERATOR_PRIVATE_DIR/Code.js.sha256"
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/Code.js.sha256"
+test "$(awk '{print $1}' "$PMC_OPERATOR_PRIVATE_DIR/Code.js.sha256")" = "$PMC_OPERATOR_REVIEWED_CODE_SHA256"
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" show-authorized-user > "$PMC_OPERATOR_PRIVATE_DIR/clasp-account.log" 2>&1
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" deployments "$PMC_OPERATOR_SCRIPT_ID" > "$PMC_OPERATOR_PRIVATE_DIR/deployments-before.log" 2>&1
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" push > "$PMC_OPERATOR_PRIVATE_DIR/clasp-push.log" 2>&1
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" version "PMC Booking workbook presentation" > "$PMC_OPERATOR_PRIVATE_DIR/clasp-version.log" 2>&1
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" redeploy "$PMC_OPERATOR_DEPLOYMENT_ID" --versionNumber "$PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION" --description "PMC Booking workbook presentation" > "$PMC_OPERATOR_PRIVATE_DIR/clasp-redeploy.log" 2>&1
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" deployments "$PMC_OPERATOR_SCRIPT_ID" > "$PMC_OPERATOR_PRIVATE_DIR/deployments-after.log" 2>&1
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/"*.log
 ```
 
-Owner must open those two private files locally and confirm the intended company account, exact project, and exact deployment before continuing. Then deploy only the reviewed bundle through the operator-owned private clasp project file:
+Owner opens the private logs locally and aborts if the account, script project, immutable version, deployment, or generated bundle hash differs from the reviewed values.
+
+2. Pause the exact production Booking queue and prove the task list is empty. All identity-bearing output stays in private files.
 
 ```bash
-npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> push
-npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> version "PMC Booking workbook presentation <reviewed-commit-sha>"
-npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> redeploy <operator-private-deployment-id> --versionNumber <reviewed-version> --description "PMC Booking workbook presentation <reviewed-commit-sha>"
-npx clasp --user <operator-private-clasp-profile> deployments <operator-private-script-id> > "$PMC_PRESENTATION_PRIVATE_DIR/deployments-after.txt"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/deployments-after.txt"
+gcloud tasks queues pause "$PMC_OPERATOR_QUEUE" --location "$PMC_OPERATOR_REGION" --project "$PMC_OPERATOR_PROJECT" > "$PMC_OPERATOR_PRIVATE_DIR/queue-pause.log" 2>&1
+gcloud tasks queues describe "$PMC_OPERATOR_QUEUE" --location "$PMC_OPERATOR_REGION" --project "$PMC_OPERATOR_PROJECT" --format=json > "$PMC_OPERATOR_PRIVATE_DIR/queue-paused.json" 2>&1
+gcloud tasks list --queue "$PMC_OPERATOR_QUEUE" --location "$PMC_OPERATOR_REGION" --project "$PMC_OPERATOR_PROJECT" --format=json > "$PMC_OPERATOR_PRIVATE_DIR/tasks-paused.json" 2>&1
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/queue-pause.log" "$PMC_OPERATOR_PRIVATE_DIR/queue-paused.json" "$PMC_OPERATOR_PRIVATE_DIR/tasks-paused.json"
 ```
 
-Abort if the immutable version, deployment, account, project, or generated bundle hash differs from the reviewed values.
+Require the private queue readback to show `PAUSED` and the private task array to be empty. Do not infer state from the pause command's exit code alone.
 
-2. Pause the exact production Booking queue, prove the task list is empty, and create the fresh whole-queue attestation used by both Attribution V2 migration and this presentation workflow. First prepare a private preinstall Script Property snapshot with only allowed cutover properties; edit it locally without printing its values.
+3. Read and verify `PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST`. The operator creates `PMC_OPERATOR_PROPERTIES_PREINSTALL` as a private exact Script Property JSON snapshot containing the signed `COMPLETE` migration manifest but excluding a fresh presentation attestation and expected queue digest. `PREPARED`, `RESTORE_REQUIRED`, absent, invalid, or manually edited is an abort.
 
-```bash
-gcloud tasks queues pause <operator-private-queue> --location <operator-private-region> --project <operator-private-project>
-gcloud tasks list --queue <operator-private-queue> --location <operator-private-region> --project <operator-private-project> --format=json > "$PMC_PRESENTATION_PRIVATE_DIR/tasks-paused.json"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/tasks-paused.json"
-install -m 600 /dev/null "$PMC_PRESENTATION_PRIVATE_DIR/properties-preinstall.json"
-${PMC_PRIVATE_EDITOR:-vi} "$PMC_PRESENTATION_PRIVATE_DIR/properties-preinstall.json"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/properties-preinstall.json"
-```
-
-The first attestation generation command must not include `--strict`. It must use stage `MIGRATION`, the exact paused revision, the exact queue, and a new file path that does not exist:
+The first PRESENTATION attestation command must not include `--strict`. It must use the exact target schema, minimum protocol 2, serving revision with prepare enabled, write barrier, paused/empty queue, compatible Apps Script deployment, and `COMPLETE` manifest. Checker stdout contains safe booleans/status only; stderr and stdout are still retained privately:
 
 ```bash
 node scripts/check-pmc-booking-attribution-v2.mjs \
   --allow-readonly-production \
-  --expected-stage MIGRATION \
-  --project <operator-private-project> \
-  --region <operator-private-region> \
-  --service <operator-private-service> \
-  --queue <operator-private-queue> \
-  --expected-revision <reviewed-paused-revision> \
-  --apps-script-id <operator-private-script-id> \
-  --apps-script-deployment-id <operator-private-deployment-id> \
-  --minimum-apps-script-version <reviewed-dual-reader-version> \
-  --script-properties-file <absolute-private-0600-preinstall-property-snapshot> \
-  --write-attestation <absolute-new-private-0600-attestation-file>
+  --expected-stage PRESENTATION \
+  --project "$PMC_OPERATOR_PROJECT" \
+  --region "$PMC_OPERATOR_REGION" \
+  --service "$PMC_OPERATOR_SERVICE" \
+  --queue "$PMC_OPERATOR_QUEUE" \
+  --expected-revision "$PMC_OPERATOR_REVISION" \
+  --apps-script-id "$PMC_OPERATOR_SCRIPT_ID" \
+  --apps-script-deployment-id "$PMC_OPERATOR_DEPLOYMENT_ID" \
+  --minimum-apps-script-version "$PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION" \
+  --script-properties-file "$PMC_OPERATOR_PROPERTIES_PREINSTALL" \
+  --write-attestation "$PMC_OPERATOR_ATTESTATION_FILE" \
+  > "$PMC_OPERATOR_PRIVATE_DIR/presentation-check-preinstall.json" \
+  2> "$PMC_OPERATOR_PRIVATE_DIR/presentation-check-preinstall.err"
 ```
 
-Require exit `0`, `attestationEligible=true`, `safeStatus=PROPERTY_INSTALL_REQUIRED`, `ready=false`, and a newly created mode-`0600` attestation. The checker must not print the JSON, digest, or private path. In the verified Apps Script project's Project Settings, owner installs exactly:
+Require exit `0`, stage `PRESENTATION`, `manifestStatus=COMPLETE`, `attestationEligible=true`, `safeStatus=PROPERTY_INSTALL_REQUIRED`, `ready=false`, and a new mode-`0600` attestation. The checker never prints its JSON, digest, or private path. In the verified Apps Script Project Settings, owner installs exactly:
 
 - `PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION` = the complete attestation JSON;
 - `PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST` = the exact `queueResourceDigest` from that same JSON.
 
-Do not print either value. Create a new private installed-property snapshot through the local editor and verify with the strict read-only command:
+Do not print either value. Owner creates `PMC_OPERATOR_PROPERTIES_INSTALLED` as a new private mode-`0600` property snapshot containing the same `COMPLETE` manifest plus the newly installed values. Verify with a strict read-only PRESENTATION check and no second write:
 
 ```bash
-install -m 600 /dev/null "$PMC_PRESENTATION_PRIVATE_DIR/properties-installed.json"
-${PMC_PRIVATE_EDITOR:-vi} "$PMC_PRESENTATION_PRIVATE_DIR/properties-installed.json"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/properties-installed.json"
 node scripts/check-pmc-booking-attribution-v2.mjs \
   --allow-readonly-production \
-  --expected-stage MIGRATION \
-  --project <operator-private-project> \
-  --region <operator-private-region> \
-  --service <operator-private-service> \
-  --queue <operator-private-queue> \
-  --expected-revision <reviewed-paused-revision> \
-  --apps-script-id <operator-private-script-id> \
-  --apps-script-deployment-id <operator-private-deployment-id> \
-  --minimum-apps-script-version <reviewed-dual-reader-version> \
-  --script-properties-file <absolute-private-0600-installed-property-snapshot> \
-  --strict
+  --expected-stage PRESENTATION \
+  --project "$PMC_OPERATOR_PROJECT" \
+  --region "$PMC_OPERATOR_REGION" \
+  --service "$PMC_OPERATOR_SERVICE" \
+  --queue "$PMC_OPERATOR_QUEUE" \
+  --expected-revision "$PMC_OPERATOR_REVISION" \
+  --apps-script-id "$PMC_OPERATOR_SCRIPT_ID" \
+  --apps-script-deployment-id "$PMC_OPERATOR_DEPLOYMENT_ID" \
+  --minimum-apps-script-version "$PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION" \
+  --script-properties-file "$PMC_OPERATOR_PROPERTIES_INSTALLED" \
+  --strict \
+  > "$PMC_OPERATOR_PRIVATE_DIR/presentation-check-installed.json" \
+  2> "$PMC_OPERATOR_PRIVATE_DIR/presentation-check-installed.err"
 ```
 
-Require queue `PAUSED`, zero tasks, `attestationInstalled=true`, `expectedQueueDigestInstalled=true`, `manifestStatus=ABSENT`, `safeStatus=READY`, and `ready=true`.
-
-3. Read and verify `PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST`. Complete the reviewed Attribution V2 preview/approval/apply procedure in Gate B3 of `docs/pmc-mini-app/pilot-runbook.md` while the exact queue and mutation barrier remain paused. The property must transition from absent through the guarded migration to a signed `COMPLETE`; `PREPARED`, `RESTORE_REQUIRED`, missing, invalid, or manually edited is an abort. The presentation workflow reuses the exact attestation installed in step 2; it does not generate or reinterpret a second attestation after migration.
-
-The attestation is accepted for only ten minutes from its signed `verifiedAt`. Steps 3–9 must finish inside that same ten-minute window. If it expires, do not edit its timestamp, digest, manifest, or checker output and do not run presentation apply. Keep the queue paused, preserve the `COMPLETE` migration evidence privately, resume only under the Attribution cutover recovery decision, and schedule a newly reviewed presentation maintenance procedure.
+Require `manifestStatus=COMPLETE`, queue `PAUSED`, zero tasks, `attestationInstalled=true`, `expectedQueueDigestInstalled=true`, `safeStatus=READY`, and `ready=true`. The new attestation is accepted for only ten minutes from its signed `verifiedAt`; steps 4–9 must finish inside that ten-minute window. If it expires, do not edit or re-sign it. Keep the queue/barrier paused and rerun step 3 with a new output path and fresh explicit owner review.
 
 4. Run `previewPmcBookingWorkbookPresentation()` once. Capture its safe result privately. The runtime itself must reject if either presentation function appears in `ScriptApp.getProjectTriggers()`.
 
 ```bash
-npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev previewPmcBookingWorkbookPresentation > "$PMC_PRESENTATION_PRIVATE_DIR/presentation-preview.json"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/presentation-preview.json"
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" run --nondev previewPmcBookingWorkbookPresentation > "$PMC_OPERATOR_PRIVATE_DIR/presentation-preview.json" 2>&1
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/presentation-preview.json"
 ```
 
 Require `preflightPassed=true`, `queuePausedAndEmpty=true`, `migrationComplete=true`, `readyForOwnerApproval=true`, `backupCreated=false`, and `liveWrites=false`.
@@ -425,8 +441,8 @@ Require `preflightPassed=true`, `queuePausedAndEmpty=true`, `migrationComplete=t
 7. Run `applyPmcBookingWorkbookPresentation()` once. Capture the safe result privately. A source, queue-attestation, migration-manifest, trigger topology, or approval digest that changed since preview must fail before backup or presentation batch.
 
 ```bash
-npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev applyPmcBookingWorkbookPresentation > "$PMC_PRESENTATION_PRIVATE_DIR/presentation-apply.json"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/presentation-apply.json"
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" run --nondev applyPmcBookingWorkbookPresentation > "$PMC_OPERATOR_PRIVATE_DIR/presentation-apply.json" 2>&1
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/presentation-apply.json"
 ```
 
 Under the same script lock, accepted approval changes from the bare digest to `ATTEMPTED:<digest>` before any backup, batch, or no-op decision. A verified `APPLIED` or `NOOP` then changes it to `APPLIED:<digest>`. Any backup, batch, readback, final property-write, or ambiguous failure leaves `ATTEMPTED` or another fail-closed used state; replay is forbidden until a new preview, review, and explicit bare-digest property approval. The workflow never auto-clears approval, pauses/resumes the queue, or performs rollback.
@@ -436,8 +452,8 @@ Under the same script lock, accepted approval changes from the bare digest to `A
 9. Compare the returned source, plan, and review SHA-256 digests with the approved preview. Then perform a second read-only preview and capture it privately:
 
 ```bash
-npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev previewPmcBookingWorkbookPresentation > "$PMC_PRESENTATION_PRIVATE_DIR/presentation-post-apply-preview.json"
-chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/presentation-post-apply-preview.json"
+npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" run --nondev previewPmcBookingWorkbookPresentation > "$PMC_OPERATOR_PRIVATE_DIR/presentation-post-apply-preview.json" 2>&1
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/presentation-post-apply-preview.json"
 ```
 
 Require `actionCount=0`, `preflightPassed=true`, `backupCreated=false`, and `liveWrites=false`. The preceding apply result is the readback marker and must still show `readbackVerified=true`; this second preview must create no backup, batch, lock, or property write. Any nonzero action count, changed immutable hash, failed trigger gate, or ambiguous result is an abort.
@@ -447,8 +463,9 @@ Require `actionCount=0`, `preflightPassed=true`, `backupCreated=false`, and `liv
 11. Only after digest/readback verification and all four screenshots are accepted may the owner resume the exact queue. Also require the post-apply zero-action preview and private `APPLIED` property readback before this command:
 
 ```bash
-gcloud tasks queues resume <operator-private-queue> --location <operator-private-region> --project <operator-private-project>
-gcloud tasks queues describe <operator-private-queue> --location <operator-private-region> --project <operator-private-project> --format='value(state)'
+gcloud tasks queues resume "$PMC_OPERATOR_QUEUE" --location "$PMC_OPERATOR_REGION" --project "$PMC_OPERATOR_PROJECT" > "$PMC_OPERATOR_PRIVATE_DIR/queue-resume.log" 2>&1
+gcloud tasks queues describe "$PMC_OPERATOR_QUEUE" --location "$PMC_OPERATOR_REGION" --project "$PMC_OPERATOR_PROJECT" --format=json > "$PMC_OPERATOR_PRIVATE_DIR/queue-resumed.json" 2>&1
+chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/queue-resume.log" "$PMC_OPERATOR_PRIVATE_DIR/queue-resumed.json"
 ```
 
 Require the expected running state. Do not reuse the old queue attestation or presentation approval for any later maintenance.

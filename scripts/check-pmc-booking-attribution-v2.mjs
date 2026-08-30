@@ -62,7 +62,7 @@ const REQUIRED_DEPLOYED_ENV_NAMES = [
   'PMC_BOOKING_PROTOCOL_SUPPORTED', 'PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION',
   'PMC_BOOKING_PREPARE_ENABLED', 'PMC_BOOKING_BRIDGE_READY', 'PMC_BOOKING_MUTATIONS_PAUSED',
 ]
-const ALLOWED_STAGES = new Set(['BRIDGE', 'MIGRATION', 'CUTOVER'])
+const ALLOWED_STAGES = new Set(['BRIDGE', 'MIGRATION', 'CUTOVER', 'PRESENTATION'])
 const QUEUE_ATTESTATION_PROPERTY = 'PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION'
 const EXPECTED_QUEUE_DIGEST_PROPERTY = 'PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST'
 const MIGRATION_MANIFEST_PROPERTY = 'PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST'
@@ -81,6 +81,8 @@ export function inspectBookingAttributionCutover(observations, options) {
     : environment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION === '2' ? 2 : 0
   const supportedV2 = environment.PMC_BOOKING_PROTOCOL_SUPPORTED === '2'
   const prepareDisabled = environment.PMC_BOOKING_PREPARE_ENABLED === 'false'
+  const prepareEnabled = environment.PMC_BOOKING_PREPARE_ENABLED === 'true'
+  const prepareStageReady = stage === 'PRESENTATION' ? prepareEnabled : prepareDisabled
   const bridgeReady = environment.PMC_BOOKING_BRIDGE_READY === 'true'
   const mutationsPaused = environment.PMC_BOOKING_MUTATIONS_PAUSED === 'true'
   const mutationPauseKnown = environment.PMC_BOOKING_MUTATIONS_PAUSED === 'true'
@@ -97,7 +99,7 @@ export function inspectBookingAttributionCutover(observations, options) {
     && traffic.status === 'NO_TRAFFIC'
   const revisionReady = serviceReady && revisionDescribed && (trafficAt100Percent || explicitNoTrafficPrecheck)
   const requiredEnvironmentNamesPresent = REQUIRED_DEPLOYED_ENV_NAMES.every((name) => presentEnvironmentBinding(environment[name]))
-  const targetRevisionCompatible = revisionReady && miniAppEnabled && supportedV2 && prepareDisabled
+  const targetRevisionCompatible = revisionReady && miniAppEnabled && supportedV2 && prepareStageReady
     && bridgeReady && mutationPauseKnown && (minimum === 1 || minimum === 2)
 
   const legacyHeaders = sameArray(observations?.requestHeaders, CHECKER_MINI_APP_REQUEST_HEADERS_V1)
@@ -152,19 +154,23 @@ export function inspectBookingAttributionCutover(observations, options) {
     && installedAttestation.state === 'PAUSED'
     && installedAttestation.activeTaskCount === 0
 
-  const protocolStageReady = stage === 'CUTOVER' ? minimum === 2 : minimum === 1
-  const sheetStageReady = stage === 'CUTOVER' ? targetHeaders : legacyHeaders
+  const targetStage = stage === 'CUTOVER' || stage === 'PRESENTATION'
+  const protocolStageReady = targetStage ? minimum === 2 : minimum === 1
+  const sheetStageReady = targetStage ? targetHeaders : legacyHeaders
   const queueStageReady = stage === 'BRIDGE' || queuePaused && zeroActiveTasks
   const draftStageReady = stage === 'BRIDGE' || zeroNonterminalProtocol1Drafts
   const mutationPauseStageReady = stage === 'BRIDGE' ? !mutationsPaused : mutationsPaused
-  const manifestStageReady = stage === 'CUTOVER' ? manifestStatus === 'COMPLETE' : manifestStatus === 'ABSENT'
+  const manifestStageReady = targetStage
+    ? manifestStatus === 'COMPLETE'
+    : manifestStatus === 'ABSENT'
   const baseReady = stage !== 'INVALID' && serviceReady && requiredEnvironmentNamesPresent
-    && revisionReady && targetRevisionCompatible && supportedV2 && prepareDisabled
+    && revisionReady && targetRevisionCompatible && supportedV2 && prepareStageReady
     && bridgeReady && protocolStageReady && sheetStageReady && withinRowLimit && exactRows
     && queueStageReady && draftStageReady && mutationPauseStageReady
     && deploymentPresent && versionCompatible && dualReaderReady && manifestStageReady
-  const attestationEligible = stage === 'MIGRATION' && baseReady
-  const propertiesReady = stage !== 'MIGRATION' || attestationInstalled && expectedQueueDigestInstalled
+  const attestationStage = stage === 'MIGRATION' || stage === 'PRESENTATION'
+  const attestationEligible = attestationStage && baseReady
+  const propertiesReady = !attestationStage || attestationInstalled && expectedQueueDigestInstalled
   const ready = baseReady && propertiesReady
   const safeStatus = readinessStatus({
     stage,
@@ -173,7 +179,7 @@ export function inspectBookingAttributionCutover(observations, options) {
     revisionReady,
     targetRevisionCompatible,
     supportedV2,
-    prepareDisabled,
+    prepareStageReady,
     bridgeReady,
     miniAppEnabled,
     trafficAt100Percent,
@@ -211,6 +217,7 @@ export function inspectBookingAttributionCutover(observations, options) {
       minimumIs1: minimum === 1,
       minimumIs2: minimum === 2,
       prepareDisabled,
+      ...(stage === 'PRESENTATION' ? { prepareEnabled } : {}),
       bridgeReady,
     },
     sheets: { schemaStatus, exactHeaders, exactRows, withinRowLimit, zeroNonterminalProtocol1Drafts },
@@ -277,7 +284,7 @@ export async function runPmcBookingAttributionV2Check(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout, stderr: process.stderr }
   if (parsed.help) {
-    io.stdout.write('Usage: check-pmc-booking-attribution-v2 --allow-readonly-production --expected-stage BRIDGE|MIGRATION|CUTOVER --project <id> --region <region> --service <name> --queue <name> --expected-revision <name> --apps-script-id <id> --apps-script-deployment-id <id> --minimum-apps-script-version <number> --script-properties-file <absolute-private-file> [--allow-no-traffic-precheck] [--write-attestation <absolute-new-file>] [--strict]\n')
+    io.stdout.write('Usage: check-pmc-booking-attribution-v2 --allow-readonly-production --expected-stage BRIDGE|MIGRATION|CUTOVER|PRESENTATION --project <id> --region <region> --service <name> --queue <name> --expected-revision <name> --apps-script-id <id> --apps-script-deployment-id <id> --minimum-apps-script-version <number> --script-properties-file <absolute-private-file> [--allow-no-traffic-precheck] [--write-attestation <absolute-new-file>] [--strict]\n')
     return 0
   }
   const collect = options.collect ?? collectLiveObservations
@@ -421,7 +428,7 @@ function readinessStatus(value) {
   if (value.stage === 'INVALID') return 'INVALID_STAGE'
   if (value.manifestStatus === 'PREPARED' || value.manifestStatus === 'RESTORE_REQUIRED' || value.manifestStatus === 'INVALID') return 'RESTORE_REQUIRED'
   if (!value.serviceReady || !value.requiredEnvironmentNamesPresent || !value.revisionReady
-    || !value.targetRevisionCompatible || !value.supportedV2 || !value.prepareDisabled
+    || !value.targetRevisionCompatible || !value.supportedV2 || !value.prepareStageReady
     || !value.bridgeReady || !value.miniAppEnabled
     || !value.trafficAt100Percent && !value.explicitNoTrafficPrecheck) return 'DEPLOYMENT_INCOMPATIBLE'
   if (!value.protocolStageReady) return 'PROTOCOL_STAGE_MISMATCH'

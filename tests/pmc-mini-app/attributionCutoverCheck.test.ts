@@ -248,6 +248,148 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
     })
   })
 
+  it('issues a post-migration PRESENTATION attestation only for the exact paused target state', () => {
+    const observations = presentationObservations()
+
+    const result = inspectBookingAttributionCutover(observations, { expectedStage: 'PRESENTATION' })
+    const serialized = JSON.stringify(result.report)
+
+    expect(result.report).toMatchObject({
+      stage: 'PRESENTATION',
+      ready: false,
+      safeStatus: 'PROPERTY_INSTALL_REQUIRED',
+      cloudRun: {
+        trafficAt100Percent: true,
+        mutationsPaused: true,
+        targetRevisionCompatible: true,
+      },
+      protocol: {
+        minimumIs2: true,
+        prepareDisabled: false,
+        prepareEnabled: true,
+        bridgeReady: true,
+      },
+      sheets: { schemaStatus: 'TARGET', exactHeaders: true, exactRows: true },
+      queue: { status: 'PAUSED', paused: true, zeroActiveTasks: true },
+      appsScript: { deploymentPresent: true, versionCompatible: true, dualReaderReady: true },
+      migration: {
+        manifestStatus: 'COMPLETE',
+        attestationEligible: true,
+        attestationInstalled: false,
+        expectedQueueDigestInstalled: false,
+      },
+    })
+    expect(result.attestation).not.toBeNull()
+    expect(result.attestation).toMatchObject({
+      version: 1,
+      environment: 'production',
+      state: 'PAUSED',
+      activeTaskCount: 0,
+      checkerVersion: BOOKING_ATTRIBUTION_CHECKER_VERSION,
+    })
+    expect(() => parseBookingQueueAttestationJson(JSON.stringify(result.attestation), {
+      nowMs: Date.parse('2026-08-30T09:02:00.000Z'),
+      maxAgeMs: 10 * 60 * 1_000,
+      environment: 'production',
+      queueResourceDigest: result.attestation!.queueResourceDigest,
+      checkerVersion: BOOKING_ATTRIBUTION_CHECKER_VERSION,
+      sha256,
+    })).not.toThrow()
+    for (const value of observations.privateSentinels) expect(serialized).not.toContain(value)
+    expect(serialized).not.toContain(result.attestation!.digest)
+    expect(serialized).not.toContain(result.attestation!.queueResourceDigest)
+  })
+
+  it.each([
+    ['minimum 1', (value: ReturnType<typeof presentationObservations>) => {
+      value.deployedEnvironment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION = '1'
+    }, 'PROTOCOL_STAGE_MISMATCH'],
+    ['prepare disabled', (value: ReturnType<typeof presentationObservations>) => {
+      value.deployedEnvironment.PMC_BOOKING_PREPARE_ENABLED = 'false'
+    }, 'DEPLOYMENT_INCOMPATIBLE'],
+    ['Mini App environment disabled', (value: ReturnType<typeof presentationObservations>) => {
+      value.deployedEnvironment.PMC_MINI_APP_ENABLED = 'false'
+    }, 'DEPLOYMENT_INCOMPATIBLE'],
+    ['mutation barrier open', (value: ReturnType<typeof presentationObservations>) => {
+      value.deployedEnvironment.PMC_BOOKING_MUTATIONS_PAUSED = 'false'
+    }, 'BOOKING_MUTATIONS_NOT_PAUSED'],
+    ['queue running', (value: ReturnType<typeof presentationObservations>) => {
+      value.queue.state = 'RUNNING'
+    }, 'QUEUE_NOT_DRAINED'],
+    ['active task', (value: ReturnType<typeof presentationObservations>) => {
+      value.queue.tasks = [{}]
+    }, 'QUEUE_NOT_DRAINED'],
+    ['wrong serving revision', (value: ReturnType<typeof presentationObservations>) => {
+      value.service.traffic = [{ revisionName: 'private-other-revision', percent: 100 }]
+    }, 'DEPLOYMENT_INCOMPATIBLE'],
+    ['Apps Script too old', (value: ReturnType<typeof presentationObservations>) => {
+      value.appsScript.deploymentVersion = 41
+    }, 'APPS_SCRIPT_INCOMPATIBLE'],
+    ['target row invalid', (value: ReturnType<typeof presentationObservations>) => {
+      value.requestRows = [requestRow(PMC_MINI_APP_REQUEST_HEADERS_V2, {
+        protocolVersion: 3, state: 'CONFIRMED',
+      })]
+    }, 'SHEET_ROWS_INVALID'],
+    ['prepared manifest', (value: ReturnType<typeof presentationObservations>) => {
+      value.scriptProperties.PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST = JSON.stringify(
+        migrationManifest('PREPARED'),
+      )
+    }, 'RESTORE_REQUIRED'],
+    ['restore-required manifest', (value: ReturnType<typeof presentationObservations>) => {
+      value.scriptProperties.PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST = JSON.stringify(
+        migrationManifest('RESTORE_REQUIRED'),
+      )
+    }, 'RESTORE_REQUIRED'],
+    ['invalid manifest', (value: ReturnType<typeof presentationObservations>) => {
+      value.scriptProperties.PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST = '{"state":"COMPLETE"}'
+    }, 'RESTORE_REQUIRED'],
+  ] as const)('rejects PRESENTATION when %s', (_label, mutate, safeStatus) => {
+    const observations = presentationObservations()
+    mutate(observations)
+
+    const result = inspectBookingAttributionCutover(observations, { expectedStage: 'PRESENTATION' })
+
+    expect(result.report).toMatchObject({ ready: false, safeStatus })
+    expect(result.report.migration.attestationEligible).toBe(false)
+    expect(result.attestation).toBeNull()
+  })
+
+  it('requires the exact newly installed PRESENTATION attestation and queue digest', () => {
+    const observations = presentationObservations()
+    const generated = createBookingQueueAttestation(observations.queueResource, {
+      now: new Date('2026-08-30T09:00:00.000Z'),
+      attestationId: 'attestation-presentation-1',
+    })
+    observations.scriptProperties = {
+      ...observations.scriptProperties,
+      PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION: JSON.stringify(generated),
+      PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST: generated.queueResourceDigest,
+    }
+
+    expect(inspectBookingAttributionCutover(observations, { expectedStage: 'PRESENTATION' }).report)
+      .toMatchObject({ ready: true, safeStatus: 'READY', migration: {
+        manifestStatus: 'COMPLETE',
+        attestationInstalled: true,
+        expectedQueueDigestInstalled: true,
+      } })
+
+    const wrongQueue = presentationObservations()
+    wrongQueue.scriptProperties = {
+      ...wrongQueue.scriptProperties,
+      PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION: JSON.stringify(generated),
+      PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST: generated.queueResourceDigest,
+    }
+    wrongQueue.queueResource = {
+      ...wrongQueue.queueResource,
+      queue: 'private-different-queue',
+    }
+    expect(inspectBookingAttributionCutover(wrongQueue, { expectedStage: 'PRESENTATION' }).report)
+      .toMatchObject({ ready: false, safeStatus: 'PROPERTY_INSTALL_REQUIRED', migration: {
+        attestationInstalled: false,
+        expectedQueueDigestInstalled: false,
+      } })
+  })
+
   it('rejects a correctly re-signed but structurally invalid migration manifest', () => {
     const observations = legacyMigrationObservations()
     observations.deployedEnvironment.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION = '2'
@@ -339,6 +481,50 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
     })
   })
 
+  it('writes a new PRESENTATION attestation without strict, then becomes strict-ready after install', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pmc-presentation-gate-order-'))
+    temporaryDirectories.push(directory)
+    const propertiesFile = join(directory, 'properties.json')
+    const attestationFile = join(directory, 'presentation-queue-attestation.json')
+    const observations = presentationObservations()
+    const initialOutput: string[] = []
+    const baseArgs = checkerArguments(propertiesFile, 'PRESENTATION')
+
+    const initialCode = await runPmcBookingAttributionV2Check([
+      ...baseArgs, '--write-attestation', attestationFile,
+    ], {
+      collect: vi.fn(async () => observations),
+      io: { stdout: { write: (value: string) => initialOutput.push(value) }, stderr: { write: vi.fn() } },
+    })
+
+    expect(initialCode).toBe(0)
+    expect(JSON.parse(initialOutput.join(''))).toMatchObject({
+      stage: 'PRESENTATION', ready: false, safeStatus: 'PROPERTY_INSTALL_REQUIRED',
+      migration: { manifestStatus: 'COMPLETE', attestationEligible: true },
+    })
+    expect((await stat(attestationFile)).mode & 0o777).toBe(0o600)
+    const rawAttestation = await readFile(attestationFile, 'utf8')
+    const attestation = JSON.parse(rawAttestation) as { queueResourceDigest: string }
+    expect(initialOutput.join('')).not.toContain(rawAttestation)
+
+    observations.scriptProperties = {
+      ...observations.scriptProperties,
+      PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION: rawAttestation,
+      PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST: attestation.queueResourceDigest,
+    }
+    const strictOutput: string[] = []
+    const strictCode = await runPmcBookingAttributionV2Check([...baseArgs, '--strict'], {
+      collect: vi.fn(async () => observations),
+      io: { stdout: { write: (value: string) => strictOutput.push(value) }, stderr: { write: vi.fn() } },
+    })
+
+    expect(strictCode).toBe(0)
+    expect(JSON.parse(strictOutput.join(''))).toMatchObject({
+      stage: 'PRESENTATION', ready: true, safeStatus: 'READY',
+      migration: { manifestStatus: 'COMPLETE', attestationInstalled: true },
+    })
+  })
+
   it('prints help without collecting or mutating any external state', async () => {
     const output: string[] = []
     const collect = vi.fn()
@@ -349,6 +535,7 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
     })).resolves.toBe(0)
 
     expect(output.join('')).toContain('--expected-stage')
+    expect(output.join('')).toContain('PRESENTATION')
     expect(output.join('')).toContain('--write-attestation')
     expect(collect).not.toHaveBeenCalled()
   })
@@ -464,9 +651,9 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
   })
 })
 
-function checkerArguments(propertiesFile: string): string[] {
+function checkerArguments(propertiesFile: string, stage = 'MIGRATION'): string[] {
   return [
-    '--allow-readonly-production', '--expected-stage', 'MIGRATION',
+    '--allow-readonly-production', '--expected-stage', stage,
     '--project', 'project-id', '--region', 'asia-southeast1', '--service', 'service-id',
     '--queue', 'queue-id', '--expected-revision', 'revision-id', '--apps-script-id', 'script-id',
     '--apps-script-deployment-id', 'deployment-id', '--minimum-apps-script-version', '42',
@@ -539,6 +726,12 @@ function targetCutoverObservations() {
   return observations
 }
 
+function presentationObservations() {
+  const observations = targetCutoverObservations()
+  observations.deployedEnvironment.PMC_BOOKING_PREPARE_ENABLED = 'true'
+  return observations
+}
+
 function installFreshAttestation(observations: ReturnType<typeof legacyMigrationObservations>) {
   const generated = createBookingQueueAttestation(observations.queueResource, {
     now: new Date('2026-08-30T09:00:00.000Z'),
@@ -579,11 +772,15 @@ function requestRow(
 }
 
 function completeManifest() {
+  return migrationManifest('COMPLETE')
+}
+
+function migrationManifest(state: 'PREPARED' | 'COMPLETE' | 'RESTORE_REQUIRED') {
   const digest = 'a'.repeat(64)
   return createBookingMigrationManifestEnvelope({
     version: 1,
     migration: 'PMC_BOOKING_ATTRIBUTION_V2',
-    state: 'COMPLETE',
+    state,
     sourceFingerprint: digest,
     backupFileId: 'private_backup_id',
     backupMimeType: 'application/vnd.google-apps.spreadsheet',
@@ -604,8 +801,8 @@ function completeManifest() {
     queueAttestationDigest: digest,
     preparedAt: '2026-08-30T08:00:00.000Z',
     updatedAt: '2026-08-30T08:10:00.000Z',
-    completedAt: '2026-08-30T08:10:00.000Z',
-    safeFailureCode: null,
+    completedAt: state === 'COMPLETE' ? '2026-08-30T08:10:00.000Z' : null,
+    safeFailureCode: state === 'RESTORE_REQUIRED' ? 'MIGRATION_APPLY_FAILED' : null,
   }, sha256)
 }
 

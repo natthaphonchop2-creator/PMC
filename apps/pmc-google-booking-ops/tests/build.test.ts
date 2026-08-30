@@ -89,6 +89,7 @@ describe('Apps Script bundle', () => {
 
   it('documents the exact owner maintenance, verification, screenshot, and resume order', () => {
     const runbook = readFileSync('apps/pmc-google-booking-ops/docs/pilot-runbook.md', 'utf8')
+    const section = runbook.slice(runbook.indexOf('## Owner-gated Booking workbook presentation maintenance'))
     const orderedMarkers = [
       '1. Deploy the reviewed Apps Script version.',
       '2. Pause the exact production Booking queue',
@@ -104,39 +105,59 @@ describe('Apps Script bundle', () => {
     ]
     let cursor = -1
     for (const marker of orderedMarkers) {
-      const next = runbook.indexOf(marker)
+      const next = section.indexOf(marker)
       expect(next).toBeGreaterThan(cursor)
       cursor = next
     }
-    expect(runbook).toContain('Hiding a tab is a convenience for operators and is **not access control**')
-    expect(runbook).toContain('do not rerun automatically')
-    expect(runbook).toContain('do not claim rollback')
-    expect(runbook).toContain('Do not record customer names, phone numbers, evidence images, cell values')
+    expect(section).toContain('Hiding a tab is a convenience for operators and is **not access control**')
+    expect(section).toContain('do not rerun automatically')
+    expect(section).toContain('do not claim rollback')
+    expect(section).toContain('Do not record customer names, phone numbers, evidence images, cell values')
+    expect(section).toContain('set +x')
+    expect(section).toContain('set +o history')
+    expect(section).toContain('source "$PMC_BOOKING_PRESENTATION_ENV_FILE"')
+    expect(section).toContain('chmod 600 "$PMC_BOOKING_PRESENTATION_ENV_FILE"')
+    for (const variable of [
+      'PMC_OPERATOR_PROJECT', 'PMC_OPERATOR_REGION', 'PMC_OPERATOR_SERVICE',
+      'PMC_OPERATOR_QUEUE', 'PMC_OPERATOR_REVISION', 'PMC_OPERATOR_SCRIPT_ID',
+      'PMC_OPERATOR_DEPLOYMENT_ID', 'PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION',
+      'PMC_OPERATOR_CLASP_PROFILE', 'PMC_OPERATOR_CLASP_PROJECT_FILE',
+      'PMC_OPERATOR_PRIVATE_DIR', 'PMC_OPERATOR_PROPERTIES_PREINSTALL',
+      'PMC_OPERATOR_PROPERTIES_INSTALLED', 'PMC_OPERATOR_ATTESTATION_FILE',
+    ]) expect(section).toContain(`$${variable}`)
 
-    for (const command of [
-      'npm run booking:build',
-      'shasum -a 256 apps/pmc-google-booking-ops/dist/Code.js',
-      'npx clasp --user <operator-private-clasp-profile> show-authorized-user',
-      'npx clasp --user <operator-private-clasp-profile> deployments <operator-private-script-id>',
-      'node scripts/check-pmc-booking-attribution-v2.mjs',
-      '--expected-stage MIGRATION',
-      '--write-attestation <absolute-new-private-0600-attestation-file>',
-      '--script-properties-file <absolute-private-0600-preinstall-property-snapshot>',
-      '--script-properties-file <absolute-private-0600-installed-property-snapshot>',
-      'npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev previewPmcBookingWorkbookPresentation',
-      'npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev applyPmcBookingWorkbookPresentation',
-    ]) expect(runbook).toContain(command)
-    expect(runbook).toContain('The first attestation generation command must not include `--strict`')
-    expect(runbook).toContain('`0600`')
-    expect(runbook).toContain('ten minutes')
-    expect(runbook).toContain('PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION')
-    expect(runbook).toContain('PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST')
-    expect(runbook).toContain('PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST')
-    expect(runbook).toContain('PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST')
-    expect(runbook).toContain('actionCount=0')
-    expect(runbook).toContain('readbackVerified=true')
-    expect(runbook).toContain('ATTEMPTED')
-    expect(runbook).toContain('APPLIED')
+    const bashBlocks = [...section.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]!)
+    expect(bashBlocks.join('\n')).not.toMatch(/<(?:operator|absolute|reviewed)-[^>]+>/)
+    const identityCommands = bashBlocks.flatMap((block) => block.split('\n'))
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('gcloud ') || line.startsWith('npx clasp '))
+    expect(identityCommands.length).toBeGreaterThan(0)
+    for (const command of identityCommands) {
+      expect(command).toContain('> "$PMC_OPERATOR_PRIVATE_DIR/')
+      expect(command).toContain('2>&1')
+    }
+
+    const checkerCommands = bashBlocks.filter((command) =>
+      command.includes('node scripts/check-pmc-booking-attribution-v2.mjs'))
+    expect(checkerCommands).toHaveLength(2)
+    expect(checkerCommands[0]).toContain('--expected-stage PRESENTATION')
+    expect(checkerCommands[0]).toContain('--write-attestation "$PMC_OPERATOR_ATTESTATION_FILE"')
+    expect(checkerCommands[0]).not.toContain('--strict')
+    expect(checkerCommands[1]).toContain('--expected-stage PRESENTATION')
+    expect(checkerCommands[1]).toContain('--strict')
+    expect(checkerCommands[1]).not.toContain('--write-attestation')
+    expect(section).not.toContain('--expected-stage MIGRATION')
+    expect(section).toContain('The first PRESENTATION attestation command must not include `--strict`')
+    expect(section).toContain('`0600`')
+    expect(section).toContain('ten minutes')
+    expect(section).toContain('PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION')
+    expect(section).toContain('PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST')
+    expect(section).toContain('PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST')
+    expect(section).toContain('PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST')
+    expect(section).toContain('actionCount=0')
+    expect(section).toContain('readbackVerified=true')
+    expect(section).toContain('ATTEMPTED')
+    expect(section).toContain('APPLIED')
   })
 
   it('does not recreate the paused legacy JERA polling trigger', () => {
