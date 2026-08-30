@@ -876,13 +876,25 @@ async function claimOwnerConfirmation(
 
   const reread = await readOwnerDraft(draft, deps)
   if (!reread) return null
-  if (validConfirmingDraft(reread, payloadHash)) return reread
+  if (validClaimRecovery(draft, reread, expected, payloadHash)) return reread
   if (validConfirmedDraft(reread, payloadHash) || reread.state === 'CANCELLED' || reread.state === 'EXPIRED') return reread
   if (projectionDigest(reread) !== projectionDigest(draft)) return null
   try {
     const result = await deps.draftStateIngress.mutate(mutation)
     return trustedOwnerResult(result, expected) ? expected : null
   } catch { return null }
+}
+
+function validClaimRecovery(
+  base: MiniAppRequestRecord,
+  reread: MiniAppRequestRecord,
+  expected: MiniAppRequestRecord,
+  payloadHash: string,
+): boolean {
+  return validConfirmingDraft(reread, payloadHash)
+    && reread.version === base.version + 1
+    && reread.attemptCount === base.attemptCount
+    && projectionDigest(reread) === projectionDigest(expected)
 }
 
 async function completeOwnerConfirmation(
@@ -1034,12 +1046,8 @@ function applyQueueProjection(
     queuedAt: draft.queuedAt ?? queuedAt,
     caseId: projection.caseId,
     confirmationStatus: projection.confirmationStatus,
-    safeErrorCode: projection.state === 'CONFIRMED_WITH_RETRY' ? 'DOWNSTREAM_RETRY'
-      : projection.state === 'NEEDS_REVIEW' ? 'RETRY_EXHAUSTED'
-        : draft.safeErrorCode,
-    retentionState: projection.state === 'CANCELLED' || projection.state === 'EXPIRED'
-      ? 'PENDING_APPROVAL'
-      : draft.retentionState,
+    safeErrorCode: draft.safeErrorCode,
+    retentionState: draft.retentionState,
     updatedAt: queuedAt,
   }
 }

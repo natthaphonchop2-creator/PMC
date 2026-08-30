@@ -1,6 +1,7 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { CalendarInterval } from './domain/automaticQueue'
-import type { MiniAppAsyncRequestRecord } from '../../../shared/pmcMiniAppAsyncState'
+import type { MiniAppAsyncRequestRecordV1 } from '../../../shared/pmcMiniAppAsyncState'
+import type { PmcMiniAppTargetRequestRecord } from '../../../shared/pmcBookingRowContracts'
 import type { StockAuditEvent, StockDocumentSummary, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
 import type { ExpenseAuditEvent, ExpenseMonthlyProjection, ExpenseSubmission } from '../../../shared/pmcExpense'
 import type { ExpensePrivateAttachment, MiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress'
@@ -385,13 +386,15 @@ export interface CryptoPort {
   base64Decode(value: string): number[]
 }
 
+export type MiniAppRequestStateRecord = MiniAppAsyncRequestRecordV1 | PmcMiniAppTargetRequestRecord
+
 export interface MiniAppRequestStatePort {
-  getByRequestId(requestId: string): MiniAppAsyncRequestRecord | null
+  getByRequestId(requestId: string): MiniAppRequestStateRecord | null
   updateByRequestId(
     requestId: string,
     expectedVersion: number,
-    next: MiniAppAsyncRequestRecord,
-  ): MiniAppAsyncRequestRecord
+    next: MiniAppRequestStateRecord,
+  ): MiniAppRequestStateRecord
 }
 
 export interface DashboardPort {

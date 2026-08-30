@@ -1,11 +1,11 @@
 import {
   MINI_APP_ASYNC_REQUEST_HEADERS_V1,
-  type MiniAppAsyncRequestRecord,
+  type MiniAppAsyncRequestRecordV1,
   type MiniAppAsyncRequestState,
   type MiniAppAsyncConfirmationStatus,
 } from '../../../../shared/pmcMiniAppAsyncState'
 import { encodeSheetCell } from './googleSheets'
-import type { MiniAppRequestStatePort } from '../ports'
+import type { MiniAppRequestStatePort, MiniAppRequestStateRecord } from '../ports'
 import { TARGET_MINI_APP_REQUEST_HEADERS } from '../domain/attributionMigration'
 import { parsePmcMiniAppTargetRequestRow } from '../../../../shared/pmcBookingRowContracts'
 
@@ -30,7 +30,7 @@ export function createGoogleMiniAppRequestStatePort(
 
   function readRows(): {
     headers: readonly string[]
-    rows: Array<{ rowNumber: number; value: MiniAppAsyncRequestRecord }>
+    rows: Array<{ rowNumber: number; value: MiniAppRequestStateRecord }>
   } {
     const sheet = requireSheet()
     const columnCount = sheet.getLastColumn()
@@ -72,20 +72,20 @@ export function createGoogleMiniAppRequestStatePort(
       const target = sheet.getRange(row.rowNumber, 1, 1, table.headers.length)
       target.setNumberFormats([requestRowNumberFormats(table.headers)])
       target.setValues([toRow(next, table.headers)])
-      return JSON.parse(JSON.stringify(next)) as MiniAppAsyncRequestRecord
+      return JSON.parse(JSON.stringify(next)) as MiniAppRequestStateRecord
     },
   }
 }
 
-function fromRow(row: unknown[], headers: readonly string[]): MiniAppAsyncRequestRecord {
+function fromRow(row: unknown[], headers: readonly string[]): MiniAppRequestStateRecord {
   if (sameHeader(headers, TARGET_MINI_APP_REQUEST_HEADERS)) {
-    return parsePmcMiniAppTargetRequestRow(row) as unknown as MiniAppAsyncRequestRecord
+    return parsePmcMiniAppTargetRequestRow(row)
   }
   const value = Object.fromEntries(headers.map((header, index) => [header, row[index] ?? '']))
   const record = {
     requestId: text(value.requestId), draftId: text(value.draftId), staffId: text(value.staffId),
     lineUserIdHash: text(value.lineUserIdHash), state: text(value.state) as MiniAppAsyncRequestState,
-    retentionState: text(value.retentionState) as MiniAppAsyncRequestRecord['retentionState'],
+    retentionState: text(value.retentionState) as MiniAppAsyncRequestRecordV1['retentionState'],
     version: numberValue(value.version), payloadHash: nullable(value.payloadHash), aeName: text(value.aeName),
     customerName: text(value.customerName), facebookName: text(value.facebookName),
     phoneNormalized: text(value.phoneNormalized), doctorId: text(value.doctorId), serviceId: text(value.serviceId),
@@ -106,7 +106,7 @@ function fromRow(row: unknown[], headers: readonly string[]): MiniAppAsyncReques
   return record
 }
 
-function toRow(record: MiniAppAsyncRequestRecord, headers: readonly string[]): Array<string | number | boolean> {
+function toRow(record: MiniAppRequestStateRecord, headers: readonly string[]): Array<string | number | boolean> {
   const mapped: Record<string, unknown> = {
     ...record,
     paymentEvidenceFileIdsJson: record.paymentEvidenceFileIds,

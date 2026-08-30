@@ -1,8 +1,4 @@
-import type {
-  MiniAppAsyncConfirmationStatus,
-  MiniAppAsyncRequestState,
-  MiniAppAsyncStateIngressResult,
-} from '../../shared/pmcMiniAppAsyncState.js'
+import type { MiniAppAsyncStateIngressResult } from '../../shared/pmcMiniAppAsyncState.js'
 
 export interface QueueFastPathBinding {
   requestId: string
@@ -18,16 +14,12 @@ export interface SafeQueueProjection {
   draftId: string
   payloadHash: string
   taskName: string
-  state: MiniAppAsyncRequestState
+  state: 'QUEUED'
   version: number
   attemptCount: number
-  caseId: string | null
-  confirmationStatus: MiniAppAsyncConfirmationStatus | null
+  caseId: null
+  confirmationStatus: null
 }
-
-const LIVE_IDEMPOTENT_STATES = new Set<MiniAppAsyncRequestState>(['PROCESSING', 'RETRYING'])
-const CONFIRMED_STATES = new Set<MiniAppAsyncRequestState>(['CONFIRMED', 'CONFIRMED_WITH_RETRY'])
-const EMPTY_TERMINAL_STATES = new Set<MiniAppAsyncRequestState>(['NEEDS_REVIEW', 'CANCELLED', 'EXPIRED'])
 
 export function validatedQueueFastPath(
   binding: QueueFastPathBinding,
@@ -37,32 +29,9 @@ export function validatedQueueFastPath(
   if (result.requestId !== binding.requestId || result.draftId !== binding.draftId) return null
 
   const noTerminalFields = result.caseId === null && result.confirmationStatus === null
-  if (result.outcome === 'APPLIED') {
-    if (result.state !== 'QUEUED' || result.version !== binding.baseVersion + 1
-      || result.attemptCount !== binding.baseAttempt || !noTerminalFields) return null
-    return safeProjection(binding, result)
-  }
-
-  if (result.outcome === 'IDEMPOTENT') {
-    const exactQueue = result.state === 'QUEUED' && result.version === binding.baseVersion + 1
-      && result.attemptCount === binding.baseAttempt
-    const liveWorker = LIVE_IDEMPOTENT_STATES.has(result.state) && result.version >= binding.baseVersion + 2
-      && result.attemptCount >= binding.baseAttempt + 1 && result.attemptCount <= 8
-    if ((!exactQueue && !liveWorker) || !noTerminalFields) return null
-    return safeProjection(binding, result)
-  }
-
-  if (result.outcome !== 'TERMINAL' || result.version < binding.baseVersion + 1) return null
-  if (CONFIRMED_STATES.has(result.state)) {
-    if (!validCaseId(result.caseId) || !validConfirmationStatus(result.confirmationStatus)
-      || result.attemptCount < binding.baseAttempt + 1 || result.attemptCount > 8) return null
-    return safeProjection(binding, result)
-  }
-  if (!EMPTY_TERMINAL_STATES.has(result.state) || !noTerminalFields) return null
-  if ((result.state === 'CANCELLED' || result.state === 'EXPIRED')
-    && result.attemptCount !== binding.baseAttempt) return null
-  if (result.state === 'NEEDS_REVIEW'
-    && (result.attemptCount < binding.baseAttempt || result.attemptCount > 8)) return null
+  if (result.outcome !== 'APPLIED' && result.outcome !== 'IDEMPOTENT') return null
+  if (result.state !== 'QUEUED' || result.version !== binding.baseVersion + 1
+    || result.attemptCount !== binding.baseAttempt || !noTerminalFields) return null
   return safeProjection(binding, result)
 }
 
@@ -84,18 +53,10 @@ function safeProjection(
     draftId: binding.draftId,
     payloadHash: binding.payloadHash,
     taskName: binding.taskName,
-    state: result.state,
+    state: 'QUEUED',
     version: result.version,
     attemptCount: result.attemptCount,
-    caseId: result.caseId,
-    confirmationStatus: result.confirmationStatus,
+    caseId: null,
+    confirmationStatus: null,
   }
-}
-
-function validCaseId(value: unknown): value is string {
-  return typeof value === 'string' && /^PMC-\d{6}-\d{4,}$/.test(value)
-}
-
-function validConfirmationStatus(value: unknown): value is MiniAppAsyncConfirmationStatus {
-  return value === 'CONFIRMED' || value === 'TENTATIVE' || value === 'AWAITING_ADMIN_SLOT'
 }

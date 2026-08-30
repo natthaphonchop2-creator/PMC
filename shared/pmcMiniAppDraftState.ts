@@ -2,7 +2,7 @@ import {
   canonicalMiniAppAsyncIdentity,
   type MiniAppAsyncConfirmationStatus,
   type MiniAppAsyncRequestRecordV1,
-} from './pmcMiniAppAsyncState'
+} from './pmcMiniAppAsyncState.js'
 
 export type MiniAppDraftStateOperation =
   | 'PREPARE_BEGIN' | 'PREPARE_READY' | 'PREPARE_PARTIAL' | 'CANCEL'

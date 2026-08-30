@@ -388,6 +388,35 @@ describe('PMC Mini App booking draft API', () => {
     expect(owner.operations()).toEqual(['CONFIRM_CLAIM', 'CONFIRM_COMPLETE'])
   })
 
+  it('never lets an ambiguous stale claim attach to a later CONFIRMING generation', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
+    deps.config.bookingProtocol.prepare = true
+    const ready = await createPreparedP2ReadyDraft(deps)
+    const staleClaimIngress: DraftStateIngressPort = {
+      mutate: vi.fn(async (input) => {
+        if (input.operation !== 'CONFIRM_CLAIM') throw new Error('unexpected operation')
+        const claimed = await deps.storeFixture.updateDraft('draft-1', 3, {
+          state: 'CONFIRMING', payloadHash: input.payloadHash, safeErrorCode: null, updatedAt: input.nowIso,
+        })
+        const failed = await deps.storeFixture.updateDraft('draft-1', claimed.version, {
+          state: 'FAILED_RETRYABLE', safeErrorCode: 'BOOKING_INGRESS_TIMEOUT', updatedAt: input.nowIso,
+        })
+        await deps.storeFixture.updateDraft('draft-1', failed.version, {
+          state: 'CONFIRMING', safeErrorCode: null, updatedAt: input.nowIso,
+        })
+        throw new Error('INJECTED_STALE_CLAIM_RESPONSE')
+      }),
+    }
+    deps.storeFixture.resetGetDraftCount()
+
+    const response = await confirmP2Draft({ ...deps, draftStateIngress: staleClaimIngress }, Number(ready.version))
+
+    expect(response).toEqual({ status: 503, body: { error: 'MINI_APP_STORAGE_UNAVAILABLE' } })
+    expect(deps.storeFixture.getDraftCount()).toBe(2)
+    expect(deps.storeFixture.read('draft-1')).toMatchObject({ state: 'CONFIRMING', version: 6 })
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+  })
+
   it('recovers an applied CONFIRM_COMPLETE response loss without repeating booking ingress', async () => {
     const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
     deps.config.bookingProtocol.prepare = true
@@ -871,21 +900,22 @@ describe('PMC Mini App booking draft API', () => {
     expect(deps.storeFixture.getDraftCount()).toBe(1)
   })
 
-  it('uses the actual processing projection returned by an idempotent queue result without rereading', async () => {
+  it('authoritatively rereads an idempotent processing result before acknowledgement', async () => {
     const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
     const ready = await createReadyDraft(deps)
     const base = deps.storeFixture.read('draft-1')!
     const stateIngress: AsyncStateIngressPort = {
-      mutate: vi.fn(async (mutation) => ({
-        requestId: mutation.requestId,
-        draftId: mutation.draftId,
-        state: 'PROCESSING',
-        version: base.version + 2,
-        attemptCount: base.attemptCount + 1,
-        caseId: null,
-        confirmationStatus: null,
-        outcome: 'IDEMPOTENT',
-      })),
+      mutate: vi.fn(async (mutation) => {
+        await deps.storeFixture.queueDraft(mutation.requestId, mutation.payloadHash, mutation.taskName!, mutation.nowIso)
+        deps.storeFixture.replace({
+          state: 'PROCESSING', version: base.version + 2, attemptCount: base.attemptCount + 1,
+        })
+        return {
+          requestId: mutation.requestId, draftId: mutation.draftId, state: 'PROCESSING',
+          version: base.version + 2, attemptCount: base.attemptCount + 1,
+          caseId: null, confirmationStatus: null, outcome: 'IDEMPOTENT',
+        }
+      }),
     }
     deps.storeFixture.resetGetDraftCount()
 
@@ -898,8 +928,43 @@ describe('PMC Mini App booking draft API', () => {
         projection: { state: 'PROCESSING', version: base.version + 2 },
       },
     })
-    expect(deps.storeFixture.getDraftCount()).toBe(1)
+    expect(deps.storeFixture.getDraftCount()).toBe(2)
   })
+
+  it.each(['PROCESSING', 'RETRYING', 'CONFIRMED'] as const)(
+    'rejects a %s queue result when the authoritative row has another task binding',
+    async (state) => {
+      const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
+      const ready = await createReadyDraft(deps)
+      const base = deps.storeFixture.read('draft-1')!
+      const stateIngress: AsyncStateIngressPort = {
+        mutate: vi.fn(async (mutation) => {
+          deps.storeFixture.replace({
+            state,
+            version: base.version + 2,
+            attemptCount: 1,
+            payloadHash: mutation.payloadHash,
+            taskName: 'task/wrong-binding',
+            caseId: state === 'CONFIRMED' ? 'PMC-202608-0001' : null,
+            confirmationStatus: state === 'CONFIRMED' ? 'CONFIRMED' : null,
+          })
+          return {
+            requestId: mutation.requestId, draftId: mutation.draftId, state,
+            version: base.version + 2, attemptCount: 1,
+            caseId: state === 'CONFIRMED' ? 'PMC-202608-0001' : null,
+            confirmationStatus: state === 'CONFIRMED' ? 'CONFIRMED' as const : null,
+            outcome: state === 'CONFIRMED' ? 'TERMINAL' as const : 'IDEMPOTENT' as const,
+          }
+        }),
+      }
+      deps.storeFixture.resetGetDraftCount()
+
+      const response = await confirmDraft({ ...deps, stateIngress }, Number(ready.body.version))
+
+      expect(response).toEqual({ status: 503, body: { error: 'MINI_APP_STORAGE_UNAVAILABLE' } })
+      expect(deps.storeFixture.getDraftCount()).toBe(2)
+    },
+  )
 
   it.each([
     ['BUSY', { state: 'PROCESSING' as const, versionOffset: 2, attemptOffset: 1, outcome: 'BUSY' as const }],

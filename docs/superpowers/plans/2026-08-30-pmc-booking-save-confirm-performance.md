@@ -417,7 +417,7 @@ export interface QueueFastPathBinding {
 }
 ```
 
-APPLIED accepts only QUEUED/base+1/unchanged attempt. IDEMPOTENT additionally accepts PROCESSING/RETRYING at version ≥ base+2 and attempt base+1…8. Use returned state/version/attempt. BUSY/invalid/uncertain returns null. Bind local deterministic task name and payload hash before mutation.
+APPLIED accepts only QUEUED/base+1/unchanged attempt. IDEMPOTENT accepts only the same exact QUEUED projection because the deployed v1 result does not carry persisted task-name binding; PROCESSING/RETRYING/terminal outcomes return null and perform one authoritative reread. Use returned state/version/attempt only on the trusted QUEUED path. BUSY/invalid/uncertain returns null. Bind local deterministic task name and payload hash before mutation.
 
 The synchronous confirm claim that competes with cancellation is also owner-fenced before this task can claim the complete row state machine is cross-instance safe.
 

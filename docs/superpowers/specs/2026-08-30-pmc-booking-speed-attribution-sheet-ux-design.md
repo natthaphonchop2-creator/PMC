@@ -214,9 +214,9 @@ The UI cannot show success before both are known or recovered idempotently.
 
 - bind the locally returned deterministic task name and payload hash before calling state ingress;
 - `APPLIED` is accepted only when state is `QUEUED`, version equals base version + 1, and attempt count is unchanged;
-- `IDEMPOTENT` is accepted when request/draft IDs and payload bindings match and the state is `QUEUED`, `PROCESSING`, or `RETRYING`; `QUEUED` requires version base + 1 and unchanged attempt, while processing/retrying requires version at least base + 2 and attempt count in the valid worker range;
+- `IDEMPOTENT` fast path is accepted only for exact `QUEUED` base+1/unchanged-attempt while the version-1 owner result cannot carry a persisted task-name attestation. `PROCESSING`, `RETRYING`, and terminal outcomes fall back to exactly one authoritative reread; a later versioned owner-result contract may restore those no-reread cases.
 - use the actual returned state/version/attempt in the safe projection rather than claiming `QUEUED` after a worker has already claimed it;
-- terminal outcomes return only an exact valid terminal projection; `BUSY`, unknown state/version, missing binding, or impossible attempt falls back to authoritative reread;
+- terminal outcomes, `BUSY`, unknown state/version, missing binding, or impossible attempt fall back to authoritative reread;
 - construct the safe response from the trusted current draft, local task binding, and validated ingress result;
 - return `202` without an additional full `MINI_APP_REQUESTS` Sheet reread.
 

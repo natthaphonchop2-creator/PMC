@@ -9,8 +9,6 @@ describe('validatedQueueFastPath', () => {
   it.each([
     ['APPLIED queue', result({ outcome: 'APPLIED', state: 'QUEUED', version: 5, attemptCount: 0 })],
     ['IDEMPOTENT queue', result({ outcome: 'IDEMPOTENT', state: 'QUEUED', version: 5, attemptCount: 0 })],
-    ['IDEMPOTENT processing', result({ outcome: 'IDEMPOTENT', state: 'PROCESSING', version: 6, attemptCount: 1 })],
-    ['IDEMPOTENT retrying', result({ outcome: 'IDEMPOTENT', state: 'RETRYING', version: 9, attemptCount: 4 })],
   ] as const)('accepts an exact %s projection', (_label, ingressResult) => {
     expect(validatedQueueFastPath(binding(), ingressResult)).toEqual({
       requestId: 'request-1',
@@ -30,6 +28,8 @@ describe('validatedQueueFastPath', () => {
     ['APPLIED queue wrong version', result({ outcome: 'APPLIED', state: 'QUEUED', version: 6, attemptCount: 0 })],
     ['APPLIED queue wrong attempt', result({ outcome: 'APPLIED', state: 'QUEUED', version: 5, attemptCount: 1 })],
     ['IDEMPOTENT queue wrong version', result({ outcome: 'IDEMPOTENT', state: 'QUEUED', version: 4, attemptCount: 0 })],
+    ['IDEMPOTENT processing', result({ outcome: 'IDEMPOTENT', state: 'PROCESSING', version: 6, attemptCount: 1 })],
+    ['IDEMPOTENT retrying', result({ outcome: 'IDEMPOTENT', state: 'RETRYING', version: 9, attemptCount: 4 })],
     ['IDEMPOTENT processing old version', result({ outcome: 'IDEMPOTENT', state: 'PROCESSING', version: 5, attemptCount: 1 })],
     ['IDEMPOTENT processing unchanged attempt', result({ outcome: 'IDEMPOTENT', state: 'PROCESSING', version: 6, attemptCount: 0 })],
     ['IDEMPOTENT retry beyond worker limit', result({ outcome: 'IDEMPOTENT', state: 'RETRYING', version: 14, attemptCount: 9 })],
@@ -60,14 +60,8 @@ describe('validatedQueueFastPath', () => {
     ['NEEDS_REVIEW', result({ outcome: 'TERMINAL', state: 'NEEDS_REVIEW', version: 7, attemptCount: 1 })],
     ['CANCELLED', result({ outcome: 'TERMINAL', state: 'CANCELLED', version: 5, attemptCount: 0 })],
     ['EXPIRED', result({ outcome: 'TERMINAL', state: 'EXPIRED', version: 5, attemptCount: 0 })],
-  ] as const)('accepts a coherent terminal %s projection', (_label, ingressResult) => {
-    expect(validatedQueueFastPath(binding(), ingressResult)).toMatchObject({
-      state: ingressResult.state,
-      version: ingressResult.version,
-      attemptCount: ingressResult.attemptCount,
-      caseId: ingressResult.caseId,
-      confirmationStatus: ingressResult.confirmationStatus,
-    })
+  ] as const)('requires an authoritative reread for coherent terminal %s', (_label, ingressResult) => {
+    expect(validatedQueueFastPath(binding(), ingressResult)).toBeNull()
   })
 
   it.each([

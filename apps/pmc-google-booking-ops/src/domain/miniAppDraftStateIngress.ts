@@ -13,16 +13,10 @@ import {
   type MiniAppNormalizedBookingInputV2,
   type UnsignedMiniAppDraftStateEnvelope,
 } from '../../../../shared/pmcMiniAppDraftState'
-import type { MiniAppAsyncRequestRecord } from '../../../../shared/pmcMiniAppAsyncState'
-import type { BookingPorts, StaffConfig } from '../ports'
+import type { PmcMiniAppTargetRequestRecord } from '../../../../shared/pmcBookingRowContracts'
+import type { BookingPorts, MiniAppRequestStateRecord, StaffConfig } from '../ports'
 
-type P2Record = MiniAppAsyncRequestRecord & {
-  protocolVersion: 2
-  recorderName: string
-  adminId: string
-  adminName: string
-  aeId: string | null
-}
+type P2Record = PmcMiniAppTargetRequestRecord & { protocolVersion: 2 }
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'payload', 'signature'] as const
 const CANCEL_KEYS = ['operation', 'requestId', 'draftId', 'expectedVersion', 'expectedAttempt', 'nowIso'] as const
@@ -556,8 +550,8 @@ function referenceCount(record: P2Record): number {
   return record.paymentEvidenceFileIds.length + record.chatEvidenceFileIds.length
     + record.paymentEvidenceObjectKeys.length + record.chatEvidenceObjectKeys.length
 }
-function asP2Record(value: MiniAppAsyncRequestRecord | null): P2Record | null {
-  if (!value || (value as Partial<P2Record>).protocolVersion !== 2 || typeof (value as Partial<P2Record>).recorderName !== 'string') return null
+function asP2Record(value: MiniAppRequestStateRecord | null): P2Record | null {
+  if (!value || !('protocolVersion' in value) || value.protocolVersion !== 2) return null
   return value as P2Record
 }
 function normalizedText(value: unknown, max: number): value is string {

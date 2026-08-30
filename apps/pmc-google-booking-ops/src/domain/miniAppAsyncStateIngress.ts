@@ -2,13 +2,13 @@ import {
   canonicalMiniAppAsyncIdentity,
   canonicalMiniAppAsyncStateIngress,
   canonicalMiniAppEvidenceProjection,
-  type MiniAppAsyncRequestRecord,
   type MiniAppAsyncStateIngressEnvelope,
   type MiniAppAsyncStateIngressResult,
   type MiniAppAsyncStateMutation,
   type UnsignedMiniAppAsyncStateIngressEnvelope,
 } from '../../../../shared/pmcMiniAppAsyncState'
-import type { BookingPorts } from '../ports'
+import { canonicalMiniAppP2BookingIdentity } from '../../../../shared/pmcMiniAppDraftState'
+import type { BookingPorts, MiniAppRequestStateRecord } from '../ports'
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'payload', 'signature'] as const
 const PAYLOAD_KEYS = [
@@ -80,11 +80,11 @@ function validatePayloadShape(payload: MiniAppAsyncStateMutation): void {
 }
 
 function validateImmutableBindings(
-  current: MiniAppAsyncRequestRecord,
+  current: MiniAppRequestStateRecord,
   payload: MiniAppAsyncStateMutation,
   ports: BookingPorts,
 ): void {
-  const persistedHash = current.payloadHash ?? ports.crypto.sha256Base64Url(canonicalMiniAppAsyncIdentity(current))
+  const persistedHash = current.payloadHash ?? ports.crypto.sha256Base64Url(canonicalRequestIdentity(current))
   if (persistedHash !== payload.payloadHash
     || !sameStrings(current.paymentEvidenceObjectKeys, payload.paymentEvidenceObjectKeys)
     || !sameStrings(current.chatEvidenceObjectKeys, payload.chatEvidenceObjectKeys)) {
@@ -93,10 +93,10 @@ function validateImmutableBindings(
 }
 
 function applyMutation(
-  current: MiniAppAsyncRequestRecord,
+  current: MiniAppRequestStateRecord,
   payload: MiniAppAsyncStateMutation,
   ports: BookingPorts,
-): { write: boolean; next: MiniAppAsyncRequestRecord; outcome: MiniAppAsyncStateIngressResult['outcome'] } {
+): { write: boolean; next: MiniAppRequestStateRecord; outcome: MiniAppAsyncStateIngressResult['outcome'] } {
   if (payload.operation === 'EXHAUST') return applyExhaust(current, payload, ports)
   if (TERMINAL_STATES.has(current.state)) return { write: false, next: current, outcome: 'TERMINAL' }
   if (payload.operation === 'QUEUE') return applyQueue(current, payload)
@@ -107,7 +107,7 @@ function applyMutation(
   return applyComplete(current, payload, ports)
 }
 
-function applyQueue(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyQueue(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation) {
   if (current.state === 'QUEUED' && current.version === payload.expectedVersion + 1
     && current.taskName === payload.taskName && current.payloadHash === payload.payloadHash) return unchanged(current)
   if ((current.state === 'PROCESSING' || current.state === 'RETRYING') && current.payloadHash === payload.payloadHash) {
@@ -121,7 +121,7 @@ function applyQueue(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
   })
 }
 
-function applyClaim(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyClaim(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation) {
   requireLeaseFields(payload)
   if (current.state === 'PROCESSING') {
     if (current.processingOwnerToken === payload.leaseOwnerToken
@@ -145,7 +145,7 @@ function applyClaim(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
   })
 }
 
-function applyRenew(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyRenew(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation) {
   requireLeaseFields(payload)
   if (current.state === 'PROCESSING' && current.processingOwnerToken === payload.leaseOwnerToken
     && current.version === payload.expectedVersion + 1 && current.attemptCount === payload.expectedAttempt
@@ -156,7 +156,7 @@ function applyRenew(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
   })
 }
 
-function applyProject(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
+function applyProject(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   const completeEvidence = payload.paymentEvidenceFileIds.length === payload.paymentEvidenceObjectKeys.length
     && payload.chatEvidenceFileIds.length === payload.chatEvidenceObjectKeys.length
     && payload.evidenceCount === payload.paymentEvidenceFileIds.length + payload.chatEvidenceFileIds.length
@@ -176,7 +176,7 @@ function applyProject(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncS
   })
 }
 
-function applyRetry(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
+function applyRetry(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation) {
   if (!payload.safeErrorCode) throw new Error('mini app async retry rejected')
   const target = payload.taskAttempt === 8 || payload.safeErrorCode === 'RETRY_EXHAUSTED' ? 'NEEDS_REVIEW' : 'RETRYING'
   if (current.state === target && current.version === payload.expectedVersion + 1
@@ -188,7 +188,7 @@ function applyRetry(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncSta
   })
 }
 
-function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
+function applyComplete(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   if (!payload.caseId || !payload.confirmationStatus) throw new Error('mini app async completion rejected')
   if (payload.safeErrorCode !== null && payload.safeErrorCode !== 'DOWNSTREAM_RETRY') {
     throw new Error('mini app async completion rejected')
@@ -213,7 +213,7 @@ function applyComplete(current: MiniAppAsyncRequestRecord, payload: MiniAppAsync
   })
 }
 
-function applyExhaust(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
+function applyExhaust(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
   if (payload.taskAttempt !== 8 || payload.safeErrorCode !== 'RETRY_EXHAUSTED') {
     throw new Error('mini app async exhaustion rejected')
   }
@@ -241,7 +241,7 @@ function applyExhaust(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncS
   })
 }
 
-function projectionHash(current: MiniAppAsyncRequestRecord, ports: BookingPorts): string | null {
+function projectionHash(current: MiniAppRequestStateRecord, ports: BookingPorts): string | null {
   if (!current.payloadHash) return null
   return ports.crypto.sha256Base64Url(canonicalMiniAppEvidenceProjection({
     requestId: current.requestId,
@@ -256,7 +256,7 @@ function projectionHash(current: MiniAppAsyncRequestRecord, ports: BookingPorts)
 }
 
 function projectionBinding(
-  current: MiniAppAsyncRequestRecord,
+  current: MiniAppRequestStateRecord,
   payload: MiniAppAsyncStateMutation,
 ) {
   return {
@@ -271,7 +271,7 @@ function projectionBinding(
   }
 }
 
-function requireExpected(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation): void {
+function requireExpected(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation): void {
   if (current.version !== payload.expectedVersion || current.attemptCount !== payload.expectedAttempt) {
     throw new Error('stale mini app async state')
   }
@@ -284,7 +284,7 @@ function requireLeaseFields(payload: MiniAppAsyncStateMutation): void {
     || !payload.leaseUntil || until <= now || until - now > MAX_LEASE_MS) throw new Error('invalid mini app async lease')
 }
 
-function requireOwnedProcessing(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation): void {
+function requireOwnedProcessing(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation): void {
   requireExpected(current, payload)
   if (current.state !== 'PROCESSING' || !payload.leaseOwnerToken
     || current.processingOwnerToken !== payload.leaseOwnerToken
@@ -293,17 +293,23 @@ function requireOwnedProcessing(current: MiniAppAsyncRequestRecord, payload: Min
   }
 }
 
-function changed(current: MiniAppAsyncRequestRecord, patch: Partial<MiniAppAsyncRequestRecord>) {
+function changed(current: MiniAppRequestStateRecord, patch: Partial<MiniAppRequestStateRecord>) {
   return { write: true as const, next: { ...current, ...patch, version: current.version + 1 }, outcome: 'APPLIED' as const }
 }
-function unchanged(current: MiniAppAsyncRequestRecord) {
+function unchanged(current: MiniAppRequestStateRecord) {
   return { write: false as const, next: current, outcome: 'IDEMPOTENT' as const }
 }
-function result(record: MiniAppAsyncRequestRecord, outcome: MiniAppAsyncStateIngressResult['outcome']): MiniAppAsyncStateIngressResult {
+function result(record: MiniAppRequestStateRecord, outcome: MiniAppAsyncStateIngressResult['outcome']): MiniAppAsyncStateIngressResult {
   return {
     requestId: record.requestId, draftId: record.draftId, state: record.state, version: record.version,
     attemptCount: record.attemptCount, caseId: record.caseId, confirmationStatus: record.confirmationStatus, outcome,
   }
+}
+
+function canonicalRequestIdentity(record: MiniAppRequestStateRecord): string {
+  return 'protocolVersion' in record && record.protocolVersion === 2
+    ? canonicalMiniAppP2BookingIdentity({ ...record, protocolVersion: 2 })
+    : canonicalMiniAppAsyncIdentity(record)
 }
 function validObjectKeys(values: unknown, draftId: string, kind: 'PAYMENT' | 'CHAT'): values is string[] {
   const prefix = `drafts/${draftId}/${kind}/`
