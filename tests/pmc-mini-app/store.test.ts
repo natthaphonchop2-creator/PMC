@@ -330,6 +330,113 @@ describe('PMC Mini App Sheet store', () => {
     })
   })
 
+  it('retains prepare references on a terminal row without changing terminal or business fields', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    const original = validDraft({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], evidenceCount: 0,
+    })
+    await store.createDraft(original)
+    const bindingHash = 'p'.repeat(43)
+
+    const retained = await store.retainTerminalPrepareEvidence('draft-1', 1, {
+      bindingHash,
+      paymentEvidenceFileIds: [],
+      chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [prepareObjectKey('PAYMENT', 'a')],
+      chatEvidenceObjectKeys: [prepareObjectKey('CHAT', 'b')],
+      evidenceCount: 2,
+      updatedAt: '2026-08-30T10:00:00.000Z',
+    })
+
+    expect(retained).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: bindingHash,
+      paymentEvidenceObjectKeys: [prepareObjectKey('PAYMENT', 'a')],
+      chatEvidenceObjectKeys: [prepareObjectKey('CHAT', 'b')], evidenceCount: 2,
+      customerName: original.customerName, facebookName: original.facebookName, adminId: original.adminId,
+    })
+    expect(retained.version).toBe(2)
+  })
+
+  it('makes same-binding terminal retention idempotent, merges a canonical superset, and rejects another binding', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      state: 'EXPIRED', retentionState: 'PENDING_APPROVAL', paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], evidenceCount: 0,
+    }))
+    const bindingHash = 'q'.repeat(43)
+    const first = {
+      bindingHash,
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [prepareObjectKey('PAYMENT', 'a')], chatEvidenceObjectKeys: [],
+      evidenceCount: 1, updatedAt: '2026-08-30T10:00:00.000Z',
+    }
+    const retained = await store.retainTerminalPrepareEvidence('draft-1', 1, first)
+    const writesAfterFirst = sheets.updateCount()
+
+    await expect(store.retainTerminalPrepareEvidence('draft-1', 1, first)).resolves.toEqual(retained)
+    expect(sheets.updateCount()).toBe(writesAfterFirst)
+
+    const merged = await store.retainTerminalPrepareEvidence('draft-1', retained.version, {
+      ...first,
+      paymentEvidenceObjectKeys: [prepareObjectKey('PAYMENT', 'a'), prepareObjectKey('PAYMENT', 'c')],
+      chatEvidenceObjectKeys: [prepareObjectKey('CHAT', 'b')],
+      evidenceCount: 3,
+      updatedAt: '2026-08-30T10:01:00.000Z',
+    })
+    expect(merged).toMatchObject({
+      state: 'EXPIRED', evidenceCount: 3,
+      paymentEvidenceObjectKeys: [prepareObjectKey('PAYMENT', 'a'), prepareObjectKey('PAYMENT', 'c')],
+      chatEvidenceObjectKeys: [prepareObjectKey('CHAT', 'b')],
+    })
+    const authoritative = await store.getDraft('draft-1')
+    await expect(store.retainTerminalPrepareEvidence('draft-1', merged.version, {
+      ...first, bindingHash: 'r'.repeat(43),
+    })).rejects.toThrow('BOOKING_PREPARE_CONFLICT')
+    await expect(store.getDraft('draft-1')).resolves.toEqual(authoritative)
+  })
+
+  it('recovers the exact terminal retention projection after a lost Sheet response', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], evidenceCount: 0,
+    }))
+    sheets.loseNextUpdateResponse()
+
+    await expect(store.retainTerminalPrepareEvidence('draft-1', 1, {
+      bindingHash: 's'.repeat(43),
+      paymentEvidenceFileIds: ['drive-payment-1'], chatEvidenceFileIds: ['drive-chat-1'],
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], evidenceCount: 2,
+      updatedAt: '2026-08-30T10:00:00.000Z',
+    })).resolves.toMatchObject({
+      state: 'CANCELLED', evidenceProjectionHash: 's'.repeat(43), evidenceCount: 2,
+      paymentEvidenceFileIds: ['drive-payment-1'], chatEvidenceFileIds: ['drive-chat-1'],
+    })
+  })
+
+  it('rejects terminal retention references that are not bound to the exact draft and evidence kind', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], evidenceCount: 0,
+    }))
+
+    await expect(store.retainTerminalPrepareEvidence('draft-1', 1, {
+      bindingHash: 't'.repeat(43),
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [`drafts/other-draft/PAYMENT/${'a'.repeat(64)}.png`],
+      chatEvidenceObjectKeys: [], evidenceCount: 1, updatedAt: '2026-08-30T10:00:00.000Z',
+    })).rejects.toThrow('INVALID_BOOKING_PREPARE_RETENTION')
+    await expect(store.getDraft('draft-1')).resolves.toMatchObject({
+      state: 'CANCELLED', evidenceCount: 0, evidenceProjectionHash: null,
+    })
+  })
+
   it('resolves only active staff from the canonical LINE mapping', async () => {
     const sheets = new MemorySheets()
     sheets.setTab('CONFIG_STAFF', [
@@ -577,12 +684,14 @@ class MemorySheets implements MiniAppSheetsPort {
   private requestHeaders: unknown[] = [...ATTRIBUTION_V2_REQUEST_HEADERS]
   private updates = 0
   private failUpdate = false
+  private loseUpdateResponse = false
 
   setTab(tab: string, rows: unknown[][]): void { this.tabs.set(tab, structuredClone(rows)) }
   setRequestHeaders(headers: readonly unknown[]): void { this.requestHeaders = structuredClone([...headers]) }
   rows(tab: string): unknown[][] { return structuredClone(this.tabs.get(tab) ?? []) }
   updateCount(): number { return this.updates }
   failNextUpdate(): void { this.failUpdate = true }
+  loseNextUpdateResponse(): void { this.loseUpdateResponse = true }
 
   async batchGet(_spreadsheetId: string, ranges: string[]): Promise<Record<string, unknown[][]>> {
     return Object.fromEntries(ranges.map((range) => [range,
@@ -609,6 +718,10 @@ class MemorySheets implements MiniAppSheetsPort {
     const current = [...(this.tabs.get(tab) ?? [])]
     current[index] = structuredClone(rows[0] ?? [])
     this.tabs.set(tab, current)
+    if (this.loseUpdateResponse) {
+      this.loseUpdateResponse = false
+      throw new Error('SHEETS_RESPONSE_LOST')
+    }
   }
 
   async batchUpdate(spreadsheetId: string, data: Array<{ range: string; values: unknown[][] }>): Promise<void> {
@@ -617,6 +730,10 @@ class MemorySheets implements MiniAppSheetsPort {
 
   async getWorkbook(): Promise<Array<{ sheetId: number; title: string }>> { return [] }
   async applyWorkbookRequests(): Promise<void> { return undefined }
+}
+
+function prepareObjectKey(kind: 'PAYMENT' | 'CHAT', marker: string): string {
+  return `drafts/draft-1/${kind}/${marker.repeat(64)}.png`
 }
 
 function tabName(range: string): string {

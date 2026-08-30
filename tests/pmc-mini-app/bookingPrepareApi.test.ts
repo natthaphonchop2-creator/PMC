@@ -7,7 +7,12 @@ import {
 } from '../../server/pmc-mini-app/bookingPrepare'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
 import type { EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
-import type { MiniAppDraftPatch, MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
+import type {
+  MiniAppDraftPatch,
+  MiniAppPrepareEvidenceRetention,
+  MiniAppRequestRecord,
+  MiniAppStore,
+} from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App Booking prepare persistence', () => {
   it('stages async evidence with at most four concurrent puts and writes one ordered ready draft', async () => {
@@ -117,6 +122,52 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.staging!.putCount()).toBe(puts)
   })
 
+  it.each([
+    ['different normalized input', (input: PersistPrepareEvidenceInput) => ({
+      ...input, input: { ...input.input, customerName: 'ลูกค้าคนละราย' },
+    })],
+    ['different bytes', (input: PersistPrepareEvidenceInput) => ({
+      ...input, paymentFiles: [png(1), png(9), png(3)],
+    })],
+    ['different order', (input: PersistPrepareEvidenceInput) => ({
+      ...input, paymentFiles: [png(3), png(2), png(1)],
+    })],
+  ] as const)('keeps the first durable partial binding authoritative against concurrent %s', async (_label, change) => {
+    const fixture = prepareFixture('ASYNC')
+    const initial = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
+    const competingStaging = new DeferredStaging()
+    const competing = change({
+      ...initial,
+      persistence: { type: 'ASYNC' as const, staging: competingStaging },
+    })
+    const competingResult = persistPrepareEvidence(competing)
+    await competingStaging.entered()
+
+    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+    await expect(persistPrepareEvidence(initial)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    const authoritative = fixture.store.read()
+    const writes = fixture.store.writeCount()
+    competingStaging.release()
+
+    await expect(competingResult).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.store.read()).toEqual(authoritative)
+    expect(fixture.store.writeCount()).toBe(writes)
+  })
+
+  it('keeps a partial base-version binding authoritative over a changed recovery version', async () => {
+    const fixture = prepareFixture('ASYNC')
+    const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)] })
+    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    const authoritative = fixture.store.read()
+    const puts = fixture.staging!.putCount()
+
+    await expect(persistPrepareEvidence({ ...input, draft: authoritative, version: 2 }))
+      .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.store.read()).toEqual(authoritative)
+    expect(fixture.staging!.putCount()).toBe(puts)
+  })
+
   it('serializes synchronous Apps Script ingress and writes only one final ready draft', async () => {
     const fixture = prepareFixture('SYNC')
 
@@ -146,6 +197,59 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.ingress!.createdCount()).toBe(4)
     expect(fixture.ingress!.maxActive()).toBe(1)
     expect(fixture.store.writeCount()).toBe(2)
+  })
+
+  it('retains every async object without reopening when cancellation overtakes in-flight staging', async () => {
+    const fixture = prepareFixture('ASYNC')
+    const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
+    fixture.staging!.afterFirstCreate(() => fixture.store.commitTerminal('CANCELLED'))
+
+    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+
+    const terminal = fixture.store.read()
+    expect(terminal).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceCount: 4,
+      customerName: '', facebookName: '', adminId: '', adminName: '',
+    })
+    expect(terminal.paymentEvidenceObjectKeys).toEqual([
+      objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
+    ])
+    expect(terminal.chatEvidenceObjectKeys).toEqual([objectKey('CHAT', jpeg(4).bytes)])
+    const puts = fixture.staging!.putCount()
+    const writes = fixture.store.writeCount()
+
+    await expect(persistPrepareEvidence({ ...input, draft: terminal }))
+      .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.store.read()).toEqual(terminal)
+    expect(fixture.staging!.putCount()).toBe(puts)
+    expect(fixture.store.writeCount()).toBe(writes)
+  })
+
+  it('retains every synchronous Drive file without reopening when expiry overtakes the final mutation', async () => {
+    const fixture = prepareFixture('SYNC')
+    const input = fixture.input({ paymentFiles: [png(1), png(2)], chatFiles: [jpeg(3), jpeg(4)] })
+    const finalWrite = fixture.store.pauseNextUpdate()
+    const result = persistPrepareEvidence(input)
+    await finalWrite.entered
+    fixture.store.commitTerminal('EXPIRED')
+    finalWrite.release()
+
+    await expect(result).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    const terminal = fixture.store.read()
+    expect(terminal).toMatchObject({
+      state: 'EXPIRED', retentionState: 'PENDING_APPROVAL', evidenceCount: 4,
+      customerName: '', facebookName: '', adminId: '', adminName: '',
+      paymentEvidenceFileIds: ['drive-file-01', 'drive-file-02'],
+      chatEvidenceFileIds: ['drive-file-03', 'drive-file-04'],
+    })
+    const calls = fixture.ingress!.callCount()
+    const writes = fixture.store.writeCount()
+
+    await expect(persistPrepareEvidence({ ...input, draft: terminal }))
+      .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.store.read()).toEqual(terminal)
+    expect(fixture.ingress!.callCount()).toBe(calls)
+    expect(fixture.store.writeCount()).toBe(writes)
   })
 
   it.each(['CANCELLED', 'EXPIRED'] as const)('keeps %s evidence pending approval without remote or draft mutation', async (state) => {
@@ -196,16 +300,41 @@ class PrepareStore implements MiniAppStore {
   private current: MiniAppRequestRecord
   private writes = 0
   private loseUpdate = false
+  private updateGate: { entered: () => void; wait: Promise<void> } | null = null
 
   constructor(initial: MiniAppRequestRecord) { this.current = structuredClone(initial) }
   read(): MiniAppRequestRecord { return structuredClone(this.current) }
   writeCount(): number { return this.writes }
   loseFirstUpdateResponse(): void { this.loseUpdate = true }
+  pauseNextUpdate(): { entered: Promise<void>; release(): void } {
+    let entered!: () => void
+    let release!: () => void
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
+    const wait = new Promise<void>((resolve) => { release = resolve })
+    this.updateGate = { entered, wait }
+    return { entered: enteredPromise, release }
+  }
+  commitTerminal(state: 'CANCELLED' | 'EXPIRED'): void {
+    this.current = {
+      ...this.current,
+      state,
+      retentionState: 'PENDING_APPROVAL',
+      version: this.current.version + 1,
+      updatedAt: '2026-08-30T10:00:00.000Z',
+    }
+    this.writes += 1
+  }
   async getActiveStaffByLineUserId(): Promise<never> { throw new Error('not used') }
   async getActiveBookingConfig(): Promise<never> { throw new Error('not used') }
   async createDraft(value: MiniAppRequestRecord) { this.current = structuredClone(value); return this.read() }
   async getDraft(draftId: string) { return draftId === this.current.draftId ? this.read() : null }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {
+    if (this.updateGate) {
+      const gate = this.updateGate
+      this.updateGate = null
+      gate.entered()
+      await gate.wait
+    }
     if (draftId !== this.current.draftId) throw new Error('DRAFT_NOT_FOUND')
     if (expectedVersion !== this.current.version) throw new Error('STALE_DRAFT_VERSION')
     this.current = { ...this.current, ...structuredClone(patch), version: this.current.version + 1 }
@@ -214,6 +343,32 @@ class PrepareStore implements MiniAppStore {
       this.loseUpdate = false
       throw new Error('SHEETS_RESPONSE_LOST')
     }
+    return this.read()
+  }
+  async retainTerminalPrepareEvidence(
+    draftId: string,
+    expectedVersion: number,
+    input: MiniAppPrepareEvidenceRetention,
+  ) {
+    if (draftId !== this.current.draftId) throw new Error('DRAFT_NOT_FOUND')
+    if (expectedVersion !== this.current.version) throw new Error('STALE_DRAFT_VERSION')
+    if (this.current.state !== 'CANCELLED' && this.current.state !== 'EXPIRED') throw new Error('INVALID_DRAFT_TRANSITION')
+    if (this.current.evidenceProjectionHash && this.current.evidenceProjectionHash !== input.bindingHash) {
+      throw new Error('BOOKING_PREPARE_CONFLICT')
+    }
+    this.current = {
+      ...this.current,
+      retentionState: 'PENDING_APPROVAL',
+      paymentEvidenceFileIds: [...input.paymentEvidenceFileIds],
+      chatEvidenceFileIds: [...input.chatEvidenceFileIds],
+      paymentEvidenceObjectKeys: [...input.paymentEvidenceObjectKeys],
+      chatEvidenceObjectKeys: [...input.chatEvidenceObjectKeys],
+      evidenceCount: input.evidenceCount,
+      evidenceProjectionHash: input.bindingHash,
+      updatedAt: input.updatedAt,
+      version: this.current.version + 1,
+    }
+    this.writes += 1
     return this.read()
   }
   async markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string) {
@@ -230,11 +385,13 @@ class PrepareStaging implements EvidenceStagingPort {
   private active = 0
   private highWater = 0
   private calls = 0
+  private firstCreateHook: (() => void) | null = null
 
   failOnce(key: string): void { this.oneTimeFailures.add(key) }
   maxActive(): number { return this.highWater }
   putCount(): number { return this.calls }
   createdCount(): number { return this.objects.size }
+  afterFirstCreate(hook: () => void): void { this.firstCreateHook = hook }
 
   async put(input: Parameters<EvidenceStagingPort['put']>[0]) {
     this.calls += 1
@@ -245,6 +402,11 @@ class PrepareStaging implements EvidenceStagingPort {
       await new Promise((resolve) => setTimeout(resolve, 4))
       if (this.oneTimeFailures.delete(key)) throw new Error('CONTROLLED_STAGE_FAILURE')
       this.objects.add(key)
+      if (this.firstCreateHook) {
+        const hook = this.firstCreateHook
+        this.firstCreateHook = null
+        hook()
+      }
       return { objectKey: key, size: input.bytes.length, contentSha256: sha256(input.bytes) }
     } finally {
       this.active -= 1
@@ -252,6 +414,28 @@ class PrepareStaging implements EvidenceStagingPort {
   }
   async get(): Promise<never> { throw new Error('not used') }
   async deleteVerified(): Promise<void> { throw new Error('must retain for approval') }
+}
+
+class DeferredStaging extends PrepareStaging {
+  private readonly enteredPromise: Promise<void>
+  private enteredResolve!: () => void
+  private readonly waitPromise: Promise<void>
+  private releaseResolve!: () => void
+
+  constructor() {
+    super()
+    this.enteredPromise = new Promise((resolve) => { this.enteredResolve = resolve })
+    this.waitPromise = new Promise((resolve) => { this.releaseResolve = resolve })
+  }
+
+  entered(): Promise<void> { return this.enteredPromise }
+  release(): void { this.releaseResolve() }
+
+  override async put(input: Parameters<EvidenceStagingPort['put']>[0]) {
+    this.enteredResolve()
+    await this.waitPromise
+    return super.put(input)
+  }
 }
 
 class PrepareIngress implements EvidenceIngressPort {
