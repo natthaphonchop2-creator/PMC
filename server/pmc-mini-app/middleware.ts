@@ -36,7 +36,8 @@ import {
   type PersistPrepareEvidenceInput,
 } from './bookingPrepare.js'
 import type { DraftStateIngressPort } from './draftStateIngressClient.js'
-import type { MiniAppDraftStateResult } from '../../shared/pmcMiniAppDraftState.js'
+import type { MiniAppDraftStateMutation, MiniAppDraftStateResult } from '../../shared/pmcMiniAppDraftState.js'
+import { validatedQueueFastPath, type SafeQueueProjection } from './queuedProjection.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
@@ -604,7 +605,11 @@ async function handleBookingDraftRoute(
   }
   const retryingConfirmation = route.action === 'CONFIRM' && version < draft.version
     && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED' || confirmedWithRetryResult(draft) !== null)
-  if (version !== draft.version && !retryingConfirmation) {
+  const recoveringOwnerConfirmation = route.action === 'CONFIRM' && !asyncOwner
+    && deps.config.bookingProtocol.prepare && draft.protocolVersion === 2
+    && draft.state === 'CONFIRMING' && version <= draft.version
+    && draft.payloadHash === bookingPayloadHash(draft)
+  if (version !== draft.version && !retryingConfirmation && !recoveringOwnerConfirmation) {
     if (
       route.action === 'CANCEL' && version < draft.version
       && draft.state === 'CANCELLED' && draft.retentionState === 'PENDING_APPROVAL'
@@ -694,7 +699,9 @@ async function handleBookingDraftRoute(
     respond(res, 200, retryTerminal)
     return
   }
-  if (draft.state !== 'READY_TO_CONFIRM' && draft.state !== 'FAILED_RETRYABLE') {
+  const ownerFencedSync = !asyncOwner && deps.config.bookingProtocol.prepare && draft.protocolVersion === 2
+  if (draft.state !== 'READY_TO_CONFIRM' && draft.state !== 'FAILED_RETRYABLE'
+    && !(ownerFencedSync && draft.state === 'CONFIRMING')) {
     respond(res, 409, { error: 'DRAFT_NOT_READY' })
     return
   }
@@ -733,20 +740,46 @@ async function handleBookingDraftRoute(
       chatEvidenceFileIds: [...draft.chatEvidenceFileIds], evidenceCount: draft.evidenceCount,
       safeErrorCode: null, caseId: null, confirmationStatus: null,
     }
+    const queueBinding = {
+      requestId: draft.requestId,
+      draftId: draft.draftId,
+      payloadHash,
+      taskName: task.taskName,
+      baseVersion: draft.version,
+      baseAttempt: draft.attemptCount,
+    }
+    let trustedProjection: SafeQueueProjection | null = null
     try {
-      await deps.stateIngress.mutate(queueMutation)
+      trustedProjection = validatedQueueFastPath(queueBinding, await deps.stateIngress.mutate(queueMutation))
     } catch { /* persisted reread below resolves response loss */ }
-    let persisted: MiniAppRequestRecord | null
-    try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
-    if (persisted && validQueuedPersistence(draft, persisted, payloadHash)) {
+    let persisted = trustedProjection ? applyQueueProjection(draft, trustedProjection, nowIso) : null
+    if (!persisted) {
+      try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
+      if (!persisted || !validQueuedPersistence(draft, persisted, payloadHash, task.taskName)) persisted = null
+    }
+    if (persisted) {
       const terminal = confirmedWithRetryResult(persisted)
       emitAsyncTelemetry(deps, 'booking_task_enqueued', {
-        requestId: persisted.requestId, draftId: persisted.draftId, attempt: 1, state: persisted.state,
+        requestId: persisted.requestId, draftId: persisted.draftId,
+        attempt: Math.max(1, persisted.attemptCount), state: persisted.state,
         fileCount: persisted.evidenceCount, elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
       })
-      if (terminal) respond(res, 200, terminal)
+      if (persisted.state === 'CONFIRMED' && persisted.caseId && persisted.confirmationStatus) {
+        respond(res, 200, { caseId: persisted.caseId, status: persisted.confirmationStatus })
+      } else if (terminal) respond(res, 200, terminal)
+      else if (persisted.state === 'CANCELLED' || persisted.state === 'EXPIRED') {
+        respond(res, 409, { error: 'DRAFT_NOT_READY' })
+      }
       else respond(res, 202, queuedAcknowledgement(persisted))
     } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+  if (ownerFencedSync) {
+    if (!deps.draftStateIngress) {
+      respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
+      return
+    }
+    await confirmOwnerFencedP2(draft, payloadHash, { ...deps, draftStateIngress: deps.draftStateIngress }, res)
     return
   }
   try {
@@ -769,6 +802,189 @@ async function handleBookingDraftRoute(
   }
 }
 
+async function confirmOwnerFencedP2(
+  draft: MiniAppRequestRecord,
+  payloadHash: string,
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+  res: ServerResponse,
+): Promise<void> {
+  const claim = draft.state === 'CONFIRMING'
+    ? validConfirmingDraft(draft, payloadHash) ? draft : null
+    : await claimOwnerConfirmation(draft, payloadHash, deps)
+  if (!claim) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+  if (claim.state === 'CONFIRMED' && claim.caseId && claim.confirmationStatus) {
+    respond(res, 200, { caseId: claim.caseId, status: claim.confirmationStatus })
+    return
+  }
+  if (claim.state === 'CANCELLED' || claim.state === 'EXPIRED') {
+    respond(res, 409, { error: 'DRAFT_NOT_READY' })
+    return
+  }
+  if (claim.state !== 'CONFIRMING') {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+
+  let bookingResult: Awaited<ReturnType<NonNullable<PmcMiniAppMiddlewareDependencies['ingress']>['send']>>
+  try {
+    bookingResult = await deps.ingress!.send(claim)
+  } catch (error) {
+    const code = safeIngressError(error)
+    const failure = await failOwnerConfirmation(claim, payloadHash, code, deps)
+    if (failure?.state === 'CONFIRMED' && failure.caseId && failure.confirmationStatus) {
+      respond(res, 200, { caseId: failure.caseId, status: failure.confirmationStatus })
+      return
+    }
+    if (!failure || failure.state !== 'FAILED_RETRYABLE' || failure.safeErrorCode !== code) {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      return
+    }
+    respond(res, code === 'BOOKING_INGRESS_TIMEOUT' ? 504 : 502, { error: code })
+    return
+  }
+
+  const completed = await completeOwnerConfirmation(claim, payloadHash, bookingResult, deps)
+  if (completed?.state === 'CONFIRMED' && completed.caseId === bookingResult.caseId
+    && completed.confirmationStatus === bookingResult.status) {
+    respond(res, 200, bookingResult)
+    return
+  }
+  respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+}
+
+async function claimOwnerConfirmation(
+  draft: MiniAppRequestRecord,
+  payloadHash: string,
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+): Promise<MiniAppRequestRecord | null> {
+  const nowIso = currentIso(deps)
+  const mutation: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_CLAIM' }> = {
+    operation: 'CONFIRM_CLAIM', requestId: draft.requestId, draftId: draft.draftId,
+    expectedVersion: draft.version, expectedAttempt: draft.attemptCount, nowIso, payloadHash,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(draft), state: 'CONFIRMING', payloadHash, safeErrorCode: null,
+    updatedAt: nowIso, version: draft.version + 1,
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trustedOwnerResult(result, expected)) return expected
+  } catch { /* exactly one authoritative reread below */ }
+
+  const reread = await readOwnerDraft(draft, deps)
+  if (!reread) return null
+  if (validConfirmingDraft(reread, payloadHash)) return reread
+  if (validConfirmedDraft(reread, payloadHash) || reread.state === 'CANCELLED' || reread.state === 'EXPIRED') return reread
+  if (projectionDigest(reread) !== projectionDigest(draft)) return null
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    return trustedOwnerResult(result, expected) ? expected : null
+  } catch { return null }
+}
+
+async function completeOwnerConfirmation(
+  claimed: MiniAppRequestRecord,
+  payloadHash: string,
+  bookingResult: { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> },
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+): Promise<MiniAppRequestRecord | null> {
+  const nowIso = currentIso(deps)
+  const mutation: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_COMPLETE' }> = {
+    operation: 'CONFIRM_COMPLETE', requestId: claimed.requestId, draftId: claimed.draftId,
+    expectedVersion: claimed.version, expectedAttempt: claimed.attemptCount, nowIso, payloadHash,
+    caseId: bookingResult.caseId, confirmationStatus: bookingResult.status,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(claimed), state: 'CONFIRMED', caseId: bookingResult.caseId,
+    confirmationStatus: bookingResult.status, confirmedAt: nowIso, safeErrorCode: null,
+    updatedAt: nowIso, version: claimed.version + 1,
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trustedOwnerResult(result, expected)) return expected
+  } catch { /* exactly one authoritative reread below */ }
+
+  const reread = await readOwnerDraft(claimed, deps)
+  if (!reread) return null
+  if (validCompletedDraft(reread, payloadHash, bookingResult)) return reread
+  if (!validConfirmingDraft(reread, payloadHash) || projectionDigest(reread) !== projectionDigest(claimed)) return null
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    return trustedOwnerResult(result, expected) ? expected : null
+  } catch { return null }
+}
+
+async function failOwnerConfirmation(
+  claimed: MiniAppRequestRecord,
+  payloadHash: string,
+  safeErrorCode: string,
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+): Promise<MiniAppRequestRecord | null> {
+  const nowIso = currentIso(deps)
+  const mutation: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_FAIL' }> = {
+    operation: 'CONFIRM_FAIL', requestId: claimed.requestId, draftId: claimed.draftId,
+    expectedVersion: claimed.version, expectedAttempt: claimed.attemptCount, nowIso, payloadHash, safeErrorCode,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(claimed), state: 'FAILED_RETRYABLE', safeErrorCode,
+    updatedAt: nowIso, version: claimed.version + 1,
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trustedOwnerResult(result, expected)) return expected
+  } catch { /* exactly one authoritative reread below */ }
+
+  const reread = await readOwnerDraft(claimed, deps)
+  if (!reread) return null
+  if (reread.state === 'FAILED_RETRYABLE' && reread.payloadHash === payloadHash
+    && reread.safeErrorCode === safeErrorCode) return reread
+  if (validConfirmedDraft(reread, payloadHash)) return reread
+  if (!validConfirmingDraft(reread, payloadHash) || projectionDigest(reread) !== projectionDigest(claimed)) return null
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    return trustedOwnerResult(result, expected) ? expected : null
+  } catch { return null }
+}
+
+function trustedOwnerResult(result: MiniAppDraftStateResult, expected: MiniAppRequestRecord): boolean {
+  return result.requestId === expected.requestId && result.draftId === expected.draftId
+    && result.state === expected.state && result.version === expected.version
+    && result.projectionDigest === projectionDigest(expected)
+    && (result.outcome === 'APPLIED' || result.outcome === 'IDEMPOTENT')
+}
+
+async function readOwnerDraft(
+  expectedOwner: MiniAppRequestRecord,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<MiniAppRequestRecord | null> {
+  try {
+    const reread = await deps.store.getDraft(expectedOwner.draftId)
+    return reread?.staffId === expectedOwner.staffId && reread.requestId === expectedOwner.requestId ? reread : null
+  } catch { return null }
+}
+
+function validConfirmingDraft(draft: MiniAppRequestRecord, payloadHash: string): boolean {
+  return draft.protocolVersion === 2 && draft.state === 'CONFIRMING'
+    && draft.payloadHash === payloadHash && bookingPayloadHash(draft) === payloadHash
+}
+
+function validConfirmedDraft(draft: MiniAppRequestRecord, payloadHash: string): boolean {
+  return draft.state === 'CONFIRMED' && draft.payloadHash === payloadHash && bookingPayloadHash(draft) === payloadHash
+    && /^PMC-\d{6}-\d{4,}$/.test(draft.caseId ?? '') && isConfirmationStatus(draft.confirmationStatus)
+}
+
+function validCompletedDraft(
+  draft: MiniAppRequestRecord,
+  payloadHash: string,
+  bookingResult: { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> },
+): boolean {
+  return validConfirmedDraft(draft, payloadHash)
+    && draft.caseId === bookingResult.caseId && draft.confirmationStatus === bookingResult.status
+}
+
 function isBoundAsyncConfirmation(draft: MiniAppRequestRecord): boolean {
   return (draft.state === 'QUEUED' || draft.state === 'PROCESSING' || draft.state === 'RETRYING')
     && typeof draft.payloadHash === 'string'
@@ -781,6 +997,7 @@ function validQueuedPersistence(
   before: MiniAppRequestRecord,
   persisted: MiniAppRequestRecord,
   payloadHash: string,
+  taskName: string,
 ): boolean {
   return persisted.requestId === before.requestId && persisted.draftId === before.draftId
     && persisted.payloadHash === payloadHash && bookingPayloadHash(persisted) === payloadHash
@@ -795,10 +1012,36 @@ function validQueuedPersistence(
     && persisted.depositAmount === before.depositAmount && persisted.channelId === before.channelId
     && sameStringArray(persisted.paymentEvidenceObjectKeys, before.paymentEvidenceObjectKeys)
     && sameStringArray(persisted.chatEvidenceObjectKeys, before.chatEvidenceObjectKeys)
+    && persisted.taskName === taskName
     && (
       ['QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMED', 'NEEDS_REVIEW'].includes(persisted.state)
       || confirmedWithRetryResult(persisted) !== null
     )
+}
+
+function applyQueueProjection(
+  draft: MiniAppRequestRecord,
+  projection: SafeQueueProjection,
+  queuedAt: string,
+): MiniAppRequestRecord {
+  return {
+    ...structuredClone(draft),
+    state: projection.state,
+    version: projection.version,
+    attemptCount: projection.attemptCount,
+    payloadHash: projection.payloadHash,
+    taskName: projection.taskName,
+    queuedAt: draft.queuedAt ?? queuedAt,
+    caseId: projection.caseId,
+    confirmationStatus: projection.confirmationStatus,
+    safeErrorCode: projection.state === 'CONFIRMED_WITH_RETRY' ? 'DOWNSTREAM_RETRY'
+      : projection.state === 'NEEDS_REVIEW' ? 'RETRY_EXHAUSTED'
+        : draft.safeErrorCode,
+    retentionState: projection.state === 'CANCELLED' || projection.state === 'EXPIRED'
+      ? 'PENDING_APPROVAL'
+      : draft.retentionState,
+    updatedAt: queuedAt,
+  }
 }
 
 function confirmedWithRetryResult(draft: MiniAppRequestRecord): { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> } | null {

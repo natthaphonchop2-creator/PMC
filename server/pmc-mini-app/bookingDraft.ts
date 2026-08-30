@@ -7,6 +7,7 @@ import {
   canonicalMiniAppEvidenceProjection,
   type MiniAppEvidenceProjectionBinding,
 } from '../../shared/pmcMiniAppAsyncState.js'
+import { canonicalMiniAppP2BookingIdentity } from '../../shared/pmcMiniAppDraftState.js'
 
 export interface BookingDraftContext {
   draftId: string
@@ -194,17 +195,9 @@ export function parseBookingDraftV2(input: unknown, context: BookingDraftContext
 }
 
 export function bookingPayloadHash(draft: MiniAppRequestRecord): string {
-  const legacyIdentity = canonicalMiniAppAsyncIdentity(draft)
-  const canonical = draft.protocolVersion !== 2 ? legacyIdentity : JSON.stringify({
-    protocolVersion: draft.protocolVersion,
-    staffId: draft.staffId,
-    recorderName: draft.recorderName,
-    adminId: draft.adminId,
-    adminName: draft.adminName,
-    aeId: draft.aeId,
-    aeName: draft.aeName,
-    booking: JSON.parse(legacyIdentity) as unknown,
-  })
+  const canonical = draft.protocolVersion !== 2
+    ? canonicalMiniAppAsyncIdentity(draft)
+    : canonicalMiniAppP2BookingIdentity({ ...draft, protocolVersion: 2 })
   return createHash('sha256').update(canonical, 'utf8').digest('base64url')
 }
 

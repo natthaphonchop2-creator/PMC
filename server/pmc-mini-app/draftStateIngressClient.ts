@@ -94,6 +94,11 @@ const PREPARE_KEYS = [
   'operation', 'requestId', 'draftId', 'expectedVersion', 'expectedAttempt', 'baseVersion', 'nowIso',
   'prepareBindingHash', 'input', 'evidence',
 ] as const
+const CONFIRM_CLAIM_KEYS = [
+  'operation', 'requestId', 'draftId', 'expectedVersion', 'expectedAttempt', 'nowIso', 'payloadHash',
+] as const
+const CONFIRM_COMPLETE_KEYS = [...CONFIRM_CLAIM_KEYS, 'caseId', 'confirmationStatus'] as const
+const CONFIRM_FAIL_KEYS = [...CONFIRM_CLAIM_KEYS, 'safeErrorCode'] as const
 const INPUT_KEYS = [
   'requestId', 'adminId', 'aeId', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
@@ -106,6 +111,17 @@ function validMutation(value: MiniAppDraftStateMutation): boolean {
     || !Number.isSafeInteger(value.expectedVersion) || value.expectedVersion < 1
     || !Number.isSafeInteger(value.expectedAttempt) || value.expectedAttempt < 0 || !validIso(value.nowIso)) return false
   if (value.operation === 'CANCEL') return hasExactKeys(value, CANCEL_KEYS)
+  if (value.operation === 'CONFIRM_CLAIM') {
+    return hasExactKeys(value, CONFIRM_CLAIM_KEYS) && validPayloadHash(value.payloadHash)
+  }
+  if (value.operation === 'CONFIRM_COMPLETE') {
+    return hasExactKeys(value, CONFIRM_COMPLETE_KEYS) && validPayloadHash(value.payloadHash)
+      && /^PMC-\d{6}-\d{4,}$/.test(value.caseId) && validConfirmationStatus(value.confirmationStatus)
+  }
+  if (value.operation === 'CONFIRM_FAIL') {
+    return hasExactKeys(value, CONFIRM_FAIL_KEYS) && validPayloadHash(value.payloadHash)
+      && /^BOOKING_INGRESS_[A-Z_]{1,60}$/.test(value.safeErrorCode)
+  }
   return (value.operation === 'PREPARE_BEGIN' || value.operation === 'PREPARE_READY' || value.operation === 'PREPARE_PARTIAL')
     && hasExactKeys(value, PREPARE_KEYS)
     && Number.isSafeInteger(value.baseVersion) && value.baseVersion >= 1
@@ -176,7 +192,9 @@ function validEvidenceValue(item: MiniAppDraftEvidenceItem, draftId: string): bo
 function isResult(value: unknown): value is MiniAppDraftStateResult {
   if (!isRecord(value) || !hasExactKeys(value, ['requestId', 'draftId', 'state', 'version', 'outcome', 'projectionDigest'])) return false
   return safeId(value.requestId) && safeId(value.draftId)
-    && (value.state === 'DRAFT' || value.state === 'READY_TO_CONFIRM' || value.state === 'CANCELLED' || value.state === 'EXPIRED')
+    && (value.state === 'DRAFT' || value.state === 'READY_TO_CONFIRM' || value.state === 'CONFIRMING'
+      || value.state === 'FAILED_RETRYABLE' || value.state === 'CONFIRMED'
+      || value.state === 'CANCELLED' || value.state === 'EXPIRED')
     && Number.isSafeInteger(value.version) && Number(value.version) >= 1
     && (value.outcome === 'APPLIED' || value.outcome === 'IDEMPOTENT' || value.outcome === 'TERMINAL')
     && typeof value.projectionDigest === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value.projectionDigest)
@@ -199,6 +217,10 @@ function hasNoControlCharacters(value: string): boolean {
   return true
 }
 function validIso(value: unknown): value is string { return typeof value === 'string' && Number.isFinite(Date.parse(value)) }
+function validPayloadHash(value: unknown): value is string { return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value) }
+function validConfirmationStatus(value: unknown): boolean {
+  return value === 'CONFIRMED' || value === 'TENTATIVE' || value === 'AWAITING_ADMIN_SLOT'
+}
 function validDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00.000Z`)

@@ -1,6 +1,7 @@
 import {
   canonicalMiniAppDraftProjection,
   canonicalMiniAppDraftStateIngress,
+  canonicalMiniAppP2BookingIdentity,
   canonicalMiniAppPrepareBinding,
   type MiniAppDraftEvidenceItem,
   type MiniAppDraftPrepareBeginMutation,
@@ -29,6 +30,15 @@ const PREPARE_KEYS = [
   'operation', 'requestId', 'draftId', 'expectedVersion', 'expectedAttempt', 'baseVersion', 'nowIso',
   'prepareBindingHash', 'input', 'evidence',
 ] as const
+const CONFIRM_CLAIM_KEYS = [
+  'operation', 'requestId', 'draftId', 'expectedVersion', 'expectedAttempt', 'nowIso', 'payloadHash',
+] as const
+const CONFIRM_COMPLETE_KEYS = [
+  ...CONFIRM_CLAIM_KEYS, 'caseId', 'confirmationStatus',
+] as const
+const CONFIRM_FAIL_KEYS = [
+  ...CONFIRM_CLAIM_KEYS, 'safeErrorCode',
+] as const
 const INPUT_KEYS = [
   'requestId', 'adminId', 'aeId', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
@@ -41,15 +51,25 @@ export function mutateMiniAppDraftState(input: unknown, ports: BookingPorts): Mi
     if (ports.repositories.lineDirectory.hasNonce(envelope.nonce)) throw new Error('mini app draft state replay detected')
     const current = asP2Record(ports.miniAppRequests.getByRequestId(envelope.payload.requestId))
     if (!current || current.draftId !== envelope.payload.draftId) throw new Error('mini app draft state request not found')
-    const mutation = envelope.payload.operation === 'CANCEL' ? applyCancel(current, envelope.payload)
-      : envelope.payload.operation === 'PREPARE_BEGIN' ? applyPrepareBegin(current, envelope.payload, ports)
-        : applyPrepare(current, envelope.payload, ports)
+    const mutation = applyOwnerMutation(current, envelope.payload, ports)
     const persisted = mutation.write
       ? asP2Record(ports.miniAppRequests.updateByRequestId(current.requestId, current.version, mutation.next))!
       : current
     ports.repositories.lineDirectory.rememberNonce(envelope.nonce, ports.clock.nowIso())
     return safeResult(persisted, mutation.outcome, ports)
   })
+}
+
+function applyOwnerMutation(current: P2Record, payload: MiniAppDraftStateMutation, ports: BookingPorts) {
+  if (payload.operation === 'CANCEL') return applyCancel(current, payload)
+  if (payload.operation === 'PREPARE_BEGIN') return applyPrepareBegin(current, payload, ports)
+  if (payload.operation === 'PREPARE_READY' || payload.operation === 'PREPARE_PARTIAL') {
+    return applyPrepare(current, payload, ports)
+  }
+  if (payload.operation === 'CONFIRM_CLAIM') return applyConfirmClaim(current, payload, ports)
+  if (payload.operation === 'CONFIRM_COMPLETE') return applyConfirmComplete(current, payload, ports)
+  if (payload.operation === 'CONFIRM_FAIL') return applyConfirmFail(current, payload, ports)
+  throw new Error('unsupported mini app draft state operation')
 }
 
 function verifyEnvelope(input: unknown, ports: BookingPorts): MiniAppDraftStateEnvelope {
@@ -80,6 +100,27 @@ function validatePayload(payload: MiniAppDraftStateMutation): void {
   }
   if (payload.operation === 'CANCEL') {
     if (!hasExactKeys(payload, CANCEL_KEYS)) throw new Error('invalid mini app draft cancel payload')
+    return
+  }
+  if (payload.operation === 'CONFIRM_CLAIM') {
+    if (!hasExactKeys(payload, CONFIRM_CLAIM_KEYS) || !validPayloadHash(payload.payloadHash)) {
+      throw new Error('invalid mini app draft confirm claim payload')
+    }
+    return
+  }
+  if (payload.operation === 'CONFIRM_COMPLETE') {
+    if (!hasExactKeys(payload, CONFIRM_COMPLETE_KEYS) || !validPayloadHash(payload.payloadHash)
+      || !/^PMC-\d{6}-\d{4,}$/.test(payload.caseId)
+      || !validConfirmationStatus(payload.confirmationStatus)) {
+      throw new Error('invalid mini app draft confirm complete payload')
+    }
+    return
+  }
+  if (payload.operation === 'CONFIRM_FAIL') {
+    if (!hasExactKeys(payload, CONFIRM_FAIL_KEYS) || !validPayloadHash(payload.payloadHash)
+      || !/^BOOKING_INGRESS_[A-Z_]{1,60}$/.test(payload.safeErrorCode)) {
+      throw new Error('invalid mini app draft confirm fail payload')
+    }
     return
   }
   if ((payload.operation !== 'PREPARE_BEGIN' && payload.operation !== 'PREPARE_READY' && payload.operation !== 'PREPARE_PARTIAL')
@@ -259,6 +300,90 @@ function applyCancel(current: P2Record, payload: Extract<MiniAppDraftStateMutati
   return changed(current, { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', updatedAt: payload.nowIso })
 }
 
+function applyConfirmClaim(
+  current: P2Record,
+  payload: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_CLAIM' }>,
+  ports: BookingPorts,
+) {
+  const canonicalHash = confirmPayloadHash(current, ports)
+  if (payload.payloadHash !== canonicalHash) throw new Error('mini app draft confirm payload hash conflict')
+  if (current.state === 'CANCELLED' || current.state === 'EXPIRED') return unchanged(current, 'TERMINAL')
+  if (current.state === 'CONFIRMED') {
+    if (current.payloadHash !== payload.payloadHash || !current.caseId || !current.confirmationStatus) {
+      throw new Error('mini app draft confirmed binding conflict')
+    }
+    return unchanged(current, 'TERMINAL')
+  }
+  if (current.state === 'CONFIRMING') {
+    if (current.payloadHash === payload.payloadHash && current.version === payload.expectedVersion + 1
+      && current.attemptCount === payload.expectedAttempt) return unchanged(current)
+    throw new Error('mini app draft confirm claim conflict')
+  }
+  if (current.version !== payload.expectedVersion || current.attemptCount !== payload.expectedAttempt
+    || !['READY_TO_CONFIRM', 'FAILED_RETRYABLE'].includes(current.state)) {
+    throw new Error('stale mini app draft confirm claim')
+  }
+  if (current.payloadHash !== null && current.payloadHash !== payload.payloadHash) {
+    throw new Error('mini app draft confirm payload hash conflict')
+  }
+  return changed(current, {
+    state: 'CONFIRMING', payloadHash: payload.payloadHash, safeErrorCode: null, updatedAt: payload.nowIso,
+  })
+}
+
+function applyConfirmComplete(
+  current: P2Record,
+  payload: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_COMPLETE' }>,
+  ports: BookingPorts,
+) {
+  requireConfirmBinding(current, payload.payloadHash, ports)
+  if (current.state === 'CONFIRMED') {
+    if (current.version === payload.expectedVersion + 1 && current.caseId === payload.caseId
+      && current.confirmationStatus === payload.confirmationStatus) return unchanged(current)
+    throw new Error('mini app draft confirm completion conflict')
+  }
+  if (current.state === 'CANCELLED' || current.state === 'EXPIRED') return unchanged(current, 'TERMINAL')
+  if (current.state !== 'CONFIRMING' || current.version !== payload.expectedVersion
+    || current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft confirm completion')
+  return changed(current, {
+    state: 'CONFIRMED', caseId: payload.caseId, confirmationStatus: payload.confirmationStatus,
+    confirmedAt: payload.nowIso, safeErrorCode: null, updatedAt: payload.nowIso,
+  })
+}
+
+function applyConfirmFail(
+  current: P2Record,
+  payload: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_FAIL' }>,
+  ports: BookingPorts,
+) {
+  requireConfirmBinding(current, payload.payloadHash, ports)
+  if (current.state === 'FAILED_RETRYABLE') {
+    if (current.version === payload.expectedVersion + 1 && current.safeErrorCode === payload.safeErrorCode) {
+      return unchanged(current)
+    }
+    throw new Error('mini app draft confirm failure conflict')
+  }
+  if (current.state === 'CONFIRMED' || current.state === 'CANCELLED' || current.state === 'EXPIRED') {
+    return unchanged(current, 'TERMINAL')
+  }
+  if (current.state !== 'CONFIRMING' || current.version !== payload.expectedVersion
+    || current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft confirm failure')
+  return changed(current, {
+    state: 'FAILED_RETRYABLE', safeErrorCode: payload.safeErrorCode, updatedAt: payload.nowIso,
+  })
+}
+
+function requireConfirmBinding(current: P2Record, payloadHash: string, ports: BookingPorts): void {
+  if (current.payloadHash !== payloadHash || confirmPayloadHash(current, ports) !== payloadHash) {
+    throw new Error('mini app draft confirm payload hash conflict')
+  }
+}
+
+function confirmPayloadHash(current: P2Record, ports: BookingPorts): string {
+  if (current.protocolVersion !== 2) throw new Error('mini app draft confirm protocol rejected')
+  return ports.crypto.sha256Base64Url(canonicalMiniAppP2BookingIdentity({ ...current, protocolVersion: 2 }))
+}
+
 function resolveSnapshots(current: P2Record, input: MiniAppNormalizedBookingInputV2, ports: BookingPorts) {
   if (current.protocolVersion !== 2) throw new Error('mini app draft protocol rejected')
   const recorder = requireStaff(ports.config.findStaffById(current.staffId), 'recorder')
@@ -399,6 +524,12 @@ function projection(record: P2Record): MiniAppDraftProjection {
     paymentEvidenceFileIds: [...record.paymentEvidenceFileIds], chatEvidenceFileIds: [...record.chatEvidenceFileIds],
     paymentEvidenceObjectKeys: [...record.paymentEvidenceObjectKeys], chatEvidenceObjectKeys: [...record.chatEvidenceObjectKeys],
     evidenceCount: record.evidenceCount,
+    payloadHash: record.payloadHash,
+    attemptCount: record.attemptCount,
+    confirmedAt: record.confirmedAt,
+    caseId: record.caseId,
+    confirmationStatus: record.confirmationStatus,
+    safeErrorCode: record.safeErrorCode,
   }
 }
 
@@ -446,6 +577,10 @@ function hasNoControlCharacters(value: string): boolean {
   return true
 }
 function validIso(value: unknown): value is string { return typeof value === 'string' && Number.isFinite(Date.parse(value)) }
+function validPayloadHash(value: unknown): value is string { return typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value) }
+function validConfirmationStatus(value: unknown): boolean {
+  return value === 'CONFIRMED' || value === 'TENTATIVE' || value === 'AWAITING_ADMIN_SLOT'
+}
 function validDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const date = new Date(`${value}T00:00:00.000Z`)

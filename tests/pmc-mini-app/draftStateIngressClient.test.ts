@@ -61,6 +61,33 @@ describe('PMC Mini App signed draft-state ingress client', () => {
   })
 
   it.each([
+    ['CONFIRM_CLAIM', confirmClaimMutation(), ['draftId', 'expectedAttempt', 'expectedVersion', 'nowIso', 'operation', 'payloadHash', 'requestId']],
+    ['CONFIRM_COMPLETE', confirmCompleteMutation(), ['caseId', 'confirmationStatus', 'draftId', 'expectedAttempt', 'expectedVersion', 'nowIso', 'operation', 'payloadHash', 'requestId']],
+    ['CONFIRM_FAIL', confirmFailMutation(), ['draftId', 'expectedAttempt', 'expectedVersion', 'nowIso', 'operation', 'payloadHash', 'requestId', 'safeErrorCode']],
+  ] as const)('signs exact %s owner mutation fields', (_operation, mutation, expectedKeys) => {
+    const built = buildMiniAppDraftStateIngress(mutation, {
+      timestamp: 1_800_000_000, nonce: `nonce-${mutation.operation.toLowerCase()}`,
+    }, 'server-secret')
+
+    expect(Object.keys(built.body.payload).sort()).toEqual([...expectedKeys].sort())
+  })
+
+  it('accepts a safe CONFIRMING owner result from the sibling ingress', async () => {
+    const fetch = vi.fn(async () => response(200, {
+      requestId: 'request-1', draftId: 'draft-1', state: 'CONFIRMING', version: 4,
+      outcome: 'APPLIED', projectionDigest: 'd'.repeat(43),
+    }))
+    const client = createDraftStateIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+      now: () => 1_800_000_000, nonce: () => 'nonce-confirm-claim', fetch,
+    })
+
+    await expect(client.mutate(confirmClaimMutation())).resolves.toMatchObject({
+      state: 'CONFIRMING', version: 4, outcome: 'APPLIED',
+    })
+  })
+
+  it.each([
     ['unknown prepare field', { input: { ...normalizedInput(), recorderName: 'forbidden' } }],
     ['duplicate ordinal', { evidence: [evidence(0), evidence(0)] }],
     ['mixed storage', { evidence: [evidence(0), { ...evidence(1), storage: 'DRIVE_FILE', value: 'drive-file-01' }] }],
@@ -125,6 +152,29 @@ function cancelMutation(): MiniAppDraftStateMutation {
   return {
     operation: 'CANCEL', requestId: 'request-1', draftId: 'draft-1', expectedVersion: 1,
     expectedAttempt: 0, nowIso: '2026-08-30T10:00:00.000Z',
+  }
+}
+
+function confirmClaimMutation(): MiniAppDraftStateMutation {
+  return {
+    operation: 'CONFIRM_CLAIM', requestId: 'request-1', draftId: 'draft-1', expectedVersion: 3,
+    expectedAttempt: 0, nowIso: '2026-08-30T10:00:00.000Z', payloadHash: 'h'.repeat(43),
+  }
+}
+
+function confirmCompleteMutation(): MiniAppDraftStateMutation {
+  return {
+    operation: 'CONFIRM_COMPLETE', requestId: 'request-1', draftId: 'draft-1', expectedVersion: 4,
+    expectedAttempt: 0, nowIso: '2026-08-30T10:05:00.000Z', payloadHash: 'h'.repeat(43),
+    caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+  }
+}
+
+function confirmFailMutation(): MiniAppDraftStateMutation {
+  return {
+    operation: 'CONFIRM_FAIL', requestId: 'request-1', draftId: 'draft-1', expectedVersion: 4,
+    expectedAttempt: 0, nowIso: '2026-08-30T10:05:00.000Z', payloadHash: 'h'.repeat(43),
+    safeErrorCode: 'BOOKING_INGRESS_TIMEOUT',
   }
 }
 

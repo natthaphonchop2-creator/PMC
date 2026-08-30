@@ -478,6 +478,12 @@ function projection(draft: MiniAppRequestRecord): MiniAppDraftProjection {
     paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds], chatEvidenceFileIds: [...draft.chatEvidenceFileIds],
     paymentEvidenceObjectKeys: [...draft.paymentEvidenceObjectKeys], chatEvidenceObjectKeys: [...draft.chatEvidenceObjectKeys],
     evidenceCount: draft.evidenceCount,
+    payloadHash: draft.payloadHash,
+    attemptCount: draft.attemptCount,
+    confirmedAt: draft.confirmedAt,
+    caseId: draft.caseId,
+    confirmationStatus: draft.confirmationStatus,
+    safeErrorCode: draft.safeErrorCode,
   }
 }
 

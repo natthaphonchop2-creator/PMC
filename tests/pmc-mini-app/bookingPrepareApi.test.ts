@@ -860,6 +860,12 @@ function fakeProjectionDigest(draft: MiniAppRequestRecord): string {
     paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds], chatEvidenceFileIds: [...draft.chatEvidenceFileIds],
     paymentEvidenceObjectKeys: [...draft.paymentEvidenceObjectKeys], chatEvidenceObjectKeys: [...draft.chatEvidenceObjectKeys],
     evidenceCount: draft.evidenceCount,
+    payloadHash: draft.payloadHash,
+    attemptCount: draft.attemptCount,
+    confirmedAt: draft.confirmedAt,
+    caseId: draft.caseId,
+    confirmationStatus: draft.confirmationStatus,
+    safeErrorCode: draft.safeErrorCode,
   }
   return createHash('sha256').update(canonicalMiniAppDraftProjection(projection)).digest('base64url')
 }

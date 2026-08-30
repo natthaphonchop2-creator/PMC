@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   canonicalMiniAppDraftStateIngress,
+  canonicalMiniAppP2BookingIdentity,
   canonicalMiniAppPrepareBinding,
   type MiniAppDraftEvidenceItem,
   type MiniAppDraftStateEnvelope,
@@ -227,6 +228,113 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     expect(() => processBookingDoPost(event(signed), fixture.ports)).toThrow(/replay/i)
     expect(fixture.requests.writeCount).toBe(1)
   })
+
+  it('claims a canonical protocol-2 ready draft once and replays the same claim idempotently', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    const claim = confirmClaim(current)
+
+    const first = processBookingDoPost(event(envelope(claim, 'nonce-confirm-claim-first')), fixture.ports)
+    const replay = processBookingDoPost(event(envelope(claim, 'nonce-confirm-claim-replay')), fixture.ports)
+
+    expect(first).toMatchObject({ state: 'CONFIRMING', version: current.version + 1, outcome: 'APPLIED' })
+    expect(replay).toMatchObject({ state: 'CONFIRMING', version: current.version + 1, outcome: 'IDEMPOTENT' })
+    expect(fixture.requests.read()).toMatchObject({
+      state: 'CONFIRMING', payloadHash: p2PayloadHash(current), safeErrorCode: null,
+      paymentEvidenceFileIds: current.paymentEvidenceFileIds,
+      chatEvidenceFileIds: current.chatEvidenceFileIds,
+    })
+    expect(fixture.requests.writeCount).toBe(1)
+  })
+
+  it('recomputes the canonical protocol-2 payload hash before claiming', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    const before = fixture.requests.read()
+
+    expect(() => processBookingDoPost(event(envelope({
+      ...confirmClaim(current), payloadHash: `${p2PayloadHash(current)}x`,
+    }, 'nonce-confirm-bad-hash')), fixture.ports)).toThrow(/payload|hash|binding/i)
+    expect(fixture.requests.read()).toEqual(before)
+    expect(fixture.requests.writeCount).toBe(0)
+  })
+
+  it('serializes CANCEL before CONFIRM_CLAIM so booking ingress can never start', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    processBookingDoPost(event(envelope(cancelMutation(current.version), 'nonce-cancel-before-confirm')), fixture.ports)
+
+    const claim = processBookingDoPost(event(envelope(
+      confirmClaim(current), 'nonce-confirm-after-cancel',
+    )), fixture.ports)
+
+    expect(claim).toMatchObject({ state: 'CANCELLED', outcome: 'TERMINAL' })
+    expect(fixture.requests.read()).toMatchObject({ state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' })
+    expect(fixture.requests.writeCount).toBe(1)
+  })
+
+  it('serializes CONFIRM_CLAIM before CANCEL so cancellation cannot overwrite an ingress owner', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    processBookingDoPost(event(envelope(confirmClaim(current), 'nonce-confirm-before-cancel')), fixture.ports)
+
+    expect(() => processBookingDoPost(event(envelope(
+      cancelMutation(current.version), 'nonce-cancel-after-confirm',
+    )), fixture.ports)).toThrow(/stale|conflict|state/i)
+    expect(fixture.requests.read()).toMatchObject({ state: 'CONFIRMING', payloadHash: p2PayloadHash(current) })
+  })
+
+  it('completes only an owner-claimed draft and replays response loss without another write', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    processBookingDoPost(event(envelope(confirmClaim(current), 'nonce-complete-claim')), fixture.ports)
+    const claimed = fixture.requests.read()!
+    const complete = confirmComplete(claimed)
+
+    const first = processBookingDoPost(event(envelope(complete, 'nonce-complete-first')), fixture.ports)
+    const replay = processBookingDoPost(event(envelope(complete, 'nonce-complete-replay')), fixture.ports)
+
+    expect(first).toMatchObject({ state: 'CONFIRMED', version: claimed.version + 1, outcome: 'APPLIED' })
+    expect(replay).toMatchObject({ state: 'CONFIRMED', version: claimed.version + 1, outcome: 'IDEMPOTENT' })
+    expect(fixture.requests.read()).toMatchObject({
+      state: 'CONFIRMED', caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+      confirmedAt: '2026-08-30T10:05:00.000Z', safeErrorCode: null,
+    })
+    expect(fixture.requests.writeCount).toBe(2)
+  })
+
+  it('records a retryable failure without losing prepared input or evidence and permits a new claim', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    processBookingDoPost(event(envelope(confirmClaim(current), 'nonce-fail-claim')), fixture.ports)
+    const claimed = fixture.requests.read()!
+    const failed = processBookingDoPost(event(envelope(
+      confirmFail(claimed), 'nonce-fail-first',
+    )), fixture.ports)
+    const retryClaim = processBookingDoPost(event(envelope(
+      confirmClaim(fixture.requests.read()!), 'nonce-fail-retry-claim',
+    )), fixture.ports)
+
+    expect(failed).toMatchObject({ state: 'FAILED_RETRYABLE', outcome: 'APPLIED' })
+    expect(retryClaim).toMatchObject({ state: 'CONFIRMING', outcome: 'APPLIED' })
+    expect(fixture.requests.read()).toMatchObject({
+      state: 'CONFIRMING', customerName: current.customerName,
+      paymentEvidenceFileIds: current.paymentEvidenceFileIds,
+      chatEvidenceFileIds: current.chatEvidenceFileIds,
+    })
+  })
+
+  it('allows only one row mutation across five same-payload concurrent claim replays', () => {
+    const current = readyDraft()
+    const fixture = draftStateFixture(current)
+    const results = Array.from({ length: 5 }, (_, index) => processBookingDoPost(event(envelope(
+      confirmClaim(current), `nonce-five-confirm-${index}`,
+    )), fixture.ports))
+
+    expect(results.map((result) => (result as { outcome: string }).outcome))
+      .toEqual(['APPLIED', 'IDEMPOTENT', 'IDEMPOTENT', 'IDEMPOTENT', 'IDEMPOTENT'])
+    expect(fixture.requests.writeCount).toBe(1)
+  })
 })
 
 type P2Request = MiniAppAsyncRequestRecord & {
@@ -249,6 +357,48 @@ function draft(patch: Partial<P2Request> = {}): P2Request {
     processingOwnerToken: null, evidenceProjectionHash: null, createdAt: '2026-08-30T09:00:00.000Z',
     confirmedAt: null, caseId: null, confirmationStatus: null, safeErrorCode: null,
     updatedAt: '2026-08-30T09:00:00.000Z', ...patch,
+  }
+}
+
+function readyDraft(patch: Partial<P2Request> = {}): P2Request {
+  return draft({
+    state: 'READY_TO_CONFIRM', version: 3,
+    adminId: 'admin-1', adminName: 'Admin A', aeId: 'staff-ae', aeName: 'เอม',
+    customerName: 'ลูกค้า ทดสอบ', facebookName: 'Facebook Test', phoneNormalized: '0812345678',
+    doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL',
+    appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'เพจหลัก',
+    paymentEvidenceFileIds: ['drive-file-payment-0'], chatEvidenceFileIds: ['drive-file-chat-0'], evidenceCount: 2,
+    evidenceProjectionHash: 'prepare-projection-hash', ...patch,
+  })
+}
+
+function confirmClaim(current: P2Request): Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_CLAIM' }> {
+  return {
+    operation: 'CONFIRM_CLAIM', requestId: current.requestId, draftId: current.draftId,
+    expectedVersion: current.version, expectedAttempt: current.attemptCount,
+    nowIso: '2026-08-30T10:00:00.000Z', payloadHash: p2PayloadHash(current),
+  }
+}
+
+function p2PayloadHash(current: P2Request): string {
+  return createHash('sha256').update(canonicalMiniAppP2BookingIdentity(current)).digest('base64url')
+}
+
+function confirmComplete(current: P2Request): Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_COMPLETE' }> {
+  return {
+    operation: 'CONFIRM_COMPLETE', requestId: current.requestId, draftId: current.draftId,
+    expectedVersion: current.version, expectedAttempt: current.attemptCount,
+    nowIso: '2026-08-30T10:05:00.000Z', payloadHash: current.payloadHash!,
+    caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+  }
+}
+
+function confirmFail(current: P2Request): Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_FAIL' }> {
+  return {
+    operation: 'CONFIRM_FAIL', requestId: current.requestId, draftId: current.draftId,
+    expectedVersion: current.version, expectedAttempt: current.attemptCount,
+    nowIso: '2026-08-30T10:05:00.000Z', payloadHash: current.payloadHash!,
+    safeErrorCode: 'BOOKING_INGRESS_TIMEOUT',
   }
 }
 
