@@ -78,11 +78,38 @@ describe('PMC LINE Mini App shell', () => {
     }
   })
 
-  it('gates active expense capture cards on both rollout and submit permission', async () => {
+  it('opens the finance home from both Home and bottom navigation in capture-only mode', async () => {
+    const user = userEvent.setup()
+    const appConfig = {
+      ...config, reportingEnabled: false, financeReportsEnabled: false,
+      expenseCaptureEnabled: true, canSubmitExpense: true,
+    }
+    const view = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={appConfig}
+      api={miniAppApi()}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /รายรับรายวัน/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+
+    view.unmount()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={appConfig}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงาน' }))
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+  })
+
+  it('keeps capture-only navigation reachable but exposes no active create button without submit permission', async () => {
     const user = userEvent.setup()
     const view = render(<PmcMiniApp
       initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: false }}
+      initialConfig={{ ...config, financeReportsEnabled: false, expenseCaptureEnabled: true, canSubmitExpense: false }}
       api={miniAppApi()}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
@@ -92,17 +119,29 @@ describe('PMC LINE Mini App shell', () => {
     view.unmount()
     render(<PmcMiniApp
       initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      initialConfig={{ ...config, financeReportsEnabled: false, expenseCaptureEnabled: true, canSubmitExpense: true }}
       api={miniAppApi()}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
   })
 
+  it('shows both revenue and permitted expense actions only in combined mode', async () => {
+    const user = userEvent.setup()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByRole('button', { name: /รายรับรายวัน/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+  })
+
   it('routes expense form to a validated durable receipt and clears form state on return', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
-    api.stageExpense = vi.fn(async () => ({ stagingTokens: ['stage-1'] }))
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: ['stage-1.signature-1'] }))
     api.submitExpense = vi.fn(async () => ({
       expenseId: 'EXP-202608-SHELL', receiptNumber: 'EXP-202608-SHELL', expenseDate: '2026-08-30', monthKey: '2026-08',
       category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: 120_000, recordState: 'COMMITTED', revision: 1,

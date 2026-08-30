@@ -24,4 +24,14 @@ describe('durable expense receipt', () => {
     await user.click(screen.getByRole('button', { name: 'กลับหน้ารายงาน' }))
     expect(onDone).toHaveBeenCalledOnce()
   })
+
+  it('renders maximum-safe satang without floating-point loss', () => {
+    render(<ExpenseReceiptView receipt={{
+      expenseId: 'EXP-202608-MAX', receiptNumber: 'EXP-202608-MAX', expenseDate: '2026-08-30', monthKey: '2026-08',
+      category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: Number.MAX_SAFE_INTEGER,
+      recordState: 'COMMITTED', revision: 1, committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+    }} onDone={vi.fn()} />)
+
+    expect(screen.getByText('90,071,992,547,409.91 บาท')).toBeVisible()
+  })
 })

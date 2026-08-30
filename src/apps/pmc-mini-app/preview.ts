@@ -170,7 +170,7 @@ export function createPreviewMiniAppApi(options: {
       return stock.submit(command)
     },
     async stageExpense(_token, rootRequestId, files) {
-      const tokens = files.map((_, index) => `preview-expense-stage-${index + 1}`)
+      const tokens = files.map((_, index) => `preview-expense-stage-${index + 1}.preview-signature-${index + 1}`)
       stagedExpense = { rootRequestId, tokens }
       return { stagingTokens: [...tokens] }
     },

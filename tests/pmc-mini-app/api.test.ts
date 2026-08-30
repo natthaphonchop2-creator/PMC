@@ -225,7 +225,7 @@ describe('PMC Mini App browser API', () => {
   it('stages ordered expense files and submits the exact Task 7 browser payload with bearer auth', async () => {
     const committed = expenseReceipt()
     const fetch = vi.fn()
-      .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['token-1', 'token-2'] }))
+      .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['token-1.signature-1', 'token-2.signature-2'] }))
       .mockResolvedValueOnce(jsonResponse(200, committed))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
     const files = [
@@ -235,10 +235,12 @@ describe('PMC Mini App browser API', () => {
     const input = {
       rootRequestId: 'root-request-1', category: 'BILL_DOCUMENT' as const, expenseDate: '2026-08-30',
       amountSatang: 120_000, counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'TRANSFER' as const,
-      expectedRevision: 0, stagingTokens: ['token-1', 'token-2'],
+      expectedRevision: 0, stagingTokens: ['token-1.signature-1', 'token-2.signature-2'],
     }
 
-    await expect(api.stageExpense('raw-id-token', input.rootRequestId, files)).resolves.toEqual({ stagingTokens: ['token-1', 'token-2'] })
+    await expect(api.stageExpense('raw-id-token', input.rootRequestId, files)).resolves.toEqual({
+      stagingTokens: ['token-1.signature-1', 'token-2.signature-2'],
+    })
     await expect(api.submitExpense('raw-id-token', input)).resolves.toEqual(committed)
 
     const [, stageInit] = fetch.mock.calls[0]!
@@ -255,7 +257,7 @@ describe('PMC Mini App browser API', () => {
 
   it('rejects malformed staging and committed responses before the shell can show success', async () => {
     const fetch = vi.fn()
-      .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['duplicate', 'duplicate'] }))
+      .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['duplicate.signature', 'duplicate.signature'] }))
       .mockResolvedValueOnce(jsonResponse(200, { ...expenseReceipt(), recordState: 'PREPARED' }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
 
@@ -265,8 +267,40 @@ describe('PMC Mini App browser API', () => {
     ])).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
     await expect(api.submitExpense('raw-id-token', {
       rootRequestId: 'root-request-1', category: 'BILL_DOCUMENT', expenseDate: '2026-08-30', amountSatang: 120_000,
-      counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'CASH', expectedRevision: 0, stagingTokens: ['token-1'],
+      counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'CASH', expectedRevision: 0, stagingTokens: ['token-1.signature-1'],
     })).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
+  it.each([
+    ['too short', 'a.'],
+    ['missing signature separator', 'payload-only'],
+    ['whitespace', 'payload.bad signature'],
+    ['unsafe punctuation', 'payload.bad+signature'],
+  ])('rejects a %s staging token response', async (_label, token) => {
+    const fetch = vi.fn(async () => jsonResponse(200, { stagingTokens: [token] }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    await expect(api.stageExpense('raw-id-token', 'root-request-1', [
+      new File(['one'], 'one.jpg', { type: 'image/jpeg' }),
+    ])).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
+  it('preserves the exact server retryable boolean on safe client errors', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(503, { error: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: 'EXPENSE_INVALID_ATTACHMENTS', retryable: false }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = {
+      rootRequestId: 'root-request-1', category: 'BILL_DOCUMENT' as const, expenseDate: '2026-08-30', amountSatang: 120_000,
+      counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'CASH' as const, expectedRevision: 0,
+      stagingTokens: ['payload.signature'],
+    }
+
+    await expect(api.submitExpense('raw-id-token', input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    await expect(api.submitExpense('raw-id-token', input)).rejects.toMatchObject({
+      code: 'EXPENSE_INVALID_ATTACHMENTS', retryable: false,
+    })
   })
 
   it('rejects an internally valid receipt that does not match the submitted expense', async () => {
@@ -275,7 +309,7 @@ describe('PMC Mini App browser API', () => {
 
     await expect(api.submitExpense('raw-id-token', {
       rootRequestId: 'root-request-book', category: 'BOOK_DOCTOR_PERSONAL', expenseDate: '2026-08-30', amountSatang: 500_000,
-      counterpartyName: null, description: '', paymentMethod: null, expectedRevision: 0, stagingTokens: ['token-1'],
+      counterpartyName: null, description: '', paymentMethod: null, expectedRevision: 0, stagingTokens: ['token-1.signature-1'],
     })).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
   })
 

@@ -12,12 +12,14 @@ export type FinanceReportView = 'DAILY_INCOME' | 'MONTHLY_INCOME'
 
 export function FinanceReportHome({
   canViewFinance,
+  financeReportsEnabled = true,
   expenseCaptureEnabled = false,
   canSubmitExpense = false,
   onSelect,
   onSelectExpense = () => undefined,
 }: {
   canViewFinance: boolean
+  financeReportsEnabled?: boolean
   expenseCaptureEnabled?: boolean
   canSubmitExpense?: boolean
   onSelect: (view: FinanceReportView) => void
@@ -27,10 +29,10 @@ export function FinanceReportHome({
     <header className="pmc-finance-header">
       <BrandMark />
       <h1>รายงานคลินิก</h1>
-      <p>เลือกดูรายรับตามช่วงเวลาที่ต้องการ</p>
+      <p>{financeReportsEnabled ? 'เลือกดูรายรับตามช่วงเวลาที่ต้องการ' : 'เลือกประเภทของรายการรายจ่าย'}</p>
     </header>
 
-    <section className="pmc-finance-primary-grid" aria-label="รายงานรายรับ">
+    {financeReportsEnabled && <section className="pmc-finance-primary-grid" aria-label="รายงานรายรับ">
       <button type="button" onClick={() => onSelect('DAILY_INCOME')}>
         <span className="pmc-finance-card-icon"><Banknote aria-hidden="true" /></span>
         <span><strong>รายรับรายวัน</strong><small>วันนี้ เมื่อวาน หรือเลือกช่วงวันที่</small></span>
@@ -47,7 +49,7 @@ export function FinanceReportHome({
         <span><strong>รายงานรายเดือน</strong><small>{canViewFinance ? 'สรุปรายรับประจำเดือน' : 'เฉพาะฝ่ายการเงิน'}</small></span>
         <ChevronRight aria-hidden="true" />
       </button>
-    </section>
+    </section>}
 
     <section className="pmc-finance-deferred" aria-labelledby="pmc-finance-deferred-heading">
       <h2 id="pmc-finance-deferred-heading">รายการรายจ่าย</h2>

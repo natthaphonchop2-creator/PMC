@@ -20,6 +20,7 @@ import {
   type EnabledExpenseCategory,
   type ExpenseReceipt,
 } from '../../../shared/pmcExpense'
+import { isExpenseStagingToken } from './expense/expenseModel'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -58,13 +59,15 @@ export class MiniAppApiError extends Error {
   readonly code: string
   readonly status: number
   readonly retryAfterSeconds: number | null
+  readonly retryable: boolean | null
 
-  constructor(code: string, status: number, retryAfterSeconds: number | null = null) {
+  constructor(code: string, status: number, retryAfterSeconds: number | null = null, retryable: boolean | null = null) {
     super(`Mini App API failed: ${code}`)
     this.name = 'MiniAppApiError'
     this.code = code
     this.status = status
     this.retryAfterSeconds = retryAfterSeconds
+    this.retryable = retryable
   }
 }
 
@@ -247,7 +250,14 @@ async function requestJson<T>(
     const code = body && typeof body === 'object' && !Array.isArray(body) && 'error' in body ? String(body.error) : 'MINI_APP_REQUEST_FAILED'
     const retryAfterSeconds = body && typeof body === 'object' && !Array.isArray(body) && 'retryAfterSeconds' in body
       && safeRetryAfterSeconds(body.retryAfterSeconds) !== null ? safeRetryAfterSeconds(body.retryAfterSeconds) : null
-    throw new MiniAppApiError(/^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED', response.status, retryAfterSeconds)
+    const retryable = body && typeof body === 'object' && !Array.isArray(body) && 'retryable' in body
+      && typeof body.retryable === 'boolean' ? body.retryable : null
+    throw new MiniAppApiError(
+      /^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED',
+      response.status,
+      retryAfterSeconds,
+      retryable,
+    )
   }
   return parse ? parse(body, response.status) : body as T
 }
@@ -270,7 +280,7 @@ function parseExpenseStagingResponse(body: unknown, status: number, expectedCoun
   }
   const tokens = body.stagingTokens
   if (expectedCount < 1 || expectedCount > 5 || tokens.length !== expectedCount || new Set(tokens).size !== tokens.length
-    || !tokens.every((token) => typeof token === 'string' && token.length > 0 && token.length <= 2_048)) {
+    || !tokens.every(isExpenseStagingToken)) {
     throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   }
   return { stagingTokens: tokens as string[] }

@@ -36,10 +36,13 @@ export function validateExpenseValues(
   const errors: ExpenseFormErrors = {}
   if (!validExpenseDate(values.expenseDate)) errors.expenseDate = 'กรุณาเลือกวันที่รายจ่ายให้ถูกต้อง'
   if (parseExpenseAmountSatang(values.amount) === null) errors.amount = 'กรุณากรอกจำนวนเงินที่มากกว่า 0 และไม่เกิน 2 ตำแหน่ง'
-  if (values.description.length > 500) errors.description = 'หมายเหตุต้องไม่เกิน 500 ตัวอักษร'
+  if (hasForbiddenExpenseText(values.description)) {
+    errors.description = 'หมายเหตุต้องเป็นข้อความบรรทัดเดียวและไม่มีอักขระควบคุม'
+  } else if (values.description.length > 500) errors.description = 'หมายเหตุต้องไม่เกิน 500 ตัวอักษร'
   if (category === 'BILL_DOCUMENT') {
     const counterparty = values.counterpartyName.trim()
     if (!counterparty) errors.counterpartyName = 'กรุณากรอกชื่อร้านหรือผู้รับเงิน'
+    else if (hasForbiddenExpenseText(values.counterpartyName)) errors.counterpartyName = 'ชื่อร้านหรือผู้รับเงินมีอักขระที่ไม่รองรับ'
     else if (counterparty.length > 160) errors.counterpartyName = 'ชื่อร้านหรือผู้รับเงินต้องไม่เกิน 160 ตัวอักษร'
     if (!isExpensePaymentMethod(values.paymentMethod)) errors.paymentMethod = 'กรุณาเลือกวิธีชำระ'
   }
@@ -70,6 +73,19 @@ export function expenseFileFingerprint(files: File[]): string {
     }
     return `${identity}:${file.name.length}:${file.name}:${file.type}:${file.size}:${file.lastModified}`
   }).join('|')
+}
+
+export function isExpenseStagingToken(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 3 && value.length <= 2_048
+    && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)
+}
+
+export function formatExpenseSatang(value: number): string {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error('EXPENSE_INVALID_AMOUNT')
+  const satang = BigInt(value)
+  const baht = satang / 100n
+  const remainder = (satang % 100n).toString().padStart(2, '0')
+  return `${new Intl.NumberFormat('th-TH').format(baht)}.${remainder} บาท`
 }
 
 export function expenseCategoryLabel(category: EnabledExpenseCategory): string {
@@ -107,4 +123,8 @@ function matchingImageType(file: File): boolean {
 
 function isExpensePaymentMethod(value: unknown): value is ExpensePaymentMethod {
   return value === 'TRANSFER' || value === 'CASH' || value === 'CREDIT' || value === 'OTHER'
+}
+
+function hasForbiddenExpenseText(value: string): boolean {
+  return [...value].some((character) => [0, 10, 13, 127].includes(character.charCodeAt(0)))
 }

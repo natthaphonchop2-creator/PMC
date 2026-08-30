@@ -6,6 +6,8 @@ import {
   expenseCategoryLabel,
   expenseFileFingerprint,
   expensePaymentLabel,
+  formatExpenseSatang,
+  isExpenseStagingToken,
   parseExpenseAmountSatang,
   validateExpenseFiles,
   validateExpenseValues,
@@ -60,6 +62,7 @@ export function ExpenseForm({
   const itemsRef = useRef(items)
   const busyRef = useRef(false)
   const itemSequenceRef = useRef(0)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { itemsRef.current = items }, [items])
   useEffect(() => () => {
@@ -120,7 +123,7 @@ export function ExpenseForm({
     if (fileError) nextErrors.files = fileError
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) {
-      focusFirstError(nextErrors)
+      focusFirstError(nextErrors, fileInputRef.current)
       return
     }
     setFailure('')
@@ -159,6 +162,7 @@ export function ExpenseForm({
       if (receipt.recordState !== 'COMMITTED' || receipt.unreviewed !== true) throw safeClientError()
       onCommitted(receipt)
     } catch (error) {
+      if (requiresFreshExpenseStaging(error)) stagedRef.current = null
       setFailure(expenseFailureMessage(error))
       setReviewing(false)
     } finally {
@@ -220,9 +224,10 @@ export function ExpenseForm({
             <h2 id="expense-evidence-heading">รูปหลักฐาน</h2>
             <span>เลือกแล้ว {items.length} รูป</span>
           </div>
-          <label className="pmc-expense-add-file">
+          <label className="pmc-expense-add-file" htmlFor="expense-files">
             <ImagePlus aria-hidden="true" /> เพิ่มรูป
-            <input className="pmc-visually-hidden" aria-label="รูปหลักฐาน" type="file" multiple
+            <input ref={fileInputRef} id="expense-files" className="pmc-visually-hidden" aria-label="รูปหลักฐาน" type="file" multiple
+              aria-invalid={Boolean(errors.files)} aria-describedby={errors.files ? 'expense-files-error' : undefined}
               accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={addFiles} />
           </label>
           {errors.files && <p id="expense-files-error" className="pmc-expense-error" role="alert">{errors.files}</p>}
@@ -261,7 +266,7 @@ function ExpenseReview({ category, values, files }: {
     <dl>
       <div><dt>ประเภท</dt><dd>{expenseCategoryLabel(category)}</dd></div>
       <div><dt>วันที่รายจ่าย</dt><dd>{values.expenseDate}</dd></div>
-      <div><dt>{category === 'BILL_DOCUMENT' ? 'จำนวนเงิน' : 'ยอดรวมรายวัน'}</dt><dd>{formatSatang(amountSatang)}</dd></div>
+      <div><dt>{category === 'BILL_DOCUMENT' ? 'จำนวนเงิน' : 'ยอดรวมรายวัน'}</dt><dd>{formatExpenseSatang(amountSatang)}</dd></div>
       {category === 'BILL_DOCUMENT' && <>
         <div><dt>ชื่อร้านหรือผู้รับเงิน</dt><dd>{values.counterpartyName.trim()}</dd></div>
         <div><dt>วิธีชำระ</dt><dd>{expensePaymentLabel(values.paymentMethod as ExpensePaymentMethod)}</dd></div>
@@ -283,17 +288,20 @@ function Field({ id, label, error, children }: { id: string; label: string; erro
 
 function validStagingTokens(tokens: unknown, expectedCount: number): tokens is string[] {
   return Array.isArray(tokens) && tokens.length === expectedCount && new Set(tokens).size === tokens.length
-    && tokens.every((token) => typeof token === 'string' && token.length > 0 && token.length <= 2_048)
+    && tokens.every(isExpenseStagingToken)
 }
 
-function focusFirstError(errors: ExpenseFormErrors): void {
+function focusFirstError(errors: ExpenseFormErrors, fileInput: HTMLInputElement | null): void {
   const ids: Partial<Record<keyof ExpenseFormErrors, string>> = {
     expenseDate: 'expense-date', amount: 'expense-amount', counterpartyName: 'expense-counterparty',
-    paymentMethod: 'expense-payment', description: 'expense-description', files: 'expense-evidence-heading',
+    paymentMethod: 'expense-payment', description: 'expense-description',
   }
   const first = Object.keys(errors)[0] as keyof ExpenseFormErrors | undefined
   if (!first) return
-  queueMicrotask(() => document.getElementById(ids[first] ?? '')?.focus())
+  queueMicrotask(() => {
+    if (first === 'files') fileInput?.focus()
+    else document.getElementById(ids[first] ?? '')?.focus()
+  })
 }
 
 function expenseFailureMessage(error: unknown): string {
@@ -303,16 +311,24 @@ function expenseFailureMessage(error: unknown): string {
   return 'บันทึกรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง'
 }
 
+function requiresFreshExpenseStaging(error: unknown): boolean {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  return [
+    'EXPENSE_INVALID_ATTACHMENTS',
+    'EXPENSE_PRIVATE_FILE_INVALID',
+    'EXPENSE_STAGING_TOKEN_INVALID',
+    'EXPENSE_STAGING_NOT_FOUND',
+    'EXPENSE_STAGING_EXPIRED',
+    'EXPENSE_STAGING_OBJECT_NOT_FOUND',
+  ].includes(code)
+}
+
 function safeClientError(): Error & { code: string } {
   return Object.assign(new Error('Invalid expense response'), { code: 'MINI_APP_INVALID_RESPONSE' })
 }
 
 function revokePreview(value: string): void {
   if (value.startsWith('blob:') && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(value)
-}
-
-function formatSatang(value: number): string {
-  return `${new Intl.NumberFormat('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)} บาท`
 }
 
 function currentBangkokDate(): string {

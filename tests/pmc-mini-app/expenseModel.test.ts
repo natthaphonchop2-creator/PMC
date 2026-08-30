@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   expenseFileFingerprint,
+  formatExpenseSatang,
   parseExpenseAmountSatang,
   validateExpenseFiles,
   validateExpenseValues,
@@ -53,6 +54,18 @@ describe('expense capture client model', () => {
     expect(expenseFileFingerprint([a, b])).not.toBe(expenseFileFingerprint([
       imageFile('a.jpg', 'image/jpeg', 5, 101), b,
     ]))
+  })
+
+  it('formats ordinary and maximum-safe satang with integer quotient and two exact digits', () => {
+    expect(formatExpenseSatang(120_005)).toBe('1,200.05 บาท')
+    expect(formatExpenseSatang(Number.MAX_SAFE_INTEGER)).toBe('90,071,992,547,409.91 บาท')
+  })
+
+  it('rejects note control characters before staging while preserving the typed value contract', () => {
+    expect(validateExpenseValues('BOOK_CLINIC', {
+      expenseDate: '2026-08-30', amount: '1200', counterpartyName: '', paymentMethod: '',
+      description: 'บรรทัดหนึ่ง\nบรรทัดสอง',
+    })).toMatchObject({ description: 'หมายเหตุต้องเป็นข้อความบรรทัดเดียวและไม่มีอักขระควบคุม' })
   })
 })
 

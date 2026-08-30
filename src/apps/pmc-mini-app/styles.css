@@ -411,6 +411,7 @@ button:focus-visible {
 .pmc-expense-evidence > div:first-child span { color: var(--pmc-muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
 .pmc-expense-add-file { display: inline-flex; min-height: 48px; align-items: center; gap: 7px; margin-block-start: 9px; color: var(--pmc-gold-dark); font-weight: 700; cursor: pointer; }
 .pmc-expense-add-file svg { width: 20px; height: 20px; }
+.pmc-expense-add-file:focus-within { outline: 3px solid #8b641f; outline-offset: 3px; border-radius: 6px; }
 .pmc-expense-file-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 10px 0 0; padding: 0; list-style: none; }
 .pmc-expense-file-list li { min-width: 0; padding: 9px; border: 1px solid #e4e4e4; border-radius: 12px; background: #fff; }
 .pmc-expense-file-list img,

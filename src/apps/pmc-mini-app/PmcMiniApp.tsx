@@ -78,6 +78,8 @@ export function PmcMiniApp({
   const [stockHistoryLoadingMore, setStockHistoryLoadingMore] = useState(false)
   const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
+  const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.expenseCaptureEnabled)
+  const reportNavigationEnabled = Boolean(config?.reportingEnabled || financeShellEnabled)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
   useEffect(() => { saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters) }, [financeFilterStorage, financeFilters])
@@ -278,7 +280,7 @@ export function PmcMiniApp({
     setMessage('')
     if (next === 'REPORTS' && view === 'REPORTS') {
       setExpenseReceipt(null)
-      if (config?.financeReportsEnabled) setFinanceView('FINANCE_HOME')
+      if (financeShellEnabled) setFinanceView('FINANCE_HOME')
       else setSelectedReport(null)
       return
     }
@@ -420,7 +422,7 @@ export function PmcMiniApp({
     <div className="pmc-mini-app-shell">
       {view === 'HOME' && <Home
         session={session}
-        reportingEnabled={Boolean(config?.reportingEnabled || config?.financeReportsEnabled)}
+        reportingEnabled={reportNavigationEnabled}
         stockEnabled={Boolean(config?.stockEnabled)}
         onAction={(action) => {
           if (action === 'BOOKING') void openBooking()
@@ -428,8 +430,8 @@ export function PmcMiniApp({
           else navigateTo(action)
         }}
       />}
-      {view === 'REPORTS' && (config?.financeReportsEnabled
-        ? financeView === 'DAILY_INCOME'
+      {view === 'REPORTS' && (financeShellEnabled
+        ? config?.financeReportsEnabled && financeView === 'DAILY_INCOME'
           ? <DailyIncomePage
             bangkokDate={bangkokDate}
             initialFilter={financeFilters.daily}
@@ -437,7 +439,7 @@ export function PmcMiniApp({
             onFilterChange={rememberDailyFilter}
             onBack={() => setFinanceView('FINANCE_HOME')}
           />
-          : financeView === 'MONTHLY_INCOME'
+          : config?.financeReportsEnabled && financeView === 'MONTHLY_INCOME'
             ? <MonthlyFinancePage
               canViewFinance={Boolean(config.canViewFinance)}
               bangkokDate={bangkokDate}
@@ -448,15 +450,16 @@ export function PmcMiniApp({
               onBack={() => setFinanceView('FINANCE_HOME')}
             />
             : <FinanceReportHome
-              canViewFinance={Boolean(config.canViewFinance)}
-              expenseCaptureEnabled={Boolean(config.expenseCaptureEnabled)}
-              canSubmitExpense={Boolean(config.canSubmitExpense)}
+              canViewFinance={Boolean(config?.canViewFinance)}
+              financeReportsEnabled={Boolean(config?.financeReportsEnabled)}
+              expenseCaptureEnabled={Boolean(config?.expenseCaptureEnabled)}
+              canSubmitExpense={Boolean(config?.canSubmitExpense)}
               onSelect={(next) => {
-                if (next === 'MONTHLY_INCOME' && !config.canViewFinance) return
+                if (next === 'MONTHLY_INCOME' && !config?.canViewFinance) return
                 setFinanceView(next)
               }}
               onSelectExpense={(category) => {
-                if (!config.expenseCaptureEnabled || !config.canSubmitExpense) return
+                if (!config?.expenseCaptureEnabled || !config.canSubmitExpense) return
                 setExpenseReceipt(null)
                 setFinanceView(category)
               }}
@@ -491,7 +494,7 @@ export function PmcMiniApp({
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
       <BottomNavigation
         view={view}
-        reportingEnabled={Boolean(config?.reportingEnabled || config?.financeReportsEnabled)}
+        reportingEnabled={reportNavigationEnabled}
         stockEnabled={Boolean(config?.stockEnabled)}
         onChange={(next) => {
         if (next === 'BOOKING') void openBooking()
