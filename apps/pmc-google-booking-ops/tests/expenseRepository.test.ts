@@ -169,6 +169,48 @@ describe('Apps Script expense repository and command journal', () => {
     })
   })
 
+  it('rejects a stale VOID after another manager has committed a replacement revision', () => {
+    const ports = createExpenseTestPorts()
+    const original = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'stale-void-original', expectedRevision: 0, amountSatang: 10_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'stale-void-original', expenseId: original.prepared.expenseId,
+      expectedRevision: 0, attachments: original.attachments,
+    }), ports)
+    const replacement = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'stale-void-replacement', expectedRevision: 1, amountSatang: 12_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'stale-void-replacement', expenseId: replacement.prepared.expenseId,
+      expectedRevision: 1, staffId: 'MANAGER_01',
+      attachments: replacement.attachments.map((item) => ({ ...item, uploadedByStaffId: 'MANAGER_01' })),
+    }), ports)
+
+    expect(() => executeExpenseCommand({
+      rootRequestId: 'stale-void-original-action',
+      commandIdempotencyKey: 'stale-void-original-action:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE',
+      payload: {
+        expenseId: original.prepared.expenseId,
+        expectedVersion: 2,
+        expectedRevision: 1,
+        reason: 'คำสั่งยกเลิกจากหน้าจอที่ล้าสมัย',
+      },
+    }, ports)).toThrow('EXPENSE_REVISION_CONFLICT')
+
+    expect(ports.expense.getSubmission('2026-08', original.prepared.expenseId)).toMatchObject({
+      recordState: 'COMMITTED', version: 2, revision: 1,
+    })
+    expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toMatchObject({
+      expenseId: replacement.prepared.expenseId, recordState: 'COMMITTED', revision: 2,
+    })
+    expect(ports.expense.auditForExpense(original.prepared.expenseId))
+      .not.toContainEqual(expect.objectContaining({ action: 'VOID' }))
+    expect(ports.expense.listRecoveryCandidates()).toEqual([])
+  })
+
   it('never counts PREPARED, VOID, or superseded rows in the monthly summary', () => {
     const ports = createExpenseTestPorts()
     const original = prepareWithManifest(ports, bookPrepareCommand({

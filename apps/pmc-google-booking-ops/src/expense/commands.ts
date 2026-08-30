@@ -256,6 +256,41 @@ function committedResumeReceipt(
     version: 1,
     supersedesExpenseId: null,
   }
+  const prepareCommandPayload = prepareRequest.command.payload
+  const preparedDate = parseExpenseDate(prepareCommandPayload.expenseDate)
+  const preparedFromCommand: ExpenseSubmission = {
+    expenseId: submission.expenseId,
+    expenseDate: preparedDate.expenseDate,
+    monthKey: preparedDate.monthKey,
+    category: prepareCommandPayload.category,
+    scope: deriveExpenseScope(prepareCommandPayload.category),
+    amountSatang: prepareCommandPayload.amountSatang,
+    counterpartyName: prepareCommandPayload.counterpartyName,
+    description: prepareCommandPayload.description,
+    paymentMethod: prepareCommandPayload.paymentMethod,
+    recordState: 'PREPARED',
+    bookDailyKey: prepareCommandPayload.bookDailyKey,
+    revision: prepareCommandPayload.category === 'BILL_DOCUMENT'
+      ? 1
+      : prepareCommandPayload.expectedRevision + 1,
+    supersedesExpenseId: null,
+    submittedByStaffId: prepareRequest.command.staffId,
+    submittedByName: submission.submittedByName,
+    submittedAt: submission.submittedAt,
+    committedAt: null,
+    updatedAt: submission.submittedAt,
+    version: 1,
+    idempotencyKey: snapshot.rootRequestId,
+  }
+  validateStoredSubmission(preparedFromCommand, prepareCommandPayload.expectedRevision)
+  requirePreparedIntent(preparedFromCommand, prepareAudit, ports)
+  validateAttachments(
+    commitRequest.command.payload.attachments,
+    submission,
+    prepareAudit.expectedAttachmentCount,
+    prepareAudit.expectedManifestHash,
+    ports,
+  )
   if (
     prepareResult.commandType !== 'PREPARE_EXPENSE'
     || prepareResult.expenseId !== submission.expenseId
@@ -268,6 +303,7 @@ function committedResumeReceipt(
     || prepareEvent.actorStaffId !== submission.submittedByStaffId
     || prepareEvent.createdAt !== submission.submittedAt
     || prepareEvent.beforeJson !== '{}'
+    || !samePreparedIntent(preparedFromCommand, preparedBeforeCommit)
     || prepareAudit.rootRequestId !== snapshot.rootRequestId
     || prepareAudit.monthKey !== submission.monthKey
     || prepareAudit.commandFingerprint !== prepareRequest.request.commandFingerprint
@@ -283,6 +319,7 @@ function committedResumeReceipt(
     || commitRequest.command.payload.expectedRevision + 1 !== submission.revision
     || commitRequest.command.payload.expectedManifestHash !== prepareAudit.expectedManifestHash
     || commitEvent.actorStaffId !== submission.submittedByStaffId
+    || commitEvent.eventId !== auditEventId(commitRequest.request.commandFingerprint, 'C')
     || commitEvent.createdAt !== submission.committedAt
     || commitEvent.beforeJson !== JSON.stringify(preparedBeforeCommit)
     || commitAudit.rootRequestId !== snapshot.rootRequestId
@@ -516,7 +553,10 @@ function commitExpense(
   if (submission.bookDailyKey !== null) {
     if (command.payload.expectedRevision > 0) requireManager(actor)
     const authority = bookRevisionAuthority(monthKey, submission.bookDailyKey, null, ports)
-    if ((authority?.revision ?? 0) !== command.payload.expectedRevision) {
+    if (
+      hasPendingVoidIntent(authority, ports)
+      || (authority?.revision ?? 0) !== command.payload.expectedRevision
+    ) {
       completeFailure(
         command.commandIdempotencyKey,
         fingerprint,
@@ -594,6 +634,8 @@ function finishDurableCommit(
         recoveryContext?.bookRevisionClaims,
       )
       if (
+        hasPendingVoidIntent(authority, ports)
+        ||
         (authority?.revision ?? 0) !== payload.expectedRevision
         || (authority?.expenseId ?? null) !== payload.supersedesExpenseId
       ) throw new Error('EXPENSE_REVISION_CONFLICT')
@@ -738,6 +780,21 @@ function voidExpense(
   ) throw new Error('EXPENSE_NOT_PREPARED')
   if (priorVoid && submission.recordState === 'VOID' && submission.version !== command.payload.expectedVersion + 1) {
     throw new Error('EXPENSE_NOT_PREPARED')
+  }
+  if (submission.recordState === 'COMMITTED' && submission.bookDailyKey !== null) {
+    const authority = bookRevisionAuthority(monthKey, submission.bookDailyKey, null, ports)
+    if (
+      authority?.expenseId !== submission.expenseId
+      || authority.revision !== submission.revision
+    ) {
+      completeFailure(
+        command.commandIdempotencyKey,
+        fingerprint,
+        'EXPENSE_REVISION_CONFLICT',
+        ports,
+      )
+      throw new Error('EXPENSE_REVISION_CONFLICT')
+    }
   }
   const durableVoid = ports.expense.appendAudit({
     eventId,
@@ -1004,6 +1061,17 @@ function bookRevisionAuthority(
     && candidates[0].expenseId !== candidates[1].expenseId
   ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   return candidates[0] ?? null
+}
+
+function hasPendingVoidIntent(
+  authority: ExpenseSubmission | null,
+  ports: ExpenseCommandPorts,
+): boolean {
+  return Boolean(
+    authority
+    && authority.recordState === 'COMMITTED'
+    && ports.expense.auditForExpense(authority.expenseId).some(({ action }) => action === 'VOID'),
+  )
 }
 
 function validateAttachments(

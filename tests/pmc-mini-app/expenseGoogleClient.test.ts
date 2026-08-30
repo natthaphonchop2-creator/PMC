@@ -398,16 +398,15 @@ describe('private finance Google ports', () => {
     expect(fake.fileIds(parentId)).toEqual([loser.privateFileId, winner.privateFileId].sort())
 
     let claimReads = 0
-    const recovered = await winnerProcess.uploadExpenseImage({
-      ...upload,
-      slotClaim: registeredWinner,
+    const recovered = await winnerProcess.listVerifiedExpenseImages(MONTH_KEY, EXPENSE_ID, [{
+      claim: registeredWinner,
       readCurrentClaim: async () => {
         claimReads += 1
         return { ...registeredWinner }
       },
-    })
+    }])
 
-    expect(recovered).toEqual(winner)
+    expect(recovered).toEqual([winner])
     expect(claimReads).toBe(2)
     expect(fake.fileIds(parentId)).toEqual([winner.privateFileId])
     expect(fake.driveDeletes).toHaveBeenCalledWith(expect.objectContaining({

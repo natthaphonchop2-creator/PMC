@@ -121,6 +121,7 @@ export interface FinanceGoogleCapturePorts {
   listVerifiedExpenseImages(
     monthKey: string,
     expenseId: string,
+    registeredSlots?: ExpenseRegisteredSlot[],
   ): Promise<ExpensePrivateAttachment[]>
   deleteExpenseFileIfUnregistered(input: {
     monthKey: string
@@ -129,6 +130,11 @@ export interface FinanceGoogleCapturePorts {
     expectedAttachment: ExpensePrivateAttachment
     readCurrentClaim: () => Promise<ExpenseDriveSlotClaim>
   }): Promise<void>
+}
+
+export interface ExpenseRegisteredSlot {
+  claim: ExpenseDriveSlotClaim
+  readCurrentClaim(): Promise<ExpenseDriveSlotClaim>
 }
 
 export interface FinanceGooglePorts extends FinanceGoogleReadPorts, FinanceGoogleCapturePorts {}
@@ -846,9 +852,49 @@ export function createFinanceGooglePorts(
       })
     },
 
-    async listVerifiedExpenseImages(monthKey, expenseId) {
+    async listVerifiedExpenseImages(monthKey, expenseId, registeredSlots = []) {
       return withSafeGoogleError('EXPENSE_PRIVATE_FILE_INVALID', async () => {
         const context = await existingExpenseFolder(monthKey, expenseId)
+        if (registeredSlots.length > 0) {
+          const ordinals = new Set<number>()
+          for (const slot of registeredSlots) {
+            const claim = slot.claim
+            if (
+              claim.state !== 'REGISTERED'
+              || claim.registeredFileId === null
+              || claim.expenseId !== expenseId
+              || ordinals.has(claim.ordinal)
+              || typeof slot.readCurrentClaim !== 'function'
+            ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+            ordinals.add(claim.ordinal)
+            const children = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+            const candidates = relevantExpenseFiles(children, {
+              expenseId,
+              ordinal: claim.ordinal,
+              deterministicName: claim.deterministicName,
+              slotClaimId: claim.claimId,
+            })
+            if (!candidates.some(({ id }) => id === claim.registeredFileId)) {
+              throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+            }
+            for (const candidate of candidates.filter(({ id }) => id !== claim.registeredFileId)) {
+              const fileId = requiredId(String(candidate.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+              const loser = (await validatedExpenseFile({
+                monthKey,
+                expenseId,
+                folderId: context.folderId,
+                fileId,
+              })).attachment
+              await deleteExpenseFileIfUnregisteredInternal({
+                monthKey,
+                expenseId,
+                fileId,
+                expectedAttachment: loser,
+                readCurrentClaim: slot.readCurrentClaim,
+              })
+            }
+          }
+        }
         const before = (await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'))
           .filter(({ mimeType }) => mimeType !== FOLDER_MIME)
         if (before.length < 1 || before.length > 5) {

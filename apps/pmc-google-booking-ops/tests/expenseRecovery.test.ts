@@ -279,6 +279,86 @@ describe('Apps Script expense recovery journal', () => {
     expect(ports.expense.auditForExpense(prepared.prepared.expenseId).filter(({ action }) => action === 'VOID')).toHaveLength(1)
   })
 
+  it('blocks a replacement while a durable VOID audit is waiting for row recovery', () => {
+    const ports = createExpenseTestPorts()
+    const original = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'void-pending-original', expectedRevision: 0, amountSatang: 10_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'void-pending-original', expenseId: original.prepared.expenseId,
+      expectedRevision: 0, attachments: original.attachments,
+    }), ports)
+    ports.backend.failSubmissionUpdateCount = 1
+    expect(() => executeExpenseCommand(voidCommand({
+      rootRequestId: 'void-pending-action', expenseId: original.prepared.expenseId,
+      expectedVersion: 2, expectedRevision: 1,
+    }), ports)).toThrow('simulated submission update failure')
+
+    const replacement = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'void-pending-replacement', expectedRevision: 1, amountSatang: 12_000,
+    }))
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'void-pending-replacement', expenseId: replacement.prepared.expenseId,
+      expectedRevision: 1, staffId: 'MANAGER_01',
+      attachments: replacement.attachments.map((item) => ({ ...item, uploadedByStaffId: 'MANAGER_01' })),
+    }), ports)).toThrow('EXPENSE_REVISION_CONFLICT')
+
+    expect(runExpenseRecovery(ports)).toEqual({ inspected: 2, recovered: 1, abandoned: 0, errors: [] })
+    expect(ports.expense.getSubmission('2026-08', original.prepared.expenseId)).toMatchObject({
+      recordState: 'VOID', version: 3,
+    })
+    expect(ports.expense.getSubmission('2026-08', replacement.prepared.expenseId)).toMatchObject({
+      recordState: 'PREPARED', version: 1,
+    })
+    expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toBeNull()
+  })
+
+  it('never mutates a predecessor when recovering a legacy partial VOID after a replacement committed', () => {
+    const ports = createExpenseTestPorts()
+    const original = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'legacy-void-original', expectedRevision: 0, amountSatang: 10_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'legacy-void-original', expenseId: original.prepared.expenseId,
+      expectedRevision: 0, attachments: original.attachments,
+    }), ports)
+    ports.backend.failSubmissionUpdateCount = 1
+    expect(() => executeExpenseCommand(voidCommand({
+      rootRequestId: 'legacy-void-action', expenseId: original.prepared.expenseId,
+      expectedVersion: 2, expectedRevision: 1,
+    }), ports)).toThrow('simulated submission update failure')
+    const auditRows = ports.backend.master.get('EXPENSE_AUDIT')!
+    const pendingVoid = auditRows.find((row) => row.action === 'VOID')!
+    ports.backend.master.set('EXPENSE_AUDIT', auditRows.filter((row) => row !== pendingVoid))
+
+    const replacement = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'legacy-void-replacement', expectedRevision: 1, amountSatang: 12_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'legacy-void-replacement', expenseId: replacement.prepared.expenseId,
+      expectedRevision: 1, staffId: 'MANAGER_01',
+      attachments: replacement.attachments.map((item) => ({ ...item, uploadedByStaffId: 'MANAGER_01' })),
+    }), ports)
+    ports.backend.master.set('EXPENSE_AUDIT', [
+      ...ports.backend.master.get('EXPENSE_AUDIT')!,
+      pendingVoid,
+    ])
+
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 1,
+      recovered: 0,
+      abandoned: 0,
+      errors: ['EXPENSE_REVISION_CONFLICT'],
+    })
+    expect(runExpenseRecovery(ports)).toEqual({ inspected: 0, recovered: 0, abandoned: 0, errors: [] })
+    expect(ports.expense.getSubmission('2026-08', original.prepared.expenseId)).toMatchObject({
+      recordState: 'COMMITTED', version: 2, revision: 1,
+    })
+    expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toMatchObject({
+      expenseId: replacement.prepared.expenseId, recordState: 'COMMITTED', revision: 2,
+    })
+  })
+
   it('reconstructs a missing VOID audit and request result from a durable state-first row', () => {
     const ports = createExpenseTestPorts()
     const prepared = prepareWithManifest(ports, prepareCommand({

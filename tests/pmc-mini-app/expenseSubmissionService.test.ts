@@ -179,6 +179,34 @@ describe('expense submission orchestration', () => {
     expect(state.driveAttachments).toHaveLength(2)
   })
 
+  it('reconciles a late unregistered duplicate before replaying a COMMITTED lease', async () => {
+    const state = serviceState()
+    const firstProcess = serviceFixture([], state)
+    await expect(firstProcess.service.submit(firstProcess.input)).resolves.toEqual(firstProcess.receipt)
+    const winner = state.driveAttachments[0]!
+    state.driveAttachments.push({
+      ...winner,
+      privateFileId: 'late-private-file-1',
+      driveVersion: '99',
+    })
+
+    const restarted = serviceFixture([], state)
+    await expect(restarted.service.submit(restarted.input)).resolves.toEqual(restarted.receipt)
+
+    expect(state.driveAttachments).toHaveLength(2)
+    expect(state.driveAttachments.some(({ privateFileId }) => privateFileId === 'late-private-file-1')).toBe(false)
+    expect(restarted.finance.listVerifiedExpenseImages).toHaveBeenCalledWith(
+      '2026-08',
+      'EXP-202608-0001',
+      expect.arrayContaining([
+        expect.objectContaining({
+          claim: expect.objectContaining({ state: 'REGISTERED', registeredFileId: winner.privateFileId }),
+          readCurrentClaim: expect.any(Function),
+        }),
+      ]),
+    )
+  })
+
   it('takes over an expired partial manifest, blocks the stale owner, and completes missing slots once', async () => {
     const state = serviceState()
     state.failUploadOrdinalOnce = 2
@@ -439,7 +467,24 @@ function serviceFixture(
         throw new Error('private file mismatch')
       }
     }),
-    listVerifiedExpenseImages: vi.fn(async () => {
+    listVerifiedExpenseImages: vi.fn(async (
+      _monthKey: string,
+      _expenseId: string,
+      registeredSlots: Array<{
+        claim: ExpenseDriveSlotClaim
+        readCurrentClaim: () => Promise<ExpenseDriveSlotClaim>
+      }> = [],
+    ) => {
+      for (const slot of registeredSlots) {
+        const current = await slot.readCurrentClaim()
+        if (current.state !== 'REGISTERED' || current.registeredFileId !== slot.claim.registeredFileId) {
+          throw new Error('registered claim mismatch')
+        }
+        state.driveAttachments = state.driveAttachments.filter((attachment) => (
+          attachment.ordinal !== current.ordinal
+          || attachment.privateFileId === current.registeredFileId
+        ))
+      }
       if (state.driveAttachments.length < 1) throw new Error('private files incomplete')
       return state.driveAttachments.map((attachment) => ({ ...attachment }))
     }),

@@ -215,6 +215,72 @@ describe('Apps Script Mini App expense ingress', () => {
     expect(JSON.stringify(response)).not.toContain(prepared.prepared.expenseId)
   })
 
+  it('fails closed when COMMIT attachments no longer match the signed PREPARE manifest', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-corrupt-manifest', commandIdempotencyKey: 'resume-corrupt-manifest:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-corrupt-manifest', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const requests = ports.expenseBackend.master.get('EXPENSE_REQUESTS')!
+    const commitRequest = requests.find((row) => row.commandIdempotencyKey === 'resume-corrupt-manifest:commit')!
+    const command = JSON.parse(String(commitRequest.commandJson)) as Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }>
+    command.payload.attachments[0] = {
+      ...command.payload.attachments[0]!,
+      originalFileName: 'tampered-receipt.jpg',
+    }
+    commitRequest.commandJson = canonicalMiniAppExpenseCommand(command)
+    commitRequest.commandFingerprint = ports.crypto.sha256Hex(String(commitRequest.commandJson))
+    const commitAudit = ports.expenseBackend.master.get('EXPENSE_AUDIT')!
+      .find((row) => row.action === 'COMMIT')!
+    const auditPayload = JSON.parse(String(commitAudit.afterJson)) as Record<string, unknown>
+    commitAudit.afterJson = JSON.stringify({
+      ...auditPayload,
+      commandFingerprint: commitRequest.commandFingerprint,
+      attachments: command.payload.attachments,
+    })
+    commitAudit.eventId = `EAUD:${String(commitRequest.commandFingerprint).slice(0, 48)}:C`
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-corrupt-manifest', staffId: 'STAFF_01', nonce: 'resume-corrupt-manifest',
+    }), ports)).toEqual({
+      ok: true, result: { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' },
+    })
+  })
+
+  it('fails closed when the stored PREPARE command business intent diverges from its durable submission', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-corrupt-prepare', commandIdempotencyKey: 'resume-corrupt-prepare:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-corrupt-prepare', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const requests = ports.expenseBackend.master.get('EXPENSE_REQUESTS')!
+    const prepareRequest = requests.find((row) => row.commandIdempotencyKey === 'resume-corrupt-prepare:prepare')!
+    const command = JSON.parse(String(prepareRequest.commandJson)) as Extract<MiniAppExpenseCommand, { commandType: 'PREPARE_EXPENSE' }>
+    command.payload.amountSatang += 1
+    prepareRequest.commandJson = canonicalMiniAppExpenseCommand(command)
+    prepareRequest.commandFingerprint = ports.crypto.sha256Hex(String(prepareRequest.commandJson))
+    const prepareAudit = ports.expenseBackend.master.get('EXPENSE_AUDIT')!
+      .find((row) => row.action === 'PREPARE')!
+    const auditPayload = JSON.parse(String(prepareAudit.afterJson)) as Record<string, unknown>
+    prepareAudit.afterJson = JSON.stringify({
+      ...auditPayload,
+      commandFingerprint: prepareRequest.commandFingerprint,
+    })
+    prepareAudit.eventId = `EAUD:${String(prepareRequest.commandFingerprint).slice(0, 48)}:P`
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-corrupt-prepare', staffId: 'STAFF_01', nonce: 'resume-corrupt-prepare',
+    }), ports)).toEqual({
+      ok: true, result: { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' },
+    })
+  })
+
   it('routes signed recovery through doPost without exposing worker or private topology', () => {
     const routed = createRoutedPorts()
     const response = processBookingDoPost(event(signedRecoveryEnvelope('expense-recovery-route')), routed)

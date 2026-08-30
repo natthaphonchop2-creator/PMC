@@ -135,9 +135,17 @@ export async function submitExpense(
       ownerId,
     })
     if (lease.state === 'COMMITTED') {
+      const registeredSlots = await Promise.all(validated.stagingReceipts.map(async (receipt) => {
+        const intent = driveSlotIntent(validated, prepared, receipt)
+        return {
+          claim: await dependencies.staging.readDriveSlotClaim(intent),
+          readCurrentClaim: () => dependencies.staging.readDriveSlotClaim(intent),
+        }
+      }))
       const recovered = await dependencies.finance.listVerifiedExpenseImages(
         prepared.monthKey,
         prepared.expenseId,
+        registeredSlots,
       )
       await validateRecoveredAttachments(recovered, prepared, validated, dependencies.staging)
       const receipt = await commitPreparedExpense(
