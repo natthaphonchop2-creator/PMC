@@ -32,7 +32,7 @@ const DRIVE_PERMISSION_FIELDS = [
 const SHEETS_V4_FIELDS = [
   'spreadsheetId,sheets(properties(sheetId,title,index,hidden,sheetType,gridProperties(',
   'rowCount,columnCount,frozenRowCount,frozenColumnCount)),data(startRow,startColumn,',
-  'rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note,textFormatRuns,chipRuns,',
+  'rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note,hyperlink,textFormatRuns,chipRuns,',
   'pivotTable,dataSourceFormula,dataSourceTable)),',
   'rowMetadata(pixelSize,hiddenByUser,hiddenByFilter,developerMetadata),',
   'columnMetadata(pixelSize,hiddenByUser,hiddenByFilter,developerMetadata)),',
@@ -349,7 +349,17 @@ function hasExactOwnerOnlyPermissions(
     && permission.deleted !== true
     && permission.pendingOwner !== true
     && permission.allowFileDiscovery !== true
-    && !nonempty(permission.permissionDetails)
+    && hasOnlyDirectFileOwnerDetails(permission.permissionDetails)
+}
+
+function hasOnlyDirectFileOwnerDetails(
+  details: readonly GoogleAppsScript.Drive_v3.Drive.V3.Schema.PermissionPermissionDetails[] | undefined,
+): boolean {
+  if (!details || details.length === 0) return true
+  return details.every((detail) => detail.inherited === false
+    && detail.permissionType === 'file'
+    && detail.role === 'owner'
+    && !hasUnexpectedKeys(detail, ['inherited', 'permissionType', 'role']))
 }
 
 export function inspectWorkbookPresentationMetadata(
@@ -754,9 +764,17 @@ function contentAttestation(cells: ReadonlyMap<string, InspectedCell>): unknown[
     const note = data.note ?? null
     const runs = data.textFormatRuns?.length ? canonicalValue(data.textFormatRuns) : null
     const chips = nonempty(raw.chipRuns) ? canonicalValue(raw.chipRuns) : null
+    const formatLink = data.userEnteredFormat?.textFormat?.link
+      ? canonicalValue(data.userEnteredFormat.textFormat.link)
+      : null
+    const hyperlink = data.hyperlink ?? null
     return literal === null && note === null && runs === null && chips === null
+      && formatLink === null && hyperlink === null
       ? []
-      : [{ rowIndex, columnIndex, literal, note, textFormatRuns: runs, chipRuns: chips }]
+      : [{
+        rowIndex, columnIndex, literal, note, textFormatRuns: runs, chipRuns: chips,
+        formatLink, hyperlink,
+      }]
   })
 }
 

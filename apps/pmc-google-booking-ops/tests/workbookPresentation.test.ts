@@ -416,6 +416,7 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
         'userEnteredFormat.backgroundColorStyle',
         'userEnteredFormat.textFormat.foregroundColorStyle',
       ]))
+      expect(request.repeatCell?.fields).not.toContain('textFormat.link')
     }
     for (const request of batch.requests.filter((request) => 'addConditionalFormatRule' in request)) {
       const format = request.addConditionalFormatRule?.rule?.booleanRule?.format
@@ -533,6 +534,34 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(JSON.stringify(formula)).not.toContain('PRIVATE_SOURCE')
   })
 
+  it.each(['userEnteredFormat link', 'read-only hyperlink'] as const)(
+    'binds a URI-only %s change into valuesHash without returning the URI',
+    (representation) => {
+      const firstResponse = sheetsV4Response(canonicalSnapshot())
+      const firstCell = firstResponse.sheets!
+        .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+        .data![0]!.rowData![0]!.values![0]!
+      const secondResponse = structuredClone(firstResponse)
+      const secondCell = secondResponse.sheets!
+        .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+        .data![0]!.rowData![0]!.values![0]!
+      if (representation === 'userEnteredFormat link') {
+        firstCell.userEnteredFormat = { textFormat: { link: { uri: 'https://private.invalid/first-link' } } }
+        secondCell.userEnteredFormat = { textFormat: { link: { uri: 'https://private.invalid/second-link' } } }
+      } else {
+        firstCell.hyperlink = 'https://private.invalid/first-link'
+        secondCell.hyperlink = 'https://private.invalid/second-link'
+      }
+
+      const first = inspectWorkbookPresentationMetadata(firstResponse, sha256Hex)
+      const second = inspectWorkbookPresentationMetadata(secondResponse, sha256Hex)
+      expect(sheet(second, 'BOOKING_MASTER').valuesHash)
+        .not.toBe(sheet(first, 'BOOKING_MASTER').valuesHash)
+      expect(JSON.stringify(first)).not.toContain('first-link')
+      expect(JSON.stringify(second)).not.toContain('second-link')
+    },
+  )
+
   it.each([
     ['pivot table', 'pivotTable', { source: { startRowIndex: 0 } }],
     ['data-source table', 'dataSourceTable', { dataSourceId: 'private-data-source-id' }],
@@ -601,7 +630,7 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     const fields = firstCall[1].fields
     for (const field of [
       'chipRuns', 'textFormatRuns', 'dataSourceFormula', 'dataSourceTable',
-      'pivotTable', 'rowMetadata',
+      'pivotTable', 'rowMetadata', 'hyperlink',
     ]) expect(fields).toContain(field)
   })
 
@@ -690,6 +719,13 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
       target.columnWidths = Array(target.maxColumns).fill(100)
     }
     const response = sheetsV4Response(source)
+    const linkedCell = response.sheets!
+      .find((item) => item.properties?.title === 'BOOKING_MASTER')!
+      .data![0]!.rowData![0]!.values![0]!
+    linkedCell.userEnteredFormat = {
+      textFormat: { link: { uri: 'https://private.invalid/preserved-link' } },
+    }
+    linkedCell.hyperlink = 'https://private.invalid/preserved-link'
     const before = inspectWorkbookPresentationMetadata(response, sha256Hex)
     const firstPlan = buildPlan(before)
 
@@ -700,6 +736,8 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(buildPlan(after).actions).toEqual([])
     expect(buildPlan(after).expectedPresentationFingerprint)
       .toBe(firstPlan.expectedPresentationFingerprint)
+    expect(sheet(after, 'BOOKING_MASTER').valuesHash)
+      .toBe(sheet(before, 'BOOKING_MASTER').valuesHash)
   })
 
   it('uses one Sheets batchUpdate and a bounded document lock in the production adapter', () => {
@@ -757,6 +795,68 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
       expect(fields).not.toContain('domain')
       expect(fields).not.toMatch(/permissions\([^)]*\bid\b/)
     }
+  })
+
+  it('accepts the production Drive v3 direct file-owner permission detail', () => {
+    const drive = driveV3BackupFake({
+      folderPermissions: [directOwnerPermission()],
+      backupPermissions: [directOwnerPermission()],
+    })
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(gateway.createPrivateNativeBackup('PMC Booking Presentation Backup').fileId)
+      .toBe('backup-file-test-id')
+    expect(drive.cleanup).not.toHaveBeenCalled()
+  })
+
+  it('accepts one direct owner accumulated across bounded permission pages', () => {
+    const drive = driveV3BackupFake({
+      folderPermissionPages: [[], [directOwnerPermission()]],
+      backupPermissionPages: [[], [directOwnerPermission()]],
+    })
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(gateway.createPrivateNativeBackup('PMC Booking Presentation Backup').fileId)
+      .toBe('backup-file-test-id')
+    expect(drive.permissionList).toHaveBeenCalledTimes(4)
+    expect(drive.permissionList.mock.calls.map((call) => (
+      call[1] as { pageToken?: string }
+    ).pageToken ?? '')).toEqual(['', 'permission-page-2', '', 'permission-page-2'])
+  })
+
+  it.each([
+    ['inherited owner detail', { inherited: true, permissionType: 'file', role: 'owner' }],
+    ['member owner detail', { inherited: false, permissionType: 'member', role: 'owner' }],
+    ['direct writer detail', { inherited: false, permissionType: 'file', role: 'writer' }],
+  ])('rejects an otherwise owner-only permission with %s', (_label, detail) => {
+    const invalid = {
+      ...ownerPermission(),
+      permissionDetails: [detail],
+    }
+    const drive = driveV3BackupFake({
+      folderPermissions: [invalid],
+      backupPermissions: [invalid],
+    })
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(() => gateway.createPrivateNativeBackup('PMC Booking Presentation Backup'))
+      .toThrow('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+    expect(drive.copy).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -1305,8 +1405,10 @@ function applySheetsBatchToResponse(
         for (let columnIndex = targetRange.startColumnIndex!;
           columnIndex < targetRange.endColumnIndex!; columnIndex += 1) {
           rows[rowIndex]!.values![columnIndex] ??= {}
-          rows[rowIndex]!.values![columnIndex]!.userEnteredFormat = structuredClone(
+          rows[rowIndex]!.values![columnIndex]!.userEnteredFormat = mergeManagedCellFormatForTest(
+            rows[rowIndex]!.values![columnIndex]!.userEnteredFormat,
             request.repeatCell.cell!.userEnteredFormat!,
+            request.repeatCell.fields ?? '',
           )
         }
       }
@@ -1323,6 +1425,27 @@ function applySheetsBatchToResponse(
       )
     }
   }
+}
+
+function mergeManagedCellFormatForTest(
+  current: GoogleAppsScript.Sheets.Schema.CellFormat | undefined,
+  incoming: GoogleAppsScript.Sheets.Schema.CellFormat,
+  fields: string,
+): GoogleAppsScript.Sheets.Schema.CellFormat {
+  const result = structuredClone(current ?? {})
+  result.backgroundColorStyle = structuredClone(incoming.backgroundColorStyle)
+  result.textFormat = {
+    ...result.textFormat,
+    bold: incoming.textFormat?.bold,
+    foregroundColorStyle: structuredClone(incoming.textFormat?.foregroundColorStyle),
+  }
+  result.verticalAlignment = incoming.verticalAlignment
+  result.wrapStrategy = incoming.wrapStrategy
+  result.borders = structuredClone(incoming.borders)
+  if (fields.split(',').includes('userEnteredFormat.numberFormat')) {
+    result.numberFormat = structuredClone(incoming.numberFormat)
+  }
+  return result
 }
 
 function roundTripOwnedColorsThroughFloat32(
@@ -1362,6 +1485,8 @@ interface DriveBackupFakeOptions {
   backupPatch?: Partial<GoogleAppsScript.Drive_v3.Drive.V3.Schema.File>
   folderPermissions?: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[]
   backupPermissions?: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[]
+  folderPermissionPages?: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[][]
+  backupPermissionPages?: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[][]
   cleanupThrows?: boolean
   copyReturnedId?: string
 }
@@ -1426,9 +1551,19 @@ function driveV3BackupFake(options: DriveBackupFakeOptions = {}): {
     if (target) files.set(fileId, { ...target, ...resource })
     return files.get(fileId) ?? {}
   })
-  const permissionList = vi.fn((fileId: string) => ({
-    permissions: structuredClone(permissions.get(fileId) ?? []),
-  }))
+  const permissionList = vi.fn((fileId: string, request: { pageToken?: string } = {}) => {
+    const pages = fileId === folderId
+      ? options.folderPermissionPages
+      : fileId === backupId ? options.backupPermissionPages : undefined
+    const pageIndex = request.pageToken === 'permission-page-2' ? 1 : 0
+    if (pages) {
+      return {
+        permissions: structuredClone(pages[pageIndex] ?? []),
+        nextPageToken: pageIndex + 1 < pages.length ? 'permission-page-2' : undefined,
+      }
+    }
+    return { permissions: structuredClone(permissions.get(fileId) ?? []) }
+  })
   const service = {
     Files: {
       get: vi.fn((fileId: string) => structuredClone(files.get(fileId) ?? {})),
@@ -1444,6 +1579,13 @@ function driveV3BackupFake(options: DriveBackupFakeOptions = {}): {
 
 function ownerPermission(): GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission {
   return { type: 'user', role: 'owner', deleted: false, pendingOwner: false }
+}
+
+function directOwnerPermission(): GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission {
+  return {
+    ...ownerPermission(),
+    permissionDetails: [{ inherited: false, permissionType: 'file', role: 'owner' }],
+  }
 }
 
 function readerPermission(): GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission {

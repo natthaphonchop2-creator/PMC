@@ -59,3 +59,16 @@ Fix-round TDD evidence:
 - Focused policy/gateway/build suites: `2` files, `80` tests passed.
 - Full Booking suite: `51` files, `771` tests passed.
 - Booking typecheck/build passed; full lint reported zero errors and the same one pre-existing generated warning; `git diff --check` passed.
+
+## Fix round 2 — direct owner details and immutable links
+
+- Owner-only Drive verification now accepts either an absent permission-detail list or a nonempty list in which every entry is an explicit non-inherited file-level owner detail. Inherited, member, reader/writer, unexpected-detail, and additional top-level permissions remain fail-closed.
+- Production-shaped tests cover the direct owner-detail representation and a bounded two-page permission response for both destination and copied file.
+- The Sheets metadata read now includes read-only `CellData.hyperlink`; immutable content hashing also binds `userEnteredFormat.textFormat.link`. URI-only changes alter `valuesHash`, but URI text never enters a snapshot, workflow result, or error.
+- The batch simulator now applies the adapter's exact field mask, proving owned presentation updates preserve cell-level links and still produce a verified, action-free second plan.
+
+Fix-round 2 verification:
+
+- Focused policy/gateway/build suites: `2` files, `87` tests passed.
+- Full Booking suite: `51` files, `778` tests passed.
+- Booking typecheck/build passed; full lint reported zero errors and the same one pre-existing generated warning; `git diff --check` passed.
