@@ -237,7 +237,7 @@ git commit -m "feat: parse bounded Booking prepare uploads"
 **Interfaces:**
 - Produces: `persistPrepareEvidence(input): Promise<PersistedPrepareEvidence>`.
 - Produces: exact deterministic binding by draft ID, kind, and SHA-256.
-- Produces: versioned signed Apps Script owner-lock draft-state mutation for PREPARE_READY/PREPARE_PARTIAL/CANCEL.
+- Produces: versioned signed Apps Script owner-lock draft-state mutation for PREPARE_BEGIN/PREPARE_READY/PREPARE_PARTIAL/CANCEL.
 
 - [ ] **Step 1: Write failing persistence/recovery tests**
 
@@ -276,7 +276,7 @@ export interface PersistedPrepareEvidence {
 }
 ```
 
-Persist only existing object-key/file-ID columns in Sheets; recompute deterministic bindings. On partial success, send only accumulated references plus `PENDING_APPROVAL` through the signed owner mutation and return a retryable error. Exact retry reuses references and changed binding conflicts. Final READY, partial binding, and terminal retention never use direct Cloud Run Sheets writes. Keep the existing `MINI_APP_ASYNC_STATE v1` wire contract unchanged for deployed workers.
+Before remote persistence, reserve only the canonical prepare binding with PREPARE_BEGIN under the owner lock; no customer field/reference is bound yet. If reservation is ambiguous, reread/resend before uploading anything. Persist only existing object-key/file-ID columns in Sheets; recompute deterministic bindings. On partial success, send only accumulated references plus `PENDING_APPROVAL` through the signed owner mutation and return a retryable error. Exact retry reuses references and changed binding conflicts. Final READY, partial binding, and terminal retention never use direct Cloud Run Sheets writes. Keep the existing `MINI_APP_ASYNC_STATE v1` wire contract unchanged for deployed workers.
 
 - [ ] **Step 4: Run GREEN persistence tests**
 
@@ -323,7 +323,7 @@ git commit -m "feat: recover deterministic Booking evidence uploads"
 expect(identity.verify).toHaveBeenCalledOnce()
 expect(store.getDraft).toHaveBeenCalledOnce()
 expect(store.getActiveBookingConfig).toHaveBeenCalledOnce()
-expect(store.updateDraft).toHaveBeenCalledOnce()
+expect(draftStateIngress.mutate).toHaveBeenCalledTimes(2) // BEGIN + READY
 expect(response).toMatchObject({ status: 200, body: { state: 'READY_TO_CONFIRM' } })
 ```
 
@@ -342,7 +342,7 @@ Expected: FAIL because route/wizard one-request flow do not exist.
 
 - [ ] **Step 3: Implement handler order and client selection**
 
-Handler order is authenticate once → owned draft once → one config snapshot → parse/validate → persist evidence → one final update. Client chooses prepare from config, not error probing. Legacy flow remains only when protocol capability explicitly says prepare false.
+Handler order is authenticate once → owned draft once → one config snapshot → parse/validate → owner-locked binding reservation → persist evidence → one final owner mutation. Client chooses prepare from config, not error probing. Legacy flow remains only when protocol capability explicitly says prepare false.
 
 The route constructs the draft-state ingress client for all Booking staff, independent of the async GCS/Cloud Tasks allowlist. Before advertising prepare, P2 cancellation also uses the owner lock and legacy P2 write routes are either owner-fenced or fail with the persistent upgrade instruction; no reachable direct Sheets writer may race PREPARE_READY/PARTIAL.
 

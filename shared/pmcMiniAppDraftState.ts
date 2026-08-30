@@ -1,4 +1,4 @@
-export type MiniAppDraftStateOperation = 'PREPARE_READY' | 'PREPARE_PARTIAL' | 'CANCEL'
+export type MiniAppDraftStateOperation = 'PREPARE_BEGIN' | 'PREPARE_READY' | 'PREPARE_PARTIAL' | 'CANCEL'
 
 export interface MiniAppNormalizedBookingInputV2 {
   requestId: string
@@ -25,6 +25,21 @@ export interface MiniAppDraftEvidenceItem {
   value: string | null
 }
 
+export type MiniAppDraftEvidenceManifestItem = Omit<MiniAppDraftEvidenceItem, 'value'>
+
+export interface MiniAppDraftPrepareBeginMutation {
+  operation: 'PREPARE_BEGIN'
+  requestId: string
+  draftId: string
+  expectedVersion: number
+  expectedAttempt: number
+  baseVersion: number
+  nowIso: string
+  prepareBindingHash: string
+  input: MiniAppNormalizedBookingInputV2
+  evidence: MiniAppDraftEvidenceManifestItem[]
+}
+
 export interface MiniAppDraftPrepareMutation {
   operation: 'PREPARE_READY' | 'PREPARE_PARTIAL'
   requestId: string
@@ -47,7 +62,7 @@ export interface MiniAppDraftCancelMutation {
   nowIso: string
 }
 
-export type MiniAppDraftStateMutation = MiniAppDraftPrepareMutation | MiniAppDraftCancelMutation
+export type MiniAppDraftStateMutation = MiniAppDraftPrepareBeginMutation | MiniAppDraftPrepareMutation | MiniAppDraftCancelMutation
 
 export interface UnsignedMiniAppDraftStateEnvelope {
   kind: 'MINI_APP_DRAFT_STATE'

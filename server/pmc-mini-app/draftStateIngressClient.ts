@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto'
 import {
   canonicalMiniAppDraftStateIngress,
   type MiniAppDraftEvidenceItem,
+  type MiniAppDraftEvidenceManifestItem,
   type MiniAppDraftStateEnvelope,
   type MiniAppDraftStateMutation,
   type MiniAppDraftStateResult,
@@ -98,18 +99,26 @@ const INPUT_KEYS = [
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
 ] as const
 const EVIDENCE_KEYS = ['kind', 'ordinal', 'contentSha256', 'mimeType', 'storage', 'value'] as const
+const MANIFEST_KEYS = ['kind', 'ordinal', 'contentSha256', 'mimeType', 'storage'] as const
 
 function validMutation(value: MiniAppDraftStateMutation): boolean {
   if (!isRecord(value) || !safeId(value.requestId) || !safeId(value.draftId)
     || !Number.isSafeInteger(value.expectedVersion) || value.expectedVersion < 1
     || !Number.isSafeInteger(value.expectedAttempt) || value.expectedAttempt < 0 || !validIso(value.nowIso)) return false
   if (value.operation === 'CANCEL') return hasExactKeys(value, CANCEL_KEYS)
-  return (value.operation === 'PREPARE_READY' || value.operation === 'PREPARE_PARTIAL')
+  return (value.operation === 'PREPARE_BEGIN' || value.operation === 'PREPARE_READY' || value.operation === 'PREPARE_PARTIAL')
     && hasExactKeys(value, PREPARE_KEYS)
     && Number.isSafeInteger(value.baseVersion) && value.baseVersion >= 1
     && /^[A-Za-z0-9_-]{43}$/.test(value.prepareBindingHash)
     && validNormalizedInput(value.input, value.requestId)
-    && validEvidence(value.evidence, value.draftId, value.operation)
+    && (value.operation === 'PREPARE_BEGIN'
+      ? validEvidenceManifest(value.evidence)
+      : validEvidence(value.evidence, value.draftId, value.operation))
+}
+
+function validEvidenceManifest(values: unknown): boolean {
+  if (!Array.isArray(values) || values.length < 2 || values.length > 20) return false
+  return validEvidenceShape(values, MANIFEST_KEYS)
 }
 
 function validNormalizedInput(value: MiniAppNormalizedBookingInputV2, requestId: string): boolean {
@@ -129,6 +138,16 @@ function validEvidence(
   operation: 'PREPARE_READY' | 'PREPARE_PARTIAL',
 ): boolean {
   if (!Array.isArray(values) || values.length < 2 || values.length > 20) return false
+  if (!validEvidenceShape(values, EVIDENCE_KEYS)) return false
+  for (const item of values) if (item.value !== null && !validEvidenceValue(item, draftId)) return false
+  const persisted = values.filter(({ value }) => value !== null).length
+  return operation === 'PREPARE_READY' ? persisted === values.length : persisted > 0 && persisted < values.length
+}
+
+function validEvidenceShape(
+  values: Array<MiniAppDraftEvidenceItem | MiniAppDraftEvidenceManifestItem>,
+  keys: readonly string[],
+): boolean {
   const storage = values[0]?.storage
   if (storage !== 'STAGED_OBJECT' && storage !== 'DRIVE_FILE') return false
   for (const kind of ['PAYMENT', 'CHAT'] as const) {
@@ -137,16 +156,14 @@ function validEvidence(
   }
   const seen = new Set<string>()
   for (const item of values) {
-    if (!isRecord(item) || !hasExactKeys(item, EVIDENCE_KEYS) || item.storage !== storage
+    if (!isRecord(item) || !hasExactKeys(item as unknown as Record<string, unknown>, keys) || item.storage !== storage
       || !Number.isSafeInteger(item.ordinal) || item.ordinal < 0 || !/^[a-f0-9]{64}$/.test(item.contentSha256)
       || item.mimeType !== 'image/jpeg' && item.mimeType !== 'image/png') return false
     const identity = `${item.kind}:${item.ordinal}`
     if (seen.has(identity)) return false
     seen.add(identity)
-    if (item.value !== null && !validEvidenceValue(item, draftId)) return false
   }
-  const persisted = values.filter(({ value }) => value !== null).length
-  return operation === 'PREPARE_READY' ? persisted === values.length : persisted > 0 && persisted < values.length
+  return true
 }
 
 function validEvidenceValue(item: MiniAppDraftEvidenceItem, draftId: string): boolean {

@@ -14,6 +14,39 @@ import type { BookingPorts } from '../src/ports'
 import { createTestPorts } from './helpers/fakes'
 
 describe('Apps Script Mini App draft-state owner ingress', () => {
+  it('PREPARE_BEGIN reserves only binding/version and replays without customer or reference mutation', () => {
+    const fixture = draftStateFixture(draft())
+    const begin = beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')])
+    const first = processBookingDoPost(event(envelope(begin, 'nonce-begin-first')), fixture.ports)
+    const replay = processBookingDoPost(event(envelope(begin, 'nonce-begin-replay')), fixture.ports)
+
+    expect(first).toMatchObject({ state: 'DRAFT', version: 2, outcome: 'APPLIED' })
+    expect(replay).toMatchObject({ state: 'DRAFT', version: 2, outcome: 'IDEMPOTENT' })
+    expect(fixture.requests.read()).toMatchObject({
+      state: 'DRAFT', retentionState: '', evidenceProjectionHash: begin.prepareBindingHash,
+      customerName: '', facebookName: '', adminId: '', adminName: '', evidenceCount: 0,
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+    })
+    expect(fixture.requests.writeCount).toBe(1)
+  })
+
+  it('PREPARE_BEGIN rejects an unbound terminal row but returns terminal for the same reserved binding', () => {
+    const unbound = draft({ state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 2 })
+    const rejected = draftStateFixture(unbound)
+    const begin = beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')])
+    expect(() => processBookingDoPost(event(envelope(begin, 'nonce-begin-terminal-null')), rejected.ports))
+      .toThrow(/terminal|begin/i)
+
+    const reserved = draft({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 3,
+      evidenceProjectionHash: begin.prepareBindingHash,
+    })
+    const accepted = draftStateFixture(reserved)
+    expect(processBookingDoPost(event(envelope(begin, 'nonce-begin-terminal-same')), accepted.ports))
+      .toMatchObject({ state: 'CANCELLED', version: 3, outcome: 'TERMINAL' })
+    expect(accepted.requests.writeCount).toBe(0)
+  })
+
   it('persists partial refs without input, replays idempotently, then promotes the same binding to ready', () => {
     const fixture = draftStateFixture(draft())
     const partial = prepareMutation('PREPARE_PARTIAL', draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT', null)])
@@ -202,6 +235,21 @@ function prepareMutation(
     expectedAttempt: current.attemptCount, baseVersion: 1, nowIso: '2026-08-30T10:00:00.000Z',
     prepareBindingHash: createHash('sha256').update(canonicalMiniAppPrepareBinding(binding)).digest('base64url'),
     input, evidence, ...patch,
+  }
+}
+
+function beginMutation(
+  current: P2Request,
+  evidence: MiniAppDraftEvidenceItem[],
+): Extract<MiniAppDraftStateMutation, { operation: 'PREPARE_BEGIN' }> {
+  const ready = prepareMutation('PREPARE_READY', current, evidence)
+  return {
+    ...ready,
+    operation: 'PREPARE_BEGIN',
+    evidence: ready.evidence.map((item) => ({
+      kind: item.kind, ordinal: item.ordinal, contentSha256: item.contentSha256,
+      mimeType: item.mimeType, storage: item.storage,
+    })),
   }
 }
 

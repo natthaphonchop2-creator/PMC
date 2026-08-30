@@ -161,3 +161,41 @@ Round-3 verification:
 - Touched-path ESLint and `git diff --check`: passed.
 
 No route was registered, no capability was enabled, no async allowlist changed, and no deploy, live upload, Sheet mutation or external production call was made. Task 4 still owns all-staff runtime wiring and switching P2 CANCEL to this owner ingress before advertising prepare.
+
+---
+
+## Fix round 4 — PREPARE_BEGIN reservation before remote evidence
+
+The owner-serialized draft-state contract now includes `PREPARE_BEGIN`. It carries the canonical base version, normalized P2 input and ordered typed evidence manifest without any Drive/object reference values. Apps Script revalidates config and recomputes the same binding, then reserves only `evidenceProjectionHash`, timestamp and version under the script lock. It leaves state, retention, customer/booking fields, evidence columns and evidence count unchanged.
+
+`bookingPrepare` must receive or attest this reservation before entering either the GCS or Drive persistence path:
+
+- exact BEGIN result/digest proceeds without a reread;
+- ambiguous BEGIN performs one authoritative reread;
+- reread proving no apply permits one idempotent BEGIN resend;
+- two pre-apply losses return `BOOKING_PREPARE_RETRY` with zero remote writes;
+- applied-but-lost BEGIN is recovered from the same binding;
+- another binding conflicts before remote evidence;
+- cancellation observed after BEGIN but before remote persistence returns conflict with zero remote calls;
+- a terminal row with the same prior reservation may later retry the exact payload, deterministically reuse remote evidence and attach every durable reference without reopening.
+
+The sibling domain treats null-binding terminal BEGIN as invalid and same-binding terminal BEGIN as terminal/idempotent. Normal success now consists of exactly two owner mutations—BEGIN then READY—and still zero direct Cloud Run Sheet mutations. READY/CANCEL and final-response loss continue using the same shared owner lock and projection digest.
+
+Fix-round-4 TDD evidence:
+
+- Clean success and partial tests first failed their new zero-direct-write/owner-operation expectations against the prior implementation.
+- New BEGIN client/domain tests cover reference-free manifests, no customer/reference mutation, exact replay and terminal null/same-binding behavior.
+- Double pre-apply loss, post-BEGIN cancellation, remote-phase cancellation with two final-call losses, later exact retry and changed-terminal-payload conflict are covered before remote/retention assertions.
+
+Fix-round-4 verification:
+
+- Focused draft-state client/domain, prepare, legacy async-state, evidence, worker and store regressions: **8 files, 161 tests passed**.
+- Full Mini App suite: **72 files, 978 tests passed**.
+- Full Apps Script Booking suite: **49 files, 682 tests passed**.
+- `npm run build:server`: passed.
+- `npm run booking:typecheck`: passed.
+- `npm run booking:build`: passed.
+- `npm run build:mini-app`: passed.
+- Touched-path ESLint and `git diff --check`: passed.
+
+No route, capability, runtime switch, deployment, live upload or external production mutation was performed. Task 4 still owns wiring the sibling client for every staff member and moving P2 cancellation to owner `CANCEL` before `prepare=true`.

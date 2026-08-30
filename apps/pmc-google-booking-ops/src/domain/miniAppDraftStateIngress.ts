@@ -3,6 +3,7 @@ import {
   canonicalMiniAppDraftStateIngress,
   canonicalMiniAppPrepareBinding,
   type MiniAppDraftEvidenceItem,
+  type MiniAppDraftPrepareBeginMutation,
   type MiniAppDraftPrepareMutation,
   type MiniAppDraftProjection,
   type MiniAppDraftStateEnvelope,
@@ -40,9 +41,9 @@ export function mutateMiniAppDraftState(input: unknown, ports: BookingPorts): Mi
     if (ports.repositories.lineDirectory.hasNonce(envelope.nonce)) throw new Error('mini app draft state replay detected')
     const current = asP2Record(ports.miniAppRequests.getByRequestId(envelope.payload.requestId))
     if (!current || current.draftId !== envelope.payload.draftId) throw new Error('mini app draft state request not found')
-    const mutation = envelope.payload.operation === 'CANCEL'
-      ? applyCancel(current, envelope.payload)
-      : applyPrepare(current, envelope.payload, ports)
+    const mutation = envelope.payload.operation === 'CANCEL' ? applyCancel(current, envelope.payload)
+      : envelope.payload.operation === 'PREPARE_BEGIN' ? applyPrepareBegin(current, envelope.payload, ports)
+        : applyPrepare(current, envelope.payload, ports)
     const persisted = mutation.write
       ? asP2Record(ports.miniAppRequests.updateByRequestId(current.requestId, current.version, mutation.next))!
       : current
@@ -81,33 +82,25 @@ function validatePayload(payload: MiniAppDraftStateMutation): void {
     if (!hasExactKeys(payload, CANCEL_KEYS)) throw new Error('invalid mini app draft cancel payload')
     return
   }
-  if ((payload.operation !== 'PREPARE_READY' && payload.operation !== 'PREPARE_PARTIAL')
+  if ((payload.operation !== 'PREPARE_BEGIN' && payload.operation !== 'PREPARE_READY' && payload.operation !== 'PREPARE_PARTIAL')
     || !hasExactKeys(payload, PREPARE_KEYS) || !Number.isSafeInteger(payload.baseVersion) || payload.baseVersion < 1
     || !/^[A-Za-z0-9_-]{43}$/.test(payload.prepareBindingHash)
     || !validNormalizedInput(payload.input, payload.requestId)) throw new Error('invalid mini app draft prepare payload')
-  validateEvidence(payload)
+  if (payload.operation === 'PREPARE_BEGIN') validateEvidenceManifest(payload.evidence)
+  else validateEvidence(payload)
+}
+
+function validateEvidenceManifest(values: MiniAppDraftPrepareBeginMutation['evidence']): void {
+  if (!Array.isArray(values) || values.length < 2 || values.length > 20) throw new Error('invalid mini app draft evidence')
+  validateEvidenceShape(values, ['kind', 'ordinal', 'contentSha256', 'mimeType', 'storage'])
 }
 
 function validateEvidence(payload: MiniAppDraftPrepareMutation): void {
   if (!Array.isArray(payload.evidence) || payload.evidence.length < 2 || payload.evidence.length > 20) {
     throw new Error('invalid mini app draft evidence')
   }
-  const storage = payload.evidence[0]?.storage
-  if (storage !== 'STAGED_OBJECT' && storage !== 'DRIVE_FILE') throw new Error('invalid mini app draft evidence storage')
-  for (const kind of ['PAYMENT', 'CHAT'] as const) {
-    const items = payload.evidence.filter((item) => item.kind === kind).sort((left, right) => left.ordinal - right.ordinal)
-    if (items.length < 1 || items.length > 10 || items.some((item, index) => item.ordinal !== index)) {
-      throw new Error('invalid mini app draft evidence ordinal')
-    }
-  }
-  const identities = new Set<string>()
+  validateEvidenceShape(payload.evidence, EVIDENCE_KEYS)
   for (const item of payload.evidence) {
-    if (!isRecord(item) || !hasExactKeys(item, EVIDENCE_KEYS) || item.storage !== storage
-      || !Number.isSafeInteger(item.ordinal) || item.ordinal < 0 || !/^[a-f0-9]{64}$/.test(item.contentSha256)
-      || item.mimeType !== 'image/jpeg' && item.mimeType !== 'image/png') throw new Error('invalid mini app draft evidence')
-    const identity = `${item.kind}:${item.ordinal}`
-    if (identities.has(identity)) throw new Error('duplicate mini app draft evidence ordinal')
-    identities.add(identity)
     if (item.value !== null && !validEvidenceValue(item, payload.draftId)) throw new Error('invalid mini app draft evidence reference')
   }
   const persisted = payload.evidence.filter(({ value }) => value !== null).length
@@ -116,21 +109,48 @@ function validateEvidence(payload: MiniAppDraftPrepareMutation): void {
   }
 }
 
+function validateEvidenceShape(
+  values: Array<{ kind: 'PAYMENT' | 'CHAT'; ordinal: number; contentSha256: string; mimeType: string; storage: string }>,
+  keys: readonly string[],
+): void {
+  const storage = values[0]?.storage
+  if (storage !== 'STAGED_OBJECT' && storage !== 'DRIVE_FILE') throw new Error('invalid mini app draft evidence storage')
+  for (const kind of ['PAYMENT', 'CHAT'] as const) {
+    const items = values.filter((item) => item.kind === kind).sort((left, right) => left.ordinal - right.ordinal)
+    if (items.length < 1 || items.length > 10 || items.some((item, index) => item.ordinal !== index)) {
+      throw new Error('invalid mini app draft evidence ordinal')
+    }
+  }
+  const identities = new Set<string>()
+  for (const item of values) {
+    if (!isRecord(item) || !hasExactKeys(item, keys) || item.storage !== storage
+      || !Number.isSafeInteger(item.ordinal) || item.ordinal < 0 || !/^[a-f0-9]{64}$/.test(item.contentSha256)
+      || item.mimeType !== 'image/jpeg' && item.mimeType !== 'image/png') throw new Error('invalid mini app draft evidence')
+    const identity = `${item.kind}:${item.ordinal}`
+    if (identities.has(identity)) throw new Error('duplicate mini app draft evidence ordinal')
+    identities.add(identity)
+  }
+}
+
+function applyPrepareBegin(current: P2Record, payload: MiniAppDraftPrepareBeginMutation, ports: BookingPorts) {
+  if (current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft prepare attempt')
+  const { bindingHash } = resolvePrepare(current, payload, ports)
+  if (current.evidenceProjectionHash === null) {
+    if (current.state === 'CANCELLED' || current.state === 'EXPIRED') throw new Error('terminal mini app draft begin rejected')
+    if (current.state !== 'DRAFT' || current.version !== payload.expectedVersion || referenceCount(current) !== 0) {
+      throw new Error('stale mini app draft begin version')
+    }
+    return changed(current, { evidenceProjectionHash: bindingHash, updatedAt: payload.nowIso })
+  }
+  if (current.evidenceProjectionHash !== bindingHash) throw new Error('mini app draft prepare binding conflict')
+  if (current.state === 'CANCELLED' || current.state === 'EXPIRED') return unchanged(current, 'TERMINAL')
+  if (current.state !== 'DRAFT' && current.state !== 'READY_TO_CONFIRM') throw new Error('mini app draft begin state conflict')
+  return unchanged(current)
+}
+
 function applyPrepare(current: P2Record, payload: MiniAppDraftPrepareMutation, ports: BookingPorts) {
   if (current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft prepare attempt')
-  const snapshots = resolveSnapshots(current, payload.input, ports)
-  const bindingProjection = {
-    requestId: payload.requestId, draftId: payload.draftId, baseVersion: payload.baseVersion,
-    staffId: current.staffId, recorderName: snapshots.recorder.name,
-    adminId: snapshots.admin.id, adminName: snapshots.admin.name,
-    aeId: snapshots.ae?.id ?? null, aeName: snapshots.ae?.name ?? 'ไม่ระบุ', input: payload.input,
-    evidence: payload.evidence.map((item) => ({
-      kind: item.kind, ordinal: item.ordinal, contentSha256: item.contentSha256,
-      mimeType: item.mimeType, storage: item.storage,
-    })),
-  }
-  const bindingHash = ports.crypto.sha256Base64Url(canonicalMiniAppPrepareBinding(bindingProjection))
-  if (bindingHash !== payload.prepareBindingHash) throw new Error('mini app draft prepare binding conflict')
+  const { snapshots, bindingHash } = resolvePrepare(current, payload, ports)
   if (current.evidenceProjectionHash === null) {
     const terminalWon = current.state === 'CANCELLED' || current.state === 'EXPIRED'
     if ((!terminalWon && current.state !== 'DRAFT')
@@ -167,6 +187,27 @@ function applyPrepare(current: P2Record, payload: MiniAppDraftPrepareMutation, p
     depositAmount: payload.input.depositAmount, channelId: payload.input.channelId, ...evidence,
     safeErrorCode: null, updatedAt: payload.nowIso,
   })
+}
+
+function resolvePrepare(
+  current: P2Record,
+  payload: MiniAppDraftPrepareBeginMutation | MiniAppDraftPrepareMutation,
+  ports: BookingPorts,
+) {
+  const snapshots = resolveSnapshots(current, payload.input, ports)
+  const bindingProjection = {
+    requestId: payload.requestId, draftId: payload.draftId, baseVersion: payload.baseVersion,
+    staffId: current.staffId, recorderName: snapshots.recorder.name,
+    adminId: snapshots.admin.id, adminName: snapshots.admin.name,
+    aeId: snapshots.ae?.id ?? null, aeName: snapshots.ae?.name ?? 'ไม่ระบุ', input: payload.input,
+    evidence: payload.evidence.map((item) => ({
+      kind: item.kind, ordinal: item.ordinal, contentSha256: item.contentSha256,
+      mimeType: item.mimeType, storage: item.storage,
+    })),
+  }
+  const bindingHash = ports.crypto.sha256Base64Url(canonicalMiniAppPrepareBinding(bindingProjection))
+  if (bindingHash !== payload.prepareBindingHash) throw new Error('mini app draft prepare binding conflict')
+  return { snapshots, bindingHash }
 }
 
 function applyCancel(current: P2Record, payload: Extract<MiniAppDraftStateMutation, { operation: 'CANCEL' }>) {

@@ -78,19 +78,27 @@ export async function persistPrepareEvidence(input: PersistPrepareEvidenceInput)
   const bindingHash = prepareBindingHash(input, validationDraft, normalizedInput, descriptors)
   if (input.draft.state === 'READY_TO_CONFIRM') return exactReadyReplay(input, descriptors, bindingHash)
   assertRecoverableDraft(input.draft, input.version, bindingHash)
+  const startedTerminal = input.draft.state === 'CANCELLED' || input.draft.state === 'EXPIRED'
+  const reservedDraft = await reserveOwnerBinding(input, descriptors, bindingHash, normalizedInput)
+  if (!startedTerminal && (reservedDraft.state === 'CANCELLED' || reservedDraft.state === 'EXPIRED')) {
+    throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  }
+  const reservedInput = { ...input, draft: reservedDraft }
 
   let persisted: PersistedReferences
   try {
-    persisted = input.persistence.type === 'ASYNC' ? await persistAsync(input, descriptors) : await persistSync(input, descriptors)
+    persisted = reservedInput.persistence.type === 'ASYNC'
+      ? await persistAsync(reservedInput, descriptors)
+      : await persistSync(reservedInput, descriptors)
   } catch (error) {
     if (!(error instanceof RemoteEvidencePersistenceError)) throw error
-    const draft = await mutateOwnerState(input, descriptors, error.persisted, bindingHash, normalizedInput, 'PREPARE_PARTIAL')
+    const draft = await mutateOwnerState(reservedInput, descriptors, error.persisted, bindingHash, normalizedInput, 'PREPARE_PARTIAL')
     if (draft.state === 'CANCELLED' || draft.state === 'EXPIRED') {
       throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT', referenceCount(error.persisted))
     }
     throw new BookingPreparePersistenceError('BOOKING_PREPARE_RETRY', referenceCount(error.persisted))
   }
-  const draft = await mutateOwnerState(input, descriptors, persisted, bindingHash, normalizedInput, 'PREPARE_READY')
+  const draft = await mutateOwnerState(reservedInput, descriptors, persisted, bindingHash, normalizedInput, 'PREPARE_READY')
   if (draft.state === 'CANCELLED' || draft.state === 'EXPIRED') {
     throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT', referenceCount(persisted))
   }
@@ -173,7 +181,14 @@ function exactReadyReplay(input: PersistPrepareEvidenceInput, descriptors: reado
   return { ...persisted, complete: true, draft: structuredClone(input.draft) }
 }
 function assertRecoverableDraft(draft: MiniAppRequestRecord, version: number, bindingHash: string): void {
-  if (draft.state !== 'DRAFT' || draft.payloadHash !== null) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  if (draft.payloadHash !== null) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  if (draft.state === 'CANCELLED' || draft.state === 'EXPIRED') {
+    if (draft.evidenceProjectionHash !== bindingHash || draft.version < version + 2) {
+      throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+    }
+    return
+  }
+  if (draft.state !== 'DRAFT') throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   if (draft.evidenceProjectionHash === null) {
     if (draft.version !== version || referenceCountFromDraft(draft) !== 0) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   } else if (draft.evidenceProjectionHash !== bindingHash) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
@@ -222,6 +237,56 @@ async function persistSync(input: PersistPrepareEvidenceInput, descriptors: read
   return splitReferences(all, paymentCount)
 }
 
+async function reserveOwnerBinding(
+  input: PersistPrepareEvidenceInput,
+  descriptors: readonly EvidenceDescriptor[],
+  bindingHash: string,
+  normalizedInput: MiniAppNormalizedBookingInputV2,
+): Promise<MiniAppRequestRecord> {
+  const mutation = beginMutation(input, descriptors, bindingHash, normalizedInput)
+  const expected = expectedBeginProjection(input.draft, bindingHash, input.now())
+  try {
+    const result = await input.draftStateIngress.mutate(mutation)
+    if (trustedResult(result, expected)) return withResultVersion(expected, result)
+  } catch { /* exactly one authoritative reread below */ }
+  const reread = await safeReadDraft(input.store, input.draft.draftId)
+  if (!reread) throw new BookingPreparePersistenceError('BOOKING_PREPARE_RETRY')
+  if (reread.evidenceProjectionHash === bindingHash) {
+    if (reread.state === 'DRAFT' || reread.state === 'CANCELLED' || reread.state === 'EXPIRED') return reread
+    throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  }
+  if (reread.evidenceProjectionHash !== null) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  if (reread.state === 'CANCELLED' || reread.state === 'EXPIRED') throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  if (projectionDigest(reread) !== projectionDigest(input.draft)) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  try {
+    const result = await input.draftStateIngress.mutate(mutation)
+    if (trustedResult(result, expected)) return withResultVersion(expected, result)
+  } catch { /* bounded resend has no remote side effect and no second reread */ }
+  throw new BookingPreparePersistenceError('BOOKING_PREPARE_RETRY')
+}
+
+function beginMutation(
+  input: PersistPrepareEvidenceInput,
+  descriptors: readonly EvidenceDescriptor[],
+  bindingHash: string,
+  normalizedInput: MiniAppNormalizedBookingInputV2,
+): MiniAppDraftStateMutation {
+  return {
+    operation: 'PREPARE_BEGIN', requestId: input.draft.requestId, draftId: input.draft.draftId,
+    expectedVersion: input.draft.version, expectedAttempt: input.draft.attemptCount, baseVersion: input.version,
+    nowIso: input.now(), prepareBindingHash: bindingHash, input: normalizedInput,
+    evidence: descriptors.map((item) => ({
+      kind: item.kind, ordinal: item.ordinal, contentSha256: item.rawContentSha256,
+      mimeType: item.mimeType, storage: input.persistence.type === 'ASYNC' ? 'STAGED_OBJECT' : 'DRIVE_FILE',
+    })),
+  }
+}
+
+function expectedBeginProjection(draft: MiniAppRequestRecord, bindingHash: string, updatedAt: string): MiniAppRequestRecord {
+  if (draft.evidenceProjectionHash === bindingHash) return structuredClone(draft)
+  return { ...structuredClone(draft), evidenceProjectionHash: bindingHash, updatedAt, version: draft.version + 1 }
+}
+
 async function mutateOwnerState(
   input: PersistPrepareEvidenceInput,
   descriptors: readonly EvidenceDescriptor[],
@@ -243,10 +308,14 @@ async function mutateOwnerState(
   const cancelWonWithoutPrepare = (reread.state === 'CANCELLED' || reread.state === 'EXPIRED')
     && reread.evidenceProjectionHash === null && referenceCountFromDraft(reread) === 0
     && reread.version === input.draft.version + 1
-  if (!cancelWonWithoutPrepare && projectionDigest(reread) !== projectionDigest(input.draft)) {
+  const terminalSameBindingNoApply = (reread.state === 'CANCELLED' || reread.state === 'EXPIRED')
+    && reread.evidenceProjectionHash === bindingHash
+    && !attestsApplied(reread, expected, persisted, bindingHash, input.persistence.type, operation)
+  if (!cancelWonWithoutPrepare && !terminalSameBindingNoApply
+    && projectionDigest(reread) !== projectionDigest(input.draft)) {
     throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   }
-  const resendExpected = cancelWonWithoutPrepare
+  const resendExpected = cancelWonWithoutPrepare || terminalSameBindingNoApply
     ? expectedOwnerProjection({ ...input, draft: reread }, descriptors, persisted, bindingHash, operation)
     : expected
   try {

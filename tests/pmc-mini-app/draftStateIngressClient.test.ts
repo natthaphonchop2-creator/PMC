@@ -10,6 +10,17 @@ import {
 } from '../../shared/pmcMiniAppDraftState'
 
 describe('PMC Mini App signed draft-state ingress client', () => {
+  it('signs PREPARE_BEGIN with only binding inputs and an evidence manifest without references', () => {
+    const built = buildMiniAppDraftStateIngress(beginMutation(), {
+      timestamp: 1_800_000_000, nonce: 'nonce-draft-begin-1',
+    }, 'server-secret')
+
+    expect(built.body.payload.operation).toBe('PREPARE_BEGIN')
+    if (built.body.payload.operation !== 'PREPARE_BEGIN') throw new Error('expected begin')
+    expect(built.body.payload.evidence.every((item) => !('value' in item))).toBe(true)
+    expect(JSON.stringify(built.body.payload)).not.toMatch(/drafts\/|drive-file/)
+  })
+
   it('signs an exact PREPARE_READY sibling envelope without changing async-state v1', () => {
     const built = buildMiniAppDraftStateIngress(prepareMutation('PREPARE_READY'), {
       timestamp: 1_800_000_000, nonce: 'nonce-draft-state-1',
@@ -94,6 +105,19 @@ function prepareMutation(operation: 'PREPARE_READY' | 'PREPARE_PARTIAL'): MiniAp
       evidence(0),
       { ...evidence(0, 'CHAT'), ordinal: 0, value: operation === 'PREPARE_PARTIAL' ? null : evidence(0, 'CHAT').value },
     ],
+  }
+}
+
+function beginMutation(): MiniAppDraftStateMutation {
+  const ready = prepareMutation('PREPARE_READY')
+  if (ready.operation !== 'PREPARE_READY') throw new Error('expected ready')
+  return {
+    ...ready,
+    operation: 'PREPARE_BEGIN',
+    evidence: ready.evidence.map((item) => ({
+      kind: item.kind, ordinal: item.ordinal, contentSha256: item.contentSha256,
+      mimeType: item.mimeType, storage: item.storage,
+    })),
   }
 }
 

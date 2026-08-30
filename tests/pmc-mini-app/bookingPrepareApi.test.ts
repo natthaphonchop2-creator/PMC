@@ -40,8 +40,9 @@ describe('PMC Mini App Booking prepare persistence', () => {
     ])
     expect(result.payment[0]?.deterministicUploadId).toBe(stagedUploadId('PAYMENT', png(1).bytes))
     expect(fixture.staging?.maxActive()).toBe(4)
-    expect(fixture.store.writeCount()).toBe(1)
+    expect(fixture.store.writeCount()).toBe(2)
     expect(fixture.store.directWriteCount()).toBe(0)
+    expect(fixture.draftStateIngress.operations()).toEqual(['PREPARE_BEGIN', 'PREPARE_READY'])
   })
 
   it('recovers an exact retry after response loss without another remote write', async () => {
@@ -57,7 +58,37 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(first.payment).toEqual(replay.payment)
     expect(first.chat).toEqual(replay.chat)
     expect(fixture.staging!.putCount()).toBe(putsAfterFirst)
-    expect(fixture.store.writeCount()).toBe(1)
+    expect(fixture.store.writeCount()).toBe(2)
+  })
+
+  it('performs zero remote writes after two lost PREPARE_BEGIN calls and lets a later exact retry reserve', async () => {
+    const fixture = prepareFixture('ASYNC')
+    const input = fixture.input()
+    fixture.draftStateIngress.loseBeforeNextApplies(2)
+
+    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    expect(fixture.staging!.putCount()).toBe(0)
+    expect(fixture.store.writeCount()).toBe(0)
+
+    const recovered = await persistPrepareEvidence({ ...input, draft: fixture.store.read() })
+    expect(recovered.draft).toMatchObject({ state: 'READY_TO_CONFIRM', evidenceCount: 2 })
+    expect(fixture.draftStateIngress.operations()).toEqual([
+      'PREPARE_BEGIN', 'PREPARE_BEGIN', 'PREPARE_BEGIN', 'PREPARE_READY',
+    ])
+  })
+
+  it('stops before remote persistence when cancellation wins after BEGIN but before its response', async () => {
+    const fixture = prepareFixture('ASYNC')
+    fixture.draftStateIngress.afterBeginApply(() => fixture.store.commitTerminal('CANCELLED'))
+    fixture.draftStateIngress.loseNextResponse()
+
+    await expect(persistPrepareEvidence(fixture.input())).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.staging!.putCount()).toBe(0)
+    expect(fixture.store.read()).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceCount: 0,
+      customerName: '', adminId: '', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      evidenceProjectionHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    })
   })
 
   it.each([
@@ -82,7 +113,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     await expect(persistPrepareEvidence(change({ ...initial, draft: fixture.store.read() })))
       .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
     expect(fixture.staging!.putCount()).toBe(puts)
-    expect(fixture.store.writeCount()).toBe(1)
+    expect(fixture.store.writeCount()).toBe(2)
   })
 
   it('persists only partial async references as non-ready retention state and reuses them on retry', async () => {
@@ -108,7 +139,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(recovered.draft).toMatchObject({ state: 'READY_TO_CONFIRM', retentionState: '', evidenceCount: 4 })
     expect(fixture.staging!.createdCount()).toBe(4)
     expect(fixture.staging!.createdCount()).toBeGreaterThan(createdBeforeRetry)
-    expect(fixture.store.writeCount()).toBe(2)
+    expect(fixture.store.writeCount()).toBe(3)
   })
 
   it('rejects changed input against a partially persisted binding before retrying remote evidence', async () => {
@@ -136,7 +167,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     ['different order', (input: PersistPrepareEvidenceInput) => ({
       ...input, paymentFiles: [png(3), png(2), png(1)],
     })],
-  ] as const)('keeps the first durable partial binding authoritative against concurrent %s', async (_label, change) => {
+  ] as const)('lets the first PREPARE_BEGIN reservation win against concurrent %s', async (_label, change) => {
     const fixture = prepareFixture('ASYNC')
     const initial = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
     const competingStaging = new DeferredStaging()
@@ -147,15 +178,13 @@ describe('PMC Mini App Booking prepare persistence', () => {
     const competingResult = persistPrepareEvidence(competing)
     await competingStaging.entered()
 
-    fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
-    await expect(persistPrepareEvidence(initial)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
-    const authoritative = fixture.store.read()
-    const writes = fixture.store.writeCount()
+    await expect(persistPrepareEvidence(initial)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.staging!.putCount()).toBe(0)
     competingStaging.release()
 
-    await expect(competingResult).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
-    expect(fixture.store.read()).toEqual(authoritative)
-    expect(fixture.store.writeCount()).toBe(writes)
+    await expect(competingResult).resolves.toMatchObject({ draft: { state: 'READY_TO_CONFIRM' } })
+    expect(fixture.store.read()).toMatchObject({ state: 'READY_TO_CONFIRM', evidenceCount: 4 })
+    expect(fixture.store.writeCount()).toBe(2)
   })
 
   it('keeps a partial base-version binding authoritative over a changed recovery version', async () => {
@@ -207,7 +236,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(result.payment.map(({ storage }) => storage)).toEqual(['DRIVE_FILE', 'DRIVE_FILE', 'DRIVE_FILE'])
     expect(fixture.ingress?.maxActive()).toBe(1)
     expect(fixture.ingress?.callCount()).toBe(5)
-    expect(fixture.store.writeCount()).toBe(1)
+    expect(fixture.store.writeCount()).toBe(2)
   })
 
   it('recovers synchronous partial failure by reusing deterministic Drive files', async () => {
@@ -224,16 +253,30 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(recovered.draft).toMatchObject({ state: 'READY_TO_CONFIRM', retentionState: '', evidenceCount: 4 })
     expect(fixture.ingress!.createdCount()).toBe(4)
     expect(fixture.ingress!.maxActive()).toBe(1)
-    expect(fixture.store.writeCount()).toBe(2)
+    expect(fixture.store.writeCount()).toBe(3)
   })
 
   it('retains every async object without reopening when cancellation overtakes in-flight staging', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
-    fixture.draftStateIngress.loseBeforeNextApply()
+    fixture.draftStateIngress.loseBeforeOperation('PREPARE_READY', 2)
     fixture.staging!.afterFirstCreate(() => fixture.store.commitTerminal('CANCELLED'))
 
-    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+
+    const pendingTerminal = fixture.store.read()
+    expect(pendingTerminal).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceCount: 0,
+      evidenceProjectionHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    })
+    const putsBeforeChanged = fixture.staging!.putCount()
+    await expect(persistPrepareEvidence({
+      ...input, draft: pendingTerminal, input: { ...input.input, customerName: 'ลูกค้าคนอื่น' },
+    })).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.staging!.putCount()).toBe(putsBeforeChanged)
+
+    await expect(persistPrepareEvidence({ ...input, draft: pendingTerminal }))
+      .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
 
     const terminal = fixture.store.read()
     expect(terminal).toMatchObject({
@@ -244,7 +287,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
       objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
     ])
     expect(terminal.chatEvidenceObjectKeys).toEqual([objectKey('CHAT', jpeg(4).bytes)])
-    expect(fixture.draftStateIngress.callCount()).toBe(2)
+    expect(fixture.staging!.createdCount()).toBe(4)
     const puts = fixture.staging!.putCount()
     const writes = fixture.store.writeCount()
 
@@ -259,7 +302,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     const fixture = prepareFixture('SYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2)], chatFiles: [jpeg(3), jpeg(4)] })
     fixture.draftStateIngress.loseNextResponse()
-    const finalWrite = fixture.draftStateIngress.pauseNextMutation()
+    const finalWrite = fixture.draftStateIngress.pauseBeforeOperation('PREPARE_READY')
     const result = persistPrepareEvidence(input)
     await finalWrite.entered
     fixture.store.commitTerminal('EXPIRED')
@@ -273,7 +316,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
       paymentEvidenceFileIds: ['drive-file-01', 'drive-file-02'],
       chatEvidenceFileIds: ['drive-file-03', 'drive-file-04'],
     })
-    expect(fixture.draftStateIngress.callCount()).toBe(1)
+    expect(fixture.draftStateIngress.callCount()).toBe(2)
     const calls = fixture.ingress!.callCount()
     const writes = fixture.store.writeCount()
 
@@ -372,6 +415,19 @@ class PrepareStore implements MiniAppStore {
       this.writes += 1
       return fakeResult(this.current, 'APPLIED')
     }
+    if (input.operation === 'PREPARE_BEGIN') {
+      if (this.current.evidenceProjectionHash === null) {
+        if (this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
+          || this.current.version !== input.expectedVersion) throw new Error('BOOKING_PREPARE_CONFLICT')
+        this.current = { ...this.current, evidenceProjectionHash: input.prepareBindingHash,
+          updatedAt: input.nowIso, version: this.current.version + 1 }
+        this.writes += 1
+        return fakeResult(this.current, 'APPLIED')
+      }
+      if (this.current.evidenceProjectionHash !== input.prepareBindingHash) throw new Error('BOOKING_PREPARE_CONFLICT')
+      return fakeResult(this.current,
+        this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED' ? 'TERMINAL' : 'IDEMPOTENT')
+    }
     if (this.current.evidenceProjectionHash === null) {
       const terminal = this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
       if (this.current.version !== input.expectedVersion + (terminal ? 1 : 0)) throw new Error('BOOKING_PREPARE_CONFLICT')
@@ -410,23 +466,33 @@ class PrepareStore implements MiniAppStore {
 class PrepareOwnerDraftStateIngress implements DraftStateIngressPort {
   private tail: Promise<void> = Promise.resolve()
   private loseResponse = false
-  private loseBeforeApply = false
+  private loseBeforeApply = 0
   private calls = 0
+  private readonly operationLog: MiniAppDraftStateMutation['operation'][] = []
+  private afterBeginHook: (() => void) | null = null
+  private readonly loseByOperation = new Map<MiniAppDraftStateMutation['operation'], number>()
+  private operationGate: {
+    operation: MiniAppDraftStateMutation['operation']; entered: () => void; wait: Promise<void>
+  } | null = null
 
   constructor(private readonly store: PrepareStore) {}
   loseNextResponse(): void { this.loseResponse = true }
-  loseBeforeNextApply(): void { this.loseBeforeApply = true }
+  loseBeforeNextApply(): void { this.loseBeforeApply += 1 }
+  loseBeforeNextApplies(count: number): void { this.loseBeforeApply += count }
+  afterBeginApply(hook: () => void): void { this.afterBeginHook = hook }
+  loseBeforeOperation(operation: MiniAppDraftStateMutation['operation'], count: number): void {
+    this.loseByOperation.set(operation, (this.loseByOperation.get(operation) ?? 0) + count)
+  }
   callCount(): number { return this.calls }
+  operations(): MiniAppDraftStateMutation['operation'][] { return [...this.operationLog] }
 
-  pauseNextMutation(): { entered: Promise<void>; release(): void } {
+  pauseBeforeOperation(operation: MiniAppDraftStateMutation['operation']): { entered: Promise<void>; release(): void } {
     let entered!: () => void; let release!: () => void
     const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
     const wait = new Promise<void>((resolve) => { release = resolve })
-    this.beforeApplyGate = { entered, wait }
+    this.operationGate = { operation, entered, wait }
     return { entered: enteredPromise, release }
   }
-
-  private beforeApplyGate: { entered: () => void; wait: Promise<void> } | null = null
 
   async mutate(input: MiniAppDraftStateMutation): Promise<MiniAppDraftStateResult> {
     const previous = this.tail
@@ -435,14 +501,23 @@ class PrepareOwnerDraftStateIngress implements DraftStateIngressPort {
     await previous
     try {
       this.calls += 1
-      if (this.loseBeforeApply) {
-        this.loseBeforeApply = false
+      this.operationLog.push(input.operation)
+      const operationLosses = this.loseByOperation.get(input.operation) ?? 0
+      if (operationLosses > 0) {
+        this.loseByOperation.set(input.operation, operationLosses - 1)
         throw new Error('OWNER_INGRESS_REQUEST_LOST')
       }
-      if (this.beforeApplyGate) {
-        const gate = this.beforeApplyGate; this.beforeApplyGate = null; gate.entered(); await gate.wait
+      if (this.loseBeforeApply > 0) {
+        this.loseBeforeApply -= 1
+        throw new Error('OWNER_INGRESS_REQUEST_LOST')
+      }
+      if (this.operationGate?.operation === input.operation) {
+        const gate = this.operationGate; this.operationGate = null; gate.entered(); await gate.wait
       }
       const result = this.store.ownerMutate(input)
+      if (input.operation === 'PREPARE_BEGIN' && this.afterBeginHook) {
+        const hook = this.afterBeginHook; this.afterBeginHook = null; hook()
+      }
       if (this.loseResponse) {
         this.loseResponse = false
         throw new Error('OWNER_INGRESS_RESPONSE_LOST')
