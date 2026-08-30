@@ -108,9 +108,24 @@ describe('PMC finance report server end-to-end flow', () => {
     expect(system.queue.enqueue).toHaveBeenCalledOnce()
     expect(system.allocationStore.saveCoverage).toHaveBeenCalledOnce()
   })
+
+  it('limits the live finance pilot to finance-authorized Admin accounts', async () => {
+    const system = financeServerSystem(true, true)
+    const staffDaily = await system.request('staff-token', '/api/mini-app/finance/daily?startDate=2026-08-31&endDate=2026-08-31')
+    const staffConfig = await system.request('staff-token', '/api/mini-app/config')
+    const adminDaily = await system.request('finance-token', '/api/mini-app/finance/daily?startDate=2026-08-31&endDate=2026-08-31')
+    const adminConfig = await system.request('finance-token', '/api/mini-app/config')
+
+    expect({ status: staffDaily.status, body: await staffDaily.json() }).toEqual({
+      status: 403, body: { error: 'FINANCE_FORBIDDEN' },
+    })
+    expect(await staffConfig.json()).toMatchObject({ financeReportsEnabled: false })
+    expect(adminDaily.status).toBe(200)
+    expect(await adminConfig.json()).toMatchObject({ financeReportsEnabled: true })
+  })
 })
 
-function financeServerSystem(categoryMoneyEnabled: boolean) {
+function financeServerSystem(categoryMoneyEnabled: boolean, financeReportsPilotOnly = false) {
   const fixture = financeCacheFixture()
   const providerOrder: string[] = []
   let activeProviderCalls = 0
@@ -186,8 +201,9 @@ function financeServerSystem(categoryMoneyEnabled: boolean) {
       active: true as const,
       profileImageUrl: null,
     })),
+    getActiveBookingConfig: vi.fn(async () => ({ doctors: [], services: [], channels: [], aes: [] })),
   } as unknown as MiniAppStore
-  const middleware = createPmcMiniAppMiddleware({ config: financeServerConfig(), identity, store, jera })
+  const middleware = createPmcMiniAppMiddleware({ config: financeServerConfig(financeReportsPilotOnly), identity, store, jera })
   return {
     coordinator,
     allocationStore,
@@ -359,7 +375,7 @@ function financeUuid(prefix: number, day: number): string {
   return `${prefix}0000000-0000-4000-8000-${String(day).padStart(12, '0')}`
 }
 
-function financeServerConfig(): PmcMiniAppServerConfig {
+function financeServerConfig(financeReportsPilotOnly = false): PmcMiniAppServerConfig {
   return {
     enabled: true,
     miniAppId: '2001234567-mini-app',
@@ -376,6 +392,7 @@ function financeServerConfig(): PmcMiniAppServerConfig {
     asyncBooking: null,
     financeReportsEnabled: true,
     financeUiPreviewEnabled: false,
+    financeReportsPilotOnly,
     stockEnabled: false,
     stockManagerPilotOnly: false,
   }

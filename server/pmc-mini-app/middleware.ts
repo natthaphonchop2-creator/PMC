@@ -15,7 +15,7 @@ import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from 
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppResumeStore, MiniAppStore } from './store.js'
 import type { BookingTaskQueuePort } from './taskQueue.js'
-import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
+import { isJeraFinanceApiPath, isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerAuth.js'
 import type { AsyncBookingWorker } from './asyncWorker.js'
@@ -146,6 +146,10 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     if (isJeraMiniAppApiPath(pathname)) {
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (deps.config.financeReportsPilotOnly && isJeraFinanceApiPath(pathname) && !authenticated.canViewFinance) {
+        respond(res, 403, { error: 'FINANCE_FORBIDDEN' })
+        return
+      }
       if (!deps.jera) {
         respond(res, 503, { error: 'JERA_REPORTING_UNAVAILABLE' })
         return
@@ -253,7 +257,8 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       respond(res, 200, {
         fallbackFormUrl: deps.config.fallbackFormUrl,
         reportingEnabled: Boolean(deps.jera),
-        financeReportsEnabled: deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled,
+        financeReportsEnabled: deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled
+          && (!deps.config.financeReportsPilotOnly || authenticated.canViewFinance),
         financeUiPreviewEnabled: deps.config.financeUiPreviewEnabled,
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
         expenseCaptureEnabled: Boolean(deps.finance?.capture),
