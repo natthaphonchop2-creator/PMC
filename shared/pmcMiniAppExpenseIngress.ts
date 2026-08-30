@@ -1,3 +1,6 @@
+import {
+  isValidExpenseOriginalFileName,
+} from './pmcExpense'
 import type {
   EnabledExpenseCategory,
   ExpensePaymentMethod,
@@ -19,6 +22,30 @@ export interface ExpensePrivateAttachment {
   sha256: string
   uploadedByStaffId: string
   uploadedAt: string
+}
+
+export function canonicalExpenseAttachmentManifest(
+  attachments: readonly Pick<
+    ExpensePrivateAttachment,
+    'ordinal' | 'mediaType' | 'originalFileName' | 'sha256'
+  >[],
+): string {
+  if (
+    attachments.length < 1
+    || attachments.length > 5
+    || attachments.some((attachment, index) => (
+      attachment.ordinal !== index + 1
+      || (attachment.mediaType !== 'image/jpeg' && attachment.mediaType !== 'image/png')
+      || !isValidExpenseOriginalFileName(attachment.originalFileName)
+      || !sha256(attachment.sha256)
+    ))
+  ) throw new Error('invalid mini app expense attachment manifest')
+  return JSON.stringify(attachments.map((attachment) => ({
+    ordinal: attachment.ordinal,
+    mediaType: attachment.mediaType,
+    originalFileName: attachment.originalFileName,
+    sha256: attachment.sha256,
+  })))
 }
 
 export type MiniAppExpenseCommand =
@@ -410,7 +437,7 @@ function orderedAttachment(value: unknown): ExpensePrivateAttachment {
     || value.ordinal < 1
     || value.ordinal > 5
     || (value.mediaType !== 'image/jpeg' && value.mediaType !== 'image/png')
-    || !boundedText(value.originalFileName, 160)
+    || !isValidExpenseOriginalFileName(value.originalFileName)
     || !safeId(value.privateFileId)
     || typeof value.deterministicName !== 'string'
     || !safeInteger(value.sizeBytes)

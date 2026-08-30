@@ -1,10 +1,13 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalExpenseAttachmentManifest,
   canonicalMiniAppExpenseCommand,
   canonicalMiniAppExpenseIngress,
   canonicalMiniAppExpenseRecoveryIngress,
   type MiniAppExpenseCommand,
 } from '../../shared/pmcMiniAppExpenseIngress'
+import { expenseAttachmentManifestHash } from '../../server/pmc-mini-app/finance/submissionService'
 
 const manifestHash = 'a'.repeat(64)
 
@@ -83,6 +86,17 @@ const voidCommand: MiniAppExpenseCommand = {
 }
 
 describe('expense ingress contract', () => {
+  it('uses one cross-runtime canonical attachment manifest and exact 160-character filename boundary', () => {
+    const attachments = (commitCommand as Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }>).payload.attachments
+    const canonical = canonicalExpenseAttachmentManifest(attachments)
+    expect(expenseAttachmentManifestHash(attachments)).toBe(
+      createHash('sha256').update(canonical, 'utf8').digest('hex'),
+    )
+    expect(() => canonicalExpenseAttachmentManifest([{ ...attachments[0]!, originalFileName: `${'ก'.repeat(156)}.jpg` }]))
+      .not.toThrow()
+    expect(() => canonicalExpenseAttachmentManifest([{ ...attachments[0]!, originalFileName: `${'ก'.repeat(157)}.jpg` }]))
+      .toThrow('invalid mini app expense attachment manifest')
+  })
   it('produces deterministic field-order canonical JSON for every command phase', () => {
     expect(canonicalMiniAppExpenseCommand(prepareCommand)).toBe(
       '{"rootRequestId":"expense-request-1","commandIdempotencyKey":"expense-request-1:prepare","staffId":"ADMIN_01","commandType":"PREPARE_EXPENSE","payload":{"expenseDate":"2026-08-29","category":"BOOK_CLINIC","bookDailyKey":"CLINIC:2026-08-29","amountSatang":12000,"counterpartyName":null,"description":"สมุดประจำวันที่ 29","paymentMethod":null,"expectedAttachmentCount":2,"expectedManifestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedRevision":0}}',

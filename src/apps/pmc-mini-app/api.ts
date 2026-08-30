@@ -16,6 +16,8 @@ import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '.
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
 import {
   deriveExpenseScope,
+  isExpenseBrowserToken,
+  isValidExpenseOriginalFileName,
   parseExpenseDate,
   type ExpenseHistoryPage,
   type ExpenseHistoryRow,
@@ -450,7 +452,7 @@ function parseExpenseAttachment(value: unknown, expenseId: string, status: numbe
     || typeof value.attachmentId !== 'string' || !/^[A-Za-z0-9._:-]{1,124}$/.test(value.attachmentId)
     || value.expenseId !== expenseId || !positiveOrZeroInteger(value.ordinal) || value.ordinal < 1 || value.ordinal > 5
     || (value.mediaType !== 'image/jpeg' && value.mediaType !== 'image/png')
-    || typeof value.originalFileName !== 'string' || value.originalFileName.length < 1 || value.originalFileName.length > 180
+    || !isValidExpenseOriginalFileName(value.originalFileName)
   ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   return {
     attachmentId: value.attachmentId,
@@ -463,7 +465,7 @@ function parseExpenseAttachment(value: unknown, expenseId: string, status: numbe
 
 function parseEvidenceToken(body: unknown, status: number): string {
   if (status !== 200 || !isRecord(body) || Object.keys(body).join(',') !== 'token'
-    || typeof body.token !== 'string' || !/^[A-Za-z0-9_-]{1,2048}\.[A-Za-z0-9_-]{1,2048}$/.test(body.token)) {
+    || !isExpenseBrowserToken(body.token)) {
     throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   }
   return body.token

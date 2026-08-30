@@ -9,6 +9,32 @@ export type ExpenseScope = 'CLINIC' | 'DOCTOR_PERSONAL'
 export type ExpensePaymentMethod = 'TRANSFER' | 'CASH' | 'CREDIT' | 'OTHER'
 export type ExpenseRecordState = 'PREPARED' | 'COMMITTED' | 'VOID'
 
+export const EXPENSE_ORIGINAL_FILE_NAME_MAX_CHARACTERS = 160
+export const EXPENSE_BROWSER_TOKEN_MAX_LENGTH = 2_048
+export const EXPENSE_BROWSER_TOKEN_MAX_PAYLOAD_LENGTH = 1_536
+export const EXPENSE_BROWSER_TOKEN_SIGNATURE_LENGTH = 43
+
+export function isValidExpenseOriginalFileName(value: unknown): value is string {
+  return typeof value === 'string'
+    && [...value].length > 0
+    && [...value].length <= EXPENSE_ORIGINAL_FILE_NAME_MAX_CHARACTERS
+    && ![...value].some((character) => {
+      const codePoint = character.codePointAt(0) ?? -1
+      return character === '/' || character === '\\' || codePoint < 32 || codePoint === 127
+    })
+}
+
+export function isExpenseBrowserToken(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length < 3 || value.length > EXPENSE_BROWSER_TOKEN_MAX_LENGTH) return false
+  const parts = value.split('.')
+  return parts.length === 2
+    && parts[0]!.length >= 1
+    && parts[0]!.length <= EXPENSE_BROWSER_TOKEN_MAX_PAYLOAD_LENGTH
+    && parts[1]!.length === EXPENSE_BROWSER_TOKEN_SIGNATURE_LENGTH
+    && /^[A-Za-z0-9_-]+$/.test(parts[0]!)
+    && /^[A-Za-z0-9_-]+$/.test(parts[1]!)
+}
+
 export interface ExpenseSubmission {
   expenseId: string
   expenseDate: string

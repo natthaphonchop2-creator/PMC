@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import {
   consumeExpenseMultipart,
   EXPENSE_MAX_RAW_MULTIPART_BYTES,
+  inspectExpenseImage,
 } from '../../server/pmc-mini-app/finance/multipart'
 
 describe('expense evidence multipart parser', () => {
@@ -46,6 +47,16 @@ describe('expense evidence multipart parser', () => {
     await expect(consumeExpenseMultipart(multipartRequest(boundary, [
       textPart(boundary, 'note', 'not allowed'), closingPart(boundary),
     ]))).rejects.toMatchObject({ code: 'EXPENSE_UNKNOWN_MULTIPART_FIELD' })
+  })
+
+  it('enforces the 160 Unicode-character original filename boundary', async () => {
+    const image = await jpeg(1, 1)
+    await expect(inspectExpenseImage({
+      bytes: image, advertisedMime: 'image/jpeg', originalFileName: `${'ก'.repeat(156)}.jpg`,
+    })).resolves.toMatchObject({ originalFileName: `${'ก'.repeat(156)}.jpg` })
+    await expect(inspectExpenseImage({
+      bytes: image, advertisedMime: 'image/jpeg', originalFileName: `${'ก'.repeat(157)}.jpg`,
+    })).rejects.toMatchObject({ code: 'EXPENSE_INVALID_FILE_NAME' })
   })
 
   it('rejects empty, oversized, over-aggregate, MIME-mismatched, and noncontiguous files', async () => {

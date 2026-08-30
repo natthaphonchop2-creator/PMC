@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isValidExpenseOriginalFileName } from '../../../shared/pmcExpense.js'
 import { Storage, type Bucket, type File, type FileMetadata } from '@google-cloud/storage'
 import { inspectExpenseImage, type ExpenseImageMimeType } from './multipart.js'
 
@@ -291,7 +292,16 @@ export interface ExpenseDriveSlotClaim extends ExpenseDriveSlotClaimInput {
   claimId: string
   generation: string
   createdAt: string
-  created: boolean
+  updatedAt: string
+  state: 'CLAIMED' | 'REGISTERED'
+  leaseId: string
+  leaseOwnerId: string
+  leaseGeneration: string
+  registeredFileId: string | null
+}
+
+export interface ExpenseDriveSlotClaimRequest extends ExpenseDriveSlotClaimInput {
+  lease: ExpenseSubmissionLease
 }
 
 export interface ExpenseSubmissionLeaseSlot {
@@ -330,7 +340,13 @@ export interface ExpenseStagingPort {
   }): Promise<ExpenseStagingReceipt>
   get(objectKey: string): Promise<ExpenseStagingReceipt & { bytes: Buffer }>
   deleteVerified(objectKey: string): Promise<void>
-  claimDriveSlot(input: ExpenseDriveSlotClaimInput): Promise<ExpenseDriveSlotClaim>
+  claimDriveSlot(input: ExpenseDriveSlotClaimRequest): Promise<ExpenseDriveSlotClaim>
+  registerDriveSlotFile(input: {
+    claim: ExpenseDriveSlotClaim
+    lease: ExpenseSubmissionLease
+    fileId: string
+  }): Promise<ExpenseDriveSlotClaim>
+  readDriveSlotClaim(input: ExpenseDriveSlotClaimInput): Promise<ExpenseDriveSlotClaim>
   acquireSubmissionLease(
     input: ExpenseSubmissionLeaseIntent & { ownerId: string },
   ): Promise<ExpenseSubmissionLease>
@@ -506,42 +522,105 @@ export function createGoogleExpenseStagingPort(input: {
 
     async claimDriveSlot(request) {
       try {
-        const intent = validDriveSlotIntent(request)
+        const { intent, lease } = validDriveSlotClaimRequest(request)
+        await assertLeaseForDriveSlot(bucket, lease, intent, validCreatedAt(now()))
         const objectKey = expenseDriveSlotObjectKey(intent)
         const claimId = expenseDriveSlotClaimId(intent)
         const createdAt = validCreatedAt(now())
-        const persisted = { version: 1 as const, claimId, ...intent, createdAt }
-        const bytes = Buffer.from(JSON.stringify(persisted), 'utf8')
         const file = bucket.file(objectKey)
+        const persisted = driveSlotPersisted({
+          intent,
+          claimId,
+          state: 'CLAIMED',
+          lease,
+          registeredFileId: null,
+          createdAt,
+          updatedAt: createdAt,
+        })
         try {
-          await file.save(bytes, {
-            resumable: false,
-            validation: 'crc32c',
-            preconditionOpts: { ifGenerationMatch: 0 },
-            metadata: {
-              contentType: 'application/json',
-              cacheControl: 'no-store',
-              metadata: claimMetadata(persisted),
-            },
-          })
-          const metadata = (await file.getMetadata())[0]
-          const generation = normalizedGeneration(metadata.generation)
-          return { objectKey, claimId, ...intent, createdAt, generation, created: true }
+          await saveDriveSlotClaim(file, persisted, 0)
+          return readDriveSlotClaimObject(bucket, objectKey)
         } catch (error) {
           if (!isCreateOnlyConflict(error)) throw error
-          try {
-            const metadata = (await file.getMetadata())[0]
-            const generation = normalizedGeneration(metadata.generation)
-            const [existingBytes] = await bucket.file(objectKey, { generation }).download({ validation: 'crc32c' })
-            const existing = driveSlotClaimFromStorage(objectKey, metadata, existingBytes)
-            if (!sameDriveSlotIntent(existing, intent) || existing.claimId !== claimId) {
-              throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
-            }
-            return { ...existing, generation, created: false }
-          } catch {
-            throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
-          }
         }
+        const existing = await readDriveSlotClaimObject(bucket, objectKey)
+        if (!sameDriveSlotIntent(existing, intent) || existing.claimId !== claimId) {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+        }
+        if (existing.state === 'REGISTERED') return existing
+        if (sameDriveSlotLease(existing, lease)) return existing
+        const takeover = driveSlotPersisted({
+          intent,
+          claimId,
+          state: 'CLAIMED',
+          lease,
+          registeredFileId: null,
+          createdAt: existing.createdAt,
+          updatedAt: createdAt,
+        })
+        try {
+          await saveDriveSlotClaim(file, takeover, existing.generation)
+          return readDriveSlotClaimObject(bucket, objectKey)
+        } catch {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+        }
+      } catch (error) {
+        throw safeStagingError(error)
+      }
+    },
+
+    async registerDriveSlotFile(input) {
+      try {
+        if (!isRecord(input) || !hasExactKeys(input, ['claim', 'lease', 'fileId'])) {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+        }
+        const claim = validDriveSlotClaim(input.claim)
+        const lease = validSubmissionLease(input.lease)
+        if (!EXPENSE_ID.test(input.fileId)) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+        try {
+          await assertLeaseForDriveSlot(bucket, lease, claim, validCreatedAt(now()))
+        } catch {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+        }
+        const current = await readDriveSlotClaimObject(bucket, claim.objectKey)
+        if (!sameDriveSlotIntent(current, claim) || current.claimId !== claim.claimId) {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+        }
+        if (current.state === 'REGISTERED') {
+          if (current.registeredFileId !== input.fileId) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+          return current
+        }
+        if (current.generation !== claim.generation || !sameDriveSlotLease(current, lease)) {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+        }
+        const registered = driveSlotPersisted({
+          intent: current,
+          claimId: current.claimId,
+          state: 'REGISTERED',
+          lease,
+          registeredFileId: input.fileId,
+          createdAt: current.createdAt,
+          updatedAt: validCreatedAt(now()),
+        })
+        try {
+          await saveDriveSlotClaim(bucket.file(claim.objectKey), registered, claim.generation)
+          return readDriveSlotClaimObject(bucket, claim.objectKey)
+        } catch {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+        }
+      } catch (error) {
+        throw safeStagingError(error)
+      }
+    },
+
+    async readDriveSlotClaim(input) {
+      try {
+        const intent = validDriveSlotIntent(input)
+        const claim = await readDriveSlotClaimObject(bucket, expenseDriveSlotObjectKey(intent))
+        if (!sameDriveSlotIntent(claim, intent) || claim.claimId !== expenseDriveSlotClaimId(intent)) {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+        }
+        return claim
       } catch (error) {
         throw safeStagingError(error)
       }
@@ -652,6 +731,67 @@ function validDriveSlotIntent(input: ExpenseDriveSlotClaimInput): ExpenseDriveSl
   return { ...input }
 }
 
+function validDriveSlotClaimRequest(input: ExpenseDriveSlotClaimRequest): {
+  intent: ExpenseDriveSlotClaimInput
+  lease: ExpenseSubmissionLease
+} {
+  if (!isRecord(input) || !hasExactKeys(input, [
+    'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName', 'lease',
+  ])) throw new ExpenseStagingError('EXPENSE_STAGING_INPUT_INVALID')
+  const { lease, ...rawIntent } = input
+  return { intent: validDriveSlotIntent(rawIntent), lease: validSubmissionLease(lease) }
+}
+
+function validDriveSlotClaim(input: ExpenseDriveSlotClaim): ExpenseDriveSlotClaim {
+  if (!isRecord(input) || !hasExactKeys(input, [
+    'objectKey', 'claimId', 'generation', 'createdAt', 'updatedAt', 'state', 'leaseId',
+    'leaseOwnerId', 'leaseGeneration', 'registeredFileId', 'rootRequestId', 'expenseId',
+    'ordinal', 'sha256', 'mimeType', 'deterministicName',
+  ])) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+  const intent = validDriveSlotIntent({
+    rootRequestId: input.rootRequestId,
+    expenseId: input.expenseId,
+    ordinal: input.ordinal,
+    sha256: input.sha256,
+    mimeType: input.mimeType,
+    deterministicName: input.deterministicName,
+  })
+  if (
+    input.objectKey !== expenseDriveSlotObjectKey(intent)
+    || input.claimId !== expenseDriveSlotClaimId(intent)
+    || !safeGeneration(input.generation)
+    || !safeCreatedAt(input.createdAt)
+    || !safeCreatedAt(input.updatedAt)
+    || (input.state !== 'CLAIMED' && input.state !== 'REGISTERED')
+    || !/^LEASE-[a-f0-9]{64}$/.test(input.leaseId)
+    || !LEASE_OWNER_ID.test(input.leaseOwnerId)
+    || !safeGeneration(input.leaseGeneration)
+    || (input.state === 'CLAIMED' && input.registeredFileId !== null)
+    || (input.state === 'REGISTERED' && (typeof input.registeredFileId !== 'string' || !EXPENSE_ID.test(input.registeredFileId)))
+  ) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+  return { ...input, ...intent }
+}
+
+async function assertLeaseForDriveSlot(
+  bucket: Bucket,
+  lease: ExpenseSubmissionLease,
+  intent: ExpenseDriveSlotClaimInput,
+  capturedAt: string,
+): Promise<void> {
+  const current = await readSubmissionLease(bucket, submissionLeaseObjectKey(lease.expenseId))
+  assertCurrentSubmissionLease(current, lease, capturedAt)
+  const slot = lease.slots[intent.ordinal - 1]
+  if (
+    lease.rootRequestId !== intent.rootRequestId
+    || lease.expenseId !== intent.expenseId
+    || !slot
+    || slot.ordinal !== intent.ordinal
+    || slot.sha256 !== intent.sha256
+    || slot.mimeType !== intent.mimeType
+    || slot.deterministicName !== intent.deterministicName
+  ) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+}
+
 export function expenseDriveSlotObjectKey(input: ExpenseDriveSlotClaimInput): string {
   return `expense-drive-slots/${input.expenseId}/${String(input.ordinal).padStart(3, '0')}.json`
 }
@@ -676,16 +816,50 @@ function deterministicDriveName(
   return `${String(ordinal).padStart(3, '0')}-${sha256}.${extensionFor(mimeType)}`
 }
 
-function claimMetadata(input: {
+interface ExpenseDriveSlotClaimPersisted extends ExpenseDriveSlotClaimInput {
+  version: 2
   claimId: string
-  rootRequestId: string
-  expenseId: string
-  ordinal: number
-  sha256: string
-  mimeType: ExpenseImageMimeType
-  deterministicName: string
+  state: 'CLAIMED' | 'REGISTERED'
+  leaseId: string
+  leaseOwnerId: string
+  leaseGeneration: string
+  registeredFileId: string | null
   createdAt: string
-}): Record<string, string> {
+  updatedAt: string
+}
+
+function driveSlotPersisted(input: {
+  intent: ExpenseDriveSlotClaimInput
+  claimId: string
+  state: 'CLAIMED' | 'REGISTERED'
+  lease: ExpenseSubmissionLease
+  registeredFileId: string | null
+  createdAt: string
+  updatedAt: string
+}): ExpenseDriveSlotClaimPersisted {
+  const intent = validDriveSlotIntent({
+    rootRequestId: input.intent.rootRequestId,
+    expenseId: input.intent.expenseId,
+    ordinal: input.intent.ordinal,
+    sha256: input.intent.sha256,
+    mimeType: input.intent.mimeType,
+    deterministicName: input.intent.deterministicName,
+  })
+  return {
+    version: 2,
+    claimId: input.claimId,
+    ...intent,
+    state: input.state,
+    leaseId: input.lease.leaseId,
+    leaseOwnerId: input.lease.ownerId,
+    leaseGeneration: input.lease.generation,
+    registeredFileId: input.registeredFileId,
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
+  }
+}
+
+function claimMetadata(input: ExpenseDriveSlotClaimPersisted): Record<string, string> {
   return {
     claimId: input.claimId,
     rootRequestId: input.rootRequestId,
@@ -694,15 +868,46 @@ function claimMetadata(input: {
     sha256: input.sha256,
     mimeType: input.mimeType,
     deterministicName: input.deterministicName,
+    state: input.state,
+    leaseId: input.leaseId,
+    leaseOwnerId: input.leaseOwnerId,
+    leaseGeneration: input.leaseGeneration,
+    registeredFileId: input.registeredFileId ?? '',
     createdAt: input.createdAt,
+    updatedAt: input.updatedAt,
   }
+}
+
+async function saveDriveSlotClaim(
+  file: File,
+  persisted: ExpenseDriveSlotClaimPersisted,
+  ifGenerationMatch: string | number,
+): Promise<void> {
+  const bytes = Buffer.from(JSON.stringify(persisted), 'utf8')
+  await file.save(bytes, {
+    resumable: false,
+    validation: 'crc32c',
+    preconditionOpts: { ifGenerationMatch },
+    metadata: {
+      contentType: 'application/json',
+      cacheControl: 'no-store',
+      metadata: claimMetadata(persisted),
+    },
+  })
+}
+
+async function readDriveSlotClaimObject(bucket: Bucket, objectKey: string): Promise<ExpenseDriveSlotClaim> {
+  const metadata = (await bucket.file(objectKey).getMetadata())[0]
+  const generation = normalizedGeneration(metadata.generation)
+  const [bytes] = await bucket.file(objectKey, { generation }).download({ validation: 'crc32c' })
+  return { ...driveSlotClaimFromStorage(objectKey, metadata, bytes), generation }
 }
 
 function driveSlotClaimFromStorage(
   objectKey: string,
   metadata: FileMetadata,
   bytes: Buffer,
-): Omit<ExpenseDriveSlotClaim, 'generation' | 'created'> {
+): Omit<ExpenseDriveSlotClaim, 'generation'> {
   const key = DRIVE_SLOT_KEY.exec(objectKey)
   const sizeBytes = Number(metadata.size)
   const custom = metadata.metadata
@@ -714,12 +919,20 @@ function driveSlotClaimFromStorage(
     || metadata.contentType !== 'application/json'
     || metadata.cacheControl !== 'no-store'
     || metadata.contentEncoding !== undefined && metadata.contentEncoding !== ''
-    || !Number.isSafeInteger(sizeBytes) || sizeBytes !== bytes.length || sizeBytes < 1 || sizeBytes > 4_096
+    || !Number.isSafeInteger(sizeBytes) || sizeBytes !== bytes.length || sizeBytes < 1 || sizeBytes > 8_192
     || !isRecord(custom)
-    || !hasExactKeys(custom, ['claimId', 'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName', 'createdAt'])
+    || !hasExactKeys(custom, [
+      'claimId', 'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType',
+      'deterministicName', 'state', 'leaseId', 'leaseOwnerId', 'leaseGeneration',
+      'registeredFileId', 'createdAt', 'updatedAt',
+    ])
     || !isRecord(parsed)
-    || !hasExactKeys(parsed, ['version', 'claimId', 'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName', 'createdAt'])
-    || parsed.version !== 1
+    || !hasExactKeys(parsed, [
+      'version', 'claimId', 'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType',
+      'deterministicName', 'state', 'leaseId', 'leaseOwnerId', 'leaseGeneration',
+      'registeredFileId', 'createdAt', 'updatedAt',
+    ])
+    || parsed.version !== 2
   ) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
   const intent = validDriveSlotIntent({
     rootRequestId: String(parsed.rootRequestId ?? ''),
@@ -731,16 +944,53 @@ function driveSlotClaimFromStorage(
   })
   const claimId = String(parsed.claimId ?? '')
   const createdAt = String(parsed.createdAt ?? '')
-  const expectedMetadata = claimMetadata({ claimId, ...intent, createdAt })
+  const updatedAt = String(parsed.updatedAt ?? '')
+  const state = String(parsed.state ?? '')
+  const leaseId = String(parsed.leaseId ?? '')
+  const leaseOwnerId = String(parsed.leaseOwnerId ?? '')
+  const leaseGeneration = String(parsed.leaseGeneration ?? '')
+  const registeredFileId = parsed.registeredFileId === null ? null : String(parsed.registeredFileId ?? '')
+  const persisted = driveSlotPersisted({
+    intent,
+    claimId,
+    state: state as 'CLAIMED' | 'REGISTERED',
+    lease: {
+      leaseId,
+      ownerId: leaseOwnerId,
+      generation: leaseGeneration,
+    } as ExpenseSubmissionLease,
+    registeredFileId,
+    createdAt,
+    updatedAt,
+  })
+  const expectedMetadata = claimMetadata(persisted)
   if (
     key[1] !== intent.expenseId
     || Number(key[2]) !== intent.ordinal
     || claimId !== expenseDriveSlotClaimId(intent)
     || !safeCreatedAt(createdAt)
+    || !safeCreatedAt(updatedAt)
+    || (state !== 'CLAIMED' && state !== 'REGISTERED')
+    || !/^LEASE-[a-f0-9]{64}$/.test(leaseId)
+    || !LEASE_OWNER_ID.test(leaseOwnerId)
+    || !safeGeneration(leaseGeneration)
+    || (state === 'CLAIMED' && registeredFileId !== null)
+    || (state === 'REGISTERED' && (registeredFileId === null || !EXPENSE_ID.test(registeredFileId)))
     || Object.keys(expectedMetadata).some((name) => custom[name] !== expectedMetadata[name])
-    || JSON.stringify(parsed) !== JSON.stringify({ version: 1, claimId, ...intent, createdAt })
+    || JSON.stringify(parsed) !== JSON.stringify(persisted)
   ) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
-  return { objectKey, claimId, ...intent, createdAt }
+  return {
+    objectKey,
+    claimId,
+    ...intent,
+    createdAt,
+    updatedAt,
+    state: state as 'CLAIMED' | 'REGISTERED',
+    leaseId,
+    leaseOwnerId,
+    leaseGeneration,
+    registeredFileId,
+  }
 }
 
 function sameDriveSlotIntent(
@@ -753,6 +1003,15 @@ function sameDriveSlotIntent(
     && left.sha256 === right.sha256
     && left.mimeType === right.mimeType
     && left.deterministicName === right.deterministicName
+}
+
+function sameDriveSlotLease(
+  claim: Pick<ExpenseDriveSlotClaim, 'leaseId' | 'leaseOwnerId' | 'leaseGeneration'>,
+  lease: ExpenseSubmissionLease,
+): boolean {
+  return claim.leaseId === lease.leaseId
+    && claim.leaseOwnerId === lease.ownerId
+    && claim.leaseGeneration === lease.generation
 }
 
 function receiptFromMetadata(objectKey: string, metadata: FileMetadata): ExpenseStagingReceipt {
@@ -812,10 +1071,7 @@ function normalizedGeneration(value: string | number | undefined): string {
   return String(value)
 }
 function safeOriginalFileName(value: string): boolean {
-  return typeof value === 'string' && value.length > 0 && value.length <= 180 && ![...value].some((character) => {
-    const code = character.charCodeAt(0)
-    return character === '/' || character === '\\' || code < 32 || code === 127
-  })
+  return isValidExpenseOriginalFileName(value)
 }
 function safeCreatedAt(value: string): boolean { return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) }
 function validCreatedAt(value: string): string {

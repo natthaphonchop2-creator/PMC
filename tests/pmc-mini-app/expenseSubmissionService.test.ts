@@ -33,9 +33,9 @@ describe('expense submission orchestration', () => {
       'lease-renew', 'lease-assert',
       'ensure-folder',
       'lease-renew', 'lease-assert',
-      'staging-get-1', 'upload-1', 'verify-1', 'lease-assert',
+      'staging-get-1', 'claim-1', 'upload-1', 'register-1', 'verify-1', 'lease-assert',
       'lease-renew', 'lease-assert',
-      'staging-get-2', 'upload-2', 'verify-2', 'lease-assert',
+      'staging-get-2', 'claim-2', 'upload-2', 'register-2', 'verify-2', 'lease-assert',
       'lease-renew', 'lease-assert',
       'commit', 'lease-assert', 'lease-commit',
       'staging-delete-1', 'staging-delete-2',
@@ -219,6 +219,38 @@ describe('expense submission orchestration', () => {
       .toBe(JSON.stringify(secondProcess.ingress.commit.mock.calls[0]?.[0].payload.attachments))
   })
 
+  it('registers only the takeover winner and safely deletes a stale late Drive create', async () => {
+    const state = serviceState()
+    let markStarted!: () => void
+    let releaseLateCreate!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const wait = new Promise<void>((resolve) => { releaseLateCreate = resolve })
+    state.delayedUpload = {
+      ownerId: 'lease-owner-process-a', ordinal: 1, markStarted, wait,
+    }
+    const firstProcess = serviceFixture([], state, 'lease-owner-process-a')
+    const first = firstProcess.service.submit(firstProcess.input)
+    const firstExpectation = expect(first).rejects.toMatchObject({ code: 'EXPENSE_STORAGE_UNAVAILABLE' })
+    await started
+
+    state.now += 300_001
+    const secondProcess = serviceFixture([], state, 'lease-owner-process-b')
+    await expect(secondProcess.service.submit(secondProcess.input)).resolves.toEqual(secondProcess.receipt)
+    releaseLateCreate()
+    await firstExpectation
+
+    expect(state.claims.get('EXP-202608-0001:1')).toMatchObject({
+      state: 'REGISTERED', leaseOwnerId: 'lease-owner-process-b', registeredFileId: 'private-file-1',
+    })
+    expect(state.driveAttachments.map(({ privateFileId }) => privateFileId).sort()).toEqual([
+      'private-file-1', 'private-file-2',
+    ])
+    expect(firstProcess.finance.deleteExpenseFileIfUnregistered).toHaveBeenCalledWith(expect.objectContaining({
+      fileId: 'late-private-file-1', registeredFileId: 'private-file-1',
+    }))
+    expect(secondProcess.ingress.commit).toHaveBeenCalledTimes(1)
+  })
+
   it('fails safely when staged bytes or the returned receipt do not match the prepared intent', async () => {
     const poisoned = serviceFixture()
     poisoned.staging.get.mockResolvedValueOnce({
@@ -291,7 +323,7 @@ function serviceFixture(
       uploadedByStaffId: string
       uploadedAt: string
       attachmentId: string
-      slotClaim: { claimId: string; created: boolean }
+      slotClaim: ExpenseDriveSlotClaim
       allowClaimReplayCreate?: boolean
     }) => {
       events.push(`upload-${input.ordinal}`)
@@ -299,27 +331,29 @@ function serviceFixture(
         state.failUploadOrdinalOnce = null
         throw new Error('controlled partial upload failure')
       }
+      if (
+        state.delayedUpload
+        && state.delayedUpload.ownerId === input.slotClaim.leaseOwnerId
+        && state.delayedUpload.ordinal === input.ordinal
+      ) {
+        const delayed = state.delayedUpload
+        state.delayedUpload = null
+        delayed.markStarted()
+        await delayed.wait
+        const late = attachmentFromUpload(input, `late-private-file-${input.ordinal}`)
+        state.driveAttachments.push(late)
+        return { ...late }
+      }
       const existing = state.driveAttachments.find(({ ordinal }) => ordinal === input.ordinal)
       if (existing) return { ...existing }
-      if (!input.slotClaim.created && input.allowClaimReplayCreate !== true) {
-        throw new Error('claim owner has not created the Drive file')
+      if (input.slotClaim.state === 'REGISTERED') {
+        const registered = state.driveAttachments.find(({ privateFileId }) => (
+          privateFileId === input.slotClaim.registeredFileId
+        ))
+        if (!registered) throw new Error('registered Drive file is missing')
+        return { ...registered }
       }
-      const attachment: ExpensePrivateAttachment = {
-        attachmentId: input.attachmentId,
-        expenseId: input.expenseId,
-        rootRequestId: input.rootRequestId,
-        ordinal: input.ordinal,
-        mediaType: input.mimeType,
-        originalFileName: input.originalFileName,
-        privateFileId: `private-file-${input.ordinal}`,
-        deterministicName: input.deterministicName,
-        sizeBytes: input.bytes.length,
-        driveVersion: String(6 + input.ordinal),
-        slotClaimId: input.slotClaim.claimId,
-        sha256: input.sha256,
-        uploadedByStaffId: input.uploadedByStaffId,
-        uploadedAt: input.uploadedAt,
-      }
+      const attachment = attachmentFromUpload(input, `private-file-${input.ordinal}`)
       state.driveAttachments.push(attachment)
       return { ...attachment }
     }),
@@ -333,6 +367,14 @@ function serviceFixture(
     listVerifiedExpenseImages: vi.fn(async () => {
       if (state.driveAttachments.length < 1) throw new Error('private files incomplete')
       return state.driveAttachments.map((attachment) => ({ ...attachment }))
+    }),
+    deleteExpenseFileIfUnregistered: vi.fn(async (input: {
+      fileId: string
+      registeredFileId: string | null
+    }) => {
+      if (input.fileId === input.registeredFileId) return
+      state.driveAttachments = state.driveAttachments.filter(({ privateFileId }) => privateFileId !== input.fileId)
+      events.push(`drive-delete-${input.fileId}`)
     }),
     downloadExpenseFile: vi.fn(),
   }
@@ -356,21 +398,70 @@ function serviceFixture(
       sha256: string
       mimeType: 'image/jpeg' | 'image/png'
       deterministicName: string
+      lease: ExpenseSubmissionLease
     }) => {
       events.push(`claim-${claimInput.ordinal}`)
+      assertFakeLease(state, claimInput.lease)
       const key = `${claimInput.expenseId}:${claimInput.ordinal}`
       const existing = state.claims.get(key)
-      if (existing) return { ...existing, created: false }
-      const claimId = `SLOT-${createHash('sha256').update(JSON.stringify(claimInput), 'utf8').digest('hex')}`
+      const { lease, ...intent } = claimInput
+      if (existing?.state === 'REGISTERED') return { ...existing }
+      if (existing && existing.leaseGeneration === lease.generation && existing.leaseOwnerId === lease.ownerId) {
+        return { ...existing }
+      }
+      const claimId = `SLOT-${createHash('sha256').update(JSON.stringify(intent), 'utf8').digest('hex')}`
       const claim = {
         objectKey: `expense-drive-slots/${claimInput.expenseId}/${String(claimInput.ordinal).padStart(3, '0')}.json`,
         claimId,
-        generation: '4',
-        createdAt: '2026-08-29T10:00:00.000Z',
-        created: true,
-        ...claimInput,
+        generation: String(Number(existing?.generation ?? 3) + 1),
+        createdAt: existing?.createdAt ?? '2026-08-29T10:00:00.000Z',
+        updatedAt: new Date(state.now).toISOString(),
+        state: 'CLAIMED' as const,
+        leaseId: lease.leaseId,
+        leaseOwnerId: lease.ownerId,
+        leaseGeneration: lease.generation,
+        registeredFileId: null,
+        ...intent,
       }
       state.claims.set(key, claim)
+      return { ...claim }
+    }),
+    registerDriveSlotFile: vi.fn(async (input: {
+      claim: ExpenseDriveSlotClaim
+      lease: ExpenseSubmissionLease
+      fileId: string
+    }) => {
+      events.push(`register-${input.claim.ordinal}`)
+      assertFakeLease(state, input.lease)
+      const key = `${input.claim.expenseId}:${input.claim.ordinal}`
+      const current = state.claims.get(key)
+      if (current?.state === 'REGISTERED') {
+        if (current.registeredFileId !== input.fileId) {
+          throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+        }
+        return { ...current }
+      }
+      if (!current || current.generation !== input.claim.generation
+        || current.leaseGeneration !== input.lease.generation
+        || current.leaseOwnerId !== input.lease.ownerId) {
+        throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+      }
+      const registered: ExpenseDriveSlotClaim = {
+        ...current,
+        generation: String(Number(current.generation) + 1),
+        updatedAt: new Date(state.now).toISOString(),
+        state: 'REGISTERED',
+        registeredFileId: input.fileId,
+      }
+      state.claims.set(key, registered)
+      return { ...registered }
+    }),
+    readDriveSlotClaim: vi.fn(async (intent: {
+      expenseId: string
+      ordinal: number
+    }) => {
+      const claim = state.claims.get(`${intent.expenseId}:${intent.ordinal}`)
+      if (!claim) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
       return { ...claim }
     }),
     acquireSubmissionLease: vi.fn(async (
@@ -430,6 +521,38 @@ function serviceFixture(
   }
 }
 
+function attachmentFromUpload(input: {
+  attachmentId: string
+  expenseId: string
+  rootRequestId: string
+  ordinal: number
+  mimeType: 'image/jpeg' | 'image/png'
+  originalFileName: string
+  deterministicName: string
+  bytes: Buffer
+  sha256: string
+  uploadedByStaffId: string
+  uploadedAt: string
+  slotClaim: ExpenseDriveSlotClaim
+}, privateFileId: string): ExpensePrivateAttachment {
+  return {
+    attachmentId: input.attachmentId,
+    expenseId: input.expenseId,
+    rootRequestId: input.rootRequestId,
+    ordinal: input.ordinal,
+    mediaType: input.mimeType,
+    originalFileName: input.originalFileName,
+    privateFileId,
+    deterministicName: input.deterministicName,
+    sizeBytes: input.bytes.length,
+    driveVersion: String(6 + input.ordinal),
+    slotClaimId: input.slotClaim.claimId,
+    sha256: input.sha256,
+    uploadedByStaffId: input.uploadedByStaffId,
+    uploadedAt: input.uploadedAt,
+  }
+}
+
 function serviceState(): {
   claims: Map<string, ExpenseDriveSlotClaim>
   driveAttachments: ExpensePrivateAttachment[]
@@ -437,6 +560,12 @@ function serviceState(): {
   now: number
   lease: ExpenseSubmissionLease | null
   failUploadOrdinalOnce: number | null
+  delayedUpload: null | {
+    ownerId: string
+    ordinal: number
+    markStarted: () => void
+    wait: Promise<void>
+  }
 } {
   return {
     claims: new Map(),
@@ -445,6 +574,7 @@ function serviceState(): {
     now: Date.parse('2026-08-29T10:00:00.000Z'),
     lease: null,
     failUploadOrdinalOnce: null,
+    delayedUpload: null,
   }
 }
 

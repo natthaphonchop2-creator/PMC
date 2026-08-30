@@ -47,6 +47,13 @@ describe('expense capture client model', () => {
     ])).toBe('รูปทั้งหมดต้องมีขนาดรวมไม่เกิน 25 MB')
   })
 
+  it('accepts exactly 160 Unicode filename characters and rejects 161 before upload', () => {
+    expect(validateExpenseFiles([imageFile(`${'ก'.repeat(156)}.jpg`, 'image/jpeg', 1)])).toBeNull()
+    expect(validateExpenseFiles([imageFile(`${'ก'.repeat(157)}.jpg`, 'image/jpeg', 1)]))
+      .toBe('ชื่อไฟล์ไม่ถูกต้อง กรุณาเปลี่ยนชื่อแล้วแนบใหม่')
+    expect(validateExpenseFiles([imageFile(`${'😀'.repeat(78)}.jpg`, 'image/jpeg', 1)])).toBeNull()
+  })
+
   it('changes the ordered fingerprint whenever a file is replaced or reordered', () => {
     const a = imageFile('a.jpg', 'image/jpeg', 5, 100)
     const b = imageFile('b.png', 'image/png', 7, 200)

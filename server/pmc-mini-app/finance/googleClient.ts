@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isValidExpenseOriginalFileName } from '../../../shared/pmcExpense.js'
 import { google } from 'googleapis'
 import type { ExpensePrivateAttachment } from '../../../shared/pmcMiniAppExpenseIngress.js'
 import { inspectExpenseImage, type ExpenseImageMimeType } from './multipart.js'
@@ -70,6 +71,7 @@ interface FinanceDriveApi {
       incompleteSearch?: boolean | null
     }>
     create: GoogleMethod<DriveMetadata>
+    delete: GoogleMethod<unknown>
   }
 }
 
@@ -119,6 +121,13 @@ export interface FinanceGoogleCapturePorts {
     monthKey: string,
     expenseId: string,
   ): Promise<ExpensePrivateAttachment[]>
+  deleteExpenseFileIfUnregistered(input: {
+    monthKey: string
+    expenseId: string
+    fileId: string
+    expectedAttachment: ExpensePrivateAttachment
+    registeredFileId: string | null
+  }): Promise<void>
 }
 
 export interface FinanceGooglePorts extends FinanceGoogleReadPorts, FinanceGoogleCapturePorts {}
@@ -143,6 +152,7 @@ export function financeGoogleCaptureCapability(
     uploadExpenseImage: ports.uploadExpenseImage,
     verifyExpenseFile: ports.verifyExpenseFile,
     listVerifiedExpenseImages: ports.listVerifiedExpenseImages,
+    deleteExpenseFileIfUnregistered: ports.deleteExpenseFileIfUnregistered,
   }
 }
 
@@ -193,7 +203,10 @@ export function createFinanceGooglePorts(
   const sheetsApi = factory.createSheets(auth)
   const driveApi = factory.createDrive(auth)
   const folderFlights = new Map<string, Promise<string>>()
-  const uploadFlights = new Map<string, Promise<ExpensePrivateAttachment>>()
+  const uploadFlights = new Map<string, {
+    fingerprint: string
+    promise: Promise<ExpensePrivateAttachment>
+  }>()
 
   async function rootContext(code: FinanceGoogleErrorCode): Promise<DriveMetadata> {
     const root = await getMetadata(financeFolderId, code)
@@ -639,6 +652,9 @@ export function createFinanceGooglePorts(
     if (before.length > 1) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     if (before[0]) {
       const fileId = requiredId(String(before[0].id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+      if (input.slotClaim.state === 'REGISTERED' && input.slotClaim.registeredFileId !== fileId) {
+        throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      }
       return (await validatedExpenseFile({
         monthKey: input.monthKey,
         expenseId: input.expenseId,
@@ -646,8 +662,8 @@ export function createFinanceGooglePorts(
         fileId,
       })).attachment
     }
-    if (input.slotClaim.created !== true && input.allowClaimReplayCreate !== true) {
-      throw new FinanceGoogleError('EXPENSE_STORAGE_UNAVAILABLE')
+    if (input.slotClaim.state === 'REGISTERED') {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     }
 
     let created: GoogleResponse<DriveMetadata>
@@ -708,11 +724,28 @@ export function createFinanceGooglePorts(
     },
 
     async uploadExpenseImage(input) {
-      const key = `${input.monthKey}:${input.expenseId}:${input.ordinal}:${input.slotClaim.claimId}`
-      return singleFlight(uploadFlights, key, () => withSafeGoogleError(
-        'EXPENSE_PRIVATE_FILE_INVALID',
-        () => uploadExpenseImageInternal(input),
-      ))
+      try {
+        validateUploadInput(input)
+        const key = `${input.monthKey}:${input.expenseId}:${input.ordinal}:${input.slotClaim.claimId}`
+        const fingerprint = uploadInputFingerprint(input)
+        const current = uploadFlights.get(key)
+        if (current) {
+          if (current.fingerprint !== fingerprint) {
+            throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+          }
+          return current.promise
+        }
+        const promise = withSafeGoogleError(
+          'EXPENSE_PRIVATE_FILE_INVALID',
+          () => uploadExpenseImageInternal(input),
+        ).finally(() => {
+          if (uploadFlights.get(key)?.promise === promise) uploadFlights.delete(key)
+        })
+        uploadFlights.set(key, { fingerprint, promise })
+        return promise
+      } catch (error) {
+        throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
+      }
     },
 
     async verifyExpenseFile(input) {
@@ -761,6 +794,32 @@ export function createFinanceGooglePorts(
           throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
         }
         return verified
+      })
+    },
+
+    async deleteExpenseFileIfUnregistered(input) {
+      await withSafeGoogleError('EXPENSE_PRIVATE_FILE_INVALID', async () => {
+        if (input.fileId === input.registeredFileId) return
+        const context = await existingExpenseFolder(input.monthKey, input.expenseId)
+        await validatedExpenseFile({
+          monthKey: input.monthKey,
+          expenseId: input.expenseId,
+          folderId: context.folderId,
+          fileId: input.fileId,
+          expectedAttachment: input.expectedAttachment,
+        })
+        try {
+          await driveApi.files.delete({ fileId: input.fileId, supportsAllDrives: true })
+        } catch (error) {
+          throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
+        }
+        const remaining = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+        if (remaining.some(({ id }) => id === input.fileId)) {
+          throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+        }
+        if (input.registeredFileId && !remaining.some(({ id }) => id === input.registeredFileId)) {
+          throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+        }
       })
     },
 
@@ -869,11 +928,30 @@ function validateUploadInput(input: ExpenseImageUploadInput): void {
     || !SAFE_EXPENSE_ID.test(input.rootRequestId)
     || !SAFE_EXPENSE_ID.test(input.uploadedByStaffId)
     || !SAFE_EXPENSE_ID.test(input.attachmentId)
-    || !boundedText(input.originalFileName, 160)
-    || input.originalFileName.length < 1
+    || !isValidExpenseOriginalFileName(input.originalFileName)
     || !validTimestamp(input.uploadedAt)
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
   validateSlotClaim(input)
+}
+
+function uploadInputFingerprint(input: ExpenseImageUploadInput): string {
+  return createHash('sha256').update(JSON.stringify({
+    monthKey: input.monthKey,
+    expenseId: input.expenseId,
+    parentId: input.parentId,
+    deterministicName: input.deterministicName,
+    sizeBytes: input.bytes.length,
+    mimeType: input.mimeType,
+    ordinal: input.ordinal,
+    sha256: input.sha256,
+    rootRequestId: input.rootRequestId,
+    uploadedByStaffId: input.uploadedByStaffId,
+    uploadedAt: input.uploadedAt,
+    originalFileName: input.originalFileName,
+    attachmentId: input.attachmentId,
+    slotClaim: input.slotClaim,
+    allowClaimReplayCreate: input.allowClaimReplayCreate === true,
+  }), 'utf8').digest('hex')
 }
 
 function validateSlotClaim(input: ExpenseImageUploadInput): void {
@@ -881,7 +959,8 @@ function validateSlotClaim(input: ExpenseImageUploadInput): void {
   if (
     !isRecord(claim)
     || !hasExactKeys(claim, [
-      'objectKey', 'claimId', 'generation', 'createdAt', 'created',
+      'objectKey', 'claimId', 'generation', 'createdAt', 'updatedAt', 'state',
+      'leaseId', 'leaseOwnerId', 'leaseGeneration', 'registeredFileId',
       'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName',
     ])
     || claim.rootRequestId !== input.rootRequestId
@@ -894,7 +973,13 @@ function validateSlotClaim(input: ExpenseImageUploadInput): void {
     || claim.claimId !== expenseDriveSlotClaimId(claim)
     || !VERSION.test(claim.generation)
     || !validTimestamp(claim.createdAt)
-    || typeof claim.created !== 'boolean'
+    || !validTimestamp(claim.updatedAt)
+    || (claim.state !== 'CLAIMED' && claim.state !== 'REGISTERED')
+    || !/^LEASE-[a-f0-9]{64}$/.test(claim.leaseId)
+    || !/^[A-Za-z0-9._:-]{8,128}$/.test(claim.leaseOwnerId)
+    || !VERSION.test(claim.leaseGeneration)
+    || (claim.state === 'CLAIMED' && claim.registeredFileId !== null)
+    || (claim.state === 'REGISTERED' && !SAFE_EXPENSE_ID.test(String(claim.registeredFileId ?? '')))
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
 }
 
@@ -915,19 +1000,10 @@ function parseAttachmentDescription(value: string | null | undefined): {
   if (
     !isRecord(parsed)
     || !hasExactKeys(parsed, ['originalFileName', 'uploadedAt'])
-    || !boundedText(parsed.originalFileName, 160)
-    || parsed.originalFileName.length < 1
+    || !isValidExpenseOriginalFileName(parsed.originalFileName)
     || !validTimestamp(parsed.uploadedAt)
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
   return { originalFileName: parsed.originalFileName, uploadedAt: parsed.uploadedAt }
-}
-
-function boundedText(value: unknown, max: number): value is string {
-  return typeof value === 'string'
-    && value.length <= max
-    && !value.includes('\r')
-    && !value.includes('\n')
-    && !value.includes(String.fromCharCode(0))
 }
 
 function validTimestamp(value: unknown): value is string {

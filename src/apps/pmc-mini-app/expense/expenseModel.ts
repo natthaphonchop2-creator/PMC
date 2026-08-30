@@ -1,4 +1,9 @@
-import type { EnabledExpenseCategory, ExpensePaymentMethod } from '../../../../shared/pmcExpense'
+import {
+  isExpenseBrowserToken,
+  isValidExpenseOriginalFileName,
+  type EnabledExpenseCategory,
+  type ExpensePaymentMethod,
+} from '../../../../shared/pmcExpense'
 
 export const EXPENSE_MAX_FILES = 5
 export const EXPENSE_MAX_FILE_BYTES = 10_000_000
@@ -76,8 +81,7 @@ export function expenseFileFingerprint(files: File[]): string {
 }
 
 export function isExpenseStagingToken(value: unknown): value is string {
-  return typeof value === 'string' && value.length >= 3 && value.length <= 2_048
-    && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)
+  return isExpenseBrowserToken(value)
 }
 
 export function formatExpenseSatang(value: number): string {
@@ -109,10 +113,7 @@ function validExpenseDate(value: string): boolean {
 }
 
 function safeFileName(value: string): boolean {
-  return value.length > 0 && value.length <= 180 && ![...value].some((character) => {
-    const code = character.charCodeAt(0)
-    return character === '/' || character === '\\' || code < 32 || code === 127
-  })
+  return isValidExpenseOriginalFileName(value)
 }
 
 function matchingImageType(file: File): boolean {

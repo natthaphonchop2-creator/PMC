@@ -2,11 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   deriveBookDailyKey,
   deriveExpenseScope,
+  isValidExpenseOriginalFileName,
   parseExpenseDate,
   type EnabledExpenseCategory,
   type ExpensePaymentMethod,
   type ExpenseReceipt,
 } from '../../../shared/pmcExpense.js'
+import { canonicalExpenseAttachmentManifest } from '../../../shared/pmcMiniAppExpenseIngress.js'
 import type {
   ExpensePrepareResult,
   ExpensePrivateAttachment,
@@ -137,7 +139,7 @@ export async function submitExpense(
         prepared.monthKey,
         prepared.expenseId,
       )
-      validateRecoveredAttachments(recovered, prepared, validated)
+      await validateRecoveredAttachments(recovered, prepared, validated, dependencies.staging)
       const receipt = await commitPreparedExpense(
         prepared,
         validated,
@@ -154,7 +156,6 @@ export async function submitExpense(
       dependencies.staging,
     )
     lease = claimed.lease
-    const claims = claimed.claims
     lease = await dependencies.staging.renewSubmissionLease(lease)
     await dependencies.staging.assertSubmissionLease(lease)
     const folderId = await dependencies.finance.ensureExpenseFolder(
@@ -162,7 +163,7 @@ export async function submitExpense(
       prepared.expenseId,
     )
     const attachments: ExpensePrivateAttachment[] = []
-    for (const [index, receipt] of validated.stagingReceipts.entries()) {
+    for (const receipt of validated.stagingReceipts) {
       lease = await dependencies.staging.renewSubmissionLease(lease)
       await dependencies.staging.assertSubmissionLease(lease)
       const staged = await dependencies.staging.get(receipt.objectKey)
@@ -173,23 +174,56 @@ export async function submitExpense(
         prepared.expenseId,
         receipt.ordinal,
       )
-      const attachment = await dependencies.finance.uploadExpenseImage({
-        monthKey: prepared.monthKey,
-        expenseId: prepared.expenseId,
-        parentId: folderId,
-        deterministicName,
-        bytes: staged.bytes,
-        mimeType: receipt.mimeType,
-        ordinal: receipt.ordinal,
-        sha256: receipt.sha256,
-        rootRequestId: validated.rootRequestId,
-        uploadedByStaffId: validated.staffId,
-        uploadedAt: receipt.createdAt,
-        originalFileName: receipt.originalFileName,
-        attachmentId,
-        slotClaim: claims[index]!,
-        allowClaimReplayCreate: true,
+      const claim = await dependencies.staging.claimDriveSlot({
+        ...driveSlotIntent(validated, prepared, receipt),
+        lease,
       })
+      let attachment: ExpensePrivateAttachment | null = null
+      try {
+        attachment = await dependencies.finance.uploadExpenseImage({
+          monthKey: prepared.monthKey,
+          expenseId: prepared.expenseId,
+          parentId: folderId,
+          deterministicName,
+          bytes: staged.bytes,
+          mimeType: receipt.mimeType,
+          ordinal: receipt.ordinal,
+          sha256: receipt.sha256,
+          rootRequestId: validated.rootRequestId,
+          uploadedByStaffId: validated.staffId,
+          uploadedAt: receipt.createdAt,
+          originalFileName: receipt.originalFileName,
+          attachmentId,
+          slotClaim: claim,
+          allowClaimReplayCreate: true,
+        })
+        const registered = await dependencies.staging.registerDriveSlotFile({
+          claim,
+          lease,
+          fileId: attachment.privateFileId,
+        })
+        if (registered.state !== 'REGISTERED' || registered.registeredFileId !== attachment.privateFileId) {
+          throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+        }
+      } catch (error) {
+        if (attachment) {
+          let registeredFileId: string | null = null
+          try {
+            registeredFileId = (await dependencies.staging.readDriveSlotClaim(
+              driveSlotIntent(validated, prepared, receipt),
+            )).registeredFileId
+          } catch { /* preserve the original fenced failure */ }
+          await dependencies.finance.deleteExpenseFileIfUnregistered({
+            monthKey: prepared.monthKey,
+            expenseId: prepared.expenseId,
+            fileId: attachment.privateFileId,
+            expectedAttachment: attachment,
+            registeredFileId,
+          }).catch(() => undefined)
+        }
+        throw error
+      }
+      if (!attachment) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
       await dependencies.finance.verifyExpenseFile({
         monthKey: prepared.monthKey,
         expenseId: prepared.expenseId,
@@ -201,6 +235,7 @@ export async function submitExpense(
     }
     lease = await dependencies.staging.renewSubmissionLease(lease)
     await dependencies.staging.assertSubmissionLease(lease)
+    await assertRegisteredAttachments(validated, prepared, attachments, dependencies.staging)
     const receipt = await commitPreparedExpense(
       prepared,
       validated,
@@ -222,7 +257,7 @@ export async function submitExpense(
 export function expenseAttachmentManifestHash(
   receipts: readonly (ExpenseStagingReceipt | ExpensePrivateAttachment)[],
 ): string {
-  const canonical = JSON.stringify(receipts.map((receipt) => ({
+  const canonical = canonicalExpenseAttachmentManifest(receipts.map((receipt) => ({
     ordinal: receipt.ordinal,
     mediaType: 'mimeType' in receipt ? receipt.mimeType : receipt.mediaType,
     originalFileName: receipt.originalFileName,
@@ -260,12 +295,8 @@ async function claimExpenseSlotsWithLease(
   for (const receipt of input.stagingReceipts) {
     lease = await staging.renewSubmissionLease(lease)
     const claim = await staging.claimDriveSlot({
-      rootRequestId: input.rootRequestId,
-      expenseId: prepared.expenseId,
-      ordinal: receipt.ordinal,
-      sha256: receipt.sha256,
-      mimeType: receipt.mimeType,
-      deterministicName: deterministicNameFor(receipt),
+      ...driveSlotIntent(input, prepared, receipt),
+      lease,
     })
     await staging.assertSubmissionLease(lease)
     claims.push(claim)
@@ -273,11 +304,12 @@ async function claimExpenseSlotsWithLease(
   return { lease, claims }
 }
 
-function validateRecoveredAttachments(
+async function validateRecoveredAttachments(
   attachments: ExpensePrivateAttachment[],
   prepared: ExpensePrepareResult,
   input: ExpenseSubmissionInput,
-): void {
+  staging: ExpenseStagingPort,
+): Promise<void> {
   if (
     attachments.length !== prepared.expectedAttachmentCount
     || expenseAttachmentManifestHash(attachments) !== prepared.expectedManifestHash
@@ -295,6 +327,38 @@ function validateRecoveredAttachments(
       )
     ) throw new ExpenseSubmissionError('EXPENSE_PRIVATE_FILE_INVALID')
   })
+  await assertRegisteredAttachments(input, prepared, attachments, staging)
+}
+
+function driveSlotIntent(
+  input: ExpenseSubmissionInput,
+  prepared: ExpensePrepareResult,
+  receipt: ExpenseStagingReceipt,
+) {
+  return {
+    rootRequestId: input.rootRequestId,
+    expenseId: prepared.expenseId,
+    ordinal: receipt.ordinal,
+    sha256: receipt.sha256,
+    mimeType: receipt.mimeType,
+    deterministicName: deterministicNameFor(receipt),
+  }
+}
+
+async function assertRegisteredAttachments(
+  input: ExpenseSubmissionInput,
+  prepared: ExpensePrepareResult,
+  attachments: ExpensePrivateAttachment[],
+  staging: ExpenseStagingPort,
+): Promise<void> {
+  for (const [index, receipt] of input.stagingReceipts.entries()) {
+    const claim = await staging.readDriveSlotClaim(driveSlotIntent(input, prepared, receipt))
+    if (
+      claim.state !== 'REGISTERED'
+      || claim.registeredFileId !== attachments[index]?.privateFileId
+      || claim.claimId !== attachments[index]?.slotClaimId
+    ) throw new ExpenseSubmissionError('EXPENSE_PRIVATE_FILE_INVALID')
+  }
 }
 
 async function commitPreparedExpense(
@@ -423,8 +487,7 @@ function validateStagingReceipt(
     || receipt.sizeBytes < 1
     || receipt.sizeBytes > 10_000_000
     || !SHA256.test(receipt.sha256)
-    || !boundedText(receipt.originalFileName, 160)
-    || receipt.originalFileName.length < 1
+    || !isValidExpenseOriginalFileName(receipt.originalFileName)
     || !validTimestamp(receipt.createdAt)
   ) throw new ExpenseSubmissionError('EXPENSE_INVALID_ATTACHMENTS')
 }

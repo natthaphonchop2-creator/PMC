@@ -143,6 +143,7 @@ describe('private finance runtime configuration', () => {
     const finance = {
       readMaster: vi.fn(), readMonth: vi.fn(), ensureExpenseFolder: vi.fn(),
       uploadExpenseImage: vi.fn(), verifyExpenseFile: vi.fn(), listVerifiedExpenseImages: vi.fn(),
+      deleteExpenseFileIfUnregistered: vi.fn(),
       downloadExpenseFile: vi.fn(),
     }
     const staging = {
@@ -175,7 +176,8 @@ describe('private finance runtime configuration', () => {
     }
     if (runtime.capture) {
       expect(Object.keys(runtime.capture.finance).sort()).toEqual([
-        'ensureExpenseFolder', 'listVerifiedExpenseImages', 'uploadExpenseImage', 'verifyExpenseFile',
+        'deleteExpenseFileIfUnregistered', 'ensureExpenseFolder', 'listVerifiedExpenseImages',
+        'uploadExpenseImage', 'verifyExpenseFile',
       ])
       expect(runtime.capture).toMatchObject({ staging, ingress, submission })
     }

@@ -10,6 +10,7 @@ import {
 } from '../../../../shared/pmcExpense'
 import {
   canonicalMiniAppExpenseCommand,
+  canonicalExpenseAttachmentManifest as canonicalSharedExpenseAttachmentManifest,
   MINI_APP_EXPENSE_SAFE_ERROR_CODES,
   type ExpenseCommandResult,
   type ExpensePrivateAttachment,
@@ -99,12 +100,7 @@ const SAFE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 export function canonicalExpenseAttachmentManifest(
   attachments: readonly ExpensePrivateAttachment[],
 ): string {
-  return JSON.stringify(attachments.map((attachment) => ({
-    ordinal: attachment.ordinal,
-    mediaType: attachment.mediaType,
-    originalFileName: attachment.originalFileName,
-    sha256: attachment.sha256,
-  })))
+  return canonicalSharedExpenseAttachmentManifest(attachments)
 }
 
 export function executeExpenseCommand(

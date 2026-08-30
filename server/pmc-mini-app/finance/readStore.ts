@@ -2,6 +2,7 @@ import {
   deriveBookDailyKey,
   deriveExpenseScope,
   effectiveCommittedExpenses,
+  isValidExpenseOriginalFileName,
   parseExpenseDate,
   projectMonthlyExpenses,
   type EnabledExpenseCategory,
@@ -265,7 +266,7 @@ function parseAttachments(rows: unknown[][]): PrivateExpenseAttachment[] {
       const ordinal = integer(row[3], 1, 5)
       const mediaType = row[4]
       if (mediaType !== 'image/jpeg' && mediaType !== 'image/png') throw integrity()
-      const originalFileName = nonEmptyText(row[5], 180)
+      const originalFileName = nonEmptyText(row[5], 320)
       const privateFileId = id(row[6])
       const deterministicName = nonEmptyText(row[7], 160)
       const sizeBytes = integer(row[8], 1, 10_000_000)
@@ -275,7 +276,7 @@ function parseAttachments(rows: unknown[][]): PrivateExpenseAttachment[] {
       const uploadedByStaffId = id(row[12])
       const uploadedAt = timestamp(row[13])
       const expectedName = `${String(ordinal).padStart(3, '0')}-${sha256}.${mediaType === 'image/jpeg' ? 'jpg' : 'png'}`
-      if (deterministicName !== expectedName) throw integrity()
+      if (deterministicName !== expectedName || !isValidExpenseOriginalFileName(originalFileName)) throw integrity()
       return {
         attachmentId, expenseId, rootRequestId, ordinal, mediaType, originalFileName,
         privateFileId, deterministicName, sizeBytes, driveVersion, slotClaimId, sha256,
