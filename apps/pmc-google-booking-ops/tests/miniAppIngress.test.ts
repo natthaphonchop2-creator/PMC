@@ -56,6 +56,26 @@ describe('Apps Script Mini App booking ingress', () => {
     })), createTestPorts())).toThrow('mini app staff is not active or eligible')
   })
 
+  it.each([
+    ['reserved Admin ID', { adminId: 'NONE', adminName: 'Reserved by ID' }],
+    ['reserved Admin name', { adminId: 'reserved-name', adminName: 'ไม่ระบุ' }],
+    ['reserved AE ID', { aeId: 'NONE', aeName: 'Reserved by ID' }],
+    ['reserved AE name', { aeId: 'reserved-name', aeName: 'ไม่ระบุ' }],
+  ])('rejects protocol-2 %s even when the Staff row is active and AE-eligible', (_label, patch) => {
+    const ports = createTestPorts()
+    const base = ports.config.listStaff()
+    ports.config.listStaff = () => [
+      ...base,
+      { ...base[1], id: 'NONE', name: 'Reserved by ID' },
+      { ...base[1], id: 'reserved-name', name: 'ไม่ระบุ' },
+    ]
+
+    expect(() => parseAndVerifyMiniAppIngress(
+      event(signedEnvelopeV2({ payload: patch })),
+      ports,
+    )).toThrow()
+  })
+
   it('returns the exact safe booking projection for an initial submission and verified duplicate', () => {
     const miniPorts = createTestPorts()
     const first = processBookingDoPost(event(envelope()), miniPorts)

@@ -31,7 +31,7 @@ import {
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import { BOOKING_FORM_LABELS, NO_AE_OPTION } from './config'
 import {
-  activeAttributionStaff,
+  bookingAttributionFormChoices,
   resolveCloserByEmail,
   resolveCloserByName,
   resolveEligibleAeByName,
@@ -690,7 +690,7 @@ export function setupSystem(): {
   ensureSheetTopology(spreadsheet)
   const runtime = createRuntime()
   const staff = runtime.config.listStaff().filter((item) => item.active)
-  const aes = activeAttributionStaff(staff)
+  const formAttributionChoices = bookingAttributionFormChoices(staff)
   validateStaffDirectory(staff)
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   const doctors = runtime.config.listDoctors().filter((doctor) => doctor.active)
@@ -698,14 +698,14 @@ export function setupSystem(): {
   const channels = runtime.config.listChannels().filter((channel) => channel.active)
   if (!isConfigurationReady({
     staff: staff.length,
-    aes: aes.length,
+    aes: formAttributionChoices.aes.length,
     doctors: doctors.length,
     services: services.length,
   })) {
     return {
       createdTriggers: 0,
       syncedStaff: staff.length,
-      syncedAes: aes.length,
+      syncedAes: formAttributionChoices.aes.length,
       syncedDoctors: doctors.length,
       syncedServices: services.length,
       syncedChannels: channels.length,
@@ -714,8 +714,8 @@ export function setupSystem(): {
   runtime.forms.ensureCloserField()
   runtime.forms.ensureFacebookNameField()
   runtime.forms.syncBookingChoices(
-    aes.map((ae) => ae.name),
-    aes.map((ae) => ae.name),
+    formAttributionChoices.admins,
+    formAttributionChoices.aes,
     doctors.map((doctor) => doctor.id),
     services.map((service) => service.id),
     channels.map((channel) => channel.id),
@@ -738,7 +738,7 @@ export function setupSystem(): {
   return {
     createdTriggers: created,
     syncedStaff: staff.length,
-    syncedAes: aes.length,
+    syncedAes: formAttributionChoices.aes.length,
     syncedDoctors: doctors.length,
     syncedServices: services.length,
     syncedChannels: channels.length,
@@ -1172,9 +1172,9 @@ export function configureCompactBookingIdentityFieldsWorkflow(): {
   aeChoiceCount: number
 } {
   const runtime = createRuntime()
-  const activeAes = runtime.config.listEligibleAes()
+  const activeAes = bookingAttributionFormChoices(runtime.config.listStaff()).aes
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
-  runtime.forms.configureCompactIdentityFields(activeAes.map((ae) => ae.name))
+  runtime.forms.configureCompactIdentityFields(activeAes)
   if (!runtime.forms.bookingHasCloserField()) throw new Error('booking Form closer field is missing')
   if (!runtime.forms.bookingHasAeField()) throw new Error('booking Form AE field is missing')
   return {
@@ -1366,19 +1366,23 @@ export function pauseAndCutoverBookingFormWorkflow(): {
 } {
   const runtime = createRuntime()
   validateStaffDirectory(runtime.config.listStaff())
-  const activeAes = activeAttributionStaff(runtime.config.listStaff())
+  const formAttributionChoices = bookingAttributionFormChoices(runtime.config.listStaff())
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   runtime.forms.pauseBookingResponses()
   runtime.forms.renameAdminFieldToAe()
   runtime.forms.ensureCloserField()
   runtime.forms.syncBookingChoices(
-    activeAes.map((ae) => ae.name),
-    activeAes.map((ae) => ae.name),
+    formAttributionChoices.admins,
+    formAttributionChoices.aes,
     runtime.config.listDoctors().filter((doctor) => doctor.active).map((doctor) => doctor.id),
     runtime.config.listServices().filter((service) => service.active).map((service) => service.id),
     runtime.config.listChannels().filter((channel) => channel.active).map((channel) => channel.id),
   )
-  return { paused: true, syncedClosers: activeAes.length, syncedAes: activeAes.length }
+  return {
+    paused: true,
+    syncedClosers: formAttributionChoices.admins.length,
+    syncedAes: formAttributionChoices.aes.length,
+  }
 }
 
 export function resumeBookingFormAfterAeCutoverWorkflow(): { acceptingResponses: true } {

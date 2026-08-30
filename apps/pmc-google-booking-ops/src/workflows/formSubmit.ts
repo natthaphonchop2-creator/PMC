@@ -81,7 +81,12 @@ export function submitBookingIntake(
     if (!admin || trusted.adminName !== admin.name) {
       throw new Error('trusted Admin attribution is not current')
     }
-    if ((trusted.aeId === null) !== (trusted.aeName === null || trusted.aeName === NO_AE_OPTION)) {
+    if (trusted.aeId === null) {
+      const exactNoAeName = trusted.protocolVersion === 2 ? null : NO_AE_OPTION
+      if (trusted.aeName !== exactNoAeName) {
+        throw new Error('trusted AE attribution is not current')
+      }
+    } else if (trusted.aeName === null || trusted.aeName === NO_AE_OPTION) {
       throw new Error('trusted AE attribution is not current')
     }
     const ae = trusted.aeId === null ? null : resolveEligibleAeById(staff, trusted.aeId)

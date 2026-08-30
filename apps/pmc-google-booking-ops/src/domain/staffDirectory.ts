@@ -25,6 +25,12 @@ export function normalizeStaffEmail(value: string): string {
   return value.trim().toLowerCase()
 }
 
+export function isReservedAttributionOption(
+  staff: Pick<StaffConfig, 'id' | 'name'>,
+): boolean {
+  return staff.id.trim().toUpperCase() === 'NONE' || staff.name.trim() === 'ไม่ระบุ'
+}
+
 export function validateStaffDirectory(staff: StaffConfig[]): {
   activeClosers: StaffConfig[]
   activeAes: StaffConfig[]
@@ -72,7 +78,11 @@ export function resolveEligibleAeByName(staff: StaffConfig[], name: string): Sta
   const normalized = name.trim()
   if (!normalized) return null
   const matches = staff.filter(
-    (item) => item.active && item.canBeAe && item.name === normalized,
+    (item) =>
+      item.active &&
+      item.canBeAe &&
+      !isReservedAttributionOption(item) &&
+      item.name === normalized,
   )
   return matches.length === 1 ? matches[0] : null
 }
@@ -81,7 +91,11 @@ export function resolveSelectableAdminById(staff: StaffConfig[], id: string): St
   const normalized = id.trim()
   if (!normalized || normalized !== id) return null
   const matches = staff.filter(
-    (item) => item.active && item.canBeAe && item.id === normalized,
+    (item) =>
+      item.active &&
+      item.canBeAe &&
+      !isReservedAttributionOption(item) &&
+      item.id === normalized,
   )
   return matches.length === 1 ? matches[0] : null
 }
@@ -91,7 +105,9 @@ export function resolveEligibleAeById(staff: StaffConfig[], id: string): StaffCo
 }
 
 export function activeAttributionStaff(staff: StaffConfig[]): StaffConfig[] {
-  const eligible = staff.filter((item) => item.active && item.canBeAe)
+  const eligible = staff.filter(
+    (item) => item.active && item.canBeAe && !isReservedAttributionOption(item),
+  )
   const ids = eligible.map((item) => item.id)
   const names = eligible.map((item) => item.name.trim())
   if (new Set(ids).size !== ids.length) throw new Error('duplicate active attribution staff ID')
@@ -100,6 +116,14 @@ export function activeAttributionStaff(staff: StaffConfig[]): StaffConfig[] {
     throw new Error('duplicate active attribution staff name')
   }
   return eligible
+}
+
+export function bookingAttributionFormChoices(staff: StaffConfig[]): {
+  admins: string[]
+  aes: string[]
+} {
+  const names = activeAttributionStaff(staff).map((item) => item.name.trim())
+  return { admins: [...names], aes: [...names] }
 }
 
 export function resolveSelectableAdminByName(staff: StaffConfig[], name: string): StaffConfig | null {

@@ -1,9 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { parseBookingFormEvent } from '../src/adapters/googleForms'
+import { bookingAttributionFormChoices } from '../src/domain/staffDirectory'
 import { submitBookingIntake } from '../src/workflows/formSubmit'
 import { createTestPorts, validBookingIntake } from './helpers/fakes'
 
 describe('booking Form workflow', () => {
+  it('keeps the same ordered Form Admin and AE choices while excluding reserved identities', () => {
+    const base = createTestPorts().config.listStaff()
+    const staff = [
+      base[0],
+      reservedStaff({ id: ' none ', name: 'Reserved by ID' }),
+      base[1],
+      reservedStaff({ id: 'reserved-name', name: ' ไม่ระบุ ' }),
+    ]
+
+    const formChoices = bookingAttributionFormChoices(staff)
+
+    expect(formChoices).toEqual({
+      admins: ['Admin A', 'เอม'],
+      aes: ['Admin A', 'เอม'],
+    })
+  })
+
   it('treats a legacy response with no queue type as NORMAL', () => {
     const intake = parseBookingFormEvent({
       responseKey: 'legacy-normal:2',
@@ -304,6 +322,56 @@ describe('booking Form workflow', () => {
     expect(ports.line.adminMessages()).toEqual([])
   })
 
+  it.each([
+    ['reserved Admin ID', { closerName: 'Reserved by ID' }],
+    ['reserved Admin name', { closerName: 'ไม่ระบุ' }],
+    ['reserved AE ID', { aeName: 'Reserved by ID' }],
+  ])('rejects %s before any booking side effect', (_label, patch) => {
+    const ports = createTestPorts()
+    const base = ports.config.listStaff()
+    ports.config.listStaff = () => [
+      base[0],
+      reservedStaff({ id: 'NONE', name: 'Reserved by ID' }),
+      base[1],
+      reservedStaff({ id: 'reserved-name', name: 'ไม่ระบุ' }),
+    ]
+
+    expect(() => submitBookingIntake(validBookingIntake(patch), ports)).toThrow()
+    expect(ports.bookings.list()).toEqual([])
+    expect(ports.calendar.createdEvents()).toEqual([])
+    expect(ports.line.adminMessages()).toEqual([])
+  })
+
+  it('accepts the exact protocol-2 trusted null AE pair', () => {
+    const result = submitBookingIntake(
+      validBookingIntake({ aeName: 'ไม่ระบุ' }),
+      createTestPorts(),
+      { trustedAttribution: trustedAttribution(2, null) },
+    )
+    expect(result).toMatchObject({ aeId: null, aeName: null })
+  })
+
+  it('rejects the legacy no-AE label in a protocol-2 trusted pair before side effects', () => {
+    const ports = createTestPorts()
+    expect(() => submitBookingIntake(
+      validBookingIntake({ aeName: 'ไม่ระบุ' }),
+      ports,
+      { trustedAttribution: trustedAttribution(2, 'ไม่ระบุ') },
+    )).toThrow('trusted AE attribution is not current')
+    expect(ports.bookings.list()).toEqual([])
+    expect(ports.calendar.createdEvents()).toEqual([])
+    expect(ports.line.adminMessages()).toEqual([])
+  })
+
+  it('accepts the exact protocol-1 trusted legacy no-AE pair', () => {
+    const result = submitBookingIntake(
+      validBookingIntake({ aeName: 'ไม่ระบุ' }),
+      createTestPorts(),
+      { trustedAttribution: trustedAttribution(1, 'ไม่ระบุ') },
+    )
+    expect(result).toMatchObject({ aeId: null, aeName: 'ไม่ระบุ' })
+  })
+
   it('uses the selected Admin even when the submitter uses the former shared email', () => {
     const ports = createTestPorts()
     ports.config.isSharedCloserEmail = (email) =>
@@ -430,3 +498,23 @@ describe('booking Form workflow', () => {
     expect(ports.bookings.list()).toEqual([])
   })
 })
+
+function reservedStaff(patch: { id: string; name: string }) {
+  return {
+    ...createTestPorts().config.listStaff()[1],
+    ...patch,
+  }
+}
+
+function trustedAttribution(protocolVersion: 1 | 2, aeName: string | null) {
+  return {
+    protocolVersion,
+    recorderId: 'admin-1',
+    recorderName: 'Admin A',
+    recorderSource: 'VERIFIED_LINE' as const,
+    adminId: 'admin-1',
+    adminName: 'Admin A',
+    aeId: null,
+    aeName,
+  }
+}
