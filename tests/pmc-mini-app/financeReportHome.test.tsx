@@ -45,6 +45,23 @@ describe('finance-first report home', () => {
     expect(onSelect).toHaveBeenCalledWith('MONTHLY_INCOME')
   })
 
+  it('keeps monthly income visibly unavailable during the one-day pilot', async () => {
+    const user = userEvent.setup()
+    const onSelect = vi.fn()
+    render(<FinanceReportHome
+      canViewFinance
+      financeReportsEnabled
+      monthlyReportsEnabled={false}
+      onSelect={onSelect}
+    />)
+
+    const monthly = screen.getByRole('button', { name: /รายงานรายเดือน/ })
+    expect(monthly).toHaveAttribute('aria-disabled', 'true')
+    expect(monthly).toHaveTextContent('ยังไม่เปิดข้อมูลย้อนหลัง')
+    await user.click(monthly)
+    expect(onSelect).not.toHaveBeenCalledWith('MONTHLY_INCOME')
+  })
+
   it('hides every revenue action in expense-only mode while leaving permitted capture active', () => {
     render(<FinanceReportHome
       financeReportsEnabled={false}

@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DailyIncomePage, type DailyIncomePageAdapter } from '../../src/apps/pmc-mini-app/DailyIncomePage'
+import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
 import type { DailyIncomeProjection, FinancePaymentRow } from '../../shared/pmcFinance'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
@@ -173,6 +174,21 @@ describe('daily income report', () => {
     expect(screen.getByText('เลือกช่วงเวลาได้ไม่เกิน 31 วัน')).toBeVisible()
     expect(screen.queryByText('กำลังโหลดรายรับ')).not.toBeInTheDocument()
     expect(adapter.load).not.toHaveBeenCalled()
+  })
+
+  it('explains which selected pilot date has no cached income data', async () => {
+    const adapter = dailyAdapter()
+    adapter.load.mockRejectedValueOnce(new MiniAppApiError('FINANCE_CACHE_UNAVAILABLE', 503))
+    render(<DailyIncomePage
+      bangkokDate="2026-08-31"
+      adapter={adapter}
+      onBack={vi.fn()}
+      initialFilter={{ preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22' }}
+    />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'ยังไม่มีข้อมูลรายรับสำหรับวันที่ 2026-08-22 กรุณาเลือกวันที่อื่น',
+    )
   })
 
   it('hides old-period totals immediately when the daily filter changes', async () => {

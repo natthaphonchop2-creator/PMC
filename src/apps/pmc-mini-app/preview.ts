@@ -30,6 +30,8 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   reportingEnabled: false,
   financeReportsEnabled: false,
   financeUiPreviewEnabled: false,
+  financePilotDefaultDate: null,
+  financeMonthlyIncomeEnabled: true,
   stockEnabled: false,
   expenseCaptureEnabled: false,
   financeReadsEnabled: false,
