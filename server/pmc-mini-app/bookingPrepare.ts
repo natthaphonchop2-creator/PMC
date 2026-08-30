@@ -160,17 +160,43 @@ function placeholderReferences(type: 'ASYNC' | 'SYNC', descriptors: readonly Evi
 }
 function parsedDraft(input: PersistPrepareEvidenceInput, descriptors: readonly EvidenceDescriptor[], persisted: PersistedReferences): MiniAppRequestRecord {
   const asyncEvidence = input.persistence.type === 'ASYNC'
-  const draft = parseBookingDraftV2(input.input, {
-    draftId: input.draft.draftId, staffId: input.draft.staffId, recorderName: input.draft.recorderName,
-    lineUserIdHash: input.draft.lineUserIdHash, ...input.bookingContext,
-    paymentEvidenceFileIds: asyncEvidence ? [] : persisted.payment.map(({ value }) => value),
-    chatEvidenceFileIds: asyncEvidence ? [] : persisted.chat.map(({ value }) => value),
-    paymentEvidenceObjectKeys: asyncEvidence ? persisted.payment.map(({ value }) => value) : [],
-    chatEvidenceObjectKeys: asyncEvidence ? persisted.chat.map(({ value }) => value) : [],
-    asyncEvidence, now: input.now(),
-  })
+  const reserved = input.draft.evidenceProjectionHash !== null
+  let draft: MiniAppRequestRecord
+  try {
+    draft = parseBookingDraftV2(input.input, {
+      draftId: input.draft.draftId,
+      staffId: input.draft.staffId,
+      recorderName: input.draft.recorderName,
+      lineUserIdHash: input.draft.lineUserIdHash,
+      ...(reserved ? reservedBookingContext(input) : input.bookingContext),
+      paymentEvidenceFileIds: asyncEvidence ? [] : persisted.payment.map(({ value }) => value),
+      chatEvidenceFileIds: asyncEvidence ? [] : persisted.chat.map(({ value }) => value),
+      paymentEvidenceObjectKeys: asyncEvidence ? persisted.payment.map(({ value }) => value) : [],
+      chatEvidenceObjectKeys: asyncEvidence ? persisted.chat.map(({ value }) => value) : [],
+      asyncEvidence,
+      now: input.now(),
+    })
+  } catch (error) {
+    if (reserved) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+    throw error
+  }
   if (draft.requestId !== input.draft.requestId || descriptors.length !== draft.evidenceCount) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   return draft
+}
+
+function reservedBookingContext(
+  input: PersistPrepareEvidenceInput,
+): Pick<BookingDraftContextV2, 'doctors' | 'services' | 'channels' | 'admins' | 'aes'> {
+  const option = (id: unknown, name: unknown = id) => typeof id === 'string' && typeof name === 'string'
+    ? [{ id, name }]
+    : []
+  return {
+    doctors: option(input.input.doctorId),
+    services: option(input.input.serviceId),
+    channels: option(input.input.channelId),
+    admins: option(input.draft.adminId, input.draft.adminName),
+    aes: input.draft.aeId === null ? [] : option(input.draft.aeId, input.draft.aeName),
+  }
 }
 function exactReadyReplay(input: PersistPrepareEvidenceInput, descriptors: readonly EvidenceDescriptor[], bindingHash: string): PersistedPrepareEvidence {
   const persisted = referencesFromDraft(input.draft, descriptors, input.persistence.type)

@@ -66,6 +66,63 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.store.writeCount()).toBe(2)
   })
 
+  it.each(['ASYNC', 'SYNC'] as const)(
+    'returns an exact reserved READY %s retry after mutable config removal without another remote write',
+    async (mode) => {
+      const fixture = prepareFixture(mode)
+      const input = fixture.input({ paymentFiles: [png(1), png(2)], chatFiles: [jpeg(3)] })
+      const first = await persistPrepareEvidence(input)
+      const remoteCalls = mode === 'ASYNC' ? fixture.staging!.putCount() : fixture.ingress!.callCount()
+      const remoteCreates = mode === 'ASYNC' ? fixture.staging!.createdCount() : fixture.ingress!.createdCount()
+      const ownerCalls = fixture.draftStateIngress.callCount()
+
+      const replay = await persistPrepareEvidence({
+        ...input,
+        draft: fixture.store.read(),
+        bookingContext: removedAndRenamedBookingContext(),
+      })
+
+      expect(replay.draft).toEqual(first.draft)
+      expect(mode === 'ASYNC' ? fixture.staging!.putCount() : fixture.ingress!.callCount()).toBe(remoteCalls)
+      expect(mode === 'ASYNC' ? fixture.staging!.createdCount() : fixture.ingress!.createdCount()).toBe(remoteCreates)
+      expect(fixture.draftStateIngress.callCount()).toBe(ownerCalls)
+
+      await expect(persistPrepareEvidence({
+        ...input,
+        draft: fixture.store.read(),
+        bookingContext: removedAndRenamedBookingContext(),
+        input: { ...input.input, customerName: 'ลูกค้าคนอื่น' },
+      })).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+      expect(mode === 'ASYNC' ? fixture.staging!.putCount() : fixture.ingress!.callCount()).toBe(remoteCalls)
+    },
+  )
+
+  it.each(['ASYNC', 'SYNC'] as const)(
+    'continues an exact reserved PARTIAL %s retry after mutable config removal without duplicate remote objects',
+    async (mode) => {
+      const fixture = prepareFixture(mode)
+      const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
+      if (mode === 'ASYNC') fixture.staging!.failOnce(objectKey('PAYMENT', png(2).bytes))
+      else fixture.ingress!.failOnceAt(2)
+      await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+      const partial = fixture.store.read()
+
+      await expect(persistPrepareEvidence({
+        ...input,
+        draft: partial,
+        bookingContext: removedAndRenamedBookingContext(),
+      })).resolves.toMatchObject({ draft: { state: 'READY_TO_CONFIRM', retentionState: '', evidenceCount: 4 } })
+
+      expect(mode === 'ASYNC' ? fixture.staging!.createdCount() : fixture.ingress!.createdCount()).toBe(4)
+      await expect(persistPrepareEvidence({
+        ...input,
+        draft: fixture.store.read(),
+        bookingContext: removedAndRenamedBookingContext(),
+        paymentFiles: [png(3), png(2), png(1)],
+      })).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    },
+  )
+
   it('performs zero remote writes after two lost PREPARE_BEGIN calls and lets a later exact retry reserve', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input()
@@ -483,6 +540,16 @@ function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppReque
         ...patch,
       }
     },
+  }
+}
+
+function removedAndRenamedBookingContext(): PersistPrepareEvidenceInput['bookingContext'] {
+  return {
+    doctors: [],
+    services: [],
+    channels: [],
+    admins: [{ id: 'ADMIN_02', name: 'แววใหม่' }],
+    aes: [],
   }
 }
 

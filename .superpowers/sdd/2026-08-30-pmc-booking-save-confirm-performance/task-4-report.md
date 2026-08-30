@@ -87,3 +87,29 @@ Fix-round verification:
 - `git diff --check`: passed.
 
 No deploy, live request, external evidence upload, Sheet/Apps Script push, queue/property mutation or allowlist expansion was performed.
+
+---
+
+## Fix round 2 — reserved retry parsing
+
+The fix-round-1 re-review found that a later HTTP retry still ran the live-config parser before consulting the durable reservation. Exact READY and PARTIAL retries therefore conflicted after Admin/AE or doctor/service/channel config changed, even though the owner row already held the authoritative binding and attribution snapshots.
+
+`persistPrepareEvidence(...)` now selects its parser before any live-config resolution:
+
+- a null-binding DRAFT continues to use the full request-scoped active Booking config and therefore preserves all first-BEGIN authorization/eligibility checks;
+- a row with a non-null reservation strictly parses the exact P2 input schema and canonical booking semantics using only persisted recorder/Admin/AE snapshots plus the submitted doctor/service/channel IDs;
+- the reserved path recomputes the canonical binding from the persisted snapshots, exact normalized input, ordered evidence hashes/storage and original base version, then requires the exact stored binding before READY replay, remote reuse or owner finalization;
+- forged recorder/Admin/AE name fields remain impossible because the multipart reader rejects every non-contract input key before persistence.
+
+New async and sync tests cover exact READY response-loss retries and PARTIAL retries after Admin rename, AE removal and doctor/service/channel removal. READY returns the existing projection with zero remote or owner calls. PARTIAL deterministically reuses existing evidence and completes without duplicate remote objects/files. Changed customer input or evidence order still conflicts before new remote work. The existing controls continue to cover changed bytes, base version and competing binding.
+
+Fix-round-2 verification:
+
+- Focused prepare/parser/route/owner gate: **9 files, 233 tests passed**.
+- Full Mini App suite: **72 files, 1,005 tests passed**.
+- Full Apps Script Booking suite: **49 files, 686 tests passed**.
+- `npm run booking:typecheck`, `npm run booking:build`, `npm run build:server`, `npm run build:mini-app`, and full `npm run build`: passed.
+- Full `npm run lint`: zero errors; one pre-existing generated `dist-server` unused-disable warning only.
+- `git diff --check`: passed.
+
+No deployment, live/external request, evidence upload, Sheet mutation, Apps Script push, queue/property change or allowlist expansion was performed.

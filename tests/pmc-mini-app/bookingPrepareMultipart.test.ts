@@ -16,6 +16,8 @@ describe('PMC Booking prepare multipart parser', () => {
     ['version zero', [inputPart('prepare-boundary', { version: 0 })]],
     ['a fractional version', [inputPart('prepare-boundary', { version: 1.5 })]],
     ['an extra Booking input key', [inputPart('prepare-boundary', {}, { recorderName: 'forged' })]],
+    ['a forged Admin snapshot', [inputPart('prepare-boundary', {}, { adminName: 'forged' })]],
+    ['a forged AE snapshot', [inputPart('prepare-boundary', {}, { aeName: 'forged' })]],
     ['a noncanonical Booking input value', [inputPart('prepare-boundary', {}, { depositAmount: '900' })]],
   ])('rejects %s with the one safe JSON error', async (_case, inputParts) => {
     const boundary = 'prepare-boundary'
