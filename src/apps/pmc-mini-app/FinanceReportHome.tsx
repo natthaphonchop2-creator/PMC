@@ -13,6 +13,7 @@ export type FinanceReportView = 'DAILY_INCOME' | 'MONTHLY_INCOME'
 export function FinanceReportHome({
   canViewFinance,
   financeReportsEnabled = true,
+  financeReadsEnabled = false,
   expenseCaptureEnabled = false,
   canSubmitExpense = false,
   onSelect,
@@ -20,6 +21,7 @@ export function FinanceReportHome({
 }: {
   canViewFinance: boolean
   financeReportsEnabled?: boolean
+  financeReadsEnabled?: boolean
   expenseCaptureEnabled?: boolean
   canSubmitExpense?: boolean
   onSelect: (view: FinanceReportView) => void
@@ -29,15 +31,17 @@ export function FinanceReportHome({
     <header className="pmc-finance-header">
       <BrandMark />
       <h1>รายงานคลินิก</h1>
-      <p>{financeReportsEnabled ? 'เลือกดูรายรับตามช่วงเวลาที่ต้องการ' : 'เลือกประเภทของรายการรายจ่าย'}</p>
+      <p>{financeReportsEnabled ? 'เลือกดูรายรับตามช่วงเวลาที่ต้องการ' : financeReadsEnabled
+        ? 'เลือกดูรายจ่ายที่บันทึกตามเดือน'
+        : 'เลือกประเภทของรายการรายจ่าย'}</p>
     </header>
 
-    {financeReportsEnabled && <section className="pmc-finance-primary-grid" aria-label="รายงานรายรับ">
-      <button type="button" onClick={() => onSelect('DAILY_INCOME')}>
+    {(financeReportsEnabled || financeReadsEnabled) && <section className="pmc-finance-primary-grid" aria-label={financeReportsEnabled ? 'รายงานรายรับ' : 'รายงานรายจ่าย'}>
+      {financeReportsEnabled && <button type="button" onClick={() => onSelect('DAILY_INCOME')}>
         <span className="pmc-finance-card-icon"><Banknote aria-hidden="true" /></span>
         <span><strong>รายรับรายวัน</strong><small>วันนี้ เมื่อวาน หรือเลือกช่วงวันที่</small></span>
         <ChevronRight aria-hidden="true" />
-      </button>
+      </button>}
       <button
         type="button"
         aria-disabled={!canViewFinance || undefined}
@@ -46,7 +50,9 @@ export function FinanceReportHome({
         <span className="pmc-finance-card-icon">{canViewFinance
           ? <CalendarRange aria-hidden="true" />
           : <LockKeyhole aria-hidden="true" />}</span>
-        <span><strong>รายงานรายเดือน</strong><small>{canViewFinance ? 'สรุปรายรับประจำเดือน' : 'เฉพาะฝ่ายการเงิน'}</small></span>
+        <span><strong>{financeReportsEnabled ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</strong><small>{canViewFinance
+          ? financeReportsEnabled ? 'สรุปรายรับประจำเดือน' : 'ยอดรายจ่ายและประวัติหลักฐาน'
+          : 'เฉพาะฝ่ายการเงิน'}</small></span>
         <ChevronRight aria-hidden="true" />
       </button>
     </section>}

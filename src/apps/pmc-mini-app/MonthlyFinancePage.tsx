@@ -8,7 +8,7 @@ import {
   type FinanceDailyFilter,
   type FinanceMonthSelection,
 } from './financeReports'
-import { formatBaht } from './reportFormatting'
+import { formatBaht, formatBahtFixed } from './reportFormatting'
 import { MonthlyExpensePanel } from './expense/MonthlyExpensePanel'
 
 export interface MonthlyIncomePageAdapter {
@@ -21,6 +21,7 @@ export interface MonthlyExpensePageAdapter {
 
 export function MonthlyFinancePage({
   canViewFinance,
+  incomeEnabled = true,
   bangkokDate,
   adapter,
   expenseAdapter,
@@ -31,6 +32,7 @@ export function MonthlyFinancePage({
   onSelectionChange,
 }: {
   canViewFinance: boolean
+  incomeEnabled?: boolean
   bangkokDate: string
   adapter: MonthlyIncomePageAdapter
   expenseAdapter?: MonthlyExpensePageAdapter
@@ -42,7 +44,7 @@ export function MonthlyFinancePage({
 }) {
   const [selection, setSelection] = useState(() => initialSelection ?? defaultFinanceMonthSelection(bangkokDate))
   const [loadedProjection, setLoadedProjection] = useState<{ key: string; value: MonthlyIncomeProjection } | null>(null)
-  const [loading, setLoading] = useState(canViewFinance)
+  const [loading, setLoading] = useState(canViewFinance && incomeEnabled)
   const [error, setError] = useState('')
   const [loadedExpenseProjection, setLoadedExpenseProjection] = useState<{ key: string; value: ExpenseMonthlyProjection } | null>(null)
   const [expenseError, setExpenseError] = useState<{ key: string; value: 'EMPTY' | 'UNAVAILABLE' } | null>(null)
@@ -59,14 +61,16 @@ export function MonthlyFinancePage({
     const requestKey = monthSelectionKey(selection)
     onSelectionChange?.(selection)
     if (financeMonthSelectionError(selection)) return
-    void adapter.load(selection).then((next) => {
-      if (requestEpoch === requestEpochRef.current) setLoadedProjection({ key: requestKey, value: next })
-    }).catch(() => {
-      if (requestEpoch !== requestEpochRef.current) return
-      setError(projection ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')
-    }).finally(() => {
-      if (requestEpoch === requestEpochRef.current) setLoading(false)
-    })
+    if (incomeEnabled) {
+      void adapter.load(selection).then((next) => {
+        if (requestEpoch === requestEpochRef.current) setLoadedProjection({ key: requestKey, value: next })
+      }).catch(() => {
+        if (requestEpoch !== requestEpochRef.current) return
+        setError(projection ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')
+      }).finally(() => {
+        if (requestEpoch === requestEpochRef.current) setLoading(false)
+      })
+    }
     if (expenseAdapter) {
       void expenseAdapter.load(monthValueForSelection(selection)).then((next) => {
         if (requestEpoch === requestEpochRef.current) {
@@ -79,7 +83,7 @@ export function MonthlyFinancePage({
     }
   // Keep the last successful projection visible when a later month load fails.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, canViewFinance, expenseAdapter, onSelectionChange, selection])
+  }, [adapter, canViewFinance, expenseAdapter, incomeEnabled, onSelectionChange, selection])
 
   if (!canViewFinance) return <main className="pmc-finance-page pmc-finance-locked-page">
     <LockKeyhole aria-hidden="true" />
@@ -94,7 +98,9 @@ export function MonthlyFinancePage({
       <button type="button" className="pmc-icon-button" aria-label="กลับไปรายงาน" onClick={onBack}>
         <ArrowLeft aria-hidden="true" />
       </button>
-      <div><h1>รายงานรายเดือน</h1><p>ภาพรวมรายรับของฝ่ายการเงิน</p></div>
+      <div><h1>{incomeEnabled ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</h1><p>{incomeEnabled
+        ? 'ภาพรวมรายรับของฝ่ายการเงิน'
+        : 'ยอดรายจ่ายที่บันทึกและหลักฐานย้อนหลัง'}</p></div>
     </header>
 
     <section className="pmc-finance-filter pmc-monthly-filter" aria-label="ตัวกรองเดือนรายงาน">
@@ -110,7 +116,7 @@ export function MonthlyFinancePage({
             requestEpochRef.current += 1
             setError('')
             setExpenseError(null)
-            setLoading(true)
+            setLoading(incomeEnabled)
             setSelection({ year: year!, month: month! })
           }
         }}
@@ -122,6 +128,12 @@ export function MonthlyFinancePage({
     {projection && <MonthlyIncomeContent projection={projection} onDrillDown={onDrillDown}
       expenseProjection={expenseProjection} expenseLoading={expenseLoading} expenseError={currentExpenseError}
       onOpenExpenseHistory={onOpenExpenseHistory ? () => onOpenExpenseHistory(monthValue) : undefined} />}
+    {!incomeEnabled && <MonthlyExpensePanel
+      projection={expenseProjection}
+      loading={expenseLoading}
+      error={currentExpenseError}
+      onOpenHistory={onOpenExpenseHistory ? () => onOpenExpenseHistory(monthValue) : undefined}
+    />}
   </main>
 }
 
@@ -195,7 +207,7 @@ function MonthlyIncomeContent({
     <MonthlyFreshnessSection freshness={projection.freshness} />
     <MonthlyExpensePanel projection={expenseProjection} loading={expenseLoading} error={expenseError} onOpenHistory={onOpenExpenseHistory} />
     {expenseProjection && <section className="pmc-finance-section pmc-monthly-balance" aria-labelledby="monthly-balance-heading">
-      <h2 id="monthly-balance-heading">ยอดคงเหลือโดยประมาณ <strong>{formatRecordedExpense(estimatedClinicBalance(projection.netReceivedSatang, expenseProjection.clinicCommittedSatang) ?? Number.NaN)}</strong></h2>
+      <h2 id="monthly-balance-heading">ยอดคงเหลือโดยประมาณ <strong>{formatBahtFixed(estimatedClinicBalance(projection.netReceivedSatang, expenseProjection.clinicCommittedSatang) ?? Number.NaN)}</strong></h2>
       <small>รับสุทธิ หักเฉพาะรายจ่ายคลินิกที่บันทึกแล้ว ไม่รวมรายจ่ายส่วนตัวหมอ</small>
     </section>}
   </div>
@@ -245,9 +257,4 @@ function monthValueForSelection(selection: FinanceMonthSelection): string {
 function estimatedClinicBalance(netReceivedSatang: number, clinicCommittedSatang: number): number | null {
   const balance = netReceivedSatang - clinicCommittedSatang
   return Number.isSafeInteger(balance) ? balance : null
-}
-
-function formatRecordedExpense(satang: number): string {
-  if (!Number.isSafeInteger(satang)) return '—'
-  return `${new Intl.NumberFormat('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(satang / 100)} บาท`
 }

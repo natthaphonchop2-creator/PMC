@@ -329,6 +329,7 @@ export function voidCommand(input: {
   rootRequestId: string
   expenseId: string
   expectedVersion?: number
+  expectedRevision?: number
   reason?: string
 }): Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }> {
   return {
@@ -339,6 +340,7 @@ export function voidCommand(input: {
     payload: {
       expenseId: input.expenseId,
       expectedVersion: input.expectedVersion ?? 1,
+      expectedRevision: input.expectedRevision ?? 1,
       reason: input.reason ?? 'ยกเลิกรายการทดสอบ',
     },
   }

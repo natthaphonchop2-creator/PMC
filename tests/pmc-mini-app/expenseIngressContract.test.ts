@@ -83,7 +83,7 @@ const voidCommand: MiniAppExpenseCommand = {
   commandIdempotencyKey: 'expense-request-1:void',
   staffId: 'ADMIN_01',
   commandType: 'VOID_EXPENSE',
-  payload: { expenseId: 'EXP-202608-1', expectedVersion: 2, reason: 'duplicate entry' },
+  payload: { expenseId: 'EXP-202608-1', expectedVersion: 2, expectedRevision: 1, reason: 'duplicate entry' },
 }
 
 describe('expense ingress contract', () => {

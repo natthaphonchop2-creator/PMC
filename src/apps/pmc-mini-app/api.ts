@@ -263,9 +263,17 @@ export function createMiniAppApi(options: {
       await requestJson(request,
         `/api/mini-app/finance/expenses/${encodeURIComponent(expenseId)}/void`,
         authenticatedJson(idToken, 'POST', {
-          rootRequestId: input.rootRequestId, expectedVersion: committedExpenseVersion(), reason: input.reason,
+          rootRequestId: input.rootRequestId,
+          expectedVersion: committedExpenseVersion(),
+          expectedRevision: input.expectedRevision,
+          reason: input.reason,
         }),
-        parseVoidExpenseResponse,
+        (body, status) => parseVoidExpenseResponse(
+          body,
+          status,
+          expenseId,
+          committedExpenseVersion(),
+        ),
       )
     },
   }
@@ -434,9 +442,13 @@ function parseExpenseHistoryPage(body: unknown, status: number, expectedMonthKey
 function parseExpenseHistoryRow(value: unknown, status: number, expectedMonthKey: string): ExpenseHistoryRow {
   const expected = ['amountSatang', 'attachments', 'category', 'committedAt', 'description', 'expenseDate', 'expenseId', 'recordState', 'revision', 'scope', 'submittedAt', 'submittedByName']
   const category = isRecord(value) ? enabledExpenseCategory(value.category) : null
+  let parsedExpenseDate: string | null = null
+  if (isRecord(value) && typeof value.expenseDate === 'string') {
+    try { parsedExpenseDate = parseExpenseDate(value.expenseDate).expenseDate } catch { parsedExpenseDate = null }
+  }
   if (!isRecord(value) || Object.keys(value).sort().join(',') !== expected.join(',')
     || typeof value.expenseId !== 'string' || !/^EXP-\d{6}-[A-Za-z0-9._:-]{1,107}$/.test(value.expenseId)
-    || typeof value.expenseDate !== 'string' || value.expenseDate.slice(0, 7) !== expectedMonthKey || !validMonthKey(value.expenseDate.slice(0, 7))
+    || parsedExpenseDate === null || parsedExpenseDate.slice(0, 7) !== expectedMonthKey
     || !new RegExp(`^EXP-${expectedMonthKey.replace('-', '')}-[A-Za-z0-9._:-]{1,107}$`).test(value.expenseId)
     || !category || value.scope !== deriveExpenseScope(category)
     || !positiveOrZeroInteger(value.amountSatang) || value.amountSatang < 1
@@ -450,10 +462,13 @@ function parseExpenseHistoryRow(value: unknown, status: number, expectedMonthKey
   ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   const expenseId = value.expenseId as string
   const attachments = value.attachments.map((attachment) => parseExpenseAttachment(attachment, expenseId, status))
-  if (new Set(attachments.map(({ attachmentId }) => attachmentId)).size !== attachments.length) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  if (new Set(attachments.map(({ attachmentId }) => attachmentId)).size !== attachments.length
+    || attachments.some((attachment, index) => attachment.ordinal !== index + 1)) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
   return {
     expenseId,
-    expenseDate: value.expenseDate,
+    expenseDate: parsedExpenseDate,
     category,
     scope: deriveExpenseScope(category),
     amountSatang: value.amountSatang,
@@ -492,10 +507,15 @@ function parseEvidenceToken(body: unknown, status: number): string {
   return body.token
 }
 
-function parseVoidExpenseResponse(body: unknown, status: number): void {
+function parseVoidExpenseResponse(
+  body: unknown,
+  status: number,
+  expectedExpenseId: string,
+  expectedVersion: number,
+): void {
   if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== 'expenseId,recordState,updatedAt,version'
-    || typeof body.expenseId !== 'string' || body.recordState !== 'VOID'
-    || !positiveOrZeroInteger(body.version) || !canonicalIsoTimestamp(String(body.updatedAt))) {
+    || body.expenseId !== expectedExpenseId || body.recordState !== 'VOID'
+    || body.version !== expectedVersion + 1 || !canonicalIsoTimestamp(String(body.updatedAt))) {
     throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
   }
 }

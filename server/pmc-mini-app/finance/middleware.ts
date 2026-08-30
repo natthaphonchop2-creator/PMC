@@ -365,22 +365,24 @@ async function handleVoid(
 ): Promise<void> {
   const body = await readExpenseJson(req, res)
   if (!body) return
-  if (!hasExactKeys(body, ['rootRequestId', 'expectedVersion', 'reason'])) return invalidField(res)
+  if (!hasExactKeys(body, ['rootRequestId', 'expectedVersion', 'expectedRevision', 'reason'])) return invalidField(res)
   const rootRequestId = typeof body.rootRequestId === 'string' && ROOT_REQUEST_ID.test(body.rootRequestId)
     ? body.rootRequestId : null
   const expectedVersion = positiveInteger(body.expectedVersion)
+  const expectedRevision = positiveInteger(body.expectedRevision)
   const reason = boundedReason(body.reason)
-  if (!rootRequestId || expectedVersion === null || !reason) return invalidRequest(res)
+  if (!rootRequestId || expectedVersion === null || expectedRevision === null || !reason) return invalidRequest(res)
   try {
     const context = await finance.reads!.readStore.getExpenseMutationContext(monthKey, expenseId)
     if (!context) return safeError(res, 404, 'EXPENSE_NOT_FOUND', false)
     if (context.version !== expectedVersion) return safeError(res, 409, 'EXPENSE_REVISION_CONFLICT', false)
+    if (context.revision !== expectedRevision) return safeError(res, 409, 'EXPENSE_REVISION_CONFLICT', false)
     const command: Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }> = {
       rootRequestId,
       commandIdempotencyKey: `${rootRequestId}:void`,
       staffId: authenticated.staffId,
       commandType: 'VOID_EXPENSE',
-      payload: { expenseId, expectedVersion, reason },
+      payload: { expenseId, expectedVersion, expectedRevision, reason },
     }
     const result = await finance.capture!.ingress.void(command)
     if (

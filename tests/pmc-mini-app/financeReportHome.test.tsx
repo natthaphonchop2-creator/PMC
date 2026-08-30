@@ -60,6 +60,22 @@ describe('finance-first report home', () => {
     expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
   })
 
+  it('shows a monthly expense entry in reads-only mode without exposing revenue actions', async () => {
+    const user = userEvent.setup()
+    const onSelect = vi.fn()
+    render(<FinanceReportHome
+      financeReportsEnabled={false}
+      financeReadsEnabled
+      canViewFinance
+      expenseCaptureEnabled={false}
+      onSelect={onSelect}
+    />)
+
+    expect(screen.queryByRole('button', { name: /รายรับรายวัน/ })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /รายจ่ายรายเดือน/ }))
+    expect(onSelect).toHaveBeenCalledWith('MONTHLY_INCOME')
+  })
+
   it('keeps every deferred expense area compact, unavailable, and free of create actions', () => {
     render(<FinanceReportHome canViewFinance onSelect={vi.fn()} />)
 

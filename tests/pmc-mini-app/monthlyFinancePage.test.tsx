@@ -148,6 +148,25 @@ describe('monthly finance report', () => {
     expect(view.container).not.toHaveTextContent(/(?:\d[\d,]*\s*บาท|฿)/)
   })
 
+  it('loads expense-only monthly reads without fetching income or rendering estimated balance', async () => {
+    const adapter = monthlyAdapter()
+    const expenseAdapter = { load: vi.fn(async () => expenseProjection('2026-08', 120_000)) }
+    render(<MonthlyFinancePage
+      canViewFinance
+      incomeEnabled={false}
+      bangkokDate="2026-08-29"
+      adapter={adapter}
+      expenseAdapter={expenseAdapter}
+      onBack={vi.fn()}
+      onDrillDown={vi.fn()}
+    />)
+
+    expect((await screen.findByText('รายจ่ายคลินิก')).closest('div')).toHaveTextContent('1,200.00 บาท')
+    expect(adapter.load).not.toHaveBeenCalled()
+    expect(expenseAdapter.load).toHaveBeenCalledWith('2026-08')
+    expect(screen.queryByText(/ยอดคงเหลือโดยประมาณ/)).not.toBeInTheDocument()
+  })
+
   it('clears a prior expense read error when retrying the same month and keeps stale month results out', async () => {
     const augustRetry = deferred<ReturnType<typeof expenseProjection>>()
     const expenseAdapter = {
@@ -160,13 +179,13 @@ describe('monthly finance report', () => {
 
     expect(await screen.findByText('โหลดรายจ่ายที่บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง')).toBeVisible()
     fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-07' } })
-    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('700.00 บาท'))
+    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก').closest('div')).toHaveTextContent('700.00 บาท'))
     fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-08' } })
     expect(screen.queryByText('โหลดรายจ่ายที่บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง')).not.toBeInTheDocument()
     expect(await screen.findByText('กำลังโหลดรายจ่ายที่บันทึก')).toBeVisible()
     await act(async () => { augustRetry.resolve(expenseProjection('2026-08', 120_000)) })
 
-    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('1,200.00 บาท'))
+    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก').closest('div')).toHaveTextContent('1,200.00 บาท'))
     expect(screen.queryByText('โหลดรายจ่ายที่บันทึกไม่สำเร็จ กรุณาลองอีกครั้ง')).not.toBeInTheDocument()
   })
 
@@ -178,11 +197,11 @@ describe('monthly finance report', () => {
 
     fireEvent.change(screen.getByLabelText('เดือนรายงาน'), { target: { value: '2026-07' } })
     await act(async () => { july.resolve(expenseProjection('2026-07', 70_000)) })
-    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('700.00 บาท'))
+    await waitFor(() => expect(screen.getByText('รายจ่ายคลินิก').closest('div')).toHaveTextContent('700.00 บาท'))
     await act(async () => { august.resolve(expenseProjection('2026-08', 120_000)) })
 
-    expect(screen.getByText('รายจ่ายคลินิก')).toHaveTextContent('700.00 บาท')
-    expect(screen.getByText('รายจ่ายคลินิก')).not.toHaveTextContent('1,200.00 บาท')
+    expect(screen.getByText('รายจ่ายคลินิก').closest('div')).toHaveTextContent('700.00 บาท')
+    expect(screen.getByText('รายจ่ายคลินิก').closest('div')).not.toHaveTextContent('1,200.00 บาท')
   })
 })
 

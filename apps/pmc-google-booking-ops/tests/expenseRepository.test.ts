@@ -157,7 +157,10 @@ describe('Apps Script expense repository and command journal', () => {
       commandIdempotencyKey: 'book-void-a:void',
       staffId: 'MANAGER_01',
       commandType: 'VOID_EXPENSE',
-      payload: { expenseId: replacement.expenseId, expectedVersion: replacement.version, reason: 'ยอดผิดจากสมุดจริง' },
+      payload: {
+        expenseId: replacement.expenseId, expectedVersion: replacement.version,
+        expectedRevision: replacement.revision, reason: 'ยอดผิดจากสมุดจริง',
+      },
     }, ports)
 
     expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toBeNull()
@@ -288,9 +291,43 @@ describe('Apps Script expense repository and command journal', () => {
       payload: {
         expenseId: prepared.prepared.expenseId,
         expectedVersion: 2,
+        expectedRevision: 1,
         reason: 'ยกเลิกรายการตามสิทธิ์ผู้ดูแล',
       },
     }, ports)).toMatchObject({ recordState: 'VOID', version: 3 })
+  })
+
+  it('binds VOID to the selected committed book revision before writing audit or state', () => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'void-revision-cas', commandIdempotencyKey: 'void-revision-cas:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'void-revision-cas', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+
+    expect(() => executeExpenseCommand({
+      rootRequestId: 'void-revision-stale',
+      commandIdempotencyKey: 'void-revision-stale:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE',
+      payload: {
+        expenseId: prepared.prepared.expenseId,
+        expectedVersion: 2,
+        expectedRevision: 2,
+        reason: 'ยกเลิกจาก revision ที่ล้าสมัย',
+      },
+    }, ports)).toThrow('EXPENSE_REVISION_CONFLICT')
+    expect(ports.expense.getSubmission('2026-08', prepared.prepared.expenseId)).toMatchObject({
+      recordState: 'COMMITTED', revision: 1, version: 2,
+    })
+    expect(ports.expense.auditForExpense(prepared.prepared.expenseId))
+      .not.toContainEqual(expect.objectContaining({ action: 'VOID' }))
+    expect(ports.expense.listRecoveryCandidates()).toEqual([])
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 0, recovered: 0, abandoned: 0, errors: [],
+    })
   })
 
   it('rejects unknown or private fields in every stored command-result replay union', () => {
@@ -345,6 +382,7 @@ describe('Apps Script expense repository and command journal', () => {
       payload: {
         expenseId: voidPrepared.prepared.expenseId,
         expectedVersion: 2,
+        expectedRevision: 1,
         reason: 'ยกเลิกรายการทดสอบ',
       },
     }

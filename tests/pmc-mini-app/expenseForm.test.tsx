@@ -57,8 +57,12 @@ describe('expense form lifecycle', () => {
     expect(screen.queryByLabelText('วิธีชำระ')).not.toBeInTheDocument()
   })
 
-  it('keeps values, ordered files, and staged tokens through retryable failures', async () => {
+  it('keeps values and ordered files, then re-stages after authoritative safe-to-retry', async () => {
     const user = userEvent.setup()
+    vi.mocked(globalThis.crypto.randomUUID)
+      .mockReset()
+      .mockReturnValueOnce('root-request-initial')
+      .mockReturnValueOnce('root-request-retry')
     const app = adapter()
     vi.mocked(app.submit)
       .mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE'))
@@ -70,7 +74,7 @@ describe('expense form lifecycle', () => {
     expect(screen.getByRole('heading', { name: 'ตรวจสอบข้อมูล' })).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('บันทึกรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง')
+    expect(await screen.findByRole('alert')).toHaveTextContent('ไม่พบรายการที่บันทึกค้างอยู่ กรุณาตรวจข้อมูลและยืนยันใหม่')
     expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('1200')
     expect(screen.getByText('เลือกแล้ว 2 รูป')).toBeVisible()
 
@@ -78,19 +82,24 @@ describe('expense form lifecycle', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
     await waitFor(() => expect(app.submit).toHaveBeenCalledTimes(2))
-    expect(app.stage).toHaveBeenCalledOnce()
-    expect(app.stage).toHaveBeenCalledWith('root-request-stable', [expect.objectContaining({ name: 'a.jpg' }), expect.objectContaining({ name: 'b.jpg' })])
+    expect(app.stage).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(app.stage).mock.calls.map(([rootRequestId]) => rootRequestId))
+      .toEqual(['root-request-initial', 'root-request-retry'])
     expect(app.submit).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      rootRequestId: 'root-request-stable', amountSatang: 120_000,
-      stagingTokens: ['staged-a.signature-a', 'staged-b.signature-b'],
+      rootRequestId: 'root-request-retry', amountSatang: 120_000,
+      stagingTokens: [expenseToken('staged-1'), expenseToken('staged-2')],
     }))
   })
 
   it.each([
     ['expired or missing staging object', 'EXPENSE_INVALID_ATTACHMENTS'],
     ['invalid private attachment', 'EXPENSE_PRIVATE_FILE_INVALID'],
-  ])('re-stages unchanged files after %s while preserving the form and root request', async (_label, code) => {
+  ])('re-stages unchanged files after %s while preserving the form and rotating the terminal root', async (_label, code) => {
     const user = userEvent.setup()
+    vi.mocked(globalThis.crypto.randomUUID)
+      .mockReset()
+      .mockReturnValueOnce('root-request-initial')
+      .mockReturnValueOnce('root-request-retry')
     const app = adapter()
     vi.mocked(app.submit)
       .mockRejectedValueOnce(safeError(code, false))
@@ -108,7 +117,7 @@ describe('expense form lifecycle', () => {
 
     await waitFor(() => expect(app.stage).toHaveBeenCalledTimes(2))
     expect(vi.mocked(app.stage).mock.calls.map(([rootRequestId]) => rootRequestId))
-      .toEqual(['root-request-stable', 'root-request-stable'])
+      .toEqual(['root-request-initial', 'root-request-retry'])
     expect(app.submit).toHaveBeenCalledTimes(2)
   })
 
@@ -162,6 +171,19 @@ describe('expense form lifecycle', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true')
   })
 
+  it('distinguishes duplicate filenames by image ordinal in every file action name', async () => {
+    const user = userEvent.setup()
+    renderForm('BILL_DOCUMENT')
+    await user.upload(screen.getByLabelText('รูปหลักฐาน'), [
+      imageFile('same.jpg'), imageFile('same.jpg'),
+    ])
+
+    expect(screen.getByRole('button', { name: 'ลบรูปที่ 1 same.jpg' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'ลบรูปที่ 2 same.jpg' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'เลื่อนรูปที่ 1 same.jpg ลง' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'เลื่อนรูปที่ 2 same.jpg ขึ้น' })).toBeVisible()
+  })
+
   it('rejects malformed staging tokens at the form boundary before submit', async () => {
     const user = userEvent.setup()
     const app = adapter()
@@ -179,8 +201,8 @@ describe('expense form lifecycle', () => {
     const user = userEvent.setup()
     const app = adapter()
     vi.mocked(app.stage)
-      .mockResolvedValueOnce({ stagingTokens: ['old-token.old-signature'] })
-      .mockResolvedValueOnce({ stagingTokens: ['new-a.new-signature-a', 'new-b.new-signature-b'] })
+      .mockResolvedValueOnce({ stagingTokens: [expenseToken('old-token')] })
+      .mockResolvedValueOnce({ stagingTokens: [expenseToken('new-a'), expenseToken('new-b')] })
     vi.mocked(app.submit)
       .mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE'))
       .mockResolvedValueOnce(receipt())
@@ -191,14 +213,14 @@ describe('expense form lifecycle', () => {
     await screen.findByRole('alert')
 
     await user.upload(screen.getByLabelText('รูปหลักฐาน'), imageFile('b.jpg'))
-    await user.click(screen.getByRole('button', { name: 'เลื่อน a.jpg ลง' }))
+    await user.click(screen.getByRole('button', { name: 'เลื่อนรูปที่ 1 a.jpg ลง' }))
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
     await waitFor(() => expect(app.stage).toHaveBeenCalledTimes(2))
     expect(vi.mocked(app.stage).mock.calls[1]?.[1].map((file) => file.name)).toEqual(['b.jpg', 'a.jpg'])
     expect(app.submit).toHaveBeenLastCalledWith(expect.objectContaining({
-      stagingTokens: ['new-a.new-signature-a', 'new-b.new-signature-b'],
+      stagingTokens: [expenseToken('new-a'), expenseToken('new-b')],
     }))
   })
 
@@ -209,7 +231,7 @@ describe('expense form lifecycle', () => {
     vi.mocked(app.stage).mockReturnValue(staged.promise)
     const view = renderForm('BILL_DOCUMENT', app)
     await completeBill(user, [imageFile('a.jpg'), imageFile('b.jpg')])
-    await user.click(screen.getByRole('button', { name: 'ลบ a.jpg' }))
+    await user.click(screen.getByRole('button', { name: 'ลบรูปที่ 1 a.jpg' }))
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:a.jpg')
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
 
@@ -224,7 +246,7 @@ describe('expense form lifecycle', () => {
   it('renders the submit-only revision conflict copy exactly and does not claim success', async () => {
     const user = userEvent.setup()
     const app = adapter()
-    vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_REVISION_CONFLICT'))
+    vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_REVISION_CONFLICT', false))
     const onCommitted = vi.fn()
     render(<ExpenseForm category="BOOK_CLINIC" adapter={app} onCommitted={onCommitted} onBack={vi.fn()} />)
     await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
@@ -236,6 +258,56 @@ describe('expense form lifecycle', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('มีรายการของวันนี้แล้ว กรุณาแจ้งผู้ดูแล')
     expect(onCommitted).not.toHaveBeenCalled()
+  })
+
+  it('locks editing and new-root submission while an ambiguous result remains server-pending', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE', true))
+    vi.mocked(app.resume)
+      .mockResolvedValueOnce({ status: 'PENDING' })
+      .mockResolvedValueOnce({ status: 'COMMITTED', receipt: receipt() })
+    const onCommitted = vi.fn()
+    render(<ExpenseForm category="BILL_DOCUMENT" adapter={app} onCommitted={onCommitted} onBack={vi.fn()} />)
+    await completeBill(user, [imageFile('a.jpg')])
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByText('กำลังตรวจสอบสถานะรายการที่บันทึก')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'แก้ไขข้อมูล' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('จำนวนเงิน')).not.toBeInTheDocument()
+    expect(app.submit).toHaveBeenCalledTimes(1)
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบสถานะอีกครั้ง' }))
+    await waitFor(() => expect(onCommitted).toHaveBeenCalledWith(receipt()))
+    expect(app.submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('unlocks and rotates the root after a definite resume rejection', async () => {
+    const user = userEvent.setup()
+    vi.mocked(globalThis.crypto.randomUUID)
+      .mockReset()
+      .mockReturnValueOnce('root-request-initial')
+      .mockReturnValueOnce('root-request-retry')
+    const app = adapter()
+    vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE', true))
+    vi.mocked(app.resume).mockRejectedValueOnce(safeError('EXPENSE_RESUME_FORBIDDEN', false))
+    const onCommitted = vi.fn()
+    render(<ExpenseForm category="BILL_DOCUMENT" adapter={app} onCommitted={onCommitted} onBack={vi.fn()} />)
+    await completeBill(user, [imageFile('a.jpg')])
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('alert')).toBeVisible()
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('1200')
+    expect(screen.queryByRole('button', { name: 'ตรวจสอบสถานะอีกครั้ง' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+    await waitFor(() => expect(onCommitted).toHaveBeenCalledWith(receipt()))
+    expect(vi.mocked(app.stage).mock.calls.map(([rootRequestId]) => rootRequestId))
+      .toEqual(['root-request-initial', 'root-request-retry'])
   })
 })
 
@@ -255,11 +327,10 @@ async function completeBill(user: ReturnType<typeof userEvent.setup>, files: Fil
 function adapter(): ExpenseFormAdapter {
   return {
     stage: vi.fn(async (_rootRequestId, files) => ({
-      stagingTokens: files.map((_, index) => index === 0
-        ? 'staged-a.signature-a'
-        : index === 1 ? 'staged-b.signature-b' : `staged-${index + 1}.signature-${index + 1}`),
+      stagingTokens: files.map((_, index) => expenseToken(`staged-${index + 1}`)),
     })),
     submit: vi.fn(async () => receipt()),
+    resume: vi.fn(async () => ({ status: 'SAFE_TO_RETRY' as const })),
   }
 }
 
@@ -277,6 +348,10 @@ function imageFile(name: string, type = 'image/jpeg'): File {
 
 function safeError(code: string, retryable: boolean | null = null) {
   return Object.assign(new Error(code), { code, retryable })
+}
+
+function expenseToken(label: string): string {
+  return `${label}.${'a'.repeat(43)}`
 }
 
 function deferred<T>() {

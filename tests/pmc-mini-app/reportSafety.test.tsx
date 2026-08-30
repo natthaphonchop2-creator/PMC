@@ -24,6 +24,7 @@ describe('safe JERA report rendering', () => {
     expect(formatBaht(null)).toBe('—')
     expect(formatBaht(-100)).toBe('-1 บาท')
     expect(formatBaht(1_000_000)).toBe('10,000 บาท')
+    expect(formatBaht(Number.MAX_SAFE_INTEGER)).toBe('90,071,992,547,409.91 บาท')
   })
 
   it('contains wide patient rows in an explicitly scrollable table region', () => {
@@ -50,7 +51,7 @@ describe('safe JERA report rendering', () => {
     />)
 
     expect(await screen.findByText('ยอดคงเหลือโดยประมาณ')).toHaveTextContent('8,800.00')
-    expect(screen.getByText('รายจ่ายส่วนตัวหมอ')).toHaveTextContent('500.00')
+    expect(screen.getByText('รายจ่ายส่วนตัวหมอ').closest('div')).toHaveTextContent('500.00')
   })
 })
 

@@ -61,7 +61,8 @@ export function createPreviewMiniAppConfig(options: {
     ...PREVIEW_CONFIG,
     reportingEnabled: options.reportingEnabled === true,
     financeReportsEnabled: options.financeReportsEnabled === true,
-    canViewFinance: options.financeReportsEnabled === true && options.canViewFinance === true,
+    canViewFinance: (options.financeReportsEnabled === true || options.financeReadsEnabled === true)
+      && options.canViewFinance === true,
     stockEnabled: options.stockEnabled === true,
     canManageStock: options.stockEnabled === true && options.canManageStock === true,
     expenseCaptureEnabled: options.expenseCaptureEnabled === true,
@@ -90,8 +91,19 @@ export function createPreviewMiniAppApi(options: {
   const config = createPreviewMiniAppConfig(options)
   const stock = createPreviewStockStore({ canManageStock: config.canManageStock })
   let stagedExpense: { rootRequestId: string; tokens: string[]; fileNames: string[] } | null = null
-  const expenseRows: ExpenseHistoryRow[] = [previewBookExpense()]
+  const expenseLedgerRows: ExpenseHistoryRow[] = [previewBookExpense()]
+  const supersededExpenseIds = new Set<string>()
+  const effectiveExpenseRows = () => expenseLedgerRows.filter((row) => (
+    row.recordState === 'COMMITTED' && !supersededExpenseIds.has(row.expenseId)
+  ))
+  const auditableExpenseRows = () => expenseLedgerRows.filter((row) => (
+    row.recordState === 'VOID'
+    || row.recordState === 'COMMITTED' && !supersededExpenseIds.has(row.expenseId)
+  ))
   const expenseRequests = new Map<string, { fingerprint: string; receipt: ExpenseReceipt }>()
+  const pendingResumeRoots = new Set<string>()
+  let previewSubmissionSequence = 0
+  let previewReplacementSequence = 0
   const evidenceTokens = new Map<string, { expenseId: string; attachmentId: string }>()
   return {
     async initialize() { return 'preview-token' },
@@ -182,7 +194,7 @@ export function createPreviewMiniAppApi(options: {
       } satisfies MonthlyIncomeProjection
     },
     async loadMonthlyExpenses(_token, monthKey) {
-      const effective = expenseRows.filter((row) => row.expenseDate.startsWith(`${monthKey}-`) && row.recordState === 'COMMITTED')
+      const effective = effectiveExpenseRows().filter((row) => row.expenseDate.startsWith(`${monthKey}-`))
       const clinic = effective.filter((row) => row.scope === 'CLINIC')
       return {
         monthKey,
@@ -201,12 +213,12 @@ export function createPreviewMiniAppApi(options: {
     },
     async loadExpenseHistory(_token, monthKey) {
       return {
-        expenses: structuredClone(expenseRows.filter((row) => row.expenseDate.startsWith(`${monthKey}-`))),
+        expenses: structuredClone(auditableExpenseRows().filter((row) => row.expenseDate.startsWith(`${monthKey}-`))),
         nextCursor: null,
       }
     },
     async issueExpenseEvidenceToken(_token, expenseId, attachmentId) {
-      const row = expenseRows.find((candidate) => candidate.expenseId === expenseId && candidate.recordState === 'COMMITTED')
+      const row = auditableExpenseRows().find((candidate) => candidate.expenseId === expenseId)
       if (!row?.attachments.some((attachment) => attachment.attachmentId === attachmentId)) throw previewExpenseError('EXPENSE_EVIDENCE_NOT_FOUND')
       const token = `preview-evidence-${expenseId}-${attachmentId}.preview-signature`
       evidenceTokens.set(token, { expenseId, attachmentId })
@@ -222,7 +234,7 @@ export function createPreviewMiniAppApi(options: {
       return stock.submit(command)
     },
     async stageExpense(_token, rootRequestId, files) {
-      const tokens = files.map((_, index) => `preview-expense-stage-${index + 1}.preview-signature-${index + 1}`)
+      const tokens = files.map((_, index) => `preview-expense-stage-${index + 1}.${'a'.repeat(43)}`)
       stagedExpense = { rootRequestId, tokens, fileNames: files.map(({ name }) => name) }
       return { stagingTokens: [...tokens] }
     },
@@ -234,40 +246,66 @@ export function createPreviewMiniAppApi(options: {
         if (existing.fingerprint !== fingerprint) throw previewExpenseError('EXPENSE_IDEMPOTENCY_CONFLICT')
         return structuredClone(existing.receipt)
       }
-      const receipt = previewExpenseReceipt('PREVIEW', input)
+      previewSubmissionSequence += 1
+      const receipt = previewExpenseReceipt('PREVIEW', previewSubmissionSequence, input)
       expenseRequests.set(input.rootRequestId, {
         fingerprint,
         receipt,
       })
-      expenseRows.unshift(previewHistoryFromReceipt(receipt, stagedExpense!.fileNames))
+      expenseLedgerRows.unshift(previewHistoryFromReceipt(receipt, stagedExpense!.fileNames))
       if (options.expenseScenario === 'lost-first-submit') {
+        pendingResumeRoots.add(input.rootRequestId)
         throw previewExpenseError('EXPENSE_STORAGE_UNAVAILABLE')
       }
       return structuredClone(receipt)
     },
     async resumeExpense(_token, rootRequestId) {
       const existing = expenseRequests.get(rootRequestId)
+      if (pendingResumeRoots.has(rootRequestId)) return { status: 'PENDING' as const }
+      if (!existing && options.expenseScenario === 'lost-first-submit') {
+        return { status: 'COMMITTED' as const, receipt: previewLostResponseReceipt() }
+      }
       return existing
         ? { status: 'COMMITTED' as const, receipt: structuredClone(existing.receipt) }
         : { status: 'SAFE_TO_RETRY' as const }
     },
     async replaceExpense(_token, expenseId, input: ExpenseSubmitInput) {
       requirePreviewStaging(stagedExpense, input)
-      const index = expenseRows.findIndex((row) => row.expenseId === expenseId && row.recordState === 'COMMITTED')
-      const currentRow = expenseRows[index]
+      const currentRow = effectiveExpenseRows().find((row) => row.expenseId === expenseId)
       if (!currentRow
         || currentRow.category !== input.category
         || currentRow.expenseDate !== input.expenseDate
         || currentRow.revision !== input.expectedRevision) throw previewExpenseError('EXPENSE_REVISION_CONFLICT')
-      const receipt = previewExpenseReceipt('PREVIEW-REPLACEMENT', input)
-      expenseRows.splice(index, 1, previewHistoryFromReceipt(receipt, stagedExpense!.fileNames))
+      previewReplacementSequence += 1
+      const receipt = previewExpenseReceipt('PREVIEW-REPLACEMENT', previewReplacementSequence, input)
+      supersededExpenseIds.add(currentRow.expenseId)
+      expenseLedgerRows.unshift(previewHistoryFromReceipt(receipt, stagedExpense!.fileNames))
       return structuredClone(receipt)
     },
-    async voidExpense(_token, expenseId) {
-      const row = expenseRows.find((candidate) => candidate.expenseId === expenseId)
+    async voidExpense(_token, expenseId, input) {
+      const row = effectiveExpenseRows().find((candidate) => candidate.expenseId === expenseId)
       if (!row) throw previewExpenseError('EXPENSE_NOT_FOUND')
+      const reasonLength = input.reason.trim().length
+      if (row.revision !== input.expectedRevision) throw previewExpenseError('EXPENSE_REVISION_CONFLICT')
+      if (reasonLength < 3 || reasonLength > 300) throw previewExpenseError('MINI_APP_INVALID_REQUEST')
       row.recordState = 'VOID'
     },
+  }
+}
+
+function previewLostResponseReceipt(): ExpenseReceipt {
+  return {
+    expenseId: 'EXP-202608-PREVIEW',
+    receiptNumber: 'EXP-202608-PREVIEW',
+    expenseDate: '2026-08-30',
+    monthKey: '2026-08',
+    category: 'BILL_DOCUMENT',
+    scope: 'CLINIC',
+    amountSatang: 125_050,
+    recordState: 'COMMITTED',
+    revision: 1,
+    committedAt: '2026-08-30T04:00:00.000Z',
+    unreviewed: true,
   }
 }
 
@@ -293,9 +331,11 @@ function previewBookExpense(): ExpenseHistoryRow {
 
 function previewExpenseReceipt(
   suffix: 'PREVIEW' | 'PREVIEW-REPLACEMENT',
+  sequence: number,
   input: ExpenseSubmitInput,
 ): ExpenseReceipt {
-  const expenseId = `EXP-${input.expenseDate.slice(0, 7).replace('-', '')}-${suffix}`
+  const uniqueSuffix = sequence === 1 ? suffix : `${suffix}-${sequence}`
+  const expenseId = `EXP-${input.expenseDate.slice(0, 7).replace('-', '')}-${uniqueSuffix}`
   return {
     expenseId,
     receiptNumber: expenseId,
@@ -325,7 +365,7 @@ function previewHistoryFromReceipt(receipt: ExpenseReceipt, fileNames: string[])
     submittedAt: receipt.committedAt,
     committedAt: receipt.committedAt,
     attachments: fileNames.map((originalFileName, index) => ({
-      attachmentId: `ATT-PREVIEW-${index + 1}`,
+      attachmentId: `ATT-${receipt.expenseId.slice(4)}-${index + 1}`,
       expenseId: receipt.expenseId,
       ordinal: index + 1,
       mediaType: originalFileName.toLowerCase().endsWith('.jpg') ? 'image/jpeg' : 'image/png',

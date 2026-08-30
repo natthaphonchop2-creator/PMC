@@ -279,8 +279,19 @@ test.describe('Expense capture Android acceptance', () => {
     await expect(page.getByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'สมุดรายจ่ายภายในคลินิก' })).toBeVisible()
     await expect(page.getByText('2026-08-29 · มัส')).toBeVisible()
-    await page.getByRole('button', { name: 'ดูหลักฐาน 1' }).click()
+    await page.getByRole('button', { name: /^ดูหลักฐาน 1/ }).click()
     await expect(page.getByRole('img', { name: 'หลักฐาน 1: proof.png' })).toBeVisible()
+  })
+
+  test('reads-only finance staff opens monthly expense and history without income fetch UI', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance-reads=enabled&role=finance')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await page.getByRole('button', { name: /รายจ่ายรายเดือน/ }).click()
+    await expect(page.getByRole('heading', { name: 'รายจ่ายรายเดือน' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'รายจ่ายที่บันทึก' })).toBeVisible()
+    await expect(page.getByText(/ยอดคงเหลือโดยประมาณ/)).toHaveCount(0)
+    await page.getByRole('button', { name: 'ประวัติรายจ่าย' }).click()
+    await expect(page.getByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
   })
 
   test('finance manager replaces an existing book using its expected revision', async ({ page }) => {
@@ -288,7 +299,7 @@ test.describe('Expense capture Android acceptance', () => {
     await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
     await page.getByRole('button', { name: /รายงานรายเดือน/ }).click()
     await page.getByRole('button', { name: 'ประวัติรายจ่าย' }).click()
-    await page.getByRole('button', { name: 'แทนที่ยอดเดิม' }).click()
+    await page.getByRole('button', { name: /^แทนที่ยอดเดิม/ }).click()
 
     await expect(page.getByLabel('วันที่รายจ่าย')).toHaveValue('2026-08-29')
     await expect(page.getByLabel('วันที่รายจ่าย')).toHaveAttribute('readonly', '')
@@ -301,7 +312,7 @@ test.describe('Expense capture Android acceptance', () => {
     await expect(page.getByText('2', { exact: true })).toBeVisible()
   })
 
-  test('lost first submit response retries with the same receipt and selected images', async ({ page }) => {
+  test('lost first submit response resumes the same receipt after WebView reload', async ({ page }) => {
     await page.goto('/mini-app/?preview=1&expense=enabled&role=staff&expense-scenario=lost-first-submit')
     await openExpenseForm(page, 'บิลเอกสาร')
     await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
@@ -312,11 +323,16 @@ test.describe('Expense capture Android acceptance', () => {
     await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
     await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
 
-    await expect(page.getByRole('alert')).toHaveText('บันทึกรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง')
-    await expect(page.getByLabel('จำนวนเงิน')).toHaveValue('1250.50')
-    await expect(page.getByText('เลือกแล้ว 2 รูป')).toBeVisible()
-    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
-    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+    await expect(page.getByText('กำลังตรวจสอบสถานะรายการที่บันทึก')).toBeVisible()
+    const stored = await page.evaluate(() => ({
+      keys: Object.keys(sessionStorage),
+      resume: sessionStorage.getItem('pmc-expense-resume:v1'),
+    }))
+    expect(stored.keys.filter((key) => key.startsWith('pmc-expense'))).toEqual(['pmc-expense-resume:v1'])
+    expect(stored.resume).toMatch(/^\{"version":1,"rootRequestId":"[A-Za-z0-9._:-]+"\}$/)
+    expect(stored.resume).not.toMatch(/amount|file|token|receipt|private|staff/i)
+
+    await page.reload()
 
     await expect(page.getByText('EXP-202608-PREVIEW', { exact: true })).toBeVisible()
     await expect(page.getByText('EXP-202608-PREVIEW-2')).toHaveCount(0)

@@ -561,6 +561,7 @@ function voidExpense(
   const afterJson = JSON.stringify({
     rootRequestId: command.rootRequestId,
     commandFingerprint: fingerprint,
+    expectedRevision: command.payload.expectedRevision,
     reason: command.payload.reason,
   })
   if (
@@ -575,6 +576,15 @@ function voidExpense(
   ) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
   if (submission.recordState !== 'COMMITTED' && !priorVoid && !stateFirstVoid) {
     throw new Error('EXPENSE_NOT_PREPARED')
+  }
+  if (submission.revision !== command.payload.expectedRevision) {
+    completeFailure(
+      command.commandIdempotencyKey,
+      fingerprint,
+      'EXPENSE_REVISION_CONFLICT',
+      ports,
+    )
+    throw new Error('EXPENSE_REVISION_CONFLICT')
   }
   if (
     !priorVoid

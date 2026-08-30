@@ -270,6 +270,54 @@ describe('PMC Mini App browser API', () => {
     await expect(api.loadExpenseHistory('raw-id-token', '2026-08')).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
   })
 
+  it.each([
+    ['invalid calendar date', () => ({ ...expenseHistoryRow('2026-08'), expenseDate: '2026-08-99' })],
+    ['ordinal gap', () => ({
+      ...expenseHistoryRow('2026-08'),
+      attachments: [{
+        attachmentId: 'ATT-2', expenseId: 'EXP-202608-BOOK-01', ordinal: 2,
+        mediaType: 'image/jpeg', originalFileName: 'proof.jpg',
+      }],
+    })],
+    ['reordered ordinals', () => ({
+      ...expenseHistoryRow('2026-08'),
+      attachments: [
+        { attachmentId: 'ATT-2', expenseId: 'EXP-202608-BOOK-01', ordinal: 2, mediaType: 'image/jpeg', originalFileName: 'two.jpg' },
+        { attachmentId: 'ATT-1', expenseId: 'EXP-202608-BOOK-01', ordinal: 1, mediaType: 'image/jpeg', originalFileName: 'one.jpg' },
+      ],
+    })],
+  ])('rejects malformed expense history %s', async (_case, row) => {
+    const api = createMiniAppApi({
+      fetch: vi.fn(async () => jsonResponse(200, { expenses: [row()], nextCursor: null })),
+      liff: inertLiff(),
+    })
+    await expect(api.loadExpenseHistory('raw-id-token', '2026-08'))
+      .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
+  it('binds VOID response to the requested expense and exact next lifecycle version', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, {
+        expenseId: 'EXP-202608-BOOK-01', recordState: 'VOID', version: 3,
+        updatedAt: '2026-08-30T03:00:00.000Z',
+      }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        expenseId: 'EXP-202608-OTHER', recordState: 'VOID', version: 4,
+        updatedAt: '2026-08-30T03:00:00.000Z',
+      }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = { rootRequestId: 'void-root', expectedRevision: 2, reason: 'ยอดรวมผิด' }
+
+    await expect(api.voidExpense('raw-id-token', 'EXP-202608-BOOK-01', input)).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/mini-app/finance/expenses/EXP-202608-BOOK-01/void', expect.objectContaining({
+      body: JSON.stringify({
+        rootRequestId: 'void-root', expectedVersion: 2, expectedRevision: 2, reason: 'ยอดรวมผิด',
+      }),
+    }))
+    await expect(api.voidExpense('raw-id-token', 'EXP-202608-BOOK-01', input))
+      .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
   it('downloads evidence blobs with the current bearer token and viewer token', async () => {
     const fetch = vi.fn(async () => new Response(new Blob(['image'], { type: 'image/png' }), {
       status: 200, headers: { 'content-type': 'image/png' },

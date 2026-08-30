@@ -242,6 +242,7 @@ function voidCommand(): Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPE
     payload: {
       expenseId: 'EXP-202608-0001',
       expectedVersion: 2,
+      expectedRevision: 1,
       reason: 'ยอดรวมบันทึกผิด',
     },
   }

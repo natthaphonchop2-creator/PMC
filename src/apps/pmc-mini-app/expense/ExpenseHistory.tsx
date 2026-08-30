@@ -17,6 +17,7 @@ export function ExpenseHistory({
   page,
   adapter,
   canManageExpense,
+  canReplaceExpense = canManageExpense,
   loading = false,
   error = null,
   onBack,
@@ -25,6 +26,7 @@ export function ExpenseHistory({
   page: ExpenseHistoryPage
   adapter: ExpenseHistoryAdapter
   canManageExpense: boolean
+  canReplaceExpense?: boolean
   loading?: boolean
   error?: string | null
   onBack?: () => void
@@ -35,6 +37,8 @@ export function ExpenseHistory({
   const [voiding, setVoiding] = useState<ExpenseHistoryRow | null>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
+  const reasonLength = reason.trim().length
+  const reasonInvalid = reasonLength > 0 && (reasonLength < 3 || reasonLength > 300)
   const loadMoreEpochRef = useRef(0)
   const voidEpochRef = useRef(0)
 
@@ -63,7 +67,7 @@ export function ExpenseHistory({
   }
 
   const confirmVoid = async () => {
-    if (!voiding || busy || !reason.trim()) return
+    if (!voiding || busy || reasonLength < 3 || reasonLength > 300) return
     const requestEpoch = ++voidEpochRef.current
     setBusy(true)
     setFailure('')
@@ -96,8 +100,9 @@ export function ExpenseHistory({
     {loading && !currentPage.expenses.length && <p className="pmc-finance-loading">กำลังโหลดประวัติรายจ่าย</p>}
     {!loading && !currentPage.expenses.length && <p className="pmc-finance-message">ยังไม่มีรายจ่ายที่บันทึกในเดือนนี้</p>}
     <ol className="pmc-expense-history-list">
-      {currentPage.expenses.map((row) => <li key={row.expenseId}>
-        <ExpenseHistoryItem row={row} adapter={adapter} canManageExpense={canManageExpense}
+      {currentPage.expenses.map((row, index) => <li key={row.expenseId}>
+        <ExpenseHistoryItem row={row} adapter={adapter} canManageExpense={canManageExpense} canReplaceExpense={canReplaceExpense}
+          listOrdinal={index + 1}
           onReplace={() => adapter.replace({ row, expectedRevision: row.revision })} onStartVoid={() => { setVoiding(row); setReason('') }} />
       </li>)}
     </ol>
@@ -107,9 +112,12 @@ export function ExpenseHistory({
       <h2 id="void-expense-heading">ยกเลิกรายการ</h2>
       <p>รายการที่ยกเลิกจะไม่รวมในยอดรายจ่าย แต่หลักฐานเดิมยังคงเก็บไว้</p>
       <label htmlFor="void-reason">เหตุผลการยกเลิก</label>
-      <textarea id="void-reason" value={reason} maxLength={500} onChange={(event) => setReason(event.currentTarget.value)} />
+      <textarea id="void-reason" value={reason} maxLength={300}
+        aria-invalid={reasonInvalid} aria-describedby={reasonInvalid ? 'void-reason-error' : undefined}
+        onChange={(event) => setReason(event.currentTarget.value)} />
+      {reasonInvalid && <p id="void-reason-error" className="pmc-expense-error">เหตุผลต้องมี 3–300 ตัวอักษร</p>}
       <div><button type="button" className="pmc-secondary-button" disabled={busy} onClick={() => setVoiding(null)}>กลับ</button>
-        <button type="button" className="pmc-danger-button" disabled={busy || !reason.trim()} onClick={() => { void confirmVoid() }}>ยืนยันยกเลิก</button></div>
+        <button type="button" className="pmc-danger-button" disabled={busy || reasonLength < 3 || reasonLength > 300} onClick={() => { void confirmVoid() }}>ยืนยันยกเลิก</button></div>
     </section>}
   </main>
 }
@@ -118,29 +126,34 @@ function ExpenseHistoryItem({
   row,
   adapter,
   canManageExpense,
+  canReplaceExpense,
+  listOrdinal,
   onReplace,
   onStartVoid,
 }: {
   row: ExpenseHistoryRow
   adapter: ExpenseHistoryAdapter
   canManageExpense: boolean
+  canReplaceExpense: boolean
+  listOrdinal: number
   onReplace: () => void
   onStartVoid: () => void
 }) {
   const committed = row.recordState === 'COMMITTED'
   const isBook = row.category === 'BOOK_CLINIC' || row.category === 'BOOK_DOCTOR_PERSONAL'
+  const recordContext = `รายการที่ ${listOrdinal} ${expenseCategoryLabel(row.category)} วันที่ ${row.expenseDate} revision ${row.revision}`
   return <article className="pmc-expense-history-card">
     <header><div><h2>{expenseCategoryLabel(row.category)}</h2><p>{row.expenseDate} · {row.submittedByName}</p></div>
       <span className={committed ? 'committed' : 'void'}>{committed ? 'บันทึกแล้ว' : 'ยกเลิกแล้ว'}</span></header>
     <strong className="pmc-expense-history-amount">{formatBaht(row.amountSatang)}</strong>
     {row.description && <p className="pmc-expense-history-description">{row.description}</p>}
     <p className="pmc-expense-history-meta">Revision {row.revision} · {row.attachments.length} หลักฐาน</p>
-    {committed && row.attachments.length > 0 && <ul className="pmc-expense-history-evidence">
-      {row.attachments.map((attachment) => <li key={attachment.attachmentId}><EvidenceThumbnail row={row} attachment={attachment} adapter={adapter} /></li>)}
+    {row.attachments.length > 0 && <ul className="pmc-expense-history-evidence">
+      {row.attachments.map((attachment) => <li key={attachment.attachmentId}><EvidenceThumbnail row={row} attachment={attachment} adapter={adapter} recordContext={recordContext} /></li>)}
     </ul>}
     {canManageExpense && committed && <div className="pmc-expense-history-actions">
-      {isBook && <button type="button" onClick={onReplace}><RotateCcw aria-hidden="true" />แทนที่ยอดเดิม</button>}
-      <button type="button" className="danger" onClick={onStartVoid}><Trash2 aria-hidden="true" />ยกเลิกรายการ</button>
+      {isBook && canReplaceExpense && <button type="button" aria-label={`แทนที่ยอดเดิม ${recordContext}`} onClick={onReplace}><RotateCcw aria-hidden="true" />แทนที่ยอดเดิม</button>}
+      <button type="button" className="danger" aria-label={`ยกเลิกรายการ ${recordContext}`} onClick={onStartVoid}><Trash2 aria-hidden="true" />ยกเลิกรายการ</button>
     </div>}
   </article>
 }
@@ -149,10 +162,12 @@ function EvidenceThumbnail({
   row,
   attachment,
   adapter,
+  recordContext,
 }: {
   row: ExpenseHistoryRow
   attachment: ExpenseHistoryRow['attachments'][number]
   adapter: ExpenseHistoryAdapter
+  recordContext: string
 }) {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
@@ -189,7 +204,7 @@ function EvidenceThumbnail({
 
   if (url) return <figure><img src={url} alt={`หลักฐาน ${attachment.ordinal}: ${attachment.originalFileName}`} /><figcaption>{attachment.originalFileName}</figcaption></figure>
   return <div className="pmc-expense-evidence-placeholder">
-    <button type="button" disabled={loading} onClick={() => { void load() }}><Image aria-hidden="true" />{loading ? 'กำลังโหลด' : `ดูหลักฐาน ${attachment.ordinal}`}</button>
+    <button type="button" aria-label={`ดูหลักฐาน ${attachment.ordinal} ${recordContext}`} disabled={loading} onClick={() => { void load() }}><Image aria-hidden="true" />{loading ? 'กำลังโหลด' : `ดูหลักฐาน ${attachment.ordinal}`}</button>
     {failed && <p role="alert">โหลดหลักฐานไม่สำเร็จ</p>}
   </div>
 }

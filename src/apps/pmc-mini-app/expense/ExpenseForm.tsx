@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, X } from 'lucide-react'
 import type { EnabledExpenseCategory, ExpensePaymentMethod, ExpenseReceipt } from '../../../../shared/pmcExpense'
+import type { ExpenseResumeStatus } from '../../../../shared/pmcMiniAppExpenseIngress'
 import { BrandMark } from '../BrandMark'
 import {
   expenseCategoryLabel,
@@ -28,6 +29,7 @@ export interface ExpenseFormAdapter {
     expectedRevision: number
     stagingTokens: string[]
   }): Promise<ExpenseReceipt>
+  resume(rootRequestId: string): Promise<ExpenseResumeStatus>
 }
 
 interface ExpenseFileItem {
@@ -59,7 +61,10 @@ export function ExpenseForm({
   const [reviewing, setReviewing] = useState(false)
   const [failure, setFailure] = useState('')
   const [busy, setBusy] = useState(false)
-  const rootRequestId = useMemo(() => globalThis.crypto.randomUUID(), [])
+  const [resumePending, setResumePending] = useState(false)
+  const [resumeBusy, setResumeBusy] = useState(false)
+  const [initialRootRequestId] = useState(() => globalThis.crypto.randomUUID())
+  const rootRequestIdRef = useRef(initialRootRequestId)
   const stagedRef = useRef<{ fingerprint: string; stagingTokens: string[] } | null>(null)
   const itemsRef = useRef(items)
   const busyRef = useRef(false)
@@ -132,6 +137,48 @@ export function ExpenseForm({
     setReviewing(true)
   }
 
+  const rotateRootRequest = () => {
+    rootRequestIdRef.current = globalThis.crypto.randomUUID()
+    stagedRef.current = null
+  }
+
+  const checkResume = async () => {
+    if (resumeBusy) return
+    setResumeBusy(true)
+    try {
+      const status = await adapter.resume(rootRequestIdRef.current)
+      if (status.status === 'COMMITTED') {
+        setResumePending(false)
+        onCommitted(status.receipt)
+        return
+      }
+      if (status.status === 'PENDING') {
+        setResumePending(true)
+        setReviewing(true)
+        return
+      }
+      rotateRootRequest()
+      setResumePending(false)
+      setReviewing(false)
+      setFailure(status.status === 'FAILED'
+        ? 'รายการเดิมสิ้นสุดแล้ว กรุณาตรวจข้อมูลและเริ่มบันทึกใหม่'
+        : 'ไม่พบรายการที่บันทึกค้างอยู่ กรุณาตรวจข้อมูลและยืนยันใหม่')
+    } catch (error) {
+      if (!ambiguousExpenseResult(error)) {
+        rotateRootRequest()
+        setResumePending(false)
+        setReviewing(false)
+        setFailure(expenseFailureMessage(error))
+      } else {
+        setResumePending(true)
+        setReviewing(true)
+        setFailure('')
+      }
+    } finally {
+      setResumeBusy(false)
+    }
+  }
+
   const confirm = async () => {
     if (busyRef.current) return
     busyRef.current = true
@@ -142,7 +189,7 @@ export function ExpenseForm({
     try {
       let staged = stagedRef.current
       if (!staged || staged.fingerprint !== fingerprint) {
-        const result = await adapter.stage(rootRequestId, files)
+        const result = await adapter.stage(rootRequestIdRef.current, files)
         if (!validStagingTokens(result.stagingTokens, files.length)) throw safeClientError()
         staged = { fingerprint, stagingTokens: [...result.stagingTokens] }
         stagedRef.current = staged
@@ -151,7 +198,7 @@ export function ExpenseForm({
       if (amountSatang === null) throw safeClientError()
       const paymentMethod = category === 'BILL_DOCUMENT' ? values.paymentMethod as ExpensePaymentMethod : null
       const receipt = await adapter.submit({
-        rootRequestId,
+        rootRequestId: rootRequestIdRef.current,
         category,
         expenseDate: values.expenseDate,
         amountSatang,
@@ -165,8 +212,16 @@ export function ExpenseForm({
       onCommitted(receipt)
     } catch (error) {
       if (requiresFreshExpenseStaging(error)) stagedRef.current = null
-      setFailure(expenseFailureMessage(error))
-      setReviewing(false)
+      if (ambiguousExpenseResult(error)) {
+        setResumePending(true)
+        setReviewing(true)
+        setFailure('')
+        await checkResume()
+      } else {
+        rotateRootRequest()
+        setFailure(expenseFailureMessage(error))
+        setReviewing(false)
+      }
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -175,13 +230,16 @@ export function ExpenseForm({
 
   return <main className="pmc-expense-page">
     <header className="pmc-expense-header">
-      <button type="button" aria-label="ย้อนกลับ" disabled={busy} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
+      <button type="button" aria-label="ย้อนกลับ" disabled={busy || resumePending} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
       <BrandMark compact />
       <div><p>จัดเก็บรายจ่าย</p><span>{expenseCategoryLabel(category)}</span></div>
     </header>
 
     {reviewing
-      ? <ExpenseReview category={category} values={values} files={items.map(({ file }) => file)} />
+      ? <>
+        <ExpenseReview category={category} values={values} files={items.map(({ file }) => file)} />
+        {resumePending && <p className="pmc-expense-alert" role="status">กำลังตรวจสอบสถานะรายการที่บันทึก</p>}
+      </>
       : <form className="pmc-expense-form" onSubmit={openReview} noValidate>
         <div className="pmc-expense-heading">
           <h1>{expenseCategoryLabel(category)}</h1>
@@ -238,9 +296,9 @@ export function ExpenseForm({
               {item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="pmc-expense-file-placeholder"><ImagePlus aria-hidden="true" /></span>}
               <p>{item.file.name}</p>
               <div>
-                <button type="button" aria-label={`เลื่อน ${item.file.name} ขึ้น`} disabled={index === 0} onClick={() => moveFile(index, -1)}><ArrowUp aria-hidden="true" /></button>
-                <button type="button" aria-label={`เลื่อน ${item.file.name} ลง`} disabled={index === items.length - 1} onClick={() => moveFile(index, 1)}><ArrowDown aria-hidden="true" /></button>
-                <button type="button" aria-label={`ลบ ${item.file.name}`} onClick={() => removeFile(item.id)}><X aria-hidden="true" /></button>
+                <button type="button" aria-label={`เลื่อนรูปที่ ${index + 1} ${item.file.name} ขึ้น`} disabled={index === 0} onClick={() => moveFile(index, -1)}><ArrowUp aria-hidden="true" /></button>
+                <button type="button" aria-label={`เลื่อนรูปที่ ${index + 1} ${item.file.name} ลง`} disabled={index === items.length - 1} onClick={() => moveFile(index, 1)}><ArrowDown aria-hidden="true" /></button>
+                <button type="button" aria-label={`ลบรูปที่ ${index + 1} ${item.file.name}`} onClick={() => removeFile(item.id)}><X aria-hidden="true" /></button>
               </div>
             </li>)}
           </ol>}
@@ -251,8 +309,14 @@ export function ExpenseForm({
       </form>}
 
     {reviewing && <footer className="pmc-expense-footer review">
-      <button type="button" className="secondary" disabled={busy} onClick={() => setReviewing(false)}>แก้ไขข้อมูล</button>
-      <button type="button" disabled={busy} onClick={() => { void confirm() }}>{busy ? 'กำลังยืนยัน' : 'ยืนยันบันทึก'}</button>
+      {resumePending
+        ? <button type="button" disabled={busy || resumeBusy} onClick={() => { void checkResume() }}>
+          {resumeBusy ? 'กำลังตรวจสอบ' : 'ตรวจสอบสถานะอีกครั้ง'}
+        </button>
+        : <>
+          <button type="button" className="secondary" disabled={busy} onClick={() => setReviewing(false)}>แก้ไขข้อมูล</button>
+          <button type="button" disabled={busy} onClick={() => { void confirm() }}>{busy ? 'กำลังยืนยัน' : 'ยืนยันบันทึก'}</button>
+        </>}
     </footer>}
   </main>
 }
@@ -323,6 +387,12 @@ function requiresFreshExpenseStaging(error: unknown): boolean {
     'EXPENSE_STAGING_EXPIRED',
     'EXPENSE_STAGING_OBJECT_NOT_FOUND',
   ].includes(code)
+}
+
+function ambiguousExpenseResult(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return true
+  if ('retryable' in error && error.retryable === false) return false
+  return true
 }
 
 function safeClientError(): Error & { code: string } {

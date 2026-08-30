@@ -39,10 +39,16 @@ import {
 import { ExpenseForm, type ExpenseFormAdapter } from './expense/ExpenseForm'
 import { ExpenseReceiptView } from './expense/ExpenseReceipt'
 import { ExpenseHistory, type ExpenseHistoryAdapter } from './expense/ExpenseHistory'
+import {
+  clearExpenseResumeRoot,
+  loadExpenseResumeRoot,
+  safeExpenseResumeStorage,
+  saveExpenseResumeRoot,
+} from './expense/expenseResume'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
-type FinanceView = 'FINANCE_HOME' | FinanceReportView | EnabledExpenseCategory | 'EXPENSE_RECEIPT' | 'EXPENSE_HISTORY'
+type FinanceView = 'FINANCE_HOME' | FinanceReportView | EnabledExpenseCategory | 'EXPENSE_RECEIPT' | 'EXPENSE_HISTORY' | 'EXPENSE_RESUME'
 
 export function PmcMiniApp({
   initialSession,
@@ -54,10 +60,15 @@ export function PmcMiniApp({
   api?: PmcMiniAppApi
 }) {
   const api = useMemo(() => suppliedApi ?? createMiniAppApi(), [suppliedApi])
+  const expenseResumeStorage = useMemo(() => safeExpenseResumeStorage(), [])
+  const initialExpenseResumeRoot = useMemo(
+    () => loadExpenseResumeRoot(expenseResumeStorage),
+    [expenseResumeStorage],
+  )
   const [session, setSession] = useState<MiniAppSession | null>(initialSession ?? null)
   const [config, setConfig] = useState<MiniAppConfig | null>(initialConfig ?? null)
   const [idToken, setIdToken] = useState(initialSession ? 'preview-token' : '')
-  const [view, setView] = useState<MiniAppView>('HOME')
+  const [view, setView] = useState<MiniAppView>(initialExpenseResumeRoot ? 'REPORTS' : 'HOME')
   const [draft, setDraft] = useState<BookingDraftProjection | null>(null)
   const [loading, setLoading] = useState(!initialSession)
   const [message, setMessage] = useState('')
@@ -70,10 +81,12 @@ export function PmcMiniApp({
   const bangkokDate = useMemo(() => currentBangkokDate(), [])
   const financeFilterStorage = useMemo(() => safeFinanceFilterStorage(), [])
   const [financeFilters, setFinanceFilters] = useState(() => loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate))
-  const [financeView, setFinanceView] = useState<FinanceView>('FINANCE_HOME')
+  const [financeView, setFinanceView] = useState<FinanceView>(initialExpenseResumeRoot ? 'EXPENSE_RESUME' : 'FINANCE_HOME')
   const [expenseReceipt, setExpenseReceipt] = useState<ExpenseReceipt | null>(null)
   const [expenseHistory, setExpenseHistory] = useState<{ monthKey: string; page: ExpenseHistoryPage; loading: boolean; error: string } | null>(null)
   const [expenseReplacement, setExpenseReplacement] = useState<ExpenseHistoryRow | null>(null)
+  const [expenseResumeRoot, setExpenseResumeRoot] = useState(initialExpenseResumeRoot)
+  const [expenseResumeChecking, setExpenseResumeChecking] = useState(false)
   const openingBookingRef = useRef<Promise<void> | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
   const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
@@ -82,12 +95,56 @@ export function PmcMiniApp({
   const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
   const financeReadAccess = Boolean(config?.financeReadsEnabled && config?.canViewFinance)
-  const canManageExpense = Boolean(financeReadAccess && config?.expenseCaptureEnabled && config?.canSubmitExpense && config?.canManageExpense)
+  const canManageExpense = Boolean(financeReadAccess && config?.expenseCaptureEnabled && config?.canManageExpense)
   const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.expenseCaptureEnabled || config?.financeReadsEnabled)
   const reportNavigationEnabled = Boolean(config?.reportingEnabled || financeShellEnabled)
 
+  const leaveExpenseResumeWithoutReceipt = useCallback(() => {
+    setFinanceView('FINANCE_HOME')
+    if (!financeShellEnabled) setView('HOME')
+  }, [financeShellEnabled])
+
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
   useEffect(() => { saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters) }, [financeFilterStorage, financeFilters])
+
+  const checkExpenseResume = useCallback(async (rootRequestId: string) => {
+    if (!idToken) return
+    setExpenseResumeChecking(true)
+    try {
+      const status = await api.resumeExpense(idToken, rootRequestId)
+      if (status.status === 'PENDING') return
+      clearExpenseResumeRoot(expenseResumeStorage)
+      setExpenseResumeRoot(null)
+      if (status.status === 'COMMITTED') {
+        setExpenseReceipt(status.receipt)
+        setFinanceView('EXPENSE_RECEIPT')
+      } else {
+        setMessageTone('ERROR')
+        setMessage(status.status === 'FAILED'
+          ? 'รายการเดิมสิ้นสุดแล้ว สามารถเริ่มบันทึกรายการใหม่ได้'
+          : 'ไม่พบรายการค้าง สามารถเริ่มบันทึกรายการใหม่ได้')
+        leaveExpenseResumeWithoutReceipt()
+      }
+    } catch (error) {
+      if (definiteExpenseFailure(error)) {
+        clearExpenseResumeRoot(expenseResumeStorage)
+        setExpenseResumeRoot(null)
+        setMessageTone('ERROR')
+        setMessage('รายการเดิมสิ้นสุดแล้ว สามารถเริ่มบันทึกรายการใหม่ได้')
+        leaveExpenseResumeWithoutReceipt()
+      } else {
+        setExpenseResumeRoot(rootRequestId)
+      }
+    } finally {
+      setExpenseResumeChecking(false)
+    }
+  }, [api, expenseResumeStorage, idToken, leaveExpenseResumeWithoutReceipt])
+
+  useEffect(() => {
+    if (!expenseResumeRoot || !idToken || !session || !config) return
+    const timeout = setTimeout(() => { void checkExpenseResume(expenseResumeRoot) }, 0)
+    return () => clearTimeout(timeout)
+  }, [checkExpenseResume, config, expenseResumeRoot, idToken, session])
 
   useEffect(() => {
     if (!message || messageTone !== 'SUCCESS') return
@@ -163,18 +220,56 @@ export function PmcMiniApp({
 
   const expenseFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
     stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
-    submit: (input) => api.submitExpense(idToken, input),
-  }), [api, idToken])
+    submit: async (input) => {
+      saveExpenseResumeRoot(expenseResumeStorage, input.rootRequestId)
+      try {
+        const receipt = await api.submitExpense(idToken, input)
+        clearExpenseResumeRoot(expenseResumeStorage)
+        return receipt
+      } catch (error) {
+        if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
+        throw error
+      }
+    },
+    resume: async (rootRequestId) => {
+      try {
+        const status = await api.resumeExpense(idToken, rootRequestId)
+        if (status.status !== 'PENDING') clearExpenseResumeRoot(expenseResumeStorage)
+        return status
+      } catch (error) {
+        if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
+        throw error
+      }
+    },
+  }), [api, expenseResumeStorage, idToken])
 
   const replacementFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
     stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
-    submit: (input) => {
+    submit: async (input) => {
       if (!expenseReplacement || input.expectedRevision !== expenseReplacement.revision) {
         return Promise.reject(new Error('EXPENSE_REVISION_CONFLICT'))
       }
-      return api.replaceExpense(idToken, expenseReplacement.expenseId, input)
+      saveExpenseResumeRoot(expenseResumeStorage, input.rootRequestId)
+      try {
+        const receipt = await api.replaceExpense(idToken, expenseReplacement.expenseId, input)
+        clearExpenseResumeRoot(expenseResumeStorage)
+        return receipt
+      } catch (error) {
+        if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
+        throw error
+      }
     },
-  }), [api, expenseReplacement, idToken])
+    resume: async (rootRequestId) => {
+      try {
+        const status = await api.resumeExpense(idToken, rootRequestId)
+        if (status.status !== 'PENDING') clearExpenseResumeRoot(expenseResumeStorage)
+        return status
+      } catch (error) {
+        if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
+        throw error
+      }
+    },
+  }), [api, expenseReplacement, expenseResumeStorage, idToken])
 
   const expenseHistoryAdapter = useMemo<ExpenseHistoryAdapter>(() => ({
     replace: ({ row, expectedRevision }) => {
@@ -455,6 +550,7 @@ export function PmcMiniApp({
       expectedRevision={expenseReplacement?.revision ?? 0}
       lockedExpenseDate={expenseReplacement?.expenseDate}
       onCommitted={(receipt) => {
+        clearExpenseResumeRoot(expenseResumeStorage)
         setExpenseReceipt(receipt)
         setFinanceView('EXPENSE_RECEIPT')
       }}
@@ -465,15 +561,22 @@ export function PmcMiniApp({
       }}
     />
   }
+  if (view === 'REPORTS' && financeView === 'EXPENSE_RESUME' && expenseResumeRoot) {
+    return <ExpenseResumeStatusView
+      checking={expenseResumeChecking}
+      onRetry={() => { void checkExpenseResume(expenseResumeRoot) }}
+    />
+  }
   if (view === 'REPORTS' && financeView === 'EXPENSE_HISTORY' && financeReadAccess && expenseHistory) {
     return <ExpenseHistory key={`${expenseHistory.monthKey}:${expenseHistory.loading}:${expenseHistory.error}:${expenseHistory.page.expenses.map((row) => row.expenseId).join('|')}:${expenseHistory.page.nextCursor ?? ''}`} monthKey={expenseHistory.monthKey} page={expenseHistory.page} adapter={expenseHistoryAdapter}
-      canManageExpense={canManageExpense} loading={expenseHistory.loading} error={expenseHistory.error}
+      canManageExpense={canManageExpense} canReplaceExpense={canManageExpense && Boolean(config?.canSubmitExpense)} loading={expenseHistory.loading} error={expenseHistory.error}
       onBack={() => { navigationEpochRef.current += 1; setFinanceView('MONTHLY_INCOME') }} />
   }
   if (view === 'REPORTS' && financeView === 'EXPENSE_RECEIPT' && expenseReceipt) {
     return <ExpenseReceiptView receipt={expenseReceipt} onDone={() => {
       setExpenseReceipt(null)
       setFinanceView('FINANCE_HOME')
+      if (!financeShellEnabled) setView('HOME')
     }} />
   }
 
@@ -498,9 +601,10 @@ export function PmcMiniApp({
             onFilterChange={rememberDailyFilter}
             onBack={() => setFinanceView('FINANCE_HOME')}
           />
-          : config?.financeReportsEnabled && financeReadAccess && financeView === 'MONTHLY_INCOME'
+          : financeReadAccess && financeView === 'MONTHLY_INCOME'
             ? <MonthlyFinancePage
               canViewFinance={financeReadAccess}
+              incomeEnabled={Boolean(config?.financeReportsEnabled)}
               bangkokDate={bangkokDate}
               initialSelection={financeFilters.monthly}
               adapter={monthlyIncomeAdapter}
@@ -513,6 +617,7 @@ export function PmcMiniApp({
             : <FinanceReportHome
               canViewFinance={financeReadAccess}
               financeReportsEnabled={Boolean(config?.financeReportsEnabled)}
+              financeReadsEnabled={Boolean(config?.financeReadsEnabled)}
               expenseCaptureEnabled={Boolean(config?.expenseCaptureEnabled)}
               canSubmitExpense={Boolean(config?.canSubmitExpense)}
               onSelect={(next) => {
@@ -625,6 +730,19 @@ function Notice({ children }: { children: string }) {
   return <main className="pmc-mini-app-notice" aria-live="polite"><p>{children}</p></main>
 }
 
+function ExpenseResumeStatusView({ checking, onRetry }: {
+  checking: boolean
+  onRetry: () => void
+}) {
+  return <main className="pmc-mini-app-notice" aria-live="polite">
+    <h1>กำลังตรวจสอบรายการรายจ่าย</h1>
+    <p>ระบบล็อกการเริ่มรายการใหม่ไว้ชั่วคราว จนกว่าจะยืนยันผลจากเซิร์ฟเวอร์ได้</p>
+    <button type="button" disabled={checking} onClick={onRetry}>
+      {checking ? 'กำลังตรวจสอบ' : 'ตรวจสอบสถานะอีกครั้ง'}
+    </button>
+  </main>
+}
+
 function isAdditionalReport(value: ReportSelection): boolean {
   return !['TODAY_SUMMARY', 'PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'].includes(value)
 }
@@ -648,6 +766,10 @@ async function hydrateActiveDraft(
 
 function safeErrorCode(error: unknown): string {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+}
+
+function definiteExpenseFailure(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'retryable' in error && error.retryable === false)
 }
 
 function safeRetryAfterSeconds(error: unknown): number {

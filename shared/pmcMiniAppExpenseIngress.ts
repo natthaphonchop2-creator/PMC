@@ -88,6 +88,7 @@ export type MiniAppExpenseCommand =
     payload: {
       expenseId: string
       expectedVersion: number
+      expectedRevision: number
       reason: string
     }
   }
@@ -472,12 +473,14 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
   }
 
   if (value.commandType === 'VOID_EXPENSE') {
-    const keys = ['expenseId', 'expectedVersion', 'reason'] as const
+    const keys = ['expenseId', 'expectedVersion', 'expectedRevision', 'reason'] as const
     if (
       !hasExactKeys(value.payload, keys)
       || !safeId(value.payload.expenseId)
       || !safeInteger(value.payload.expectedVersion)
       || value.payload.expectedVersion < 1
+      || !safeInteger(value.payload.expectedRevision)
+      || value.payload.expectedRevision < 1
       || !boundedText(value.payload.reason, 300)
       || value.payload.reason.trim().length < 3
     ) {
@@ -490,6 +493,7 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
       payload: {
         expenseId: value.payload.expenseId,
         expectedVersion: value.payload.expectedVersion,
+        expectedRevision: value.payload.expectedRevision,
         reason: value.payload.reason,
       },
     }
