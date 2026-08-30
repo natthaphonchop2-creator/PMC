@@ -95,8 +95,8 @@ export function createAsyncStateIngressClient(options: AsyncStateIngressClientOp
 }
 
 function validMutation(value: MiniAppAsyncStateMutation): boolean {
-  return value !== null && typeof value === 'object'
-    && /^(QUEUE|CLAIM|RENEW|PROJECT|RETRY|EXHAUST|COMPLETE)$/.test(value.operation)
+  const common = value !== null && typeof value === 'object'
+    && /^(QUEUE|CLAIM|RENEW|PROJECT|RETRY|EXHAUST|COMPLETE|RETAIN_PREPARE)$/.test(value.operation)
     && /^[A-Za-z0-9._:-]{1,124}$/.test(value.requestId)
     && /^[A-Za-z0-9._:-]{1,124}$/.test(value.draftId)
     && /^[A-Za-z0-9_-]{4,128}$/.test(value.payloadHash)
@@ -104,9 +104,36 @@ function validMutation(value: MiniAppAsyncStateMutation): boolean {
     && Number.isSafeInteger(value.expectedAttempt) && value.expectedAttempt >= 0
     && Number.isSafeInteger(value.taskAttempt) && value.taskAttempt >= 1 && value.taskAttempt <= 8
     && typeof value.nowIso === 'string' && Number.isFinite(Date.parse(value.nowIso))
-    && Array.isArray(value.paymentEvidenceObjectKeys) && Array.isArray(value.chatEvidenceObjectKeys)
-    && Array.isArray(value.paymentEvidenceFileIds) && Array.isArray(value.chatEvidenceFileIds)
+    && validObjectKeys(value.paymentEvidenceObjectKeys, value.draftId, 'PAYMENT')
+    && validObjectKeys(value.chatEvidenceObjectKeys, value.draftId, 'CHAT')
+    && validFileIds(value.paymentEvidenceFileIds) && validFileIds(value.chatEvidenceFileIds)
     && Number.isSafeInteger(value.evidenceCount) && value.evidenceCount >= 0 && value.evidenceCount <= 20
+  if (!common) return false
+  if (value.operation !== 'RETAIN_PREPARE') return true
+  const fileCount = value.paymentEvidenceFileIds.length + value.chatEvidenceFileIds.length
+  const objectCount = value.paymentEvidenceObjectKeys.length + value.chatEvidenceObjectKeys.length
+  return value.payloadHash.length === 43
+    && value.taskAttempt === 1
+    && value.leaseOwnerToken === null
+    && value.leaseUntil === null
+    && value.taskName === null
+    && value.safeErrorCode === null
+    && value.caseId === null
+    && value.confirmationStatus === null
+    && fileCount + objectCount >= 1
+    && fileCount + objectCount === value.evidenceCount
+    && !(fileCount > 0 && objectCount > 0)
+}
+
+function validObjectKeys(values: unknown, draftId: string, kind: 'PAYMENT' | 'CHAT'): values is string[] {
+  const prefix = `drafts/${draftId}/${kind}/`
+  return Array.isArray(values) && values.length <= 10 && values.every((value) => typeof value === 'string'
+    && value.startsWith(prefix) && /^[a-f0-9]{64}\.(?:jpg|png)$/.test(value.slice(prefix.length)))
+}
+
+function validFileIds(values: unknown): values is string[] {
+  return Array.isArray(values) && values.length <= 10
+    && values.every((value) => typeof value === 'string' && /^[A-Za-z0-9_-]{10,256}$/.test(value))
 }
 
 function isResult(value: unknown): value is MiniAppAsyncStateIngressResult {

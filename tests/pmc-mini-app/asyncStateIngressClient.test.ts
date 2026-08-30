@@ -41,6 +41,51 @@ describe('PMC Mini App signed async-state ingress client', () => {
     expect(fetch).toHaveBeenCalledOnce()
   })
 
+  it('signs and posts the exact owner-lock RETAIN_PREPARE mutation without queue or lease fields', async () => {
+    const mutationInput = retentionMutation()
+    const built = buildMiniAppAsyncStateIngress(mutationInput, {
+      timestamp: 1_800_000_000,
+      nonce: 'nonce-retain-1234',
+    }, 'server-secret')
+    const fetch = vi.fn(async () => response(200, {
+      requestId: 'request-1', draftId: 'draft-1', state: 'CANCELLED', version: 3,
+      attemptCount: 0, caseId: null, confirmationStatus: null, outcome: 'APPLIED',
+    }))
+    const client = createAsyncStateIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+      now: () => 1_800_000_000, nonce: () => 'nonce-retain-1234', fetch,
+    })
+
+    expect(built.body.payload).toMatchObject({
+      operation: 'RETAIN_PREPARE', taskName: null, leaseOwnerToken: null, leaseUntil: null,
+      expectedAttempt: 0, taskAttempt: 1, safeErrorCode: null, caseId: null, confirmationStatus: null,
+    })
+    await expect(client.mutate(mutationInput)).resolves.toMatchObject({
+      state: 'CANCELLED', version: 3, attemptCount: 0, outcome: 'APPLIED',
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['wrong object namespace', {
+      paymentEvidenceObjectKeys: [`drafts/other-draft/PAYMENT/${'a'.repeat(64)}.png`],
+    }],
+    ['mixed storage', { paymentEvidenceFileIds: ['drive-payment-1'] }],
+    ['queue task field', { taskName: 'task/forbidden' }],
+    ['wrong count', { evidenceCount: 2 }],
+  ])('rejects RETAIN_PREPARE with %s before signing or fetch', async (_label, patch) => {
+    const fetch = vi.fn()
+    const client = createAsyncStateIngressClient({
+      url: 'https://script.google.com/macros/s/deployment/exec', secret: 'server-secret',
+      now: () => 1_800_000_000, nonce: () => 'nonce-retain-1234', fetch,
+    })
+
+    await expect(client.mutate({ ...retentionMutation(), ...patch })).rejects.toMatchObject({
+      code: 'ASYNC_STATE_INGRESS_FAILED',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['provider failure', async () => response(500, { detail: 'private provider body' })],
     ['invalid result', async () => response(200, { state: 'PROCESSING', ownerToken: 'private-token' })],
@@ -70,6 +115,27 @@ function mutation(patch: Partial<MiniAppAsyncStateMutation> = {}): MiniAppAsyncS
     safeErrorCode: null, caseId: null, confirmationStatus: null,
     ...patch,
   }
+}
+
+function retentionMutation(): MiniAppAsyncStateMutation {
+  return mutation({
+    operation: 'RETAIN_PREPARE' as MiniAppAsyncStateMutation['operation'],
+    payloadHash: 'p'.repeat(43),
+    expectedVersion: 2,
+    expectedAttempt: 0,
+    taskAttempt: 1,
+    leaseOwnerToken: null,
+    leaseUntil: null,
+    taskName: null,
+    paymentEvidenceObjectKeys: [`drafts/draft-1/PAYMENT/${'a'.repeat(64)}.png`],
+    chatEvidenceObjectKeys: [],
+    paymentEvidenceFileIds: [],
+    chatEvidenceFileIds: [],
+    evidenceCount: 1,
+    safeErrorCode: null,
+    caseId: null,
+    confirmationStatus: null,
+  })
 }
 
 function response(status: number, body: unknown) {

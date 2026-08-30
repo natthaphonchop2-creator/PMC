@@ -193,7 +193,7 @@ The current evidence and PATCH routes remain during rollout for idempotent recov
 - Deterministic upload IDs make response-loss retry safe.
 - A retry with identical version/input/evidence returns the persisted projection.
 - A different payload with the same request/draft identity returns conflict.
-- If remote evidence persistence partially succeeds, write a failure-only draft patch containing only the deterministic persisted evidence references and `retentionState = PENDING_APPROVAL`; never set `READY_TO_CONFIRM`. Exact retry reuses those references. Cancellation/expiry feeds the existing retention approval workflow, whose owner is Apps Script daily operations. Cleanup retry is idempotent by draft ID, evidence kind, and deterministic upload ID.
+- If remote evidence persistence partially succeeds, write a failure-only draft patch containing only the deterministic persisted evidence references and `retentionState = PENDING_APPROVAL`; never set `READY_TO_CONFIRM`. Exact retry reuses those references. Cancellation/expiry feeds the existing retention approval workflow, whose owner is Apps Script daily operations. If cancellation/expiry wins after remote persistence, Cloud Run attaches the deterministic references through a signed Apps Script owner-lock retention mutation; a process-local mutex or unconditional Sheets update is not a cross-instance fence. Cleanup retry is idempotent by draft ID, evidence kind, and deterministic upload ID.
 
 ## 7. Confirm-path performance design
 

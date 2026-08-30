@@ -131,16 +131,6 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'updatedAt'
 >>
 
-export interface MiniAppPrepareEvidenceRetention {
-  bindingHash: string
-  paymentEvidenceFileIds: string[]
-  chatEvidenceFileIds: string[]
-  paymentEvidenceObjectKeys: string[]
-  chatEvidenceObjectKeys: string[]
-  evidenceCount: number
-  updatedAt: string
-}
-
 export interface MiniAppStore {
   getActiveStaffByLineUserId(lineUserId: string): Promise<MiniAppStaffRecord | null>
   getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection>
@@ -148,11 +138,6 @@ export interface MiniAppStore {
   getDraft(draftId: string): Promise<MiniAppRequestRecord | null>
   updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch): Promise<MiniAppRequestRecord>
   markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string): Promise<MiniAppRequestRecord>
-  retainTerminalPrepareEvidence(
-    draftId: string,
-    expectedVersion: number,
-    input: MiniAppPrepareEvidenceRetention,
-  ): Promise<MiniAppRequestRecord>
   claimConfirmation(requestId: string, payloadHash: string): Promise<{ claimed: true; draft: MiniAppRequestRecord } | { claimed: false; caseId: string | null; status: MiniAppRequestRecord['confirmationStatus'] }>
   completeConfirmation(requestId: string, caseId: string, confirmedAt: string, status: NonNullable<MiniAppRequestRecord['confirmationStatus']>): Promise<MiniAppRequestRecord>
   failConfirmation(requestId: string, safeErrorCode: string, updatedAt: string): Promise<MiniAppRequestRecord>
@@ -405,56 +390,6 @@ export function createGoogleMiniAppStore(input: {
     updateDraft: mutateDraft,
     async markRetentionPending(draftId, expectedVersion, updatedAt) {
       return mutateDraft(draftId, expectedVersion, { retentionState: 'PENDING_APPROVAL', updatedAt })
-    },
-    async retainTerminalPrepareEvidence(draftId, expectedVersion, input) {
-      validatePrepareEvidenceRetention(draftId, input)
-      return withMutex(mutexKey, async () => {
-        const table = await readRequestTable()
-        const row = table.rows.find(({ value }) => value.draftId === draftId)
-        if (!row) throw new Error('DRAFT_NOT_FOUND')
-        const current = row.value
-        if (current.state !== 'CANCELLED' && current.state !== 'EXPIRED') {
-          throw new Error('INVALID_DRAFT_TRANSITION')
-        }
-        if (current.evidenceProjectionHash && current.evidenceProjectionHash !== input.bindingHash) {
-          throw new Error('BOOKING_PREPARE_CONFLICT')
-        }
-        if (current.version !== expectedVersion && current.evidenceProjectionHash === null) {
-          throw new Error('STALE_DRAFT_VERSION')
-        }
-        const merged = mergePrepareRetentionReferences(current, input)
-        if (current.evidenceProjectionHash === input.bindingHash
-          && current.retentionState === 'PENDING_APPROVAL'
-          && sameStrings(current.paymentEvidenceFileIds, merged.paymentEvidenceFileIds)
-          && sameStrings(current.chatEvidenceFileIds, merged.chatEvidenceFileIds)
-          && sameStrings(current.paymentEvidenceObjectKeys, merged.paymentEvidenceObjectKeys)
-          && sameStrings(current.chatEvidenceObjectKeys, merged.chatEvidenceObjectKeys)
-          && current.evidenceCount === merged.evidenceCount) return current
-        const next = normalizeRequestRecord({
-          ...current,
-          ...merged,
-          retentionState: 'PENDING_APPROVAL',
-          evidenceProjectionHash: input.bindingHash,
-          updatedAt: input.updatedAt,
-          version: current.version + 1,
-        })
-        try {
-          await writeRequest(row.rowNumber, next, table.schema)
-        } catch (error) {
-          const recovered = (await readRequestTable()).rows.find(({ value }) => value.draftId === draftId)?.value
-          if (recovered && terminalRetentionContains(recovered, input.bindingHash, merged)) return recovered
-          if (recovered?.evidenceProjectionHash && recovered.evidenceProjectionHash !== input.bindingHash) {
-            throw new Error('BOOKING_PREPARE_CONFLICT', { cause: error })
-          }
-          throw error
-        }
-        const attested = (await readRequestTable()).rows.find(({ value }) => value.draftId === draftId)?.value
-        if (attested && terminalRetentionContains(attested, input.bindingHash, merged)) return attested
-        if (attested?.evidenceProjectionHash && attested.evidenceProjectionHash !== input.bindingHash) {
-          throw new Error('BOOKING_PREPARE_CONFLICT')
-        }
-        throw new Error('BOOKING_PREPARE_RETENTION_UNCERTAIN')
-      })
     },
     async claimConfirmation(requestId, payloadHash) {
       if (!safeId(requestId) || !safeHash(payloadHash)) throw new Error('INVALID_CONFIRMATION_CLAIM')
@@ -752,100 +687,6 @@ function safeHash(value: string): boolean { return /^[A-Za-z0-9_-]{4,128}$/.test
 function safeCaseId(value: string): boolean { return /^PMC-\d{6}-\d{4,}$/.test(value) }
 function safeError(value: string): boolean { return /^[A-Z0-9_]{1,80}$/.test(value) }
 function validIso(value: string): boolean { return Boolean(value) && Number.isFinite(Date.parse(value)) }
-
-function validatePrepareEvidenceRetention(draftId: string, input: MiniAppPrepareEvidenceRetention): void {
-  const fileCount = input.paymentEvidenceFileIds.length + input.chatEvidenceFileIds.length
-  const objectCount = input.paymentEvidenceObjectKeys.length + input.chatEvidenceObjectKeys.length
-  if (!/^[A-Za-z0-9_-]{43}$/.test(input.bindingHash) || !validIso(input.updatedAt)
-    || fileCount + objectCount < 1 || fileCount + objectCount > 20 || fileCount > 0 && objectCount > 0
-    || input.evidenceCount !== fileCount + objectCount
-    || input.paymentEvidenceFileIds.length > 10 || input.chatEvidenceFileIds.length > 10
-    || input.paymentEvidenceObjectKeys.length > 10 || input.chatEvidenceObjectKeys.length > 10
-    || input.paymentEvidenceFileIds.some((value) => !safeDriveFileId(value))
-    || input.chatEvidenceFileIds.some((value) => !safeDriveFileId(value))
-    || input.paymentEvidenceObjectKeys.some((value) => !safePrepareObjectKey(value, draftId, 'PAYMENT'))
-    || input.chatEvidenceObjectKeys.some((value) => !safePrepareObjectKey(value, draftId, 'CHAT'))) {
-    throw new Error('INVALID_BOOKING_PREPARE_RETENTION')
-  }
-}
-
-function safeDriveFileId(value: string): boolean { return /^[A-Za-z0-9_-]{10,256}$/.test(value) }
-
-function safePrepareObjectKey(value: string, draftId: string, kind: 'PAYMENT' | 'CHAT'): boolean {
-  const match = /^drafts\/([A-Za-z0-9_-]{1,124})\/(PAYMENT|CHAT)\/[a-f0-9]{64}\.(?:jpg|png)$/.exec(value)
-  return Boolean(match && match[1] === draftId && match[2] === kind)
-}
-
-function mergePrepareRetentionReferences(
-  current: MiniAppRequestRecord,
-  input: MiniAppPrepareEvidenceRetention,
-): Pick<MiniAppRequestRecord,
-  'paymentEvidenceFileIds' | 'chatEvidenceFileIds' | 'paymentEvidenceObjectKeys' | 'chatEvidenceObjectKeys' | 'evidenceCount'> {
-  const paymentEvidenceFileIds = mergeDriveReferencePrefix(current.paymentEvidenceFileIds, input.paymentEvidenceFileIds)
-  const chatEvidenceFileIds = mergeDriveReferencePrefix(current.chatEvidenceFileIds, input.chatEvidenceFileIds)
-  const paymentEvidenceObjectKeys = mergeObjectReferenceSubset(current.paymentEvidenceObjectKeys, input.paymentEvidenceObjectKeys)
-  const chatEvidenceObjectKeys = mergeObjectReferenceSubset(current.chatEvidenceObjectKeys, input.chatEvidenceObjectKeys)
-  const fileCount = paymentEvidenceFileIds.length + chatEvidenceFileIds.length
-  const objectCount = paymentEvidenceObjectKeys.length + chatEvidenceObjectKeys.length
-  if (fileCount > 0 && objectCount > 0) throw new Error('BOOKING_PREPARE_CONFLICT')
-  return {
-    paymentEvidenceFileIds,
-    chatEvidenceFileIds,
-    paymentEvidenceObjectKeys,
-    chatEvidenceObjectKeys,
-    evidenceCount: fileCount + objectCount,
-  }
-}
-
-function mergeObjectReferenceSubset(existing: readonly string[], incoming: readonly string[]): string[] {
-  if (isOrderedSubset(existing, incoming)) return [...incoming]
-  if (isOrderedSubset(incoming, existing)) return [...existing]
-  throw new Error('STALE_DRAFT_VERSION')
-}
-
-function mergeDriveReferencePrefix(existing: readonly string[], incoming: readonly string[]): string[] {
-  const overlap = Math.min(existing.length, incoming.length)
-  for (let index = 0; index < overlap; index += 1) {
-    if (existing[index] !== incoming[index]) throw new Error('BOOKING_PREPARE_CONFLICT')
-  }
-  return existing.length >= incoming.length ? [...existing] : [...incoming]
-}
-
-function terminalRetentionContains(
-  current: MiniAppRequestRecord,
-  bindingHash: string,
-  expected: Pick<MiniAppRequestRecord,
-    'paymentEvidenceFileIds' | 'chatEvidenceFileIds' | 'paymentEvidenceObjectKeys' | 'chatEvidenceObjectKeys'>,
-): boolean {
-  return (current.state === 'CANCELLED' || current.state === 'EXPIRED')
-    && current.retentionState === 'PENDING_APPROVAL'
-    && current.evidenceProjectionHash === bindingHash
-    && isOrderedSubset(expected.paymentEvidenceFileIds, current.paymentEvidenceFileIds)
-    && isOrderedSubset(expected.chatEvidenceFileIds, current.chatEvidenceFileIds)
-    && isOrderedSubset(expected.paymentEvidenceObjectKeys, current.paymentEvidenceObjectKeys)
-    && isOrderedSubset(expected.chatEvidenceObjectKeys, current.chatEvidenceObjectKeys)
-    && current.evidenceCount === referenceCount(current)
-}
-
-function referenceCount(value: Pick<MiniAppRequestRecord,
-  'paymentEvidenceFileIds' | 'chatEvidenceFileIds' | 'paymentEvidenceObjectKeys' | 'chatEvidenceObjectKeys'>): number {
-  return value.paymentEvidenceFileIds.length + value.chatEvidenceFileIds.length
-    + value.paymentEvidenceObjectKeys.length + value.chatEvidenceObjectKeys.length
-}
-
-function isOrderedSubset(values: readonly string[], expected: readonly string[]): boolean {
-  let cursor = 0
-  for (const value of values) {
-    while (cursor < expected.length && expected[cursor] !== value) cursor += 1
-    if (cursor >= expected.length) return false
-    cursor += 1
-  }
-  return true
-}
-
-function sameStrings(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index])
-}
 
 function isDraftIdentityBound(draft: MiniAppRequestRecord): boolean {
   return draft.payloadHash !== null || IDENTITY_BOUND_STATES.has(draft.state)

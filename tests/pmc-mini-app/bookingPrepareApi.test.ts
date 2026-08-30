@@ -6,13 +6,10 @@ import {
   type PersistPrepareEvidenceInput,
 } from '../../server/pmc-mini-app/bookingPrepare'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
+import type { AsyncStateIngressPort } from '../../server/pmc-mini-app/asyncStateIngressClient'
 import type { EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
-import type {
-  MiniAppDraftPatch,
-  MiniAppPrepareEvidenceRetention,
-  MiniAppRequestRecord,
-  MiniAppStore,
-} from '../../server/pmc-mini-app/store'
+import type { MiniAppAsyncStateIngressResult, MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState'
+import type { MiniAppDraftPatch, MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App Booking prepare persistence', () => {
   it('stages async evidence with at most four concurrent puts and writes one ordered ready draft', async () => {
@@ -168,6 +165,30 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.staging!.putCount()).toBe(puts)
   })
 
+  it('rejects an unbound legacy Drive reference before uploading arbitrary new sync bytes', async () => {
+    const fixture = prepareFixture('SYNC', {
+      paymentEvidenceFileIds: ['legacy-file-01'], evidenceCount: 1, evidenceProjectionHash: null,
+    })
+
+    await expect(persistPrepareEvidence(fixture.input({ paymentFiles: [png(9)] })))
+      .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.ingress!.callCount()).toBe(0)
+    expect(fixture.store.writeCount()).toBe(0)
+  })
+
+  it('rejects an unbound legacy staged object before any async remote call', async () => {
+    const fixture = prepareFixture('ASYNC', {
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', png(1).bytes)],
+      evidenceCount: 1,
+      evidenceProjectionHash: null,
+    })
+
+    await expect(persistPrepareEvidence(fixture.input({ paymentFiles: [png(1)] })))
+      .rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
+    expect(fixture.staging!.putCount()).toBe(0)
+    expect(fixture.store.writeCount()).toBe(0)
+  })
+
   it('serializes synchronous Apps Script ingress and writes only one final ready draft', async () => {
     const fixture = prepareFixture('SYNC')
 
@@ -202,6 +223,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('retains every async object without reopening when cancellation overtakes in-flight staging', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
+    fixture.stateIngress.loseBeforeNextApply()
     fixture.staging!.afterFirstCreate(() => fixture.store.commitTerminal('CANCELLED'))
 
     await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
@@ -213,8 +235,9 @@ describe('PMC Mini App Booking prepare persistence', () => {
     })
     expect(terminal.paymentEvidenceObjectKeys).toEqual([
       objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
-    ])
+    ].sort())
     expect(terminal.chatEvidenceObjectKeys).toEqual([objectKey('CHAT', jpeg(4).bytes)])
+    expect(fixture.stateIngress.callCount()).toBe(2)
     const puts = fixture.staging!.putCount()
     const writes = fixture.store.writeCount()
 
@@ -228,6 +251,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('retains every synchronous Drive file without reopening when expiry overtakes the final mutation', async () => {
     const fixture = prepareFixture('SYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2)], chatFiles: [jpeg(3), jpeg(4)] })
+    fixture.stateIngress.loseNextResponse()
     const finalWrite = fixture.store.pauseNextUpdate()
     const result = persistPrepareEvidence(input)
     await finalWrite.entered
@@ -242,6 +266,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
       paymentEvidenceFileIds: ['drive-file-01', 'drive-file-02'],
       chatEvidenceFileIds: ['drive-file-03', 'drive-file-04'],
     })
+    expect(fixture.stateIngress.callCount()).toBe(1)
     const calls = fixture.ingress!.callCount()
     const writes = fixture.store.writeCount()
 
@@ -250,6 +275,37 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.store.read()).toEqual(terminal)
     expect(fixture.ingress!.callCount()).toBe(calls)
     expect(fixture.store.writeCount()).toBe(writes)
+  })
+
+  it('matches owner-lock semantics across five concurrent terminal recovery clients', async () => {
+    const fixture = prepareFixture('ASYNC', { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' })
+    const binding = 'p'.repeat(43)
+    const keys = [png(1), png(2), png(3), png(4), png(5)].map(({ bytes }) => objectKey('PAYMENT', bytes))
+
+    await Promise.all(keys.map((key) => fixture.stateIngress.mutate(retentionMutation(fixture.store.read(), binding, [key]))))
+
+    expect(fixture.store.read()).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: binding,
+      paymentEvidenceObjectKeys: [...keys].sort(), evidenceCount: 5,
+    })
+  })
+
+  it('matches first-durable-wins semantics for independent different-binding owner clients', async () => {
+    const fixture = prepareFixture('ASYNC', { state: 'EXPIRED', retentionState: 'PENDING_APPROVAL' })
+    const terminal = fixture.store.read()
+    const winner = fixture.stateIngress.mutate(retentionMutation(
+      terminal, 'a'.repeat(43), [objectKey('PAYMENT', png(1).bytes)],
+    ))
+    const loser = fixture.stateIngress.mutate(retentionMutation(
+      terminal, 'b'.repeat(43), [objectKey('PAYMENT', png(2).bytes)],
+    ))
+
+    await expect(winner).resolves.toMatchObject({ outcome: 'APPLIED' })
+    await expect(loser).rejects.toThrow('BOOKING_PREPARE_CONFLICT')
+    expect(fixture.store.read()).toMatchObject({
+      state: 'EXPIRED', evidenceProjectionHash: 'a'.repeat(43),
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', png(1).bytes)], evidenceCount: 1,
+    })
   })
 
   it.each(['CANCELLED', 'EXPIRED'] as const)('keeps %s evidence pending approval without remote or draft mutation', async (state) => {
@@ -267,10 +323,12 @@ function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppReque
   const store = new PrepareStore(draft(draftPatch))
   const staging = mode === 'ASYNC' ? new PrepareStaging() : null
   const ingress = mode === 'SYNC' ? new PrepareIngress() : null
+  const stateIngress = new PrepareOwnerStateIngress(store)
   return {
     store,
     staging,
     ingress,
+    stateIngress,
     input(patch: Partial<PersistPrepareEvidenceInput> = {}): PersistPrepareEvidenceInput {
       return {
         draft: store.read(),
@@ -289,6 +347,7 @@ function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppReque
           ? { type: 'ASYNC', staging: staging! }
           : { type: 'SYNC', ingress: ingress! },
         store,
+        stateIngress,
         now: () => '2026-08-30T10:00:00.000Z',
         ...patch,
       }
@@ -345,31 +404,60 @@ class PrepareStore implements MiniAppStore {
     }
     return this.read()
   }
-  async retainTerminalPrepareEvidence(
-    draftId: string,
-    expectedVersion: number,
-    input: MiniAppPrepareEvidenceRetention,
-  ) {
-    if (draftId !== this.current.draftId) throw new Error('DRAFT_NOT_FOUND')
-    if (expectedVersion !== this.current.version) throw new Error('STALE_DRAFT_VERSION')
+  ownerRetain(input: MiniAppAsyncStateMutation): MiniAppAsyncStateIngressResult {
+    if (input.operation !== 'RETAIN_PREPARE' || input.draftId !== this.current.draftId
+      || input.requestId !== this.current.requestId) throw new Error('INVALID_RETAIN_PREPARE')
     if (this.current.state !== 'CANCELLED' && this.current.state !== 'EXPIRED') throw new Error('INVALID_DRAFT_TRANSITION')
-    if (this.current.evidenceProjectionHash && this.current.evidenceProjectionHash !== input.bindingHash) {
+    if (this.current.attemptCount !== input.expectedAttempt) throw new Error('STALE_RETAIN_PREPARE')
+    if (this.current.evidenceProjectionHash === null) {
+      if (this.current.version !== input.expectedVersion || retainedReferenceCount(this.current) !== 0) {
+        throw new Error('STALE_RETAIN_PREPARE')
+      }
+    } else if (this.current.evidenceProjectionHash !== input.payloadHash) {
       throw new Error('BOOKING_PREPARE_CONFLICT')
     }
-    this.current = {
-      ...this.current,
-      retentionState: 'PENDING_APPROVAL',
-      paymentEvidenceFileIds: [...input.paymentEvidenceFileIds],
-      chatEvidenceFileIds: [...input.chatEvidenceFileIds],
-      paymentEvidenceObjectKeys: [...input.paymentEvidenceObjectKeys],
-      chatEvidenceObjectKeys: [...input.chatEvidenceObjectKeys],
-      evidenceCount: input.evidenceCount,
-      evidenceProjectionHash: input.bindingHash,
-      updatedAt: input.updatedAt,
-      version: this.current.version + 1,
+    const incomingFileMode = input.paymentEvidenceFileIds.length + input.chatEvidenceFileIds.length > 0
+    if (incomingFileMode && this.current.paymentEvidenceObjectKeys.length + this.current.chatEvidenceObjectKeys.length > 0
+      || !incomingFileMode && this.current.paymentEvidenceFileIds.length + this.current.chatEvidenceFileIds.length > 0) {
+      throw new Error('BOOKING_PREPARE_CONFLICT')
     }
-    this.writes += 1
-    return this.read()
+    const paymentEvidenceFileIds = canonicalUnion(this.current.paymentEvidenceFileIds, input.paymentEvidenceFileIds)
+    const chatEvidenceFileIds = canonicalUnion(this.current.chatEvidenceFileIds, input.chatEvidenceFileIds)
+    const paymentEvidenceObjectKeys = canonicalUnion(this.current.paymentEvidenceObjectKeys, input.paymentEvidenceObjectKeys)
+    const chatEvidenceObjectKeys = canonicalUnion(this.current.chatEvidenceObjectKeys, input.chatEvidenceObjectKeys)
+    const evidenceCount = paymentEvidenceFileIds.length + chatEvidenceFileIds.length
+      + paymentEvidenceObjectKeys.length + chatEvidenceObjectKeys.length
+    const unchanged = this.current.evidenceProjectionHash === input.payloadHash
+      && this.current.evidenceCount === evidenceCount
+      && sameValues(this.current.paymentEvidenceFileIds, paymentEvidenceFileIds)
+      && sameValues(this.current.chatEvidenceFileIds, chatEvidenceFileIds)
+      && sameValues(this.current.paymentEvidenceObjectKeys, paymentEvidenceObjectKeys)
+      && sameValues(this.current.chatEvidenceObjectKeys, chatEvidenceObjectKeys)
+    if (!unchanged) {
+      this.current = {
+        ...this.current,
+        retentionState: 'PENDING_APPROVAL',
+        paymentEvidenceFileIds,
+        chatEvidenceFileIds,
+        paymentEvidenceObjectKeys,
+        chatEvidenceObjectKeys,
+        evidenceCount,
+        evidenceProjectionHash: input.payloadHash,
+        updatedAt: input.nowIso,
+        version: this.current.version + 1,
+      }
+      this.writes += 1
+    }
+    return {
+      requestId: this.current.requestId,
+      draftId: this.current.draftId,
+      state: this.current.state,
+      version: this.current.version,
+      attemptCount: this.current.attemptCount,
+      caseId: this.current.caseId,
+      confirmationStatus: this.current.confirmationStatus,
+      outcome: unchanged ? 'IDEMPOTENT' : 'APPLIED',
+    }
   }
   async markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string) {
     return this.updateDraft(draftId, expectedVersion, { retentionState: 'PENDING_APPROVAL', updatedAt })
@@ -377,6 +465,53 @@ class PrepareStore implements MiniAppStore {
   async claimConfirmation(): Promise<never> { throw new Error('not used') }
   async completeConfirmation(): Promise<never> { throw new Error('not used') }
   async failConfirmation(): Promise<never> { throw new Error('not used') }
+}
+
+class PrepareOwnerStateIngress implements AsyncStateIngressPort {
+  private tail: Promise<void> = Promise.resolve()
+  private loseResponse = false
+  private loseBeforeApply = false
+  private calls = 0
+
+  constructor(private readonly store: PrepareStore) {}
+  loseNextResponse(): void { this.loseResponse = true }
+  loseBeforeNextApply(): void { this.loseBeforeApply = true }
+  callCount(): number { return this.calls }
+
+  async mutate(input: MiniAppAsyncStateMutation): Promise<MiniAppAsyncStateIngressResult> {
+    const previous = this.tail
+    let release!: () => void
+    this.tail = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    try {
+      this.calls += 1
+      if (this.loseBeforeApply) {
+        this.loseBeforeApply = false
+        throw new Error('OWNER_INGRESS_REQUEST_LOST')
+      }
+      const result = this.store.ownerRetain(input)
+      if (this.loseResponse) {
+        this.loseResponse = false
+        throw new Error('OWNER_INGRESS_RESPONSE_LOST')
+      }
+      return result
+    } finally {
+      release()
+    }
+  }
+}
+
+function canonicalUnion(left: readonly string[], right: readonly string[]): string[] {
+  return [...new Set([...left, ...right])].sort()
+}
+
+function sameValues(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function retainedReferenceCount(draft: MiniAppRequestRecord): number {
+  return draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
+    + draft.paymentEvidenceObjectKeys.length + draft.chatEvidenceObjectKeys.length
 }
 
 class PrepareStaging implements EvidenceStagingPort {
@@ -513,4 +648,18 @@ function sha256(bytes: Buffer): string { return createHash('sha256').update(byte
 
 function stagedUploadId(kind: 'PAYMENT' | 'CHAT', bytes: Buffer): string {
   return createHash('sha256').update(`draft-1\0${kind}\0${sha256(bytes)}`, 'utf8').digest('hex')
+}
+
+function retentionMutation(
+  draft: MiniAppRequestRecord,
+  binding: string,
+  paymentEvidenceObjectKeys: string[],
+): MiniAppAsyncStateMutation {
+  return {
+    operation: 'RETAIN_PREPARE', requestId: draft.requestId, draftId: draft.draftId, payloadHash: binding,
+    expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
+    leaseOwnerToken: null, nowIso: '2026-08-30T10:00:00.000Z', leaseUntil: null, taskName: null,
+    paymentEvidenceObjectKeys, chatEvidenceObjectKeys: [], paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
+    evidenceCount: paymentEvidenceObjectKeys.length, safeErrorCode: null, caseId: null, confirmationStatus: null,
+  }
 }

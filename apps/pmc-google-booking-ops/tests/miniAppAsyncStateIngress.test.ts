@@ -12,6 +12,131 @@ import type { BookingPorts } from '../src/ports'
 import { createTestPorts } from './helpers/fakes'
 
 describe('Apps Script Mini App async-state ingress', () => {
+  it('owner-lock retention converges same-binding disjoint terminal subsets and preserves business fields', () => {
+    const terminal = queuedRequest({
+      state: 'CANCELLED', version: 2, payloadHash: null, taskName: null, queuedAt: null,
+      retentionState: 'PENDING_APPROVAL', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0, evidenceProjectionHash: null,
+    })
+    const fixture = stateFixture(terminal)
+    const binding = 'p'.repeat(43)
+    const first = processBookingDoPost(event(envelope(retentionMutation({
+      payloadHash: binding,
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', 'b')],
+      evidenceCount: 1,
+    }), 'nonce-retain-first')), fixture.ports)
+    const second = processBookingDoPost(event(envelope(retentionMutation({
+      payloadHash: binding,
+      expectedVersion: 2,
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', 'a')],
+      chatEvidenceObjectKeys: [objectKey('CHAT', 'c')],
+      evidenceCount: 2,
+    }), 'nonce-retain-second')), fixture.ports)
+    const replay = processBookingDoPost(event(envelope(retentionMutation({
+      payloadHash: binding,
+      expectedVersion: 2,
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', 'b')],
+      evidenceCount: 1,
+    }), 'nonce-retain-replay')), fixture.ports)
+
+    expect(first).toMatchObject({ state: 'CANCELLED', outcome: 'APPLIED' })
+    expect(second).toMatchObject({ state: 'CANCELLED', outcome: 'APPLIED' })
+    expect(replay).toMatchObject({ state: 'CANCELLED', outcome: 'IDEMPOTENT' })
+    expect(fixture.requests.read('request-1')).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: binding,
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', 'a'), objectKey('PAYMENT', 'b')],
+      chatEvidenceObjectKeys: [objectKey('CHAT', 'c')], evidenceCount: 3,
+      customerName: terminal.customerName, facebookName: terminal.facebookName, doctorId: terminal.doctorId,
+    })
+    expect(fixture.requests.writeCount).toBe(2)
+  })
+
+  it('keeps the first durable prepare binding authoritative against an independent client', () => {
+    const fixture = stateFixture(queuedRequest({
+      state: 'EXPIRED', version: 2, payloadHash: null, taskName: null, queuedAt: null,
+      retentionState: 'PENDING_APPROVAL', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0, evidenceProjectionHash: null,
+    }))
+    const first = retentionMutation({
+      payloadHash: 'a'.repeat(43), paymentEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['drive-payment-1'], evidenceCount: 1,
+    })
+    const competing = retentionMutation({
+      payloadHash: 'b'.repeat(43), paymentEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['drive-payment-2'], evidenceCount: 1,
+    })
+    processBookingDoPost(event(envelope(first, 'nonce-retain-winner')), fixture.ports)
+    const authoritative = fixture.requests.read('request-1')
+
+    expect(() => processBookingDoPost(event(envelope(competing, 'nonce-retain-loser')), fixture.ports))
+      .toThrow(/prepare.*conflict|payload.*conflict/i)
+    expect(fixture.requests.read('request-1')).toEqual(authoritative)
+    expect(fixture.requests.writeCount).toBe(1)
+  })
+
+  it('retains the union from five same-binding cancel/expiry recoveries without orphaning a reference', () => {
+    const fixture = stateFixture(queuedRequest({
+      state: 'CANCELLED', version: 2, payloadHash: null, taskName: null, queuedAt: null,
+      retentionState: 'PENDING_APPROVAL', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0, evidenceProjectionHash: null,
+    }))
+    const binding = 'c'.repeat(43)
+    const keys = ['a', 'b', 'c', 'd', 'e'].map((marker) => objectKey('PAYMENT', marker))
+
+    keys.forEach((key, index) => {
+      processBookingDoPost(event(envelope(retentionMutation({
+        payloadHash: binding,
+        expectedVersion: 2,
+        paymentEvidenceObjectKeys: [key],
+        evidenceCount: 1,
+      }), `nonce-retain-five-${index}`)), fixture.ports)
+    })
+
+    expect(fixture.requests.read('request-1')).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: binding,
+      paymentEvidenceObjectKeys: keys, evidenceCount: 5,
+    })
+    expect(fixture.requests.writeCount).toBe(5)
+  })
+
+  it('rejects a same-binding terminal union that would exceed a per-kind evidence limit', () => {
+    const existing = Array.from({ length: 10 }, (_, index) => objectKey('PAYMENT', index.toString(16)))
+    const fixture = stateFixture(queuedRequest({
+      state: 'CANCELLED', version: 3, payloadHash: null, taskName: null, queuedAt: null,
+      retentionState: 'PENDING_APPROVAL', paymentEvidenceObjectKeys: existing, chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 10, evidenceProjectionHash: 'd'.repeat(43),
+    }))
+    const before = fixture.requests.read('request-1')
+
+    expect(() => processBookingDoPost(event(envelope(retentionMutation({
+      payloadHash: 'd'.repeat(43),
+      expectedVersion: 2,
+      paymentEvidenceObjectKeys: [objectKey('PAYMENT', 'e')],
+      evidenceCount: 1,
+    }), 'nonce-retain-over-limit')), fixture.ports)).toThrow(/limit|retention/i)
+    expect(fixture.requests.read('request-1')).toEqual(before)
+  })
+
+  it.each([
+    ['non-null task', { taskName: 'task/forbidden' }],
+    ['non-null lease', { leaseOwnerToken: 'worker-owner-token-1', leaseUntil: '2026-08-20T09:01:00+07:00' }],
+    ['wrong attempt', { expectedAttempt: 1 }],
+    ['mixed storage', { paymentEvidenceFileIds: ['drive-payment-1'] }],
+    ['wrong count', { evidenceCount: 2 }],
+  ])('rejects RETAIN_PREPARE with %s before terminal mutation', (_label, patch) => {
+    const fixture = stateFixture(queuedRequest({
+      state: 'CANCELLED', version: 2, payloadHash: null, taskName: null, queuedAt: null,
+      retentionState: 'PENDING_APPROVAL', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0, evidenceProjectionHash: null,
+    }))
+    const before = fixture.requests.read('request-1')
+
+    expect(() => processBookingDoPost(event(envelope(retentionMutation(patch), 'nonce-retain-invalid')), fixture.ports))
+      .toThrow()
+    expect(fixture.requests.read('request-1')).toEqual(before)
+    expect(fixture.requests.writeCount).toBe(0)
+  })
+
   it('serializes QUEUE and task-delivery CLAIM without regressing a winning processing row', () => {
     const ready = queuedRequest({ state: 'READY_TO_CONFIRM', version: 1, payloadHash: null, taskName: null, queuedAt: null })
     const queueFirst = stateFixture(ready)
@@ -259,6 +384,32 @@ function mutation(patch: Partial<MiniAppAsyncStateMutation> = {}): MiniAppAsyncS
     evidenceCount: row.evidenceCount, safeErrorCode: null, caseId: null, confirmationStatus: null,
     ...patch,
   }
+}
+
+function retentionMutation(patch: Partial<MiniAppAsyncStateMutation> = {}): MiniAppAsyncStateMutation {
+  return mutation({
+    operation: 'RETAIN_PREPARE' as MiniAppAsyncStateMutation['operation'],
+    payloadHash: 'p'.repeat(43),
+    expectedVersion: 2,
+    expectedAttempt: 0,
+    taskAttempt: 1,
+    leaseOwnerToken: null,
+    leaseUntil: null,
+    taskName: null,
+    paymentEvidenceObjectKeys: [objectKey('PAYMENT', 'a')],
+    chatEvidenceObjectKeys: [],
+    paymentEvidenceFileIds: [],
+    chatEvidenceFileIds: [],
+    evidenceCount: 1,
+    safeErrorCode: null,
+    caseId: null,
+    confirmationStatus: null,
+    ...patch,
+  })
+}
+
+function objectKey(kind: 'PAYMENT' | 'CHAT', marker: string): string {
+  return `drafts/draft-1/${kind}/${marker.repeat(64)}.png`
 }
 
 function queuedRequest(patch: Partial<MiniAppAsyncRequestRecord> = {}): MiniAppAsyncRequestRecord {

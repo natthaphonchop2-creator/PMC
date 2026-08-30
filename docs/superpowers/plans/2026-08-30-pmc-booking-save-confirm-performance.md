@@ -224,9 +224,13 @@ git commit -m "feat: parse bounded Booking prepare uploads"
 - Modify: `server/pmc-mini-app/evidenceIngressClient.ts`
 - Modify: `server/pmc-mini-app/store.ts`
 - Modify: `server/pmc-mini-app/bookingDraft.ts`
+- Modify: `shared/pmcMiniAppAsyncState.ts`
+- Modify: `server/pmc-mini-app/asyncStateIngressClient.ts`
 - Modify: `apps/pmc-google-booking-ops/src/domain/miniAppEvidenceIngress.ts`
+- Modify: `apps/pmc-google-booking-ops/src/domain/miniAppAsyncStateIngress.ts`
 - Test: `tests/pmc-mini-app/bookingPrepareApi.test.ts`
 - Test: `apps/pmc-google-booking-ops/tests/miniAppEvidenceIngress.test.ts`
+- Test: `apps/pmc-google-booking-ops/tests/miniAppAsyncStateIngress.test.ts`
 
 **Interfaces:**
 - Produces: `persistPrepareEvidence(input): Promise<PersistedPrepareEvidence>`.
@@ -269,7 +273,7 @@ export interface PersistedPrepareEvidence {
 }
 ```
 
-Persist only existing object-key/file-ID columns in Sheets; recompute deterministic bindings. On partial success, write only accumulated references plus `PENDING_APPROVAL` and return a retryable error. Exact retry reuses references and changed binding conflicts.
+Persist only existing object-key/file-ID columns in Sheets; recompute deterministic bindings. On partial success, write only accumulated references plus `PENDING_APPROVAL` and return a retryable error. Exact retry reuses references and changed binding conflicts. A terminal cancel/expiry race attaches references only through the signed Apps Script state-ingress owner lock; Cloud Run never claims a local mutex plus unconditional Sheets write is an atomic CAS.
 
 - [ ] **Step 4: Run GREEN persistence tests**
 

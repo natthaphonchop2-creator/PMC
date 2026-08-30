@@ -89,3 +89,38 @@ Complete fix-round verification:
 - `npm run booking:typecheck`: passed.
 - `npm run booking:build`: passed.
 - `npm run build:mini-app`: passed.
+
+---
+
+## Fix round 2 — Owner-lock terminal retention
+
+The second review proved that the round-1 direct Sheet operation was not a cross-instance CAS and that allowing null-binding drafts with existing references could rebind unverifiable legacy Drive files to different incoming bytes.
+
+Both regressions were reproduced before the final implementation:
+
+- A sync draft with `evidenceProjectionHash=null` and an existing legacy Drive ID incorrectly skipped the incoming payment upload and reached `READY_TO_CONFIRM`; the async legacy-object variant also reached ready.
+- The signed client rejected `RETAIN_PREPARE`, and the Apps Script state-ingress domain rejected the operation before owner-lock mutation.
+
+The final design restores the strict rule that any null-binding draft carrying a Drive or staged-object reference conflicts before a remote call or Sheet mutation. Same-binding partial recovery remains valid because references and binding are persisted atomically together.
+
+Terminal reference attachment now uses the existing signed `MINI_APP_ASYNC_STATE` ingress with the exact `RETAIN_PREPARE` operation. Under the Apps Script script lock it:
+
+- accepts only `CANCELLED`/`EXPIRED` rows and preserves terminal/business fields;
+- requires null task, lease, error, Case and confirmation fields plus exact version/attempt sentinels;
+- validates draft/kind object-key namespaces, bounded Drive IDs, counts and one storage mode;
+- makes the first non-null prepare binding authoritative;
+- canonical-unions same-binding disjoint reference subsets and updates `evidenceCount`/`PENDING_APPROVAL` in one owner-locked row mutation;
+- returns an idempotent no-op for exact replay and rejects a different binding.
+
+Cloud Run no longer exposes or calls `retainTerminalPrepareEvidence` on the direct Sheet store. It sends the signed owner mutation, then always performs an authoritative Sheet reread. A response lost after mutation is accepted only when the same binding and every submitted reference are attested; a request lost before mutation is reread as missing and retried under the same binding. The returned ingress body is never the retention authority.
+
+Fix-round-2 verification:
+
+- Focused prepare, signed client, Sheet-store baseline, evidence ingress and Apps Script owner-lock domain: **6 files, 115 tests passed**.
+- Full Mini App suite: **71 files, 972 tests passed**.
+- Full Apps Script Booking suite: **48 files, 681 tests passed**.
+- `npm run build:server`: passed.
+- `npm run booking:typecheck`: passed.
+- `npm run booking:build`: passed.
+- `npm run build:mini-app`: passed.
+- Touched-path ESLint and `git diff --check`: passed.

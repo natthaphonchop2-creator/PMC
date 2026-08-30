@@ -11,13 +11,10 @@ import {
   miniAppEvidenceIngressIdentity,
   type EvidenceIngressPort,
 } from './evidenceIngressClient.js'
+import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import { evidenceObjectKey, type EvidenceStagingPort } from './stagingStore.js'
-import type {
-  MiniAppDraftPatch,
-  MiniAppPrepareEvidenceRetention,
-  MiniAppRequestRecord,
-  MiniAppStore,
-} from './store.js'
+import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
+import type { MiniAppDraftPatch, MiniAppRequestRecord, MiniAppStore } from './store.js'
 
 type EvidenceKind = 'PAYMENT' | 'CHAT'
 type EvidenceMime = 'image/jpeg' | 'image/png'
@@ -46,7 +43,8 @@ export interface PersistPrepareEvidenceInput {
   persistence:
     | { type: 'ASYNC'; staging: EvidenceStagingPort }
     | { type: 'SYNC'; ingress: EvidenceIngressPort }
-  store: Pick<MiniAppStore, 'getDraft' | 'updateDraft' | 'retainTerminalPrepareEvidence'>
+  store: Pick<MiniAppStore, 'getDraft' | 'updateDraft'>
+  stateIngress: AsyncStateIngressPort
   now: () => string
 }
 
@@ -94,7 +92,7 @@ export async function persistPrepareEvidence(input: PersistPrepareEvidenceInput)
   if (input.draft.state === 'READY_TO_CONFIRM') {
     return exactReadyReplay(input, descriptors, bindingHash)
   }
-  assertRecoverableDraft(input.draft, input.version, bindingHash, descriptors, input.persistence.type)
+  assertRecoverableDraft(input.draft, input.version, bindingHash)
 
   let persisted: PersistedReferences
   if (input.persistence.type === 'ASYNC') {
@@ -215,17 +213,14 @@ function assertRecoverableDraft(
   draft: MiniAppRequestRecord,
   version: number,
   bindingHash: string,
-  descriptors: readonly EvidenceDescriptor[],
-  type: 'ASYNC' | 'SYNC',
 ): void {
   if (draft.state !== 'DRAFT' || draft.payloadHash !== null) {
     throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   }
   if (draft.retentionState === '') {
-    if (draft.version !== version || draft.evidenceProjectionHash !== null) {
+    if (draft.version !== version || draft.evidenceProjectionHash !== null || referenceCountFromDraft(draft) !== 0) {
       throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
     }
-    validateExistingReferences(draft, descriptors, type)
     return
   }
   if (draft.retentionState !== 'PENDING_APPROVAL' || draft.evidenceProjectionHash !== bindingHash) {
@@ -333,10 +328,13 @@ async function persistRecoveryReferences(
     }
     return
   }
-  const merged = mergePersistedReferences(draft, persisted, descriptors, input.persistence.type)
+  const terminal = draft.state === 'CANCELLED' || draft.state === 'EXPIRED'
+  const merged = terminal
+    ? mergeTerminalPersistedReferences(draft, persisted, descriptors, input.persistence.type)
+    : mergePersistedReferences(draft, persisted, descriptors, input.persistence.type)
   const persistedCount = referenceCount(merged)
   if (persistedCount === 0) return
-  if (draft.state === 'CANCELLED' || draft.state === 'EXPIRED') {
+  if (terminal) {
     await retainTerminalReferences(input, draft, merged, bindingHash, descriptors, recoveryAttempt)
     return
   }
@@ -372,38 +370,45 @@ async function retainTerminalReferences(
   descriptors: readonly EvidenceDescriptor[],
   recoveryAttempt: number,
 ): Promise<void> {
-  const retention = terminalRetentionInput(input, persisted, bindingHash)
-  try {
-    await input.store.retainTerminalPrepareEvidence(draft.draftId, draft.version, retention)
-  } catch (error) {
-    if (isPrepareConflict(error)) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
-    const recovered = await safeReadDraft(input.store, draft.draftId)
-    if (!recovered) return
-    if (recovered.evidenceProjectionHash !== null && recovered.evidenceProjectionHash !== bindingHash) {
-      throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
-    }
-    const merged = mergePersistedReferences(recovered, persisted, descriptors, input.persistence.type)
-    if ((recovered.state === 'CANCELLED' || recovered.state === 'EXPIRED')
-      && recovered.evidenceProjectionHash === bindingHash
-      && sameReferences(referencesFromDraftPartial(recovered, descriptors, input.persistence.type), merged)) return
-    if (recoveryAttempt >= 2) return
-    await persistRecoveryReferences(input, recovered, merged, bindingHash, descriptors, recoveryAttempt + 1)
+  const mutation = terminalRetentionMutation(input, draft, persisted, bindingHash)
+  try { await input.stateIngress.mutate(mutation) } catch { /* authoritative reread below */ }
+  const recovered = await safeReadDraft(input.store, draft.draftId)
+  if (!recovered) return
+  if (recovered.evidenceProjectionHash !== null && recovered.evidenceProjectionHash !== bindingHash) {
+    throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   }
+  const merged = mergeTerminalPersistedReferences(recovered, persisted, descriptors, input.persistence.type)
+  if (terminalRetentionAttests(recovered, merged, bindingHash, input.persistence.type)) return
+  if (recoveryAttempt >= 2) return
+  await persistRecoveryReferences(input, recovered, merged, bindingHash, descriptors, recoveryAttempt + 1)
 }
 
-function terminalRetentionInput(
+function terminalRetentionMutation(
   input: PersistPrepareEvidenceInput,
+  draft: MiniAppRequestRecord,
   persisted: PersistedReferences,
   bindingHash: string,
-): MiniAppPrepareEvidenceRetention {
+): MiniAppAsyncStateMutation {
   return {
-    bindingHash,
+    operation: 'RETAIN_PREPARE',
+    requestId: draft.requestId,
+    draftId: draft.draftId,
+    payloadHash: bindingHash,
+    expectedVersion: draft.version,
+    expectedAttempt: draft.attemptCount,
+    taskAttempt: 1,
+    leaseOwnerToken: null,
+    nowIso: input.now(),
+    leaseUntil: null,
+    taskName: null,
     paymentEvidenceFileIds: input.persistence.type === 'SYNC' ? persisted.payment.map(({ value }) => value) : [],
     chatEvidenceFileIds: input.persistence.type === 'SYNC' ? persisted.chat.map(({ value }) => value) : [],
     paymentEvidenceObjectKeys: input.persistence.type === 'ASYNC' ? persisted.payment.map(({ value }) => value) : [],
     chatEvidenceObjectKeys: input.persistence.type === 'ASYNC' ? persisted.chat.map(({ value }) => value) : [],
     evidenceCount: referenceCount(persisted),
-    updatedAt: input.now(),
+    safeErrorCode: null,
+    caseId: null,
+    confirmationStatus: null,
   }
 }
 
@@ -434,6 +439,84 @@ function mergePersistedReferences(
   }
 }
 
+function mergeTerminalPersistedReferences(
+  draft: MiniAppRequestRecord,
+  persisted: PersistedReferences,
+  descriptors: readonly EvidenceDescriptor[],
+  type: 'ASYNC' | 'SYNC',
+): PersistedReferences {
+  if (type === 'ASYNC') {
+    if (draft.paymentEvidenceFileIds.length > 0 || draft.chatEvidenceFileIds.length > 0) {
+      throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+    }
+    return {
+      payment: terminalObjectReferences(
+        draft.paymentEvidenceObjectKeys,
+        persisted.payment,
+        descriptors.filter(({ kind }) => kind === 'PAYMENT'),
+      ),
+      chat: terminalObjectReferences(
+        draft.chatEvidenceObjectKeys,
+        persisted.chat,
+        descriptors.filter(({ kind }) => kind === 'CHAT'),
+      ),
+    }
+  }
+  if (draft.paymentEvidenceObjectKeys.length > 0 || draft.chatEvidenceObjectKeys.length > 0) {
+    throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  }
+  return {
+    payment: terminalDriveReferences(draft.paymentEvidenceFileIds, persisted.payment, descriptors, 'PAYMENT'),
+    chat: terminalDriveReferences(draft.chatEvidenceFileIds, persisted.chat, descriptors, 'CHAT'),
+  }
+}
+
+function terminalObjectReferences(
+  existingValues: readonly string[],
+  incoming: readonly EvidenceReference[],
+  descriptors: readonly EvidenceDescriptor[],
+): EvidenceReference[] {
+  const expected = new Map(descriptors.map((item) => [item.objectKey, item]))
+  const values = new Set([...existingValues, ...incoming.map(({ value }) => value)])
+  for (const value of values) {
+    if (!expected.has(value)) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  }
+  return [...values].sort().map((value) => reference(expected.get(value)!, 'STAGED_OBJECT', value))
+}
+
+function terminalDriveReferences(
+  existingValues: readonly string[],
+  incoming: readonly EvidenceReference[],
+  descriptors: readonly EvidenceDescriptor[],
+  kind: EvidenceKind,
+): EvidenceReference[] {
+  const values = [...new Set([...existingValues, ...incoming.map(({ value }) => value)])].sort()
+  const candidates = descriptors.filter((item) => item.kind === kind)
+  if (values.length > candidates.length) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+  return values.map((value, index) => reference(candidates[index]!, 'DRIVE_FILE', value))
+}
+
+function terminalRetentionAttests(
+  draft: MiniAppRequestRecord,
+  persisted: PersistedReferences,
+  bindingHash: string,
+  type: 'ASYNC' | 'SYNC',
+): boolean {
+  if ((draft.state !== 'CANCELLED' && draft.state !== 'EXPIRED')
+    || draft.retentionState !== 'PENDING_APPROVAL'
+    || draft.evidenceProjectionHash !== bindingHash
+    || draft.evidenceCount !== referenceCountFromDraft(draft)) return false
+  const payment = type === 'ASYNC' ? draft.paymentEvidenceObjectKeys : draft.paymentEvidenceFileIds
+  const chat = type === 'ASYNC' ? draft.chatEvidenceObjectKeys : draft.chatEvidenceFileIds
+  return isSetSubset(persisted.payment.map(({ value }) => value), payment)
+    && isSetSubset(persisted.chat.map(({ value }) => value), chat)
+}
+
+function isSetSubset(values: readonly string[], expected: readonly string[]): boolean {
+  const expectedSet = new Set(expected)
+  return values.every((value) => expectedSet.has(value))
+}
+
 function mergeDriveReferences(
   existing: readonly EvidenceReference[],
   incoming: readonly EvidenceReference[],
@@ -449,24 +532,6 @@ function mergeDriveReferences(
     result[index] = previous ?? next!
   }
   return result
-}
-
-function validateExistingReferences(
-  draft: MiniAppRequestRecord,
-  descriptors: readonly EvidenceDescriptor[],
-  type: 'ASYNC' | 'SYNC',
-): void {
-  const existing = referencesFromDraftPartial(draft, descriptors, type)
-  if (referenceCount(existing) !== draft.evidenceCount) {
-    throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
-  }
-}
-
-function isPrepareConflict(error: unknown): boolean {
-  const code = error instanceof BookingPreparePersistenceError ? error.code
-    : error instanceof Error ? error.message
-      : error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
-  return code === 'BOOKING_PREPARE_CONFLICT'
 }
 
 function readyPatch(
@@ -601,6 +666,11 @@ function splitReferences(values: readonly EvidenceReference[], paymentCount: num
 }
 
 function referenceCount(value: PersistedReferences): number { return value.payment.length + value.chat.length }
+
+function referenceCountFromDraft(draft: MiniAppRequestRecord): number {
+  return draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
+    + draft.paymentEvidenceObjectKeys.length + draft.chatEvidenceObjectKeys.length
+}
 
 function sameReferences(left: PersistedReferences, right: PersistedReferences): boolean {
   return sameEvidenceReferenceArray(left.payment, right.payment) && sameEvidenceReferenceArray(left.chat, right.chat)
