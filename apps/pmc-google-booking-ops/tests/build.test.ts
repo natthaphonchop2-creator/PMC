@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { BOOKING_AUTOMATION_TRIGGER_HANDLERS } from '../src/runtime'
+import { BOOKING_INSTALLABLE_TRIGGER_REGISTRY } from '../src/runtime'
 
 describe('Apps Script bundle', () => {
   it('exports every trigger entrypoint as a top-level function', () => {
@@ -62,18 +63,28 @@ describe('Apps Script bundle', () => {
   })
 
   it('keeps owner-only presentation entrypoints out of installed form and clock triggers', () => {
-    expect(BOOKING_AUTOMATION_TRIGGER_HANDLERS).toEqual([
-      'onBookingFormSubmit',
-      'onCallResultSubmit',
-      'runDailyOperations',
-      'runIntegrityChecks',
-    ])
-    expect(BOOKING_AUTOMATION_TRIGGER_HANDLERS).not.toContain(
-      'previewPmcBookingWorkbookPresentation',
-    )
-    expect(BOOKING_AUTOMATION_TRIGGER_HANDLERS).not.toContain(
-      'applyPmcBookingWorkbookPresentation',
-    )
+    expect(BOOKING_INSTALLABLE_TRIGGER_REGISTRY).toEqual({
+      bookingForm: { handler: 'onBookingFormSubmit', kind: 'FORM' },
+      callResultForm: { handler: 'onCallResultSubmit', kind: 'FORM' },
+      queueConfirmationForm: { handler: 'onQueueConfirmationSubmit', kind: 'FORM' },
+      dailyOperations: { handler: 'runDailyOperations', kind: 'CLOCK' },
+      integrityChecks: { handler: 'runIntegrityChecks', kind: 'CLOCK' },
+    })
+    expect(Object.isFrozen(BOOKING_INSTALLABLE_TRIGGER_REGISTRY)).toBe(true)
+    expect(Object.values(BOOKING_INSTALLABLE_TRIGGER_REGISTRY).every(Object.isFrozen)).toBe(true)
+    const handlers = Object.values(BOOKING_INSTALLABLE_TRIGGER_REGISTRY)
+      .map(({ handler }) => handler)
+    expect(handlers).not.toContain('previewPmcBookingWorkbookPresentation')
+    expect(handlers).not.toContain('applyPmcBookingWorkbookPresentation')
+
+    const sourceRoot = 'apps/pmc-google-booking-ops/src'
+    const source = sourceFiles(sourceRoot).map((file) => readFileSync(file, 'utf8')).join('\n')
+    expect(source.match(/ScriptApp\.newTrigger\(/g)).toHaveLength(2)
+    expect(source.match(/ensureFormTrigger\(\s*BOOKING_INSTALLABLE_TRIGGER_REGISTRY\./g))
+      .toHaveLength(3)
+    expect(source.match(/ensureClockTrigger\(\s*BOOKING_INSTALLABLE_TRIGGER_REGISTRY\./g))
+      .toHaveLength(2)
+    expect(source).not.toMatch(/ensure(?:Form|Clock)Trigger\(\s*['"]/)
   })
 
   it('documents the exact owner maintenance, verification, screenshot, and resume order', () => {
@@ -101,6 +112,31 @@ describe('Apps Script bundle', () => {
     expect(runbook).toContain('do not rerun automatically')
     expect(runbook).toContain('do not claim rollback')
     expect(runbook).toContain('Do not record customer names, phone numbers, evidence images, cell values')
+
+    for (const command of [
+      'npm run booking:build',
+      'shasum -a 256 apps/pmc-google-booking-ops/dist/Code.js',
+      'npx clasp --user <operator-private-clasp-profile> show-authorized-user',
+      'npx clasp --user <operator-private-clasp-profile> deployments <operator-private-script-id>',
+      'node scripts/check-pmc-booking-attribution-v2.mjs',
+      '--expected-stage MIGRATION',
+      '--write-attestation <absolute-new-private-0600-attestation-file>',
+      '--script-properties-file <absolute-private-0600-preinstall-property-snapshot>',
+      '--script-properties-file <absolute-private-0600-installed-property-snapshot>',
+      'npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev previewPmcBookingWorkbookPresentation',
+      'npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev applyPmcBookingWorkbookPresentation',
+    ]) expect(runbook).toContain(command)
+    expect(runbook).toContain('The first attestation generation command must not include `--strict`')
+    expect(runbook).toContain('`0600`')
+    expect(runbook).toContain('ten minutes')
+    expect(runbook).toContain('PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION')
+    expect(runbook).toContain('PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST')
+    expect(runbook).toContain('PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST')
+    expect(runbook).toContain('PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST')
+    expect(runbook).toContain('actionCount=0')
+    expect(runbook).toContain('readbackVerified=true')
+    expect(runbook).toContain('ATTEMPTED')
+    expect(runbook).toContain('APPLIED')
   })
 
   it('does not recreate the paused legacy JERA polling trigger', () => {
@@ -148,3 +184,13 @@ describe('Apps Script bundle', () => {
     expect(bundle).not.toContain('structuredClone(')
   })
 })
+
+function sourceFiles(directory: string): string[] {
+  const files: string[] = []
+  for (const entry of readdirSync(directory)) {
+    const path = join(directory, entry)
+    if (statSync(path).isDirectory()) files.push(...sourceFiles(path))
+    else if (path.endsWith('.ts')) files.push(path)
+  }
+  return files
+}

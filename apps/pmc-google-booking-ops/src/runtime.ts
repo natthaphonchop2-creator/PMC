@@ -146,12 +146,21 @@ const ATTRIBUTION_REQUEST_ROW_LIMIT = 10_000
 const ATTRIBUTION_MASTER_ROW_LIMIT = 100_000
 const WORKBOOK_PRESENTATION_OWNER_APPROVAL = 'PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST'
 
-export const BOOKING_AUTOMATION_TRIGGER_HANDLERS = Object.freeze([
-  'onBookingFormSubmit',
-  'onCallResultSubmit',
-  'runDailyOperations',
-  'runIntegrityChecks',
-] as const)
+export const BOOKING_INSTALLABLE_TRIGGER_REGISTRY = Object.freeze({
+  bookingForm: Object.freeze({ handler: 'onBookingFormSubmit', kind: 'FORM' } as const),
+  callResultForm: Object.freeze({ handler: 'onCallResultSubmit', kind: 'FORM' } as const),
+  queueConfirmationForm: Object.freeze({
+    handler: 'onQueueConfirmationSubmit', kind: 'FORM',
+  } as const),
+  dailyOperations: Object.freeze({ handler: 'runDailyOperations', kind: 'CLOCK' } as const),
+  integrityChecks: Object.freeze({ handler: 'runIntegrityChecks', kind: 'CLOCK' } as const),
+})
+
+export type BookingInstallableTrigger = typeof BOOKING_INSTALLABLE_TRIGGER_REGISTRY[
+  keyof typeof BOOKING_INSTALLABLE_TRIGGER_REGISTRY
+]
+type BookingFormTriggerHandler = Extract<BookingInstallableTrigger, { kind: 'FORM' }>['handler']
+type BookingClockTriggerHandler = Extract<BookingInstallableTrigger, { kind: 'CLOCK' }>['handler']
 
 const WORKBOOK_PRESENTATION_ACTION_ORDER: readonly WorkbookPresentationAction['kind'][] = Object.freeze([
   'MOVE_SHEET',
@@ -162,6 +171,10 @@ const WORKBOOK_PRESENTATION_ACTION_ORDER: readonly WorkbookPresentationAction['k
   'FORMAT_RANGE',
   'ADD_STATUS_RULE',
 ])
+const WORKBOOK_PRESENTATION_MANUAL_HANDLERS = Object.freeze([
+  'previewPmcBookingWorkbookPresentation',
+  'applyPmcBookingWorkbookPresentation',
+] as const)
 
 export function validateRuntimeProperties(properties: Record<string, string | undefined>): void {
   const missing = REQUIRED_PROPERTIES.filter((key) => !properties[key]?.trim())
@@ -367,9 +380,11 @@ export function applyPmcBookingAttributionMigrationWorkflow(): {
 }
 
 export interface PmcBookingWorkbookPresentationRuntime extends WorkbookPresentationWorkflowPort {
+  assertManualInvocation(): void
   readQueueAttestation(): BookingQueueAttestation
   readMigrationManifest(): BookingMigrationManifest | null
   readOwnerApprovedPreviewDigest(): string | null
+  transitionOwnerApproval(expected: string, next: string): void
 }
 
 export interface PmcBookingWorkbookPresentationPreview {
@@ -412,6 +427,7 @@ interface OwnerPresentationInspection {
 export function previewPmcBookingWorkbookPresentationWorkflow(
   runtime: PmcBookingWorkbookPresentationRuntime = createPmcBookingWorkbookPresentationRuntime(),
 ): PmcBookingWorkbookPresentationPreview {
+  runtime.assertManualInvocation()
   const queue = runtime.readQueueAttestation()
   const manifest = runtime.readMigrationManifest()
   return inspectOwnerWorkbookPresentation(runtime, queue, manifest).preview
@@ -420,7 +436,9 @@ export function previewPmcBookingWorkbookPresentationWorkflow(
 export function applyPmcBookingWorkbookPresentationWorkflow(
   runtime: PmcBookingWorkbookPresentationRuntime = createPmcBookingWorkbookPresentationRuntime(),
 ): PmcBookingWorkbookPresentationApply {
+  runtime.assertManualInvocation()
   return runtime.withDocumentLock(() => {
+    runtime.assertManualInvocation()
     const queue = runtime.readQueueAttestation()
     if (queue.state !== 'PAUSED' || queue.activeTaskCount !== 0) {
       throw new Error('BOOKING_WORKBOOK_PRESENTATION_QUEUE_NOT_PAUSED')
@@ -432,9 +450,14 @@ export function applyPmcBookingWorkbookPresentationWorkflow(
 
     const inspected = inspectOwnerWorkbookPresentation(runtime, queue, manifest)
     const approval = runtime.readOwnerApprovedPreviewDigest()?.trim() ?? ''
+    if (approval.startsWith('ATTEMPTED:') || approval.startsWith('APPLIED:')) {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_ALREADY_ATTEMPTED')
+    }
     if (!isSha256Digest(approval) || approval !== inspected.preview.reviewDigest) {
       throw new Error('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
     }
+    const attemptedApproval = `ATTEMPTED:${approval}`
+    runtime.transitionOwnerApproval(approval, attemptedApproval)
 
     let firstInspection = true
     const applied = applyWorkbookPresentation({
@@ -453,6 +476,10 @@ export function applyPmcBookingWorkbookPresentationWorkflow(
         apply: (plan) => runtime.gateway.apply(plan),
       },
     })
+    runtime.transitionOwnerApproval(
+      attemptedApproval,
+      `APPLIED:${inspected.preview.reviewDigest}`,
+    )
     return {
       status: applied.status,
       actionCount: applied.plannedActionCount,
@@ -485,6 +512,7 @@ export function createPmcBookingWorkbookPresentationRuntime(): PmcBookingWorkboo
     gateway,
     sha256Hex: presentationCrypto.sha256Hex,
     backupLabel: `PMC Booking Pre-Presentation ${new Date().toISOString()}`,
+    assertManualInvocation: assertPmcBookingWorkbookPresentationManualInvocation,
     withDocumentLock<T>(operation: () => T): T {
       return gateway.withDocumentLock(operation)
     },
@@ -514,6 +542,54 @@ export function createPmcBookingWorkbookPresentationRuntime(): PmcBookingWorkboo
     readOwnerApprovedPreviewDigest() {
       return scriptProperties.getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)
     },
+    transitionOwnerApproval(expected, next) {
+      if (!isValidWorkbookPresentationApprovalValue(expected)
+        || !isValidWorkbookPresentationApprovalValue(next)) {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      let current: string
+      try {
+        current = scriptProperties.getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)?.trim() ?? ''
+      } catch {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      if (current !== expected) {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      try {
+        scriptProperties.setProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL, next)
+        const persisted = scriptProperties
+          .getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)?.trim() ?? ''
+        if (persisted !== next) throw new Error('approval readback mismatch')
+      } catch {
+        if (expected.startsWith('ATTEMPTED:') && next.startsWith('APPLIED:')) {
+          try {
+            scriptProperties.setProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL, expected)
+            const recovered = scriptProperties
+              .getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)?.trim() ?? ''
+            if (recovered !== expected) throw new Error('approval recovery mismatch')
+          } catch {
+            // Both ATTEMPTED and APPLIED are fail-closed used states. The fixed
+            // error below remains authoritative when recovery cannot be proved.
+          }
+        }
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+    },
+  }
+}
+
+export function assertPmcBookingWorkbookPresentationManualInvocation(): void {
+  let handlers: string[]
+  try {
+    handlers = ScriptApp.getProjectTriggers().map((trigger) => trigger.getHandlerFunction())
+  } catch {
+    throw new Error('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
+  }
+  if (handlers.some((handler) => WORKBOOK_PRESENTATION_MANUAL_HANDLERS.includes(
+    handler as typeof WORKBOOK_PRESENTATION_MANUAL_HANDLERS[number],
+  ))) {
+    throw new Error('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
   }
 }
 
@@ -580,6 +656,11 @@ function safePresentationDigest(
 
 function isSha256Digest(value: string): boolean {
   return /^[a-f0-9]{64}$/.test(value)
+}
+
+function isValidWorkbookPresentationApprovalValue(value: string): boolean {
+  return isSha256Digest(value)
+    || /^(?:ATTEMPTED|APPLIED):[a-f0-9]{64}$/.test(value)
 }
 
 export function createPmcBookingAttributionMigrationRuntime(): BookingAttributionMigrationPorts {
@@ -1146,13 +1227,16 @@ export function isConfigurationReady(counts: {
   return counts.staff > 0 && counts.aes > 0 && counts.doctors > 0 && counts.services > 0
 }
 
-function ensureFormTrigger(handler: string, formId: string): boolean {
+function ensureFormTrigger(handler: BookingFormTriggerHandler, formId: string): boolean {
   if (ScriptApp.getProjectTriggers().some((trigger) => trigger.getHandlerFunction() === handler)) return false
   ScriptApp.newTrigger(handler).forForm(FormApp.openById(formId)).onFormSubmit().create()
   return true
 }
 
-function ensureClockTrigger(handler: string, create: (builder: GoogleAppsScript.Script.ClockTriggerBuilder) => void): boolean {
+function ensureClockTrigger(
+  handler: BookingClockTriggerHandler,
+  create: (builder: GoogleAppsScript.Script.ClockTriggerBuilder) => void,
+): boolean {
   if (ScriptApp.getProjectTriggers().some((trigger) => trigger.getHandlerFunction() === handler)) return false
   create(ScriptApp.newTrigger(handler).timeBased())
   return true
@@ -1215,19 +1299,19 @@ export function setupSystem(): {
   runtime.forms.syncCallResultChoices(callResults)
   const created = [
     ensureFormTrigger(
-      BOOKING_AUTOMATION_TRIGGER_HANDLERS[0],
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.bookingForm.handler,
       properties[SCRIPT_PROPERTY_KEYS.bookingFormId],
     ),
     ensureFormTrigger(
-      BOOKING_AUTOMATION_TRIGGER_HANDLERS[1],
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.callResultForm.handler,
       properties[SCRIPT_PROPERTY_KEYS.callResultFormId],
     ),
     ensureClockTrigger(
-      BOOKING_AUTOMATION_TRIGGER_HANDLERS[2],
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.dailyOperations.handler,
       (builder) => builder.everyDays(1).atHour(9).create(),
     ),
     ensureClockTrigger(
-      BOOKING_AUTOMATION_TRIGGER_HANDLERS[3],
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.integrityChecks.handler,
       (builder) => builder.everyDays(1).atHour(2).create(),
     ),
   ].filter(Boolean).length
@@ -1707,7 +1791,10 @@ export function configureQueueModeFormsWorkflow(): {
   try {
     const queue = runtime.forms.configureQueueModeForm()
     const confirmation = runtime.forms.ensureQueueConfirmationForm()
-    const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
+    const createdTrigger = ensureFormTrigger(
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.queueConfirmationForm.handler,
+      confirmationFormId,
+    )
     return { ...queue, ...confirmation, createdTrigger, createdConfirmationForm }
   } finally {
     runtime.forms.resumeBookingResponses()
@@ -1748,7 +1835,8 @@ export function prepareAutoQueueMigrationWorkflow(): {
     properties[SCRIPT_PROPERTY_KEYS.queueConfirmationFormId]?.trim(),
   )
   const triggerWouldBeCreated = !ScriptApp.getProjectTriggers().some(
-    (trigger) => trigger.getHandlerFunction() === 'onQueueConfirmationSubmit',
+    (trigger) => trigger.getHandlerFunction()
+      === BOOKING_INSTALLABLE_TRIGGER_REGISTRY.queueConfirmationForm.handler,
   )
   return {
     bookingRows,

@@ -304,27 +304,161 @@ Only the owner may run the two manual functions below. Neither function is an in
 - `previewPmcBookingWorkbookPresentation()` — read-only inspection and planning;
 - `applyPmcBookingWorkbookPresentation()` — explicitly approved apply under the bounded script lock.
 
+### Private operator workspace
+
+Run from the reviewed repository root. Use a new private directory outside the repository for all command output and Script Property snapshots. Do not replace the placeholders in this document inside source control.
+
+```bash
+umask 077
+PMC_PRESENTATION_PRIVATE_DIR="$(mktemp -d)"
+chmod 700 "$PMC_PRESENTATION_PRIVATE_DIR"
+```
+
+Every file created below must remain mode `0600`. Never `cat`, `echo`, paste, or upload an attestation, property value, account identity, project/deployment identity, backup identity, or unrestricted URL into terminal history, chat, screenshots, logs, or rollout evidence.
+
 ### Exact maintenance order
 
-Perform these steps in order. Stop immediately if any step fails or any digest changes.
+Perform these steps in order. Stop immediately if a command fails, a placeholder is unresolved, an identity is wrong, a trigger gate fails, or any digest changes.
 
-1. Deploy the reviewed Apps Script version. Do not run either presentation function from an unreviewed draft.
-2. Pause the exact production Booking queue and generate one fresh whole-queue attestation proving `PAUSED` with `activeTaskCount=0`. Verify its environment, queue identity digest, checker version, signature digest, and freshness. Do not infer queue state from separate properties or partial task lists.
-3. Read and verify `PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST`. Its signed state must be exactly `COMPLETE`; `PREPARED`, `RESTORE_REQUIRED`, missing, or invalid is an abort.
-4. Run `previewPmcBookingWorkbookPresentation()` once. It must report `preflightPassed=true`, `queuePausedAndEmpty=true`, `migrationComplete=true`, `readyForOwnerApproval=true`, `backupCreated=false`, and `liveWrites=false`.
-5. Review the complete safe preview: visible tab order, every tab hidden by policy, action count and action-type counts, source digest, plan digest, queue-attestation digest, migration-manifest digest, and review digest. Confirm again that tab hiding is presentation only.
-6. Install the exact reviewed `reviewDigest` as Script Property `PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST`. Do not approve a copied, shortened, stale, or manually recomputed value.
-7. Run `applyPmcBookingWorkbookPresentation()` once. A source, queue-attestation, migration-manifest, or approval digest that changed since the reviewed preview must fail before backup or presentation batch. The function never pauses/resumes the queue and never performs automatic rollback.
-8. Require a safe result with `status=APPLIED` or the explicitly reviewed `NOOP`, matching source/plan/review digests, `approvalMatched=true`, and `readbackVerified=true`. For `APPLIED`, require `backupCreated=true` and the reviewed action count. Never record the private backup identity or URL in general evidence.
-9. Compare the returned source, plan, and review SHA-256 digests with the approved preview. Independently verify that immutable value, formula, validation, protection, row-metadata, and presentation readback hashes passed.
-10. At browser zoom 100%, capture privacy-safe 1280×720 screenshots of exactly these four tabs: `DASHBOARD`, `BOOKING_MASTER`, `CALL_QUEUE`, and `RECONCILIATION`. Crop or mask any customer data before placing screenshots in the evidence register.
-11. Only after digest/readback verification and all four screenshots are accepted may the owner resume the exact queue. Generate a new queue-state attestation after resume; do not reuse it as presentation approval.
+1. Deploy the reviewed Apps Script version. Pin the exact reviewed commit and generated `Code.js` SHA-256 before any push. Verify the authorized Google account, Apps Script project ID, and deployment ID privately; do not copy their values into the evidence register.
+
+```bash
+PMC_REVIEWED_COMMIT="<reviewed-commit-sha>"
+PMC_REVIEWED_CODE_SHA256="<reviewed-Code.js-sha256>"
+test "$(git rev-parse HEAD)" = "$PMC_REVIEWED_COMMIT"
+test -z "$(git status --porcelain)"
+npm run booking:build
+shasum -a 256 apps/pmc-google-booking-ops/dist/Code.js > "$PMC_PRESENTATION_PRIVATE_DIR/Code.js.sha256"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/Code.js.sha256"
+test "$(awk '{print $1}' "$PMC_PRESENTATION_PRIVATE_DIR/Code.js.sha256")" = "$PMC_REVIEWED_CODE_SHA256"
+npx clasp --user <operator-private-clasp-profile> show-authorized-user > "$PMC_PRESENTATION_PRIVATE_DIR/clasp-account.txt"
+npx clasp --user <operator-private-clasp-profile> deployments <operator-private-script-id> > "$PMC_PRESENTATION_PRIVATE_DIR/deployments-before.txt"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/clasp-account.txt" "$PMC_PRESENTATION_PRIVATE_DIR/deployments-before.txt"
+```
+
+Owner must open those two private files locally and confirm the intended company account, exact project, and exact deployment before continuing. Then deploy only the reviewed bundle through the operator-owned private clasp project file:
+
+```bash
+npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> push
+npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> version "PMC Booking workbook presentation <reviewed-commit-sha>"
+npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> redeploy <operator-private-deployment-id> --versionNumber <reviewed-version> --description "PMC Booking workbook presentation <reviewed-commit-sha>"
+npx clasp --user <operator-private-clasp-profile> deployments <operator-private-script-id> > "$PMC_PRESENTATION_PRIVATE_DIR/deployments-after.txt"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/deployments-after.txt"
+```
+
+Abort if the immutable version, deployment, account, project, or generated bundle hash differs from the reviewed values.
+
+2. Pause the exact production Booking queue, prove the task list is empty, and create the fresh whole-queue attestation used by both Attribution V2 migration and this presentation workflow. First prepare a private preinstall Script Property snapshot with only allowed cutover properties; edit it locally without printing its values.
+
+```bash
+gcloud tasks queues pause <operator-private-queue> --location <operator-private-region> --project <operator-private-project>
+gcloud tasks list --queue <operator-private-queue> --location <operator-private-region> --project <operator-private-project> --format=json > "$PMC_PRESENTATION_PRIVATE_DIR/tasks-paused.json"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/tasks-paused.json"
+install -m 600 /dev/null "$PMC_PRESENTATION_PRIVATE_DIR/properties-preinstall.json"
+${PMC_PRIVATE_EDITOR:-vi} "$PMC_PRESENTATION_PRIVATE_DIR/properties-preinstall.json"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/properties-preinstall.json"
+```
+
+The first attestation generation command must not include `--strict`. It must use stage `MIGRATION`, the exact paused revision, the exact queue, and a new file path that does not exist:
+
+```bash
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage MIGRATION \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-paused-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-preinstall-property-snapshot> \
+  --write-attestation <absolute-new-private-0600-attestation-file>
+```
+
+Require exit `0`, `attestationEligible=true`, `safeStatus=PROPERTY_INSTALL_REQUIRED`, `ready=false`, and a newly created mode-`0600` attestation. The checker must not print the JSON, digest, or private path. In the verified Apps Script project's Project Settings, owner installs exactly:
+
+- `PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION` = the complete attestation JSON;
+- `PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST` = the exact `queueResourceDigest` from that same JSON.
+
+Do not print either value. Create a new private installed-property snapshot through the local editor and verify with the strict read-only command:
+
+```bash
+install -m 600 /dev/null "$PMC_PRESENTATION_PRIVATE_DIR/properties-installed.json"
+${PMC_PRIVATE_EDITOR:-vi} "$PMC_PRESENTATION_PRIVATE_DIR/properties-installed.json"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/properties-installed.json"
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage MIGRATION \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-paused-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-installed-property-snapshot> \
+  --strict
+```
+
+Require queue `PAUSED`, zero tasks, `attestationInstalled=true`, `expectedQueueDigestInstalled=true`, `manifestStatus=ABSENT`, `safeStatus=READY`, and `ready=true`.
+
+3. Read and verify `PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST`. Complete the reviewed Attribution V2 preview/approval/apply procedure in Gate B3 of `docs/pmc-mini-app/pilot-runbook.md` while the exact queue and mutation barrier remain paused. The property must transition from absent through the guarded migration to a signed `COMPLETE`; `PREPARED`, `RESTORE_REQUIRED`, missing, invalid, or manually edited is an abort. The presentation workflow reuses the exact attestation installed in step 2; it does not generate or reinterpret a second attestation after migration.
+
+The attestation is accepted for only ten minutes from its signed `verifiedAt`. Steps 3–9 must finish inside that same ten-minute window. If it expires, do not edit its timestamp, digest, manifest, or checker output and do not run presentation apply. Keep the queue paused, preserve the `COMPLETE` migration evidence privately, resume only under the Attribution cutover recovery decision, and schedule a newly reviewed presentation maintenance procedure.
+
+4. Run `previewPmcBookingWorkbookPresentation()` once. Capture its safe result privately. The runtime itself must reject if either presentation function appears in `ScriptApp.getProjectTriggers()`.
+
+```bash
+npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev previewPmcBookingWorkbookPresentation > "$PMC_PRESENTATION_PRIVATE_DIR/presentation-preview.json"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/presentation-preview.json"
+```
+
+Require `preflightPassed=true`, `queuePausedAndEmpty=true`, `migrationComplete=true`, `readyForOwnerApproval=true`, `backupCreated=false`, and `liveWrites=false`.
+
+5. Review the complete safe preview: locally inspect visible tab order, every tab hidden by policy, action count and action-type counts, source digest, plan digest, queue-attestation digest, migration-manifest digest, and review digest. Confirm again that hiding is presentation only. Do not copy the private result file or any digest into chat, repository, or general rollout evidence.
+
+6. Install the exact reviewed `reviewDigest` as Script Property `PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST` in the verified project. The initial value is the bare 64-character digest. Read it back only through Project Settings and a private mode-`0600` property snapshot; do not print it. Do not approve a copied, shortened, stale, or manually recomputed value.
+
+7. Run `applyPmcBookingWorkbookPresentation()` once. Capture the safe result privately. A source, queue-attestation, migration-manifest, trigger topology, or approval digest that changed since preview must fail before backup or presentation batch.
+
+```bash
+npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev applyPmcBookingWorkbookPresentation > "$PMC_PRESENTATION_PRIVATE_DIR/presentation-apply.json"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/presentation-apply.json"
+```
+
+Under the same script lock, accepted approval changes from the bare digest to `ATTEMPTED:<digest>` before any backup, batch, or no-op decision. A verified `APPLIED` or `NOOP` then changes it to `APPLIED:<digest>`. Any backup, batch, readback, final property-write, or ambiguous failure leaves `ATTEMPTED` or another fail-closed used state; replay is forbidden until a new preview, review, and explicit bare-digest property approval. The workflow never auto-clears approval, pauses/resumes the queue, or performs rollback.
+
+8. Require a safe result with `status=APPLIED` or the explicitly reviewed `NOOP`, matching source/plan/review digests, `approvalMatched=true`, and `readbackVerified=true`. For `APPLIED`, require `backupCreated=true` and the reviewed action count. Read back the approval property privately and require the safe `APPLIED` prefix. Never record the private backup identity or URL in general evidence.
+
+9. Compare the returned source, plan, and review SHA-256 digests with the approved preview. Then perform a second read-only preview and capture it privately:
+
+```bash
+npx clasp --user <operator-private-clasp-profile> --project <absolute-private-clasp-project-file> run --nondev previewPmcBookingWorkbookPresentation > "$PMC_PRESENTATION_PRIVATE_DIR/presentation-post-apply-preview.json"
+chmod 600 "$PMC_PRESENTATION_PRIVATE_DIR/presentation-post-apply-preview.json"
+```
+
+Require `actionCount=0`, `preflightPassed=true`, `backupCreated=false`, and `liveWrites=false`. The preceding apply result is the readback marker and must still show `readbackVerified=true`; this second preview must create no backup, batch, lock, or property write. Any nonzero action count, changed immutable hash, failed trigger gate, or ambiguous result is an abort.
+
+10. At browser zoom 100%, capture privacy-safe 1280×720 screenshots of exactly these four tabs: `DASHBOARD`, `BOOKING_MASTER`, `CALL_QUEUE`, and `RECONCILIATION`. Crop or mask all customer data before placing screenshots in the evidence register. Do not capture IDs, URLs, property values, attestation content, or backup identity.
+
+11. Only after digest/readback verification and all four screenshots are accepted may the owner resume the exact queue. Also require the post-apply zero-action preview and private `APPLIED` property readback before this command:
+
+```bash
+gcloud tasks queues resume <operator-private-queue> --location <operator-private-region> --project <operator-private-project>
+gcloud tasks queues describe <operator-private-queue> --location <operator-private-region> --project <operator-private-project> --format='value(state)'
+```
+
+Require the expected running state. Do not reuse the old queue attestation or presentation approval for any later maintenance.
 
 ### Abort and manual recovery
 
-- Before apply: remove or leave unused the approval property, keep the queue paused, correct the failed precondition, generate a new attestation, and run a new preview. Never reuse the old review digest.
-- If apply fails before `backupCreated=true`: no presentation backup or batch is claimed. Keep the queue paused and investigate the fixed safe error code.
-- If a private backup was created and apply or readback then fails: keep the queue paused, do not rerun automatically, do not delete tabs/data, and do not claim rollback. The owner must locate the newly created private native backup in the approved private folder, compare it manually with the workbook, and choose either a reviewed manual restoration or a newly reviewed retry.
+- Before the apply attempt: keep the queue paused, correct the failed precondition, create a new valid maintenance window if permitted by the Attribution state, run a new preview, and install only its newly reviewed bare digest. Never reuse the old review digest.
+- If the attempt marker cannot be written and verified, apply stops before backup/batch. Treat the property state as unknown until privately read back; do not retry blindly.
+- If backup, batch, readback, or final approval transition fails after the property became `ATTEMPTED`, keep the queue paused and do not rerun automatically. A replay must fail closed. Do not overwrite `ATTEMPTED` until owner has completed read-only diagnosis and explicitly approved a new preview/review cycle.
+- If a private backup was created and apply or readback then fails: do not delete tabs/data and do not claim rollback. The owner must locate the newly created private native backup in the approved private folder, compare it manually with the workbook, and choose either a reviewed manual restoration or a newly reviewed retry.
 - If the result is ambiguous: treat it as not verified, keep the queue paused, inspect Apps Script execution status and workbook metadata read-only, then follow the same manual-recovery path.
 - Resume is forbidden while readback is unverified, any migration manifest is not `COMPLETE`, or any queue task remains active.
 

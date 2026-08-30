@@ -23,6 +23,8 @@ import {
 } from '../src/domain/workbookPresentation'
 import {
   applyPmcBookingWorkbookPresentationWorkflow,
+  assertPmcBookingWorkbookPresentationManualInvocation,
+  createPmcBookingWorkbookPresentationRuntime,
   previewPmcBookingWorkbookPresentationWorkflow,
   type PmcBookingWorkbookPresentationRuntime,
 } from '../src/runtime'
@@ -974,6 +976,50 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
 })
 
 describe('owner-gated Booking workbook presentation entrypoint workflows', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    ['Form', 'previewPmcBookingWorkbookPresentation', 'ON_FORM_SUBMIT', 'FORM'],
+    ['time', 'applyPmcBookingWorkbookPresentation', 'CLOCK', 'CLOCK'],
+    ['manually installed', 'applyPmcBookingWorkbookPresentation', 'ON_OPEN', 'SPREADSHEETS'],
+  ] as const)('rejects the presentation function installed as a %s trigger', (
+    _label,
+    handler,
+    eventType,
+    triggerSource,
+  ) => {
+    vi.stubGlobal('ScriptApp', {
+      getProjectTriggers: () => [{
+        getHandlerFunction: () => handler,
+        getEventType: () => eventType,
+        getTriggerSource: () => triggerSource,
+        getUniqueId: () => 'private-trigger-id-not-returned',
+      }],
+    })
+
+    expect(() => assertPmcBookingWorkbookPresentationManualInvocation())
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
+  })
+
+  it('accepts normal production-shaped project triggers without exposing their identities', () => {
+    vi.stubGlobal('ScriptApp', {
+      getProjectTriggers: () => [
+        'onBookingFormSubmit',
+        'onQueueConfirmationSubmit',
+        'runDailyOperations',
+      ].map((handler) => ({
+        getHandlerFunction: () => handler,
+        getEventType: () => handler === 'runDailyOperations' ? 'CLOCK' : 'ON_FORM_SUBMIT',
+        getTriggerSource: () => handler === 'runDailyOperations' ? 'CLOCK' : 'FORM',
+        getUniqueId: () => 'private-trigger-id-not-returned',
+      })),
+    })
+
+    expect(() => assertPmcBookingWorkbookPresentationManualInvocation()).not.toThrow()
+  })
+
   it('previews safe names, counts, digests, and readiness without a lock, backup, or batch', () => {
     const fake = ownerWorkflowFake(canonicalSnapshot())
 
@@ -1004,7 +1050,7 @@ describe('owner-gated Booking workbook presentation entrypoint workflows', () =>
       result.migrationManifestDigest,
       result.reviewDigest,
     ]) expect(digest).toMatch(/^[a-f0-9]{64}$/)
-    expect(fake.events).toEqual(['queue:read', 'manifest:read', 'inspect'])
+    expect(fake.events).toEqual(['triggers:read', 'queue:read', 'manifest:read', 'inspect'])
     expect(fake.backupCount()).toBe(0)
     expect(fake.batchCount()).toBe(0)
     const serialized = JSON.stringify(result)
@@ -1035,9 +1081,11 @@ describe('owner-gated Booking workbook presentation entrypoint workflows', () =>
       approvalMatched: true,
     })
     expect(fake.events.slice(eventOffset)).toEqual([
-      'lock:wait', 'queue:read', 'manifest:read', 'inspect', 'approval:read',
-      'backup', 'inspect', 'batch', 'inspect', 'lock:release',
+      'triggers:read', 'lock:wait', 'triggers:read', 'queue:read', 'manifest:read',
+      'inspect', 'approval:read', 'approval:ATTEMPTED', 'backup', 'inspect',
+      'batch', 'inspect', 'approval:APPLIED', 'lock:release',
     ])
+    expect(fake.approvalState()).toBe(`APPLIED:${preview.reviewDigest}`)
     expect(fake.backupCount()).toBe(1)
     expect(fake.batchCount()).toBe(1)
     const serialized = JSON.stringify(result)
@@ -1061,6 +1109,21 @@ describe('owner-gated Booking workbook presentation entrypoint workflows', () =>
         : 'BOOKING_WORKBOOK_PRESENTATION_MIGRATION_NOT_COMPLETE',
     )
     expect(fake.events).not.toContain('inspect')
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it.each([
+    'previewPmcBookingWorkbookPresentation',
+    'applyPmcBookingWorkbookPresentation',
+  ] as const)('fails %s before every other read when installed as a trigger', (handler) => {
+    const fake = ownerWorkflowFake(canonicalSnapshot(), { installedPresentationHandler: handler })
+
+    const invoke = handler === 'previewPmcBookingWorkbookPresentation'
+      ? () => previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+      : () => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    expect(invoke).toThrow('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
+    expect(fake.events).toEqual(['triggers:read'])
     expect(fake.backupCount()).toBe(0)
     expect(fake.batchCount()).toBe(0)
   })
@@ -1109,6 +1172,91 @@ describe('owner-gated Booking workbook presentation entrypoint workflows', () =>
       .toThrow('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
     expect(fake.backupCount()).toBe(0)
     expect(fake.batchCount()).toBe(0)
+  })
+
+  it.each(['backup', 'batch', 'readback'] as const)(
+    'leaves one-shot approval ATTEMPTED after a failed %s and blocks replay',
+    (failurePhase) => {
+      const fake = ownerWorkflowFake(canonicalSnapshot(), { failurePhase })
+      const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+      fake.approve(preview.reviewDigest)
+
+      expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime)).toThrow()
+      expect(fake.approvalState()).toBe(`ATTEMPTED:${preview.reviewDigest}`)
+      const backups = fake.backupCount()
+      const batches = fake.batchCount()
+
+      expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+        .toThrow('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_ALREADY_ATTEMPTED')
+      expect(fake.backupCount()).toBe(backups)
+      expect(fake.batchCount()).toBe(batches)
+    },
+  )
+
+  it('marks a reviewed no-op approval APPLIED without backup or batch', () => {
+    const before = canonicalSnapshot()
+    const alreadyPresented = applyPlanForTest(before, buildPlan(before))
+    const fake = ownerWorkflowFake(alreadyPresented)
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+
+    const result = applyPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+
+    expect(result).toMatchObject({ status: 'NOOP', actionCount: 0, backupCreated: false })
+    expect(fake.approvalState()).toBe(`APPLIED:${preview.reviewDigest}`)
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('fails before backup when the ATTEMPTED property transition cannot be verified', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot(), { approvalWriteFailure: 'ATTEMPTED' })
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+    expect(fake.approvalState()).toBe(preview.reviewDigest)
+    expect(fake.backupCount()).toBe(0)
+    expect(fake.batchCount()).toBe(0)
+  })
+
+  it('leaves ATTEMPTED and blocks replay when the final APPLIED property transition fails', () => {
+    const fake = ownerWorkflowFake(canonicalSnapshot(), { approvalWriteFailure: 'APPLIED' })
+    const preview = previewPmcBookingWorkbookPresentationWorkflow(fake.runtime)
+    fake.approve(preview.reviewDigest)
+
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+    expect(fake.approvalState()).toBe(`ATTEMPTED:${preview.reviewDigest}`)
+    expect(fake.backupCount()).toBe(1)
+    expect(fake.batchCount()).toBe(1)
+    expect(() => applyPmcBookingWorkbookPresentationWorkflow(fake.runtime))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_ALREADY_ATTEMPTED')
+  })
+
+  it('restores ATTEMPTED when the production APPLIED property write is ambiguous', () => {
+    const digest = 'd'.repeat(64)
+    const attempted = `ATTEMPTED:${digest}`
+    let approval = attempted
+    const properties = {
+      getProperty(key: string) {
+        if (key === 'PMC_SPREADSHEET_ID') return 'spreadsheet-private-id'
+        if (key === 'PMC_BACKUP_FOLDER_ID') return 'backup-folder-private-id'
+        if (key === 'PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST') return approval
+        return null
+      },
+      setProperty(key: string, value: string) {
+        if (key !== 'PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST') throw new Error('bad key')
+        approval = value
+        if (value.startsWith('APPLIED:')) throw new Error('ambiguous property write')
+      },
+    }
+    vi.stubGlobal('PropertiesService', { getScriptProperties: () => properties })
+    const runtime = createPmcBookingWorkbookPresentationRuntime()
+
+    expect(() => runtime.transitionOwnerApproval(attempted, `APPLIED:${digest}`))
+      .toThrow('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+    expect(approval).toBe(attempted)
   })
 })
 
@@ -1371,6 +1519,10 @@ function ownerWorkflowFake(
   options: {
     queue?: BookingQueueAttestation
     manifestState?: BookingMigrationManifestState
+    installedPresentationHandler?: 'previewPmcBookingWorkbookPresentation'
+      | 'applyPmcBookingWorkbookPresentation'
+    failurePhase?: 'backup' | 'batch' | 'readback'
+    approvalWriteFailure?: 'ATTEMPTED' | 'APPLIED'
   } = {},
 ): {
   runtime: PmcBookingWorkbookPresentationRuntime
@@ -1379,6 +1531,7 @@ function ownerWorkflowFake(
   setQueue(queue: BookingQueueAttestation): void
   setManifest(manifest: BookingMigrationManifest): void
   changeSourceFingerprint(fingerprint: string): void
+  approvalState(): string | null
   backupCount(): number
   batchCount(): number
 } {
@@ -1388,10 +1541,17 @@ function ownerWorkflowFake(
   let approval: string | null = null
   let backups = 0
   let batches = 0
+  let batchApplied = false
   const events: string[] = []
   const runtime: PmcBookingWorkbookPresentationRuntime = {
     sha256Hex,
     backupLabel: 'PMC Booking Presentation Backup',
+    assertManualInvocation() {
+      events.push('triggers:read')
+      if (options.installedPresentationHandler) {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
+      }
+    },
     readQueueAttestation() {
       events.push('queue:read')
       return structuredClone(queue)
@@ -1404,6 +1564,14 @@ function ownerWorkflowFake(
       events.push('approval:read')
       return approval
     },
+    transitionOwnerApproval(expected, next) {
+      const state = next.startsWith('ATTEMPTED:') ? 'ATTEMPTED' : 'APPLIED'
+      events.push(`approval:${state}`)
+      if (approval !== expected || options.approvalWriteFailure === state) {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      approval = next
+    },
     withDocumentLock<T>(operation: () => T): T {
       events.push('lock:wait')
       try { return operation() } finally { events.push('lock:release') }
@@ -1411,17 +1579,28 @@ function ownerWorkflowFake(
     gateway: {
       inspect() {
         events.push('inspect')
-        return cloneSnapshot(current)
+        const result = cloneSnapshot(current)
+        if (options.failurePhase === 'readback' && batchApplied) {
+          sheet(result, 'BOOKING_MASTER').valuesHash = 'changed-after-write'
+        }
+        return result
       },
       createPrivateNativeBackup() {
         events.push('backup')
+        if (options.failurePhase === 'backup') {
+          throw new Error('WORKBOOK_PRESENTATION_BACKUP_FAILED')
+        }
         backups += 1
         return { fileId: 'private-backup-id', url: 'https://example.invalid/private-backup' }
       },
       apply(plan) {
         events.push('batch')
         batches += 1
+        if (options.failurePhase === 'batch') {
+          throw new Error('WORKBOOK_PRESENTATION_BATCH_FAILED')
+        }
         current = applyPlanForTest(current, plan)
+        batchApplied = true
       },
     },
   }
@@ -1432,6 +1611,7 @@ function ownerWorkflowFake(
     setQueue(next) { queue = structuredClone(next) },
     setManifest(next) { manifest = structuredClone(next) },
     changeSourceFingerprint(fingerprint) { current.fingerprint = fingerprint },
+    approvalState: () => approval,
     backupCount: () => backups,
     batchCount: () => batches,
   }
