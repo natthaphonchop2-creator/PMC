@@ -128,7 +128,12 @@ export function createMiniAppGooglePorts(
       async batchGet(candidate, ranges) {
         assertSpreadsheet(candidate)
         ranges.forEach(assertRange)
-        const response = await sheetsApi.spreadsheets.values.batchGet({ spreadsheetId, ranges })
+        const response = await sheetsApi.spreadsheets.values.batchGet({
+          spreadsheetId,
+          ranges,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+          dateTimeRenderOption: 'FORMATTED_STRING',
+        })
         const valueRanges = response.data.valueRanges ?? []
         return Object.fromEntries(ranges.map((range) => {
           const match = valueRanges.find((candidate) => sheetRangeMatches(range, candidate.range ?? ''))

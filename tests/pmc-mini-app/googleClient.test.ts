@@ -45,6 +45,12 @@ describe('PMC Mini App keyless Google ports', () => {
       "'TAB_A'!A1:B2": [['a']],
       "'TAB_B'!A1:B2": [['b']],
     })
+    expect(batchGet).toHaveBeenCalledWith({
+      spreadsheetId: 'sheet-1',
+      ranges: ["'TAB_A'!A1:B2", "'TAB_B'!A1:B2"],
+      valueRenderOption: 'UNFORMATTED_VALUE',
+      dateTimeRenderOption: 'FORMATTED_STRING',
+    })
     await ports.sheets.batchUpdate('sheet-1', [{ range: "'TAB_A'!A2:B2", values: [['x', 'y']] }])
     expect(batchUpdate).toHaveBeenCalledWith({
       spreadsheetId: 'sheet-1',
