@@ -221,7 +221,8 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
       if (!requireBookingRecorder(authenticated, res)) return
-      if (!deps.config.asyncBooking || !deps.config.asyncBooking.ownerStaffIds.has(authenticated.staffId)) {
+      const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
+      if (!deps.config.bookingProtocol.prepare && !asyncOwner) {
         respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
         return
       }

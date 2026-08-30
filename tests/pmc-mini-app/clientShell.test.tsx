@@ -233,6 +233,63 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.createDraft).not.toHaveBeenCalled()
   })
 
+  it('reopens a synchronous prepared READY draft for review and confirmation without creating another draft', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const preparedConfig = { ...config, bookingProtocol: { supported: 2 as const, minimumMutation: 2 as const, prepare: true } }
+    const input = {
+      requestId: 'request-sync-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    vi.mocked(api.loadLatestActiveDraft).mockResolvedValueOnce({
+      draftId: 'draft-sync-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3,
+      input: null, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 1,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    })
+    vi.mocked(api.loadDraft).mockResolvedValueOnce({
+      draftId: 'draft-sync-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3,
+      input, attribution: savedAttribution(), paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 1,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    })
+    vi.mocked(api.confirm).mockResolvedValueOnce({ caseId: 'PMC-202608-0099', status: 'CONFIRMED' })
+    render(<PmcMiniApp initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }} initialConfig={preparedConfig} api={api} />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
+    expect(api.loadDraft).toHaveBeenCalledWith('preview-token', 'draft-sync-ready')
+    expect(api.confirm).toHaveBeenCalledWith('preview-token', 'draft-sync-ready', 3, 2)
+    expect(api.createDraft).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+  })
+
+  it('surfaces a synchronous reserved partial draft for cancel and restart instead of creating another draft', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const preparedConfig = { ...config, bookingProtocol: { supported: 2 as const, minimumMutation: 2 as const, prepare: true } }
+    const partial = {
+      draftId: 'draft-sync-partial', requestId: 'request-sync-partial', state: 'DRAFT' as const,
+      retentionState: 'PENDING_APPROVAL' as const, version: 3, input: null,
+      paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 0,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }
+    vi.mocked(api.loadLatestActiveDraft).mockResolvedValueOnce(partial)
+    vi.mocked(api.loadDraft).mockResolvedValueOnce(partial)
+    vi.mocked(api.cancel).mockResolvedValueOnce({ ...partial, state: 'CANCELLED', version: 4 })
+    render(<PmcMiniApp initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }} initialConfig={preparedConfig} api={api} />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    expect(api.cancel).toHaveBeenCalledWith('preview-token', 'draft-sync-partial', 3, 2)
+    expect(api.createDraft).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+  })
+
   it('returns home immediately after async queue acknowledgement', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -492,7 +549,7 @@ function miniAppApi(): PmcMiniAppApi {
       caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     })),
     loadDraft: vi.fn(),
-    upload: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
+    upload: vi.fn(), prepare: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
     loadReport: vi.fn(), refreshReport: vi.fn(),
     loadDailyIncome: vi.fn(async (_token, filter) => dailyIncomeProjection(filter.startDate, filter.endDate)),
     refreshDailyIncome: vi.fn(async () => ({ accepted: true as const, allocationQueued: true, retryAfterSeconds: 60 })),

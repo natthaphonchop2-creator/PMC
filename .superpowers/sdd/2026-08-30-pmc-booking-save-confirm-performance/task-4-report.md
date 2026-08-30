@@ -56,3 +56,34 @@ GREEN evidence:
 ## Deferred boundaries
 
 Task 5 still owns the confirm queue-result fast path and synchronous confirm owner fencing. Task 6 still owns privacy-safe performance telemetry and measurement harnesses. No all-staff async expansion, production flag change, live canary, deploy, or external mutation is included here.
+
+---
+
+## Fix round 1 — config-stable reservation and Android reload recovery
+
+The first review found three recovery gaps. Each was reproduced before production changes:
+
+- Apps Script `PREPARE_BEGIN` stored only the binding hash, while READY/PARTIAL re-resolved mutable config. Async READY and sync PARTIAL both failed after staff/doctor/service/channel configuration changed.
+- A Wizard holding the original version after BEGIN/partial/READY response loss could not cancel because its request failed before reaching the owner lock.
+- `/active` remained hidden from synchronous recorders, so reopening Android/LINE after a lost READY response created another draft.
+
+The owner reservation now persists the exact resolved recorder/Admin/AE ID/name snapshots atomically with only the binding, version and timestamp. It still writes no customer fields, doctor/service/channel IDs, evidence references/count, retention flag, or READY state. READY/PARTIAL and exact BEGIN replay reconstruct and verify the canonical binding from those reserved snapshots and the signed input/evidence manifest; they do not read mutable staff/doctor/service/channel configuration after remote persistence. Cloud Run validates the same reserved snapshots on ambiguous BEGIN recovery before allowing any remote write.
+
+Wizard cancellation now has one bounded stale-version recovery: load the exact owned draft once, exit immediately if it is already CANCELLED/EXPIRED, or retry owner CANCEL exactly once with the authoritative version only for DRAFT/UPLOADING/READY/FAILED_RETRYABLE. A competing queue/processing state is never cancelled or reopened, and the Wizard never replaces its original prepare base/version during Save retry recovery.
+
+The PII-free `/active` projection is now available to every authorized Booking recorder when prepare is enabled, while the prior async-owner gate remains for `prepare=false`. A synchronous READY draft is hydrated to the exact full owned projection and opens directly at review/confirm. A reserved/partial DRAFT is hydrated and offered for cancellation/restart rather than silently creating a second draft. The safe active response still omits input, customer/phone data, evidence IDs/object keys and every private reference.
+
+Fix-round verification:
+
+- Focused owner/prepare/route/Wizard/shell/session/API gate: **9 files, 227 tests passed**.
+- Full Mini App suite: **72 files, 999 tests passed**.
+- Full Apps Script Booking suite: **49 files, 686 tests passed**.
+- `npm run booking:typecheck`: passed.
+- `npm run booking:build`: passed.
+- `npm run build:server`: passed.
+- `npm run build:mini-app`: passed.
+- Full `npm run build`: passed.
+- Full `npm run lint`: zero errors; one pre-existing generated `dist-server` unused-disable warning only.
+- `git diff --check`: passed.
+
+No deploy, live request, external evidence upload, Sheet/Apps Script push, queue/property mutation or allowlist expansion was performed.

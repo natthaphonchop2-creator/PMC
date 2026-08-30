@@ -79,7 +79,7 @@ export async function persistPrepareEvidence(input: PersistPrepareEvidenceInput)
   if (input.draft.state === 'READY_TO_CONFIRM') return exactReadyReplay(input, descriptors, bindingHash)
   assertRecoverableDraft(input.draft, input.version, bindingHash)
   const startedTerminal = input.draft.state === 'CANCELLED' || input.draft.state === 'EXPIRED'
-  const reservedDraft = await reserveOwnerBinding(input, descriptors, bindingHash, normalizedInput)
+  const reservedDraft = await reserveOwnerBinding(input, descriptors, bindingHash, normalizedInput, validationDraft)
   if (!startedTerminal && (reservedDraft.state === 'CANCELLED' || reservedDraft.state === 'EXPIRED')) {
     throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   }
@@ -242,9 +242,10 @@ async function reserveOwnerBinding(
   descriptors: readonly EvidenceDescriptor[],
   bindingHash: string,
   normalizedInput: MiniAppNormalizedBookingInputV2,
+  validationDraft: MiniAppRequestRecord,
 ): Promise<MiniAppRequestRecord> {
   const mutation = beginMutation(input, descriptors, bindingHash, normalizedInput)
-  const expected = expectedBeginProjection(input.draft, bindingHash, input.now())
+  const expected = expectedBeginProjection(input.draft, validationDraft, bindingHash, input.now())
   try {
     const result = await input.draftStateIngress.mutate(mutation)
     if (trustedResult(result, expected)) return withResultVersion(expected, result)
@@ -252,6 +253,9 @@ async function reserveOwnerBinding(
   const reread = await safeReadDraft(input.store, input.draft.draftId)
   if (!reread) throw new BookingPreparePersistenceError('BOOKING_PREPARE_RETRY')
   if (reread.evidenceProjectionHash === bindingHash) {
+    if (!sameReservedAttribution(reread, validationDraft)) {
+      throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
+    }
     if (reread.state === 'DRAFT' || reread.state === 'CANCELLED' || reread.state === 'EXPIRED') return reread
     throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   }
@@ -282,9 +286,24 @@ function beginMutation(
   }
 }
 
-function expectedBeginProjection(draft: MiniAppRequestRecord, bindingHash: string, updatedAt: string): MiniAppRequestRecord {
+function expectedBeginProjection(
+  draft: MiniAppRequestRecord,
+  validationDraft: MiniAppRequestRecord,
+  bindingHash: string,
+  updatedAt: string,
+): MiniAppRequestRecord {
   if (draft.evidenceProjectionHash === bindingHash) return structuredClone(draft)
-  return { ...structuredClone(draft), evidenceProjectionHash: bindingHash, updatedAt, version: draft.version + 1 }
+  return {
+    ...structuredClone(draft),
+    recorderName: validationDraft.recorderName,
+    adminId: validationDraft.adminId,
+    adminName: validationDraft.adminName,
+    aeId: validationDraft.aeId,
+    aeName: validationDraft.aeName,
+    evidenceProjectionHash: bindingHash,
+    updatedAt,
+    version: draft.version + 1,
+  }
 }
 
 async function mutateOwnerState(
@@ -484,6 +503,11 @@ function samePreparedFields(left: MiniAppRequestRecord, right: MiniAppRequestRec
     evidenceProjectionHash: left.evidenceProjectionHash,
     updatedAt: left.updatedAt,
   })
+}
+function sameReservedAttribution(left: MiniAppRequestRecord, right: MiniAppRequestRecord): boolean {
+  return left.staffId === right.staffId && left.recorderName === right.recorderName
+    && left.adminId === right.adminId && left.adminName === right.adminName
+    && left.aeId === right.aeId && left.aeName === right.aeName
 }
 function referenceCount(refs: PersistedReferences): number { return refs.payment.length + refs.chat.length }
 function referenceCountFromDraft(draft: MiniAppRequestRecord): number {

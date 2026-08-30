@@ -134,14 +134,23 @@ function validateEvidenceShape(
 
 function applyPrepareBegin(current: P2Record, payload: MiniAppDraftPrepareBeginMutation, ports: BookingPorts) {
   if (current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft prepare attempt')
-  const { bindingHash } = resolvePrepare(current, payload, ports)
   if (current.evidenceProjectionHash === null) {
+    const { snapshots, bindingHash } = resolveInitialPrepare(current, payload, ports)
     if (current.state === 'CANCELLED' || current.state === 'EXPIRED') throw new Error('terminal mini app draft begin rejected')
     if (current.state !== 'DRAFT' || current.version !== payload.expectedVersion || referenceCount(current) !== 0) {
       throw new Error('stale mini app draft begin version')
     }
-    return changed(current, { evidenceProjectionHash: bindingHash, updatedAt: payload.nowIso })
+    return changed(current, {
+      recorderName: snapshots.recorder.name,
+      adminId: snapshots.admin.id,
+      adminName: snapshots.admin.name,
+      aeId: snapshots.ae?.id ?? null,
+      aeName: snapshots.ae?.name ?? 'ไม่ระบุ',
+      evidenceProjectionHash: bindingHash,
+      updatedAt: payload.nowIso,
+    })
   }
+  const { bindingHash } = resolveReservedPrepare(current, payload, ports)
   if (current.evidenceProjectionHash !== bindingHash) throw new Error('mini app draft prepare binding conflict')
   if (current.state === 'CANCELLED' || current.state === 'EXPIRED') return unchanged(current, 'TERMINAL')
   if (current.state !== 'DRAFT' && current.state !== 'READY_TO_CONFIRM') throw new Error('mini app draft begin state conflict')
@@ -150,7 +159,7 @@ function applyPrepareBegin(current: P2Record, payload: MiniAppDraftPrepareBeginM
 
 function applyPrepare(current: P2Record, payload: MiniAppDraftPrepareMutation, ports: BookingPorts) {
   if (current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app draft prepare attempt')
-  const { snapshots, bindingHash } = resolvePrepare(current, payload, ports)
+  const { snapshots, bindingHash } = resolveReservedPrepare(current, payload, ports)
   if (current.evidenceProjectionHash === null) {
     throw new Error('mini app draft prepare reservation required')
   }
@@ -187,12 +196,44 @@ function applyPrepare(current: P2Record, payload: MiniAppDraftPrepareMutation, p
   })
 }
 
-function resolvePrepare(
+interface PrepareSnapshots {
+  recorder: { id: string; name: string }
+  admin: { id: string; name: string }
+  ae: { id: string; name: string } | null
+}
+
+function resolveInitialPrepare(
   current: P2Record,
   payload: MiniAppDraftPrepareBeginMutation | MiniAppDraftPrepareMutation,
   ports: BookingPorts,
 ) {
   const snapshots = resolveSnapshots(current, payload.input, ports)
+  return bindingFor(current, payload, snapshots, ports)
+}
+
+function resolveReservedPrepare(
+  current: P2Record,
+  payload: MiniAppDraftPrepareBeginMutation | MiniAppDraftPrepareMutation,
+  ports: BookingPorts,
+) {
+  if (current.protocolVersion !== 2 || !current.recorderName || !current.adminId || !current.adminName
+    || current.adminId !== payload.input.adminId || current.aeId !== payload.input.aeId
+    || current.aeId === null && current.aeName !== 'ไม่ระบุ'
+    || current.aeId !== null && !current.aeName) throw new Error('mini app draft reserved attribution conflict')
+  const snapshots: PrepareSnapshots = {
+    recorder: { id: current.staffId, name: current.recorderName },
+    admin: { id: current.adminId, name: current.adminName },
+    ae: current.aeId === null ? null : { id: current.aeId, name: current.aeName },
+  }
+  return bindingFor(current, payload, snapshots, ports)
+}
+
+function bindingFor(
+  current: P2Record,
+  payload: MiniAppDraftPrepareBeginMutation | MiniAppDraftPrepareMutation,
+  snapshots: PrepareSnapshots,
+  ports: BookingPorts,
+) {
   const bindingProjection = {
     requestId: payload.requestId, draftId: payload.draftId, baseVersion: payload.baseVersion,
     staffId: current.staffId, recorderName: snapshots.recorder.name,
@@ -302,7 +343,7 @@ function applyTerminalEvidence(
 function sameReadyProjection(
   current: P2Record,
   payload: MiniAppDraftPrepareMutation,
-  snapshots: ReturnType<typeof resolveSnapshots>,
+  snapshots: PrepareSnapshots,
   evidence: ReturnType<typeof mergeEvidence>,
 ): boolean {
   return current.adminId === snapshots.admin.id && current.adminName === snapshots.admin.name

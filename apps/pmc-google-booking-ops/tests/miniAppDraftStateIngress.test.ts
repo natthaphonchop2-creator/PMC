@@ -32,7 +32,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     },
   )
 
-  it('PREPARE_BEGIN reserves only binding/version and replays without customer or reference mutation', () => {
+  it('PREPARE_BEGIN reserves binding and exact attribution snapshots without customer or reference mutation', () => {
     const fixture = draftStateFixture(draft())
     const begin = beginMutation(draft(), [staged(0, 'PAYMENT'), staged(0, 'CHAT')])
     const first = processBookingDoPost(event(envelope(begin, 'nonce-begin-first')), fixture.ports)
@@ -42,10 +42,44 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     expect(replay).toMatchObject({ state: 'DRAFT', version: 2, outcome: 'IDEMPOTENT' })
     expect(fixture.requests.read()).toMatchObject({
       state: 'DRAFT', retentionState: '', evidenceProjectionHash: begin.prepareBindingHash,
-      customerName: '', facebookName: '', adminId: '', adminName: '', evidenceCount: 0,
+      recorderName: 'Admin A', adminId: 'admin-1', adminName: 'Admin A', aeId: 'staff-ae', aeName: 'เอม',
+      customerName: '', facebookName: '', doctorId: '', serviceId: '', channelId: '', evidenceCount: 0,
       paymentEvidenceFileIds: [], chatEvidenceFileIds: [], paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
     })
     expect(fixture.requests.writeCount).toBe(1)
+  })
+
+  it.each([
+    ['async READY', 'STAGED_OBJECT', 'PREPARE_READY'],
+    ['sync PARTIAL', 'DRIVE_FILE', 'PREPARE_PARTIAL'],
+  ] as const)('%s uses the reserved snapshots after mutable config changes', (_label, storage, operation) => {
+    const fixture = draftStateFixture(draft())
+    const complete = storage === 'STAGED_OBJECT'
+      ? [staged(0, 'PAYMENT'), staged(0, 'CHAT')]
+      : [drive(0, 'PAYMENT'), drive(0, 'CHAT')]
+    const finalEvidence = operation === 'PREPARE_READY'
+      ? complete
+      : complete.map((item, index) => index === 0 ? item : { ...item, value: null })
+    const begin = beginMutation(draft(), complete)
+    processBookingDoPost(event(envelope(begin, `nonce-config-race-begin-${storage.toLowerCase()}`)), fixture.ports)
+
+    fixture.ports.config.findStaffById = () => null
+    fixture.ports.config.findDoctor = () => null
+    fixture.ports.config.findService = () => null
+    fixture.ports.config.findChannel = () => null
+
+    const result = processBookingDoPost(event(envelope({
+      ...prepareMutation(operation, fixture.requests.read()!, finalEvidence),
+      prepareBindingHash: begin.prepareBindingHash,
+      expectedVersion: 1,
+    }, `nonce-config-race-final-${storage.toLowerCase()}`)), fixture.ports)
+
+    expect(result).toMatchObject({ state: operation === 'PREPARE_READY' ? 'READY_TO_CONFIRM' : 'DRAFT' })
+    expect(fixture.requests.read()).toMatchObject({
+      recorderName: 'Admin A', adminId: 'admin-1', adminName: 'Admin A', aeId: 'staff-ae', aeName: 'เอม',
+      retentionState: operation === 'PREPARE_PARTIAL' ? 'PENDING_APPROVAL' : '',
+      evidenceCount: operation === 'PREPARE_PARTIAL' ? 1 : 2,
+    })
   })
 
   it('PREPARE_BEGIN rejects an unbound terminal row but returns terminal for the same reserved binding', () => {
@@ -58,6 +92,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
     const reserved = draft({
       state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 3,
       evidenceProjectionHash: begin.prepareBindingHash,
+      adminId: 'admin-1', adminName: 'Admin A', aeId: 'staff-ae', aeName: 'เอม',
     })
     const accepted = draftStateFixture(reserved)
     expect(processBookingDoPost(event(envelope(begin, 'nonce-begin-terminal-same')), accepted.ports))
@@ -123,7 +158,7 @@ describe('Apps Script Mini App draft-state owner ingress', () => {
 
     expect(result).toMatchObject({ state: 'CANCELLED', outcome: 'APPLIED' })
     expect(fixture.requests.read()).toMatchObject({
-      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', customerName: '', adminId: '',
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', customerName: '', adminId: 'admin-1', adminName: 'Admin A',
       paymentEvidenceObjectKeys: [staged(0, 'PAYMENT').value],
       chatEvidenceObjectKeys: [staged(0, 'CHAT').value], evidenceCount: 2,
     })
@@ -237,6 +272,14 @@ function staged(
   return {
     kind, ordinal, contentSha256: hash, mimeType: 'image/png', storage: 'STAGED_OBJECT',
     value: value === undefined ? objectKey : value,
+  }
+}
+
+function drive(ordinal: number, kind: 'PAYMENT' | 'CHAT', value: string | null | undefined = undefined): MiniAppDraftEvidenceItem {
+  const marker = kind === 'PAYMENT' ? 'c' : 'd'
+  return {
+    kind, ordinal, contentSha256: marker.repeat(64), mimeType: 'image/png', storage: 'DRIVE_FILE',
+    value: value === undefined ? `drive-file-${kind.toLowerCase()}-${ordinal}` : value,
   }
 }
 

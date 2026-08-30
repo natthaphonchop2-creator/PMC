@@ -98,7 +98,25 @@ export function BookingWizard({
       await adapter.cancel(draft.draftId, draft.version)
       setBusy(false)
       onExit?.()
-    } catch {
+    } catch (error) {
+      if (errorCode(error) === 'STALE_DRAFT_VERSION') {
+        try {
+          const authoritative = await adapter.load(draft.draftId)
+          if (authoritative.state === 'CANCELLED' || authoritative.state === 'EXPIRED') {
+            setBusy(false)
+            onExit?.()
+            return
+          }
+          if (isPrepareCancelableState(authoritative.state)) {
+            await adapter.cancel(authoritative.draftId, authoritative.version)
+            setBusy(false)
+            onExit?.()
+            return
+          }
+        } catch {
+          // Fall through to the bounded cancellation failure below.
+        }
+      }
       setFailure('ยกเลิกร่างไม่สำเร็จ กรุณาลองอีกครั้ง')
       setBusy(false)
     }
@@ -422,6 +440,10 @@ function draftSaveFailureMessage(error: unknown): string {
 
 function errorCode(error: unknown): string {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+}
+
+function isPrepareCancelableState(state: BookingDraftProjection['state']): boolean {
+  return state === 'DRAFT' || state === 'UPLOADING' || state === 'READY_TO_CONFIRM' || state === 'FAILED_RETRYABLE'
 }
 
 function sameBookingInput(left: BookingDraftInput | null, right: BookingDraftInput): boolean {

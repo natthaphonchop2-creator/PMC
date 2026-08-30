@@ -59,6 +59,44 @@ describe('PMC Mini App booking draft API', () => {
     expect(JSON.stringify(body)).not.toContain('drafts/draft-1')
   })
 
+  it.each(['DRAFT', 'READY_TO_CONFIRM'] as const)(
+    'returns a PII-free latest synchronous %s draft when prepare recovery is enabled',
+    async (state) => {
+      const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
+      deps.config.bookingProtocol.prepare = true
+      await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+      deps.storeFixture.replace({
+        state,
+        version: state === 'DRAFT' ? 2 : 3,
+        retentionState: state === 'DRAFT' ? 'PENDING_APPROVAL' : '',
+        customerName: state === 'READY_TO_CONFIRM' ? 'ลูกค้าทดสอบ' : '',
+        phoneNormalized: state === 'READY_TO_CONFIRM' ? '0812345678' : '',
+        paymentEvidenceFileIds: ['private-payment-file'], chatEvidenceFileIds: ['private-chat-file'], evidenceCount: 2,
+      })
+
+      const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/booking-drafts/active', {
+        headers: { authorization: 'Bearer valid-token' },
+      })
+      const body = await response.json() as Record<string, unknown>
+
+      expect(response.status).toBe(200)
+      expect(body).toMatchObject({ state, input: null, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 1 })
+      expect(JSON.stringify(body)).not.toMatch(/ลูกค้าทดสอบ|0812345678|private-payment-file|private-chat-file/)
+      expect(deps.config.asyncBooking).toBeNull()
+    },
+  )
+
+  it('keeps synchronous active-draft discovery private while prepare recovery is disabled', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
+    await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/booking-drafts/active', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(404)
+  })
+
   it('does not call Apps Script before explicit confirmation', async () => {
     const deps = dependencies()
     const middleware = createPmcMiniAppMiddleware(deps)

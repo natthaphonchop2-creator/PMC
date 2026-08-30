@@ -91,7 +91,8 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.staging!.putCount()).toBe(0)
     expect(fixture.store.read()).toMatchObject({
       state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceCount: 0,
-      customerName: '', adminId: '', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      customerName: '', adminId: 'ADMIN_02', adminName: 'แวว', aeId: 'ADMIN_03', aeName: 'หมวย',
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
       evidenceProjectionHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
     })
   })
@@ -286,7 +287,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     const terminal = fixture.store.read()
     expect(terminal).toMatchObject({
       state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceCount: 4,
-      customerName: '', facebookName: '', adminId: '', adminName: '',
+      customerName: '', facebookName: '', adminId: 'ADMIN_02', adminName: 'แวว',
     })
     expect(terminal.paymentEvidenceObjectKeys).toEqual([
       objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
@@ -317,7 +318,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     const terminal = fixture.store.read()
     expect(terminal).toMatchObject({
       state: 'EXPIRED', retentionState: 'PENDING_APPROVAL', evidenceCount: 4,
-      customerName: '', facebookName: '', adminId: '', adminName: '',
+      customerName: '', facebookName: '', adminId: 'ADMIN_02', adminName: 'แวว',
       paymentEvidenceFileIds: ['drive-file-01', 'drive-file-02'],
       chatEvidenceFileIds: ['drive-file-03', 'drive-file-04'],
     })
@@ -549,7 +550,13 @@ class PrepareStore implements MiniAppStore {
       if (this.current.evidenceProjectionHash === null) {
         if (this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
           || this.current.version !== input.expectedVersion) throw new Error('BOOKING_PREPARE_CONFLICT')
-        this.current = { ...this.current, evidenceProjectionHash: input.prepareBindingHash,
+        this.current = { ...this.current,
+          recorderName: this.current.recorderName,
+          adminId: input.input.adminId,
+          adminName: input.input.adminId === 'ADMIN_02' ? 'แวว' : 'หมวย',
+          aeId: input.input.aeId,
+          aeName: input.input.aeId === null ? 'ไม่ระบุ' : 'หมวย',
+          evidenceProjectionHash: input.prepareBindingHash,
           updatedAt: input.nowIso, version: this.current.version + 1 }
         this.writes += 1
         return fakeResult(this.current, 'APPLIED')

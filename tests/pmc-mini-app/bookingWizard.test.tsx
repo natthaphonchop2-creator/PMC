@@ -305,6 +305,65 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(onExit).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['BEGIN-only', { ...draft, state: 'DRAFT' as const, version: 2 }],
+    ['partial', { ...draft, state: 'DRAFT' as const, retentionState: 'PENDING_APPROVAL' as const, version: 3,
+      paymentEvidenceCount: 1, chatEvidenceCount: 0 }],
+    ['READY response loss', { ...draft, state: 'READY_TO_CONFIRM' as const, version: 3, input: completeInput(),
+      attribution: savedAttribution(), paymentEvidenceCount: 1, chatEvidenceCount: 1 }],
+  ])('reloads once and retries owner cancellation once for a stale %s prepare draft', async (_label, latest) => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel)
+      .mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+      .mockResolvedValueOnce({ ...latest, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: latest.version + 1 })
+    vi.mocked(app.load).mockResolvedValueOnce(latest)
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    await waitFor(() => expect(onExit).toHaveBeenCalledOnce())
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.load).toHaveBeenCalledWith('draft-1')
+    expect(app.cancel).toHaveBeenNthCalledWith(1, 'draft-1', 1)
+    expect(app.cancel).toHaveBeenNthCalledWith(2, 'draft-1', latest.version)
+  })
+
+  it('exits safely when stale cancel recovery finds the draft already cancelled', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel).mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+    vi.mocked(app.load).mockResolvedValueOnce({
+      ...draft, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 3,
+      paymentEvidenceCount: 1, chatEvidenceCount: 1,
+    })
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    await waitFor(() => expect(onExit).toHaveBeenCalledOnce())
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.cancel).toHaveBeenCalledOnce()
+  })
+
+  it('does not loop, reopen, or cancel a competing non-cancelable state during stale recovery', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel).mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+    vi.mocked(app.load).mockResolvedValueOnce({ ...draft, state: 'QUEUED', version: 4, queuedAt: '2026-08-30T10:00:00.000Z' })
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('ยกเลิกร่างไม่สำเร็จ')
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.cancel).toHaveBeenCalledOnce()
+    expect(onExit).not.toHaveBeenCalled()
+  })
+
   it('does not upload the same evidence again when saving fails after uploads succeeded', async () => {
     const user = userEvent.setup()
     const current = { ...draft, input: completeInput() }
