@@ -38,9 +38,21 @@ const EXPECTED_MONTH_HEADERS = {
 
 const EXPECTED_STAFF_HEADERS = ['id', 'name', 'email', 'lineUserId', 'canCloseBooking', 'canBeAe', 'active', 'profileImageUrl', 'canManageStock', 'canSubmitExpense', 'canViewFinance', 'canManageExpense']
 const FORBIDDEN_CLIENT_KEY = /(?:spreadsheet|folder|bucket|privateFile|driveVersion|slotClaim|sha256|secret|ingressUrl|lineUserId)/i
+const SNAPSHOT_KEYS = ['provenance', 'healthStatus', 'clientConfig', 'flags', 'bindingNames', 'submitOnly', 'financeRead', 'staging', 'recovery', 'topology']
+const PROVENANCE_KEYS = ['schemaVersion', 'profile', 'target', 'environment', 'collectedAt', 'sourceChecks']
+const SUBMIT_ONLY_KEYS = ['history', 'evidence']
+const PERMISSION_RESULT_KEYS = ['status', 'error']
+const FINANCE_READ_KEYS = ['selectedMonth', 'requestedMonths']
+const STAGING_KEYS = ['deleteAfterDays']
+const RECOVERY_KEYS = ['targetPath', 'audienceConfigured', 'identityConfigured']
+const TOPOLOGY_KEYS = ['master', 'month', 'staff']
 
 export function inspectPmcExpenseRuntime(snapshot, options = {}) {
   const source = isRecord(snapshot) ? snapshot : {}
+  const snapshotSchema = snapshotSchemaReport(source)
+  if (!snapshotSchema.safe) {
+    return { mode: 'READ_ONLY', ready: false, snapshotSchema }
+  }
   const provenanceSource = isRecord(source.provenance) ? source.provenance : {}
   const sourceChecks = isRecord(provenanceSource.sourceChecks) ? provenanceSource.sourceChecks : {}
   const sourceCheckCount = REQUIRED_SOURCE_CHECKS.filter((name) => sourceChecks[name] === true).length
@@ -83,7 +95,7 @@ export function inspectPmcExpenseRuntime(snapshot, options = {}) {
   const forbiddenKeyCount = countForbiddenKeys(clientSource)
   const clientProfileMatch = clientSource.expenseCaptureEnabled === false
     && clientSource.financeReadsEnabled === true
-    && clientSource.canSubmitExpense === false
+    && clientSource.canSubmitExpense === true
     && clientSource.canViewFinance === true
     && clientSource.canManageExpense === true
   const clientConfig = {
@@ -109,7 +121,9 @@ export function inspectPmcExpenseRuntime(snapshot, options = {}) {
   const bindings = {
     requiredCount: REQUIRED_BINDINGS.length,
     presentCount,
-    coherent: presentCount === REQUIRED_BINDINGS.length,
+    coherent: presentCount === REQUIRED_BINDINGS.length
+      && bindingNames.length === REQUIRED_BINDINGS.length
+      && uniqueBindingNames.size === REQUIRED_BINDINGS.length,
   }
   const flags = {
     captureEnabled: captureEnabled === true,
@@ -164,13 +178,14 @@ export function inspectPmcExpenseRuntime(snapshot, options = {}) {
       && staffHeaderExact,
   }
 
-  const ready = provenance.ready && health.ok && clientConfig.safe && flags.coherent && bindings.coherent
+  const ready = snapshotSchema.safe && provenance.ready && health.ok && clientConfig.safe && flags.coherent && bindings.coherent
     && submitOnly.historyDenied && submitOnly.evidenceDenied
     && financeRead.oneSelectedMonthOnly && staging.lifecycleReady && recovery.ready && topology.ready
 
   return {
     mode: 'READ_ONLY',
     ready,
+    snapshotSchema,
     provenance,
     health,
     clientConfig,
@@ -244,6 +259,43 @@ function countForbiddenKeys(value) {
     else if (Array.isArray(child)) count += child.reduce((total, item) => total + countForbiddenKeys(item), 0)
   }
   return count
+}
+
+function snapshotSchemaReport(source) {
+  let unknownKeyCount = 0
+  let safe = true
+  const check = (value, keys) => {
+    if (!isRecord(value)) { safe = false; return }
+    const actual = Object.keys(value)
+    unknownKeyCount += actual.filter((key) => !keys.includes(key)).length
+    if (actual.length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) safe = false
+  }
+
+  check(source, SNAPSHOT_KEYS)
+  check(source.provenance, PROVENANCE_KEYS)
+  check(source.provenance?.sourceChecks, REQUIRED_SOURCE_CHECKS)
+  check(source.clientConfig, REQUIRED_CONFIG_BOOLEANS)
+  check(source.flags, ['PMC_EXPENSE_CAPTURE_ENABLED', 'PMC_FINANCE_READS_ENABLED'])
+  check(source.submitOnly, SUBMIT_ONLY_KEYS)
+  check(source.submitOnly?.history, PERMISSION_RESULT_KEYS)
+  check(source.submitOnly?.evidence, PERMISSION_RESULT_KEYS)
+  check(source.financeRead, FINANCE_READ_KEYS)
+  check(source.staging, STAGING_KEYS)
+  check(source.recovery, RECOVERY_KEYS)
+  check(source.topology, TOPOLOGY_KEYS)
+  check(source.topology?.master, Object.keys(EXPECTED_MASTER_HEADERS))
+  check(source.topology?.month, Object.keys(EXPECTED_MONTH_HEADERS))
+
+  if (!Array.isArray(source.bindingNames)
+    || !Array.isArray(source.financeRead?.requestedMonths)
+    || !Array.isArray(source.topology?.staff)) safe = false
+  for (const name of Object.keys(EXPECTED_MASTER_HEADERS)) {
+    if (!Array.isArray(source.topology?.master?.[name])) safe = false
+  }
+  for (const name of Object.keys(EXPECTED_MONTH_HEADERS)) {
+    if (!Array.isArray(source.topology?.month?.[name])) safe = false
+  }
+  return { unknownKeyCount, safe: safe && unknownKeyCount === 0 }
 }
 
 function isRecord(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value) }

@@ -40,13 +40,15 @@ The snapshot must be collected with separately approved read-only operator acces
 The operator collecting the snapshot must perform these read-only checks against one named target/environment within one 15-minute window:
 
 1. GET `/api/healthz` and record only the status.
-2. GET `/api/mini-app/config` with the approved manager probe identity and inspect it in memory. Persist a redacted key/type map only: keep the five finance booleans as booleans, retain other key names only with a fixed non-sensitive placeholder, and never persist their original values. The exact manager profile at this gate is `expenseCaptureEnabled=false`, `financeReadsEnabled=true`, `canSubmitExpense=false`, `canViewFinance=true`, and `canManageExpense=true`; any mismatch fails. This lets the checker detect contradictory rollout state or forbidden finance-private keys without storing private IDs or URLs.
+2. GET `/api/mini-app/config` with the approved manager probe identity and inspect every response key in memory. If a finance-private key is present, do not attest the client-config source check. Persist exactly the five finance booleans and no other config field. The exact manager profile at this gate is `expenseCaptureEnabled=false`, `financeReadsEnabled=true`, `canSubmitExpense=true`, `canViewFinance=true`, and `canManageExpense=true`; step 7 already requires every manager to be included in the approved submitter IDs. Any mismatch fails.
 3. Use the submit-only probe identity against the exact history and evidence-token routes; persist only status and safe error code.
 4. Invoke the finance read port with one selected `YYYY-MM` while wrapping `readMonth`; persist only the selected month and requested-month list.
 5. Read Cloud Run binding names, the GCS lifecycle, and the exact recovery Scheduler/Cloud Tasks target/audience/invoker through approved read-only describe operations; persist names, booleans, path, and lifecycle days only.
 6. Read only header rows from the finance master, one selected monthly ledger, and `CONFIG_STAFF`; persist header strings only.
 7. Add provenance with `schemaVersion=1`, `profile=DISABLED_PREFLIGHT`, the approved logical target/environment, the UTC `collectedAt`, and all seven source checks set true only after their read completed. Do not copy tokens, secret values, URLs, bucket/workbook/folder/file IDs, provider payloads, or evidence into the snapshot.
 8. Run the checker before the fixed 900-second maximum age expires. Missing, future, stale, target-mismatched, environment-mismatched, or incomplete source provenance fails closed.
+
+The snapshot format is recursively allowlisted. Unknown or missing top-level/nested keys, extra binding payloads, debug metadata, tokens, secrets, URLs, or private IDs make strict readiness false. The checker reports only safe counts/booleans and never echoes an unknown value.
 
 The checker verifies:
 

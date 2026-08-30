@@ -21,6 +21,7 @@ describe('read-only expense runtime checker', () => {
     expect(report).toEqual({
       mode: 'READ_ONLY',
       ready: true,
+      snapshotSchema: { unknownKeyCount: 0, safe: true },
       provenance: {
         schemaVersion: 1, profile: 'DISABLED_PREFLIGHT', targetMatches: true,
         environmentMatches: true, ageSeconds: 600, maxAgeSeconds: 900,
@@ -76,7 +77,7 @@ describe('read-only expense runtime checker', () => {
   it.each([
     ['capture surface enabled', 'expenseCaptureEnabled', true],
     ['finance reads hidden', 'financeReadsEnabled', false],
-    ['submit permission granted early', 'canSubmitExpense', true],
+    ['manager submit permission missing', 'canSubmitExpense', false],
     ['manager cannot view finance', 'canViewFinance', false],
     ['manager cannot manage expense', 'canManageExpense', false],
   ] as const)('rejects client-config mismatch: %s', async (_label, key, value) => {
@@ -121,7 +122,11 @@ describe('read-only expense runtime checker', () => {
     const report = checker.inspectPmcExpenseRuntime(snapshot, inspectorOptions())
 
     expect(report.ready).toBe(false)
-    expect(report.provenance.ready).toBe(false)
+    if (report.snapshotSchema.safe === false) {
+      expect(Object.keys(report).sort()).toEqual(['mode', 'ready', 'snapshotSchema'])
+    } else {
+      expect(report.provenance.ready).toBe(false)
+    }
   })
 
   it('never prints secrets, tokens, URLs, or private resource IDs from an unsafe snapshot', async () => {
@@ -145,7 +150,43 @@ describe('read-only expense runtime checker', () => {
     expect(serialized).not.toContain('private-line-token-sentinel')
     expect(serialized).not.toContain('private-expense-secret-sentinel')
     expect(serialized).not.toContain('sensitive-deployment-id')
-    expect(JSON.parse(serialized).clientConfig).toMatchObject({ forbiddenKeyCount: 1, safe: false })
+    const report = JSON.parse(serialized)
+    expect(report.ready).toBe(false)
+    expect(report.snapshotSchema).toEqual({ unknownKeyCount: 2, safe: false })
+    expect(Object.keys(report).sort()).toEqual(['mode', 'ready', 'snapshotSchema'])
+  })
+
+  it.each([
+    ['top level', (snapshot: ReturnType<typeof validSnapshot>) => Object.assign(snapshot, { debug: true })],
+    ['provenance', (snapshot: ReturnType<typeof validSnapshot>) => Object.assign(snapshot.provenance, { token: 'private-token' })],
+    ['source checks', (snapshot: ReturnType<typeof validSnapshot>) => Object.assign(snapshot.provenance.sourceChecks, { extra: true })],
+    ['flags', (snapshot: ReturnType<typeof validSnapshot>) => Object.assign(snapshot.flags, { secret: 'private-secret' })],
+    ['permission result', (snapshot: ReturnType<typeof validSnapshot>) => Object.assign(snapshot.submitOnly.history, { privateId: 'private-id' })],
+    ['topology', (snapshot: ReturnType<typeof validSnapshot>) => Object.assign(snapshot.topology.master, { EXTRA: ['private'] })],
+  ])('rejects unknown %s snapshot keys', async (_label, mutate) => {
+    const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
+    const snapshot = validSnapshot()
+    mutate(snapshot)
+
+    const report = checker.inspectPmcExpenseRuntime(snapshot, inspectorOptions())
+
+    expect(report.ready).toBe(false)
+    expect(report.snapshotSchema).toMatchObject({ safe: false })
+    expect(report.snapshotSchema.unknownKeyCount).toBeGreaterThan(0)
+    expect(Object.keys(report).sort()).toEqual(['mode', 'ready', 'snapshotSchema'])
+  })
+
+  it('rejects extra binding payloads even when every required name remains present', async () => {
+    const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
+    const snapshot = validSnapshot()
+    snapshot.bindingNames.push('PRIVATE_SECRET=must-not-print-binding-sentinel')
+
+    const serialized = JSON.stringify(checker.inspectPmcExpenseRuntime(snapshot, inspectorOptions()))
+    const report = JSON.parse(serialized)
+
+    expect(report.ready).toBe(false)
+    expect(report.bindings.coherent).toBe(false)
+    expect(serialized).not.toContain('must-not-print-binding-sentinel')
   })
 
   it('accepts only an explicit local snapshot file and prints sanitized JSON', async () => {
@@ -155,7 +196,6 @@ describe('read-only expense runtime checker', () => {
     await writeFile(snapshotPath, JSON.stringify({
       ...validSnapshot(),
       provenance: { ...validSnapshot().provenance, collectedAt: new Date().toISOString() },
-      privateProbeMetadata: { secret: 'must-not-print-secret-sentinel' },
     }))
 
     const result = await execute(process.execPath, [
@@ -167,6 +207,28 @@ describe('read-only expense runtime checker', () => {
     expect(report).toMatchObject({ mode: 'READ_ONLY', ready: true })
     expect(result.stdout).not.toContain('must-not-print-secret-sentinel')
     expect(result.stderr).toBe('')
+  })
+
+  it('strict CLI rejects unknown private payloads without printing them', async () => {
+    const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
+    const directory = await mkdtemp(join(tmpdir(), 'pmc-expense-runtime-unsafe-'))
+    temporaryDirectories.push(directory)
+    const snapshotPath = join(directory, 'snapshot.json')
+    await writeFile(snapshotPath, JSON.stringify({
+      ...validSnapshot(),
+      provenance: { ...validSnapshot().provenance, collectedAt: new Date().toISOString() },
+      privateProbeMetadata: { secret: 'must-not-print-secret-sentinel' },
+    }))
+    let stdout = ''
+
+    const code = await checker.runExpenseRuntimeCheck([
+      '--snapshot-file', snapshotPath,
+      '--expected-target', 'pmc-mini-app', '--expected-environment', 'production', '--strict',
+    ], { stdout: { write(value: string) { stdout += value } } })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout)).toMatchObject({ ready: false, snapshotSchema: { safe: false } })
+    expect(stdout).not.toContain('must-not-print-secret-sentinel')
   })
 })
 
@@ -192,7 +254,7 @@ function validSnapshot() {
     clientConfig: {
       expenseCaptureEnabled: false,
       financeReadsEnabled: true,
-      canSubmitExpense: false,
+      canSubmitExpense: true,
       canViewFinance: true,
       canManageExpense: true,
     },
