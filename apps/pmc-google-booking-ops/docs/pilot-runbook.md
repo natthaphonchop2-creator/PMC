@@ -308,11 +308,21 @@ Only the owner may run the two manual functions below. Neither function is an in
 
 Before opening the maintenance shell, owner creates one environment file outside the repository, sets it to mode `0600`, and populates all values privately. The file must define `PMC_OPERATOR_PROJECT`, `PMC_OPERATOR_REGION`, `PMC_OPERATOR_SERVICE`, `PMC_OPERATOR_QUEUE`, `PMC_OPERATOR_REVISION`, `PMC_OPERATOR_SCRIPT_ID`, `PMC_OPERATOR_DEPLOYMENT_ID`, `PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION`, `PMC_OPERATOR_CLASP_PROFILE`, `PMC_OPERATOR_CLASP_PROJECT_FILE`, `PMC_OPERATOR_PRIVATE_DIR`, `PMC_OPERATOR_PROPERTIES_PREINSTALL`, `PMC_OPERATOR_PROPERTIES_INSTALLED`, `PMC_OPERATOR_ATTESTATION_FILE`, `PMC_OPERATOR_REVIEWED_COMMIT`, `PMC_OPERATOR_REVIEWED_CODE_SHA256`, and `PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION`.
 
-The secure launcher supplies only the environment-file path as `PMC_BOOKING_PRESENTATION_ENV_FILE`. Do not type resolved project, queue, revision, script, deployment, account, or filesystem values into copied commands. Start from the reviewed repository root, disable tracing and history before sourcing, and validate every required variable:
+The secure launcher supplies only the environment-file path as `PMC_BOOKING_PRESENTATION_ENV_FILE`. Do not type resolved project, queue, revision, script, deployment, account, or filesystem values into copied commands.
+
+macOS normally opens zsh. Paste this launcher by itself first and wait for the clean Bash prompt; it is also safe when the current shell is already Bash:
 
 ```bash
-set +x
+exec /bin/bash --noprofile --norc
+```
+
+Only after the clean Bash prompt appears, run the next block from the reviewed repository root. Bash owns `set +o history`; `HISTFILE=/dev/null`, disabled history, disabled xtrace, and private umask must be in effect before the private environment file is sourced:
+
+```bash
+HISTFILE=/dev/null
+export HISTFILE
 set +o history
+set +x
 umask 077
 test -n "${PMC_BOOKING_PRESENTATION_ENV_FILE:-}"
 chmod 600 "$PMC_BOOKING_PRESENTATION_ENV_FILE"

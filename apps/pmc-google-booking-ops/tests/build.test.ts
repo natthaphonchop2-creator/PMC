@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import { join } from 'node:path'
@@ -115,6 +115,10 @@ describe('Apps Script bundle', () => {
     expect(section).toContain('Do not record customer names, phone numbers, evidence images, cell values')
     expect(section).toContain('set +x')
     expect(section).toContain('set +o history')
+    expect(section).toContain('HISTFILE=/dev/null')
+    const bashLaunch = section.indexOf('exec /bin/bash --noprofile --norc')
+    expect(bashLaunch).toBeGreaterThanOrEqual(0)
+    expect(bashLaunch).toBeLessThan(section.indexOf('set +o history'))
     expect(section).toContain('source "$PMC_BOOKING_PRESENTATION_ENV_FILE"')
     expect(section).toContain('chmod 600 "$PMC_BOOKING_PRESENTATION_ENV_FILE"')
     for (const variable of [
@@ -159,6 +163,25 @@ describe('Apps Script bundle', () => {
     expect(section).toContain('ATTEMPTED')
     expect(section).toContain('APPLIED')
   })
+
+  it.each(['/bin/zsh', '/bin/bash'])(
+    'launches the private maintenance shell from %s without option errors',
+    (sourceShell) => {
+      const probe = [
+        "exec /bin/bash --noprofile --norc -c '",
+        'HISTFILE=/dev/null; export HISTFILE; set +o history; set +x; umask 077; ',
+        'PMC_HISTORY_STATE=off; if shopt -qo history; then PMC_HISTORY_STATE=on; fi; ',
+        'printf "%s|%s|%s" "$HISTFILE" "$(umask)" "$PMC_HISTORY_STATE"',
+        "'",
+      ].join('')
+
+      const result = spawnSync(sourceShell, ['-c', probe], { encoding: 'utf8' })
+
+      expect(result.status).toBe(0)
+      expect(result.stderr).toBe('')
+      expect(result.stdout).toBe('/dev/null|0077|off')
+    },
+  )
 
   it('does not recreate the paused legacy JERA polling trigger', () => {
     const runtime = readFileSync('apps/pmc-google-booking-ops/src/runtime.ts', 'utf8')
