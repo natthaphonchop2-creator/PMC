@@ -119,6 +119,7 @@ describe('PMC Mini App session and configuration API', () => {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
       channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+      bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
       admins: [{ id: 'staff-1', name: 'มัส' }],
       aes: [{ id: 'staff-1', name: 'มัส' }],
     })
@@ -189,6 +190,7 @@ function dependencies(): {
       enrollmentPin: null,
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
+      bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
       financeReportsEnabled: false,
     },
     identity,

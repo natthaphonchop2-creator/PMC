@@ -261,6 +261,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         doctors: bookingConfig.doctors,
         services: bookingConfig.services,
         channels: bookingConfig.channels,
+        bookingProtocol: deps.config.bookingProtocol,
         admins: bookingConfig.admins ?? bookingConfig.aes,
         aes: bookingConfig.aes,
       })
@@ -413,6 +414,53 @@ function bookingDraftRoute(pathname: string): BookingDraftRoute | null {
   return { action: 'GET', draftId: match[1]! }
 }
 
+type BookingMutationEnvelope =
+  | { protocolVersion: 1; version: number; input?: unknown }
+  | { protocolVersion: 2; version: number; input?: unknown }
+
+type BookingMutationEnvelopeResult =
+  | { value: BookingMutationEnvelope }
+  | { status: 400; error: 'INVALID_BOOKING_PROTOCOL_VERSION' | 'UNKNOWN_BOOKING_FIELD' }
+
+function parseBookingMutationEnvelope(
+  action: 'PATCH' | 'CONFIRM' | 'CANCEL',
+  body: Record<string, unknown>,
+): BookingMutationEnvelopeResult {
+  const legacyKeys = action === 'PATCH' ? ['version', 'input'] : ['version']
+  const protocol2Keys = action === 'PATCH' ? ['protocolVersion', 'version', 'input'] : ['protocolVersion', 'version']
+  if (hasExactKeys(body, legacyKeys)) {
+    return { value: { protocolVersion: 1, version: body.version as number, ...(action === 'PATCH' ? { input: body.input } : {}) } }
+  }
+  if (hasExactKeys(body, protocol2Keys)) {
+    if (body.protocolVersion !== 2) return { status: 400, error: 'INVALID_BOOKING_PROTOCOL_VERSION' }
+    return { value: { protocolVersion: 2, version: body.version as number, ...(action === 'PATCH' ? { input: body.input } : {}) } }
+  }
+  if ('protocolVersion' in body && body.protocolVersion !== 2) {
+    return { status: 400, error: 'INVALID_BOOKING_PROTOCOL_VERSION' }
+  }
+  return { status: 400, error: 'UNKNOWN_BOOKING_FIELD' }
+}
+
+function isProtocol1Recovery(
+  action: 'PATCH' | 'CONFIRM' | 'CANCEL',
+  draft: MiniAppRequestRecord,
+  mutation: BookingMutationEnvelope,
+  asyncOwner: boolean,
+): boolean {
+  if (mutation.protocolVersion !== 1 || draft.protocolVersion !== 1) return false
+  if (action === 'PATCH') {
+    return mutation.version < draft.version && matchesSavedDraftInput(draft, mutation.input)
+  }
+  if (action === 'CANCEL') {
+    return mutation.version < draft.version
+      && draft.state === 'CANCELLED'
+      && draft.retentionState === 'PENDING_APPROVAL'
+  }
+  return draft.state === 'CONFIRMED'
+    || confirmedWithRetryResult(draft) !== null
+    || asyncOwner && mutation.version <= draft.version && isBoundAsyncConfirmation(draft)
+}
+
 async function handleBookingDraftRoute(
   req: IncomingMessage,
   res: ServerResponse,
@@ -431,6 +479,9 @@ async function handleBookingDraftRoute(
       if (body.protocolVersion !== 2) return respond(res, 400, { error: 'INVALID_BOOKING_PROTOCOL_VERSION' })
       requestedProtocol = 2
     } else return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+    if (requestedProtocol < deps.config.bookingProtocol.minimumMutation) {
+      return respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    }
     const now = currentIso(deps)
     const requestId = deps.requestId?.() ?? `request-${randomUUID()}`
     const draftId = deps.draftId?.() ?? `draft-${randomUUID()}`
@@ -472,15 +523,28 @@ async function handleBookingDraftRoute(
   const body = await readRequiredJson(req, res)
   if (!body) return
 
+  const mutation = parseBookingMutationEnvelope(route.action, body)
+  if ('error' in mutation) return respond(res, mutation.status, { error: mutation.error })
+
   const draft = await ownedDraft(route.draftId, authenticated.staffId, deps, res)
   if (!draft) return
-  const version = body.version
+  const version = mutation.value.version
   if (typeof version !== 'number' || !Number.isSafeInteger(version)) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
   const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
+  if (mutation.value.protocolVersion !== draft.protocolVersion) {
+    return respond(res, mutation.value.protocolVersion < deps.config.bookingProtocol.minimumMutation ? 409 : 400, {
+      error: mutation.value.protocolVersion < deps.config.bookingProtocol.minimumMutation
+        ? 'CLIENT_UPGRADE_REQUIRED'
+        : 'BOOKING_PROTOCOL_MISMATCH',
+    })
+  }
+  if (mutation.value.protocolVersion < deps.config.bookingProtocol.minimumMutation
+    && !isProtocol1Recovery(route.action, draft, mutation.value, asyncOwner)) {
+    return respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+  }
   if (
     route.action === 'CONFIRM'
     && version <= draft.version
-    && hasExactKeys(body, ['version'])
     && asyncOwner
     && isBoundAsyncConfirmation(draft)
   ) {
@@ -491,15 +555,15 @@ async function handleBookingDraftRoute(
     && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED' || confirmedWithRetryResult(draft) !== null)
   if (version !== draft.version && !retryingConfirmation) {
     if (
-      route.action === 'CANCEL' && version < draft.version && hasExactKeys(body, ['version'])
+      route.action === 'CANCEL' && version < draft.version
       && draft.state === 'CANCELLED' && draft.retentionState === 'PENDING_APPROVAL'
     ) {
       respond(res, 200, draftProjection(draft))
       return
     }
     if (
-      route.action === 'PATCH' && version < draft.version && hasExactKeys(body, ['version', 'input'])
-      && matchesSavedDraftInput(draft, body.input)
+      route.action === 'PATCH' && version < draft.version
+      && matchesSavedDraftInput(draft, mutation.value.input)
     ) {
       respond(res, 200, draftProjection(draft))
       return
@@ -508,7 +572,6 @@ async function handleBookingDraftRoute(
   }
 
   if (route.action === 'PATCH') {
-    if (!hasExactKeys(body, ['version', 'input'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
     let config
     try { config = await deps.store.getActiveBookingConfig() } catch { return respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' }) }
     try {
@@ -520,7 +583,7 @@ async function handleBookingDraftRoute(
         now: currentIso(deps),
       }
       const parsed = draft.protocolVersion === 2
-        ? parseBookingDraftV2(body.input, {
+        ? parseBookingDraftV2(mutation.value.input, {
           ...commonContext,
           recorderName: draft.recorderName || authenticated.displayName,
           doctors: config.doctors,
@@ -529,7 +592,7 @@ async function handleBookingDraftRoute(
           admins: config.admins,
           aes: config.aes,
         })
-        : parseBookingDraft(body.input, {
+        : parseBookingDraft(mutation.value.input, {
           ...commonContext,
           doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
           channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
@@ -552,7 +615,6 @@ async function handleBookingDraftRoute(
     return
   }
 
-  if (!hasExactKeys(body, ['version'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
   if (route.action === 'CANCEL') {
     if (!['DRAFT', 'UPLOADING', 'READY_TO_CONFIRM', 'FAILED_RETRYABLE'].includes(draft.state)) {
       return respond(res, 409, { error: 'INVALID_DRAFT_TRANSITION' })

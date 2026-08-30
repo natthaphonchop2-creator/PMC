@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
-import type { MiniAppBookingIngressPayload } from '../../shared/pmcMiniAppBooking'
+import type { MiniAppBookingIngressPayloadV1, MiniAppBookingIngressPayloadV2 } from '../../shared/pmcMiniAppBooking'
 import { bookingPayloadHash, parseBookingDraft } from '../../server/pmc-mini-app/bookingDraft'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
@@ -41,6 +41,35 @@ describe('PMC Mini App deterministic end-to-end booking flow', () => {
     })
 
     expect(result.booking).toMatchObject({ paymentEvidenceCount: 2, chatEvidenceCount: 2, driveState: 'OK' })
+  })
+
+  it('cuts over to exact protocol 2 without allowing a cached protocol-1 mutation to create side effects', async () => {
+    const system = protocol2HttpSystem()
+
+    const rejectedCreate = await system.json('POST', '/api/mini-app/booking-drafts', {})
+    const created = await system.json('POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+    system.attachEvidence()
+    const saved = await system.json('PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2,
+      version: 1,
+      input: protocol2Booking(),
+    })
+    const rejectedCachedConfirm = await system.json('POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      version: saved.body.version,
+    })
+    const confirmed = await system.json('POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      protocolVersion: 2,
+      version: saved.body.version,
+    })
+
+    expect(rejectedCreate).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(created.status).toBe(201)
+    expect(rejectedCachedConfirm).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(confirmed).toEqual({ status: 200, body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' } })
+    expect(system.bookings()).toEqual([expect.objectContaining({
+      recorderId: 'admin-1', recorderName: 'Admin A', adminId: 'staff-ae', adminName: 'เอม',
+      aeId: 'admin-1', aeName: 'Admin A',
+    })])
   })
 })
 
@@ -364,6 +393,7 @@ function financeServerConfig(): PmcMiniAppServerConfig {
     enrollmentPin: null,
     maxImageBytes: 10_000_000,
     maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
     asyncBooking: null,
     financeReportsEnabled: true,
     stockEnabled: false,
@@ -428,13 +458,111 @@ function miniAppTestSystem() {
   }
 }
 
-function ingressPayload(draft: MiniAppRequestRecord): MiniAppBookingIngressPayload {
+function protocol2HttpSystem() {
+  const store = new MemoryMiniAppStore(2)
+  const ports = createTestPorts({ extraDriveFileIds: ['payment-1', 'chat-1'] })
+  const originalFindChannel = ports.config.findChannel
+  ports.config.findChannel = (id) => id === 'channel-1'
+    ? { id: 'channel-1', name: 'เพจหลัก', active: true }
+    : originalFindChannel(id)
+  const config: PmcMiniAppServerConfig = {
+    enabled: true,
+    miniAppId: 'mini-app',
+    lineChannelId: '2001234567',
+    spreadsheetId: 'sheet-1',
+    intakeFolderId: 'folder-1',
+    bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
+    fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
+    bookingIngressSecret: 'booking-secret',
+    signingSecret: 'signing-secret',
+    enrollmentPin: null,
+    maxImageBytes: 10_000_000,
+    maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+    asyncBooking: null,
+    financeReportsEnabled: false,
+    stockEnabled: false,
+    stockManagerPilotOnly: false,
+    finance: null,
+  }
+  const middleware = createPmcMiniAppMiddleware({
+    config,
+    identity: { async verify() { return { lineUserId: 'Urecorder' } } },
+    store,
+    requestId: () => 'request-1',
+    draftId: () => 'draft-1',
+    now: () => new Date('2026-08-30T09:00:00.000Z'),
+    ingress: {
+      async send(draft) {
+        const booking = submitMiniAppBooking(ingressPayload(draft), ports)
+        return { caseId: booking.caseId, status: booking.appointmentStatus }
+      },
+    },
+  })
+  return {
+    async json(method: string, path: string, body: Record<string, unknown>) {
+      const response = await invokeFinanceMiddleware(middleware, path, {
+        method,
+        headers: { authorization: 'Bearer valid-token', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return { status: response.status, body: await response.json() as Record<string, unknown> }
+    },
+    attachEvidence: () => store.attachEvidence('draft-1'),
+    bookings: () => ports.bookings.list(),
+  }
+}
+
+function ingressPayload(draft: MiniAppRequestRecord): MiniAppBookingIngressPayloadV1 | MiniAppBookingIngressPayloadV2 {
+  if (draft.protocolVersion === 2) {
+    return {
+      protocolVersion: 2,
+      requestId: draft.requestId,
+      payloadHash: draft.payloadHash!,
+      staffId: draft.staffId,
+      recorderName: draft.recorderName,
+      adminId: draft.adminId,
+      adminName: draft.adminName,
+      aeId: draft.aeId,
+      aeName: draft.aeId === null ? null : draft.aeName,
+      customerName: draft.customerName,
+      facebookName: draft.facebookName,
+      phoneNormalized: draft.phoneNormalized,
+      doctorId: draft.doctorId,
+      serviceId: draft.serviceId,
+      queueType: draft.queueType,
+      appointmentDate: draft.appointmentDate,
+      appointmentTime: draft.appointmentTime,
+      depositAmount: draft.depositAmount,
+      channelId: draft.channelId,
+      paymentEvidenceFileIds: draft.paymentEvidenceFileIds,
+      chatEvidenceFileIds: draft.chatEvidenceFileIds,
+    }
+  }
   return {
     requestId: draft.requestId, payloadHash: draft.payloadHash!, staffId: draft.staffId, aeName: draft.aeName,
     customerName: draft.customerName, facebookName: draft.facebookName, phoneNormalized: draft.phoneNormalized,
     doctorId: draft.doctorId, serviceId: draft.serviceId, queueType: draft.queueType,
     appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
     channelId: draft.channelId, paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
+  }
+}
+
+function protocol2Booking(): BookingDraftInput {
+  return {
+    requestId: 'request-1',
+    adminId: 'staff-ae',
+    aeId: 'admin-1',
+    customerName: 'ลูกค้าทดสอบ',
+    facebookName: 'Facebook Test',
+    phone: '0812345678',
+    doctorId: 'doctor-1',
+    serviceId: 'service-1',
+    queueType: 'NORMAL',
+    appointmentDate: '2026-08-30',
+    appointmentTime: '13:00',
+    depositAmount: 900,
+    channelId: 'channel-1',
   }
 }
 
@@ -456,9 +584,36 @@ function evidenceFor(requestId: string) {
 
 class MemoryMiniAppStore implements MiniAppStore {
   private readonly drafts = new Map<string, MiniAppRequestRecord>()
-  async getActiveStaffByLineUserId() { return null }
-  async getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection> { return { doctors: [], services: [], channels: [], aes: [] } }
-  async createDraft(draft: MiniAppRequestRecord) { this.drafts.set(draft.draftId, structuredClone(draft)); return structuredClone(draft) }
+  constructor(private readonly requestSchemaVersion: 1 | 2 = 1) {}
+  async getActiveStaffByLineUserId(lineUserId: string) {
+    return {
+      id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId,
+      canCloseBooking: true, canBeAe: true, active: true as const, profileImageUrl: null,
+    }
+  }
+  async getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection> {
+    return {
+      doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
+      services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
+      channels: [{ id: 'channel-1', name: 'เพจหลัก' }],
+      admins: [{ id: 'admin-1', name: 'Admin A' }, { id: 'staff-ae', name: 'เอม' }],
+      aes: [{ id: 'admin-1', name: 'Admin A' }, { id: 'staff-ae', name: 'เอม' }],
+    }
+  }
+  async createDraft(draft: MiniAppRequestRecord) {
+    if (draft.protocolVersion !== this.requestSchemaVersion) throw new Error('BOOKING_PROTOCOL_SCHEMA_MISMATCH')
+    this.drafts.set(draft.draftId, structuredClone(draft))
+    return structuredClone(draft)
+  }
+  attachEvidence(draftId: string) {
+    const draft = this.drafts.get(draftId)!
+    this.drafts.set(draftId, {
+      ...draft,
+      paymentEvidenceFileIds: ['payment-1'],
+      chatEvidenceFileIds: ['chat-1'],
+      evidenceCount: 2,
+    })
+  }
   async getDraft(draftId: string) { return structuredClone(this.drafts.get(draftId) ?? null) }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {
     const draft = this.drafts.get(draftId)

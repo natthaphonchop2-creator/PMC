@@ -200,7 +200,7 @@ function validInput(patch: Record<string, unknown> = {}) {
 }
 
 function validInputV2(patch: Record<string, unknown> = {}) {
-  const { aeName: _aeName, ...base } = validInput()
+  const base = Object.fromEntries(Object.entries(validInput()).filter(([key]) => key !== 'aeName'))
   return { ...base, adminId: 'ADMIN_02', aeId: null, ...patch }
 }
 

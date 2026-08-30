@@ -14,6 +14,11 @@ export interface PmcMiniAppServerConfig {
   enrollmentPin: string | null
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
+  bookingProtocol: {
+    supported: 2
+    minimumMutation: 1 | 2
+    prepare: false
+  }
   asyncBooking: PmcAsyncBookingConfig | null
   financeReportsEnabled: boolean
   stockEnabled: boolean
@@ -56,6 +61,8 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   if (!validOptionalFlag(env.PMC_STOCK_ENABLED)) return null
   if (!validOptionalFlag(env.PMC_STOCK_MANAGER_PILOT_ONLY)) return null
   if (!validOptionalFlag(env.PMC_FINANCE_REPORTS_ENABLED)) return null
+  const minimumMutation = bookingProtocolMinimum(env.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION)
+  if (minimumMutation === null) return null
   const enrollmentPin = env.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
     ? env.PMC_MINI_APP_ENROLLMENT_PIN?.trim() ?? ''
     : null
@@ -77,12 +84,20 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     enrollmentPin,
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
+    bookingProtocol: { supported: 2, minimumMutation, prepare: false },
     asyncBooking,
     financeReportsEnabled: env.PMC_FINANCE_REPORTS_ENABLED === 'true',
     stockEnabled: env.PMC_STOCK_ENABLED === 'true',
     stockManagerPilotOnly: env.PMC_STOCK_MANAGER_PILOT_ONLY === 'true',
     finance: readPmcFinanceConfig(env),
   }
+}
+
+function bookingProtocolMinimum(value: string | undefined): 1 | 2 | null {
+  if (value === undefined) return 1
+  if (value === '1') return 1
+  if (value === '2') return 2
+  return null
 }
 
 function validOptionalFlag(value: string | undefined): boolean {

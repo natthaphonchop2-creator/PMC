@@ -226,7 +226,7 @@ describe('PMC Mini App booking draft API', () => {
   })
 
   it('creates protocol 2 on a v2 request schema and snapshots the immutable recorder', async () => {
-    const deps = dependencies({ requestSchemaVersion: 2 })
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
 
     const created = await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
 
@@ -261,12 +261,13 @@ describe('PMC Mini App booking draft API', () => {
   })
 
   it('saves canonical Admin and AE snapshots after a protocol-2 create', async () => {
-    const deps = dependencies({ requestSchemaVersion: 2 })
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
     const middleware = createPmcMiniAppMiddleware(deps)
     const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
     deps.storeFixture.attachEvidence('draft-1')
 
     const saved = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2,
       version: 1,
       input: validInputV2({ requestId: created.body.requestId, adminId: 'staff-admin', aeId: 'staff-ae' }),
     })
@@ -279,11 +280,12 @@ describe('PMC Mini App booking draft API', () => {
   })
 
   it('projects only browser-safe persisted attribution snapshots for a protocol-2 review', async () => {
-    const deps = dependencies({ requestSchemaVersion: 2 })
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
     const middleware = createPmcMiniAppMiddleware(deps)
     const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
     deps.storeFixture.attachEvidence('draft-1')
     await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2,
       version: 1,
       input: validInputV2({ requestId: created.body.requestId, adminId: 'staff-admin', aeId: 'staff-ae' }),
     })
@@ -303,6 +305,145 @@ describe('PMC Mini App booking draft API', () => {
     expect(JSON.stringify(body.attribution)).not.toContain('private@example.com')
     expect(body.input).not.toHaveProperty('adminName')
     expect(body.input).not.toHaveProperty('aeName')
+  })
+
+  it('returns the exact authenticated Booking protocol capability', async () => {
+    const deps = dependencies({ minimumMutation: 2 })
+
+    const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/config', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+    })
+  })
+
+  it('rejects a new protocol-1 create at the protocol-2 floor before storage mutation', async () => {
+    const deps = dependencies({ minimumMutation: 2 })
+
+    const response = await jsonRequest(createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/booking-drafts', {})
+
+    expect(response).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(deps.storeFixture.count()).toBe(0)
+    expect(deps.storeFixture.writeCount()).toBe(0)
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+    expect(deps.taskQueue.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('rejects new protocol-1 save, cancel, and confirm effects after the floor reaches 2', async () => {
+    const saveDeps = dependencies()
+    const saveMiddleware = createPmcMiniAppMiddleware(saveDeps)
+    await jsonRequest(saveMiddleware, 'POST', '/api/mini-app/booking-drafts', {})
+    saveDeps.storeFixture.attachEvidence('draft-1')
+    saveDeps.config.bookingProtocol.minimumMutation = 2
+
+    const rejectedSave = await jsonRequest(saveMiddleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      version: 1, input: validInput(),
+    })
+    const rejectedCancel = await jsonRequest(saveMiddleware, 'POST', '/api/mini-app/booking-drafts/draft-1/cancel', { version: 1 })
+
+    expect(rejectedSave).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(rejectedCancel).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(saveDeps.storeFixture.writeCount()).toBe(0)
+
+    saveDeps.config.bookingProtocol.minimumMutation = 1
+    const saved = await jsonRequest(saveMiddleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      version: 1, input: validInput(),
+    })
+    saveDeps.config.bookingProtocol.minimumMutation = 2
+    const rejectedConfirm = await jsonRequest(saveMiddleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      version: saved.body.version,
+    })
+
+    expect(rejectedConfirm).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(saveDeps.ingress.send).not.toHaveBeenCalled()
+    expect(saveDeps.taskQueue.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('retains exact protocol-1 idempotent save, cancel, confirm, and GET recovery at floor 2', async () => {
+    const saveDeps = dependencies()
+    const saveMiddleware = createPmcMiniAppMiddleware(saveDeps)
+    await jsonRequest(saveMiddleware, 'POST', '/api/mini-app/booking-drafts', {})
+    saveDeps.storeFixture.attachEvidence('draft-1')
+    const input = validInput()
+    const saved = await jsonRequest(saveMiddleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', { version: 1, input })
+    const writeCountAfterSave = saveDeps.storeFixture.writeCount()
+    saveDeps.config.bookingProtocol.minimumMutation = 2
+
+    const savedReplay = await jsonRequest(saveMiddleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', { version: 1, input })
+    const getSaved = await invoke(saveMiddleware, '/api/mini-app/booking-drafts/draft-1', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+
+    expect(savedReplay).toEqual(saved)
+    expect(getSaved.status).toBe(200)
+    expect(saveDeps.storeFixture.writeCount()).toBe(writeCountAfterSave)
+
+    const cancelDeps = dependencies()
+    const cancelMiddleware = createPmcMiniAppMiddleware(cancelDeps)
+    await jsonRequest(cancelMiddleware, 'POST', '/api/mini-app/booking-drafts', {})
+    const cancelled = await jsonRequest(cancelMiddleware, 'POST', '/api/mini-app/booking-drafts/draft-1/cancel', { version: 1 })
+    const cancelWrites = cancelDeps.storeFixture.writeCount()
+    cancelDeps.config.bookingProtocol.minimumMutation = 2
+    const cancelReplay = await jsonRequest(cancelMiddleware, 'POST', '/api/mini-app/booking-drafts/draft-1/cancel', { version: 1 })
+
+    expect(cancelReplay).toEqual(cancelled)
+    expect(cancelDeps.storeFixture.writeCount()).toBe(cancelWrites)
+
+    const confirmDeps = dependencies()
+    const confirmMiddleware = createPmcMiniAppMiddleware(confirmDeps)
+    await jsonRequest(confirmMiddleware, 'POST', '/api/mini-app/booking-drafts', {})
+    confirmDeps.storeFixture.attachEvidence('draft-1')
+    const ready = await jsonRequest(confirmMiddleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      version: 1, input: validInput(),
+    })
+    const confirmed = await jsonRequest(confirmMiddleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      version: ready.body.version,
+    })
+    const ingressCalls = confirmDeps.ingress.send.mock.calls.length
+    confirmDeps.config.bookingProtocol.minimumMutation = 2
+    const confirmedReplay = await jsonRequest(confirmMiddleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      version: confirmDeps.storeFixture.read('draft-1')!.version,
+    })
+
+    expect(confirmedReplay).toEqual(confirmed)
+    expect(confirmDeps.ingress.send).toHaveBeenCalledTimes(ingressCalls)
+  })
+
+  it('requires exact protocol-2 save and confirm envelopes before any effect', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2, minimumMutation: 2 })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+    deps.storeFixture.attachEvidence('draft-1')
+    const input = validInputV2()
+
+    const missingSaveProtocol = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      version: 1, input,
+    })
+    const extraSaveField = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2, version: 1, input, recorderName: 'ปลอม',
+    })
+
+    expect(missingSaveProtocol).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(extraSaveField).toEqual({ status: 400, body: { error: 'UNKNOWN_BOOKING_FIELD' } })
+    expect(deps.storeFixture.writeCount()).toBe(0)
+
+    const saved = await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2, version: 1, input,
+    })
+    const missingConfirmProtocol = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      version: saved.body.version,
+    })
+    expect(missingConfirmProtocol).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(deps.ingress.send).not.toHaveBeenCalled()
+
+    const confirmed = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      protocolVersion: 2, version: saved.body.version,
+    })
+    expect(confirmed).toEqual({ status: 200, body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' } })
+    expect(deps.ingress.send).toHaveBeenCalledOnce()
   })
 
   it('returns 202 after enqueue and Sheet state without calling Apps Script inline for an owner pilot', async () => {
@@ -587,6 +728,7 @@ function dependencies(options: {
   asyncBooking?: PmcAsyncBookingConfig | null
   events?: string[]
   requestSchemaVersion?: 1 | 2
+  minimumMutation?: 1 | 2
 } = {}) {
   const storeFixture = new TestStore(options.requestSchemaVersion ?? 1)
   const identity: LineIdentityPort = {
@@ -619,6 +761,7 @@ function dependencies(options: {
     intakeFolderId: 'folder-1', bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'ingress-secret',
     signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: options.minimumMutation ?? 1, prepare: false },
     asyncBooking: options.asyncBooking ?? null,
   }
   storeFixture.onQueueWrite(() => options.events?.push('queueDraft'))
