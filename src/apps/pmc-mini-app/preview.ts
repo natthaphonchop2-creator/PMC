@@ -15,6 +15,7 @@ import type {
   StockHistoryPage,
 } from '../../../shared/pmcStock'
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
+import { deriveExpenseScope } from '../../../shared/pmcExpense'
 
 export const PREVIEW_SESSION: MiniAppSession = { staffId: 'staff-preview', displayName: 'มัส', active: true }
 
@@ -44,6 +45,8 @@ export function createPreviewMiniAppConfig(options: {
   canViewFinance?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean
+  expenseCaptureEnabled?: boolean
+  canSubmitExpense?: boolean
 } = {}): MiniAppConfig {
   return {
     ...PREVIEW_CONFIG,
@@ -52,6 +55,8 @@ export function createPreviewMiniAppConfig(options: {
     canViewFinance: options.financeReportsEnabled === true && options.canViewFinance === true,
     stockEnabled: options.stockEnabled === true,
     canManageStock: options.stockEnabled === true && options.canManageStock === true,
+    expenseCaptureEnabled: options.expenseCaptureEnabled === true,
+    canSubmitExpense: options.expenseCaptureEnabled === true && options.canSubmitExpense === true,
   }
 }
 
@@ -62,12 +67,15 @@ export function createPreviewMiniAppApi(options: {
   canViewFinance?: boolean
   stockEnabled?: boolean
   canManageStock?: boolean
+  expenseCaptureEnabled?: boolean
+  canSubmitExpense?: boolean
 } = {}): MiniAppBrowserApi {
   let current: BookingDraftProjection | null = null
   let staffAllowed = options.staffAllowed !== false
   let reportRefreshSequence = 0
   const config = createPreviewMiniAppConfig(options)
   const stock = createPreviewStockStore({ canManageStock: config.canManageStock })
+  let stagedExpense: { rootRequestId: string; tokens: string[] } | null = null
   return {
     async initialize() { return 'preview-token' },
     async loadSession() {
@@ -160,6 +168,23 @@ export function createPreviewMiniAppApi(options: {
     async loadStockHistory(_token: string, cursor?: string) { return stock.loadHistory(cursor) },
     async submitStockCommand(_token: string, command: StockClientCommand) {
       return stock.submit(command)
+    },
+    async stageExpense(_token, rootRequestId, files) {
+      const tokens = files.map((_, index) => `preview-expense-stage-${index + 1}`)
+      stagedExpense = { rootRequestId, tokens }
+      return { stagingTokens: [...tokens] }
+    },
+    async submitExpense(_token, input) {
+      if (!stagedExpense || stagedExpense.rootRequestId !== input.rootRequestId
+        || stagedExpense.tokens.join('|') !== input.stagingTokens.join('|')) {
+        throw Object.assign(new Error('Invalid preview staging'), { code: 'EXPENSE_STAGING_INVALID' })
+      }
+      return {
+        expenseId: 'EXP-202608-PREVIEW', receiptNumber: 'EXP-202608-PREVIEW', expenseDate: input.expenseDate,
+        monthKey: input.expenseDate.slice(0, 7), category: input.category, scope: deriveExpenseScope(input.category),
+        amountSatang: input.amountSatang, recordState: 'COMMITTED' as const, revision: input.expectedRevision + 1,
+        committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
+      }
     },
   }
 }

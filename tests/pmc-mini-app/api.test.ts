@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createMiniAppApi } from '../../src/apps/pmc-mini-app/api'
 import { type FinanceDailyFilter, type FinanceMonthSelection } from '../../src/apps/pmc-mini-app/financeReports'
 import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
+import type { ExpenseReceipt } from '../../shared/pmcExpense'
 
 describe('PMC Mini App browser API', () => {
   it('initializes LIFF from public config and keeps the raw ID token in authorization headers only', async () => {
@@ -221,6 +222,63 @@ describe('PMC Mini App browser API', () => {
     expect(String(url)).not.toContain('monthKey')
   })
 
+  it('stages ordered expense files and submits the exact Task 7 browser payload with bearer auth', async () => {
+    const committed = expenseReceipt()
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['token-1', 'token-2'] }))
+      .mockResolvedValueOnce(jsonResponse(200, committed))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const files = [
+      new File(['one'], 'one.jpg', { type: 'image/jpeg' }),
+      new File(['two'], 'two.png', { type: 'image/png' }),
+    ]
+    const input = {
+      rootRequestId: 'root-request-1', category: 'BILL_DOCUMENT' as const, expenseDate: '2026-08-30',
+      amountSatang: 120_000, counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'TRANSFER' as const,
+      expectedRevision: 0, stagingTokens: ['token-1', 'token-2'],
+    }
+
+    await expect(api.stageExpense('raw-id-token', input.rootRequestId, files)).resolves.toEqual({ stagingTokens: ['token-1', 'token-2'] })
+    await expect(api.submitExpense('raw-id-token', input)).resolves.toEqual(committed)
+
+    const [, stageInit] = fetch.mock.calls[0]!
+    expect(fetch.mock.calls[0]?.[0]).toBe('/api/mini-app/expenses/staging/root-request-1')
+    expect(stageInit).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer raw-id-token' } })
+    expect((stageInit.body as FormData).getAll('file1')).toEqual([files[0]])
+    expect((stageInit.body as FormData).getAll('file2')).toEqual([files[1]])
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/mini-app/expenses', expect.objectContaining({
+      method: 'POST', headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    }))
+    expect(JSON.stringify(fetch.mock.calls)).not.toContain('staffId')
+  })
+
+  it('rejects malformed staging and committed responses before the shell can show success', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['duplicate', 'duplicate'] }))
+      .mockResolvedValueOnce(jsonResponse(200, { ...expenseReceipt(), recordState: 'PREPARED' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.stageExpense('raw-id-token', 'root-request-1', [
+      new File(['one'], 'one.jpg', { type: 'image/jpeg' }),
+      new File(['two'], 'two.jpg', { type: 'image/jpeg' }),
+    ])).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+    await expect(api.submitExpense('raw-id-token', {
+      rootRequestId: 'root-request-1', category: 'BILL_DOCUMENT', expenseDate: '2026-08-30', amountSatang: 120_000,
+      counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'CASH', expectedRevision: 0, stagingTokens: ['token-1'],
+    })).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
+  it('rejects an internally valid receipt that does not match the submitted expense', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, expenseReceipt()))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.submitExpense('raw-id-token', {
+      rootRequestId: 'root-request-book', category: 'BOOK_DOCTOR_PERSONAL', expenseDate: '2026-08-30', amountSatang: 500_000,
+      counterpartyName: null, description: '', paymentMethod: null, expectedRevision: 0, stagingTokens: ['token-1'],
+    })).rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
   it('keeps only a bounded numeric integer retry delay from a finance error response', async () => {
     const fetch = vi.fn(async () => jsonResponse(429, { error: 'FINANCE_REFRESH_UNAVAILABLE', retryAfterSeconds: 999_999 }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
@@ -317,4 +375,12 @@ function queuedProjection() {
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+function expenseReceipt(): ExpenseReceipt {
+  return {
+    expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT', expenseDate: '2026-08-30', monthKey: '2026-08',
+    category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: 120_000, recordState: 'COMMITTED', revision: 1,
+    committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+  }
 }

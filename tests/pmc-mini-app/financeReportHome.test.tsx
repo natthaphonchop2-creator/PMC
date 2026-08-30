@@ -49,9 +49,8 @@ describe('finance-first report home', () => {
     render(<FinanceReportHome canViewFinance onSelect={vi.fn()} />)
 
     for (const label of EXPENSE_CARDS) {
-      const card = screen.getByRole('button', { name: new RegExp(label) })
-      expect(card).toHaveAttribute('aria-disabled', 'true')
-      expect(card).toHaveTextContent('เตรียมระบบ')
+      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument()
+      expect(screen.getByText(label).closest('.pmc-expense-card-deferred')).toHaveTextContent('เตรียมระบบ')
     }
     expect(screen.queryByRole('button', { name: /เพิ่ม|สร้าง|บันทึก/ })).not.toBeInTheDocument()
   })

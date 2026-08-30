@@ -28,6 +28,7 @@ import {
   type ReportSelection,
 } from './reports'
 import type { StockHistoryPage } from '../../../shared/pmcStock'
+import type { EnabledExpenseCategory, ExpenseReceipt } from '../../../shared/pmcExpense'
 import {
   loadFinanceReportFilterPreferences,
   saveFinanceReportFilterPreferences,
@@ -35,10 +36,12 @@ import {
   type FinanceMonthSelection,
   type FinanceReportFilterStorage,
 } from './financeReports'
+import { ExpenseForm, type ExpenseFormAdapter } from './expense/ExpenseForm'
+import { ExpenseReceiptView } from './expense/ExpenseReceipt'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
-type FinanceView = 'FINANCE_HOME' | FinanceReportView
+type FinanceView = 'FINANCE_HOME' | FinanceReportView | EnabledExpenseCategory | 'EXPENSE_RECEIPT'
 
 export function PmcMiniApp({
   initialSession,
@@ -67,6 +70,7 @@ export function PmcMiniApp({
   const financeFilterStorage = useMemo(() => safeFinanceFilterStorage(), [])
   const [financeFilters, setFinanceFilters] = useState(() => loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate))
   const [financeView, setFinanceView] = useState<FinanceView>('FINANCE_HOME')
+  const [expenseReceipt, setExpenseReceipt] = useState<ExpenseReceipt | null>(null)
   const openingBookingRef = useRef<Promise<void> | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
   const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
@@ -144,6 +148,11 @@ export function PmcMiniApp({
 
   const monthlyIncomeAdapter = useMemo<MonthlyIncomePageAdapter>(() => ({
     load: (selection) => api.loadMonthlyIncome(idToken, selection),
+  }), [api, idToken])
+
+  const expenseFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
+    stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
+    submit: (input) => api.submitExpense(idToken, input),
   }), [api, idToken])
 
   const rememberDailyFilter = useCallback((daily: FinanceDailyFilter) => {
@@ -268,6 +277,7 @@ export function PmcMiniApp({
     setLoading(false)
     setMessage('')
     if (next === 'REPORTS' && view === 'REPORTS') {
+      setExpenseReceipt(null)
       if (config?.financeReportsEnabled) setFinanceView('FINANCE_HOME')
       else setSelectedReport(null)
       return
@@ -276,6 +286,7 @@ export function PmcMiniApp({
     if (next !== 'REPORTS') {
       setSelectedReport(null)
       setFinanceView('FINANCE_HOME')
+      setExpenseReceipt(null)
     }
   }
 
@@ -383,6 +394,27 @@ export function PmcMiniApp({
       }}
     />
   }
+  if (view === 'REPORTS' && isEnabledExpenseCategory(financeView)
+    && config?.expenseCaptureEnabled && config.canSubmitExpense) {
+    return <ExpenseForm
+      category={financeView}
+      adapter={expenseFormAdapter}
+      onCommitted={(receipt) => {
+        setExpenseReceipt(receipt)
+        setFinanceView('EXPENSE_RECEIPT')
+      }}
+      onBack={() => {
+        setExpenseReceipt(null)
+        setFinanceView('FINANCE_HOME')
+      }}
+    />
+  }
+  if (view === 'REPORTS' && financeView === 'EXPENSE_RECEIPT' && expenseReceipt) {
+    return <ExpenseReceiptView receipt={expenseReceipt} onDone={() => {
+      setExpenseReceipt(null)
+      setFinanceView('FINANCE_HOME')
+    }} />
+  }
 
   return (
     <div className="pmc-mini-app-shell">
@@ -417,9 +449,16 @@ export function PmcMiniApp({
             />
             : <FinanceReportHome
               canViewFinance={Boolean(config.canViewFinance)}
+              expenseCaptureEnabled={Boolean(config.expenseCaptureEnabled)}
+              canSubmitExpense={Boolean(config.canSubmitExpense)}
               onSelect={(next) => {
                 if (next === 'MONTHLY_INCOME' && !config.canViewFinance) return
                 setFinanceView(next)
+              }}
+              onSelectExpense={(category) => {
+                if (!config.expenseCaptureEnabled || !config.canSubmitExpense) return
+                setExpenseReceipt(null)
+                setFinanceView(category)
               }}
             />
         : selectedReport === 'ADDITIONAL'
@@ -527,6 +566,10 @@ function isAdditionalReport(value: ReportSelection): boolean {
 
 function isAsyncBookingState(state: BookingDraftProjection['state']): boolean {
   return state === 'QUEUED' || state === 'PROCESSING' || state === 'RETRYING' || state === 'CONFIRMING'
+}
+
+function isEnabledExpenseCategory(value: FinanceView): value is EnabledExpenseCategory {
+  return value === 'BILL_DOCUMENT' || value === 'BOOK_CLINIC' || value === 'BOOK_DOCTOR_PERSONAL'
 }
 
 async function hydrateActiveDraft(

@@ -2,33 +2,26 @@ import {
   Banknote,
   CalendarRange,
   ChevronRight,
-  FileText,
-  HandCoins,
   LockKeyhole,
-  ReceiptText,
-  Stethoscope,
-  UserRoundCog,
-  WalletCards,
 } from 'lucide-react'
+import type { EnabledExpenseCategory } from '../../../shared/pmcExpense'
 import { BrandMark } from './BrandMark'
+import { ExpenseCards } from './expense/ExpenseCards'
 
 export type FinanceReportView = 'DAILY_INCOME' | 'MONTHLY_INCOME'
 
-const EXPENSE_CARDS = [
-  { label: 'บิลเอกสาร', icon: FileText },
-  { label: 'สมุดรายจ่ายภายในคลินิก', icon: ReceiptText },
-  { label: 'สมุดรายจ่ายส่วนตัวหมอ', icon: Stethoscope },
-  { label: 'เงินเดือนพนักงาน', icon: WalletCards },
-  { label: 'DF พนักงานตามแพ็กเกจ', icon: UserRoundCog },
-  { label: 'DF แพทย์', icon: HandCoins },
-]
-
 export function FinanceReportHome({
   canViewFinance,
+  expenseCaptureEnabled = false,
+  canSubmitExpense = false,
   onSelect,
+  onSelectExpense = () => undefined,
 }: {
   canViewFinance: boolean
+  expenseCaptureEnabled?: boolean
+  canSubmitExpense?: boolean
   onSelect: (view: FinanceReportView) => void
+  onSelectExpense?: (category: EnabledExpenseCategory) => void
 }) {
   return <main className="pmc-finance-home">
     <header className="pmc-finance-header">
@@ -58,17 +51,10 @@ export function FinanceReportHome({
 
     <section className="pmc-finance-deferred" aria-labelledby="pmc-finance-deferred-heading">
       <h2 id="pmc-finance-deferred-heading">รายการรายจ่าย</h2>
-      <div className="pmc-finance-deferred-grid">
-        {EXPENSE_CARDS.map((card) => <button
-          key={card.label}
-          type="button"
-          aria-disabled="true"
-          onClick={(event) => event.preventDefault()}
-        >
-          <card.icon aria-hidden="true" />
-          <span><strong>{card.label}</strong><small>เตรียมระบบ</small></span>
-        </button>)}
-      </div>
+      <ExpenseCards
+        canSubmitExpense={expenseCaptureEnabled && canSubmitExpense}
+        onSelect={onSelectExpense}
+      />
     </section>
   </main>
 }

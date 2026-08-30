@@ -1,0 +1,324 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, X } from 'lucide-react'
+import type { EnabledExpenseCategory, ExpensePaymentMethod, ExpenseReceipt } from '../../../../shared/pmcExpense'
+import { BrandMark } from '../BrandMark'
+import {
+  expenseCategoryLabel,
+  expenseFileFingerprint,
+  expensePaymentLabel,
+  parseExpenseAmountSatang,
+  validateExpenseFiles,
+  validateExpenseValues,
+  type ExpenseFormErrors,
+  type ExpenseFormValues,
+} from './expenseModel'
+
+export interface ExpenseFormAdapter {
+  stage(rootRequestId: string, files: File[]): Promise<{ stagingTokens: string[] }>
+  submit(input: {
+    rootRequestId: string
+    category: EnabledExpenseCategory
+    expenseDate: string
+    amountSatang: number
+    counterpartyName: string | null
+    description: string
+    paymentMethod: ExpensePaymentMethod | null
+    expectedRevision: number
+    stagingTokens: string[]
+  }): Promise<ExpenseReceipt>
+}
+
+interface ExpenseFileItem {
+  id: number
+  file: File
+  previewUrl: string
+}
+
+export function ExpenseForm({
+  category,
+  adapter,
+  expectedRevision = 0,
+  onCommitted,
+  onBack,
+}: {
+  category: EnabledExpenseCategory
+  adapter: ExpenseFormAdapter
+  expectedRevision?: number
+  onCommitted: (receipt: ExpenseReceipt) => void
+  onBack: () => void
+}) {
+  const [values, setValues] = useState<ExpenseFormValues>(() => ({
+    expenseDate: currentBangkokDate(), amount: '', counterpartyName: '', paymentMethod: '', description: '',
+  }))
+  const [items, setItems] = useState<ExpenseFileItem[]>([])
+  const [errors, setErrors] = useState<ExpenseFormErrors>({})
+  const [reviewing, setReviewing] = useState(false)
+  const [failure, setFailure] = useState('')
+  const [busy, setBusy] = useState(false)
+  const rootRequestId = useMemo(() => globalThis.crypto.randomUUID(), [])
+  const stagedRef = useRef<{ fingerprint: string; stagingTokens: string[] } | null>(null)
+  const itemsRef = useRef(items)
+  const busyRef = useRef(false)
+  const itemSequenceRef = useRef(0)
+
+  useEffect(() => { itemsRef.current = items }, [items])
+  useEffect(() => () => {
+    for (const item of itemsRef.current) revokePreview(item.previewUrl)
+  }, [])
+
+  const update = (field: keyof ExpenseFormValues, value: string) => {
+    setValues((current) => ({ ...current, [field]: value }))
+    setErrors((current) => current[field] ? { ...current, [field]: '' } : current)
+    setFailure('')
+  }
+
+  const addFiles = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.target.files ?? [])]
+    event.target.value = ''
+    const combined = [...items.map(({ file }) => file), ...files]
+    const fileError = validateExpenseFiles(combined)
+    if (fileError) {
+      setErrors((current) => ({ ...current, files: fileError }))
+      return
+    }
+    const added = files.map((file): ExpenseFileItem => ({
+      id: ++itemSequenceRef.current,
+      file,
+      previewUrl: typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '',
+    }))
+    stagedRef.current = null
+    setItems((current) => [...current, ...added])
+    setErrors((current) => ({ ...current, files: '' }))
+    setFailure('')
+  }
+
+  const removeFile = (id: number) => {
+    const item = items.find((candidate) => candidate.id === id)
+    if (item) revokePreview(item.previewUrl)
+    stagedRef.current = null
+    setItems((current) => current.filter((candidate) => candidate.id !== id))
+    setFailure('')
+  }
+
+  const moveFile = (index: number, offset: -1 | 1) => {
+    const nextIndex = index + offset
+    if (nextIndex < 0 || nextIndex >= items.length) return
+    stagedRef.current = null
+    setItems((current) => {
+      const next = [...current]
+      const [item] = next.splice(index, 1)
+      next.splice(nextIndex, 0, item!)
+      return next
+    })
+    setFailure('')
+  }
+
+  const openReview = (event: FormEvent) => {
+    event.preventDefault()
+    const nextErrors = validateExpenseValues(category, values)
+    const fileError = validateExpenseFiles(items.map(({ file }) => file))
+    if (fileError) nextErrors.files = fileError
+    setErrors(nextErrors)
+    if (Object.keys(nextErrors).length > 0) {
+      focusFirstError(nextErrors)
+      return
+    }
+    setFailure('')
+    setReviewing(true)
+  }
+
+  const confirm = async () => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setFailure('')
+    const files = items.map(({ file }) => file)
+    const fingerprint = expenseFileFingerprint(files)
+    try {
+      let staged = stagedRef.current
+      if (!staged || staged.fingerprint !== fingerprint) {
+        const result = await adapter.stage(rootRequestId, files)
+        if (!validStagingTokens(result.stagingTokens, files.length)) throw safeClientError()
+        staged = { fingerprint, stagingTokens: [...result.stagingTokens] }
+        stagedRef.current = staged
+      }
+      const amountSatang = parseExpenseAmountSatang(values.amount)
+      if (amountSatang === null) throw safeClientError()
+      const paymentMethod = category === 'BILL_DOCUMENT' ? values.paymentMethod as ExpensePaymentMethod : null
+      const receipt = await adapter.submit({
+        rootRequestId,
+        category,
+        expenseDate: values.expenseDate,
+        amountSatang,
+        counterpartyName: category === 'BILL_DOCUMENT' ? values.counterpartyName.trim() : null,
+        description: values.description.trim(),
+        paymentMethod,
+        expectedRevision,
+        stagingTokens: [...staged.stagingTokens],
+      })
+      if (receipt.recordState !== 'COMMITTED' || receipt.unreviewed !== true) throw safeClientError()
+      onCommitted(receipt)
+    } catch (error) {
+      setFailure(expenseFailureMessage(error))
+      setReviewing(false)
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return <main className="pmc-expense-page">
+    <header className="pmc-expense-header">
+      <button type="button" aria-label="ย้อนกลับ" disabled={busy} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
+      <BrandMark compact />
+      <div><p>จัดเก็บรายจ่าย</p><span>{expenseCategoryLabel(category)}</span></div>
+    </header>
+
+    {reviewing
+      ? <ExpenseReview category={category} values={values} files={items.map(({ file }) => file)} />
+      : <form className="pmc-expense-form" onSubmit={openReview} noValidate>
+        <div className="pmc-expense-heading">
+          <h1>{expenseCategoryLabel(category)}</h1>
+          <p>{category === 'BILL_DOCUMENT' ? 'กรอกรายละเอียดและแนบรูปเอกสาร' : 'กรอกยอดรวมของวันและแนบรูปหน้าสมุด'}</p>
+        </div>
+        <Field id="expense-date" label="วันที่รายจ่าย" error={errors.expenseDate}>
+          <input id="expense-date" name="expenseDate" type="date" value={values.expenseDate} required
+            aria-invalid={Boolean(errors.expenseDate)} aria-describedby={errors.expenseDate ? 'expense-date-error' : undefined}
+            onChange={(event) => update('expenseDate', event.target.value)} />
+        </Field>
+        <Field id="expense-amount" label={category === 'BILL_DOCUMENT' ? 'จำนวนเงิน' : 'ยอดรวมรายวัน'} error={errors.amount}>
+          <input id="expense-amount" name="amount" type="text" inputMode="decimal" value={values.amount} required
+            aria-invalid={Boolean(errors.amount)} aria-describedby={errors.amount ? 'expense-amount-error' : undefined}
+            onChange={(event) => update('amount', event.target.value)} />
+        </Field>
+        {category === 'BILL_DOCUMENT' && <>
+          <Field id="expense-counterparty" label="ชื่อร้านหรือผู้รับเงิน" error={errors.counterpartyName}>
+            <input id="expense-counterparty" name="counterpartyName" type="text" value={values.counterpartyName} required maxLength={160}
+              aria-invalid={Boolean(errors.counterpartyName)} aria-describedby={errors.counterpartyName ? 'expense-counterparty-error' : undefined}
+              onChange={(event) => update('counterpartyName', event.target.value)} />
+          </Field>
+          <Field id="expense-payment" label="วิธีชำระ" error={errors.paymentMethod}>
+            <select id="expense-payment" name="paymentMethod" value={values.paymentMethod} required
+              aria-invalid={Boolean(errors.paymentMethod)} aria-describedby={errors.paymentMethod ? 'expense-payment-error' : undefined}
+              onChange={(event) => update('paymentMethod', event.target.value)}>
+              <option value="">เลือกวิธีชำระ</option>
+              <option value="TRANSFER">โอนเงิน</option>
+              <option value="CASH">เงินสด</option>
+              <option value="CREDIT">บัตรเครดิต</option>
+              <option value="OTHER">อื่น ๆ</option>
+            </select>
+          </Field>
+        </>}
+        <Field id="expense-description" label="หมายเหตุ (ไม่บังคับ)" error={errors.description}>
+          <textarea id="expense-description" name="description" value={values.description} maxLength={500}
+            aria-invalid={Boolean(errors.description)} aria-describedby={errors.description ? 'expense-description-error' : undefined}
+            onChange={(event) => update('description', event.target.value)} />
+        </Field>
+
+        <section className="pmc-expense-evidence">
+          <div>
+            <h2 id="expense-evidence-heading">รูปหลักฐาน</h2>
+            <span>เลือกแล้ว {items.length} รูป</span>
+          </div>
+          <label className="pmc-expense-add-file">
+            <ImagePlus aria-hidden="true" /> เพิ่มรูป
+            <input className="pmc-visually-hidden" aria-label="รูปหลักฐาน" type="file" multiple
+              accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={addFiles} />
+          </label>
+          {errors.files && <p id="expense-files-error" className="pmc-expense-error" role="alert">{errors.files}</p>}
+          {items.length > 0 && <ol className="pmc-expense-file-list">
+            {items.map((item, index) => <li key={item.id}>
+              {item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="pmc-expense-file-placeholder"><ImagePlus aria-hidden="true" /></span>}
+              <p>{item.file.name}</p>
+              <div>
+                <button type="button" aria-label={`เลื่อน ${item.file.name} ขึ้น`} disabled={index === 0} onClick={() => moveFile(index, -1)}><ArrowUp aria-hidden="true" /></button>
+                <button type="button" aria-label={`เลื่อน ${item.file.name} ลง`} disabled={index === items.length - 1} onClick={() => moveFile(index, 1)}><ArrowDown aria-hidden="true" /></button>
+                <button type="button" aria-label={`ลบ ${item.file.name}`} onClick={() => removeFile(item.id)}><X aria-hidden="true" /></button>
+              </div>
+            </li>)}
+          </ol>}
+        </section>
+
+        {failure && <p className="pmc-expense-alert" role="alert">{failure}</p>}
+        <footer className="pmc-expense-footer"><button type="submit" disabled={busy}>ตรวจสอบข้อมูล</button></footer>
+      </form>}
+
+    {reviewing && <footer className="pmc-expense-footer review">
+      <button type="button" className="secondary" disabled={busy} onClick={() => setReviewing(false)}>แก้ไขข้อมูล</button>
+      <button type="button" disabled={busy} onClick={() => { void confirm() }}>{busy ? 'กำลังยืนยัน' : 'ยืนยันบันทึก'}</button>
+    </footer>}
+  </main>
+}
+
+function ExpenseReview({ category, values, files }: {
+  category: EnabledExpenseCategory
+  values: ExpenseFormValues
+  files: File[]
+}) {
+  const amountSatang = parseExpenseAmountSatang(values.amount) ?? 0
+  return <section className="pmc-expense-review">
+    <div className="pmc-expense-heading"><h1>ตรวจสอบข้อมูล</h1><p>ตรวจอีกครั้งก่อนบันทึกรายการ</p></div>
+    <dl>
+      <div><dt>ประเภท</dt><dd>{expenseCategoryLabel(category)}</dd></div>
+      <div><dt>วันที่รายจ่าย</dt><dd>{values.expenseDate}</dd></div>
+      <div><dt>{category === 'BILL_DOCUMENT' ? 'จำนวนเงิน' : 'ยอดรวมรายวัน'}</dt><dd>{formatSatang(amountSatang)}</dd></div>
+      {category === 'BILL_DOCUMENT' && <>
+        <div><dt>ชื่อร้านหรือผู้รับเงิน</dt><dd>{values.counterpartyName.trim()}</dd></div>
+        <div><dt>วิธีชำระ</dt><dd>{expensePaymentLabel(values.paymentMethod as ExpensePaymentMethod)}</dd></div>
+      </>}
+      <div><dt>หมายเหตุ</dt><dd>{values.description.trim() || '—'}</dd></div>
+      <div><dt>รูปหลักฐาน</dt><dd>{files.length} รูป</dd></div>
+    </dl>
+    <ol className="pmc-expense-review-files">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`}>{index + 1}. {file.name}</li>)}</ol>
+  </section>
+}
+
+function Field({ id, label, error, children }: { id: string; label: string; error?: string; children: React.ReactNode }) {
+  return <div className="pmc-expense-field">
+    <label htmlFor={id}>{label}</label>
+    {children}
+    {error && <p id={`${id}-error`} className="pmc-expense-error">{error}</p>}
+  </div>
+}
+
+function validStagingTokens(tokens: unknown, expectedCount: number): tokens is string[] {
+  return Array.isArray(tokens) && tokens.length === expectedCount && new Set(tokens).size === tokens.length
+    && tokens.every((token) => typeof token === 'string' && token.length > 0 && token.length <= 2_048)
+}
+
+function focusFirstError(errors: ExpenseFormErrors): void {
+  const ids: Partial<Record<keyof ExpenseFormErrors, string>> = {
+    expenseDate: 'expense-date', amount: 'expense-amount', counterpartyName: 'expense-counterparty',
+    paymentMethod: 'expense-payment', description: 'expense-description', files: 'expense-evidence-heading',
+  }
+  const first = Object.keys(errors)[0] as keyof ExpenseFormErrors | undefined
+  if (!first) return
+  queueMicrotask(() => document.getElementById(ids[first] ?? '')?.focus())
+}
+
+function expenseFailureMessage(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+  if (code === 'EXPENSE_REVISION_CONFLICT') return 'มีรายการของวันนี้แล้ว กรุณาแจ้งผู้ดูแล'
+  if (code === 'EXPENSE_UNSUPPORTED_IMAGE' || code === 'EXPENSE_INVALID_FILE_NAME') return 'รองรับเฉพาะรูป JPG หรือ PNG กรุณาเปลี่ยนรูปแล้วลองใหม่'
+  return 'บันทึกรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง'
+}
+
+function safeClientError(): Error & { code: string } {
+  return Object.assign(new Error('Invalid expense response'), { code: 'MINI_APP_INVALID_RESPONSE' })
+}
+
+function revokePreview(value: string): void {
+  if (value.startsWith('blob:') && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(value)
+}
+
+function formatSatang(value: number): string {
+  return `${new Intl.NumberFormat('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)} บาท`
+}
+
+function currentBangkokDate(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date())
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+  return `${value.year}-${value.month}-${value.day}`
+}

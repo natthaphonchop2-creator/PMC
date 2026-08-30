@@ -1,4 +1,8 @@
 import type { StockCategory } from '../../../shared/pmcStock'
+import type {
+  EnabledExpenseCategory,
+  ExpensePaymentMethod,
+} from '../../../shared/pmcExpense'
 
 export interface MiniAppSession {
   staffId: string
@@ -35,6 +39,18 @@ export interface StockProductProjection {
   active: boolean
   hasLedgerActivity: boolean
   version: number
+}
+
+export interface ExpenseSubmitInput {
+  rootRequestId: string
+  category: EnabledExpenseCategory
+  expenseDate: string
+  amountSatang: number
+  counterpartyName: string | null
+  description: string
+  paymentMethod: ExpensePaymentMethod | null
+  expectedRevision: number
+  stagingTokens: string[]
 }
 
 export interface MiniAppEnrollmentOptions {

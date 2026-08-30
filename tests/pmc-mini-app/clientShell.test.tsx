@@ -78,6 +78,62 @@ describe('PMC LINE Mini App shell', () => {
     }
   })
 
+  it('gates active expense capture cards on both rollout and submit permission', async () => {
+    const user = userEvent.setup()
+    const view = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: false }}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร' })).not.toBeInTheDocument()
+    expect(screen.getByText('บิลเอกสาร').closest('div')).toHaveTextContent('เตรียมระบบ')
+
+    view.unmount()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+  })
+
+  it('routes expense form to a validated durable receipt and clears form state on return', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: ['stage-1'] }))
+    api.submitExpense = vi.fn(async () => ({
+      expenseId: 'EXP-202608-SHELL', receiptNumber: 'EXP-202608-SHELL', expenseDate: '2026-08-30', monthKey: '2026-08',
+      category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: 120_000, recordState: 'COMMITTED', revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+    }))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
+    await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
+    await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
+    await user.type(screen.getByLabelText('จำนวนเงิน'), '1200')
+    await user.type(screen.getByLabelText('ชื่อร้านหรือผู้รับเงิน'), 'ร้านทดสอบ')
+    await user.selectOptions(screen.getByLabelText('วิธีชำระ'), 'CASH')
+    await user.upload(screen.getByLabelText('รูปหลักฐาน'), new File(['image'], 'bill.jpg', { type: 'image/jpeg' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    expect(api.stageExpense).toHaveBeenCalledWith('preview-token', expect.any(String), [expect.objectContaining({ name: 'bill.jpg' })])
+    expect(api.submitExpense).toHaveBeenCalledWith('preview-token', expect.objectContaining({ amountSatang: 120_000 }))
+    await user.click(screen.getByRole('button', { name: 'กลับหน้ารายงาน' }))
+    expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('')
+  })
+
   it('keeps the legacy ReportCenter as the exact rollback path when the finance flag is off', async () => {
     const user = userEvent.setup()
     render(<PmcMiniApp
@@ -449,7 +505,7 @@ describe('PMC LINE Mini App shell', () => {
 
 const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
-  financeReportsEnabled: false, stockEnabled: false, canManageStock: false,
+  financeReportsEnabled: false, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
@@ -477,6 +533,7 @@ function miniAppApi(): PmcMiniAppApi {
       hasLedgerActivity: true, version: 2,
     }] })),
     loadStockHistory: vi.fn(), submitStockCommand: vi.fn(),
+    stageExpense: vi.fn(), submitExpense: vi.fn(),
   }
 }
 
