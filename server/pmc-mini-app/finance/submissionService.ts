@@ -13,18 +13,20 @@ import type {
   MiniAppExpenseCommand,
   MiniAppExpenseSafeErrorCode,
 } from '../../../shared/pmcMiniAppExpenseIngress.js'
-import type { FinanceGooglePorts } from './googleClient.js'
+import type { FinanceGoogleCapturePorts } from './googleClient.js'
 import { FinanceGoogleError } from './googleClient.js'
 import type { ExpenseIngressClient } from './ingressClient.js'
 import { ExpenseIngressClientError } from './ingressClient.js'
 import {
   ExpenseStagingError,
   parseExpenseStagingObjectKey,
+  type ExpenseDriveSlotClaim,
   type ExpenseStagingPort,
   type ExpenseStagingReceipt,
 } from './stagingStore.js'
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,124}$/
+const ROOT_REQUEST_ID = /^[A-Za-z0-9._:-]{1,116}$/
 const SHA256 = /^[a-f0-9]{64}$/
 
 export interface ExpenseSubmissionInput {
@@ -42,7 +44,7 @@ export interface ExpenseSubmissionInput {
 
 export interface ExpenseSubmissionDependencies {
   ingress: ExpenseIngressClient
-  finance: FinanceGooglePorts
+  finance: FinanceGoogleCapturePorts
   staging: ExpenseStagingPort
 }
 
@@ -69,6 +71,7 @@ export function createExpenseSubmissionService(
     fingerprint: string
     promise: Promise<ExpenseReceipt>
   }>()
+  const ownedClaims = new Map<string, ExpenseDriveSlotClaim[]>()
   return {
     submit(input) {
       let fingerprint: string
@@ -83,7 +86,7 @@ export function createExpenseSubmissionService(
           ? current.promise
           : Promise.reject(new ExpenseSubmissionError('EXPENSE_IDEMPOTENCY_CONFLICT'))
       }
-      const promise = submitExpense(input, dependencies).finally(() => {
+      const promise = submitExpense(input, dependencies, ownedClaims).finally(() => {
         if (flights.get(input.rootRequestId)?.promise === promise) {
           flights.delete(input.rootRequestId)
         }
@@ -97,6 +100,7 @@ export function createExpenseSubmissionService(
 export async function submitExpense(
   input: ExpenseSubmissionInput,
   dependencies: ExpenseSubmissionDependencies,
+  ownedClaims: Map<string, ExpenseDriveSlotClaim[]> = new Map(),
 ): Promise<ExpenseReceipt> {
   try {
     const validated = validateSubmission(input)
@@ -121,16 +125,40 @@ export async function submitExpense(
     }
     const prepared = await dependencies.ingress.prepare(prepareCommand)
     validatePrepared(prepared, validated)
+    const cachedClaims = ownedClaims.get(validated.rootRequestId)
+    const claims = cachedClaims ?? await claimExpenseSlots(validated, prepared, dependencies.staging)
+    if (claims === null) {
+      const recovered = await dependencies.finance.listVerifiedExpenseImages(
+        prepared.monthKey,
+        prepared.expenseId,
+      )
+      validateRecoveredAttachments(recovered, prepared, validated)
+      const receipt = await commitPreparedExpense(
+        prepared,
+        validated,
+        recovered,
+        dependencies.ingress,
+      )
+      await cleanupStaging(validated.stagingReceipts, dependencies.staging)
+      return receipt
+    }
+    validateOwnedClaims(claims, prepared, validated)
+    ownedClaims.set(validated.rootRequestId, claims)
     const folderId = await dependencies.finance.ensureExpenseFolder(
       prepared.monthKey,
       prepared.expenseId,
     )
     const attachments: ExpensePrivateAttachment[] = []
-    for (const receipt of validated.stagingReceipts) {
+    for (const [index, receipt] of validated.stagingReceipts.entries()) {
       const staged = await dependencies.staging.get(receipt.objectKey)
       verifyStagedReceipt(receipt, staged)
       const deterministicName = deterministicNameFor(receipt)
-      const privateFileId = await dependencies.finance.uploadExpenseImage({
+      const attachmentId = deterministicAttachmentId(
+        validated.rootRequestId,
+        prepared.expenseId,
+        receipt.ordinal,
+      )
+      const attachment = await dependencies.finance.uploadExpenseImage({
         monthKey: prepared.monthKey,
         expenseId: prepared.expenseId,
         parentId: folderId,
@@ -139,46 +167,29 @@ export async function submitExpense(
         mimeType: receipt.mimeType,
         ordinal: receipt.ordinal,
         sha256: receipt.sha256,
+        rootRequestId: validated.rootRequestId,
+        uploadedByStaffId: validated.staffId,
+        uploadedAt: receipt.createdAt,
+        originalFileName: receipt.originalFileName,
+        attachmentId,
+        slotClaim: claims[index]!,
       })
       await dependencies.finance.verifyExpenseFile({
         monthKey: prepared.monthKey,
         expenseId: prepared.expenseId,
-        fileId: privateFileId,
+        fileId: attachment.privateFileId,
+        expectedAttachment: attachment,
       })
-      attachments.push({
-        attachmentId: deterministicAttachmentId(
-          validated.rootRequestId,
-          prepared.expenseId,
-          receipt.ordinal,
-        ),
-        expenseId: prepared.expenseId,
-        ordinal: receipt.ordinal,
-        mediaType: receipt.mimeType,
-        originalFileName: receipt.originalFileName,
-        privateFileId,
-        sha256: receipt.sha256,
-        uploadedByStaffId: validated.staffId,
-        uploadedAt: receipt.createdAt,
-      })
+      attachments.push(attachment)
     }
-    const commitCommand: Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }> = {
-      rootRequestId: validated.rootRequestId,
-      commandIdempotencyKey: `${validated.rootRequestId}:commit`,
-      staffId: validated.staffId,
-      commandType: 'COMMIT_EXPENSE',
-      payload: {
-        expenseId: prepared.expenseId,
-        expectedVersion: prepared.version,
-        expectedRevision: validated.expectedRevision,
-        expectedManifestHash,
-        attachments,
-      },
-    }
-    const receipt = await dependencies.ingress.commit(commitCommand)
-    validateReceipt(receipt, prepared, validated)
-    await Promise.allSettled(
-      validated.stagingReceipts.map(({ objectKey }) => dependencies.staging.deleteVerified(objectKey)),
+    const receipt = await commitPreparedExpense(
+      prepared,
+      validated,
+      attachments,
+      dependencies.ingress,
     )
+    await cleanupStaging(validated.stagingReceipts, dependencies.staging)
+    ownedClaims.delete(validated.rootRequestId)
     return receipt
   } catch (error) {
     throw safeSubmissionError(error)
@@ -186,15 +197,125 @@ export async function submitExpense(
 }
 
 export function expenseAttachmentManifestHash(
-  receipts: readonly ExpenseStagingReceipt[],
+  receipts: readonly (ExpenseStagingReceipt | ExpensePrivateAttachment)[],
 ): string {
   const canonical = JSON.stringify(receipts.map((receipt) => ({
     ordinal: receipt.ordinal,
-    mediaType: receipt.mimeType,
+    mediaType: 'mimeType' in receipt ? receipt.mimeType : receipt.mediaType,
     originalFileName: receipt.originalFileName,
     sha256: receipt.sha256,
   })))
   return createHash('sha256').update(canonical, 'utf8').digest('hex')
+}
+
+async function claimExpenseSlots(
+  input: ExpenseSubmissionInput,
+  prepared: ExpensePrepareResult,
+  staging: ExpenseStagingPort,
+): Promise<ExpenseDriveSlotClaim[] | null> {
+  const firstReceipt = input.stagingReceipts[0]!
+  const first = await staging.claimDriveSlot({
+    rootRequestId: input.rootRequestId,
+    expenseId: prepared.expenseId,
+    ordinal: firstReceipt.ordinal,
+    sha256: firstReceipt.sha256,
+    mimeType: firstReceipt.mimeType,
+    deterministicName: deterministicNameFor(firstReceipt),
+  })
+  if (!first.created) return null
+  const claims = [first]
+  for (const receipt of input.stagingReceipts.slice(1)) {
+    const claim = await staging.claimDriveSlot({
+      rootRequestId: input.rootRequestId,
+      expenseId: prepared.expenseId,
+      ordinal: receipt.ordinal,
+      sha256: receipt.sha256,
+      mimeType: receipt.mimeType,
+      deterministicName: deterministicNameFor(receipt),
+    })
+    if (!claim.created) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+    claims.push(claim)
+  }
+  return claims
+}
+
+function validateOwnedClaims(
+  claims: ExpenseDriveSlotClaim[],
+  prepared: ExpensePrepareResult,
+  input: ExpenseSubmissionInput,
+): void {
+  if (claims.length !== input.stagingReceipts.length) {
+    throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  claims.forEach((claim, index) => {
+    const receipt = input.stagingReceipts[index]!
+    if (
+      claim.created !== true
+      || claim.rootRequestId !== input.rootRequestId
+      || claim.expenseId !== prepared.expenseId
+      || claim.ordinal !== receipt.ordinal
+      || claim.sha256 !== receipt.sha256
+      || claim.mimeType !== receipt.mimeType
+      || claim.deterministicName !== deterministicNameFor(receipt)
+    ) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+  })
+}
+
+function validateRecoveredAttachments(
+  attachments: ExpensePrivateAttachment[],
+  prepared: ExpensePrepareResult,
+  input: ExpenseSubmissionInput,
+): void {
+  if (
+    attachments.length !== prepared.expectedAttachmentCount
+    || expenseAttachmentManifestHash(attachments) !== prepared.expectedManifestHash
+  ) throw new ExpenseSubmissionError('EXPENSE_PRIVATE_FILE_INVALID')
+  attachments.forEach((attachment, index) => {
+    if (
+      attachment.expenseId !== prepared.expenseId
+      || attachment.rootRequestId !== input.rootRequestId
+      || attachment.ordinal !== index + 1
+      || attachment.uploadedByStaffId !== input.staffId
+      || attachment.attachmentId !== deterministicAttachmentId(
+        input.rootRequestId,
+        prepared.expenseId,
+        attachment.ordinal,
+      )
+    ) throw new ExpenseSubmissionError('EXPENSE_PRIVATE_FILE_INVALID')
+  })
+}
+
+async function commitPreparedExpense(
+  prepared: ExpensePrepareResult,
+  input: ExpenseSubmissionInput,
+  attachments: ExpensePrivateAttachment[],
+  ingress: ExpenseIngressClient,
+): Promise<ExpenseReceipt> {
+  const commitCommand: Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }> = {
+    rootRequestId: input.rootRequestId,
+    commandIdempotencyKey: `${input.rootRequestId}:commit`,
+    staffId: input.staffId,
+    commandType: 'COMMIT_EXPENSE',
+    payload: {
+      expenseId: prepared.expenseId,
+      expectedVersion: prepared.version,
+      expectedRevision: input.expectedRevision,
+      expectedManifestHash: prepared.expectedManifestHash,
+      attachments,
+    },
+  }
+  const receipt = await ingress.commit(commitCommand)
+  validateReceipt(receipt, prepared, input)
+  return receipt
+}
+
+async function cleanupStaging(
+  receipts: ExpenseStagingReceipt[],
+  staging: ExpenseStagingPort,
+): Promise<void> {
+  await Promise.allSettled(
+    receipts.map(({ objectKey }) => staging.deleteVerified(objectKey)),
+  )
 }
 
 function validateSubmission(input: ExpenseSubmissionInput): ExpenseSubmissionInput {
@@ -210,7 +331,7 @@ function validateSubmission(input: ExpenseSubmissionInput): ExpenseSubmissionInp
     'expectedRevision',
     'stagingReceipts',
   ])) throw new ExpenseSubmissionError('EXPENSE_INVALID_REQUEST')
-  if (!SAFE_ID.test(input.rootRequestId) || !SAFE_ID.test(input.staffId)) {
+  if (!ROOT_REQUEST_ID.test(input.rootRequestId) || !SAFE_ID.test(input.staffId)) {
     throw new ExpenseSubmissionError('EXPENSE_INVALID_REQUEST')
   }
   try {
@@ -326,6 +447,8 @@ function validatePrepared(
     || prepared.recordState !== 'PREPARED'
     || prepared.version !== 1
     || prepared.expectedRevision !== input.expectedRevision
+    || prepared.expectedAttachmentCount !== input.stagingReceipts.length
+    || prepared.expectedManifestHash !== expenseAttachmentManifestHash(input.stagingReceipts)
     || typeof prepared.expenseId !== 'string'
     || !new RegExp(`^EXP-${monthKey.replace('-', '')}-[A-Za-z0-9._:-]{1,107}$`).test(prepared.expenseId)
   ) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
@@ -398,8 +521,15 @@ function submissionFingerprint(input: ExpenseSubmissionInput): string {
 
 function safeSubmissionError(error: unknown): ExpenseSubmissionError | ExpenseIngressClientError {
   if (error instanceof ExpenseSubmissionError || error instanceof ExpenseIngressClientError) return error
-  if (error instanceof FinanceGoogleError || error instanceof ExpenseStagingError) {
-    return new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+  if (error instanceof FinanceGoogleError) {
+    return new ExpenseSubmissionError(error.code)
+  }
+  if (error instanceof ExpenseStagingError) {
+    return new ExpenseSubmissionError(
+      error.code === 'EXPENSE_DRIVE_SLOT_CONFLICT'
+        ? 'EXPENSE_IDEMPOTENCY_CONFLICT'
+        : 'EXPENSE_STORAGE_UNAVAILABLE',
+    )
   }
   return new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
 }

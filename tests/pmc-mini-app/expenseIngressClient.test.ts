@@ -174,10 +174,15 @@ function commitCommand(): Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_
       attachments: [{
         attachmentId: 'ATT-0001',
         expenseId: 'EXP-202608-0001',
+        rootRequestId: 'expense-request-1',
         ordinal: 1,
         mediaType: 'image/jpeg',
         originalFileName: 'receipt.jpg',
         privateFileId: 'private-file-1',
+        deterministicName: `001-${'b'.repeat(64)}.jpg`,
+        sizeBytes: 1_024,
+        driveVersion: '7',
+        slotClaimId: `SLOT-${'c'.repeat(64)}`,
         sha256: 'b'.repeat(64),
         uploadedByStaffId: 'ADMIN_01',
         uploadedAt: '2026-08-29T10:00:00.000Z',
@@ -194,6 +199,8 @@ function prepareResult(): Extract<ExpenseCommandResult, { commandType: 'PREPARE_
     recordState: 'PREPARED',
     version: 1,
     expectedRevision: 0,
+    expectedAttachmentCount: 2,
+    expectedManifestHash: MANIFEST_HASH,
   }
 }
 

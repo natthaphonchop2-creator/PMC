@@ -18,7 +18,11 @@ import { createStockReadStore } from './stock/readStore.js'
 import type { PmcFinanceConfig } from './finance/config.js'
 import {
   createFinanceGooglePorts,
+  financeGoogleCaptureCapability,
+  financeGoogleReadCapability,
+  type FinanceGoogleCapturePorts,
   type FinanceGooglePorts,
+  type FinanceGoogleReadPorts,
 } from './finance/googleClient.js'
 import {
   createExpenseIngressClient,
@@ -35,10 +39,15 @@ import {
 
 export interface PmcFinanceRuntime {
   config: PmcFinanceConfig
-  finance: FinanceGooglePorts
-  staging: ExpenseStagingPort
-  ingress: ExpenseIngressClient
-  submission: ExpenseSubmissionService
+  reads?: {
+    finance: FinanceGoogleReadPorts
+  }
+  capture?: {
+    finance: FinanceGoogleCapturePorts
+    staging: ExpenseStagingPort
+    ingress: ExpenseIngressClient
+    submission: ExpenseSubmissionService
+  }
 }
 
 export interface PmcFinanceRuntimeFactories {
@@ -47,7 +56,7 @@ export interface PmcFinanceRuntimeFactories {
   createIngress(input: { url: string; secret: string }): ExpenseIngressClient
   createSubmission(input: {
     ingress: ExpenseIngressClient
-    finance: FinanceGooglePorts
+    finance: FinanceGoogleCapturePorts
     staging: ExpenseStagingPort
   }): ExpenseSubmissionService
 }
@@ -72,13 +81,21 @@ export function createPmcFinanceRuntime(
     masterSpreadsheetId: config.masterSpreadsheetId,
     folderId: config.folderId,
   })
+  const reads = config.readsEnabled
+    ? { finance: financeGoogleReadCapability(finance) }
+    : undefined
+  if (!config.captureEnabled) {
+    return { config, ...(reads ? { reads } : {}) }
+  }
+  const captureFinance = financeGoogleCaptureCapability(finance)
   const staging = factories.createStaging({ bucketName: config.stagingBucketName })
   const ingress = factories.createIngress({
     url: config.expenseIngressUrl,
     secret: config.expenseIngressSecret,
   })
-  const submission = factories.createSubmission({ ingress, finance, staging })
-  return { config, finance, staging, ingress, submission }
+  const submission = factories.createSubmission({ ingress, finance: captureFinance, staging })
+  const capture = { finance: captureFinance, staging, ingress, submission }
+  return { config, ...(reads ? { reads } : {}), capture }
 }
 
 export function createPmcMiniAppRuntime(

@@ -81,13 +81,36 @@ describe('private finance runtime configuration', () => {
     expect(config?.finance?.expenseIngressSecret).not.toBe(config?.signingSecret)
   })
 
-  it('composes dedicated finance ports and submission service without borrowing Booking resources', () => {
-    const financeConfig = readPmcFinanceConfig(validFinanceEnvironment())!
+  it.each([
+    ['disabled', false, false, false, false],
+    ['reads only', false, true, true, false],
+    ['capture only', true, false, false, true],
+    ['reads and capture', true, true, true, true],
+  ] as const)('constructs separate %s capabilities', (
+    _name,
+    captureEnabled,
+    readsEnabled,
+    expectReads,
+    expectCapture,
+  ) => {
+    const environment = {
+      ...validFinanceEnvironment(),
+      PMC_EXPENSE_CAPTURE_ENABLED: String(captureEnabled),
+      PMC_FINANCE_READS_ENABLED: String(readsEnabled),
+    }
+    const financeConfig = readPmcFinanceConfig(environment)
+    if (!expectReads && !expectCapture) {
+      expect(financeConfig).toBeNull()
+      return
+    }
     const finance = {
       readMaster: vi.fn(), readMonth: vi.fn(), ensureExpenseFolder: vi.fn(),
-      uploadExpenseImage: vi.fn(), verifyExpenseFile: vi.fn(), downloadExpenseFile: vi.fn(),
+      uploadExpenseImage: vi.fn(), verifyExpenseFile: vi.fn(), listVerifiedExpenseImages: vi.fn(),
+      downloadExpenseFile: vi.fn(),
     }
-    const staging = { put: vi.fn(), get: vi.fn(), deleteVerified: vi.fn() }
+    const staging = {
+      put: vi.fn(), get: vi.fn(), deleteVerified: vi.fn(), claimDriveSlot: vi.fn(),
+    }
     const ingress = { prepare: vi.fn(), commit: vi.fn() }
     const submission = { submit: vi.fn() }
     const factories = {
@@ -97,18 +120,26 @@ describe('private finance runtime configuration', () => {
       createSubmission: vi.fn(() => submission),
     }
 
-    expect(createPmcFinanceRuntime(financeConfig, factories)).toEqual({
-      config: financeConfig, finance, staging, ingress, submission,
-    })
+    const runtime = createPmcFinanceRuntime(financeConfig!, factories)
+    expect(Boolean(runtime.reads)).toBe(expectReads)
+    expect(Boolean(runtime.capture)).toBe(expectCapture)
+    if (runtime.reads) {
+      expect(Object.keys(runtime.reads.finance).sort()).toEqual([
+        'downloadExpenseFile', 'readMaster', 'readMonth',
+      ])
+    }
+    if (runtime.capture) {
+      expect(Object.keys(runtime.capture.finance).sort()).toEqual([
+        'ensureExpenseFolder', 'listVerifiedExpenseImages', 'uploadExpenseImage', 'verifyExpenseFile',
+      ])
+      expect(runtime.capture).toMatchObject({ staging, ingress, submission })
+    }
     expect(factories.createGoogle).toHaveBeenCalledWith({
       masterSpreadsheetId: 'finance-master', folderId: 'finance-root',
     })
-    expect(factories.createStaging).toHaveBeenCalledWith({ bucketName: 'pmc-expense-staging' })
-    expect(factories.createIngress).toHaveBeenCalledWith({
-      url: 'https://script.google.com/macros/s/deployment/exec',
-      secret: 'expense-ingress-secret',
-    })
-    expect(factories.createSubmission).toHaveBeenCalledWith({ ingress, finance, staging })
+    expect(factories.createStaging).toHaveBeenCalledTimes(expectCapture ? 1 : 0)
+    expect(factories.createIngress).toHaveBeenCalledTimes(expectCapture ? 1 : 0)
+    expect(factories.createSubmission).toHaveBeenCalledTimes(expectCapture ? 1 : 0)
   })
 })
 

@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import { vi } from 'vitest'
+import type { ExpensePrivateAttachment } from '../../../../shared/pmcMiniAppExpenseIngress'
 import {
   EXPENSE_MASTER_SCHEMAS,
   EXPENSE_MONTH_SCHEMAS,
@@ -131,24 +133,52 @@ class FakeFolder {
 }
 
 class FakeFile {
+  name: string
+  appProperties: Record<string, string>
+  version: string
+  bytes: number[]
+  description: string
+
   constructor(
     readonly id: string,
     readonly sharing: string,
     readonly parentFolders: FakeFolder[],
     readonly mimeType = 'application/vnd.google-apps.spreadsheet',
-  ) {}
+    options: {
+      name?: string
+      appProperties?: Record<string, string>
+      version?: string
+      bytes?: number[]
+      description?: string
+    } = {},
+  ) {
+    this.name = options.name ?? id
+    this.appProperties = { ...(options.appProperties ?? {}) }
+    this.version = options.version ?? '1'
+    this.bytes = [...(options.bytes ?? [])]
+    this.description = options.description ?? ''
+  }
 
   getId(): string { return this.id }
   isTrashed(): boolean { return false }
   getSharingAccess(): string { return this.sharing }
   getParents(): FakeIterator<FakeFolder> { return new FakeIterator(this.parentFolders) }
   getMimeType(): string { return this.mimeType }
+  getBlob(): { getBytes(): number[]; getContentType(): string } {
+    return {
+      getBytes: () => [...this.bytes],
+      getContentType: () => this.mimeType,
+    }
+  }
   moveTo(): FakeFile { return this }
 }
 
 export interface GoogleExpenseFakeEnvironment {
   master: FakeExpenseSpreadsheet
   ledger: FakeExpenseSpreadsheet
+  addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
+  duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
+  mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
 }
 
 export function installGoogleExpenseFakes(options: {
@@ -207,9 +237,94 @@ export function installGoogleExpenseFakes(options: {
     getFolderById: (id: string) => folders.get(id)!,
     getFileById: (id: string) => files.get(id)!,
   })
+  vi.stubGlobal('Drive', {
+    Files: {
+      get: (id: string) => advancedFile(files.get(id)!),
+      list: (input: { q?: string }) => {
+        const parentId = /'([^']+)'\s+in\s+parents/.exec(input.q ?? '')?.[1]
+        return {
+          files: [...files.values()]
+            .filter((file) => !parentId || file.parentFolders.some(({ id }) => id === parentId))
+            .map(advancedFile),
+        }
+      },
+    },
+  })
+  vi.stubGlobal('Utilities', {
+    DigestAlgorithm: { SHA_256: 'SHA_256' },
+    computeDigest: (_algorithm: string, value: string | number[]) => {
+      const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value)
+      return [...createHash('sha256').update(bytes).digest()].map((byte) => byte > 127 ? byte - 256 : byte)
+    },
+  })
   vi.stubGlobal('SpreadsheetApp', {
     openById: (id: string) => spreadsheets.get(id)!,
     create: () => { throw new Error('unexpected spreadsheet creation') },
   })
-  return { master, ledger }
+  function addExpenseAttachment(
+    attachment: ExpensePrivateAttachment,
+    bytes: number[],
+    fileId = attachment.privateFileId,
+  ): void {
+    let expenseFolder = (month.foldersByName.get(attachment.expenseId) ?? [])[0]
+    if (!expenseFolder) {
+      expenseFolder = new FakeFolder(`folder-${attachment.expenseId}`, 'PRIVATE', [month])
+      month.foldersByName.set(attachment.expenseId, [expenseFolder])
+      folders.set(expenseFolder.id, expenseFolder)
+    }
+    const description = JSON.stringify({
+      originalFileName: attachment.originalFileName,
+      uploadedAt: attachment.uploadedAt,
+    })
+    const file = new FakeFile(fileId, 'PRIVATE', [expenseFolder], attachment.mediaType, {
+      name: attachment.deterministicName,
+      version: attachment.driveVersion,
+      bytes,
+      description,
+      appProperties: {
+        pmcExpenseId: attachment.expenseId,
+        pmcExpenseMonthKey: '2026-08',
+        pmcExpenseOrdinal: String(attachment.ordinal),
+        pmcExpenseSha256: attachment.sha256,
+        pmcExpenseSlotClaimId: attachment.slotClaimId,
+        pmcExpenseRootRequestId: attachment.rootRequestId,
+        pmcExpenseUploadedByStaffId: attachment.uploadedByStaffId,
+        pmcExpenseAttachmentId: attachment.attachmentId,
+        pmcExpenseMetadataSha256: createHash('sha256').update(description, 'utf8').digest('hex'),
+      },
+    })
+    files.set(fileId, file)
+    const byName = expenseFolder.filesByName.get(file.name) ?? []
+    expenseFolder.filesByName.set(file.name, [...byName, file])
+  }
+
+  return {
+    master,
+    ledger,
+    addExpenseAttachment,
+    duplicateExpenseAttachment(attachment, bytes) {
+      addExpenseAttachment(attachment, bytes, `${attachment.privateFileId}-duplicate`)
+    },
+    mutateExpenseFile(fileId, patch) {
+      const file = files.get(fileId)
+      if (!file) throw new Error('missing fake expense file')
+      if (patch.bytes) file.bytes = [...patch.bytes]
+      if (patch.version) file.version = patch.version
+    },
+  }
+}
+
+function advancedFile(file: FakeFile) {
+  return {
+    id: file.id,
+    name: file.name,
+    description: file.description,
+    mimeType: file.mimeType,
+    parents: file.parentFolders.map(({ id }) => id),
+    trashed: false,
+    size: String(file.bytes.length),
+    version: file.version,
+    appProperties: { ...file.appProperties },
+    permissions: [{ id: 'owner-user', type: 'user', role: 'owner', deleted: false }],
+  }
 }

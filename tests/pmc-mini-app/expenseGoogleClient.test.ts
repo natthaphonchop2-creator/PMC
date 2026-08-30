@@ -103,22 +103,13 @@ describe('private finance Google ports', () => {
     const bytes = await jpeg()
     const sha256 = createHash('sha256').update(bytes).digest('hex')
     const deterministicName = `001-${sha256}.jpg`
-    const input = {
-      monthKey: MONTH_KEY,
-      expenseId: EXPENSE_ID,
-      parentId,
-      deterministicName,
-      bytes,
-      mimeType: 'image/jpeg' as const,
-      ordinal: 1,
-      sha256,
-    }
+    const input = claimedUpload({ parentId, bytes, sha256, deterministicName })
 
     const first = await ports.uploadExpenseImage(input)
-    await expect(ports.uploadExpenseImage(input)).resolves.toBe(first)
+    await expect(ports.uploadExpenseImage(input)).resolves.toEqual(first)
     expect(fake.driveCreates.mock.calls.filter(([request]) => request.requestBody?.mimeType !== 'application/vnd.google-apps.folder'))
       .toHaveLength(1)
-    expect(fake.item(first)).toMatchObject({
+    expect(fake.item(first.privateFileId)).toMatchObject({
       name: deterministicName,
       size: String(bytes.length),
       mimeType: 'image/jpeg',
@@ -128,11 +119,12 @@ describe('private finance Google ports', () => {
         pmcExpenseMonthKey: MONTH_KEY,
         pmcExpenseOrdinal: '1',
         pmcExpenseSha256: sha256,
+        pmcExpenseSlotClaimId: input.slotClaim.claimId,
       },
     })
 
-    fake.item(first).bytes = Buffer.from('poisoned private bytes')
-    fake.item(first).size = String(fake.item(first).bytes!.length)
+    fake.item(first.privateFileId).bytes = Buffer.from('poisoned private bytes')
+    fake.item(first.privateFileId).size = String(fake.item(first.privateFileId).bytes!.length)
     await expect(ports.uploadExpenseImage(input)).rejects.toMatchObject({
       code: 'EXPENSE_PRIVATE_FILE_INVALID',
       message: 'EXPENSE_PRIVATE_FILE_INVALID',
@@ -142,18 +134,84 @@ describe('private finance Google ports', () => {
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
   })
 
+  it('allows only the atomic slot owner to create across process instances', async () => {
+    const fake = financeGoogleFake()
+    const ownerProcess = createFinanceGooglePorts(config(), fake.factory)
+    const replayProcess = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ownerProcess.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const claimIntent = {
+      rootRequestId: 'expense-request-1',
+      expenseId: EXPENSE_ID,
+      ordinal: 1,
+      sha256,
+      mimeType: 'image/jpeg' as const,
+      deterministicName,
+    }
+    const baseClaim = slotClaim(claimIntent, true)
+    const upload = {
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      parentId,
+      deterministicName,
+      bytes,
+      mimeType: 'image/jpeg' as const,
+      ordinal: 1,
+      sha256,
+      rootRequestId: 'expense-request-1',
+      uploadedByStaffId: 'ADMIN_01',
+      uploadedAt: '2026-08-29T10:01:00.000Z',
+      originalFileName: 'receipt.jpg',
+      attachmentId: 'ATT-atomic-slot-1',
+    }
+
+    await expect(replayProcess.uploadExpenseImage({
+      ...upload,
+      slotClaim: { ...baseClaim, created: false },
+    })).rejects.toMatchObject({ code: 'EXPENSE_STORAGE_UNAVAILABLE' })
+    expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(0)
+
+    const attachment = await ownerProcess.uploadExpenseImage({
+      ...upload,
+      slotClaim: baseClaim,
+    })
+    await expect(replayProcess.uploadExpenseImage({
+      ...upload,
+      slotClaim: { ...baseClaim, created: false },
+    })).resolves.toEqual(attachment)
+    expect(attachment).toMatchObject({
+      attachmentId: 'ATT-atomic-slot-1',
+      expenseId: EXPENSE_ID,
+      ordinal: 1,
+      mediaType: 'image/jpeg',
+      originalFileName: 'receipt.jpg',
+      deterministicName,
+      sizeBytes: bytes.length,
+      driveVersion: '1',
+      slotClaimId: baseClaim.claimId,
+      sha256,
+      uploadedByStaffId: 'ADMIN_01',
+      uploadedAt: '2026-08-29T10:01:00.000Z',
+    })
+    expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(1)
+  })
+
   it('pins file identity around download and validates bytes, MIME, metadata, and direct parent', async () => {
     const fake = financeGoogleFake()
     const ports = createFinanceGooglePorts(config(), fake.factory)
     const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
     const bytes = await jpeg()
     const sha256 = createHash('sha256').update(bytes).digest('hex')
-    const fileId = await ports.uploadExpenseImage({
-      monthKey: MONTH_KEY, expenseId: EXPENSE_ID, parentId,
-      deterministicName: `001-${sha256}.jpg`, bytes, mimeType: 'image/jpeg', ordinal: 1, sha256,
-    })
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    const fileId = attachment.privateFileId
 
-    await expect(ports.verifyExpenseFile({ monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId }))
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId, expectedAttachment: attachment,
+    }))
       .resolves.toBeUndefined()
     await expect(ports.downloadExpenseFile({ monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId }))
       .resolves.toEqual({ bytes, mimeType: 'image/jpeg' })
@@ -164,7 +222,9 @@ describe('private finance Google ports', () => {
 
     fake.afterMediaRead = undefined
     fake.item(fileId).parents = ['month-2026-08']
-    await expect(ports.verifyExpenseFile({ monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId }))
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId, expectedAttachment: attachment,
+    }))
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
   })
 })
@@ -189,6 +249,7 @@ interface FakeItem {
   appProperties: Record<string, string>
   permissions: FakePermission[]
   version: string
+  description?: string
   size?: string
   bytes?: Buffer
 }
@@ -280,6 +341,7 @@ function financeGoogleFake() {
       parents: [...(request.parents ?? [])],
       trashed: false,
       appProperties: { ...(request.appProperties ?? {}) },
+      ...(request.description === undefined ? {} : { description: String(request.description) }),
       permissions: privatePermissions(),
       version: '1',
       ...(bytes ? { bytes, size: String(bytes.length) } : {}),
@@ -329,6 +391,60 @@ function jpeg(): Promise<Buffer> {
   return sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).jpeg().toBuffer()
 }
 
+function claimedUpload(input: {
+  parentId: string
+  bytes: Buffer
+  sha256: string
+  deterministicName: string
+}) {
+  const intent = {
+    rootRequestId: 'expense-request-1',
+    expenseId: EXPENSE_ID,
+    ordinal: 1,
+    sha256: input.sha256,
+    mimeType: 'image/jpeg' as const,
+    deterministicName: input.deterministicName,
+  }
+  return {
+    monthKey: MONTH_KEY,
+    expenseId: EXPENSE_ID,
+    parentId: input.parentId,
+    deterministicName: input.deterministicName,
+    bytes: input.bytes,
+    mimeType: 'image/jpeg' as const,
+    ordinal: 1,
+    sha256: input.sha256,
+    rootRequestId: intent.rootRequestId,
+    uploadedByStaffId: 'ADMIN_01',
+    uploadedAt: '2026-08-29T10:01:00.000Z',
+    originalFileName: 'receipt.jpg',
+    attachmentId: 'ATT-atomic-slot-1',
+    slotClaim: slotClaim(intent, true),
+  }
+}
+
+function slotClaim(
+  intent: {
+    rootRequestId: string
+    expenseId: string
+    ordinal: number
+    sha256: string
+    mimeType: 'image/jpeg' | 'image/png'
+    deterministicName: string
+  },
+  created: boolean,
+) {
+  const claimId = `SLOT-${createHash('sha256').update(JSON.stringify(intent), 'utf8').digest('hex')}`
+  return {
+    objectKey: `expense-drive-slots/${intent.expenseId}/${String(intent.ordinal).padStart(3, '0')}.json`,
+    claimId,
+    generation: '4',
+    createdAt: '2026-08-29T10:00:00.000Z',
+    created,
+    ...intent,
+  }
+}
+
 function driveMetadata(item: FakeItem): Omit<FakeItem, 'bytes'> {
   return structuredClone({
     id: item.id,
@@ -339,6 +455,7 @@ function driveMetadata(item: FakeItem): Omit<FakeItem, 'bytes'> {
     appProperties: item.appProperties,
     permissions: item.permissions,
     version: item.version,
+    ...(item.description === undefined ? {} : { description: item.description }),
     ...(item.size === undefined ? {} : { size: item.size }),
   })
 }

@@ -3,8 +3,10 @@ import { Storage, type FileMetadata } from '@google-cloud/storage'
 import { inspectExpenseImage, type ExpenseImageMimeType } from './multipart.js'
 
 const ROOT_REQUEST_ID = /^[A-Za-z0-9._:-]{1,124}$/
+const EXPENSE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const STAGING_KEY = /^expenses\/([A-Za-z0-9._:-]{1,124})\/([1-5])-([a-f0-9]{64})\.(jpg|png)$/
+const DRIVE_SLOT_KEY = /^expense-drive-slots\/([A-Za-z0-9._:-]{1,124})\/(00[1-5])\.json$/
 
 export interface ExpenseStagingReceipt {
   objectKey: string
@@ -14,6 +16,23 @@ export interface ExpenseStagingReceipt {
   ordinal: number
   originalFileName: string
   createdAt: string
+}
+
+export interface ExpenseDriveSlotClaimInput {
+  rootRequestId: string
+  expenseId: string
+  ordinal: number
+  sha256: string
+  mimeType: ExpenseImageMimeType
+  deterministicName: string
+}
+
+export interface ExpenseDriveSlotClaim extends ExpenseDriveSlotClaimInput {
+  objectKey: string
+  claimId: string
+  generation: string
+  createdAt: string
+  created: boolean
 }
 
 export interface ExpenseStagingPort {
@@ -26,6 +45,7 @@ export interface ExpenseStagingPort {
   }): Promise<ExpenseStagingReceipt>
   get(objectKey: string): Promise<ExpenseStagingReceipt & { bytes: Buffer }>
   deleteVerified(objectKey: string): Promise<void>
+  claimDriveSlot(input: ExpenseDriveSlotClaimInput): Promise<ExpenseDriveSlotClaim>
 }
 
 export class ExpenseStagingError extends Error {
@@ -72,6 +92,49 @@ export function createGoogleExpenseStagingPort(input: {
   const now = input.now ?? (() => new Date().toISOString())
 
   return {
+    async claimDriveSlot(request) {
+      try {
+        const intent = validDriveSlotIntent(request)
+        const objectKey = expenseDriveSlotObjectKey(intent)
+        const claimId = expenseDriveSlotClaimId(intent)
+        const createdAt = validCreatedAt(now())
+        const persisted = { version: 1 as const, claimId, ...intent, createdAt }
+        const bytes = Buffer.from(JSON.stringify(persisted), 'utf8')
+        const file = bucket.file(objectKey)
+        try {
+          await file.save(bytes, {
+            resumable: false,
+            validation: 'crc32c',
+            preconditionOpts: { ifGenerationMatch: 0 },
+            metadata: {
+              contentType: 'application/json',
+              cacheControl: 'no-store',
+              metadata: claimMetadata(persisted),
+            },
+          })
+          const metadata = (await file.getMetadata())[0]
+          const generation = normalizedGeneration(metadata.generation)
+          return { objectKey, claimId, ...intent, createdAt, generation, created: true }
+        } catch (error) {
+          if (!isCreateOnlyConflict(error)) throw error
+          try {
+            const metadata = (await file.getMetadata())[0]
+            const generation = normalizedGeneration(metadata.generation)
+            const [existingBytes] = await bucket.file(objectKey, { generation }).download({ validation: 'crc32c' })
+            const existing = driveSlotClaimFromStorage(objectKey, metadata, existingBytes)
+            if (!sameDriveSlotIntent(existing, intent) || existing.claimId !== claimId) {
+              throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+            }
+            return { ...existing, generation, created: false }
+          } catch {
+            throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+          }
+        }
+      } catch (error) {
+        throw safeStagingError(error)
+      }
+    },
+
     async put(request) {
       try {
         if (!safeRootRequestId(request.rootRequestId) || !safeOrdinal(request.ordinal) || !safeMime(request.mimeType)) {
@@ -163,6 +226,123 @@ export function createGoogleExpenseStagingPort(input: {
   }
 }
 
+function validDriveSlotIntent(input: ExpenseDriveSlotClaimInput): ExpenseDriveSlotClaimInput {
+  if (
+    !isRecord(input)
+    || !hasExactKeys(input, ['rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName'])
+    || !safeRootRequestId(input.rootRequestId)
+    || !EXPENSE_ID.test(input.expenseId)
+    || !safeOrdinal(input.ordinal)
+    || !SHA256.test(input.sha256)
+    || !safeMime(input.mimeType)
+    || input.deterministicName !== deterministicDriveName(input.ordinal, input.sha256, input.mimeType)
+  ) throw new ExpenseStagingError('EXPENSE_STAGING_INPUT_INVALID')
+  return { ...input }
+}
+
+export function expenseDriveSlotObjectKey(input: ExpenseDriveSlotClaimInput): string {
+  return `expense-drive-slots/${input.expenseId}/${String(input.ordinal).padStart(3, '0')}.json`
+}
+
+export function expenseDriveSlotClaimId(input: ExpenseDriveSlotClaimInput): string {
+  const canonical = JSON.stringify({
+    rootRequestId: input.rootRequestId,
+    expenseId: input.expenseId,
+    ordinal: input.ordinal,
+    sha256: input.sha256,
+    mimeType: input.mimeType,
+    deterministicName: input.deterministicName,
+  })
+  return `SLOT-${createHash('sha256').update(canonical, 'utf8').digest('hex')}`
+}
+
+function deterministicDriveName(
+  ordinal: number,
+  sha256: string,
+  mimeType: ExpenseImageMimeType,
+): string {
+  return `${String(ordinal).padStart(3, '0')}-${sha256}.${extensionFor(mimeType)}`
+}
+
+function claimMetadata(input: {
+  claimId: string
+  rootRequestId: string
+  expenseId: string
+  ordinal: number
+  sha256: string
+  mimeType: ExpenseImageMimeType
+  deterministicName: string
+  createdAt: string
+}): Record<string, string> {
+  return {
+    claimId: input.claimId,
+    rootRequestId: input.rootRequestId,
+    expenseId: input.expenseId,
+    ordinal: String(input.ordinal),
+    sha256: input.sha256,
+    mimeType: input.mimeType,
+    deterministicName: input.deterministicName,
+    createdAt: input.createdAt,
+  }
+}
+
+function driveSlotClaimFromStorage(
+  objectKey: string,
+  metadata: FileMetadata,
+  bytes: Buffer,
+): Omit<ExpenseDriveSlotClaim, 'generation' | 'created'> {
+  const key = DRIVE_SLOT_KEY.exec(objectKey)
+  const sizeBytes = Number(metadata.size)
+  const custom = metadata.metadata
+  let parsed: unknown
+  try { parsed = JSON.parse(bytes.toString('utf8')) } catch { parsed = null }
+  if (
+    !key
+    || metadata.name !== undefined && metadata.name !== objectKey
+    || metadata.contentType !== 'application/json'
+    || metadata.cacheControl !== 'no-store'
+    || metadata.contentEncoding !== undefined && metadata.contentEncoding !== ''
+    || !Number.isSafeInteger(sizeBytes) || sizeBytes !== bytes.length || sizeBytes < 1 || sizeBytes > 4_096
+    || !isRecord(custom)
+    || !hasExactKeys(custom, ['claimId', 'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName', 'createdAt'])
+    || !isRecord(parsed)
+    || !hasExactKeys(parsed, ['version', 'claimId', 'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName', 'createdAt'])
+    || parsed.version !== 1
+  ) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+  const intent = validDriveSlotIntent({
+    rootRequestId: String(parsed.rootRequestId ?? ''),
+    expenseId: String(parsed.expenseId ?? ''),
+    ordinal: Number(parsed.ordinal),
+    sha256: String(parsed.sha256 ?? ''),
+    mimeType: String(parsed.mimeType ?? '') as ExpenseImageMimeType,
+    deterministicName: String(parsed.deterministicName ?? ''),
+  })
+  const claimId = String(parsed.claimId ?? '')
+  const createdAt = String(parsed.createdAt ?? '')
+  const expectedMetadata = claimMetadata({ claimId, ...intent, createdAt })
+  if (
+    key[1] !== intent.expenseId
+    || Number(key[2]) !== intent.ordinal
+    || claimId !== expenseDriveSlotClaimId(intent)
+    || !safeCreatedAt(createdAt)
+    || Object.keys(expectedMetadata).some((name) => custom[name] !== expectedMetadata[name])
+    || JSON.stringify(parsed) !== JSON.stringify({ version: 1, claimId, ...intent, createdAt })
+  ) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
+  return { objectKey, claimId, ...intent, createdAt }
+}
+
+function sameDriveSlotIntent(
+  left: ExpenseDriveSlotClaimInput,
+  right: ExpenseDriveSlotClaimInput,
+): boolean {
+  return left.rootRequestId === right.rootRequestId
+    && left.expenseId === right.expenseId
+    && left.ordinal === right.ordinal
+    && left.sha256 === right.sha256
+    && left.mimeType === right.mimeType
+    && left.deterministicName === right.deterministicName
+}
+
 function receiptFromMetadata(objectKey: string, metadata: FileMetadata): ExpenseStagingReceipt {
   const key = parseExpenseStagingObjectKey(objectKey)
   const sizeBytes = Number(metadata.size)
@@ -214,6 +394,10 @@ function extensionFor(value: ExpenseImageMimeType): 'jpg' | 'png' { return value
 function safeBucketName(value: string): boolean { return /^[a-z0-9][a-z0-9._-]{1,220}$/.test(value) }
 function safeGeneration(value: string | number | undefined): value is string | number {
   return typeof value === 'number' ? Number.isSafeInteger(value) && value > 0 : typeof value === 'string' && /^[1-9]\d*$/.test(value)
+}
+function normalizedGeneration(value: string | number | undefined): string {
+  if (!safeGeneration(value)) throw new ExpenseStagingError('EXPENSE_STAGING_METADATA_INVALID')
+  return String(value)
 }
 function safeOriginalFileName(value: string): boolean {
   return typeof value === 'string' && value.length > 0 && value.length <= 180 && ![...value].some((character) => {

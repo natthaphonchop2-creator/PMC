@@ -266,10 +266,15 @@ export function attachmentFixture(
   return {
     attachmentId: `ATT-${expenseId}-1`,
     expenseId,
+    rootRequestId: 'expense-request-1',
     ordinal: 1,
     mediaType: 'image/jpeg',
     originalFileName: 'receipt.jpg',
     privateFileId: `FILE-${expenseId}-1`,
+    deterministicName: `001-${'a'.repeat(64)}.jpg`,
+    sizeBytes: 1,
+    driveVersion: '1',
+    slotClaimId: `SLOT-${'b'.repeat(64)}`,
     sha256: 'a'.repeat(64),
     uploadedByStaffId: 'STAFF_01',
     uploadedAt: EXPENSE_NOW,
@@ -292,6 +297,7 @@ export function commitCommand(input: {
   attachments?: ExpensePrivateAttachment[]
 }): Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }> {
   const attachments = input.attachments ?? [attachmentFixture(input.expenseId, {
+    rootRequestId: input.rootRequestId,
     uploadedByStaffId: input.staffId ?? 'STAFF_01',
   })]
   return {
@@ -333,7 +339,10 @@ export function prepareWithManifest(
   command: Extract<MiniAppExpenseCommand, { commandType: 'PREPARE_EXPENSE' }>,
 ) {
   const provisionalExpenseId = `EXP-${command.payload.expenseDate.slice(0, 7).replace('-', '')}-0001`
-  const attachments = [attachmentFixture(provisionalExpenseId, { uploadedByStaffId: command.staffId })]
+  const attachments = [attachmentFixture(provisionalExpenseId, {
+    rootRequestId: command.rootRequestId,
+    uploadedByStaffId: command.staffId,
+  })]
   const preparedCommand = {
     ...command,
     payload: { ...command.payload, expectedManifestHash: manifestHash(attachments) },
@@ -343,7 +352,10 @@ export function prepareWithManifest(
   return {
     prepared,
     preparedCommand,
-    attachments: [attachmentFixture(prepared.expenseId, { uploadedByStaffId: command.staffId })],
+    attachments: [attachmentFixture(prepared.expenseId, {
+      rootRequestId: command.rootRequestId,
+      uploadedByStaffId: command.staffId,
+    })],
   }
 }
 

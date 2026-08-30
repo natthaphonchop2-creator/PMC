@@ -40,10 +40,15 @@ const commitCommand: MiniAppExpenseCommand = {
       {
         attachmentId: 'ATT-1',
         expenseId: 'EXP-202608-1',
+        rootRequestId: 'expense-request-1',
         ordinal: 1,
         mediaType: 'image/jpeg',
         originalFileName: 'receipt-1.jpg',
         privateFileId: 'private-file-1',
+        deterministicName: `001-${'b'.repeat(64)}.jpg`,
+        sizeBytes: 1_024,
+        driveVersion: '7',
+        slotClaimId: `SLOT-${'d'.repeat(64)}`,
         sha256: 'b'.repeat(64),
         uploadedByStaffId: 'ADMIN_01',
         uploadedAt: '2026-08-29T10:00:00+07:00',
@@ -51,10 +56,15 @@ const commitCommand: MiniAppExpenseCommand = {
       {
         attachmentId: 'ATT-2',
         expenseId: 'EXP-202608-1',
+        rootRequestId: 'expense-request-1',
         ordinal: 2,
         mediaType: 'image/png',
         originalFileName: 'receipt-2.png',
         privateFileId: 'private-file-2',
+        deterministicName: `002-${'c'.repeat(64)}.png`,
+        sizeBytes: 2_048,
+        driveVersion: '8',
+        slotClaimId: `SLOT-${'e'.repeat(64)}`,
         sha256: 'c'.repeat(64),
         uploadedByStaffId: 'ADMIN_01',
         uploadedAt: '2026-08-29T10:01:00+07:00',
@@ -76,7 +86,9 @@ describe('expense ingress contract', () => {
     expect(canonicalMiniAppExpenseCommand(prepareCommand)).toBe(
       '{"rootRequestId":"expense-request-1","commandIdempotencyKey":"expense-request-1:prepare","staffId":"ADMIN_01","commandType":"PREPARE_EXPENSE","payload":{"expenseDate":"2026-08-29","category":"BOOK_CLINIC","bookDailyKey":"CLINIC:2026-08-29","amountSatang":12000,"counterpartyName":null,"description":"สมุดประจำวันที่ 29","paymentMethod":null,"expectedAttachmentCount":2,"expectedManifestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedRevision":0}}',
     )
-    expect(canonicalMiniAppExpenseCommand(commitCommand)).toContain('"privateFileId":"private-file-1"')
+    expect(canonicalMiniAppExpenseCommand(commitCommand)).toContain(
+      `"privateFileId":"private-file-1","deterministicName":"001-${'b'.repeat(64)}.jpg","sizeBytes":1024,"driveVersion":"7","slotClaimId":"SLOT-${'d'.repeat(64)}","sha256":"${'b'.repeat(64)}"`,
+    )
     expect(canonicalMiniAppExpenseCommand(voidCommand)).toContain('"commandType":"VOID_EXPENSE"')
     expect(canonicalMiniAppExpenseCommand(structuredClone(prepareCommand))).toBe(
       canonicalMiniAppExpenseCommand(prepareCommand),
@@ -129,5 +141,19 @@ describe('expense ingress contract', () => {
         attachments: [commitCommand.payload.attachments[1]!, commitCommand.payload.attachments[0]!],
       },
     })).toThrow('invalid mini app expense attachment order')
+    expect(() => canonicalMiniAppExpenseCommand({
+      ...commitCommand,
+      payload: {
+        ...commitCommand.payload,
+        attachments: [{ ...commitCommand.payload.attachments[0]!, driveVersion: '0' }],
+      },
+    })).toThrow('invalid mini app expense attachment')
+    expect(() => canonicalMiniAppExpenseCommand({
+      ...commitCommand,
+      payload: {
+        ...commitCommand.payload,
+        attachments: [{ ...commitCommand.payload.attachments[0]!, deterministicName: 'receipt.jpg' }],
+      },
+    })).toThrow('invalid mini app expense attachment')
   })
 })

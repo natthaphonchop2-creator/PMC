@@ -169,6 +169,8 @@ function parsePrepareResult(value: unknown, command: PrepareCommand): ExpensePre
       'recordState',
       'version',
       'expectedRevision',
+      'expectedAttachmentCount',
+      'expectedManifestHash',
     ])
     || value.commandType !== 'PREPARE_EXPENSE'
     || !safeExpenseId(value.expenseId)
@@ -177,6 +179,8 @@ function parsePrepareResult(value: unknown, command: PrepareCommand): ExpensePre
     || value.recordState !== 'PREPARED'
     || value.version !== 1
     || value.expectedRevision !== command.payload.expectedRevision
+    || value.expectedAttachmentCount !== command.payload.expectedAttachmentCount
+    || value.expectedManifestHash !== command.payload.expectedManifestHash
   ) throw unavailable()
   return {
     commandType: 'PREPARE_EXPENSE',
@@ -185,6 +189,8 @@ function parsePrepareResult(value: unknown, command: PrepareCommand): ExpensePre
     recordState: 'PREPARED',
     version: 1,
     expectedRevision: value.expectedRevision,
+    expectedAttachmentCount: value.expectedAttachmentCount,
+    expectedManifestHash: value.expectedManifestHash,
   }
 }
 

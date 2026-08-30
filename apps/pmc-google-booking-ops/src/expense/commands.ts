@@ -255,6 +255,8 @@ function prepareExpense(
     recordState: 'PREPARED',
     version: submission.version,
     expectedRevision: command.payload.expectedRevision,
+    expectedAttachmentCount: command.payload.expectedAttachmentCount,
+    expectedManifestHash: command.payload.expectedManifestHash,
   }
   completeSuccess(command.commandIdempotencyKey, fingerprint, result, ports)
   return result
@@ -734,6 +736,7 @@ function validateAttachments(
     || attachments.some((attachment, index) => (
       attachment.ordinal !== index + 1
       || attachment.expenseId !== submission.expenseId
+      || attachment.rootRequestId !== submission.idempotencyKey
       || attachment.uploadedByStaffId !== submission.submittedByStaffId
     ))
     || new Set(attachments.map(({ attachmentId }) => attachmentId)).size !== attachments.length
@@ -845,12 +848,17 @@ function parseStoredCommandResult(value: unknown): ExpenseCommandResult {
     if (
       !hasExactKeys(result, [
         'commandType', 'expenseId', 'monthKey', 'recordState', 'version', 'expectedRevision',
+        'expectedAttachmentCount', 'expectedManifestHash',
       ])
       || !SAFE_ID.test(String(result.expenseId ?? ''))
       || !validStoredMonth(String(result.monthKey ?? ''), String(result.expenseId ?? ''))
       || result.recordState !== 'PREPARED'
       || result.version !== 1
       || !safeInteger(result.expectedRevision, 0)
+      || !safeInteger(result.expectedAttachmentCount, 1)
+      || result.expectedAttachmentCount > 5
+      || typeof result.expectedManifestHash !== 'string'
+      || !SHA256.test(result.expectedManifestHash)
     ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
     return {
       commandType: 'PREPARE_EXPENSE',
@@ -859,6 +867,8 @@ function parseStoredCommandResult(value: unknown): ExpenseCommandResult {
       recordState: 'PREPARED',
       version: result.version,
       expectedRevision: result.expectedRevision,
+      expectedAttachmentCount: result.expectedAttachmentCount,
+      expectedManifestHash: result.expectedManifestHash,
     }
   }
   if (result.commandType === 'COMMIT_EXPENSE') {

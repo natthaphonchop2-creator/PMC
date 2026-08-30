@@ -129,10 +129,15 @@ function asAttachment(row: ExpenseStorageRow): ExpensePrivateAttachment {
   return {
     attachmentId: String(row.attachmentId ?? ''),
     expenseId: String(row.expenseId ?? ''),
+    rootRequestId: String(row.rootRequestId ?? ''),
     ordinal: Number(row.ordinal),
     mediaType: String(row.mediaType ?? '') as ExpensePrivateAttachment['mediaType'],
     originalFileName: String(row.originalFileName ?? ''),
     privateFileId: String(row.privateFileId ?? ''),
+    deterministicName: String(row.deterministicName ?? ''),
+    sizeBytes: Number(row.sizeBytes),
+    driveVersion: String(row.driveVersion ?? ''),
+    slotClaimId: String(row.slotClaimId ?? ''),
     sha256: String(row.sha256 ?? ''),
     uploadedByStaffId: String(row.uploadedByStaffId ?? ''),
     uploadedAt: String(row.uploadedAt ?? ''),
@@ -641,15 +646,28 @@ function createGoogleExpenseRepositoryBackend(
           || expenseFolder.getSharingAccess() !== DriveApp.Access.PRIVATE
           || !hasDirectParent(expenseFolder.getParents(), monthFolder.getId())
         ) throw new Error('invalid')
+        const before = listExpenseFiles(expenseFolder.getId())
+        verifyExpenseSiblingSlots(before, monthKey, expenseId, expenseFolder.getId(), attachments)
         for (const attachment of attachments) {
           const file = DriveApp.getFileById(attachment.privateFileId)
+          const metadata = before.find(({ id }) => id === attachment.privateFileId)
           if (
-            file.isTrashed()
+            !metadata
+            || file.isTrashed()
             || file.getSharingAccess() !== DriveApp.Access.PRIVATE
             || !hasDirectParent(file.getParents(), expenseFolder.getId())
             || file.getMimeType() !== attachment.mediaType
+            || file.getBlob().getContentType() !== attachment.mediaType
+          ) throw new Error('invalid')
+          verifyExpenseFileMetadata(metadata, monthKey, expenseId, expenseFolder.getId(), attachment)
+          const bytes = file.getBlob().getBytes()
+          if (
+            bytes.length !== attachment.sizeBytes
+            || sha256Bytes(bytes) !== attachment.sha256
           ) throw new Error('invalid')
         }
+        const after = listExpenseFiles(expenseFolder.getId())
+        verifyExpenseSiblingSlots(after, monthKey, expenseId, expenseFolder.getId(), attachments)
       } catch {
         throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
       }
@@ -659,6 +677,126 @@ function createGoogleExpenseRepositoryBackend(
       return bytes.map((byte) => ((byte + 256) % 256).toString(16).padStart(2, '0')).join('')
     },
   }
+}
+
+type ExpenseDriveMetadata = GoogleAppsScript.Drive_v3.Drive.V3.Schema.File
+
+function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
+  const advancedDrive = Drive
+  if (!advancedDrive) throw new Error('invalid')
+  const files: ExpenseDriveMetadata[] = []
+  let pageToken: string | undefined
+  for (let page = 0; page < 100; page += 1) {
+    const response = advancedDrive.Files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      spaces: 'drive',
+      fields: 'nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,appProperties,permissions(id,type,role,deleted))',
+      pageSize: 100,
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      ...(pageToken ? { pageToken } : {}),
+    })
+    const nextFiles = response.files ?? []
+    if (!Array.isArray(nextFiles)) throw new Error('invalid')
+    files.push(...nextFiles)
+    if (!response.nextPageToken) return files
+    if (typeof response.nextPageToken !== 'string' || response.nextPageToken.length > 2_048) {
+      throw new Error('invalid')
+    }
+    pageToken = response.nextPageToken
+  }
+  throw new Error('invalid')
+}
+
+function verifyExpenseSiblingSlots(
+  files: ExpenseDriveMetadata[],
+  monthKey: string,
+  expenseId: string,
+  folderId: string,
+  attachments: ExpensePrivateAttachment[],
+): void {
+  if (files.length !== attachments.length || files.length < 1 || files.length > 5) {
+    throw new Error('invalid')
+  }
+  for (const attachment of attachments) {
+    const matches = files.filter((file) => (
+      file.name === attachment.deterministicName
+      || file.appProperties?.pmcExpenseId === expenseId
+        && file.appProperties?.pmcExpenseOrdinal === String(attachment.ordinal)
+      || file.appProperties?.pmcExpenseSlotClaimId === attachment.slotClaimId
+    ))
+    if (matches.length !== 1 || matches[0]?.id !== attachment.privateFileId) {
+      throw new Error('invalid')
+    }
+    verifyExpenseFileMetadata(matches[0], monthKey, expenseId, folderId, attachment)
+  }
+}
+
+function verifyExpenseFileMetadata(
+  file: ExpenseDriveMetadata,
+  monthKey: string,
+  expenseId: string,
+  folderId: string,
+  attachment: ExpensePrivateAttachment,
+): void {
+  const description = JSON.stringify({
+    originalFileName: attachment.originalFileName,
+    uploadedAt: attachment.uploadedAt,
+  })
+  const expectedProperties: Record<string, string> = {
+    pmcExpenseId: expenseId,
+    pmcExpenseMonthKey: monthKey,
+    pmcExpenseOrdinal: String(attachment.ordinal),
+    pmcExpenseSha256: attachment.sha256,
+    pmcExpenseSlotClaimId: attachment.slotClaimId,
+    pmcExpenseRootRequestId: attachment.rootRequestId,
+    pmcExpenseUploadedByStaffId: attachment.uploadedByStaffId,
+    pmcExpenseAttachmentId: attachment.attachmentId,
+    pmcExpenseMetadataSha256: sha256String(description),
+  }
+  const actualProperties = file.appProperties
+  const permissions = file.permissions
+  if (
+    file.id !== attachment.privateFileId
+    || file.name !== attachment.deterministicName
+    || file.description !== description
+    || file.mimeType !== attachment.mediaType
+    || file.trashed !== false
+    || !Array.isArray(file.parents)
+    || file.parents.length !== 1
+    || file.parents[0] !== folderId
+    || Number(file.size) !== attachment.sizeBytes
+    || file.version !== attachment.driveVersion
+    || !isPrivateExpensePermissions(permissions)
+    || !actualProperties
+    || Object.keys(actualProperties).length !== Object.keys(expectedProperties).length
+    || Object.keys(expectedProperties).some((key) => String(actualProperties[key] ?? '') !== expectedProperties[key])
+  ) throw new Error('invalid')
+}
+
+function isPrivateExpensePermissions(
+  permissions: GoogleAppsScript.Drive_v3.Drive.V3.Schema.Permission[] | undefined,
+): boolean {
+  return Array.isArray(permissions) && permissions.length > 0 && permissions.every((permission) => (
+    typeof permission.id === 'string'
+    && permission.id.length > 0
+    && (permission.type === 'user' || permission.type === 'group')
+    && typeof permission.role === 'string'
+    && permission.role.length > 0
+    && permission.deleted !== true
+  ))
+}
+
+function sha256String(value: string): string {
+  return digestHex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value))
+}
+
+function sha256Bytes(value: number[]): string {
+  return digestHex(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value))
+}
+
+function digestHex(bytes: number[]): string {
+  return bytes.map((byte) => ((byte + 256) % 256).toString(16).padStart(2, '0')).join('')
 }
 
 function requiredConfigId(value: string): string {

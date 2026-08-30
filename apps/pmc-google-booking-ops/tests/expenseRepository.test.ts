@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { executeExpenseCommand, runExpenseRecovery } from '../src/expense/commands'
 import { createGoogleExpenseRepository } from '../src/expense/repository'
 import {
   EXPENSE_NOW,
+  attachmentFixture,
   bookPrepareCommand,
   commitCommand,
   createExpenseTestPorts,
@@ -297,6 +299,67 @@ describe('Apps Script expense repository and command journal', () => {
 })
 
 describe('Google expense repository containment and literal text', () => {
+  it.each(['bytes', 'version', 'duplicate'] as const)(
+    'rejects a %s mutation before COMMIT audit or effective totals',
+    (mutation) => {
+      const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+      const repository = createGoogleExpenseRepository({
+        masterSpreadsheetId: 'finance-master',
+        financeFolderId: 'finance-root',
+      })
+      const base = createExpenseTestPorts()
+      const ports = { ...base, expense: repository }
+      const rootRequestId = `authoritative-${mutation}`
+      const expenseId = 'EXP-202608-0001'
+      const bytes = [...Buffer.from('authoritative-drive-bytes')]
+      const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+      const attachment = attachmentFixture(expenseId, {
+        attachmentId: `ATT-authoritative-${mutation}`,
+        rootRequestId,
+        privateFileId: `FILE-authoritative-${mutation}`,
+        deterministicName: `001-${sha256}.jpg`,
+        sizeBytes: bytes.length,
+        driveVersion: '7',
+        slotClaimId: `SLOT-${'c'.repeat(64)}`,
+        sha256,
+      })
+      const prepare = prepareCommand({
+        rootRequestId,
+        commandIdempotencyKey: `${rootRequestId}:prepare`,
+        payload: {
+          ...prepareCommand().payload,
+          expectedManifestHash: manifestHash([attachment]),
+        },
+      })
+      const prepared = executeExpenseCommand(prepare, ports)
+      expect(prepared).toMatchObject({ commandType: 'PREPARE_EXPENSE', expenseId })
+      environment.addExpenseAttachment(attachment, bytes)
+      expect(() => repository.verifyPrivateAttachments('2026-08', expenseId, [attachment]))
+        .not.toThrow()
+
+      if (mutation === 'bytes') {
+        environment.mutateExpenseFile(attachment.privateFileId, {
+          bytes: bytes.map((value, index) => index === 0 ? value ^ 0xff : value),
+        })
+      } else if (mutation === 'version') {
+        environment.mutateExpenseFile(attachment.privateFileId, { version: '8' })
+      } else {
+        environment.duplicateExpenseAttachment(attachment, bytes)
+      }
+
+      expect(() => executeExpenseCommand(commitCommand({
+        rootRequestId,
+        expenseId,
+        attachments: [attachment],
+      }), ports)).toThrow('EXPENSE_PRIVATE_FILE_INVALID')
+      expect(repository.auditForExpense(expenseId))
+        .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
+      expect(repository.listMonth('2026-08')).toContainEqual(
+        expect.objectContaining({ expenseId, recordState: 'PREPARED' }),
+      )
+    },
+  )
+
   it.each([
     ['shared', { ledgerSharing: 'ANYONE' as const }],
     ['outside', { ledgerParent: 'OUTSIDE' as const }],
@@ -344,10 +407,15 @@ describe('Google expense repository containment and literal text', () => {
     repository.appendAttachments('2026-08', [{
       attachmentId: 'ATT-FORMULA-1',
       expenseId: submission.expenseId,
+      rootRequestId: 'formula-roundtrip',
       ordinal: 1,
       mediaType: 'image/jpeg',
       originalFileName: ' -receipt.jpg',
       privateFileId: 'FILE-FORMULA-1',
+      deterministicName: `001-${'a'.repeat(64)}.jpg`,
+      sizeBytes: 1,
+      driveVersion: '1',
+      slotClaimId: `SLOT-${'b'.repeat(64)}`,
       sha256: 'a'.repeat(64),
       uploadedByStaffId: 'STAFF_01',
       uploadedAt: EXPENSE_NOW,

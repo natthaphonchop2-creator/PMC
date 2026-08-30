@@ -15,6 +15,45 @@ const RETRY_CREATED_AT = '2026-08-30T04:00:00.000Z'
 const SECRET = 'a staff-bound staging secret that is at least thirty two bytes'
 
 describe('expense GCS staging', () => {
+  it('atomically claims one Drive slot across processes and rejects a conflicting fingerprint', async () => {
+    const fake = fakeStorage()
+    const firstProcess = createGoogleExpenseStagingPort({
+      bucketName: 'pmc-expense-stage', storage: fake.storage, now: () => CREATED_AT,
+    })
+    const secondProcess = createGoogleExpenseStagingPort({
+      bucketName: 'pmc-expense-stage', storage: fake.storage, now: () => RETRY_CREATED_AT,
+    })
+    const claimInput = {
+      rootRequestId: ROOT_REQUEST_ID,
+      expenseId: 'EXP-202608-0001',
+      ordinal: 1,
+      sha256: 'a'.repeat(64),
+      mimeType: 'image/jpeg' as const,
+      deterministicName: `001-${'a'.repeat(64)}.jpg`,
+    }
+
+    const [owner, replay] = await Promise.all([
+      firstProcess.claimDriveSlot(claimInput),
+      secondProcess.claimDriveSlot(claimInput),
+    ])
+
+    expect(owner).toMatchObject({
+      ...claimInput,
+      objectKey: 'expense-drive-slots/EXP-202608-0001/001.json',
+      created: true,
+      generation: '4',
+    })
+    expect(replay).toEqual({ ...owner, created: false })
+
+    for (const conflict of [
+      { ...claimInput, rootRequestId: 'expense-request-2' },
+      { ...claimInput, sha256: 'b'.repeat(64), deterministicName: `001-${'b'.repeat(64)}.jpg` },
+      { ...claimInput, mimeType: 'image/png' as const, deterministicName: `001-${'a'.repeat(64)}.png` },
+    ]) {
+      await expect(secondProcess.claimDriveSlot(conflict)).rejects.toThrow('EXPENSE_DRIVE_SLOT_CONFLICT')
+    }
+  })
+
   it('writes a deterministic private key with CRC32C and returns a bounded receipt', async () => {
     const fake = fakeStorage()
     const bytes = await jpeg()

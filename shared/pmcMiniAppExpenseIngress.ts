@@ -7,10 +7,15 @@ import type {
 export interface ExpensePrivateAttachment {
   attachmentId: string
   expenseId: string
+  rootRequestId: string
   ordinal: number
   mediaType: 'image/jpeg' | 'image/png'
   originalFileName: string
   privateFileId: string
+  deterministicName: string
+  sizeBytes: number
+  driveVersion: string
+  slotClaimId: string
   sha256: string
   uploadedByStaffId: string
   uploadedAt: string
@@ -67,6 +72,8 @@ export interface ExpensePrepareResult {
   recordState: 'PREPARED'
   version: number
   expectedRevision: number
+  expectedAttachmentCount: number
+  expectedManifestHash: string
 }
 
 export type ExpenseCommandResult =
@@ -301,10 +308,15 @@ function orderedAttachment(value: unknown): ExpensePrivateAttachment {
   const keys = [
     'attachmentId',
     'expenseId',
+    'rootRequestId',
     'ordinal',
     'mediaType',
     'originalFileName',
     'privateFileId',
+    'deterministicName',
+    'sizeBytes',
+    'driveVersion',
+    'slotClaimId',
     'sha256',
     'uploadedByStaffId',
     'uploadedAt',
@@ -313,13 +325,27 @@ function orderedAttachment(value: unknown): ExpensePrivateAttachment {
     !hasExactKeys(value, keys)
     || !safeId(value.attachmentId)
     || !safeId(value.expenseId)
+    || !safeId(value.rootRequestId)
     || !safeInteger(value.ordinal)
     || value.ordinal < 1
     || value.ordinal > 5
     || (value.mediaType !== 'image/jpeg' && value.mediaType !== 'image/png')
     || !boundedText(value.originalFileName, 160)
     || !safeId(value.privateFileId)
+    || typeof value.deterministicName !== 'string'
+    || !safeInteger(value.sizeBytes)
+    || value.sizeBytes < 1
+    || value.sizeBytes > 10_000_000
+    || typeof value.driveVersion !== 'string'
+    || !/^[1-9]\d{0,31}$/.test(value.driveVersion)
+    || typeof value.slotClaimId !== 'string'
+    || !/^SLOT-[a-f0-9]{64}$/.test(value.slotClaimId)
     || !sha256(value.sha256)
+    || value.deterministicName !== deterministicAttachmentName(
+      value.ordinal,
+      value.sha256,
+      value.mediaType,
+    )
     || !safeId(value.uploadedByStaffId)
     || typeof value.uploadedAt !== 'string'
     || !Number.isFinite(Date.parse(value.uploadedAt))
@@ -330,14 +356,27 @@ function orderedAttachment(value: unknown): ExpensePrivateAttachment {
   return {
     attachmentId: value.attachmentId,
     expenseId: value.expenseId,
+    rootRequestId: value.rootRequestId,
     ordinal: value.ordinal,
     mediaType: value.mediaType,
     originalFileName: value.originalFileName,
     privateFileId: value.privateFileId,
+    deterministicName: value.deterministicName,
+    sizeBytes: value.sizeBytes,
+    driveVersion: value.driveVersion,
+    slotClaimId: value.slotClaimId,
     sha256: value.sha256,
     uploadedByStaffId: value.uploadedByStaffId,
     uploadedAt: value.uploadedAt,
   }
+}
+
+function deterministicAttachmentName(
+  ordinal: number,
+  sha256Value: string,
+  mediaType: 'image/jpeg' | 'image/png',
+): string {
+  return `${String(ordinal).padStart(3, '0')}-${sha256Value}.${mediaType === 'image/jpeg' ? 'jpg' : 'png'}`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,9 +1,15 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExpenseReceipt } from '../../shared/pmcExpense'
-import type { ExpensePrepareResult } from '../../shared/pmcMiniAppExpenseIngress'
+import type {
+  ExpensePrepareResult,
+  ExpensePrivateAttachment,
+} from '../../shared/pmcMiniAppExpenseIngress'
 import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ingressClient'
-import type { ExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingStore'
+import type {
+  ExpenseDriveSlotClaim,
+  ExpenseStagingReceipt,
+} from '../../server/pmc-mini-app/finance/stagingStore'
 import {
   createExpenseSubmissionService,
   expenseAttachmentManifestHash,
@@ -18,6 +24,7 @@ describe('expense submission orchestration', () => {
     await expect(fixture.service.submit(fixture.input)).resolves.toEqual(fixture.receipt)
     expect(events).toEqual([
       'prepare',
+      'claim-1', 'claim-2',
       'ensure-folder',
       'staging-get-1', 'upload-1', 'verify-1',
       'staging-get-2', 'upload-2', 'verify-2',
@@ -144,6 +151,25 @@ describe('expense submission orchestration', () => {
     expect(fixture.staging.deleteVerified).toHaveBeenCalledTimes(2)
   })
 
+  it('recovers a byte-identical COMMIT after cleanup and process restart without staging or new files', async () => {
+    const state = serviceState()
+    const firstProcess = serviceFixture([], state)
+    await expect(firstProcess.service.submit(firstProcess.input)).resolves.toEqual(firstProcess.receipt)
+    expect(state.deletedObjectKeys.size).toBe(2)
+    expect(firstProcess.finance.uploadExpenseImage).toHaveBeenCalledTimes(2)
+
+    const restarted = serviceFixture([], state)
+    await expect(restarted.service.submit(restarted.input)).resolves.toEqual(restarted.receipt)
+
+    expect(restarted.staging.get).not.toHaveBeenCalled()
+    expect(restarted.finance.uploadExpenseImage).not.toHaveBeenCalled()
+    expect(restarted.finance.listVerifiedExpenseImages).toHaveBeenCalledOnce()
+    expect(restarted.finance.ensureExpenseFolder).not.toHaveBeenCalled()
+    expect(JSON.stringify(restarted.ingress.commit.mock.calls[0]?.[0].payload.attachments))
+      .toBe(JSON.stringify(firstProcess.ingress.commit.mock.calls[0]?.[0].payload.attachments))
+    expect(state.driveAttachments).toHaveLength(2)
+  })
+
   it('fails safely when staged bytes or the returned receipt do not match the prepared intent', async () => {
     const poisoned = serviceFixture()
     poisoned.staging.get.mockResolvedValueOnce({
@@ -166,7 +192,7 @@ describe('expense submission orchestration', () => {
   })
 })
 
-function serviceFixture(events: string[] = []) {
+function serviceFixture(events: string[] = [], state = serviceState()) {
   const stagingReceipts = stagedReceipts()
   const prepared: ExpensePrepareResult = {
     commandType: 'PREPARE_EXPENSE',
@@ -175,6 +201,8 @@ function serviceFixture(events: string[] = []) {
     recordState: 'PREPARED',
     version: 1,
     expectedRevision: 0,
+    expectedAttachmentCount: 2,
+    expectedManifestHash: expenseAttachmentManifestHash(stagingReceipts),
   }
   const receipt: ExpenseReceipt = {
     expenseId: 'EXP-202608-0001',
@@ -198,12 +226,53 @@ function serviceFixture(events: string[] = []) {
     readMaster: vi.fn(),
     readMonth: vi.fn(),
     ensureExpenseFolder: vi.fn(async () => { events.push('ensure-folder'); return 'expense-folder-1' }),
-    uploadExpenseImage: vi.fn(async (input: { ordinal: number }) => {
+    uploadExpenseImage: vi.fn(async (input: {
+      ordinal: number
+      expenseId: string
+      rootRequestId: string
+      mimeType: 'image/jpeg' | 'image/png'
+      originalFileName: string
+      deterministicName: string
+      bytes: Buffer
+      sha256: string
+      uploadedByStaffId: string
+      uploadedAt: string
+      attachmentId: string
+      slotClaim: { claimId: string; created: boolean }
+    }) => {
       events.push(`upload-${input.ordinal}`)
-      return `private-file-${input.ordinal}`
+      const existing = state.driveAttachments.find(({ ordinal }) => ordinal === input.ordinal)
+      if (existing) return { ...existing }
+      if (!input.slotClaim.created) throw new Error('claim owner has not created the Drive file')
+      const attachment: ExpensePrivateAttachment = {
+        attachmentId: input.attachmentId,
+        expenseId: input.expenseId,
+        rootRequestId: input.rootRequestId,
+        ordinal: input.ordinal,
+        mediaType: input.mimeType,
+        originalFileName: input.originalFileName,
+        privateFileId: `private-file-${input.ordinal}`,
+        deterministicName: input.deterministicName,
+        sizeBytes: input.bytes.length,
+        driveVersion: String(6 + input.ordinal),
+        slotClaimId: input.slotClaim.claimId,
+        sha256: input.sha256,
+        uploadedByStaffId: input.uploadedByStaffId,
+        uploadedAt: input.uploadedAt,
+      }
+      state.driveAttachments.push(attachment)
+      return { ...attachment }
     }),
-    verifyExpenseFile: vi.fn(async (input: { fileId: string }) => {
+    verifyExpenseFile: vi.fn(async (input: { fileId: string; expectedAttachment?: ExpensePrivateAttachment }) => {
       events.push(`verify-${input.fileId.endsWith('-1') ? 1 : 2}`)
+      const existing = state.driveAttachments.find(({ privateFileId }) => privateFileId === input.fileId)
+      if (!existing || JSON.stringify(existing) !== JSON.stringify(input.expectedAttachment)) {
+        throw new Error('private file mismatch')
+      }
+    }),
+    listVerifiedExpenseImages: vi.fn(async () => {
+      if (state.driveAttachments.length < 1) throw new Error('private files incomplete')
+      return state.driveAttachments.map((attachment) => ({ ...attachment }))
     }),
     downloadExpenseFile: vi.fn(),
   }
@@ -211,12 +280,38 @@ function serviceFixture(events: string[] = []) {
     put: vi.fn(),
     get: vi.fn(async (objectKey: string) => {
       const selected = stagingReceipts.find((item) => item.objectKey === objectKey)!
+      if (state.deletedObjectKeys.has(objectKey)) throw new Error('staging object deleted')
       events.push(`staging-get-${selected.ordinal}`)
       return { ...selected, bytes: Buffer.from(bytesByKey.get(objectKey)!) }
     }),
     deleteVerified: vi.fn(async (objectKey: string) => {
       const selected = stagingReceipts.find((item) => item.objectKey === objectKey)!
+      state.deletedObjectKeys.add(objectKey)
       events.push(`staging-delete-${selected.ordinal}`)
+    }),
+    claimDriveSlot: vi.fn(async (claimInput: {
+      rootRequestId: string
+      expenseId: string
+      ordinal: number
+      sha256: string
+      mimeType: 'image/jpeg' | 'image/png'
+      deterministicName: string
+    }) => {
+      events.push(`claim-${claimInput.ordinal}`)
+      const key = `${claimInput.expenseId}:${claimInput.ordinal}`
+      const existing = state.claims.get(key)
+      if (existing) return { ...existing, created: false }
+      const claimId = `SLOT-${createHash('sha256').update(JSON.stringify(claimInput), 'utf8').digest('hex')}`
+      const claim = {
+        objectKey: `expense-drive-slots/${claimInput.expenseId}/${String(claimInput.ordinal).padStart(3, '0')}.json`,
+        claimId,
+        generation: '4',
+        createdAt: '2026-08-29T10:00:00.000Z',
+        created: true,
+        ...claimInput,
+      }
+      state.claims.set(key, claim)
+      return { ...claim }
     }),
   }
   const input: ExpenseSubmissionInput = {
@@ -240,6 +335,18 @@ function serviceFixture(events: string[] = []) {
     ingress,
     finance,
     staging,
+  }
+}
+
+function serviceState(): {
+  claims: Map<string, ExpenseDriveSlotClaim>
+  driveAttachments: ExpensePrivateAttachment[]
+  deletedObjectKeys: Set<string>
+} {
+  return {
+    claims: new Map(),
+    driveAttachments: [],
+    deletedObjectKeys: new Set(),
   }
 }
 
