@@ -25,7 +25,7 @@ export function mutateMiniAppAsyncState(input: unknown, ports: BookingPorts): Mi
     if (ports.repositories.lineDirectory.hasNonce(envelope.nonce)) throw new Error('mini app async state replay detected')
     const current = ports.miniAppRequests.getByRequestId(envelope.payload.requestId)
     if (!current || current.draftId !== envelope.payload.draftId) throw new Error('mini app async request not found')
-    if (envelope.payload.operation !== 'RETAIN_PREPARE') validateImmutableBindings(current, envelope.payload, ports)
+    validateImmutableBindings(current, envelope.payload, ports)
     const mutation = applyMutation(current, envelope.payload, ports)
     const persisted = mutation.write
       ? ports.miniAppRequests.updateByRequestId(current.requestId, current.version, mutation.next)
@@ -60,7 +60,7 @@ function verifyEnvelope(input: unknown, ports: BookingPorts): MiniAppAsyncStateI
 }
 
 function validatePayloadShape(payload: MiniAppAsyncStateMutation): void {
-  if (!/^(QUEUE|CLAIM|RENEW|PROJECT|RETRY|EXHAUST|COMPLETE|RETAIN_PREPARE)$/.test(payload.operation)
+  if (!/^(QUEUE|CLAIM|RENEW|PROJECT|RETRY|EXHAUST|COMPLETE)$/.test(payload.operation)
     || !safeId(payload.requestId) || !safeId(payload.draftId) || !/^[A-Za-z0-9_-]{4,128}$/.test(payload.payloadHash)
     || !Number.isSafeInteger(payload.expectedVersion) || payload.expectedVersion < 1
     || !Number.isSafeInteger(payload.expectedAttempt) || payload.expectedAttempt < 0
@@ -77,17 +77,6 @@ function validatePayloadShape(payload: MiniAppAsyncStateMutation): void {
     || payload.confirmationStatus !== null && !['CONFIRMED', 'TENTATIVE', 'AWAITING_ADMIN_SLOT'].includes(payload.confirmationStatus)) {
     throw new Error('invalid mini app async state payload')
   }
-  if (payload.operation === 'RETAIN_PREPARE') validatePrepareRetentionShape(payload)
-}
-
-function validatePrepareRetentionShape(payload: MiniAppAsyncStateMutation): void {
-  const fileCount = payload.paymentEvidenceFileIds.length + payload.chatEvidenceFileIds.length
-  const objectCount = payload.paymentEvidenceObjectKeys.length + payload.chatEvidenceObjectKeys.length
-  if (payload.payloadHash.length !== 43 || payload.taskAttempt !== 1
-    || payload.leaseOwnerToken !== null || payload.leaseUntil !== null || payload.taskName !== null
-    || payload.safeErrorCode !== null || payload.caseId !== null || payload.confirmationStatus !== null
-    || fileCount + objectCount < 1 || fileCount + objectCount !== payload.evidenceCount
-    || fileCount > 0 && objectCount > 0) throw new Error('invalid mini app prepare retention payload')
 }
 
 function validateImmutableBindings(
@@ -108,7 +97,6 @@ function applyMutation(
   payload: MiniAppAsyncStateMutation,
   ports: BookingPorts,
 ): { write: boolean; next: MiniAppAsyncRequestRecord; outcome: MiniAppAsyncStateIngressResult['outcome'] } {
-  if (payload.operation === 'RETAIN_PREPARE') return applyRetainPrepare(current, payload)
   if (payload.operation === 'EXHAUST') return applyExhaust(current, payload, ports)
   if (TERMINAL_STATES.has(current.state)) return { write: false, next: current, outcome: 'TERMINAL' }
   if (payload.operation === 'QUEUE') return applyQueue(current, payload)
@@ -117,61 +105,6 @@ function applyMutation(
   if (payload.operation === 'PROJECT') return applyProject(current, payload, ports)
   if (payload.operation === 'RETRY') return applyRetry(current, payload)
   return applyComplete(current, payload, ports)
-}
-
-function applyRetainPrepare(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {
-  if (current.state !== 'CANCELLED' && current.state !== 'EXPIRED') {
-    throw new Error('mini app prepare retention state rejected')
-  }
-  if (current.attemptCount !== payload.expectedAttempt) throw new Error('stale mini app prepare retention attempt')
-  if (current.evidenceProjectionHash === null) {
-    if (current.version !== payload.expectedVersion || evidenceReferenceCount(current) !== 0) {
-      throw new Error('stale mini app prepare retention version')
-    }
-  } else if (current.evidenceProjectionHash !== payload.payloadHash) {
-    throw new Error('mini app prepare retention conflict')
-  }
-  const fileMode = payload.paymentEvidenceFileIds.length + payload.chatEvidenceFileIds.length > 0
-  if (fileMode && current.paymentEvidenceObjectKeys.length + current.chatEvidenceObjectKeys.length > 0
-    || !fileMode && current.paymentEvidenceFileIds.length + current.chatEvidenceFileIds.length > 0) {
-    throw new Error('mini app prepare retention conflict')
-  }
-  const paymentEvidenceFileIds = canonicalReferenceUnion(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
-  const chatEvidenceFileIds = canonicalReferenceUnion(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
-  const paymentEvidenceObjectKeys = canonicalReferenceUnion(current.paymentEvidenceObjectKeys, payload.paymentEvidenceObjectKeys)
-  const chatEvidenceObjectKeys = canonicalReferenceUnion(current.chatEvidenceObjectKeys, payload.chatEvidenceObjectKeys)
-  const evidenceCount = paymentEvidenceFileIds.length + chatEvidenceFileIds.length
-    + paymentEvidenceObjectKeys.length + chatEvidenceObjectKeys.length
-  if (paymentEvidenceFileIds.length > 10 || chatEvidenceFileIds.length > 10
-    || paymentEvidenceObjectKeys.length > 10 || chatEvidenceObjectKeys.length > 10 || evidenceCount > 20) {
-    throw new Error('mini app prepare retention limit rejected')
-  }
-  if (current.evidenceProjectionHash === payload.payloadHash
-    && current.retentionState === 'PENDING_APPROVAL'
-    && sameStrings(current.paymentEvidenceFileIds, paymentEvidenceFileIds)
-    && sameStrings(current.chatEvidenceFileIds, chatEvidenceFileIds)
-    && sameStrings(current.paymentEvidenceObjectKeys, paymentEvidenceObjectKeys)
-    && sameStrings(current.chatEvidenceObjectKeys, chatEvidenceObjectKeys)
-    && current.evidenceCount === evidenceCount) return unchanged(current)
-  return changed(current, {
-    retentionState: 'PENDING_APPROVAL',
-    paymentEvidenceFileIds,
-    chatEvidenceFileIds,
-    paymentEvidenceObjectKeys,
-    chatEvidenceObjectKeys,
-    evidenceCount,
-    evidenceProjectionHash: payload.payloadHash,
-    updatedAt: payload.nowIso,
-  })
-}
-
-function canonicalReferenceUnion(left: readonly string[], right: readonly string[]): string[] {
-  return [...new Set([...left, ...right])].sort()
-}
-
-function evidenceReferenceCount(record: MiniAppAsyncRequestRecord): number {
-  return record.paymentEvidenceFileIds.length + record.chatEvidenceFileIds.length
-    + record.paymentEvidenceObjectKeys.length + record.chatEvidenceObjectKeys.length
 }
 
 function applyQueue(current: MiniAppAsyncRequestRecord, payload: MiniAppAsyncStateMutation) {

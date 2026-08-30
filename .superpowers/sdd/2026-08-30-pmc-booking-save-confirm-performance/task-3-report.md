@@ -124,3 +124,40 @@ Fix-round-2 verification:
 - `npm run booking:build`: passed.
 - `npm run build:mini-app`: passed.
 - Touched-path ESLint and `git diff --check`: passed.
+
+---
+
+## Fix round 3 — Complete draft-state owner serialization
+
+The architecture ruling supersedes the round-2 reuse of `MINI_APP_ASYNC_STATE`. Worker state v1 is restored byte-shape compatible and contains no prepare/cancel operation. The round-1 direct Sheet retention CAS and all Cloud Run `updateDraft` prepare writes remain removed.
+
+Added the versioned sibling `MINI_APP_DRAFT_STATE v1` contract with exact discriminants:
+
+- `PREPARE_READY`
+- `PREPARE_PARTIAL`
+- `CANCEL`
+
+The shared contract defines the normalized protocol-2 booking input, ordinal evidence manifest, prepare-binding canonical form, draft-projection canonical form, signed envelope and safe result. Node and Apps Script hash the same canonical strings.
+
+Apps Script now executes the complete read, validation, transition and row write inside the existing script lock. It recomputes the binding from the persisted recorder identity, active canonical config snapshots, exact normalized P2 input, original base version, ordered content hashes and typed evidence manifest. Partial mutations never bind booking/customer input; full same-binding mutations can promote the partial DRAFT to READY. Different bindings conflict. READY and CANCEL are serialized so only one transition wins; if cancellation already won, later prepare evidence is attached to the terminal row with `PENDING_APPROVAL` and the state is never reopened.
+
+Cloud Run persists remote evidence first, then sends only the sibling owner mutation. `bookingPrepare` has a read-only Sheet store dependency and contains no `updateDraft` call. It validates the exact safe result and shared projection digest. Timeout, malformed response or digest ambiguity triggers exactly one authoritative reread; it resends once only when that reread proves no prepare mutation applied. Response loss after apply is accepted only by digest/reference attestation.
+
+Round-3 TDD evidence:
+
+- New client suite first failed because `draftStateIngressClient` did not exist.
+- New Apps Script domain suite first failed because the sibling shared contract/domain did not exist.
+- Existing clean-success and partial tests were changed to require zero direct Cloud Run Sheet writes and failed against the previous implementation before the refactor.
+
+Round-3 verification:
+
+- Focused sibling client/domain, prepare orchestration, legacy async-state v1, evidence and worker regressions: **8 files, 156 tests passed**.
+- Full Mini App suite: **72 files, 975 tests passed**.
+- Full Apps Script Booking suite: **49 files, 680 tests passed**.
+- `npm run build:server`: passed.
+- `npm run booking:typecheck`: passed.
+- `npm run booking:build`: passed.
+- `npm run build:mini-app`: passed.
+- Touched-path ESLint and `git diff --check`: passed.
+
+No route was registered, no capability was enabled, no async allowlist changed, and no deploy, live upload, Sheet mutation or external production call was made. Task 4 still owns all-staff runtime wiring and switching P2 CANCEL to this owner ingress before advertising prepare.

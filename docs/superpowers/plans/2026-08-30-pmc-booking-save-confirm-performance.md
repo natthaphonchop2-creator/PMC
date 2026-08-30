@@ -221,20 +221,23 @@ git commit -m "feat: parse bounded Booking prepare uploads"
 
 **Files:**
 - Create: `server/pmc-mini-app/bookingPrepare.ts`
+- Create: `shared/pmcMiniAppDraftState.ts`
+- Create: `server/pmc-mini-app/draftStateIngressClient.ts`
+- Create: `apps/pmc-google-booking-ops/src/domain/miniAppDraftStateIngress.ts`
 - Modify: `server/pmc-mini-app/evidenceIngressClient.ts`
 - Modify: `server/pmc-mini-app/store.ts`
 - Modify: `server/pmc-mini-app/bookingDraft.ts`
-- Modify: `shared/pmcMiniAppAsyncState.ts`
-- Modify: `server/pmc-mini-app/asyncStateIngressClient.ts`
 - Modify: `apps/pmc-google-booking-ops/src/domain/miniAppEvidenceIngress.ts`
-- Modify: `apps/pmc-google-booking-ops/src/domain/miniAppAsyncStateIngress.ts`
+- Modify: `apps/pmc-google-booking-ops/src/entrypoints.ts`
 - Test: `tests/pmc-mini-app/bookingPrepareApi.test.ts`
 - Test: `apps/pmc-google-booking-ops/tests/miniAppEvidenceIngress.test.ts`
-- Test: `apps/pmc-google-booking-ops/tests/miniAppAsyncStateIngress.test.ts`
+- Test: `apps/pmc-google-booking-ops/tests/miniAppDraftStateIngress.test.ts`
+- Test: `tests/pmc-mini-app/draftStateIngressClient.test.ts`
 
 **Interfaces:**
 - Produces: `persistPrepareEvidence(input): Promise<PersistedPrepareEvidence>`.
 - Produces: exact deterministic binding by draft ID, kind, and SHA-256.
+- Produces: versioned signed Apps Script owner-lock draft-state mutation for PREPARE_READY/PREPARE_PARTIAL/CANCEL.
 
 - [ ] **Step 1: Write failing persistence/recovery tests**
 
@@ -273,7 +276,7 @@ export interface PersistedPrepareEvidence {
 }
 ```
 
-Persist only existing object-key/file-ID columns in Sheets; recompute deterministic bindings. On partial success, write only accumulated references plus `PENDING_APPROVAL` and return a retryable error. Exact retry reuses references and changed binding conflicts. A terminal cancel/expiry race attaches references only through the signed Apps Script state-ingress owner lock; Cloud Run never claims a local mutex plus unconditional Sheets write is an atomic CAS.
+Persist only existing object-key/file-ID columns in Sheets; recompute deterministic bindings. On partial success, send only accumulated references plus `PENDING_APPROVAL` through the signed owner mutation and return a retryable error. Exact retry reuses references and changed binding conflicts. Final READY, partial binding, and terminal retention never use direct Cloud Run Sheets writes. Keep the existing `MINI_APP_ASYNC_STATE v1` wire contract unchanged for deployed workers.
 
 - [ ] **Step 4: Run GREEN persistence tests**
 
@@ -340,6 +343,8 @@ Expected: FAIL because route/wizard one-request flow do not exist.
 - [ ] **Step 3: Implement handler order and client selection**
 
 Handler order is authenticate once → owned draft once → one config snapshot → parse/validate → persist evidence → one final update. Client chooses prepare from config, not error probing. Legacy flow remains only when protocol capability explicitly says prepare false.
+
+The route constructs the draft-state ingress client for all Booking staff, independent of the async GCS/Cloud Tasks allowlist. Before advertising prepare, P2 cancellation also uses the owner lock and legacy P2 write routes are either owner-fenced or fail with the persistent upgrade instruction; no reachable direct Sheets writer may race PREPARE_READY/PARTIAL.
 
 - [ ] **Step 4: Run GREEN and affected suites**
 
@@ -413,6 +418,8 @@ export interface QueueFastPathBinding {
 ```
 
 APPLIED accepts only QUEUED/base+1/unchanged attempt. IDEMPOTENT additionally accepts PROCESSING/RETRYING at version ≥ base+2 and attempt base+1…8. Use returned state/version/attempt. BUSY/invalid/uncertain returns null. Bind local deterministic task name and payload hash before mutation.
+
+The synchronous confirm claim that competes with cancellation is also owner-fenced before this task can claim the complete row state machine is cross-instance safe.
 
 - [ ] **Step 4: Run GREEN and response-loss tests**
 

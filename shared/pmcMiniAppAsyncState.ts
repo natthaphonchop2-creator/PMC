@@ -1,12 +1,4 @@
-export type MiniAppAsyncStateOperation =
-  | 'QUEUE'
-  | 'CLAIM'
-  | 'RENEW'
-  | 'PROJECT'
-  | 'RETRY'
-  | 'EXHAUST'
-  | 'COMPLETE'
-  | 'RETAIN_PREPARE'
+export type MiniAppAsyncStateOperation = 'QUEUE' | 'CLAIM' | 'RENEW' | 'PROJECT' | 'RETRY' | 'EXHAUST' | 'COMPLETE'
 export type MiniAppAsyncRequestState =
   | 'DRAFT' | 'UPLOADING' | 'READY_TO_CONFIRM' | 'QUEUED' | 'PROCESSING' | 'RETRYING'
   | 'CONFIRMING' | 'CONFIRMED' | 'CONFIRMED_WITH_RETRY' | 'NEEDS_REVIEW'

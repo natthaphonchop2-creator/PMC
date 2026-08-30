@@ -6,9 +6,14 @@ import {
   type PersistPrepareEvidenceInput,
 } from '../../server/pmc-mini-app/bookingPrepare'
 import type { EvidenceIngressPort } from '../../server/pmc-mini-app/evidenceIngressClient'
-import type { AsyncStateIngressPort } from '../../server/pmc-mini-app/asyncStateIngressClient'
+import type { DraftStateIngressPort } from '../../server/pmc-mini-app/draftStateIngressClient'
 import type { EvidenceStagingPort } from '../../server/pmc-mini-app/stagingStore'
-import type { MiniAppAsyncStateIngressResult, MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState'
+import {
+  canonicalMiniAppDraftProjection,
+  type MiniAppDraftProjection,
+  type MiniAppDraftStateMutation,
+  type MiniAppDraftStateResult,
+} from '../../shared/pmcMiniAppDraftState'
 import type { MiniAppDraftPatch, MiniAppRequestRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
 
 describe('PMC Mini App Booking prepare persistence', () => {
@@ -36,11 +41,12 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(result.payment[0]?.deterministicUploadId).toBe(stagedUploadId('PAYMENT', png(1).bytes))
     expect(fixture.staging?.maxActive()).toBe(4)
     expect(fixture.store.writeCount()).toBe(1)
+    expect(fixture.store.directWriteCount()).toBe(0)
   })
 
   it('recovers an exact retry after response loss without another remote write', async () => {
     const fixture = prepareFixture('ASYNC')
-    fixture.store.loseFirstUpdateResponse()
+    fixture.draftStateIngress.loseNextResponse()
     const input = fixture.input()
 
     const first = await persistPrepareEvidence(input)
@@ -94,6 +100,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(partial.evidenceCount).toBeGreaterThan(0)
     expect(partial.evidenceCount).toBeLessThan(4)
     expect(partial.evidenceProjectionHash).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(fixture.store.directWriteCount()).toBe(0)
 
     const createdBeforeRetry = fixture.staging!.createdCount()
     const recovered = await persistPrepareEvidence({ ...input, draft: partial })
@@ -223,10 +230,10 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('retains every async object without reopening when cancellation overtakes in-flight staging', async () => {
     const fixture = prepareFixture('ASYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2), png(3)], chatFiles: [jpeg(4)] })
-    fixture.stateIngress.loseBeforeNextApply()
+    fixture.draftStateIngress.loseBeforeNextApply()
     fixture.staging!.afterFirstCreate(() => fixture.store.commitTerminal('CANCELLED'))
 
-    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    await expect(persistPrepareEvidence(input)).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
 
     const terminal = fixture.store.read()
     expect(terminal).toMatchObject({
@@ -235,9 +242,9 @@ describe('PMC Mini App Booking prepare persistence', () => {
     })
     expect(terminal.paymentEvidenceObjectKeys).toEqual([
       objectKey('PAYMENT', png(1).bytes), objectKey('PAYMENT', png(2).bytes), objectKey('PAYMENT', png(3).bytes),
-    ].sort())
+    ])
     expect(terminal.chatEvidenceObjectKeys).toEqual([objectKey('CHAT', jpeg(4).bytes)])
-    expect(fixture.stateIngress.callCount()).toBe(2)
+    expect(fixture.draftStateIngress.callCount()).toBe(2)
     const puts = fixture.staging!.putCount()
     const writes = fixture.store.writeCount()
 
@@ -251,14 +258,14 @@ describe('PMC Mini App Booking prepare persistence', () => {
   it('retains every synchronous Drive file without reopening when expiry overtakes the final mutation', async () => {
     const fixture = prepareFixture('SYNC')
     const input = fixture.input({ paymentFiles: [png(1), png(2)], chatFiles: [jpeg(3), jpeg(4)] })
-    fixture.stateIngress.loseNextResponse()
-    const finalWrite = fixture.store.pauseNextUpdate()
+    fixture.draftStateIngress.loseNextResponse()
+    const finalWrite = fixture.draftStateIngress.pauseNextMutation()
     const result = persistPrepareEvidence(input)
     await finalWrite.entered
     fixture.store.commitTerminal('EXPIRED')
     finalWrite.release()
 
-    await expect(result).rejects.toMatchObject({ code: 'BOOKING_PREPARE_RETRY' })
+    await expect(result).rejects.toMatchObject({ code: 'BOOKING_PREPARE_CONFLICT' })
     const terminal = fixture.store.read()
     expect(terminal).toMatchObject({
       state: 'EXPIRED', retentionState: 'PENDING_APPROVAL', evidenceCount: 4,
@@ -266,7 +273,7 @@ describe('PMC Mini App Booking prepare persistence', () => {
       paymentEvidenceFileIds: ['drive-file-01', 'drive-file-02'],
       chatEvidenceFileIds: ['drive-file-03', 'drive-file-04'],
     })
-    expect(fixture.stateIngress.callCount()).toBe(1)
+    expect(fixture.draftStateIngress.callCount()).toBe(1)
     const calls = fixture.ingress!.callCount()
     const writes = fixture.store.writeCount()
 
@@ -275,37 +282,6 @@ describe('PMC Mini App Booking prepare persistence', () => {
     expect(fixture.store.read()).toEqual(terminal)
     expect(fixture.ingress!.callCount()).toBe(calls)
     expect(fixture.store.writeCount()).toBe(writes)
-  })
-
-  it('matches owner-lock semantics across five concurrent terminal recovery clients', async () => {
-    const fixture = prepareFixture('ASYNC', { state: 'CANCELLED', retentionState: 'PENDING_APPROVAL' })
-    const binding = 'p'.repeat(43)
-    const keys = [png(1), png(2), png(3), png(4), png(5)].map(({ bytes }) => objectKey('PAYMENT', bytes))
-
-    await Promise.all(keys.map((key) => fixture.stateIngress.mutate(retentionMutation(fixture.store.read(), binding, [key]))))
-
-    expect(fixture.store.read()).toMatchObject({
-      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: binding,
-      paymentEvidenceObjectKeys: [...keys].sort(), evidenceCount: 5,
-    })
-  })
-
-  it('matches first-durable-wins semantics for independent different-binding owner clients', async () => {
-    const fixture = prepareFixture('ASYNC', { state: 'EXPIRED', retentionState: 'PENDING_APPROVAL' })
-    const terminal = fixture.store.read()
-    const winner = fixture.stateIngress.mutate(retentionMutation(
-      terminal, 'a'.repeat(43), [objectKey('PAYMENT', png(1).bytes)],
-    ))
-    const loser = fixture.stateIngress.mutate(retentionMutation(
-      terminal, 'b'.repeat(43), [objectKey('PAYMENT', png(2).bytes)],
-    ))
-
-    await expect(winner).resolves.toMatchObject({ outcome: 'APPLIED' })
-    await expect(loser).rejects.toThrow('BOOKING_PREPARE_CONFLICT')
-    expect(fixture.store.read()).toMatchObject({
-      state: 'EXPIRED', evidenceProjectionHash: 'a'.repeat(43),
-      paymentEvidenceObjectKeys: [objectKey('PAYMENT', png(1).bytes)], evidenceCount: 1,
-    })
   })
 
   it.each(['CANCELLED', 'EXPIRED'] as const)('keeps %s evidence pending approval without remote or draft mutation', async (state) => {
@@ -323,12 +299,12 @@ function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppReque
   const store = new PrepareStore(draft(draftPatch))
   const staging = mode === 'ASYNC' ? new PrepareStaging() : null
   const ingress = mode === 'SYNC' ? new PrepareIngress() : null
-  const stateIngress = new PrepareOwnerStateIngress(store)
+  const draftStateIngress = new PrepareOwnerDraftStateIngress(store)
   return {
     store,
     staging,
     ingress,
-    stateIngress,
+    draftStateIngress,
     input(patch: Partial<PersistPrepareEvidenceInput> = {}): PersistPrepareEvidenceInput {
       return {
         draft: store.read(),
@@ -347,7 +323,7 @@ function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppReque
           ? { type: 'ASYNC', staging: staging! }
           : { type: 'SYNC', ingress: ingress! },
         store,
-        stateIngress,
+        draftStateIngress,
         now: () => '2026-08-30T10:00:00.000Z',
         ...patch,
       }
@@ -358,21 +334,12 @@ function prepareFixture(mode: 'ASYNC' | 'SYNC', draftPatch: Partial<MiniAppReque
 class PrepareStore implements MiniAppStore {
   private current: MiniAppRequestRecord
   private writes = 0
-  private loseUpdate = false
-  private updateGate: { entered: () => void; wait: Promise<void> } | null = null
+  private directWrites = 0
 
   constructor(initial: MiniAppRequestRecord) { this.current = structuredClone(initial) }
   read(): MiniAppRequestRecord { return structuredClone(this.current) }
   writeCount(): number { return this.writes }
-  loseFirstUpdateResponse(): void { this.loseUpdate = true }
-  pauseNextUpdate(): { entered: Promise<void>; release(): void } {
-    let entered!: () => void
-    let release!: () => void
-    const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
-    const wait = new Promise<void>((resolve) => { release = resolve })
-    this.updateGate = { entered, wait }
-    return { entered: enteredPromise, release }
-  }
+  directWriteCount(): number { return this.directWrites }
   commitTerminal(state: 'CANCELLED' | 'EXPIRED'): void {
     this.current = {
       ...this.current,
@@ -388,76 +355,49 @@ class PrepareStore implements MiniAppStore {
   async createDraft(value: MiniAppRequestRecord) { this.current = structuredClone(value); return this.read() }
   async getDraft(draftId: string) { return draftId === this.current.draftId ? this.read() : null }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {
-    if (this.updateGate) {
-      const gate = this.updateGate
-      this.updateGate = null
-      gate.entered()
-      await gate.wait
-    }
     if (draftId !== this.current.draftId) throw new Error('DRAFT_NOT_FOUND')
     if (expectedVersion !== this.current.version) throw new Error('STALE_DRAFT_VERSION')
     this.current = { ...this.current, ...structuredClone(patch), version: this.current.version + 1 }
     this.writes += 1
-    if (this.loseUpdate) {
-      this.loseUpdate = false
-      throw new Error('SHEETS_RESPONSE_LOST')
-    }
+    this.directWrites += 1
     return this.read()
   }
-  ownerRetain(input: MiniAppAsyncStateMutation): MiniAppAsyncStateIngressResult {
-    if (input.operation !== 'RETAIN_PREPARE' || input.draftId !== this.current.draftId
-      || input.requestId !== this.current.requestId) throw new Error('INVALID_RETAIN_PREPARE')
-    if (this.current.state !== 'CANCELLED' && this.current.state !== 'EXPIRED') throw new Error('INVALID_DRAFT_TRANSITION')
-    if (this.current.attemptCount !== input.expectedAttempt) throw new Error('STALE_RETAIN_PREPARE')
-    if (this.current.evidenceProjectionHash === null) {
-      if (this.current.version !== input.expectedVersion || retainedReferenceCount(this.current) !== 0) {
-        throw new Error('STALE_RETAIN_PREPARE')
-      }
-    } else if (this.current.evidenceProjectionHash !== input.payloadHash) {
-      throw new Error('BOOKING_PREPARE_CONFLICT')
-    }
-    const incomingFileMode = input.paymentEvidenceFileIds.length + input.chatEvidenceFileIds.length > 0
-    if (incomingFileMode && this.current.paymentEvidenceObjectKeys.length + this.current.chatEvidenceObjectKeys.length > 0
-      || !incomingFileMode && this.current.paymentEvidenceFileIds.length + this.current.chatEvidenceFileIds.length > 0) {
-      throw new Error('BOOKING_PREPARE_CONFLICT')
-    }
-    const paymentEvidenceFileIds = canonicalUnion(this.current.paymentEvidenceFileIds, input.paymentEvidenceFileIds)
-    const chatEvidenceFileIds = canonicalUnion(this.current.chatEvidenceFileIds, input.chatEvidenceFileIds)
-    const paymentEvidenceObjectKeys = canonicalUnion(this.current.paymentEvidenceObjectKeys, input.paymentEvidenceObjectKeys)
-    const chatEvidenceObjectKeys = canonicalUnion(this.current.chatEvidenceObjectKeys, input.chatEvidenceObjectKeys)
-    const evidenceCount = paymentEvidenceFileIds.length + chatEvidenceFileIds.length
-      + paymentEvidenceObjectKeys.length + chatEvidenceObjectKeys.length
-    const unchanged = this.current.evidenceProjectionHash === input.payloadHash
-      && this.current.evidenceCount === evidenceCount
-      && sameValues(this.current.paymentEvidenceFileIds, paymentEvidenceFileIds)
-      && sameValues(this.current.chatEvidenceFileIds, chatEvidenceFileIds)
-      && sameValues(this.current.paymentEvidenceObjectKeys, paymentEvidenceObjectKeys)
-      && sameValues(this.current.chatEvidenceObjectKeys, chatEvidenceObjectKeys)
-    if (!unchanged) {
-      this.current = {
-        ...this.current,
-        retentionState: 'PENDING_APPROVAL',
-        paymentEvidenceFileIds,
-        chatEvidenceFileIds,
-        paymentEvidenceObjectKeys,
-        chatEvidenceObjectKeys,
-        evidenceCount,
-        evidenceProjectionHash: input.payloadHash,
-        updatedAt: input.nowIso,
-        version: this.current.version + 1,
-      }
+  ownerMutate(input: MiniAppDraftStateMutation): MiniAppDraftStateResult {
+    if (input.draftId !== this.current.draftId || input.requestId !== this.current.requestId) throw new Error('INVALID_DRAFT_STATE')
+    if (input.operation === 'CANCEL') {
+      if (this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED') return fakeResult(this.current, 'IDEMPOTENT')
+      if (this.current.version !== input.expectedVersion) throw new Error('BOOKING_PREPARE_CONFLICT')
+      this.current = { ...this.current, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL',
+        updatedAt: input.nowIso, version: this.current.version + 1 }
       this.writes += 1
+      return fakeResult(this.current, 'APPLIED')
     }
-    return {
-      requestId: this.current.requestId,
-      draftId: this.current.draftId,
-      state: this.current.state,
-      version: this.current.version,
-      attemptCount: this.current.attemptCount,
-      caseId: this.current.caseId,
-      confirmationStatus: this.current.confirmationStatus,
-      outcome: unchanged ? 'IDEMPOTENT' : 'APPLIED',
+    if (this.current.evidenceProjectionHash === null) {
+      const terminal = this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
+      if (this.current.version !== input.expectedVersion + (terminal ? 1 : 0)) throw new Error('BOOKING_PREPARE_CONFLICT')
+    } else if (this.current.evidenceProjectionHash !== input.prepareBindingHash) throw new Error('BOOKING_PREPARE_CONFLICT')
+    const merged = fakeMergedEvidence(this.current, input)
+    const terminal = this.current.state === 'CANCELLED' || this.current.state === 'EXPIRED'
+    let candidate: MiniAppRequestRecord
+    if (terminal) {
+      candidate = { ...this.current, retentionState: 'PENDING_APPROVAL', evidenceProjectionHash: input.prepareBindingHash,
+        ...merged, updatedAt: input.nowIso }
+    } else if (input.operation === 'PREPARE_PARTIAL') {
+      candidate = { ...this.current, state: 'DRAFT', retentionState: 'PENDING_APPROVAL',
+        evidenceProjectionHash: input.prepareBindingHash, ...merged, updatedAt: input.nowIso }
+    } else {
+      candidate = { ...this.current, state: 'READY_TO_CONFIRM', retentionState: '',
+        evidenceProjectionHash: input.prepareBindingHash, adminId: input.input.adminId,
+        adminName: input.input.adminId === 'ADMIN_02' ? 'แวว' : 'หมวย', aeId: input.input.aeId,
+        aeName: input.input.aeId === null ? 'ไม่ระบุ' : 'หมวย', customerName: input.input.customerName,
+        facebookName: input.input.facebookName, phoneNormalized: input.input.phoneNormalized,
+        doctorId: input.input.doctorId, serviceId: input.input.serviceId, queueType: input.input.queueType,
+        appointmentDate: input.input.appointmentDate, appointmentTime: input.input.appointmentTime,
+        depositAmount: input.input.depositAmount, channelId: input.input.channelId, ...merged, updatedAt: input.nowIso }
     }
+    const unchanged = fakeProjectionDigest(candidate) === fakeProjectionDigest(this.current)
+    if (!unchanged) { this.current = { ...candidate, version: this.current.version + 1 }; this.writes += 1 }
+    return fakeResult(this.current, unchanged ? (terminal ? 'TERMINAL' : 'IDEMPOTENT') : 'APPLIED')
   }
   async markRetentionPending(draftId: string, expectedVersion: number, updatedAt: string) {
     return this.updateDraft(draftId, expectedVersion, { retentionState: 'PENDING_APPROVAL', updatedAt })
@@ -467,7 +407,7 @@ class PrepareStore implements MiniAppStore {
   async failConfirmation(): Promise<never> { throw new Error('not used') }
 }
 
-class PrepareOwnerStateIngress implements AsyncStateIngressPort {
+class PrepareOwnerDraftStateIngress implements DraftStateIngressPort {
   private tail: Promise<void> = Promise.resolve()
   private loseResponse = false
   private loseBeforeApply = false
@@ -478,7 +418,17 @@ class PrepareOwnerStateIngress implements AsyncStateIngressPort {
   loseBeforeNextApply(): void { this.loseBeforeApply = true }
   callCount(): number { return this.calls }
 
-  async mutate(input: MiniAppAsyncStateMutation): Promise<MiniAppAsyncStateIngressResult> {
+  pauseNextMutation(): { entered: Promise<void>; release(): void } {
+    let entered!: () => void; let release!: () => void
+    const enteredPromise = new Promise<void>((resolve) => { entered = resolve })
+    const wait = new Promise<void>((resolve) => { release = resolve })
+    this.beforeApplyGate = { entered, wait }
+    return { entered: enteredPromise, release }
+  }
+
+  private beforeApplyGate: { entered: () => void; wait: Promise<void> } | null = null
+
+  async mutate(input: MiniAppDraftStateMutation): Promise<MiniAppDraftStateResult> {
     const previous = this.tail
     let release!: () => void
     this.tail = new Promise<void>((resolve) => { release = resolve })
@@ -489,7 +439,10 @@ class PrepareOwnerStateIngress implements AsyncStateIngressPort {
         this.loseBeforeApply = false
         throw new Error('OWNER_INGRESS_REQUEST_LOST')
       }
-      const result = this.store.ownerRetain(input)
+      if (this.beforeApplyGate) {
+        const gate = this.beforeApplyGate; this.beforeApplyGate = null; gate.entered(); await gate.wait
+      }
+      const result = this.store.ownerMutate(input)
       if (this.loseResponse) {
         this.loseResponse = false
         throw new Error('OWNER_INGRESS_RESPONSE_LOST')
@@ -501,17 +454,55 @@ class PrepareOwnerStateIngress implements AsyncStateIngressPort {
   }
 }
 
-function canonicalUnion(left: readonly string[], right: readonly string[]): string[] {
-  return [...new Set([...left, ...right])].sort()
+function fakeMergedEvidence(current: MiniAppRequestRecord, input: Exclude<MiniAppDraftStateMutation, { operation: 'CANCEL' }>) {
+  const storage = input.evidence[0]!.storage
+  const mergeKind = (kind: 'PAYMENT' | 'CHAT') => {
+    const items = input.evidence.filter((item) => item.kind === kind).sort((left, right) => left.ordinal - right.ordinal)
+    const previous = storage === 'STAGED_OBJECT'
+      ? kind === 'PAYMENT' ? current.paymentEvidenceObjectKeys : current.chatEvidenceObjectKeys
+      : kind === 'PAYMENT' ? current.paymentEvidenceFileIds : current.chatEvidenceFileIds
+    const slots: Array<string | null> = items.map(() => null)
+    if (storage === 'STAGED_OBJECT') {
+      for (const value of previous) {
+        const index = items.findIndex((item) => value.endsWith(`/${item.contentSha256}.${item.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`))
+        if (index >= 0) slots[index] = value
+      }
+    } else previous.forEach((value, index) => { slots[index] = value })
+    items.forEach((item) => { if (item.value !== null) slots[item.ordinal] = item.value })
+    return slots.flatMap((value) => value === null ? [] : [value])
+  }
+  const payment = mergeKind('PAYMENT'); const chat = mergeKind('CHAT')
+  return {
+    paymentEvidenceFileIds: storage === 'DRIVE_FILE' ? payment : [],
+    chatEvidenceFileIds: storage === 'DRIVE_FILE' ? chat : [],
+    paymentEvidenceObjectKeys: storage === 'STAGED_OBJECT' ? payment : [],
+    chatEvidenceObjectKeys: storage === 'STAGED_OBJECT' ? chat : [],
+    evidenceCount: payment.length + chat.length,
+  }
 }
 
-function sameValues(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index])
+function fakeResult(draft: MiniAppRequestRecord, outcome: MiniAppDraftStateResult['outcome']): MiniAppDraftStateResult {
+  return { requestId: draft.requestId, draftId: draft.draftId, state: draft.state as MiniAppDraftStateResult['state'],
+    version: draft.version, outcome, projectionDigest: fakeProjectionDigest(draft) }
 }
 
-function retainedReferenceCount(draft: MiniAppRequestRecord): number {
-  return draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
-    + draft.paymentEvidenceObjectKeys.length + draft.chatEvidenceObjectKeys.length
+function fakeProjectionDigest(draft: MiniAppRequestRecord): string {
+  const projection: MiniAppDraftProjection = {
+    requestId: draft.requestId, draftId: draft.draftId, protocolVersion: 2, staffId: draft.staffId,
+    recorderName: draft.recorderName, adminId: draft.adminId, adminName: draft.adminName,
+    aeId: draft.aeId, aeName: draft.aeName, state: draft.state as MiniAppDraftProjection['state'],
+    retentionState: draft.retentionState, version: draft.version, evidenceProjectionHash: draft.evidenceProjectionHash,
+    input: draft.adminId && draft.customerName ? {
+      requestId: draft.requestId, adminId: draft.adminId, aeId: draft.aeId, customerName: draft.customerName,
+      facebookName: draft.facebookName, phoneNormalized: draft.phoneNormalized, doctorId: draft.doctorId,
+      serviceId: draft.serviceId, queueType: draft.queueType, appointmentDate: draft.appointmentDate,
+      appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount, channelId: draft.channelId,
+    } : null,
+    paymentEvidenceFileIds: [...draft.paymentEvidenceFileIds], chatEvidenceFileIds: [...draft.chatEvidenceFileIds],
+    paymentEvidenceObjectKeys: [...draft.paymentEvidenceObjectKeys], chatEvidenceObjectKeys: [...draft.chatEvidenceObjectKeys],
+    evidenceCount: draft.evidenceCount,
+  }
+  return createHash('sha256').update(canonicalMiniAppDraftProjection(projection)).digest('base64url')
 }
 
 class PrepareStaging implements EvidenceStagingPort {
@@ -648,18 +639,4 @@ function sha256(bytes: Buffer): string { return createHash('sha256').update(byte
 
 function stagedUploadId(kind: 'PAYMENT' | 'CHAT', bytes: Buffer): string {
   return createHash('sha256').update(`draft-1\0${kind}\0${sha256(bytes)}`, 'utf8').digest('hex')
-}
-
-function retentionMutation(
-  draft: MiniAppRequestRecord,
-  binding: string,
-  paymentEvidenceObjectKeys: string[],
-): MiniAppAsyncStateMutation {
-  return {
-    operation: 'RETAIN_PREPARE', requestId: draft.requestId, draftId: draft.draftId, payloadHash: binding,
-    expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
-    leaseOwnerToken: null, nowIso: '2026-08-30T10:00:00.000Z', leaseUntil: null, taskName: null,
-    paymentEvidenceObjectKeys, chatEvidenceObjectKeys: [], paymentEvidenceFileIds: [], chatEvidenceFileIds: [],
-    evidenceCount: paymentEvidenceObjectKeys.length, safeErrorCode: null, caseId: null, confirmationStatus: null,
-  }
 }

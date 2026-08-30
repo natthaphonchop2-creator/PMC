@@ -52,6 +52,7 @@ import {
 } from './domain/miniAppEvidenceIngress'
 import type { BookingPorts } from './ports'
 import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
+import { mutateMiniAppDraftState } from './domain/miniAppDraftStateIngress'
 import type { BookingCase } from './domain/types'
 import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
 import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
@@ -102,6 +103,9 @@ export function processBookingDoPost(
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_ASYNC_STATE') {
     return mutateMiniAppAsyncState(parsed, ports)
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_DRAFT_STATE') {
+    return mutateMiniAppDraftState(parsed, ports)
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_BOOKING') {
     const booking = submitMiniAppBooking(verifyMiniAppIngressPayload(parsed, ports), ports)

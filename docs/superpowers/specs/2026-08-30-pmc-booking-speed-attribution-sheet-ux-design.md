@@ -183,6 +183,8 @@ The handler:
 5. persists evidence using the configured safe path;
 6. writes one final `READY_TO_CONFIRM` draft mutation containing evidence references and booking input.
 
+Prepare final/partial state and competing cancellation use a separate versioned signed `MINI_APP_DRAFT_STATE` ingress executed under the Apps Script owner lock. Cloud Run never treats its process-local mutex plus unconditional Sheets update as a distributed CAS. The owner mutation recomputes the prepare binding from current recorder/config snapshots, ordered content hashes, exact P2 input, and evidence references. It returns only safe state metadata plus a canonical projection digest. Exact trusted results may avoid a reread; timeout, malformed, or ambiguous outcomes perform exactly one authoritative Sheet reread.
+
 For async-enabled staff, evidence is staged in private GCS with existing generation/hash/CRC checks. For synchronous staff, the handler uses deterministic Apps Script evidence ingress and accumulates file IDs before one final Sheet draft update. It must not perform a Sheet draft write after every file.
 
 The current evidence and PATCH routes remain during rollout for idempotent recovery and older cached clients. Client capability comes from authenticated config; the browser must not intentionally probe a known-unavailable route.
@@ -193,7 +195,7 @@ The current evidence and PATCH routes remain during rollout for idempotent recov
 - Deterministic upload IDs make response-loss retry safe.
 - A retry with identical version/input/evidence returns the persisted projection.
 - A different payload with the same request/draft identity returns conflict.
-- If remote evidence persistence partially succeeds, write a failure-only draft patch containing only the deterministic persisted evidence references and `retentionState = PENDING_APPROVAL`; never set `READY_TO_CONFIRM`. Exact retry reuses those references. Cancellation/expiry feeds the existing retention approval workflow, whose owner is Apps Script daily operations. If cancellation/expiry wins after remote persistence, Cloud Run attaches the deterministic references through a signed Apps Script owner-lock retention mutation; a process-local mutex or unconditional Sheets update is not a cross-instance fence. Cleanup retry is idempotent by draft ID, evidence kind, and deterministic upload ID.
+- If remote evidence persistence partially succeeds, write a failure-only owner-locked mutation containing only the deterministic persisted evidence references and `retentionState = PENDING_APPROVAL`; never set `READY_TO_CONFIRM`. Exact retry reuses those references. Cancellation/expiry feeds the existing retention approval workflow, whose owner is Apps Script daily operations. If cancellation/expiry wins after remote persistence, the same owner mutation attaches the deterministic references while preserving terminal state. Cleanup retry is idempotent by draft ID, evidence kind, and deterministic upload ID.
 
 ## 7. Confirm-path performance design
 
