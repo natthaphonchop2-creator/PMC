@@ -8,7 +8,7 @@ const executeFile = promisify(execFile)
 const FINANCE_SEED_PATH = '/internal/mini-app/finance-daily-seed'
 const ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
 const APPROVED_REGION = 'asia-southeast1'
-const STAGES = new Set(['DISABLED', 'ALLOCATION', 'READY'])
+const STAGES = new Set(['DISABLED', 'ALLOCATION', 'PILOT', 'READY'])
 const REQUIRED_ALLOCATION_NAMES = [
   'JERA_ALLOCATION_PROJECT_ID', 'JERA_ALLOCATION_LOCATION', 'JERA_ALLOCATION_QUEUE',
   'JERA_ALLOCATION_WORKER_URL', 'JERA_ALLOCATION_WORKER_AUDIENCE',
@@ -34,7 +34,7 @@ export async function runFinanceRuntimeCheck(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout }
   if (parsed.help) {
-    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|READY [--expected-worker-service <private-service> and stage expected bindings]\n')
+    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|PILOT|READY --expected-finance-pilot-only true|false --expected-finance-ui-preview-enabled true|false --expected-finance-pilot-default-date YYYY-MM-DD|UNSET --expected-finance-monthly-income-enabled true|false [--expected-worker-service <private-service> and stage expected bindings]\n')
     return 0
   }
   const report = await inspectFinanceRuntime(parsed, options)
@@ -73,6 +73,21 @@ export async function inspectFinanceRuntime(input, options = {}) {
     revenueAllocationEnabled: explicitBoolean(environment.JERA_REVENUE_ALLOCATION_ENABLED),
     categoryMoneyEnabled: explicitBoolean(environment.JERA_FINANCE_CATEGORY_MONEY_ENABLED),
   }
+  const deployedPilotDate = deployedPilotDateState(environment.PMC_FINANCE_PILOT_DEFAULT_DATE)
+  const pilotControls = {
+    financeReportsPilotOnly: explicitBoolean(environment.PMC_FINANCE_REPORTS_PILOT_ONLY),
+    financeUiPreviewEnabled: explicitBoolean(environment.PMC_FINANCE_UI_PREVIEW_ENABLED),
+    pilotDefaultDatePresent: deployedPilotDate.present,
+    pilotDefaultDateCanonical: deployedPilotDate.canonical,
+    pilotDefaultDateMatches: input.expectedFinancePilotDefaultDate === null
+      ? !deployedPilotDate.present
+      : deployedPilotDate.value === input.expectedFinancePilotDefaultDate,
+    financeMonthlyIncomeEnabled: explicitBoolean(environment.PMC_FINANCE_MONTHLY_INCOME_ENABLED),
+  }
+  pilotControls.exactExpectedControls = pilotControls.financeReportsPilotOnly === input.expectedFinancePilotOnly
+    && pilotControls.financeUiPreviewEnabled === input.expectedFinanceUiPreviewEnabled
+    && pilotControls.pilotDefaultDateMatches
+    && pilotControls.financeMonthlyIncomeEnabled === input.expectedFinanceMonthlyIncomeEnabled
   const allocationConfig = {
     requiredNameCount: REQUIRED_ALLOCATION_NAMES.length,
     presentNameCount: REQUIRED_ALLOCATION_NAMES.filter((name) => Boolean(environment[name]?.trim())).length,
@@ -156,15 +171,21 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const flagsMatch = flags.financeReportsEnabled === expectedFlags.financeReportsEnabled
     && flags.revenueAllocationEnabled === expectedFlags.revenueAllocationEnabled
     && flags.categoryMoneyEnabled === expectedFlags.categoryMoneyEnabled
+  const rolloutControlsMatch = pilotControls.exactExpectedControls
   const stageReady = input.expectedStage === 'DISABLED'
-    ? cloudRun.servicePresent && flagsMatch && scheduler.enabledJobCount === 0
+    ? cloudRun.servicePresent && flagsMatch && rolloutControlsMatch && scheduler.enabledJobCount === 0
     : input.expectedStage === 'ALLOCATION'
-      ? flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
-      : flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic
-        && scheduler.enabledFinanceSeedCandidateCount === 1 && scheduler.readyMatchCount === 1
+      ? flagsMatch && rolloutControlsMatch && infrastructureReady
+        && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
+      : input.expectedStage === 'PILOT'
+        ? flagsMatch && rolloutControlsMatch && infrastructureReady
+          && cloudRun.latestReadyHasNoTraffic && scheduler.enabledFinanceSeedCandidateCount === 0
+        : flagsMatch && rolloutControlsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic
+          && scheduler.enabledFinanceSeedCandidateCount === 1 && scheduler.readyMatchCount === 1
   return {
     mode: 'READ_ONLY', expectedStage: input.expectedStage, stageReady, ready: stageReady,
     safeCode: stageReady ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
+    pilotControls,
     workerCloudRun, allocationConfig, queue: queueReport, bindings, scheduler, tasks: taskReport, tabs, financePermissions, leases,
   }
 }
@@ -176,6 +197,8 @@ function parseArguments(args) {
     expectedFinanceViewers: null, approvedFinanceStaffIds: [], expectedStage: null, expectedQueue: null,
     expectedWorkerService: null, expectedWorkerAudience: null, expectedInvoker: null,
     expectedFinanceSeedUrl: null, expectedOidcAudience: null,
+    expectedFinancePilotOnly: null, expectedFinanceUiPreviewEnabled: null,
+    expectedFinancePilotDefaultDate: undefined, expectedFinanceMonthlyIncomeEnabled: null,
   }
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index]
@@ -193,6 +216,10 @@ function parseArguments(args) {
     else if (value === '--expected-invoker' && parsed.expectedInvoker === null && args[index + 1]) parsed.expectedInvoker = args[++index]
     else if (value === '--expected-finance-seed-url' && parsed.expectedFinanceSeedUrl === null && args[index + 1]) parsed.expectedFinanceSeedUrl = args[++index]
     else if (value === '--expected-oidc-audience' && parsed.expectedOidcAudience === null && args[index + 1]) parsed.expectedOidcAudience = args[++index]
+    else if (value === '--expected-finance-pilot-only' && parsed.expectedFinancePilotOnly === null && args[index + 1]) parsed.expectedFinancePilotOnly = expectedBoolean(args[++index])
+    else if (value === '--expected-finance-ui-preview-enabled' && parsed.expectedFinanceUiPreviewEnabled === null && args[index + 1]) parsed.expectedFinanceUiPreviewEnabled = expectedBoolean(args[++index])
+    else if (value === '--expected-finance-pilot-default-date' && parsed.expectedFinancePilotDefaultDate === undefined && args[index + 1]) parsed.expectedFinancePilotDefaultDate = expectedPilotDate(args[++index])
+    else if (value === '--expected-finance-monthly-income-enabled' && parsed.expectedFinanceMonthlyIncomeEnabled === null && args[index + 1]) parsed.expectedFinanceMonthlyIncomeEnabled = expectedBoolean(args[++index])
     else throw new Error('Unknown finance operator argument')
   }
   if (parsed.help) return parsed
@@ -200,11 +227,15 @@ function parseArguments(args) {
   parsed.project = safeProject(parsed.project)
   if (!safeToken(parsed.service) || !safeToken(parsed.region)) throw new Error('Project, service, and region are required')
   if (parsed.expectedFinanceViewers !== 3) throw new Error('Expected finance viewers must be exactly 3')
-  if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, or READY')
+  if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, PILOT, or READY')
   if (parsed.approvedFinanceStaffIds.length !== parsed.expectedFinanceViewers
     || new Set(parsed.approvedFinanceStaffIds).size !== parsed.expectedFinanceViewers
     || parsed.approvedFinanceStaffIds.some((value) => !safeStaffId(value))) {
     throw new Error('Exactly three unique approved finance staff IDs are required')
+  }
+  if (parsed.expectedFinancePilotOnly === null || parsed.expectedFinanceUiPreviewEnabled === null
+    || parsed.expectedFinancePilotDefaultDate === undefined || parsed.expectedFinanceMonthlyIncomeEnabled === null) {
+    throw new Error('All expected finance rollout controls are required')
   }
   if (parsed.expectedStage !== 'DISABLED') {
     if (!safeToken(parsed.expectedWorkerService) || !safeResource(parsed.expectedQueue)
@@ -456,6 +487,32 @@ function stageFlags(stage) {
   return { financeReportsEnabled: true, revenueAllocationEnabled: true, categoryMoneyEnabled: true }
 }
 function explicitBoolean(value) { return value === 'true' ? true : value === 'false' ? false : null }
+function expectedBoolean(value) {
+  const parsed = explicitBoolean(value)
+  if (parsed === null) throw new Error('Expected finance rollout controls must use exact values')
+  return parsed
+}
+function expectedPilotDate(value) {
+  if (value === 'UNSET') return null
+  const canonical = canonicalPilotDate(value)
+  if (canonical === null) throw new Error('Expected finance rollout controls must use exact values')
+  return canonical
+}
+function deployedPilotDateState(value) {
+  if (value === undefined) return { present: false, canonical: false, value: null }
+  const canonical = canonicalPilotDate(value)
+  return { present: true, canonical: canonical !== null, value: canonical }
+}
+function canonicalPilotDate(value) {
+  if (typeof value !== 'string') return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return null
+  const year = Number(match[1]); const month = Number(match[2]); const day = Number(match[3])
+  if (year < 2020 || year > 2100) return null
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
+    ? value : null
+}
 function taskBody(value) { try { const textValue = Buffer.from(value ?? '', 'base64').toString('utf8'); return JSON.parse(textValue) } catch { return null } }
 function safeNonnegative(value) { return Number.isFinite(value) && value >= 0 ? Number(value) : 0 }
 function safeRate(value) { return Number.isFinite(value) && value >= 0 && value <= 1000 ? Number(value) : 0 }
@@ -469,7 +526,7 @@ async function runExternal(command) { const { stdout } = await executeFile(comma
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runFinanceRuntimeCheck(process.argv.slice(2)).then((code) => { process.exitCode = code }).catch((error) => {
-    const message = error instanceof Error && /^(Explicit|Unknown|Sensitive|Expected|Exactly|Project|Allocation|Ready)/.test(error.message)
+    const message = error instanceof Error && /^(All|Explicit|Unknown|Sensitive|Expected|Exactly|Project|Allocation|Ready)/.test(error.message)
       ? error.message : 'Finance runtime check failed'
     process.stderr.write(`${message}\n`); process.exitCode = 2
   })

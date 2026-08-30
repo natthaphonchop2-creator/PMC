@@ -17,6 +17,24 @@ const OPERATOR_ACCOUNT = 'operator@example.com'
 const SEED_URL = `${AUDIENCE}/internal/mini-app/finance-daily-seed`
 const APPROVED_FINANCE_STAFF_IDS = ['ADMIN_01', 'DOCTOR_01', 'ADMIN_09'] as const
 const APPROVED_FINANCE_STAFF_ARGS = APPROVED_FINANCE_STAFF_IDS.flatMap((id) => ['--approved-finance-staff-id', id])
+const DISABLED_FINANCE_CONTROL_ARGS = [
+  '--expected-finance-pilot-only', 'false',
+  '--expected-finance-ui-preview-enabled', 'false',
+  '--expected-finance-pilot-default-date', 'UNSET',
+  '--expected-finance-monthly-income-enabled', 'false',
+] as const
+const PILOT_FINANCE_CONTROL_ARGS = [
+  '--expected-finance-pilot-only', 'true',
+  '--expected-finance-ui-preview-enabled', 'false',
+  '--expected-finance-pilot-default-date', APPROVED_DAY,
+  '--expected-finance-monthly-income-enabled', 'false',
+] as const
+const FULL_FINANCE_CONTROL_ARGS = [
+  '--expected-finance-pilot-only', 'false',
+  '--expected-finance-ui-preview-enabled', 'false',
+  '--expected-finance-pilot-default-date', 'UNSET',
+  '--expected-finance-monthly-income-enabled', 'true',
+] as const
 
 describe('finance operator script approval gates', () => {
   it('loads the three operator modules with callable entry points', async () => {
@@ -119,6 +137,7 @@ describe('read-only finance runtime checker', () => {
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
       '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+      ...DISABLED_FINANCE_CONTROL_ARGS,
     ], { execute, readGoogleState: googleReads, now: () => new Date(NOW), io: { stdout } })
 
     expect(code).toBe(0)
@@ -165,6 +184,7 @@ describe('read-only finance runtime checker', () => {
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
       '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+      ...DISABLED_FINANCE_CONTROL_ARGS,
     ], { execute, readGoogleState: vi.fn(async () => { throw new Error('sheet private-spreadsheet') }), io: { stdout } })
 
     expect(code).toBe(1)
@@ -173,7 +193,7 @@ describe('read-only finance runtime checker', () => {
     expect(JSON.parse(stdout.text())).toMatchObject({ mode: 'READ_ONLY', ready: false, safeCode: 'FINANCE_RUNTIME_INCOMPLETE' })
   })
 
-  it('accepts only the exact DISABLED, ALLOCATION, and READY stage values before external access', async () => {
+  it('accepts only the exact DISABLED, ALLOCATION, PILOT, and READY stage values before external access', async () => {
     const [check] = await loadScripts()
     const execute = vi.fn(async () => { throw new Error('must not execute') })
     for (const stage of ['', 'disabled', 'CANARY', 'READY ']) {
@@ -181,8 +201,46 @@ describe('read-only finance runtime checker', () => {
       await expect(check.runFinanceRuntimeCheck([
         '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
         '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, ...stageArg,
-      ], { execute })).rejects.toThrow('Expected stage must be DISABLED, ALLOCATION, or READY')
+      ], { execute })).rejects.toThrow('Expected stage must be DISABLED, ALLOCATION, PILOT, or READY')
     }
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('requires all four exact finance rollout expectations together before external access', async () => {
+    const [check] = await loadScripts()
+    const execute = vi.fn(async () => { throw new Error('must not execute') })
+    const controls = [...DISABLED_FINANCE_CONTROL_ARGS]
+
+    for (let omitted = 0; omitted < controls.length; omitted += 2) {
+      const args = controls.filter((_value, index) => index !== omitted && index !== omitted + 1)
+      await expect(check.runFinanceRuntimeCheck([
+        '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
+        '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+        ...args,
+      ], { execute })).rejects.toThrow('All expected finance rollout controls are required')
+    }
+
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['pilot-only boolean', ['--expected-finance-pilot-only', 'yes']],
+    ['preview boolean', ['--expected-finance-ui-preview-enabled', '0']],
+    ['pilot date', ['--expected-finance-pilot-default-date', '2026-02-30']],
+    ['pilot date sentinel', ['--expected-finance-pilot-default-date', 'unset']],
+    ['monthly boolean', ['--expected-finance-monthly-income-enabled', 'FALSE']],
+  ])('rejects malformed expected %s before external access', async (_label, replacement) => {
+    const [check] = await loadScripts()
+    const execute = vi.fn(async () => { throw new Error('must not execute') })
+    const controls = [...DISABLED_FINANCE_CONTROL_ARGS]
+    const index = controls.indexOf(replacement[0]!)
+    controls[index + 1] = replacement[1]!
+
+    await expect(check.runFinanceRuntimeCheck([
+      '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
+      '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+      ...controls,
+    ], { execute })).rejects.toThrow(/^Expected finance rollout controls must use exact values/)
     expect(execute).not.toHaveBeenCalled()
   })
 
@@ -202,9 +260,72 @@ describe('read-only finance runtime checker', () => {
     expect(JSON.parse(stdout.text())).toMatchObject({
       expectedStage: 'ALLOCATION', stageReady: true, ready: true,
       flags: { financeReportsEnabled: false, revenueAllocationEnabled: true, categoryMoneyEnabled: false },
+      pilotControls: {
+        financeReportsPilotOnly: false,
+        financeUiPreviewEnabled: false,
+        pilotDefaultDatePresent: false,
+        pilotDefaultDateCanonical: false,
+        pilotDefaultDateMatches: true,
+        financeMonthlyIncomeEnabled: false,
+        exactExpectedControls: true,
+      },
       cloudRun: { latestReadyRevisionPresent: true, latestReadyHasNoTraffic: true },
       scheduler: { enabledJobCount: 0 },
       allocationConfig: { exactExpectedConfig: true },
+    })
+  })
+
+  it('makes PILOT ready with exact true flags, pinned controls, zero Scheduler, and a no-traffic latest revision', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
+      execute: runtimeExecute({ service, schedulerJobs: [] }), readGoogleState: vi.fn(async () => googleState()),
+      now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(0)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'PILOT', stageReady: true, ready: true,
+      flags: { financeReportsEnabled: true, revenueAllocationEnabled: true, categoryMoneyEnabled: true },
+      pilotControls: {
+        financeReportsPilotOnly: true,
+        financeUiPreviewEnabled: false,
+        pilotDefaultDatePresent: true,
+        pilotDefaultDateCanonical: true,
+        pilotDefaultDateMatches: true,
+        financeMonthlyIncomeEnabled: false,
+        exactExpectedControls: true,
+      },
+      cloudRun: { latestReadyRevisionPresent: true, latestReadyHasNoTraffic: true },
+      scheduler: { enabledJobCount: 0 },
+    })
+    expect(stdout.text()).not.toContain(APPROVED_DAY)
+  })
+
+  it('fails PILOT when any finance seed Scheduler is enabled', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
+      execute: runtimeExecute({ service, schedulerJobs: [schedulerJob()] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'PILOT', stageReady: false,
+      scheduler: { enabledFinanceSeedCandidateCount: 1 },
     })
   })
 
@@ -329,6 +450,7 @@ describe('read-only finance runtime checker', () => {
     const [check] = await loadScripts()
     const validService = cloudRunService({
       flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: false, preview: false, pilotDate: undefined, monthly: true },
       latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
     })
     const validJob = schedulerJob()
@@ -360,8 +482,49 @@ describe('read-only finance runtime checker', () => {
     expect(code).toBe(0)
     expect(JSON.parse(stdout.text())).toMatchObject({
       expectedStage: 'READY', stageReady: true,
+      pilotControls: {
+        financeReportsPilotOnly: false,
+        financeUiPreviewEnabled: false,
+        pilotDefaultDatePresent: false,
+        pilotDefaultDateCanonical: false,
+        pilotDefaultDateMatches: true,
+        financeMonthlyIncomeEnabled: true,
+        exactExpectedControls: true,
+      },
       scheduler: { exactTarget: true, postMethod: true, oidcAudienceMatches: true, oidcInvokerMatches: true },
     })
+    expect(stdout.text()).not.toContain(APPROVED_DAY)
+  })
+
+  it.each([
+    ['missing pilot-only flag', { pilotOnly: undefined }, { financeReportsPilotOnly: null }],
+    ['wider non-pilot rollout', { pilotOnly: false }, { financeReportsPilotOnly: false }],
+    ['missing preview flag', { preview: undefined }, { financeUiPreviewEnabled: null }],
+    ['enabled preview UI', { preview: true }, { financeUiPreviewEnabled: true }],
+    ['missing pilot date', { pilotDate: undefined }, { pilotDefaultDatePresent: false, pilotDefaultDateMatches: false }],
+    ['malformed pilot date', { pilotDate: '2026-8-22' }, { pilotDefaultDatePresent: true, pilotDefaultDateCanonical: false, pilotDefaultDateMatches: false }],
+    ['missing monthly flag', { monthly: undefined }, { financeMonthlyIncomeEnabled: null }],
+    ['enabled monthly report', { monthly: true }, { financeMonthlyIncomeEnabled: true }],
+  ])('fails PILOT for %s without exposing the configured date', async (_label, financeControls, expected) => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls,
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
+      execute: runtimeExecute({ service, schedulerJobs: [] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'PILOT', stageReady: false,
+      pilotControls: { exactExpectedControls: false, ...expected },
+    })
+    expect(stdout.text()).not.toContain(APPROVED_DAY)
   })
 
   it.each([
@@ -390,6 +553,7 @@ describe('read-only finance runtime checker', () => {
     const stdout = bufferWriter()
     const service = cloudRunService({
       flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: false, preview: false, pilotDate: undefined, monthly: true },
       latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
     })
 
@@ -868,10 +1032,16 @@ async function loadScripts() {
   ])
 }
 
-function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'READY') {
+function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'PILOT' | 'READY') {
+  const financeControls = stage === 'PILOT'
+    ? PILOT_FINANCE_CONTROL_ARGS
+    : stage === 'READY'
+      ? FULL_FINANCE_CONTROL_ARGS
+      : DISABLED_FINANCE_CONTROL_ARGS
   const args = [
     '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
     '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, `--expected-stage=${stage}`,
+    ...financeControls,
   ]
   if (stage !== 'DISABLED') args.push(
     '--expected-worker-service', WORKER_SERVICE,
@@ -934,6 +1104,9 @@ function schedulerJob({
 
 function cloudRunService({
   flags = { reports: false, allocation: false, category: false },
+  financeControls = flags.reports === true
+    ? { pilotOnly: false, preview: false, pilotDate: undefined, monthly: true }
+    : { pilotOnly: false, preview: false, pilotDate: undefined, monthly: false },
   allocationProject = PROJECT, queue = QUEUE, audience = AUDIENCE,
   latestReadyRevisionName = 'private-revision', trafficRevisionName = 'private-revision',
 } = {}) {
@@ -944,6 +1117,12 @@ function cloudRunService({
   ].flatMap(([name, value]) => value === undefined ? [] : [[name, String(value)]])
   const env = [
     ...flagEntries,
+    ...[
+      ['PMC_FINANCE_REPORTS_PILOT_ONLY', financeControls.pilotOnly],
+      ['PMC_FINANCE_UI_PREVIEW_ENABLED', financeControls.preview],
+      ['PMC_FINANCE_PILOT_DEFAULT_DATE', financeControls.pilotDate],
+      ['PMC_FINANCE_MONTHLY_INCOME_ENABLED', financeControls.monthly],
+    ].flatMap(([name, value]) => value === undefined ? [] : [[name, String(value)]]),
     ['JERA_ALLOCATION_PROJECT_ID', allocationProject],
     ['JERA_ALLOCATION_LOCATION', REGION],
     ['JERA_ALLOCATION_QUEUE', queue],
