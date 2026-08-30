@@ -468,6 +468,26 @@ describe('Apps Script expense repository and command journal', () => {
 })
 
 describe('Google expense repository containment and literal text', () => {
+  it('persists a date-like month key as literal text and reuses one index row', () => {
+    const environment = installGoogleExpenseFakes({ initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master',
+      financeFolderId: 'finance-root',
+    })
+
+    expect(repository.ensureMonth('2026-08', EXPENSE_NOW)).toEqual({
+      ledgerSpreadsheetId: 'ledger-2026-08',
+      monthFolderId: 'month-folder',
+    })
+    expect(repository.ensureMonth('2026-08', EXPENSE_NOW)).toEqual({
+      ledgerSpreadsheetId: 'ledger-2026-08',
+      monthFolderId: 'month-folder',
+    })
+    const rows = environment.master.getSheetByName('EXPENSE_MONTHLY_INDEX')!.data
+    expect(rows).toHaveLength(2)
+    expect(rows[1]?.[0]).toBe('\u200c2026-08')
+  })
+
   it.each(['bytes', 'version', 'duplicate', 'incomplete-true', 'incomplete-missing'] as const)(
     'rejects a %s mutation before COMMIT audit or effective totals',
     (mutation) => {

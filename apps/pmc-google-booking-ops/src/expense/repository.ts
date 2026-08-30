@@ -658,22 +658,16 @@ function createGoogleExpenseRepositoryBackend(
     const indexed = indexedMonth(monthKey)
     const monthFolder = DriveApp.getFolderById(indexed.monthFolderId)
     const file = DriveApp.getFileById(indexed.ledgerSpreadsheetId)
-    const checks = {
-      monthFolderNotTrashed: !monthFolder.isTrashed(),
-      monthFolderPrivate: monthFolder.getSharingAccess() === DriveApp.Access.PRIVATE,
-      monthFolderDirectParent: hasDirectParent(monthFolder.getParents(), root.getId()),
-      ledgerNotTrashed: !file.isTrashed(),
-      ledgerPrivate: file.getSharingAccess() === DriveApp.Access.PRIVATE,
-      ledgerDirectParent: hasDirectParent(file.getParents(), monthFolder.getId()),
-    }
-    console.log(JSON.stringify({ event: 'expense-month-context', ...checks }))
-    if (Object.values(checks).some((value) => value !== true)) {
-      throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
-    }
+    if (
+      monthFolder.isTrashed()
+      || monthFolder.getSharingAccess() !== DriveApp.Access.PRIVATE
+      || !hasDirectParent(monthFolder.getParents(), root.getId())
+      || file.isTrashed()
+      || file.getSharingAccess() !== DriveApp.Access.PRIVATE
+      || !hasDirectParent(file.getParents(), monthFolder.getId())
+    ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
     const spreadsheet = SpreadsheetApp.openById(indexed.ledgerSpreadsheetId)
-    console.log('expense-month-context:spreadsheet:open')
     validateSchemas(spreadsheet, EXPENSE_MONTH_SCHEMAS)
-    console.log('expense-month-context:schema:ready')
     return { spreadsheet, monthFolder }
   }
 
@@ -1027,9 +1021,10 @@ function replaceRows(
 function encodeCell(value: unknown): string | number | boolean {
   if (value === null || value === undefined) return ''
   if (typeof value === 'string') {
-    return value.startsWith(LITERAL_TEXT_PREFIX) || /^\s*[=+\-@]/.test(value)
-      ? `${LITERAL_TEXT_PREFIX}${value}`
-      : value
+    if (value === '') return ''
+    return value.startsWith(LITERAL_TEXT_PREFIX)
+      ? value
+      : `${LITERAL_TEXT_PREFIX}${value}`
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value
   return JSON.stringify(value)
