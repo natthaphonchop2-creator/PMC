@@ -658,16 +658,22 @@ function createGoogleExpenseRepositoryBackend(
     const indexed = indexedMonth(monthKey)
     const monthFolder = DriveApp.getFolderById(indexed.monthFolderId)
     const file = DriveApp.getFileById(indexed.ledgerSpreadsheetId)
-    if (
-      monthFolder.isTrashed()
-      || monthFolder.getSharingAccess() !== DriveApp.Access.PRIVATE
-      || !hasDirectParent(monthFolder.getParents(), root.getId())
-      || file.isTrashed()
-      || file.getSharingAccess() !== DriveApp.Access.PRIVATE
-      || !hasDirectParent(file.getParents(), monthFolder.getId())
-    ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    const checks = {
+      monthFolderNotTrashed: !monthFolder.isTrashed(),
+      monthFolderPrivate: monthFolder.getSharingAccess() === DriveApp.Access.PRIVATE,
+      monthFolderDirectParent: hasDirectParent(monthFolder.getParents(), root.getId()),
+      ledgerNotTrashed: !file.isTrashed(),
+      ledgerPrivate: file.getSharingAccess() === DriveApp.Access.PRIVATE,
+      ledgerDirectParent: hasDirectParent(file.getParents(), monthFolder.getId()),
+    }
+    console.log(JSON.stringify({ event: 'expense-month-context', ...checks }))
+    if (Object.values(checks).some((value) => value !== true)) {
+      throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    }
     const spreadsheet = SpreadsheetApp.openById(indexed.ledgerSpreadsheetId)
+    console.log('expense-month-context:spreadsheet:open')
     validateSchemas(spreadsheet, EXPENSE_MONTH_SCHEMAS)
+    console.log('expense-month-context:schema:ready')
     return { spreadsheet, monthFolder }
   }
 
