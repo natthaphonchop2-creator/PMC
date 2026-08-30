@@ -12,8 +12,8 @@ export const BOOKING_PERFORMANCE_FAILURES = Object.freeze([
 ])
 
 export const BOOKING_PERFORMANCE_FIXTURE_SPECS = Object.freeze([
-  freezeFixture(fixtureSpec('payment-chat-2x500kb', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
-  freezeFixture(fixtureSpec('five-files-2mb', [fileProfile('PAYMENT', 3, 2_000_000, 'image/png', 'PNG'), fileProfile('CHAT', 2, 2_000_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
+  freezeFixture(fixtureSpec('payment-chat-2x500kb', [fileProfile('PAYMENT', 1, 500_000, 'image/jpeg', 'JPEG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
+  freezeFixture(fixtureSpec('five-files-2mb', [fileProfile('PAYMENT', 3, 2_000_000, 'image/jpeg', 'JPEG'), fileProfile('CHAT', 2, 2_000_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
   freezeFixture(fixtureSpec('twenty-files-max25mb', [fileProfile('PAYMENT', 10, 1_250_000, 'image/png', 'PNG'), fileProfile('CHAT', 10, 1_250_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 200, 'SUCCESS')),
   freezeFixture(fixtureSpec('chunk-overflow', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], { mode: 'CHUNKED', contentLength: 'OMITTED', rawMultipartBytes: 26_000_001 }, { type: 'NONE' }, 413, 'EVIDENCE_BATCH_TOO_LARGE')),
   freezeFixture(fixtureSpec('invalid-mime', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'JPEG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), { type: 'NONE' }, 415, 'UNSUPPORTED_EVIDENCE')),

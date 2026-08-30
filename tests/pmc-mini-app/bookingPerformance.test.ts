@@ -148,8 +148,8 @@ describe('Booking performance telemetry', () => {
 describe('Booking performance budget harness', () => {
   it('defines the exact bounded payload and recovery fixtures without customer data', () => {
     expect(BOOKING_PERFORMANCE_FIXTURE_SPECS).toEqual([
-      fixtureSpec('payment-chat-2x500kb', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), noFault(), 200, 'SUCCESS'),
-      fixtureSpec('five-files-2mb', [fileProfile('PAYMENT', 3, 2_000_000, 'image/png', 'PNG'), fileProfile('CHAT', 2, 2_000_000, 'image/jpeg', 'JPEG')], fixedTransfer(), noFault(), 200, 'SUCCESS'),
+      fixtureSpec('payment-chat-2x500kb', [fileProfile('PAYMENT', 1, 500_000, 'image/jpeg', 'JPEG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), noFault(), 200, 'SUCCESS'),
+      fixtureSpec('five-files-2mb', [fileProfile('PAYMENT', 3, 2_000_000, 'image/jpeg', 'JPEG'), fileProfile('CHAT', 2, 2_000_000, 'image/jpeg', 'JPEG')], fixedTransfer(), noFault(), 200, 'SUCCESS'),
       fixtureSpec('twenty-files-max25mb', [fileProfile('PAYMENT', 10, 1_250_000, 'image/png', 'PNG'), fileProfile('CHAT', 10, 1_250_000, 'image/jpeg', 'JPEG')], fixedTransfer(), noFault(), 200, 'SUCCESS'),
       fixtureSpec('chunk-overflow', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'PNG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], { mode: 'CHUNKED', contentLength: 'OMITTED', rawMultipartBytes: 26_000_001 }, noFault(), 413, 'EVIDENCE_BATCH_TOO_LARGE'),
       fixtureSpec('invalid-mime', [fileProfile('PAYMENT', 1, 500_000, 'image/png', 'JPEG'), fileProfile('CHAT', 1, 500_000, 'image/jpeg', 'JPEG')], fixedTransfer(), noFault(), 415, 'UNSUPPORTED_EVIDENCE'),

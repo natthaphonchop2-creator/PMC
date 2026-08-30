@@ -99,3 +99,16 @@ Fix-round TDD and verification:
 - `git diff --check`: passed.
 
 No real browser was launched and no live request, deploy, traffic change, external service call, Sheet/Drive/GCS/Apps Script/LINE/Calendar/JERA/Cloud Task mutation, credential operation, or async allowlist expansion was performed.
+
+---
+
+## Fix round 2 — Approved JPEG fixture alignment
+
+The exact typical and medium success descriptors now match the approved evidence profile:
+
+- `payment-chat-2x500kb`: one 500 KB payment JPEG plus one 500 KB chat JPEG, both advertised as `image/jpeg` with matching JPEG magic.
+- `five-files-2mb`: three payment JPEGs plus two chat JPEGs at 2 MB each, all advertised as `image/jpeg` with matching JPEG magic.
+
+The 20-file maximum fixture remains intentionally mixed PNG/JPEG, and the invalid fixture remains an intentional advertised-MIME/magic mismatch. Aggregate pass/fail fixtures and evaluator thresholds are unchanged.
+
+TDD evidence: the focused suite first failed exactly on the two old PNG payment profiles, then passed **42/42** after the descriptor correction. Script syntax, offline `--help`, passing/failing aggregate evaluation, and `git diff --check` passed. No live mode, browser, network, or external system was invoked.
