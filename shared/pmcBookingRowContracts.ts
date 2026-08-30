@@ -160,7 +160,10 @@ export function assertPmcMiniAppTargetRequestRecord(value: PmcMiniAppTargetReque
   if (!missingAdmin && (!safeId(value.adminId) || !boundedName(value.adminName)
     || reserved(value.adminId, value.adminName))) throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
   if (value.aeId === null) {
-    if (value.aeName !== 'ไม่ระบุ') throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
+    const validNullName = value.protocolVersion === 1
+      ? value.aeName === '' || value.aeName === 'ไม่ระบุ'
+      : value.aeName === 'ไม่ระบุ'
+    if (!validNullName) throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
   } else if (!safeId(value.aeId) || !boundedName(value.aeName)
     || reserved(value.aeId, value.aeName)) throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
   if (value.protocolVersion === 1 && !TERMINAL_P1_STATES.has(value.state)) {
@@ -306,19 +309,68 @@ export function assertPmcBookingTargetCorrelation(
   requests: readonly PmcMiniAppTargetRequestRecord[],
   masters: readonly PmcBookingMasterTargetRecord[],
 ): void {
-  const masterByCase = new Map(masters.map((value) => [value.caseId, value]))
   for (const request of requests) {
-    if (request.caseId && !masterByCase.has(request.caseId)) throw new Error('BOOKING_TARGET_CORRELATION_INVALID')
-  }
-  for (const master of masters) {
-    if (!master.formResponseId.startsWith('mini:') || master.recorderSource !== 'VERIFIED_LINE') continue
-    const legacyRequestId = /^mini:([^:]+)$/.exec(master.formResponseId)?.[1] ?? null
-    const byCase = requests.filter((value) => value.caseId === master.caseId)
-    const byForm = legacyRequestId ? requests.filter((value) => value.requestId === legacyRequestId) : []
-    if (byCase.length !== 1 || legacyRequestId && (byForm.length !== 1 || byForm[0] !== byCase[0])) {
+    if (!request.caseId) continue
+    const matches = masters.filter((master) => master.caseId === request.caseId)
+    if (matches.length !== 1
+      || matches[0].recorderSource !== 'VERIFIED_LINE'
+      || !matches[0].formResponseId.startsWith('mini:')
+      || !matchesMiniFormIdentity(matches[0].formResponseId, request)
+      || !sameAttribution(request, matches[0])) {
       throw new Error('BOOKING_TARGET_CORRELATION_INVALID')
     }
   }
+  for (const master of masters) {
+    if (master.recorderSource !== 'VERIFIED_LINE') continue
+    if (!master.formResponseId.startsWith('mini:')) throw new Error('BOOKING_TARGET_CORRELATION_INVALID')
+    const byCase = requests.filter((request) => request.caseId === master.caseId)
+    const byForm = requests.filter((request) => matchesMiniFormIdentity(master.formResponseId, request))
+    if (byCase.length !== 1 || byForm.length !== 1 || byCase[0] !== byForm[0]
+      || !sameAttribution(byCase[0], master)) {
+      throw new Error('BOOKING_TARGET_CORRELATION_INVALID')
+    }
+  }
+}
+
+function matchesMiniFormIdentity(formResponseId: string, request: PmcMiniAppTargetRequestRecord): boolean {
+  if (formResponseId === `mini:${request.requestId}`) return true
+  const current = /^mini:v2:([A-Za-z0-9_-]+):([A-Za-z0-9_-]{4,128})$/.exec(formResponseId)
+  return Boolean(current
+    && current[1] === base64UrlAscii(request.requestId)
+    && request.payloadHash !== null
+    && current[2] === request.payloadHash)
+}
+
+function sameAttribution(
+  request: PmcMiniAppTargetRequestRecord,
+  master: PmcBookingMasterTargetRecord,
+): boolean {
+  if (master.recorderId !== request.staffId
+    || master.recorderName !== request.recorderName
+    || master.adminId !== request.adminId
+    || master.adminName !== request.adminName
+    || master.aeId !== request.aeId) return false
+  if (request.aeId !== null) return master.aeName === request.aeName
+  const requestNullName = request.protocolVersion === 1
+    ? request.aeName === '' || request.aeName === 'ไม่ระบุ'
+    : request.aeName === 'ไม่ระบุ'
+  const masterNullName = master.aeName === null || master.aeName === 'ไม่ระบุ'
+  return requestNullName && masterNullName
+}
+
+function base64UrlAscii(value: string): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+  let output = ''
+  for (let index = 0; index < value.length; index += 3) {
+    const first = value.charCodeAt(index)
+    const second = index + 1 < value.length ? value.charCodeAt(index + 1) : 0
+    const third = index + 2 < value.length ? value.charCodeAt(index + 2) : 0
+    output += alphabet[first >> 2]
+    output += alphabet[((first & 3) << 4) | (second >> 4)]
+    if (index + 1 < value.length) output += alphabet[((second & 15) << 2) | (third >> 6)]
+    if (index + 2 < value.length) output += alphabet[third & 63]
+  }
+  return output
 }
 
 function normalizeMaster(value: Record<string, unknown>): PmcBookingMasterTargetRecord {

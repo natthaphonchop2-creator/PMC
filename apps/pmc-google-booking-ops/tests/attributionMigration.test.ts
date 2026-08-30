@@ -406,6 +406,37 @@ describe('Booking attribution migration workflow', () => {
     expect(fake.effects).toEqual(['manifest.read', 'sheet.read'])
   })
 
+  it('migrates and applies a terminal protocol-1 blank no-AE row without changing its aeName cell', () => {
+    const source = legacySnapshot()
+    source.request.rows[0][source.request.headers.indexOf('state')] = 'CANCELLED'
+    source.request.rows[0][source.request.headers.indexOf('aeName')] = ''
+    source.request.rows[0][source.request.headers.indexOf('caseId')] = ''
+    source.master.rows.shift()
+    const plan = planBookingAttributionMigration(source)
+    if (plan.kind !== 'MIGRATE') throw new Error('expected migration')
+    const migratedRequest = objectRows(TARGET_MINI_APP_REQUEST_HEADERS, plan.requestRows)[0]
+    expect(migratedRequest).toMatchObject({ protocolVersion: 1, state: 'CANCELLED', aeId: '', aeName: '' })
+    const fake = workflowFake([source, source, targetSnapshotFrom(plan)])
+
+    expect(applyBookingAttributionMigration(fake.ports)).toEqual({
+      status: 'COMPLETE', readbackVerified: true,
+    })
+  })
+
+  it('correlates terminal P1 blank request AE with semantic no-AE master sentinel', () => {
+    const source = legacySnapshot()
+    source.request.rows[0][source.request.headers.indexOf('aeName')] = ''
+    source.master.rows[0][source.master.headers.indexOf('aeId')] = ''
+    source.master.rows[0][source.master.headers.indexOf('aeName')] = 'ไม่ระบุ'
+    const plan = planBookingAttributionMigration(source)
+    if (plan.kind !== 'MIGRATE') throw new Error('expected migration')
+    const fake = workflowFake([source, source, targetSnapshotFrom(plan)])
+
+    expect(applyBookingAttributionMigration(fake.ports)).toEqual({
+      status: 'COMPLETE', readbackVerified: true,
+    })
+  })
+
   it.each([
     ['blank request/draft and malformed Staff ID', (target: AttributionMigrationSheetSnapshot) => {
       const row = [...target.request.rows[0]]
@@ -462,6 +493,35 @@ describe('Booking attribution migration workflow', () => {
       row[target.request.headers.indexOf('draftId')] = 'draft-orphan'
       row[target.request.headers.indexOf('caseId')] = 'PMC-202608-0099'
       target.request.rows.push(row)
+    }],
+    ['Form-case hijack', (target: AttributionMigrationSheetSnapshot) => {
+      const row = appendedRequestRow(target, 'form-hijack')
+      row[target.request.headers.indexOf('caseId')] = 'PMC-202608-0002'
+      target.request.rows.push(row)
+    }],
+    ['recorder attribution mismatch', (target: AttributionMigrationSheetSnapshot) => {
+      appendConfirmedP2Pair(target, 'recorder-mismatch', 'PMC-202608-0101')
+      const master = target.master.rows[target.master.rows.length - 1]
+      master[target.master.headers.indexOf('recorderId')] = 'staff-2'
+      master[target.master.headers.indexOf('recorderName')] = 'แวว'
+    }],
+    ['Admin attribution mismatch', (target: AttributionMigrationSheetSnapshot) => {
+      appendConfirmedP2Pair(target, 'admin-mismatch', 'PMC-202608-0102')
+      const master = target.master.rows[target.master.rows.length - 1]
+      master[target.master.headers.indexOf('adminId')] = 'staff-2'
+      master[target.master.headers.indexOf('adminName')] = 'แวว'
+    }],
+    ['AE attribution mismatch', (target: AttributionMigrationSheetSnapshot) => {
+      appendConfirmedP2Pair(target, 'ae-mismatch', 'PMC-202608-0103')
+      const master = target.master.rows[target.master.rows.length - 1]
+      master[target.master.headers.indexOf('aeId')] = ''
+      master[target.master.headers.indexOf('aeName')] = ''
+    }],
+    ['current Mini App payload identity mismatch', (target: AttributionMigrationSheetSnapshot) => {
+      appendConfirmedP2Pair(target, 'payload-mismatch', 'PMC-202608-0104')
+      const master = target.master.rows[target.master.rows.length - 1]
+      master[target.master.headers.indexOf('formResponseId')] =
+        `mini:v2:${base64UrlAscii('request-payload-mismatch')}:different-hash`
     }],
   ] as const)('marks RESTORE_REQUIRED for appended target rows with %s', (_label, mutate) => {
     const plan = planBookingAttributionMigration(legacySnapshot())
@@ -831,6 +891,27 @@ function appendedRequestRow(
   row[target.request.headers.indexOf('state')] = 'READY_TO_CONFIRM'
   row[target.request.headers.indexOf('caseId')] = ''
   return row
+}
+
+function appendConfirmedP2Pair(
+  target: AttributionMigrationSheetSnapshot,
+  suffix: string,
+  caseId: string,
+): void {
+  const request = appendedRequestRow(target, suffix)
+  request[target.request.headers.indexOf('state')] = 'CONFIRMED'
+  request[target.request.headers.indexOf('caseId')] = caseId
+  request[target.request.headers.indexOf('confirmedAt')] = '2026-08-02T10:00:00+07:00'
+  request[target.request.headers.indexOf('confirmationStatus')] = 'CONFIRMED'
+  target.request.rows.push(request)
+  const master = [...target.master.rows[0]]
+  master[target.master.headers.indexOf('caseId')] = caseId
+  master[target.master.headers.indexOf('formResponseId')] = `mini:v2:${base64UrlAscii(`request-${suffix}`)}:payload-1`
+  target.master.rows.push(master)
+}
+
+function base64UrlAscii(value: string): string {
+  return Buffer.from(value, 'ascii').toString('base64url')
 }
 
 function targetSnapshotFrom(plan: BookingAttributionMigrationPlan): AttributionMigrationSheetSnapshot {

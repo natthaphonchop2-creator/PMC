@@ -121,6 +121,23 @@ describe('Apps Script Mini App request row store', () => {
       state: 'QUEUED', version: 2,
     })
   })
+
+  it('reads migrated terminal protocol-1 blank no-AE without mutating the hash-bound aeName cell', () => {
+    const row = targetRequestRow()
+    row[TARGET_MINI_APP_REQUEST_HEADERS.indexOf('protocolVersion')] = 1
+    row[TARGET_MINI_APP_REQUEST_HEADERS.indexOf('state')] = 'EXPIRED'
+    row[TARGET_MINI_APP_REQUEST_HEADERS.indexOf('aeId')] = ''
+    row[TARGET_MINI_APP_REQUEST_HEADERS.indexOf('aeName')] = ''
+    row[TARGET_MINI_APP_REQUEST_HEADERS.indexOf('caseId')] = ''
+    const fake = fakeTargetSpreadsheet([row])
+    const port = createGoogleMiniAppRequestStatePort(fake.spreadsheet)
+
+    expect(port.getByRequestId('request-v2-1')).toMatchObject({
+      protocolVersion: 1, state: 'EXPIRED', aeId: null, aeName: '',
+    })
+    expect(fake.values[0][TARGET_MINI_APP_REQUEST_HEADERS.indexOf('aeName')]).toBe('')
+    expect(fake.setRanges).toEqual([])
+  })
 })
 
 function requestRecord(patch: Partial<MiniAppAsyncRequestRecord> = {}): MiniAppAsyncRequestRecord {
@@ -185,6 +202,35 @@ function fakeSpreadsheet(
     getSheetByName: (name: string) => name === 'MINI_APP_REQUESTS' ? sheet : null,
   } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet
   return { spreadsheet, headers, setRanges, get clearCalls() { return clearCalls } }
+}
+
+function fakeTargetSpreadsheet(initialRows: unknown[][]) {
+  const values = initialRows.map((row) => [...row])
+  const setRanges: Array<{ row: number; column: number; rows: number; columns: number }> = []
+  const sheet = {
+    getLastColumn: () => TARGET_MINI_APP_REQUEST_HEADERS.length,
+    getLastRow: () => values.length + 1,
+    getRange(row: number, column: number, rows = 1, columns = 1) {
+      return {
+        getValues() {
+          if (row === 1) return [[...TARGET_MINI_APP_REQUEST_HEADERS].slice(column - 1, column - 1 + columns)]
+          return values.slice(row - 2, row - 2 + rows).map((item) => item.slice(column - 1, column - 1 + columns))
+        },
+        setValues(next: unknown[][]) {
+          setRanges.push({ row, column, rows, columns })
+          values[row - 2] = [...next[0]]
+        },
+        setNumberFormats() { /* no-op fake */ },
+      }
+    },
+  }
+  return {
+    values,
+    setRanges,
+    spreadsheet: {
+      getSheetByName: (name: string) => name === 'MINI_APP_REQUESTS' ? sheet : null,
+    } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet,
+  }
 }
 
 function coerceLikeSheets(value: unknown): unknown {

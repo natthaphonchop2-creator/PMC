@@ -6,6 +6,7 @@ import {
   createGoogleMiniAppStore,
   type MiniAppRequestRecord,
 } from '../../server/pmc-mini-app/store'
+import { PMC_MINI_APP_REQUEST_HEADERS_V2 } from '../../shared/pmcBookingRowContracts'
 import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState'
 
 describe('PMC Mini App Sheet store', () => {
@@ -67,6 +68,24 @@ describe('PMC Mini App Sheet store', () => {
       processingOwnerToken: null,
       evidenceProjectionHash: null,
     })
+  })
+
+  it('reads a migrated terminal protocol-1 blank no-AE row without rewriting its stored aeName', async () => {
+    const sheets = new MemorySheets()
+    const legacy = validDraft({
+      protocolVersion: 1,
+      state: 'CANCELLED',
+      aeId: null,
+      aeName: '',
+      caseId: null,
+      confirmationStatus: null,
+      confirmedAt: null,
+    })
+    sheets.setTab('MINI_APP_REQUESTS', [targetRequestRow(legacy)])
+
+    await expect(createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets }).getDraft(legacy.draftId))
+      .resolves.toMatchObject({ protocolVersion: 1, state: 'CANCELLED', aeId: null, aeName: '' })
+    expect(sheets.rows('MINI_APP_REQUESTS')[0][PMC_MINI_APP_REQUEST_HEADERS_V2.indexOf('aeName')]).toBe('')
   })
 
   it('writes protocol 1 with the actual legacy schema before migration', async () => {
@@ -540,6 +559,17 @@ function validDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestRe
     updatedAt: '2026-08-27T10:00:00.000Z',
     ...patch,
   }
+}
+
+function targetRequestRow(record: MiniAppRequestRecord): unknown[] {
+  const mapped: Record<string, unknown> = {
+    ...record,
+    paymentEvidenceFileIdsJson: JSON.stringify(record.paymentEvidenceFileIds),
+    chatEvidenceFileIdsJson: JSON.stringify(record.chatEvidenceFileIds),
+    paymentEvidenceObjectKeysJson: JSON.stringify(record.paymentEvidenceObjectKeys),
+    chatEvidenceObjectKeysJson: JSON.stringify(record.chatEvidenceObjectKeys),
+  }
+  return PMC_MINI_APP_REQUEST_HEADERS_V2.map((header) => mapped[header] ?? '')
 }
 
 class MemorySheets implements MiniAppSheetsPort {
