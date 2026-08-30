@@ -34,7 +34,7 @@ export async function runFinanceRuntimeCheck(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout }
   if (parsed.help) {
-    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|READY [stage expected bindings]\n')
+    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|READY [--expected-worker-service <private-service> and stage expected bindings]\n')
     return 0
   }
   const report = await inspectFinanceRuntime(parsed, options)
@@ -50,16 +50,18 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const queueName = safeResource(environment.JERA_ALLOCATION_QUEUE)
   const bucketName = safeResource(environment.JERA_ALLOCATION_LEASE_BUCKET)
   const commandResults = await Promise.all([
+    input.expectedWorkerService ? safeJson(execute, ['gcloud', 'run', 'services', 'describe', input.expectedWorkerService, '--region', input.region, '--project', input.project, '--format=json']) : null,
+    input.expectedWorkerService ? safeJson(execute, ['gcloud', 'auth', 'list', '--filter=status:ACTIVE', '--format=json']) : null,
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'queues', 'describe', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'queues', 'get-iam-policy', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
-    safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', input.service, '--region', input.region, '--project', input.project, '--format=json']),
+    input.expectedWorkerService ? safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', input.expectedWorkerService, '--region', input.region, '--project', input.project, '--format=json']) : null,
     safeJson(execute, ['gcloud', 'projects', 'get-iam-policy', input.project, '--project', input.project, '--format=json']),
     safeJson(execute, ['gcloud', 'scheduler', 'jobs', 'list', '--location', input.region, '--project', input.project, '--format=json']),
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'list', '--queue', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     bucketName ? safeJson(execute, ['gcloud', 'storage', 'buckets', 'describe', `gs://${bucketName}`, '--project', input.project, '--format=json']) : null,
     bucketName ? safeJson(execute, ['gcloud', 'storage', 'buckets', 'get-iam-policy', `gs://${bucketName}`, '--project', input.project, '--format=json']) : null,
   ])
-  const [queue, queueIam, runIam, projectIam, schedulerJobs, tasks, bucket, bucketIam] = commandResults
+  const [workerService, activeAuth, queue, queueIam, workerIam, projectIam, schedulerJobs, tasks, bucket, bucketIam] = commandResults
   let googleState = null
   try {
     googleState = await (options.readGoogleState ?? readGoogleState)({ environment, now })
@@ -98,16 +100,22 @@ export async function inspectFinanceRuntime(input, options = {}) {
       && bucket.location.toLowerCase() === input.region.toLowerCase(),
   }
   const runtimeIdentity = serviceAccountMember(service?.spec?.template?.spec?.serviceAccountName)
+  const workerRuntimeIdentity = serviceAccountMember(workerService?.spec?.template?.spec?.serviceAccountName)
   const invokerEmail = safeEmail(environment.JERA_ALLOCATION_TASK_INVOKER_EMAIL)
   const invokerIdentity = invokerEmail ? `serviceAccount:${invokerEmail}` : null
+  const operatorIdentity = activeOperatorMember(activeAuth)
   const queuePolicy = exactIamPolicy(queueIam, new Map([['roles/cloudtasks.enqueuer', new Set([runtimeIdentity].filter(Boolean))]]))
-  const runPolicy = exactIamPolicy(runIam, new Map([['roles/run.invoker', new Set([invokerIdentity].filter(Boolean))]]))
-  const bucketPolicy = exactIamPolicy(bucketIam, new Map([['roles/storage.objectUser', new Set([runtimeIdentity].filter(Boolean))]]))
-  const projectPolicy = projectIamReport(projectIam, new Set([runtimeIdentity, invokerIdentity].filter(Boolean)))
+  const runPolicy = exactIamPolicy(workerIam, new Map([['roles/run.invoker', new Set([invokerIdentity].filter(Boolean))]]))
+  const bucketPolicy = exactIamPolicy(bucketIam, new Map([
+    ['roles/storage.objectUser', new Set([workerRuntimeIdentity].filter(Boolean))],
+    ['roles/storage.legacyBucketOwner', new Set([operatorIdentity].filter(Boolean))],
+  ]))
+  const projectPolicy = projectIamReport(projectIam, new Set([runtimeIdentity, workerRuntimeIdentity, invokerIdentity].filter(Boolean)))
+  const workerCloudRun = workerCloudRunReport(workerService, runPolicy)
   const bindings = {
     queueEnqueuerPresent: hasBinding(queueIam, 'roles/cloudtasks.enqueuer', runtimeIdentity),
-    oidcInvokerPresent: hasBinding(runIam, 'roles/run.invoker', invokerIdentity),
-    leaseBucketObjectUserPresent: hasBinding(bucketIam, 'roles/storage.objectUser', runtimeIdentity),
+    oidcInvokerPresent: hasBinding(workerIam, 'roles/run.invoker', invokerIdentity),
+    leaseBucketObjectUserPresent: hasBinding(bucketIam, 'roles/storage.objectUser', workerRuntimeIdentity),
     queuePolicyExact: queuePolicy.exact,
     runPolicyExact: runPolicy.exact,
     leaseBucketPolicyExact: bucketPolicy.exact,
@@ -132,6 +140,7 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const financePermissions = permissionReport(googleState?.staffRows, input.expectedFinanceViewers, input.approvedFinanceStaffIds)
   const leases = leaseReport(googleState?.coverageRows, now)
   const infrastructureReady = cloudRun.servicePresent
+    && workerCloudRun.servicePresent && workerCloudRun.ready && workerCloudRun.invokerPolicyExact
     && allocationConfig.presentNameCount === allocationConfig.requiredNameCount && allocationConfig.leaseBucketPresent
     && allocationConfig.exactExpectedConfig
     && queueReport.present && queueReport.running && queueReport.maxConcurrentDispatches === 1
@@ -156,7 +165,7 @@ export async function inspectFinanceRuntime(input, options = {}) {
   return {
     mode: 'READ_ONLY', expectedStage: input.expectedStage, stageReady, ready: stageReady,
     safeCode: stageReady ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
-    allocationConfig, queue: queueReport, bindings, scheduler, tasks: taskReport, tabs, financePermissions, leases,
+    workerCloudRun, allocationConfig, queue: queueReport, bindings, scheduler, tasks: taskReport, tabs, financePermissions, leases,
   }
 }
 
@@ -165,7 +174,7 @@ function parseArguments(args) {
   const parsed = {
     help: false, allowReadonlyProduction: false, project: null, service: null, region: null,
     expectedFinanceViewers: null, approvedFinanceStaffIds: [], expectedStage: null, expectedQueue: null,
-    expectedWorkerAudience: null, expectedInvoker: null,
+    expectedWorkerService: null, expectedWorkerAudience: null, expectedInvoker: null,
     expectedFinanceSeedUrl: null, expectedOidcAudience: null,
   }
   for (let index = 0; index < args.length; index += 1) {
@@ -179,6 +188,7 @@ function parseArguments(args) {
     else if (value === '--approved-finance-staff-id' && args[index + 1]) parsed.approvedFinanceStaffIds.push(args[++index])
     else if (value.startsWith('--expected-stage=') && parsed.expectedStage === null) parsed.expectedStage = value.slice('--expected-stage='.length)
     else if (value === '--expected-queue' && parsed.expectedQueue === null && args[index + 1]) parsed.expectedQueue = args[++index]
+    else if (value === '--expected-worker-service' && parsed.expectedWorkerService === null && args[index + 1]) parsed.expectedWorkerService = args[++index]
     else if (value === '--expected-worker-audience' && parsed.expectedWorkerAudience === null && args[index + 1]) parsed.expectedWorkerAudience = args[++index]
     else if (value === '--expected-invoker' && parsed.expectedInvoker === null && args[index + 1]) parsed.expectedInvoker = args[++index]
     else if (value === '--expected-finance-seed-url' && parsed.expectedFinanceSeedUrl === null && args[index + 1]) parsed.expectedFinanceSeedUrl = args[++index]
@@ -197,7 +207,8 @@ function parseArguments(args) {
     throw new Error('Exactly three unique approved finance staff IDs are required')
   }
   if (parsed.expectedStage !== 'DISABLED') {
-    if (!safeResource(parsed.expectedQueue) || !normalizedOrigin(parsed.expectedWorkerAudience) || !safeEmail(parsed.expectedInvoker)) {
+    if (!safeToken(parsed.expectedWorkerService) || !safeResource(parsed.expectedQueue)
+      || !normalizedOrigin(parsed.expectedWorkerAudience) || !safeEmail(parsed.expectedInvoker)) {
       throw new Error('Allocation stage expected bindings are required')
     }
     parsed.expectedWorkerAudience = normalizedOrigin(parsed.expectedWorkerAudience)
@@ -248,6 +259,17 @@ function cloudRunReport(service) {
     latestReadyTrafficPercent,
     trafficPercentTotal: traffic.reduce((total, item) => total + safeNonnegative(item?.percent), 0),
     trafficTargetCount: traffic.length,
+  }
+}
+function workerCloudRunReport(service, policy) {
+  const latestReadyRevisionName = typeof service?.status?.latestReadyRevisionName === 'string'
+    ? service.status.latestReadyRevisionName : null
+  const conditions = Array.isArray(service?.status?.conditions) ? service.status.conditions : []
+  const explicitReady = conditions.some((condition) => condition?.type === 'Ready' && (condition?.status === true || condition?.status === 'True'))
+  return {
+    servicePresent: service !== null,
+    ready: service !== null && (explicitReady || latestReadyRevisionName !== null),
+    invokerPolicyExact: policy.exact,
   }
 }
 function schedulerReport(value, expected) {
@@ -402,6 +424,12 @@ function projectIamReport(policy, relevantMembers) {
   }
 }
 function serviceAccountMember(value) { const email = safeEmail(value); return email ? `serviceAccount:${email}` : null }
+function activeOperatorMember(value) {
+  const active = Array.isArray(value) ? value.filter((entry) => entry?.status === 'ACTIVE' && typeof entry?.account === 'string') : []
+  if (active.length !== 1 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(active[0].account)
+    || safeEmail(active[0].account)) return null
+  return `user:${active[0].account}`
+}
 function safeEmail(value) { return typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value) ? value : null }
 function safeResource(value) { return typeof value === 'string' && /^[A-Za-z0-9._-]{1,256}$/.test(value) ? value : null }
 function safeToken(value) { return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value) }

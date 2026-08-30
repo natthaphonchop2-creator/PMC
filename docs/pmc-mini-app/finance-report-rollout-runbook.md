@@ -69,6 +69,8 @@ max concurrent dispatches: 1
 max dispatch rate: 0.016 tasks/second
 ```
 
+Deploy the reviewed image as a separate private Cloud Run service named `pmc-finance-worker`. The public `pmc-mini-app` LIFF service must not be treated as the worker IAM boundary. Queue and Scheduler OIDC requests target only the private worker service; the worker policy contains only the dedicated invoker.
+
 Grant only the runtime identity permission to enqueue that queue, the verified OIDC identity permission to invoke the no-traffic service, and the runtime identity the minimum object permission on the dedicated allocation lease bucket. Do not grant project Owner, Editor, broad Secret Manager, Cloud Tasks admin, Storage admin, or broad Cloud Run invoker roles.
 
 Every task must contain a valid `metadataSnapshotHash` and integer `attempt`. Each task processes at most 20 payment-detail attempts; the worker keeps one provider request in flight and waits at least 3,000 ms between attempts. Continuations for a day wait at least 60 seconds. This preserves the global ceiling of 20 `PAYMENT_DETAIL` requests per minute even while multiple days are pending.
@@ -162,6 +164,7 @@ node scripts/check-finance-report-runtime.mjs \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
   --expected-stage=ALLOCATION \
+  --expected-worker-service pmc-finance-worker \
   --expected-queue pmc-revenue-allocation \
   --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
   --expected-invoker "$OPERATOR_EXPECTED_INVOKER"
@@ -229,6 +232,7 @@ node scripts/check-finance-report-runtime.mjs \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
   --expected-stage=READY \
+  --expected-worker-service pmc-finance-worker \
   --expected-queue pmc-revenue-allocation \
   --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
   --expected-invoker "$OPERATOR_EXPECTED_INVOKER" \

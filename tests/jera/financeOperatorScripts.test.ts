@@ -6,12 +6,14 @@ import { JERA_OPERATOR_PROJECT } from '../../scripts/jera-operator-secrets.mjs'
 
 const PROJECT = JERA_OPERATOR_PROJECT
 const SERVICE = 'pmc-mini-app'
+const WORKER_SERVICE = 'pmc-finance-worker'
 const REGION = 'asia-southeast1'
 const APPROVED_DAY = '2026-08-22'
 const NOW = '2026-08-30T02:00:00.000Z'
 const QUEUE = 'pmc-revenue-allocation'
 const AUDIENCE = 'https://private.example'
 const INVOKER = 'invoker@example.iam.gserviceaccount.com'
+const OPERATOR_ACCOUNT = 'operator@example.com'
 const SEED_URL = `${AUDIENCE}/internal/mini-app/finance-daily-seed`
 const APPROVED_FINANCE_STAFF_IDS = ['ADMIN_01', 'DOCTOR_01', 'ADMIN_09'] as const
 const APPROVED_FINANCE_STAFF_ARGS = APPROVED_FINANCE_STAFF_IDS.flatMap((id) => ['--approved-finance-staff-id', id])
@@ -131,9 +133,9 @@ describe('read-only finance runtime checker', () => {
       allocationConfig: { requiredNameCount: 7, presentNameCount: 7, leaseBucketPresent: true },
       queue: { present: true, maxConcurrentDispatches: 1, maxDispatchesPerSecond: 0.016 },
       bindings: {
-        queueEnqueuerPresent: true, oidcInvokerPresent: true, leaseBucketObjectUserPresent: true,
-        queuePolicyExact: true, runPolicyExact: true, leaseBucketPolicyExact: true,
-        publicMemberCount: 0, broadRoleCount: 0, unexpectedRoleCount: 0, extraPrincipalCount: 0,
+        queueEnqueuerPresent: true, oidcInvokerPresent: false, leaseBucketObjectUserPresent: false,
+        queuePolicyExact: true, runPolicyExact: false, leaseBucketPolicyExact: false,
+        publicMemberCount: 0, broadRoleCount: 0, unexpectedRoleCount: 0, extraPrincipalCount: 1,
       },
       scheduler: { matchingJobCount: 0, enabledJobCount: 0, oidcBindingPresent: false },
       tasks: { pendingCount: 1, validMetadataHashCount: 1, validAttemptCount: 1, invalidPayloadCount: 0 },
@@ -203,6 +205,25 @@ describe('read-only finance runtime checker', () => {
       cloudRun: { latestReadyRevisionPresent: true, latestReadyHasNoTraffic: true },
       scheduler: { enabledJobCount: 0 },
       allocationConfig: { exactExpectedConfig: true },
+    })
+  })
+
+  it('requires an explicit private worker service instead of applying worker IAM rules to the public LIFF service', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: false, allocation: true, category: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({ service, schedulerJobs: [] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(0)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      workerCloudRun: { servicePresent: true, ready: true, invokerPolicyExact: true },
     })
   })
 
@@ -853,6 +874,7 @@ function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'READY') {
     '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, `--expected-stage=${stage}`,
   ]
   if (stage !== 'DISABLED') args.push(
+    '--expected-worker-service', WORKER_SERVICE,
     '--expected-queue', QUEUE, '--expected-worker-audience', AUDIENCE, '--expected-invoker', INVOKER,
   )
   if (stage === 'READY') args.push(
@@ -863,13 +885,18 @@ function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'READY') {
 
 function runtimeExecute({
   service,
+  workerService = cloudRunWorkerService(),
   schedulerJobs,
   queueIam = { bindings: [{ role: 'roles/cloudtasks.enqueuer', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] },
   runIam = { bindings: [{ role: 'roles/run.invoker', members: [`serviceAccount:${INVOKER}`] }] },
-  bucketIam = { bindings: [{ role: 'roles/storage.objectUser', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] }] },
+  bucketIam = { bindings: [
+    { role: 'roles/storage.objectUser', members: ['serviceAccount:runtime@example.iam.gserviceaccount.com'] },
+    { role: 'roles/storage.legacyBucketOwner', members: [`user:${OPERATOR_ACCOUNT}`] },
+  ] },
   projectIam = { bindings: [{ role: 'roles/viewer', members: ['user:owner@example.com'] }] },
 }: {
   service: unknown
+  workerService?: unknown
   schedulerJobs: unknown[]
   queueIam?: unknown
   runIam?: unknown
@@ -878,10 +905,12 @@ function runtimeExecute({
 }) {
   return vi.fn(async (command: string[]) => {
     const joined = command.join(' ')
+    if (joined.includes(`run services describe ${WORKER_SERVICE}`)) return JSON.stringify(workerService)
+    if (joined.includes('auth list')) return JSON.stringify([{ account: OPERATOR_ACCOUNT, status: 'ACTIVE' }])
     if (joined.includes('run services describe')) return JSON.stringify(service)
     if (joined.includes('tasks queues describe')) return JSON.stringify(queueDescription())
     if (joined.includes('tasks queues get-iam-policy')) return JSON.stringify(queueIam)
-    if (joined.includes('run services get-iam-policy')) return JSON.stringify(runIam)
+    if (joined.includes(`run services get-iam-policy ${WORKER_SERVICE}`)) return JSON.stringify(runIam)
     if (joined.includes('projects get-iam-policy')) return JSON.stringify(projectIam)
     if (joined.includes('scheduler jobs list')) return JSON.stringify(schedulerJobs)
     if (joined.includes('tasks list')) return JSON.stringify([{ httpRequest: { body: Buffer.from(JSON.stringify({
@@ -927,6 +956,17 @@ function cloudRunService({
   return {
     spec: { template: { metadata: { name: latestReadyRevisionName }, spec: { serviceAccountName: 'runtime@example.iam.gserviceaccount.com', containers: [{ env }] } } },
     status: { latestReadyRevisionName, traffic: [{ revisionName: trafficRevisionName, percent: 100 }] },
+  }
+}
+
+function cloudRunWorkerService() {
+  return {
+    spec: { template: { spec: { serviceAccountName: 'runtime@example.iam.gserviceaccount.com', containers: [{ env: [] }] } } },
+    status: {
+      latestReadyRevisionName: 'private-worker-revision',
+      traffic: [{ revisionName: 'private-worker-revision', percent: 100 }],
+      conditions: [{ type: 'Ready', status: 'True' }],
+    },
   }
 }
 
