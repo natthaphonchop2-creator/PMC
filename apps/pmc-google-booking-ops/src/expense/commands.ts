@@ -3,6 +3,7 @@ import {
   deriveExpenseScope,
   parseExpenseDate,
   projectMonthlyExpenses,
+  validateExpenseLedger,
   type ExpenseAuditEvent,
   type ExpenseReceipt,
   type ExpenseSubmission,
@@ -59,6 +60,7 @@ interface PrepareAuditPayload {
   expectedAttachmentCount: number
   expectedManifestHash: string
   expectedRevision: number
+  prepareIntentHash: string
 }
 
 interface CommitAuditPayload {
@@ -134,9 +136,14 @@ function requireFingerprint(command: MiniAppExpenseCommand, ports: ExpenseComman
 }
 
 function requireSubmitter(staffId: string, ports: ExpenseCommandPorts): ExpenseActor {
+  const actor = requireActiveActor(staffId, ports)
+  if (actor.canSubmitExpense !== true) throw new Error('EXPENSE_SUBMIT_PERMISSION_REQUIRED')
+  return actor
+}
+
+function requireActiveActor(staffId: string, ports: ExpenseCommandPorts): ExpenseActor {
   const actor = ports.staff.findById(staffId)
   if (!actor || actor.active !== true) throw new Error('EXPENSE_STAFF_REQUIRED')
-  if (actor.canSubmitExpense !== true) throw new Error('EXPENSE_SUBMIT_PERMISSION_REQUIRED')
   return actor
 }
 
@@ -167,6 +174,7 @@ function prepareExpense(
     rootRequestId: command.rootRequestId,
     commandType: command.commandType,
     commandFingerprint: fingerprint,
+    commandJson: canonicalMiniAppExpenseCommand(command),
     expenseId: candidateExpenseId,
     monthKey,
     createdAt,
@@ -186,19 +194,19 @@ function prepareExpense(
     .filter((event) => event.action === 'PREPARE')
   if (priorPrepareAudits.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   const priorPrepareAudit = priorPrepareAudits[0]
+  const priorPreparePayload = priorPrepareAudit ? parseJsonRecord(priorPrepareAudit.afterJson) : null
   if (
     priorPrepareAudit
     && (
       priorPrepareAudit.actorStaffId !== actor.id
       || priorPrepareAudit.correlationId !== command.commandIdempotencyKey
-      || JSON.stringify(parseJsonRecord(priorPrepareAudit.afterJson)) !== JSON.stringify({
-        rootRequestId: command.rootRequestId,
-        monthKey,
-        commandFingerprint: fingerprint,
-        expectedAttachmentCount: command.payload.expectedAttachmentCount,
-        expectedManifestHash: command.payload.expectedManifestHash,
-        expectedRevision: command.payload.expectedRevision,
-      })
+      || priorPreparePayload?.rootRequestId !== command.rootRequestId
+      || priorPreparePayload.monthKey !== monthKey
+      || priorPreparePayload.commandFingerprint !== fingerprint
+      || priorPreparePayload.expectedAttachmentCount !== command.payload.expectedAttachmentCount
+      || priorPreparePayload.expectedManifestHash !== command.payload.expectedManifestHash
+      || priorPreparePayload.expectedRevision !== command.payload.expectedRevision
+      || !SHA256.test(String(priorPreparePayload.prepareIntentHash ?? ''))
     )
   ) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
   const submittedAt = priorPrepareAudit?.createdAt ?? createdAt
@@ -224,6 +232,9 @@ function prepareExpense(
     version: 1,
     idempotencyKey: command.rootRequestId,
   }
+  if (priorPreparePayload) {
+    requirePreparedIntent(proposed, priorPreparePayload as unknown as PrepareAuditPayload, ports)
+  }
   const existing = ports.expense.getSubmission(monthKey, reservation.expenseId)
   const submission = existing ?? proposed
   if (existing && !samePreparedIntent(existing, proposed)) {
@@ -236,6 +247,11 @@ function prepareExpense(
     expectedAttachmentCount: command.payload.expectedAttachmentCount,
     expectedManifestHash: command.payload.expectedManifestHash,
     expectedRevision: command.payload.expectedRevision,
+    prepareIntentHash: preparedIntentHash(proposed, {
+      expectedAttachmentCount: command.payload.expectedAttachmentCount,
+      expectedManifestHash: command.payload.expectedManifestHash,
+      expectedRevision: command.payload.expectedRevision,
+    }, ports),
   }
   ports.expense.appendAudit({
     eventId: auditEventId(fingerprint, 'P'),
@@ -274,6 +290,7 @@ function commitExpense(
     rootRequestId: command.rootRequestId,
     commandType: command.commandType,
     commandFingerprint: fingerprint,
+    commandJson: canonicalMiniAppExpenseCommand(command),
     expenseId: command.payload.expenseId,
     monthKey,
     createdAt: now,
@@ -291,19 +308,19 @@ function commitExpense(
 
   const submission = ports.expense.getSubmission(monthKey, command.payload.expenseId)
   if (!submission) throw new Error('EXPENSE_NOT_FOUND')
-  if (
-    submission.recordState !== 'PREPARED'
-    || submission.version !== command.payload.expectedVersion
-    || submission.idempotencyKey !== command.rootRequestId
-    || submission.submittedByStaffId !== actor.id
-  ) throw new Error('EXPENSE_NOT_PREPARED')
+  if (submission.recordState !== 'PREPARED' || submission.version !== command.payload.expectedVersion) {
+    throw new Error('EXPENSE_NOT_PREPARED')
+  }
   validateStoredSubmission(submission, command.payload.expectedRevision)
   const prepare = requirePrepareAudit(submission, ports)
+  requirePreparedIntent(submission, prepare, ports)
   if (
     prepare.rootRequestId !== command.rootRequestId
     || prepare.monthKey !== monthKey
     || prepare.expectedRevision !== command.payload.expectedRevision
     || prepare.expectedManifestHash !== command.payload.expectedManifestHash
+    || submission.idempotencyKey !== command.rootRequestId
+    || submission.submittedByStaffId !== actor.id
   ) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
 
   ports.expense.verifyPrivateAttachments(monthKey, submission.expenseId, command.payload.attachments)
@@ -362,6 +379,7 @@ function finishDurableCommit(
   if (!submission) throw new Error('EXPENSE_NOT_FOUND')
   validateStoredSubmission(submission, payload.expectedRevision)
   const prepare = requirePrepareAudit(submission, ports, recoveryContext?.events)
+  requirePreparedIntent(submission, prepare, ports)
   if (
     prepare.rootRequestId !== payload.rootRequestId
     || prepare.monthKey !== payload.monthKey
@@ -430,9 +448,11 @@ function finishDurableCommit(
       correlationId: payload.commandIdempotencyKey,
     }, recoveryContext?.events)
   }
+  const committedMonthRows = ports.expense.listMonth(payload.monthKey)
+  requireValidLedger(committedMonthRows)
   ports.expense.replaceMonthlySummary(
     payload.monthKey,
-    projectMonthlyExpenses(ports.expense.listMonth(payload.monthKey), payload.monthKey),
+    projectMonthlyExpenses(committedMonthRows, payload.monthKey),
     ports.clock.nowIso(),
   )
   const receipt = receiptFromSubmission(committed)
@@ -474,17 +494,24 @@ function voidExpense(
     rootRequestId: command.rootRequestId,
     commandType: command.commandType,
     commandFingerprint: fingerprint,
+    commandJson: canonicalMiniAppExpenseCommand(command),
     expenseId: command.payload.expenseId,
     monthKey,
     createdAt: now,
   })
   if (reservation.resultJson !== null) return replayStoredOutcome(reservation.resultJson)
-  const actor = requireSubmitter(command.staffId, ports)
-  requireManager(actor)
   const submission = ports.expense.getSubmission(monthKey, command.payload.expenseId)
   if (!submission) throw new Error('EXPENSE_NOT_FOUND')
   const eventId = auditEventId(fingerprint, 'V')
   const priorVoid = ports.expense.getAuditByEventId(eventId)
+  const stateFirstVoid = !priorVoid
+    && submission.recordState === 'VOID'
+    && submission.version === command.payload.expectedVersion + 1
+    && submission.committedAt !== null
+  const actor = priorVoid || stateFirstVoid
+    ? { id: command.staffId } as ExpenseActor
+    : requireActiveActor(command.staffId, ports)
+  if (!priorVoid && !stateFirstVoid) requireManager(actor)
   const afterJson = JSON.stringify({
     rootRequestId: command.rootRequestId,
     commandFingerprint: fingerprint,
@@ -500,23 +527,37 @@ function voidExpense(
       || priorVoid.correlationId !== command.commandIdempotencyKey
     )
   ) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
+  if (submission.recordState !== 'COMMITTED' && !priorVoid && !stateFirstVoid) {
+    throw new Error('EXPENSE_NOT_PREPARED')
+  }
   if (
     !priorVoid
-    && (submission.recordState === 'VOID' || submission.version !== command.payload.expectedVersion)
+    && !stateFirstVoid
+    && submission.version !== command.payload.expectedVersion
   ) throw new Error('EXPENSE_NOT_PREPARED')
   if (
     priorVoid
     && submission.recordState !== 'VOID'
     && submission.version !== command.payload.expectedVersion
   ) throw new Error('EXPENSE_NOT_PREPARED')
+  if (priorVoid && submission.recordState === 'VOID' && submission.version !== command.payload.expectedVersion + 1) {
+    throw new Error('EXPENSE_NOT_PREPARED')
+  }
   const durableVoid = ports.expense.appendAudit({
     eventId,
     expenseId: submission.expenseId,
     actorStaffId: actor.id,
     action: 'VOID',
-    beforeJson: priorVoid?.beforeJson ?? JSON.stringify(submission),
+    beforeJson: priorVoid?.beforeJson ?? JSON.stringify(stateFirstVoid
+      ? {
+          ...submission,
+          recordState: 'COMMITTED',
+          version: command.payload.expectedVersion,
+          updatedAt: submission.committedAt,
+        }
+      : submission),
     afterJson,
-    createdAt: priorVoid?.createdAt ?? now,
+    createdAt: priorVoid?.createdAt ?? (stateFirstVoid ? submission.updatedAt : now),
     correlationId: command.commandIdempotencyKey,
   }, priorVoid ? [priorVoid] : [])
   const voided = submission.recordState === 'VOID'
@@ -525,9 +566,11 @@ function voidExpense(
         recordState: 'VOID',
         updatedAt: durableVoid.createdAt,
       })
+  const voidedMonthRows = ports.expense.listMonth(monthKey)
+  requireValidLedger(voidedMonthRows)
   ports.expense.replaceMonthlySummary(
     monthKey,
-    projectMonthlyExpenses(ports.expense.listMonth(monthKey), monthKey),
+    projectMonthlyExpenses(voidedMonthRows, monthKey),
     durableVoid.createdAt,
   )
   const result: ExpenseCommandResult = {
@@ -547,6 +590,17 @@ export function runExpenseRecovery(ports: ExpenseCommandPorts): ExpenseRecoveryR
     for (const candidate of ports.expense.listRecoveryCandidates(100)) {
       result.inspected += 1
       try {
+        if (candidate.kind === 'VOID') {
+          const command = recoveryVoidCommand(candidate)
+          voidExpense(command, candidate.voidRequest!.commandFingerprint, ports)
+          result.recovered += 1
+          continue
+        }
+        if (candidate.kind === 'ABANDON') {
+          abandonRecoveryCandidate(candidate, ports)
+          result.abandoned += 1
+          continue
+        }
         const commit = candidate.events.find((event) => event.action === 'COMMIT')
         if (commit) {
           try {
@@ -586,35 +640,55 @@ function abandonRecoveryCandidate(
   ports: ExpenseCommandPorts,
 ): void {
   const submission = ports.expense.getSubmission(candidate.monthKey, candidate.expenseId)
-  if (submission && submission.recordState !== 'PREPARED') {
+  if (!submission || submission.recordState !== 'PREPARED' || submission.version !== 1) {
     throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   }
-  const beforeJson = JSON.stringify(submission ?? {})
-  if (submission?.recordState === 'PREPARED') {
-    ports.expense.updateSubmission(candidate.monthKey, candidate.expenseId, submission.version, {
-      recordState: 'VOID',
-      updatedAt: ports.clock.nowIso(),
-    })
-  }
-  if (submission) {
-    ports.expense.replaceMonthlySummary(
-      candidate.monthKey,
-      projectMonthlyExpenses(ports.expense.listMonth(candidate.monthKey), candidate.monthKey),
-      ports.clock.nowIso(),
-    )
-  }
+  requireValidLedger(ports.expense.listMonth(candidate.monthKey))
   const prepare = candidate.events.find((event) => event.action === 'PREPARE')
   if (!prepare) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
-  ports.expense.appendAudit({
-    eventId: auditEventIdFromExpense(candidate.expenseId, 'A'),
+  const eventId = auditEventIdFromExpense(candidate.expenseId, 'A')
+  const existing = candidate.events.find((event) => event.eventId === eventId)
+  const durable = ports.expense.appendAudit({
+    eventId,
     expenseId: candidate.expenseId,
     actorStaffId: prepare.actorStaffId,
     action: 'ABANDON',
-    beforeJson,
-    afterJson: JSON.stringify({ recordState: 'VOID' }),
-    createdAt: ports.clock.nowIso(),
+    beforeJson: JSON.stringify(submission),
+    afterJson: JSON.stringify({ recordState: 'PREPARED', terminal: true }),
+    createdAt: existing?.createdAt ?? ports.clock.nowIso(),
     correlationId: `${candidate.rootRequestId}:prepare`,
   }, candidate.events)
+  if (candidate.commitRequest) {
+    completeFailure(
+      candidate.commitRequest.commandIdempotencyKey,
+      candidate.commitRequest.commandFingerprint,
+      'EXPENSE_PRIVATE_FILE_INVALID',
+      ports,
+      candidate.commitRequest,
+    )
+  }
+  if (durable.action !== 'ABANDON') throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+}
+
+function recoveryVoidCommand(candidate: ExpenseRecoveryCandidate): VoidCommand {
+  const request = candidate.voidRequest
+  if (!request || request.resultJson !== null) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  let parsed: unknown
+  try { parsed = JSON.parse(request.commandJson) as unknown } catch { parsed = null }
+  try {
+    const canonical = canonicalMiniAppExpenseCommand(parsed as MiniAppExpenseCommand)
+    if (canonical !== request.commandJson) throw new Error('invalid')
+  } catch {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  const command = parsed as MiniAppExpenseCommand
+  if (
+    command.commandType !== 'VOID_EXPENSE'
+    || command.rootRequestId !== request.rootRequestId
+    || command.commandIdempotencyKey !== request.commandIdempotencyKey
+    || command.payload.expenseId !== candidate.expenseId
+  ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  return command
 }
 
 function recoveryAgeHours(preparedAt: string, now: string): number {
@@ -634,6 +708,11 @@ function requirePrepareAudit(
   }
   const payload = parseJsonRecord(events[0].afterJson)
   if (
+    !hasExactKeys(payload, [
+      'rootRequestId', 'monthKey', 'commandFingerprint', 'expectedAttachmentCount',
+      'expectedManifestHash', 'expectedRevision', 'prepareIntentHash',
+    ])
+    ||
     events[0].eventId !== auditEventId(String(payload.commandFingerprint ?? ''), 'P')
     || events[0].correlationId !== `${String(payload.rootRequestId ?? '')}:prepare`
     || typeof payload.rootRequestId !== 'string'
@@ -642,6 +721,7 @@ function requirePrepareAudit(
     || !Number.isSafeInteger(payload.expectedAttachmentCount)
     || !SHA256.test(String(payload.expectedManifestHash ?? ''))
     || !Number.isSafeInteger(payload.expectedRevision)
+    || !SHA256.test(String(payload.prepareIntentHash ?? ''))
   ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
   return payload as unknown as PrepareAuditPayload
 }
@@ -792,6 +872,51 @@ function validateStoredSubmission(
   }
 }
 
+function preparedIntentHash(
+  submission: ExpenseSubmission,
+  prepare: Pick<PrepareAuditPayload, 'expectedAttachmentCount' | 'expectedManifestHash' | 'expectedRevision'>,
+  ports: ExpenseCommandPorts,
+): string {
+  return ports.crypto.sha256Hex(JSON.stringify({
+    expenseId: submission.expenseId,
+    expenseDate: submission.expenseDate,
+    monthKey: submission.monthKey,
+    category: submission.category,
+    scope: submission.scope,
+    amountSatang: submission.amountSatang,
+    counterpartyName: submission.counterpartyName,
+    description: submission.description,
+    paymentMethod: submission.paymentMethod,
+    bookDailyKey: submission.bookDailyKey,
+    revision: submission.revision,
+    submittedByStaffId: submission.submittedByStaffId,
+    submittedByName: submission.submittedByName,
+    submittedAt: submission.submittedAt,
+    idempotencyKey: submission.idempotencyKey,
+    expectedAttachmentCount: prepare.expectedAttachmentCount,
+    expectedManifestHash: prepare.expectedManifestHash,
+    expectedRevision: prepare.expectedRevision,
+  }))
+}
+
+function requirePreparedIntent(
+  submission: ExpenseSubmission,
+  prepare: PrepareAuditPayload,
+  ports: ExpenseCommandPorts,
+): void {
+  if (preparedIntentHash(submission, prepare, ports) !== prepare.prepareIntentHash) {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+}
+
+function requireValidLedger(rows: ExpenseSubmission[]): void {
+  try {
+    validateExpenseLedger(rows)
+  } catch {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+}
+
 function completeSuccess(
   commandIdempotencyKey: string,
   fingerprint: string,
@@ -813,6 +938,7 @@ function completeFailure(
   fingerprint: string,
   error: MiniAppExpenseSafeErrorCode,
   ports: ExpenseCommandPorts,
+  knownRequest?: ExpenseRecoveryRequestSnapshot,
 ): void {
   const stored: StoredCommandFailure = { ok: false, error }
   ports.expense.completeRequest({
@@ -820,7 +946,7 @@ function completeFailure(
     commandFingerprint: fingerprint,
     resultJson: JSON.stringify(stored),
     updatedAt: ports.clock.nowIso(),
-  })
+  }, knownRequest)
 }
 
 function replayStoredOutcome(resultJson: string): ExpenseCommandResult {

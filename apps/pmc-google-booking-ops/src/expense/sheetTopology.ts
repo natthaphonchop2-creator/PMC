@@ -11,6 +11,7 @@ export const EXPENSE_REQUEST_HEADERS = [
   'rootRequestId',
   'commandType',
   'commandFingerprint',
+  'commandJson',
   'expenseId',
   'monthKey',
   'recordState',

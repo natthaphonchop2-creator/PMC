@@ -232,6 +232,67 @@ describe('Apps Script expense repository and command journal', () => {
       .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
   })
 
+  it.each([
+    ['amount', { amountSatang: 10_001 }],
+    ['date', { expenseDate: '2026-08-30' }],
+    ['month', { expenseDate: '2026-09-01', monthKey: '2026-09' }],
+    ['category and book identity', {
+      category: 'BOOK_CLINIC', counterpartyName: null, paymentMethod: null,
+      bookDailyKey: 'CLINIC:2026-08-29',
+    }],
+    ['scope', { scope: 'DOCTOR_PERSONAL' }],
+    ['payment method', { paymentMethod: 'CASH' }],
+    ['counterparty', { counterpartyName: 'ร้านอื่น' }],
+    ['description', { description: 'เปลี่ยนหลัง PREPARE' }],
+    ['book key', { bookDailyKey: 'CLINIC:2026-08-29' }],
+    ['revision', { revision: 2 }],
+    ['actor', { submittedByStaffId: 'MANAGER_01' }],
+    ['root request', { idempotencyKey: 'different-root' }],
+  ])('rejects direct-sheet %s drift from the signed PREPARE intent', (_case, patch) => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'immutable-intent', commandIdempotencyKey: 'immutable-intent:prepare',
+    }))
+    const rows = ports.backend.months.get('2026-08')!.get('EXPENSE_SUBMISSIONS')!
+    rows[0] = { ...rows[0], ...patch }
+
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'immutable-intent', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+    expect(ports.expense.auditForExpense(prepared.prepared.expenseId))
+      .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
+    expect(summaryRows(ports.backend, '2026-08')).toEqual([])
+  })
+
+  it('allows an active expense manager to VOID without submit permission', () => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'manager-void-only', commandIdempotencyKey: 'manager-void-only:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'manager-void-only', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const originalFind = ports.staff.findById
+    ports.staff.findById = (staffId) => {
+      const staff = originalFind(staffId)
+      return staffId === 'MANAGER_01' && staff ? { ...staff, canSubmitExpense: false } : staff
+    }
+
+    expect(executeExpenseCommand({
+      rootRequestId: 'manager-void-command',
+      commandIdempotencyKey: 'manager-void-command:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE',
+      payload: {
+        expenseId: prepared.prepared.expenseId,
+        expectedVersion: 2,
+        reason: 'ยกเลิกรายการตามสิทธิ์ผู้ดูแล',
+      },
+    }, ports)).toMatchObject({ recordState: 'VOID', version: 3 })
+  })
+
   it('rejects unknown or private fields in every stored command-result replay union', () => {
     const preparePorts = createExpenseTestPorts()
     const prepare = prepareCommand({
@@ -268,19 +329,22 @@ describe('Apps Script expense repository and command journal', () => {
     expect(() => executeExpenseCommand(commit, commitPorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
 
     const voidPorts = createExpenseTestPorts()
-    const voidPrepared = executeExpenseCommand(prepareCommand({
+    const voidPrepared = prepareWithManifest(voidPorts, prepareCommand({
       rootRequestId: 'replay-void-shape',
       commandIdempotencyKey: 'replay-void-shape:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'replay-void-shape', expenseId: voidPrepared.prepared.expenseId,
+      attachments: voidPrepared.attachments,
     }), voidPorts)
-    if (voidPrepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected result')
     const voidCommand = {
       rootRequestId: 'replay-void-command',
       commandIdempotencyKey: 'replay-void-command:void',
       staffId: 'MANAGER_01',
       commandType: 'VOID_EXPENSE' as const,
       payload: {
-        expenseId: voidPrepared.expenseId,
-        expectedVersion: 1,
+        expenseId: voidPrepared.prepared.expenseId,
+        expectedVersion: 2,
         reason: 'ยกเลิกรายการทดสอบ',
       },
     }

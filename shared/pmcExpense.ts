@@ -94,6 +94,11 @@ export interface ExpenseHistoryPage {
   nextCursor: string | null
 }
 
+export interface ValidatedExpenseLedger {
+  effective: ExpenseSubmission[]
+  retainedVoid: ExpenseSubmission[]
+}
+
 export function parseExpenseDate(value: string): { expenseDate: string; monthKey: string } {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('EXPENSE_INVALID_DATE')
 
@@ -121,21 +126,13 @@ export function deriveBookDailyKey(category: EnabledExpenseCategory, expenseDate
 }
 
 export function effectiveCommittedExpenses(rows: ExpenseSubmission[]): ExpenseSubmission[] {
-  const superseded = new Set(
-    rows.flatMap((row) => row.supersedesExpenseId ? [row.supersedesExpenseId] : []),
-  )
-
-  return rows.filter((row) => (
-    row.recordState === 'COMMITTED' &&
-    !superseded.has(row.expenseId) &&
-    isCompleteCommittedExpense(row)
-  ))
+  return validateExpenseLedger(rows).effective
 }
 
 export function projectMonthlyExpenses(rows: ExpenseSubmission[], monthKey: string): ExpenseMonthlyProjection {
   assertValidMonthKey(monthKey)
 
-  const effective = effectiveCommittedExpenses(rows).filter((row) => row.monthKey === monthKey)
+  const effective = validateExpenseLedger(rows).effective.filter((row) => row.monthKey === monthKey)
   const clinic = sumSatang(effective.filter((row) => row.scope === 'CLINIC'))
   const doctorPersonal = sumSatang(effective.filter((row) => row.scope === 'DOCTOR_PERSONAL'))
 
@@ -152,6 +149,75 @@ export function projectMonthlyExpenses(rows: ExpenseSubmission[], monthKey: stri
   }
 }
 
+export function validateExpenseLedger(rows: readonly ExpenseSubmission[]): ValidatedExpenseLedger {
+  try {
+    if (!Array.isArray(rows)) throw new Error('invalid')
+    const byId = new Map<string, ExpenseSubmission>()
+    const bookRevisionKeys = new Set<string>()
+
+    for (const row of rows) {
+      validateExpenseRow(row)
+      if (byId.has(row.expenseId)) throw new Error('duplicate expense')
+      byId.set(row.expenseId, row)
+      if (row.bookDailyKey !== null && row.recordState !== 'PREPARED') {
+        const revisionKey = `${row.bookDailyKey}\u0000${row.revision}`
+        if (bookRevisionKeys.has(revisionKey)) throw new Error('duplicate book revision')
+        bookRevisionKeys.add(revisionKey)
+      }
+    }
+
+    for (const row of rows) {
+      if (row.bookDailyKey === null) {
+        if (row.supersedesExpenseId !== null || row.revision !== 1) throw new Error('invalid bill chain')
+        continue
+      }
+      if (row.recordState === 'PREPARED') {
+        if (row.supersedesExpenseId !== null) throw new Error('prepared tombstone')
+        continue
+      }
+      if (row.revision === 1) {
+        if (row.supersedesExpenseId !== null) throw new Error('invalid first revision')
+        continue
+      }
+      if (row.supersedesExpenseId === null) throw new Error('missing predecessor')
+      const predecessor = byId.get(row.supersedesExpenseId)
+      if (
+        !predecessor
+        || predecessor.expenseId === row.expenseId
+        || predecessor.recordState === 'PREPARED'
+        || predecessor.bookDailyKey !== row.bookDailyKey
+        || predecessor.expenseDate !== row.expenseDate
+        || predecessor.monthKey !== row.monthKey
+        || predecessor.category !== row.category
+        || predecessor.scope !== row.scope
+        || predecessor.revision !== row.revision - 1
+      ) throw new Error('invalid predecessor')
+    }
+
+    const superseded = new Set(
+      rows.flatMap((row) => row.recordState === 'PREPARED' || row.supersedesExpenseId === null
+        ? []
+        : [row.supersedesExpenseId]),
+    )
+    const effective = rows.filter((row) => (
+      row.recordState === 'COMMITTED' && !superseded.has(row.expenseId)
+    ))
+    const effectiveBookKeys = new Set<string>()
+    for (const row of effective) {
+      if (row.bookDailyKey === null) continue
+      if (effectiveBookKeys.has(row.bookDailyKey)) throw new Error('multiple effective books')
+      effectiveBookKeys.add(row.bookDailyKey)
+    }
+
+    return {
+      effective: effective.map((row) => ({ ...row })),
+      retainedVoid: rows.filter((row) => row.recordState === 'VOID').map((row) => ({ ...row })),
+    }
+  } catch {
+    throw new Error('EXPENSE_DATA_INTEGRITY_ERROR')
+  }
+}
+
 function assertValidMonthKey(value: string): void {
   if (!/^\d{4}-\d{2}$/.test(value)) throw new Error('EXPENSE_INVALID_MONTH')
   try {
@@ -161,19 +227,46 @@ function assertValidMonthKey(value: string): void {
   }
 }
 
-function isCompleteCommittedExpense(row: ExpenseSubmission): boolean {
-  if (!isEnabledExpenseCategory(row.category)) return false
-  if (!Number.isSafeInteger(row.amountSatang) || row.amountSatang <= 0) return false
-  if (!Number.isSafeInteger(row.revision) || row.revision < 1) return false
-  if (typeof row.expenseId !== 'string' || row.expenseId.length === 0 || row.committedAt === null) return false
-
-  try {
-    const parsed = parseExpenseDate(row.expenseDate)
-    if (parsed.monthKey !== row.monthKey || row.scope !== deriveExpenseScope(row.category)) return false
-    return row.bookDailyKey === deriveBookDailyKey(row.category, row.expenseDate)
-  } catch {
-    return false
+function validateExpenseRow(row: ExpenseSubmission): void {
+  if (!row || typeof row !== 'object' || !isEnabledExpenseCategory(row.category)) throw new Error('invalid row')
+  if (typeof row.expenseId !== 'string' || row.expenseId.length < 1 || row.expenseId.length > 124) throw new Error('invalid id')
+  if (!Number.isSafeInteger(row.amountSatang) || row.amountSatang <= 0) throw new Error('invalid amount')
+  if (!Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error('invalid revision')
+  if (typeof row.idempotencyKey !== 'string' || row.idempotencyKey.length < 1 || row.idempotencyKey.length > 124) {
+    throw new Error('invalid root')
   }
+  const parsed = parseExpenseDate(row.expenseDate)
+  if (
+    parsed.monthKey !== row.monthKey
+    || row.scope !== deriveExpenseScope(row.category)
+    || row.bookDailyKey !== deriveBookDailyKey(row.category, row.expenseDate)
+  ) throw new Error('invalid derived fields')
+  if (!validTimestamp(row.submittedAt) || !validTimestamp(row.updatedAt)) throw new Error('invalid timestamp')
+  if (Date.parse(row.updatedAt) < Date.parse(row.submittedAt)) throw new Error('invalid timestamp order')
+  if (row.category === 'BILL_DOCUMENT') {
+    if (!row.counterpartyName?.trim() || row.paymentMethod === null) throw new Error('invalid bill fields')
+  } else if (row.counterpartyName !== null || row.paymentMethod !== null) {
+    throw new Error('invalid book fields')
+  }
+  if (row.recordState === 'PREPARED') {
+    if (row.version !== 1 || row.committedAt !== null) throw new Error('invalid prepared state')
+    return
+  }
+  if (row.recordState === 'COMMITTED') {
+    if (row.version !== 2 || !validTimestamp(row.committedAt)) throw new Error('invalid committed state')
+    if (Date.parse(row.committedAt) < Date.parse(row.submittedAt)) throw new Error('invalid commit order')
+    return
+  }
+  if (row.recordState === 'VOID') {
+    if (row.version !== 3 || !validTimestamp(row.committedAt)) throw new Error('invalid void state')
+    if (Date.parse(row.updatedAt) < Date.parse(row.committedAt)) throw new Error('invalid void order')
+    return
+  }
+  throw new Error('invalid state')
+}
+
+function validTimestamp(value: string | null): value is string {
+  return typeof value === 'string' && value.length > 0 && Number.isFinite(Date.parse(value))
 }
 
 function isEnabledExpenseCategory(value: unknown): value is EnabledExpenseCategory {

@@ -90,6 +90,18 @@ describe('Apps Script Mini App expense ingress', () => {
   })
 
   it.each([
+    ['expired', NOW_SECONDS - 301],
+    ['future', NOW_SECONDS + 301],
+  ])('rejects a %s recovery envelope outside the exact five-minute boundary', (_case, timestamp) => {
+    const ports = createExpenseIngressPorts()
+    expect(processExpenseRecoveryIngressResponse(
+      signedRecoveryEnvelope(`expense-recovery-${_case}`, timestamp),
+      ports,
+    )).toEqual({ ok: false, error: 'EXPENSE_STORAGE_UNAVAILABLE' })
+    expect(ports.expenseBackend.monthOperationCount).toBe(0)
+  })
+
+  it.each([
     ['tampered signature', () => ({ ...signedEnvelope(prepareCommand()), signature: '0'.repeat(64) })],
     ['expired timestamp', () => signedEnvelope(prepareCommand(), 'expense-expired-1', NOW_SECONDS - 301)],
     ['future timestamp', () => signedEnvelope(prepareCommand(), 'expense-future-12', NOW_SECONDS + 301)],
@@ -240,11 +252,14 @@ function signedEnvelope(
   }
 }
 
-function signedRecoveryEnvelope(nonce = 'expense-recovery-123'): MiniAppExpenseRecoveryIngressEnvelope {
+function signedRecoveryEnvelope(
+  nonce = 'expense-recovery-123',
+  timestamp = NOW_SECONDS,
+): MiniAppExpenseRecoveryIngressEnvelope {
   const unsigned = {
     kind: 'MINI_APP_EXPENSE_RECOVERY' as const,
     version: 1 as const,
-    timestamp: NOW_SECONDS,
+    timestamp,
     nonce,
     correlationId: 'expense-recovery-correlation-1',
     worker: {
