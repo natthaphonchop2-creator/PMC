@@ -1,5 +1,8 @@
 import {
+  isCanonicalExpenseTimestamp,
+  isExpenseIdForMonth,
   isValidExpenseOriginalFileName,
+  parseExpenseDate,
 } from './pmcExpense'
 import type {
   EnabledExpenseCategory,
@@ -336,20 +339,25 @@ function isExpenseReceipt(value: unknown): value is ExpenseReceipt {
     'expenseId', 'receiptNumber', 'expenseDate', 'monthKey', 'category', 'scope',
     'amountSatang', 'recordState', 'revision', 'committedAt', 'unreviewed',
   ] as const)) return false
+  let parsedDate: { monthKey: string }
+  try {
+    if (typeof value.expenseDate !== 'string') return false
+    parsedDate = parseExpenseDate(value.expenseDate)
+  } catch {
+    return false
+  }
   return safeId(value.expenseId)
     && value.receiptNumber === value.expenseId
-    && typeof value.expenseDate === 'string'
-    && /^\d{4}-\d{2}-\d{2}$/.test(value.expenseDate)
     && typeof value.monthKey === 'string'
-    && value.monthKey === value.expenseDate.slice(0, 7)
+    && value.monthKey === parsedDate.monthKey
+    && isExpenseIdForMonth(value.expenseId, value.monthKey)
     && isEnabledCategory(value.category)
     && value.scope === (value.category === 'BOOK_DOCTOR_PERSONAL' ? 'DOCTOR_PERSONAL' : 'CLINIC')
     && positiveSatang(value.amountSatang)
     && value.recordState === 'COMMITTED'
     && safeInteger(value.revision)
     && value.revision > 0
-    && typeof value.committedAt === 'string'
-    && Number.isFinite(Date.parse(value.committedAt))
+    && isCanonicalExpenseTimestamp(value.committedAt)
     && value.unreviewed === true
 }
 

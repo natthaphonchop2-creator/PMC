@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
-afterEach(() => { cleanup(); vi.useRealTimers(); sessionStorage.clear(); localStorage.clear() })
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  sessionStorage.clear()
+  localStorage.clear()
+})
 
 describe('PMC LINE Mini App shell', () => {
   it('stores finance filter preferences in sessionStorage only at the shell boundary', async () => {
@@ -171,6 +177,97 @@ describe('PMC LINE Mini App shell', () => {
 
     await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
     expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('')
+  })
+
+  it('keeps the form unlocked and makes zero mutation calls when resume storage quota is unavailable', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
+      if (key === 'pmc-expense-resume:v1') throw new DOMException('quota', 'QuotaExceededError')
+      return originalSetItem.call(this, key, value)
+    })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'อุปกรณ์นี้ไม่สามารถเก็บสถานะป้องกันรายการซ้ำได้ กรุณาตรวจการตั้งค่าเบราว์เซอร์แล้วลองใหม่',
+    )
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('1200')
+    expect(screen.getByRole('button', { name: 'ย้อนกลับ' })).toBeEnabled()
+    expect(api.stageExpense).not.toHaveBeenCalled()
+    expect(api.submitExpense).not.toHaveBeenCalled()
+  })
+
+  it('keeps the form unlocked and makes zero mutation calls when sessionStorage is unavailable', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
+      if (key === 'pmc-expense-resume:v1') throw new DOMException('disabled', 'SecurityError')
+      return originalSetItem.call(this, key, value)
+    })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'อุปกรณ์นี้ไม่สามารถเก็บสถานะป้องกันรายการซ้ำได้ กรุณาตรวจการตั้งค่าเบราว์เซอร์แล้วลองใหม่',
+    )
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('1200')
+    expect(api.stageExpense).not.toHaveBeenCalled()
+    expect(api.submitExpense).not.toHaveBeenCalled()
+  })
+
+  it('reloads from the durable root after a lost response without staging or submitting twice', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const durable = {
+      expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT', expenseDate: '2026-08-30',
+      monthKey: '2026-08', category: 'BILL_DOCUMENT' as const, scope: 'CLINIC' as const,
+      amountSatang: 120_000, recordState: 'COMMITTED' as const, revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
+    }
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: [`stage-1.${'a'.repeat(43)}`] }))
+    api.submitExpense = vi.fn(async () => { throw safeApiError('EXPENSE_STORAGE_UNAVAILABLE', true) })
+    api.resumeExpense = vi.fn()
+      .mockResolvedValueOnce({ status: 'PENDING' as const })
+      .mockResolvedValueOnce({ status: 'COMMITTED' as const, receipt: durable })
+    const first = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+    expect(await screen.findByText('กำลังตรวจสอบสถานะรายการที่บันทึก')).toBeVisible()
+    const stored = sessionStorage.getItem('pmc-expense-resume:v1')
+    expect(stored).toMatch(/^\{"version":1,"rootRequestId":"[A-Za-z0-9._:-]+"\}$/)
+    first.unmount()
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+
+    expect(await screen.findByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    expect(api.stageExpense).toHaveBeenCalledTimes(1)
+    expect(api.submitExpense).toHaveBeenCalledTimes(1)
+    expect(api.resumeExpense).toHaveBeenCalledTimes(2)
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBeNull()
   })
 
   it('keeps the legacy ReportCenter as the exact rollback path when the finance flag is off', async () => {
@@ -693,6 +790,20 @@ function miniAppApi(): PmcMiniAppApi {
     stageExpense: vi.fn(), submitExpense: vi.fn(),
     resumeExpense: vi.fn(async () => ({ status: 'SAFE_TO_RETRY' as const })),
   }
+}
+
+async function openAndCompleteExpenseBill(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+  await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
+  await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
+  await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
+  await user.type(screen.getByLabelText('จำนวนเงิน'), '1200')
+  await user.type(screen.getByLabelText('ชื่อร้านหรือผู้รับเงิน'), 'ร้านทดสอบ')
+  await user.selectOptions(screen.getByLabelText('วิธีชำระ'), 'CASH')
+  await user.upload(
+    screen.getByLabelText('รูปหลักฐาน'),
+    new File(['image'], 'bill.jpg', { type: 'image/jpeg' }),
+  )
 }
 
 function safeApiError(code: string, retryable: boolean) {

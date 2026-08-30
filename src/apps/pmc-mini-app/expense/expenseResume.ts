@@ -5,7 +5,7 @@ interface ReadStorage {
   getItem(key: string): string | null
 }
 
-interface WriteStorage {
+interface WriteStorage extends ReadStorage {
   setItem(key: string, value: string): void
 }
 
@@ -28,11 +28,15 @@ export function loadExpenseResumeRoot(storage: ReadStorage | null): string | nul
   }
 }
 
-export function saveExpenseResumeRoot(storage: WriteStorage | null, rootRequestId: string): void {
-  if (!storage || !ROOT_REQUEST_ID.test(rootRequestId)) return
+export function saveExpenseResumeRoot(storage: WriteStorage | null, rootRequestId: string): boolean {
+  if (!storage || !ROOT_REQUEST_ID.test(rootRequestId)) return false
   try {
-    storage.setItem(EXPENSE_RESUME_STORAGE_KEY, JSON.stringify({ version: 1, rootRequestId }))
-  } catch { /* session storage can be unavailable in a LINE WebView */ }
+    const serialized = JSON.stringify({ version: 1, rootRequestId })
+    storage.setItem(EXPENSE_RESUME_STORAGE_KEY, serialized)
+    return storage.getItem(EXPENSE_RESUME_STORAGE_KEY) === serialized
+  } catch {
+    return false
+  }
 }
 
 export function clearExpenseResumeRoot(storage: RemoveStorage | null): void {

@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalMiniAppExpenseCommand,
   canonicalMiniAppExpenseIngress,
   canonicalMiniAppExpenseRecoveryIngress,
   canonicalMiniAppExpenseResumeIngress,
@@ -104,6 +105,114 @@ describe('Apps Script Mini App expense ingress', () => {
     expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
       rootRequestId: 'resume-unused', staffId: 'STAFF_01', nonce: 'resume-unused-12',
     }), ports)).toEqual({ ok: true, result: { status: 'SAFE_TO_RETRY' } })
+  })
+
+  it('derives reservation-only resume ownership from the verified canonical command', () => {
+    const ports = createExpenseIngressPorts()
+    const command = prepareCommand({
+      rootRequestId: 'resume-reserved', commandIdempotencyKey: 'resume-reserved:prepare',
+    })
+    const commandJson = canonicalMiniAppExpenseCommand(command)
+    ports.expense.reserveRequest({
+      commandIdempotencyKey: command.commandIdempotencyKey,
+      rootRequestId: command.rootRequestId,
+      commandType: command.commandType,
+      commandFingerprint: ports.crypto.sha256Hex(commandJson),
+      commandJson,
+      expenseId: 'EXP-202608-0099',
+      monthKey: '2026-08',
+      createdAt: EXPENSE_NOW,
+    })
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: command.rootRequestId, staffId: 'STAFF_01', nonce: 'resume-reserved-owner',
+    }), ports)).toEqual({ ok: true, result: { status: 'PENDING' } })
+    const denied = processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: command.rootRequestId, staffId: 'MANAGER_01', nonce: 'resume-reserved-other',
+    }), ports)
+    expect(denied).toEqual({ ok: false, error: 'EXPENSE_RESUME_FORBIDDEN' })
+    expect(JSON.stringify(denied)).not.toContain(command.staffId)
+  })
+
+  it('fails closed when a valid COMMITTED result is swapped from another root', () => {
+    const ports = createExpenseIngressPorts()
+    const first = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-swap-a', commandIdempotencyKey: 'resume-swap-a:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-swap-a', expenseId: first.prepared.expenseId,
+      attachments: first.attachments,
+    }), ports)
+    const secondBase = prepareCommand({
+      rootRequestId: 'resume-swap-b', commandIdempotencyKey: 'resume-swap-b:prepare',
+    })
+    const second = prepareWithManifest(ports, {
+      ...secondBase,
+      payload: { ...secondBase.payload, amountSatang: 99_000 },
+    })
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-swap-b', expenseId: second.prepared.expenseId,
+      attachments: second.attachments,
+    }), ports)
+    const requests = ports.expenseBackend.master.get('EXPENSE_REQUESTS')!
+    const firstCommit = requests.find((row) => row.commandIdempotencyKey === 'resume-swap-a:commit')!
+    const secondCommit = requests.find((row) => row.commandIdempotencyKey === 'resume-swap-b:commit')!
+    firstCommit.resultJson = secondCommit.resultJson
+
+    const response = processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-swap-a', staffId: 'STAFF_01', nonce: 'resume-swap-owner',
+    }), ports)
+    expect(response).toEqual({
+      ok: true, result: { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' },
+    })
+    expect(JSON.stringify(response)).not.toContain(second.prepared.expenseId)
+  })
+
+  it('fails closed when COMMITTED request authority no longer binds the stored submission and audit', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-corrupt-authority', commandIdempotencyKey: 'resume-corrupt-authority:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-corrupt-authority', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const requests = ports.expenseBackend.master.get('EXPENSE_REQUESTS')!
+    const commitRequest = requests.find((row) => row.commandIdempotencyKey === 'resume-corrupt-authority:commit')!
+    const command = JSON.parse(String(commitRequest.commandJson)) as Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }>
+    command.payload.expectedVersion = 2
+    commitRequest.commandJson = canonicalMiniAppExpenseCommand(command)
+    commitRequest.commandFingerprint = ports.crypto.sha256Hex(String(commitRequest.commandJson))
+
+    const response = processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-corrupt-authority', staffId: 'STAFF_01', nonce: 'resume-corrupt-command',
+    }), ports)
+    expect(response).toEqual({
+      ok: true, result: { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' },
+    })
+  })
+
+  it('fails closed when the COMMIT audit timestamp is swapped away from the exact durable receipt', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-corrupt-audit', commandIdempotencyKey: 'resume-corrupt-audit:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-corrupt-audit', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const audits = ports.expenseBackend.master.get('EXPENSE_AUDIT')!
+    const commitAudit = audits.find((row) => row.action === 'COMMIT')!
+    const payload = JSON.parse(String(commitAudit.afterJson)) as Record<string, unknown>
+    commitAudit.afterJson = JSON.stringify({ ...payload, committedAt: '2026-08-29T10:00:01+07:00' })
+
+    const response = processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-corrupt-audit', staffId: 'STAFF_01', nonce: 'resume-corrupt-audit',
+    }), ports)
+    expect(response).toEqual({
+      ok: true, result: { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' },
+    })
+    expect(JSON.stringify(response)).not.toContain(prepared.prepared.expenseId)
   })
 
   it('routes signed recovery through doPost without exposing worker or private topology', () => {

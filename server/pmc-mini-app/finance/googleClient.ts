@@ -110,6 +110,7 @@ export interface FinanceGoogleCapturePorts {
     attachmentId: string
     slotClaim: ExpenseDriveSlotClaim
     allowClaimReplayCreate?: boolean
+    readCurrentClaim?: () => Promise<ExpenseDriveSlotClaim>
   }): Promise<ExpensePrivateAttachment>
   verifyExpenseFile(input: {
     monthKey: string
@@ -126,13 +127,14 @@ export interface FinanceGoogleCapturePorts {
     expenseId: string
     fileId: string
     expectedAttachment: ExpensePrivateAttachment
-    registeredFileId: string | null
+    readCurrentClaim: () => Promise<ExpenseDriveSlotClaim>
   }): Promise<void>
 }
 
 export interface FinanceGooglePorts extends FinanceGoogleReadPorts, FinanceGoogleCapturePorts {}
 
 type ExpenseImageUploadInput = Parameters<FinanceGooglePorts['uploadExpenseImage']>[0]
+type ExpenseFileCleanupInput = Parameters<FinanceGooglePorts['deleteExpenseFileIfUnregistered']>[0]
 
 export function financeGoogleReadCapability(
   ports: FinanceGooglePorts,
@@ -631,6 +633,50 @@ export function createFinanceGooglePorts(
     return attachment
   }
 
+  async function deleteExpenseFileIfUnregisteredInternal(
+    input: ExpenseFileCleanupInput,
+  ): Promise<void> {
+    const initialClaim = registeredClaimForAttachment(
+      await input.readCurrentClaim(),
+      input.expectedAttachment,
+    )
+    if (!initialClaim || input.fileId === initialClaim.registeredFileId) return
+    const context = await existingExpenseFolder(input.monthKey, input.expenseId)
+    await validatedExpenseFile({
+      monthKey: input.monthKey,
+      expenseId: input.expenseId,
+      folderId: context.folderId,
+      fileId: input.fileId,
+      expectedAttachment: input.expectedAttachment,
+    })
+    const before = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+    if (
+      !before.some(({ id }) => id === input.fileId)
+      || !before.some(({ id }) => id === initialClaim.registeredFileId)
+    ) return
+    const currentClaim = registeredClaimForAttachment(
+      await input.readCurrentClaim(),
+      input.expectedAttachment,
+    )
+    if (
+      !currentClaim
+      || currentClaim.registeredFileId !== initialClaim.registeredFileId
+      || registeredClaimIdentity(currentClaim) !== registeredClaimIdentity(initialClaim)
+    ) return
+    try {
+      await driveApi.files.delete({ fileId: input.fileId, supportsAllDrives: true })
+    } catch (error) {
+      throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    const remaining = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+    if (remaining.some(({ id }) => id === input.fileId)) {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    if (!remaining.some(({ id }) => id === currentClaim.registeredFileId)) {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+  }
+
   async function uploadExpenseImageInternal(
     input: ExpenseImageUploadInput,
   ): Promise<ExpensePrivateAttachment> {
@@ -649,7 +695,45 @@ export function createFinanceGooglePorts(
       ...input,
       slotClaimId: input.slotClaim.claimId,
     })
-    if (before.length > 1) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    if (before.length > 1) {
+      if (
+        input.slotClaim.state !== 'REGISTERED'
+        || input.slotClaim.registeredFileId === null
+        || typeof input.readCurrentClaim !== 'function'
+      ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      const winnerMetadata = before.filter(({ id }) => id === input.slotClaim.registeredFileId)
+      if (winnerMetadata.length !== 1) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      const winner = (await validatedExpenseFile({
+        monthKey: input.monthKey,
+        expenseId: input.expenseId,
+        folderId: context.folderId,
+        fileId: input.slotClaim.registeredFileId,
+      })).attachment
+      for (const candidate of before.filter(({ id }) => id !== winner.privateFileId)) {
+        const fileId = requiredId(String(candidate.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+        const loser = (await validatedExpenseFile({
+          monthKey: input.monthKey,
+          expenseId: input.expenseId,
+          folderId: context.folderId,
+          fileId,
+        })).attachment
+        await deleteExpenseFileIfUnregisteredInternal({
+          monthKey: input.monthKey,
+          expenseId: input.expenseId,
+          fileId,
+          expectedAttachment: loser,
+          readCurrentClaim: input.readCurrentClaim,
+        })
+      }
+      const remaining = relevantExpenseFiles(
+        await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
+        { ...input, slotClaimId: input.slotClaim.claimId },
+      )
+      if (remaining.length !== 1 || remaining[0]?.id !== winner.privateFileId) {
+        throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      }
+      return winner
+    }
     if (before[0]) {
       const fileId = requiredId(String(before[0].id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
       if (input.slotClaim.state === 'REGISTERED' && input.slotClaim.registeredFileId !== fileId) {
@@ -683,19 +767,20 @@ export function createFinanceGooglePorts(
       throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
     }
     const createdId = requiredId(String(created.data?.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
-    const after = relevantExpenseFiles(
-      await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
-      { ...input, slotClaimId: input.slotClaim.claimId },
-    )
-    if (after.length !== 1 || after[0]?.id !== createdId) {
-      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
-    }
-    return (await validatedExpenseFile({
+    const createdAttachment = (await validatedExpenseFile({
       monthKey: input.monthKey,
       expenseId: input.expenseId,
       folderId: context.folderId,
       fileId: createdId,
     })).attachment
+    const after = relevantExpenseFiles(
+      await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
+      { ...input, slotClaimId: input.slotClaim.claimId },
+    )
+    if (!after.some(({ id }) => id === createdId)) {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    return createdAttachment
   }
 
   return {
@@ -798,29 +883,10 @@ export function createFinanceGooglePorts(
     },
 
     async deleteExpenseFileIfUnregistered(input) {
-      await withSafeGoogleError('EXPENSE_PRIVATE_FILE_INVALID', async () => {
-        if (input.fileId === input.registeredFileId) return
-        const context = await existingExpenseFolder(input.monthKey, input.expenseId)
-        await validatedExpenseFile({
-          monthKey: input.monthKey,
-          expenseId: input.expenseId,
-          folderId: context.folderId,
-          fileId: input.fileId,
-          expectedAttachment: input.expectedAttachment,
-        })
-        try {
-          await driveApi.files.delete({ fileId: input.fileId, supportsAllDrives: true })
-        } catch (error) {
-          throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
-        }
-        const remaining = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
-        if (remaining.some(({ id }) => id === input.fileId)) {
-          throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
-        }
-        if (input.registeredFileId && !remaining.some(({ id }) => id === input.registeredFileId)) {
-          throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
-        }
-      })
+      await withSafeGoogleError(
+        'EXPENSE_PRIVATE_FILE_INVALID',
+        () => deleteExpenseFileIfUnregisteredInternal(input),
+      )
     },
 
     async downloadExpenseFile(input) {
@@ -930,6 +996,7 @@ function validateUploadInput(input: ExpenseImageUploadInput): void {
     || !SAFE_EXPENSE_ID.test(input.attachmentId)
     || !isValidExpenseOriginalFileName(input.originalFileName)
     || !validTimestamp(input.uploadedAt)
+    || input.readCurrentClaim !== undefined && typeof input.readCurrentClaim !== 'function'
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
   validateSlotClaim(input)
 }
@@ -981,6 +1048,60 @@ function validateSlotClaim(input: ExpenseImageUploadInput): void {
     || (claim.state === 'CLAIMED' && claim.registeredFileId !== null)
     || (claim.state === 'REGISTERED' && !SAFE_EXPENSE_ID.test(String(claim.registeredFileId ?? '')))
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+}
+
+function registeredClaimForAttachment(
+  value: unknown,
+  attachment: ExpensePrivateAttachment,
+): ExpenseDriveSlotClaim | null {
+  if (
+    !isRecord(value)
+    || !hasExactKeys(value, [
+      'objectKey', 'claimId', 'generation', 'createdAt', 'updatedAt', 'state',
+      'leaseId', 'leaseOwnerId', 'leaseGeneration', 'registeredFileId',
+      'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName',
+    ])
+    || value.state !== 'REGISTERED'
+    || typeof value.registeredFileId !== 'string'
+    || !SAFE_EXPENSE_ID.test(value.registeredFileId)
+    || value.rootRequestId !== attachment.rootRequestId
+    || value.expenseId !== attachment.expenseId
+    || value.ordinal !== attachment.ordinal
+    || value.sha256 !== attachment.sha256
+    || value.mimeType !== attachment.mediaType
+    || value.deterministicName !== attachment.deterministicName
+    || value.claimId !== attachment.slotClaimId
+    || value.objectKey !== expenseDriveSlotObjectKey(value as unknown as ExpenseDriveSlotClaim)
+    || value.claimId !== expenseDriveSlotClaimId(value as unknown as ExpenseDriveSlotClaim)
+    || !VERSION.test(String(value.generation ?? ''))
+    || !validTimestamp(value.createdAt)
+    || !validTimestamp(value.updatedAt)
+    || !/^LEASE-[a-f0-9]{64}$/.test(String(value.leaseId ?? ''))
+    || !/^[A-Za-z0-9._:-]{8,128}$/.test(String(value.leaseOwnerId ?? ''))
+    || !VERSION.test(String(value.leaseGeneration ?? ''))
+  ) return null
+  return value as unknown as ExpenseDriveSlotClaim
+}
+
+function registeredClaimIdentity(claim: ExpenseDriveSlotClaim): string {
+  return JSON.stringify({
+    objectKey: claim.objectKey,
+    claimId: claim.claimId,
+    generation: claim.generation,
+    createdAt: claim.createdAt,
+    updatedAt: claim.updatedAt,
+    state: claim.state,
+    leaseId: claim.leaseId,
+    leaseOwnerId: claim.leaseOwnerId,
+    leaseGeneration: claim.leaseGeneration,
+    registeredFileId: claim.registeredFileId,
+    rootRequestId: claim.rootRequestId,
+    expenseId: claim.expenseId,
+    ordinal: claim.ordinal,
+    sha256: claim.sha256,
+    mimeType: claim.mimeType,
+    deterministicName: claim.deterministicName,
+  })
 }
 
 function deterministicFileName(

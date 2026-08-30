@@ -1,6 +1,8 @@
 import {
   deriveBookDailyKey,
   deriveExpenseScope,
+  isCanonicalExpenseTimestamp,
+  isExpenseIdForMonth,
   parseExpenseDate,
   projectMonthlyExpenses,
   validateExpenseLedger,
@@ -23,6 +25,7 @@ import type {
   ExpenseRecoveryCandidate,
   ExpenseRecoveryRequestSnapshot,
   ExpenseRepository,
+  ExpenseResumeSnapshot,
 } from '../ports'
 
 export interface ExpenseCommandPorts {
@@ -119,45 +122,182 @@ export function resolveExpenseResumeStatus(
   return ports.locks.withLock(() => {
     requireActiveActor(staffId, ports)
     const snapshot = ports.expense.resumeSnapshot(rootRequestId)
-    const durableOwner = snapshot.submission?.submittedByStaffId
-      ?? snapshot.events.find(({ action }) => action === 'PREPARE')?.actorStaffId
-      ?? null
-    if (durableOwner !== null && durableOwner !== staffId) throw new Error('EXPENSE_RESUME_FORBIDDEN')
-    if (!snapshot.submission) {
-      return durableOwner === null ? { status: 'SAFE_TO_RETRY' } : { status: 'PENDING' }
+    let verified: VerifiedResumeRequest[]
+    try {
+      verified = verifiedResumeRequests(snapshot, ports)
+    } catch {
+      return { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' }
     }
-    requireValidLedger(ports.expense.listMonth(snapshot.submission.monthKey))
-    const commitRequest = snapshot.requests.find(({ commandType }) => commandType === 'COMMIT_EXPENSE')
-    if (commitRequest?.resultJson) {
-      try {
-        const result = replayStoredOutcome(commitRequest.resultJson)
-        if (result.commandType !== 'COMMIT_EXPENSE') throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
-        return {
-          status: 'COMMITTED',
-          receipt: {
-            expenseId: result.expenseId,
-            receiptNumber: result.receiptNumber,
-            expenseDate: result.expenseDate,
-            monthKey: result.monthKey,
-            category: result.category,
-            scope: result.scope,
-            amountSatang: result.amountSatang,
-            recordState: 'COMMITTED',
-            revision: result.revision,
-            committedAt: result.committedAt,
-            unreviewed: true,
-          },
-        }
-      } catch (error) {
-        const code = safeExpenseError(error)
-        return { status: 'FAILED', error: code }
+    if (verified.length === 0) {
+      return snapshot.submission === null && snapshot.events.length === 0
+        ? { status: 'SAFE_TO_RETRY' }
+        : { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' }
+    }
+    const owners = new Set(verified.map(({ command }) => command.staffId))
+    if (owners.size !== 1) return { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' }
+    const durableOwner = verified[0]!.command.staffId
+    if (durableOwner !== staffId) throw new Error('EXPENSE_RESUME_FORBIDDEN')
+    if (!snapshot.submission) return { status: 'PENDING' }
+    try {
+      const submission = snapshot.submission
+      if (
+        submission.idempotencyKey !== rootRequestId
+        || submission.submittedByStaffId !== durableOwner
+      ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      requireValidLedger(ports.expense.listMonth(submission.monthKey))
+      const commitRequest = verified.find(({ command }) => command.commandType === 'COMMIT_EXPENSE')
+      if (snapshot.events.some(({ action }) => action === 'ABANDON')) {
+        return { status: 'FAILED', error: 'EXPENSE_PRIVATE_FILE_INVALID' }
       }
+      if (submission.recordState !== 'COMMITTED') {
+        if (commitRequest?.request.resultJson) {
+          try {
+            replayStoredOutcome(commitRequest.request.resultJson)
+            return { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' }
+          } catch (error) {
+            return { status: 'FAILED', error: safeExpenseError(error) }
+          }
+        }
+        return { status: 'PENDING' }
+      }
+      if (!commitRequest?.request.resultJson) return { status: 'PENDING' }
+      return {
+        status: 'COMMITTED',
+        receipt: committedResumeReceipt(snapshot, verified, ports),
+      }
+    } catch {
+      return { status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE' }
     }
-    if (snapshot.events.some(({ action }) => action === 'ABANDON')) {
-      return { status: 'FAILED', error: 'EXPENSE_PRIVATE_FILE_INVALID' }
-    }
-    return { status: 'PENDING' }
   })
+}
+
+interface VerifiedResumeRequest {
+  request: ExpenseRecoveryRequestSnapshot
+  command: MiniAppExpenseCommand
+}
+
+function verifiedResumeRequests(
+  snapshot: ExpenseResumeSnapshot,
+  ports: ExpenseCommandPorts,
+): VerifiedResumeRequest[] {
+  if (snapshot.rootRequestId !== snapshot.requests[0]?.rootRequestId && snapshot.requests.length > 0) {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  const verified = snapshot.requests.map((request): VerifiedResumeRequest => {
+    let parsed: unknown
+    try { parsed = JSON.parse(request.commandJson) as unknown } catch { parsed = null }
+    const canonical = canonicalMiniAppExpenseCommand(parsed as MiniAppExpenseCommand)
+    const command = parsed as MiniAppExpenseCommand
+    if (
+      canonical !== request.commandJson
+      || ports.crypto.sha256Hex(canonical) !== request.commandFingerprint
+      || request.rootRequestId !== snapshot.rootRequestId
+      || command.rootRequestId !== request.rootRequestId
+      || command.commandIdempotencyKey !== request.commandIdempotencyKey
+      || command.commandType !== request.commandType
+      || !isExpenseIdForMonth(request.expenseId, request.monthKey)
+      || !isCanonicalExpenseTimestamp(request.createdAt)
+      || !isCanonicalExpenseTimestamp(request.updatedAt)
+      || Date.parse(request.updatedAt) < Date.parse(request.createdAt)
+      || request.recordState !== (request.resultJson === null ? 'RESERVED' : 'COMPLETED')
+      || !Number.isSafeInteger(request.rowIndex)
+      || request.rowIndex < 0
+    ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    if (command.commandType === 'PREPARE_EXPENSE') {
+      if (parseExpenseDate(command.payload.expenseDate).monthKey !== request.monthKey) {
+        throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      }
+    } else if (command.payload.expenseId !== request.expenseId) {
+      throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+    }
+    return { request, command }
+  })
+  const phaseKeys = verified.map(({ command }) => command.commandType)
+  if (new Set(phaseKeys).size !== phaseKeys.length) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  return verified
+}
+
+function committedResumeReceipt(
+  snapshot: ExpenseResumeSnapshot,
+  verified: VerifiedResumeRequest[],
+  ports: ExpenseCommandPorts,
+): ExpenseReceipt {
+  const submission = snapshot.submission
+  if (!submission || submission.recordState !== 'COMMITTED' || submission.version !== 2) {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  const prepareRequest = verified.find(({ command }) => command.commandType === 'PREPARE_EXPENSE')
+  const commitRequest = verified.find(({ command }) => command.commandType === 'COMMIT_EXPENSE')
+  if (!prepareRequest?.request.resultJson || !commitRequest?.request.resultJson) {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  if (prepareRequest.command.commandType !== 'PREPARE_EXPENSE'
+    || commitRequest.command.commandType !== 'COMMIT_EXPENSE') {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  const prepareResult = replayStoredOutcome(prepareRequest.request.resultJson)
+  const commitResult = replayStoredOutcome(commitRequest.request.resultJson)
+  const prepareEvents = snapshot.events.filter(({ action }) => action === 'PREPARE')
+  const commitEvents = snapshot.events.filter(({ action }) => action === 'COMMIT')
+  if (prepareEvents.length !== 1 || commitEvents.length !== 1) {
+    throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  const prepareEvent = prepareEvents[0]!
+  const commitEvent = commitEvents[0]!
+  const prepareAudit = requirePrepareAudit(submission, ports, snapshot.events)
+  const commitAudit = parseCommitAudit(commitEvent)
+  requirePreparedIntent(submission, prepareAudit, ports)
+  const expectedReceipt = receiptFromSubmission(submission)
+  const preparedBeforeCommit: ExpenseSubmission = {
+    ...submission,
+    recordState: 'PREPARED',
+    committedAt: null,
+    updatedAt: submission.submittedAt,
+    version: 1,
+    supersedesExpenseId: null,
+  }
+  if (
+    prepareResult.commandType !== 'PREPARE_EXPENSE'
+    || prepareResult.expenseId !== submission.expenseId
+    || prepareResult.monthKey !== submission.monthKey
+    || prepareResult.recordState !== 'PREPARED'
+    || prepareResult.version !== 1
+    || prepareResult.expectedRevision !== prepareRequest.command.payload.expectedRevision
+    || prepareResult.expectedAttachmentCount !== prepareRequest.command.payload.expectedAttachmentCount
+    || prepareResult.expectedManifestHash !== prepareRequest.command.payload.expectedManifestHash
+    || prepareEvent.actorStaffId !== submission.submittedByStaffId
+    || prepareEvent.createdAt !== submission.submittedAt
+    || prepareEvent.beforeJson !== '{}'
+    || prepareAudit.rootRequestId !== snapshot.rootRequestId
+    || prepareAudit.monthKey !== submission.monthKey
+    || prepareAudit.commandFingerprint !== prepareRequest.request.commandFingerprint
+    || prepareAudit.expectedRevision !== prepareRequest.command.payload.expectedRevision
+    || prepareAudit.expectedAttachmentCount !== prepareRequest.command.payload.expectedAttachmentCount
+    || prepareAudit.expectedManifestHash !== prepareRequest.command.payload.expectedManifestHash
+    || commitResult.commandType !== 'COMMIT_EXPENSE'
+    || JSON.stringify(commitResult) !== JSON.stringify({ commandType: 'COMMIT_EXPENSE', ...expectedReceipt })
+    || commitRequest.command.rootRequestId !== snapshot.rootRequestId
+    || commitRequest.command.staffId !== submission.submittedByStaffId
+    || commitRequest.command.payload.expenseId !== submission.expenseId
+    || commitRequest.command.payload.expectedVersion + 1 !== submission.version
+    || commitRequest.command.payload.expectedRevision + 1 !== submission.revision
+    || commitRequest.command.payload.expectedManifestHash !== prepareAudit.expectedManifestHash
+    || commitEvent.actorStaffId !== submission.submittedByStaffId
+    || commitEvent.createdAt !== submission.committedAt
+    || commitEvent.beforeJson !== JSON.stringify(preparedBeforeCommit)
+    || commitAudit.rootRequestId !== snapshot.rootRequestId
+    || commitAudit.monthKey !== submission.monthKey
+    || commitAudit.commandIdempotencyKey !== commitRequest.request.commandIdempotencyKey
+    || commitAudit.commandFingerprint !== commitRequest.request.commandFingerprint
+    || commitAudit.expectedVersion !== commitRequest.command.payload.expectedVersion
+    || commitAudit.expectedRevision !== commitRequest.command.payload.expectedRevision
+    || commitAudit.expectedManifestHash !== commitRequest.command.payload.expectedManifestHash
+    || commitAudit.committedAt !== submission.committedAt
+    || submission.updatedAt !== submission.committedAt
+    || commitAudit.supersedesExpenseId !== submission.supersedesExpenseId
+    || JSON.stringify(commitAudit.attachments) !== JSON.stringify(commitRequest.command.payload.attachments)
+  ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+  return expectedReceipt
 }
 
 function executeExpenseCommandLocked(
@@ -771,6 +911,7 @@ function requirePrepareAudit(
     ||
     events[0].eventId !== auditEventId(String(payload.commandFingerprint ?? ''), 'P')
     || events[0].correlationId !== `${String(payload.rootRequestId ?? '')}:prepare`
+    || !isCanonicalExpenseTimestamp(events[0].createdAt)
     || typeof payload.rootRequestId !== 'string'
     || typeof payload.monthKey !== 'string'
     || !SHA256.test(String(payload.commandFingerprint ?? ''))
@@ -785,15 +926,20 @@ function requirePrepareAudit(
 function parseCommitAudit(event: ExpenseAuditEvent): CommitAuditPayload {
   const payload = parseJsonRecord(event.afterJson)
   if (
-    typeof payload.rootRequestId !== 'string'
+    !hasExactKeys(payload, [
+      'rootRequestId', 'monthKey', 'commandIdempotencyKey', 'commandFingerprint',
+      'expectedVersion', 'expectedRevision', 'expectedManifestHash', 'committedAt',
+      'supersedesExpenseId', 'attachments',
+    ])
+    || typeof payload.rootRequestId !== 'string'
     || typeof payload.monthKey !== 'string'
     || typeof payload.commandIdempotencyKey !== 'string'
     || !SHA256.test(String(payload.commandFingerprint ?? ''))
     || !Number.isSafeInteger(payload.expectedVersion)
     || !Number.isSafeInteger(payload.expectedRevision)
     || !SHA256.test(String(payload.expectedManifestHash ?? ''))
-    || typeof payload.committedAt !== 'string'
-    || !Number.isFinite(Date.parse(payload.committedAt))
+    || !isCanonicalExpenseTimestamp(payload.committedAt)
+    || event.createdAt !== payload.committedAt
     || !Array.isArray(payload.attachments)
     || payload.attachments.length < 1
     || payload.attachments.length > 5
@@ -1069,8 +1215,7 @@ function parseStoredCommandResult(value: unknown): ExpenseCommandResult {
       || !safeInteger(result.amountSatang, 1)
       || result.recordState !== 'COMMITTED'
       || !safeInteger(result.revision, 1)
-      || typeof result.committedAt !== 'string'
-      || !Number.isFinite(Date.parse(result.committedAt))
+      || !isCanonicalExpenseTimestamp(result.committedAt)
       || result.unreviewed !== true
     ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
     return {
@@ -1094,8 +1239,7 @@ function parseStoredCommandResult(value: unknown): ExpenseCommandResult {
       || !validStoredExpenseId(String(result.expenseId ?? ''))
       || result.recordState !== 'VOID'
       || !safeInteger(result.version, 2)
-      || typeof result.updatedAt !== 'string'
-      || !Number.isFinite(Date.parse(result.updatedAt))
+      || !isCanonicalExpenseTimestamp(result.updatedAt)
     ) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
     return {
       commandType: 'VOID_EXPENSE',

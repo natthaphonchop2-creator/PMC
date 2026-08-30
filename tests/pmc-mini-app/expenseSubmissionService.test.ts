@@ -246,9 +246,84 @@ describe('expense submission orchestration', () => {
       'private-file-1', 'private-file-2',
     ])
     expect(firstProcess.finance.deleteExpenseFileIfUnregistered).toHaveBeenCalledWith(expect.objectContaining({
-      fileId: 'late-private-file-1', registeredFileId: 'private-file-1',
+      fileId: 'late-private-file-1', readCurrentClaim: expect.any(Function),
     }))
     expect(secondProcess.ingress.commit).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers a REGISTERED same-file claim when register persistence succeeds but its response is lost', async () => {
+    const state = serviceState()
+    const fixture = serviceFixture([], state)
+    const register = vi.mocked(fixture.staging.registerDriveSlotFile)
+    const persistRegister = register.getMockImplementation()!
+    register.mockImplementationOnce(async (input) => {
+      await persistRegister(input)
+      throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+    })
+
+    await expect(fixture.service.submit(fixture.input)).resolves.toEqual(fixture.receipt)
+    expect(fixture.finance.deleteExpenseFileIfUnregistered).not.toHaveBeenCalled()
+    expect(state.claims.get('EXP-202608-0001:1')).toMatchObject({
+      state: 'REGISTERED', registeredFileId: 'private-file-1',
+    })
+    expect(state.driveAttachments).toHaveLength(2)
+    expect(fixture.ingress.commit).toHaveBeenCalledOnce()
+  })
+
+  it('never deletes after register persistence when the current claim re-read fails, and replay converges', async () => {
+    const state = serviceState()
+    const fixture = serviceFixture([], state)
+    const register = vi.mocked(fixture.staging.registerDriveSlotFile)
+    const persistRegister = register.getMockImplementation()!
+    register.mockImplementationOnce(async (input) => {
+      await persistRegister(input)
+      throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE')
+    })
+    vi.mocked(fixture.staging.readDriveSlotClaim)
+      .mockRejectedValueOnce(new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE'))
+
+    await expect(fixture.service.submit(fixture.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(fixture.finance.deleteExpenseFileIfUnregistered).not.toHaveBeenCalled()
+    expect(state.driveAttachments.map(({ privateFileId }) => privateFileId)).toContain('private-file-1')
+
+    await expect(fixture.service.submit(fixture.input)).resolves.toEqual(fixture.receipt)
+    expect(state.driveAttachments).toHaveLength(2)
+    expect(new Set(state.driveAttachments.map(({ privateFileId }) => privateFileId)).size).toBe(2)
+  })
+
+  it('never deletes from a CLAIMED null snapshot when the winner registers that same file before cleanup', async () => {
+    const state = serviceState()
+    const fixture = serviceFixture([], state)
+    vi.mocked(fixture.staging.registerDriveSlotFile)
+      .mockRejectedValueOnce(new ExpenseStagingError('EXPENSE_DRIVE_SLOT_STALE'))
+    const readClaim = vi.mocked(fixture.staging.readDriveSlotClaim)
+    const readCurrent = readClaim.getMockImplementation()!
+    readClaim.mockImplementationOnce(async (intent) => {
+      const claimed = await readCurrent(intent)
+      const key = `${intent.expenseId}:${intent.ordinal}`
+      const current = state.claims.get(key)!
+      state.claims.set(key, {
+        ...current,
+        generation: String(Number(current.generation) + 1),
+        state: 'REGISTERED',
+        registeredFileId: state.driveAttachments[0]!.privateFileId,
+      })
+      return claimed
+    })
+
+    await expect(fixture.service.submit(fixture.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(fixture.finance.deleteExpenseFileIfUnregistered).not.toHaveBeenCalled()
+    expect(state.claims.get('EXP-202608-0001:1')).toMatchObject({
+      state: 'REGISTERED', registeredFileId: 'private-file-1',
+    })
+    expect(state.driveAttachments.map(({ privateFileId }) => privateFileId)).toContain('private-file-1')
+
+    await expect(fixture.service.submit(fixture.input)).resolves.toEqual(fixture.receipt)
+    expect(state.driveAttachments).toHaveLength(2)
   })
 
   it('fails safely when staged bytes or the returned receipt do not match the prepared intent', async () => {
@@ -370,9 +445,20 @@ function serviceFixture(
     }),
     deleteExpenseFileIfUnregistered: vi.fn(async (input: {
       fileId: string
-      registeredFileId: string | null
+      expectedAttachment: ExpensePrivateAttachment
+      readCurrentClaim: () => Promise<ExpenseDriveSlotClaim>
     }) => {
-      if (input.fileId === input.registeredFileId) return
+      const initial = await input.readCurrentClaim()
+      if (
+        initial.state !== 'REGISTERED'
+        || initial.registeredFileId === null
+        || input.fileId === initial.registeredFileId
+      ) return
+      const current = await input.readCurrentClaim()
+      if (
+        current.state !== 'REGISTERED'
+        || current.registeredFileId !== initial.registeredFileId
+      ) return
       state.driveAttachments = state.driveAttachments.filter(({ privateFileId }) => privateFileId !== input.fileId)
       events.push(`drive-delete-${input.fileId}`)
     }),

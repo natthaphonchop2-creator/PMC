@@ -219,9 +219,17 @@ export function PmcMiniApp({
   }), [api, idToken])
 
   const expenseFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
-    stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
+    stage: async (rootRequestId, files) => {
+      requireExpenseResumePersistence(expenseResumeStorage, rootRequestId)
+      try {
+        return await api.stageExpense(idToken, rootRequestId, files)
+      } catch (error) {
+        if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
+        throw error
+      }
+    },
     submit: async (input) => {
-      saveExpenseResumeRoot(expenseResumeStorage, input.rootRequestId)
+      requireExpenseResumePersistence(expenseResumeStorage, input.rootRequestId)
       try {
         const receipt = await api.submitExpense(idToken, input)
         clearExpenseResumeRoot(expenseResumeStorage)
@@ -244,12 +252,20 @@ export function PmcMiniApp({
   }), [api, expenseResumeStorage, idToken])
 
   const replacementFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
-    stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
+    stage: async (rootRequestId, files) => {
+      requireExpenseResumePersistence(expenseResumeStorage, rootRequestId)
+      try {
+        return await api.stageExpense(idToken, rootRequestId, files)
+      } catch (error) {
+        if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
+        throw error
+      }
+    },
     submit: async (input) => {
       if (!expenseReplacement || input.expectedRevision !== expenseReplacement.revision) {
         return Promise.reject(new Error('EXPENSE_REVISION_CONFLICT'))
       }
-      saveExpenseResumeRoot(expenseResumeStorage, input.rootRequestId)
+      requireExpenseResumePersistence(expenseResumeStorage, input.rootRequestId)
       try {
         const receipt = await api.replaceExpense(idToken, expenseReplacement.expenseId, input)
         clearExpenseResumeRoot(expenseResumeStorage)
@@ -770,6 +786,14 @@ function safeErrorCode(error: unknown): string {
 
 function definiteExpenseFailure(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'retryable' in error && error.retryable === false)
+}
+
+function requireExpenseResumePersistence(storage: Storage | null, rootRequestId: string): void {
+  if (saveExpenseResumeRoot(storage, rootRequestId)) return
+  throw Object.assign(new Error('Expense resume storage unavailable'), {
+    code: 'EXPENSE_RESUME_STORAGE_UNAVAILABLE',
+    retryable: false,
+  })
 }
 
 function safeRetryAfterSeconds(error: unknown): number {

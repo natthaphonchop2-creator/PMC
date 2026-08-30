@@ -10,7 +10,7 @@ afterEach(() => sessionStorage.clear())
 
 describe('expense WebView resume storage', () => {
   it('persists only one versioned non-sensitive root request identifier', () => {
-    saveExpenseResumeRoot(sessionStorage, 'root-request-1')
+    expect(saveExpenseResumeRoot(sessionStorage, 'root-request-1')).toBe(true)
 
     expect(loadExpenseResumeRoot(sessionStorage)).toBe('root-request-1')
     const serialized = sessionStorage.getItem('pmc-expense-resume:v1')
@@ -30,6 +30,14 @@ describe('expense WebView resume storage', () => {
     }))
     expect(loadExpenseResumeRoot(sessionStorage)).toBeNull()
     expect(loadExpenseResumeRoot({ getItem: () => { throw new Error('disabled') } })).toBeNull()
-    expect(() => saveExpenseResumeRoot({ setItem: () => { throw new Error('disabled') } }, 'root-request-1')).not.toThrow()
+    expect(saveExpenseResumeRoot(null, 'root-request-1')).toBe(false)
+    expect(saveExpenseResumeRoot({
+      getItem: () => null,
+      setItem: () => { throw new DOMException('quota', 'QuotaExceededError') },
+    }, 'root-request-1')).toBe(false)
+    expect(saveExpenseResumeRoot({
+      getItem: () => null,
+      setItem: () => undefined,
+    }, 'root-request-1')).toBe(false)
   })
 })

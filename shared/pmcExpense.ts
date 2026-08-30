@@ -141,6 +141,29 @@ export function parseExpenseDate(value: string): { expenseDate: string; monthKey
   return { expenseDate: value, monthKey: value.slice(0, 7) }
 }
 
+export function isExpenseIdForMonth(value: unknown, monthKey: string): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}$/.test(monthKey)) return false
+  try {
+    if (parseExpenseDate(`${monthKey}-01`).monthKey !== monthKey) return false
+  } catch {
+    return false
+  }
+  return new RegExp(`^EXP-${monthKey.replace('-', '')}-[A-Za-z0-9._:-]{1,107}$`).test(value)
+}
+
+export function isCanonicalExpenseTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const match = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/.exec(value)
+  if (!match) return false
+  if (/^[+-]14:(?!00$)/.test(match[2]!)) return false
+  try {
+    parseExpenseDate(match[1]!)
+  } catch {
+    return false
+  }
+  return Number.isFinite(Date.parse(value))
+}
+
 export function deriveExpenseScope(category: EnabledExpenseCategory): ExpenseScope {
   return category === 'BOOK_DOCTOR_PERSONAL' ? 'DOCTOR_PERSONAL' : 'CLINIC'
 }
@@ -210,13 +233,14 @@ export function validateExpenseLedger(rows: readonly ExpenseSubmission[]): Valid
       if (
         !predecessor
         || predecessor.expenseId === row.expenseId
-        || predecessor.recordState === 'PREPARED'
+        || predecessor.recordState !== 'COMMITTED'
         || predecessor.bookDailyKey !== row.bookDailyKey
         || predecessor.expenseDate !== row.expenseDate
         || predecessor.monthKey !== row.monthKey
         || predecessor.category !== row.category
         || predecessor.scope !== row.scope
         || predecessor.revision !== row.revision - 1
+        || Date.parse(row.submittedAt) < Date.parse(predecessor.updatedAt)
       ) throw new Error('invalid predecessor')
     }
 
@@ -264,13 +288,14 @@ function validateExpenseRow(row: ExpenseSubmission): void {
   const parsed = parseExpenseDate(row.expenseDate)
   if (
     parsed.monthKey !== row.monthKey
+    || !isExpenseIdForMonth(row.expenseId, row.monthKey)
     || row.scope !== deriveExpenseScope(row.category)
     || row.bookDailyKey !== deriveBookDailyKey(row.category, row.expenseDate)
   ) throw new Error('invalid derived fields')
   if (!validTimestamp(row.submittedAt) || !validTimestamp(row.updatedAt)) throw new Error('invalid timestamp')
   if (Date.parse(row.updatedAt) < Date.parse(row.submittedAt)) throw new Error('invalid timestamp order')
   if (row.category === 'BILL_DOCUMENT') {
-    if (!row.counterpartyName?.trim() || row.paymentMethod === null) throw new Error('invalid bill fields')
+    if (!row.counterpartyName?.trim() || !isExpensePaymentMethod(row.paymentMethod)) throw new Error('invalid bill fields')
   } else if (row.counterpartyName !== null || row.paymentMethod !== null) {
     throw new Error('invalid book fields')
   }
@@ -281,6 +306,7 @@ function validateExpenseRow(row: ExpenseSubmission): void {
   if (row.recordState === 'COMMITTED') {
     if (row.version !== 2 || !validTimestamp(row.committedAt)) throw new Error('invalid committed state')
     if (Date.parse(row.committedAt) < Date.parse(row.submittedAt)) throw new Error('invalid commit order')
+    if (Date.parse(row.updatedAt) < Date.parse(row.committedAt)) throw new Error('invalid commit update order')
     return
   }
   if (row.recordState === 'VOID') {
@@ -292,7 +318,11 @@ function validateExpenseRow(row: ExpenseSubmission): void {
 }
 
 function validTimestamp(value: string | null): value is string {
-  return typeof value === 'string' && value.length > 0 && Number.isFinite(Date.parse(value))
+  return isCanonicalExpenseTimestamp(value)
+}
+
+function isExpensePaymentMethod(value: unknown): value is ExpensePaymentMethod {
+  return value === 'TRANSFER' || value === 'CASH' || value === 'CREDIT' || value === 'OTHER'
 }
 
 function isEnabledExpenseCategory(value: unknown): value is EnabledExpenseCategory {

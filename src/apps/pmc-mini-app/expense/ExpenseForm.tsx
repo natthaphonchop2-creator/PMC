@@ -373,6 +373,9 @@ function focusFirstError(errors: ExpenseFormErrors, fileInput: HTMLInputElement 
 function expenseFailureMessage(error: unknown): string {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
   if (code === 'EXPENSE_REVISION_CONFLICT') return 'มีรายการของวันนี้แล้ว กรุณาแจ้งผู้ดูแล'
+  if (code === 'EXPENSE_RESUME_STORAGE_UNAVAILABLE') {
+    return 'อุปกรณ์นี้ไม่สามารถเก็บสถานะป้องกันรายการซ้ำได้ กรุณาตรวจการตั้งค่าเบราว์เซอร์แล้วลองใหม่'
+  }
   if (code === 'EXPENSE_UNSUPPORTED_IMAGE' || code === 'EXPENSE_INVALID_FILE_NAME') return 'รองรับเฉพาะรูป JPG หรือ PNG กรุณาเปลี่ยนรูปแล้วลองใหม่'
   return 'บันทึกรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง'
 }

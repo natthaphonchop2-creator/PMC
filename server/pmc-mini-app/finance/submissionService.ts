@@ -196,6 +196,9 @@ export async function submitExpense(
           attachmentId,
           slotClaim: claim,
           allowClaimReplayCreate: true,
+          readCurrentClaim: () => dependencies.staging.readDriveSlotClaim(
+            driveSlotIntent(validated, prepared, receipt),
+          ),
         })
         const registered = await dependencies.staging.registerDriveSlotFile({
           claim,
@@ -207,21 +210,38 @@ export async function submitExpense(
         }
       } catch (error) {
         if (attachment) {
-          let registeredFileId: string | null = null
+          let currentClaim: ExpenseDriveSlotClaim | null = null
           try {
-            registeredFileId = (await dependencies.staging.readDriveSlotClaim(
+            currentClaim = await dependencies.staging.readDriveSlotClaim(
               driveSlotIntent(validated, prepared, receipt),
-            )).registeredFileId
-          } catch { /* preserve the original fenced failure */ }
-          await dependencies.finance.deleteExpenseFileIfUnregistered({
-            monthKey: prepared.monthKey,
-            expenseId: prepared.expenseId,
-            fileId: attachment.privateFileId,
-            expectedAttachment: attachment,
-            registeredFileId,
-          }).catch(() => undefined)
+            )
+          } catch { /* uncertainty must preserve the created file */ }
+          if (
+            currentClaim?.state === 'REGISTERED'
+            && currentClaim.registeredFileId === attachment.privateFileId
+          ) {
+            // Registration was durable and only its response was lost.
+          } else {
+            if (
+              currentClaim?.state === 'REGISTERED'
+              && currentClaim.registeredFileId !== null
+              && currentClaim.registeredFileId !== attachment.privateFileId
+            ) {
+              await dependencies.finance.deleteExpenseFileIfUnregistered({
+                monthKey: prepared.monthKey,
+                expenseId: prepared.expenseId,
+                fileId: attachment.privateFileId,
+                expectedAttachment: attachment,
+                readCurrentClaim: () => dependencies.staging.readDriveSlotClaim(
+                  driveSlotIntent(validated, prepared, receipt),
+                ),
+              }).catch(() => undefined)
+            }
+            throw error
+          }
+        } else {
+          throw error
         }
-        throw error
       }
       if (!attachment) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
       await dependencies.finance.verifyExpenseFile({

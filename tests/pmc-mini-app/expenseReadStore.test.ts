@@ -180,6 +180,8 @@ describe('finance expense read store', () => {
           expenseId: 'EXP-202608-NEW', category: 'BOOK_CLINIC', counterpartyName: null,
           paymentMethod: null, bookDailyKey: 'CLINIC:2026-08-29',
           supersedesExpenseId: 'EXP-202608-OLD', revision: 2,
+          submittedAt: '2026-08-29T03:02:00.000Z', committedAt: '2026-08-29T03:03:00.000Z',
+          updatedAt: '2026-08-29T03:03:00.000Z',
         }),
       ],
       attachments: [
@@ -225,6 +227,20 @@ describe('finance expense read store', () => {
     await expect(store.listExpenseHistory(MONTH_KEY, null, 24 as 25)).rejects.toEqual(
       expect.objectContaining({ code: 'EXPENSE_INVALID_CURSOR' }),
     )
+  })
+
+  it.each([
+    ['COMMITTED updatedAt before committedAt', submissionRow({
+      committedAt: '2026-08-29T03:01:00.000Z',
+      updatedAt: '2026-08-29T03:00:30.000Z',
+    })],
+    ['unsupported BILL_DOCUMENT payment method', submissionRow({ paymentMethod: 'WIRE' })],
+    ['expense ID month different from monthKey', submissionRow({ expenseId: 'EXP-202607-BASE' })],
+  ])('fails the Cloud Run monthly projection for %s', async (_case, invalidRow) => {
+    const finance = financePort({ submissions: [invalidRow] })
+
+    await expect(createFinanceReadStore({ finance }).loadMonthlyExpenses(MONTH_KEY))
+      .rejects.toEqual(expect.objectContaining({ code: 'EXPENSE_DATA_INTEGRITY_ERROR' }))
   })
 })
 

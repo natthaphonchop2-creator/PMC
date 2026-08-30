@@ -6,6 +6,7 @@ import {
   canonicalMiniAppExpenseIngress,
   canonicalMiniAppExpenseRecoveryIngress,
   canonicalMiniAppExpenseResumeIngress,
+  isExpenseResumeStatus,
   type MiniAppExpenseCommand,
 } from '../../shared/pmcMiniAppExpenseIngress'
 import { expenseAttachmentManifestHash } from '../../server/pmc-mini-app/finance/submissionService'
@@ -149,6 +150,27 @@ describe('expense ingress contract', () => {
     )
     expect(canonical).not.toContain('amountSatang')
     expect(canonical).not.toContain('attachment')
+  })
+
+  it.each([
+    ['impossible calendar date', { expenseDate: '2026-08-32' }],
+    ['expense ID month mismatch', {
+      expenseId: 'EXP-202607-RESULT', receiptNumber: 'EXP-202607-RESULT',
+    }],
+    ['non-canonical committed timestamp', { committedAt: '2026-08-30 04:00:00Z' }],
+    ['wrong terminal state', { recordState: 'PREPARED' }],
+    ['zero revision', { revision: 0 }],
+    ['unexpected lifecycle version', { version: 2 }],
+  ])('rejects a COMMITTED resume receipt with %s', (_case, patch) => {
+    const receipt = {
+      expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT',
+      expenseDate: '2026-08-30', monthKey: '2026-08', category: 'BILL_DOCUMENT',
+      scope: 'CLINIC', amountSatang: 12_000, recordState: 'COMMITTED', revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+      ...patch,
+    }
+
+    expect(isExpenseResumeStatus({ status: 'COMMITTED', receipt })).toBe(false)
   })
 
   it('rejects unknown or unsafe recovery worker fields before signing', () => {

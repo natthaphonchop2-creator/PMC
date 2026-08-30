@@ -2,6 +2,7 @@ import {
   deriveBookDailyKey,
   deriveExpenseScope,
   effectiveCommittedExpenses,
+  isCanonicalExpenseTimestamp,
   isValidExpenseOriginalFileName,
   parseExpenseDate,
   projectMonthlyExpenses,
@@ -470,7 +471,7 @@ function nullableTimestamp(value: unknown): string | null {
 }
 
 function validTimestamp(value: string): boolean {
-  return Number.isFinite(Date.parse(value)) && value.length <= 64 && !value.includes('|')
+  return isCanonicalExpenseTimestamp(value) && value.length <= 64 && !value.includes('|')
 }
 
 function stringMatching(value: unknown, pattern: RegExp): string {

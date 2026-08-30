@@ -377,6 +377,25 @@ describe('PMC Mini App browser API', () => {
       .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
   })
 
+  it.each([
+    ['impossible calendar date', { expenseDate: '2026-08-32' }],
+    ['expense ID month mismatch', {
+      expenseId: 'EXP-202607-RESULT', receiptNumber: 'EXP-202607-RESULT',
+    }],
+    ['non-canonical committed timestamp', { committedAt: '2026-08-30 04:00:00Z' }],
+    ['wrong terminal state', { recordState: 'PREPARED' }],
+    ['zero revision', { revision: 0 }],
+    ['unexpected lifecycle version', { version: 2 }],
+  ])('rejects a resume response with %s at the browser boundary', async (_case, patch) => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      status: 'COMMITTED', receipt: { ...expenseReceipt(), ...patch },
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.resumeExpense('raw-id-token', 'root-request-1'))
+      .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
   it('rejects malformed staging and committed responses before the shell can show success', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['duplicate.signature', 'duplicate.signature'] }))

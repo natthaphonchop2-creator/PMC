@@ -201,6 +201,31 @@ describe('Apps Script expense repository and command journal', () => {
     ]))
   })
 
+  it.each([
+    ['COMMITTED updatedAt before committedAt', { updatedAt: '2026-08-29T09:59:59+07:00' }],
+    ['unsupported BILL_DOCUMENT payment method', { paymentMethod: 'WIRE' }],
+    ['expense ID month different from monthKey', { expenseId: 'EXP-202607-CORRUPT' }],
+  ])('fails the Apps Script projection for %s', (_case, corruption) => {
+    const ports = createExpenseTestPorts()
+    const first = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'projection-first', commandIdempotencyKey: 'projection-first:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'projection-first', expenseId: first.prepared.expenseId,
+      attachments: first.attachments,
+    }), ports)
+    const rows = ports.backend.months.get('2026-08')!.get('EXPENSE_SUBMISSIONS')!
+    rows[0] = { ...rows[0], ...corruption }
+    const second = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'projection-second', commandIdempotencyKey: 'projection-second:prepare',
+    }))
+
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'projection-second', expenseId: second.prepared.expenseId,
+      attachments: second.attachments,
+    }), ports)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+  })
+
   it('rejects immutable submission patches and conflicting attachment IDs', () => {
     const ports = createExpenseTestPorts()
     const { prepared, attachments } = prepareWithManifest(ports, prepareCommand())
