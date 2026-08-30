@@ -2,6 +2,7 @@ import type { MiniAppBrowserApi } from './api'
 import type {
   BookingDraftInput,
   BookingDraftProjection,
+  ExpenseSubmitInput,
   MiniAppConfig,
   MiniAppSession,
   StockProductProjection,
@@ -25,6 +26,8 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   reportingEnabled: false,
   financeReportsEnabled: false,
   stockEnabled: false,
+  expenseCaptureEnabled: false,
+  financeReadsEnabled: false,
   canManageStock: false,
   canSubmitExpense: false,
   canViewFinance: false,
@@ -46,7 +49,9 @@ export function createPreviewMiniAppConfig(options: {
   stockEnabled?: boolean
   canManageStock?: boolean
   expenseCaptureEnabled?: boolean
+  financeReadsEnabled?: boolean
   canSubmitExpense?: boolean
+  canManageExpense?: boolean
 } = {}): MiniAppConfig {
   return {
     ...PREVIEW_CONFIG,
@@ -56,7 +61,9 @@ export function createPreviewMiniAppConfig(options: {
     stockEnabled: options.stockEnabled === true,
     canManageStock: options.stockEnabled === true && options.canManageStock === true,
     expenseCaptureEnabled: options.expenseCaptureEnabled === true,
+    financeReadsEnabled: options.financeReadsEnabled === true,
     canSubmitExpense: options.expenseCaptureEnabled === true && options.canSubmitExpense === true,
+    canManageExpense: options.financeReadsEnabled === true && options.expenseCaptureEnabled === true && options.canManageExpense === true,
   }
 }
 
@@ -68,7 +75,9 @@ export function createPreviewMiniAppApi(options: {
   stockEnabled?: boolean
   canManageStock?: boolean
   expenseCaptureEnabled?: boolean
+  financeReadsEnabled?: boolean
   canSubmitExpense?: boolean
+  canManageExpense?: boolean
 } = {}): MiniAppBrowserApi {
   let current: BookingDraftProjection | null = null
   let staffAllowed = options.staffAllowed !== false
@@ -164,6 +173,15 @@ export function createPreviewMiniAppApi(options: {
         expense: { state: 'NOT_IMPLEMENTED' as const, clinicExpenseSatang: null, estimatedBalanceSatang: null },
       } satisfies MonthlyIncomeProjection
     },
+    async loadMonthlyExpenses(_token, monthKey) {
+      return {
+        monthKey, clinicCommittedSatang: 0, doctorPersonalCommittedSatang: 0,
+        clinicByCategorySatang: { BILL_DOCUMENT: 0, BOOK_CLINIC: 0 }, effectiveExpenseCount: 0, unreviewed: true as const,
+      }
+    },
+    async loadExpenseHistory() { return { expenses: [], nextCursor: null } },
+    async issueExpenseEvidenceToken() { throw Object.assign(new Error('Preview evidence unavailable'), { code: 'EXPENSE_EVIDENCE_NOT_FOUND' }) },
+    async downloadExpenseEvidence() { throw Object.assign(new Error('Preview evidence unavailable'), { code: 'EXPENSE_EVIDENCE_NOT_FOUND' }) },
     async loadStockProducts() { return stock.loadProducts() },
     async loadStockHistory(_token: string, cursor?: string) { return stock.loadHistory(cursor) },
     async submitStockCommand(_token: string, command: StockClientCommand) {
@@ -186,6 +204,15 @@ export function createPreviewMiniAppApi(options: {
         committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
       }
     },
+    async replaceExpense(_token, _expenseId, input: ExpenseSubmitInput) {
+      return {
+        expenseId: 'EXP-202608-PREVIEW-REPLACEMENT', receiptNumber: 'EXP-202608-PREVIEW-REPLACEMENT', expenseDate: input.expenseDate,
+        monthKey: input.expenseDate.slice(0, 7), category: input.category, scope: deriveExpenseScope(input.category),
+        amountSatang: input.amountSatang, recordState: 'COMMITTED' as const, revision: input.expectedRevision + 1,
+        committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
+      }
+    },
+    async voidExpense() { return undefined },
   }
 }
 

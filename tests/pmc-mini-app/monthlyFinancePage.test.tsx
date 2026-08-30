@@ -34,7 +34,7 @@ describe('monthly finance report', () => {
     for (const label of ['บริการและคอร์ส', 'Product', 'ยังไม่จัดหมวด']) expect(screen.getByText(label)).toBeVisible()
   })
 
-  it('shows category checking state and keeps expense and balance explicitly deferred, never zero', async () => {
+  it('shows category checking state without inventing expense or balance values when no expense projection is supplied', async () => {
     const report = monthlyProjection({
       categories: {
         state: 'CHECKING', serviceSatang: null, productSatang: null, unclassifiedSatang: null,
@@ -47,9 +47,9 @@ describe('monthly finance report', () => {
 
     expect(await screen.findByText('กำลังตรวจสอบหมวด')).toBeVisible()
     expect(screen.getByText('วันที่ยังไม่ครบ: 2026-08-28')).toBeVisible()
-    expect(screen.getByText('รายจ่ายที่บันทึก — เตรียมระบบ')).toBeVisible()
-    expect(screen.getByText('คงเหลือโดยประมาณ — เตรียมระบบ')).toBeVisible()
-    expect(view.container.querySelector('.pmc-monthly-deferred')).not.toHaveTextContent('0 บาท')
+    expect(screen.getByText('รายจ่ายที่บันทึก')).toBeVisible()
+    expect(screen.queryByText('ยอดคงเหลือโดยประมาณ')).not.toBeInTheDocument()
+    expect(view.container.querySelector('.pmc-monthly-expenses')).not.toHaveTextContent('0.00 บาท')
     expect(screen.queryByRole('button', { name: /อัปเดตทั้งหมด|refresh all/i })).not.toBeInTheDocument()
   })
 

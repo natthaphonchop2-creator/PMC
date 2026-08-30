@@ -40,17 +40,19 @@ export function ExpenseForm({
   category,
   adapter,
   expectedRevision = 0,
+  lockedExpenseDate,
   onCommitted,
   onBack,
 }: {
   category: EnabledExpenseCategory
   adapter: ExpenseFormAdapter
   expectedRevision?: number
+  lockedExpenseDate?: string
   onCommitted: (receipt: ExpenseReceipt) => void
   onBack: () => void
 }) {
   const [values, setValues] = useState<ExpenseFormValues>(() => ({
-    expenseDate: currentBangkokDate(), amount: '', counterpartyName: '', paymentMethod: '', description: '',
+    expenseDate: lockedExpenseDate ?? currentBangkokDate(), amount: '', counterpartyName: '', paymentMethod: '', description: '',
   }))
   const [items, setItems] = useState<ExpenseFileItem[]>([])
   const [errors, setErrors] = useState<ExpenseFormErrors>({})
@@ -186,9 +188,9 @@ export function ExpenseForm({
           <p>{category === 'BILL_DOCUMENT' ? 'กรอกรายละเอียดและแนบรูปเอกสาร' : 'กรอกยอดรวมของวันและแนบรูปหน้าสมุด'}</p>
         </div>
         <Field id="expense-date" label="วันที่รายจ่าย" error={errors.expenseDate}>
-          <input id="expense-date" name="expenseDate" type="date" value={values.expenseDate} required
+          <input id="expense-date" name="expenseDate" type="date" value={values.expenseDate} required readOnly={Boolean(lockedExpenseDate)}
             aria-invalid={Boolean(errors.expenseDate)} aria-describedby={errors.expenseDate ? 'expense-date-error' : undefined}
-            onChange={(event) => update('expenseDate', event.target.value)} />
+            onChange={(event) => { if (!lockedExpenseDate) update('expenseDate', event.target.value) }} />
         </Field>
         <Field id="expense-amount" label={category === 'BILL_DOCUMENT' ? 'จำนวนเงิน' : 'ยอดรวมรายวัน'} error={errors.amount}>
           <input id="expense-amount" name="amount" type="text" inputMode="decimal" value={values.amount} required

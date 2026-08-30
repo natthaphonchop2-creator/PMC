@@ -222,6 +222,37 @@ describe('PMC Mini App browser API', () => {
     expect(String(url)).not.toContain('monthKey')
   })
 
+  it('serializes the committed row lifecycle version internally while preserving the selected revision for a replacement', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, expenseReceipt({ category: 'BOOK_CLINIC', revision: 3 })))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = {
+      rootRequestId: 'replace-request-1', category: 'BOOK_CLINIC' as const, expenseDate: '2026-08-30', amountSatang: 120_000,
+      counterpartyName: null, description: 'แก้ยอดรวม', paymentMethod: null, expectedRevision: 2, stagingTokens: ['payload.signature'],
+    }
+
+    await api.replaceExpense('raw-id-token', 'EXP-202608-BOOK-01', input)
+
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/finance/expenses/EXP-202608-BOOK-01/replace', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({
+        expectedVersion: 2, expectedRevision: 2, input: {
+          rootRequestId: input.rootRequestId, category: input.category, expenseDate: input.expenseDate, amountSatang: input.amountSatang,
+          counterpartyName: null, description: input.description, paymentMethod: null, stagingTokens: input.stagingTokens,
+        },
+      }),
+    }))
+  })
+
+  it('issues private evidence tokens with bearer authentication and an empty POST body', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, { token: 'payload.signature' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await api.issueExpenseEvidenceToken('raw-id-token', 'EXP-202608-BOOK-01', 'ATT-01')
+
+    expect(fetch).toHaveBeenCalledWith('/api/mini-app/finance/expenses/EXP-202608-BOOK-01/evidence/ATT-01/token', {
+      method: 'POST', headers: { authorization: 'Bearer raw-id-token' },
+    })
+  })
+
   it('stages ordered expense files and submits the exact Task 7 browser payload with bearer auth', async () => {
     const committed = expenseReceipt()
     const fetch = vi.fn()
@@ -411,10 +442,10 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
-function expenseReceipt(): ExpenseReceipt {
+function expenseReceipt(overrides: Partial<ExpenseReceipt> = {}): ExpenseReceipt {
   return {
     expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT', expenseDate: '2026-08-30', monthKey: '2026-08',
     category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: 120_000, recordState: 'COMMITTED', revision: 1,
-    committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+    committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true, ...overrides,
   }
 }

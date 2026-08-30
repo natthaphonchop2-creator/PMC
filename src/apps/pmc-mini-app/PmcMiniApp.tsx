@@ -14,7 +14,7 @@ import { EnrollmentPage } from './EnrollmentPage'
 import { Home } from './Home'
 import { DailyIncomePage, type DailyIncomePageAdapter } from './DailyIncomePage'
 import { FinanceReportHome, type FinanceReportView } from './FinanceReportHome'
-import { MonthlyFinancePage, type MonthlyIncomePageAdapter } from './MonthlyFinancePage'
+import { MonthlyFinancePage, type MonthlyExpensePageAdapter, type MonthlyIncomePageAdapter } from './MonthlyFinancePage'
 import { AdditionalReportMenu, ReportCenter } from './ReportCenter'
 import { ReportPage, type ReportPageAdapter } from './ReportPage'
 import { StockHome } from './stock/StockHome'
@@ -28,7 +28,7 @@ import {
   type ReportSelection,
 } from './reports'
 import type { StockHistoryPage } from '../../../shared/pmcStock'
-import type { EnabledExpenseCategory, ExpenseReceipt } from '../../../shared/pmcExpense'
+import type { EnabledExpenseCategory, ExpenseHistoryPage, ExpenseHistoryRow, ExpenseReceipt } from '../../../shared/pmcExpense'
 import {
   loadFinanceReportFilterPreferences,
   saveFinanceReportFilterPreferences,
@@ -38,10 +38,11 @@ import {
 } from './financeReports'
 import { ExpenseForm, type ExpenseFormAdapter } from './expense/ExpenseForm'
 import { ExpenseReceiptView } from './expense/ExpenseReceipt'
+import { ExpenseHistory, type ExpenseHistoryAdapter } from './expense/ExpenseHistory'
 
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
-type FinanceView = 'FINANCE_HOME' | FinanceReportView | EnabledExpenseCategory | 'EXPENSE_RECEIPT'
+type FinanceView = 'FINANCE_HOME' | FinanceReportView | EnabledExpenseCategory | 'EXPENSE_RECEIPT' | 'EXPENSE_HISTORY'
 
 export function PmcMiniApp({
   initialSession,
@@ -71,6 +72,8 @@ export function PmcMiniApp({
   const [financeFilters, setFinanceFilters] = useState(() => loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate))
   const [financeView, setFinanceView] = useState<FinanceView>('FINANCE_HOME')
   const [expenseReceipt, setExpenseReceipt] = useState<ExpenseReceipt | null>(null)
+  const [expenseHistory, setExpenseHistory] = useState<{ monthKey: string; page: ExpenseHistoryPage; loading: boolean; error: string } | null>(null)
+  const [expenseReplacement, setExpenseReplacement] = useState<ExpenseHistoryRow | null>(null)
   const openingBookingRef = useRef<Promise<void> | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
   const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
@@ -78,7 +81,9 @@ export function PmcMiniApp({
   const [stockHistoryLoadingMore, setStockHistoryLoadingMore] = useState(false)
   const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
-  const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.expenseCaptureEnabled)
+  const financeReadAccess = Boolean(config?.financeReadsEnabled && config?.canViewFinance)
+  const canManageExpense = Boolean(financeReadAccess && config?.expenseCaptureEnabled && config?.canSubmitExpense && config?.canManageExpense)
+  const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.expenseCaptureEnabled || config?.financeReadsEnabled)
   const reportNavigationEnabled = Boolean(config?.reportingEnabled || financeShellEnabled)
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
@@ -152,9 +157,36 @@ export function PmcMiniApp({
     load: (selection) => api.loadMonthlyIncome(idToken, selection),
   }), [api, idToken])
 
+  const monthlyExpenseAdapter = useMemo<MonthlyExpensePageAdapter>(() => ({
+    load: (monthKey) => api.loadMonthlyExpenses(idToken, monthKey),
+  }), [api, idToken])
+
   const expenseFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
     stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
     submit: (input) => api.submitExpense(idToken, input),
+  }), [api, idToken])
+
+  const replacementFormAdapter = useMemo<ExpenseFormAdapter>(() => ({
+    stage: (rootRequestId, files) => api.stageExpense(idToken, rootRequestId, files),
+    submit: (input) => {
+      if (!expenseReplacement || input.expectedRevision !== expenseReplacement.revision) {
+        return Promise.reject(new Error('EXPENSE_REVISION_CONFLICT'))
+      }
+      return api.replaceExpense(idToken, expenseReplacement.expenseId, input)
+    },
+  }), [api, expenseReplacement, idToken])
+
+  const expenseHistoryAdapter = useMemo<ExpenseHistoryAdapter>(() => ({
+    replace: ({ row, expectedRevision }) => {
+      if (row.category === 'BILL_DOCUMENT') return
+      if (expectedRevision !== row.revision) return
+      setExpenseReplacement(row)
+      setFinanceView(row.category)
+    },
+    void: (row, input) => api.voidExpense(idToken, row.expenseId, input),
+    issueEvidenceToken: (expenseId, attachmentId) => api.issueExpenseEvidenceToken(idToken, expenseId, attachmentId),
+    downloadEvidence: (token) => api.downloadExpenseEvidence(idToken, token),
+    loadMore: (monthKey, cursor) => api.loadExpenseHistory(idToken, monthKey, cursor),
   }), [api, idToken])
 
   const rememberDailyFilter = useCallback((daily: FinanceDailyFilter) => {
@@ -169,6 +201,20 @@ export function PmcMiniApp({
     setFinanceFilters((current) => ({ ...current, daily }))
     setFinanceView('DAILY_INCOME')
   }, [])
+
+  const openExpenseHistory = useCallback((monthKey: string) => {
+    if (!financeReadAccess) return
+    const requestEpoch = ++navigationEpochRef.current
+    setExpenseHistory({ monthKey, page: { expenses: [], nextCursor: null }, loading: true, error: '' })
+    setFinanceView('EXPENSE_HISTORY')
+    void api.loadExpenseHistory(idToken, monthKey).then((page) => {
+      if (requestEpoch === navigationEpochRef.current) setExpenseHistory({ monthKey, page, loading: false, error: '' })
+    }).catch(() => {
+      if (requestEpoch === navigationEpochRef.current) {
+        setExpenseHistory({ monthKey, page: { expenses: [], nextCursor: null }, loading: false, error: 'โหลดประวัติรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง' })
+      }
+    })
+  }, [api, financeReadAccess, idToken])
 
   const stockIssueAdapter = useMemo<StockIssueFlowAdapter>(() => ({
     issue: (command) => api.submitStockCommand(idToken, command),
@@ -280,6 +326,7 @@ export function PmcMiniApp({
     setMessage('')
     if (next === 'REPORTS' && view === 'REPORTS') {
       setExpenseReceipt(null)
+      setExpenseReplacement(null)
       if (financeShellEnabled) setFinanceView('FINANCE_HOME')
       else setSelectedReport(null)
       return
@@ -289,6 +336,7 @@ export function PmcMiniApp({
       setSelectedReport(null)
       setFinanceView('FINANCE_HOME')
       setExpenseReceipt(null)
+      setExpenseReplacement(null)
     }
   }
 
@@ -397,19 +445,30 @@ export function PmcMiniApp({
     />
   }
   if (view === 'REPORTS' && isEnabledExpenseCategory(financeView)
-    && config?.expenseCaptureEnabled && config.canSubmitExpense) {
+    && config?.expenseCaptureEnabled && config.canSubmitExpense
+    && (!expenseReplacement || (canManageExpense && expenseReplacement.category === financeView))) {
+    const replacing = Boolean(expenseReplacement)
     return <ExpenseForm
+      key={expenseReplacement?.expenseId ?? financeView}
       category={financeView}
-      adapter={expenseFormAdapter}
+      adapter={replacing ? replacementFormAdapter : expenseFormAdapter}
+      expectedRevision={expenseReplacement?.revision ?? 0}
+      lockedExpenseDate={expenseReplacement?.expenseDate}
       onCommitted={(receipt) => {
         setExpenseReceipt(receipt)
         setFinanceView('EXPENSE_RECEIPT')
       }}
       onBack={() => {
         setExpenseReceipt(null)
-        setFinanceView('FINANCE_HOME')
+        setExpenseReplacement(null)
+        setFinanceView(replacing ? 'EXPENSE_HISTORY' : 'FINANCE_HOME')
       }}
     />
+  }
+  if (view === 'REPORTS' && financeView === 'EXPENSE_HISTORY' && financeReadAccess && expenseHistory) {
+    return <ExpenseHistory key={`${expenseHistory.monthKey}:${expenseHistory.loading}:${expenseHistory.error}:${expenseHistory.page.expenses.map((row) => row.expenseId).join('|')}:${expenseHistory.page.nextCursor ?? ''}`} monthKey={expenseHistory.monthKey} page={expenseHistory.page} adapter={expenseHistoryAdapter}
+      canManageExpense={canManageExpense} loading={expenseHistory.loading} error={expenseHistory.error}
+      onBack={() => { navigationEpochRef.current += 1; setFinanceView('MONTHLY_INCOME') }} />
   }
   if (view === 'REPORTS' && financeView === 'EXPENSE_RECEIPT' && expenseReceipt) {
     return <ExpenseReceiptView receipt={expenseReceipt} onDone={() => {
@@ -439,28 +498,31 @@ export function PmcMiniApp({
             onFilterChange={rememberDailyFilter}
             onBack={() => setFinanceView('FINANCE_HOME')}
           />
-          : config?.financeReportsEnabled && financeView === 'MONTHLY_INCOME'
+          : config?.financeReportsEnabled && financeReadAccess && financeView === 'MONTHLY_INCOME'
             ? <MonthlyFinancePage
-              canViewFinance={Boolean(config.canViewFinance)}
+              canViewFinance={financeReadAccess}
               bangkokDate={bangkokDate}
               initialSelection={financeFilters.monthly}
               adapter={monthlyIncomeAdapter}
+              expenseAdapter={monthlyExpenseAdapter}
               onSelectionChange={rememberMonthSelection}
               onDrillDown={drillIntoDailyIncome}
+              onOpenExpenseHistory={openExpenseHistory}
               onBack={() => setFinanceView('FINANCE_HOME')}
             />
             : <FinanceReportHome
-              canViewFinance={Boolean(config?.canViewFinance)}
+              canViewFinance={financeReadAccess}
               financeReportsEnabled={Boolean(config?.financeReportsEnabled)}
               expenseCaptureEnabled={Boolean(config?.expenseCaptureEnabled)}
               canSubmitExpense={Boolean(config?.canSubmitExpense)}
               onSelect={(next) => {
-                if (next === 'MONTHLY_INCOME' && !config?.canViewFinance) return
+                if (next === 'MONTHLY_INCOME' && !financeReadAccess) return
                 setFinanceView(next)
               }}
               onSelectExpense={(category) => {
                 if (!config?.expenseCaptureEnabled || !config.canSubmitExpense) return
                 setExpenseReceipt(null)
+                setExpenseReplacement(null)
                 setFinanceView(category)
               }}
             />

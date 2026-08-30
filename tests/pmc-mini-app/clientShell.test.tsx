@@ -207,7 +207,7 @@ describe('PMC LINE Mini App shell', () => {
     const financeApi = miniAppApi()
     render(<PmcMiniApp
       initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, financeReadsEnabled: true, canViewFinance: true }}
       api={financeApi}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
@@ -221,7 +221,7 @@ describe('PMC LINE Mini App shell', () => {
     const api = miniAppApi()
     render(<PmcMiniApp
       initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, financeReadsEnabled: true, canViewFinance: true }}
       api={api}
     />)
 
@@ -566,6 +566,12 @@ function miniAppApi(): PmcMiniAppApi {
     loadDailyIncome: vi.fn(async (_token, filter) => dailyIncomeProjection(filter.startDate, filter.endDate)),
     refreshDailyIncome: vi.fn(async () => ({ accepted: true as const, allocationQueued: true, retryAfterSeconds: 60 })),
     loadMonthlyIncome: vi.fn(async () => monthlyIncomeProjection()),
+    loadMonthlyExpenses: vi.fn(async () => ({
+      monthKey: '2026-08', clinicCommittedSatang: 0, doctorPersonalCommittedSatang: 0,
+      clinicByCategorySatang: { BILL_DOCUMENT: 0, BOOK_CLINIC: 0 }, effectiveExpenseCount: 0, unreviewed: true as const,
+    })),
+    loadExpenseHistory: vi.fn(async () => ({ expenses: [], nextCursor: null })),
+    issueExpenseEvidenceToken: vi.fn(), downloadExpenseEvidence: vi.fn(), replaceExpense: vi.fn(), voidExpense: vi.fn(),
     loadStockProducts: vi.fn(async () => ({ products: [{
       productId: 'STK-000001', name: 'ถุงมือ', category: 'CLINIC_SUPPLY', unit: 'กล่อง',
       minimumQuantityMilli: 5_000, onHandMilli: 4_000, lowStock: true, active: true,

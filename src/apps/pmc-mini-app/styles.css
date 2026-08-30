@@ -865,6 +865,59 @@ button:focus-visible {
 .pmc-processing-case { margin: 20px 0 0; color: var(--pmc-muted); font-size: .8rem; overflow-wrap: anywhere; }
 .pmc-booking-processing > button { min-width: 180px; min-height: 52px; margin-block-start: 28px; }
 
+.pmc-monthly-expenses > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.pmc-monthly-expenses > header h2, .pmc-monthly-balance h2 { margin: 0; font-size: 1.08rem; line-height: var(--lh-heading); }
+.pmc-monthly-expenses > header p, .pmc-monthly-balance small { display: block; margin: 5px 0 0; color: var(--pmc-muted); font-size: .78rem; line-height: var(--lh-body); }
+.pmc-finance-text-button { flex: 0 0 auto; min-height: 44px; padding: 8px 0; border: 0; color: var(--pmc-gold-dark); background: transparent; font-size: .82rem; font-weight: 700; line-height: 1.5; text-decoration: underline; text-underline-offset: 3px; }
+.pmc-monthly-expense-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 15px 0 0; }
+.pmc-monthly-expense-summary > div, .pmc-monthly-expense-categories > div { min-width: 0; padding: 11px; border-radius: 11px; background: #f7f7f7; }
+.pmc-monthly-expense-summary > div:last-child { grid-column: 1 / -1; }
+.pmc-monthly-expense-summary dt { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; color: var(--pmc-muted); font-size: .76rem; line-height: 1.6; }
+.pmc-monthly-expense-summary dt strong, .pmc-monthly-expense-categories strong { color: var(--pmc-text); font-size: .87rem; font-variant-numeric: tabular-nums; line-height: 1.55; }
+.pmc-monthly-expense-summary dd { margin: 3px 0 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pmc-monthly-expense-categories { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-block-start: 9px; }
+.pmc-monthly-expense-categories span { display: block; color: var(--pmc-muted); font-size: .72rem; line-height: 1.55; }
+.pmc-monthly-expense-categories strong { display: block; margin-block-start: 3px; }
+.pmc-expense-unreviewed { display: inline-flex; margin: 12px 0 0; padding: 4px 9px; border-radius: 999px; color: #875c12; background: #fff3d9; font-size: .72rem; font-weight: 700; line-height: 1.55; }
+.pmc-monthly-balance { background: linear-gradient(135deg, #fffaf0, #fff); }
+.pmc-monthly-balance h2 strong { display: block; margin-block-start: 9px; color: var(--pmc-gold-dark); font-size: 1.55rem; font-weight: 760; font-variant-numeric: tabular-nums; line-height: var(--lh-heading); }
+
+.pmc-expense-history-page { width: min(100%, 560px); min-height: 100dvh; margin-inline: auto; padding: max(22px, env(safe-area-inset-top)) 18px calc(110px + env(safe-area-inset-bottom)); background: #f6f7f9; letter-spacing: normal; }
+.pmc-expense-history-header { display: flex; align-items: center; gap: 12px; }
+.pmc-expense-history-header h1 { margin: 0; font-size: 1.7rem; line-height: var(--lh-heading); }
+.pmc-expense-history-header p, .pmc-expense-history-note { margin: 4px 0 0; color: var(--pmc-muted); font-size: .82rem; line-height: var(--lh-body); }
+.pmc-expense-history-note { margin-block: 18px 13px; }
+.pmc-expense-history-list { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+.pmc-expense-history-card { padding: 15px; border: 1px solid #e3e3e3; border-radius: 15px; background: #fff; box-shadow: 0 6px 18px rgba(24, 32, 46, .04); }
+.pmc-expense-history-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.pmc-expense-history-card h2 { margin: 0; font-size: .98rem; line-height: var(--lh-heading); }
+.pmc-expense-history-card header p { margin: 3px 0 0; color: var(--pmc-muted); font-size: .73rem; line-height: 1.55; }
+.pmc-expense-history-card header > span { flex: 0 0 auto; padding: 3px 8px; border-radius: 999px; font-size: .68rem; font-weight: 700; line-height: 1.5; }
+.pmc-expense-history-card header > span.committed { color: #176b43; background: #eaf7f0; }
+.pmc-expense-history-card header > span.void { color: #6a6a6a; background: #eee; }
+.pmc-expense-history-amount { display: block; margin-block-start: 11px; font-size: 1.1rem; font-variant-numeric: tabular-nums; line-height: 1.45; }
+.pmc-expense-history-description, .pmc-expense-history-meta { margin: 6px 0 0; color: var(--pmc-muted); font-size: .78rem; line-height: var(--lh-body); overflow-wrap: anywhere; }
+.pmc-expense-history-meta { font-size: .7rem; }
+.pmc-expense-history-evidence { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.pmc-expense-history-evidence figure { margin: 0; }
+.pmc-expense-history-evidence img { display: block; width: 100%; aspect-ratio: 1; border-radius: 9px; object-fit: cover; }
+.pmc-expense-history-evidence figcaption { overflow: hidden; margin-block-start: 4px; color: var(--pmc-muted); font-size: .65rem; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.pmc-expense-evidence-placeholder button { display: grid; width: 100%; min-height: 74px; place-content: center; gap: 4px; padding: 6px; border: 1px solid #d8d8d8; border-radius: 9px; color: var(--pmc-gold-dark); background: #fffaf2; font-size: .68rem; font-weight: 700; line-height: 1.45; }
+.pmc-expense-evidence-placeholder button svg { width: 19px; height: 19px; margin-inline: auto; }
+.pmc-expense-evidence-placeholder p { margin: 4px 0 0; color: var(--pmc-error); font-size: .65rem; line-height: 1.5; }
+.pmc-expense-history-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-block-start: 14px; }
+.pmc-expense-history-actions button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; gap: 5px; padding: 7px; border: 1px solid #d8d8d8; border-radius: 10px; color: var(--pmc-text); background: #fff; font-size: .75rem; font-weight: 700; line-height: 1.45; }
+.pmc-expense-history-actions button svg { width: 16px; height: 16px; }
+.pmc-expense-history-actions button.danger, .pmc-danger-button { border-color: #edc2bd; color: var(--pmc-error); background: #fff8f7; }
+.pmc-expense-history-more { display: block; width: 100%; margin-block-start: 14px; }
+.pmc-expense-void-confirm { margin-block-start: 16px; padding: 16px; border: 1px solid #ead4d1; border-radius: 14px; background: #fff; }
+.pmc-expense-void-confirm h2 { margin: 0; font-size: 1.05rem; line-height: var(--lh-heading); }
+.pmc-expense-void-confirm p { margin: 6px 0 0; color: var(--pmc-muted); font-size: .8rem; line-height: var(--lh-body); }
+.pmc-expense-void-confirm label { display: block; margin-block: 13px 5px; font-size: .8rem; font-weight: 700; line-height: 1.55; }
+.pmc-expense-void-confirm textarea { width: 100%; min-height: 88px; padding: 10px; border: 1px solid #cfcfcf; border-radius: 9px; line-height: 1.65; resize: vertical; }
+.pmc-expense-void-confirm > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-block-start: 12px; }
+.pmc-danger-button { min-height: 52px; border-radius: 9px; font-weight: 700; }
+
 @media (hover: hover) {
   .pmc-home-quick-card:not(:disabled):hover,
   .pmc-home-account-card:hover { border-color: #d7c39f; transform: translateY(-2px); box-shadow: 0 12px 28px rgba(64, 45, 14, .09); }
