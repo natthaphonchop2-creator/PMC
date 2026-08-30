@@ -1,5 +1,6 @@
 import type { StockCategory } from '../../../shared/pmcStock'
 import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
+import type { BookingPrepareCapability } from '../../../shared/pmcMiniAppBookingPrepare'
 
 export interface MiniAppSession {
   staffId: string
@@ -24,11 +25,7 @@ export interface MiniAppConfig {
   channels: Array<{ id: string; name: string }>
   admins: Array<{ id: string; name: string }>
   aes: Array<{ id: string; name: string }>
-  bookingProtocol?: {
-    supported: 2
-    minimumMutation: BookingProtocolVersion
-    prepare: boolean
-  }
+  bookingProtocol?: BookingPrepareCapability
 }
 
 export interface StockProductProjection {

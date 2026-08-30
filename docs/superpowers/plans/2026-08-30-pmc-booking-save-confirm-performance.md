@@ -28,7 +28,7 @@
 Run this plan only after all six tasks in `2026-08-30-pmc-booking-attribution-v2.md` are committed and its complete local gate is green. Before Task 1, record:
 
 ```bash
-test "$(git log -1 --pretty=%s)" = "chore: gate Booking protocol-v2 cutover"
+test "$(git log -1 --pretty=%s)" = "fix: preserve P2 attribution through Booking ingress"
 ATTRIBUTION_BASE="$(git rev-parse HEAD)"
 test -n "$ATTRIBUTION_BASE"
 test -z "$(git status --porcelain)"

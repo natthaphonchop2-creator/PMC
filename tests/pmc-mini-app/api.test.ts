@@ -61,6 +61,45 @@ describe('PMC Mini App browser API', () => {
     expect(requestBody(fetch, 4)).toEqual({ protocolVersion: 2, version: 2 })
   })
 
+  it('prepares protocol 2 input and both evidence kinds in one exact multipart request', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      draftId: 'draft-1', requestId: 'request-1', state: 'READY_TO_CONFIRM', retentionState: '', version: 5,
+      input: null, paymentEvidenceIds: ['payment-1'], chatEvidenceIds: ['chat-1'], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const exactInput = {
+      requestId: 'request-1', adminId: 'staff-admin', aeId: null,
+      customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phone: '0812345678',
+      doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    const input = {
+      ...exactInput,
+      recorderName: 'ห้ามส่ง', adminName: 'ห้ามส่ง', aeName: 'ห้ามส่ง',
+    }
+    const paymentFiles = [new File(['one'], 'payment.png', { type: 'image/png' })]
+    const chatFiles = [new File(['two'], 'chat.png', { type: 'image/png' })]
+
+    await api.prepare('raw-id-token', 'draft-1', 4, { input, paymentFiles, chatFiles })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe('/api/mini-app/booking-drafts/draft-1/prepare')
+    expect(init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer raw-id-token' } })
+    expect(init?.body).toBeInstanceOf(FormData)
+    const body = init?.body as FormData
+    expect([...body.keys()]).toEqual(['input', 'paymentFiles', 'chatFiles'])
+    expect(body.getAll('input')).toEqual([
+      JSON.stringify({ protocolVersion: 2, version: 4, input: exactInput }),
+    ])
+    expect(body.getAll('paymentFiles')).toEqual(paymentFiles)
+    expect(body.getAll('chatFiles')).toEqual(chatFiles)
+    expect(JSON.stringify([...body.entries()])).not.toContain('recorderName')
+    expect(JSON.stringify([...body.entries()])).not.toContain('adminName')
+    expect(JSON.stringify([...body.entries()])).not.toContain('aeName')
+  })
+
   it.each([
     ['the capability is absent', {}],
     ['minimumMutation is 1', { bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false } }],
@@ -93,6 +132,7 @@ describe('PMC Mini App browser API', () => {
     expect(requestBody(fetch, 2)).toEqual({ version: 1, input })
     expect(requestBody(fetch, 3)).toEqual({ version: 2 })
     expect(requestBody(fetch, 4)).toEqual({ version: 2 })
+    expect(fetch.mock.calls.map(([url]) => String(url))).not.toContain('/api/mini-app/booking-drafts/draft-1/prepare')
   })
 
   it('uploads payment and chat evidence together through one async batch request', async () => {

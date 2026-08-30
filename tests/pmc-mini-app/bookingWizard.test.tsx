@@ -40,7 +40,8 @@ describe('PMC Mini App mobile booking wizard', () => {
 
   it('submits canonical Admin and nullable AE IDs without browser-owned names', async () => {
     const user = userEvent.setup()
-    const app = adapter()
+    const prepare = vi.fn()
+    const app = Object.assign(adapter(), { prepare })
     const current = {
       ...draft,
       input: completeInput(),
@@ -62,6 +63,7 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(submitted).not.toHaveProperty('adminName')
     expect(submitted).not.toHaveProperty('aeName')
     expect(submitted).not.toHaveProperty('recorderName')
+    expect(prepare).not.toHaveBeenCalled()
   })
 
   it('previews recorder, Admin, and AE labels in the same exact order', () => {

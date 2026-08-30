@@ -1,5 +1,6 @@
 import { readPmcAsyncBookingConfig, type PmcAsyncBookingConfig } from './asyncConfig.js'
 import { readPmcFinanceConfig, type PmcFinanceConfig } from './finance/config.js'
+import type { BookingPrepareCapability } from '../../shared/pmcMiniAppBookingPrepare.js'
 
 export interface PmcMiniAppServerConfig {
   enabled: true
@@ -14,11 +15,7 @@ export interface PmcMiniAppServerConfig {
   enrollmentPin: string | null
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
-  bookingProtocol: {
-    supported: 2
-    minimumMutation: 1 | 2
-    prepare: false
-  }
+  bookingProtocol: BookingPrepareCapability & { prepare: false }
   bookingMutationsPaused: boolean
   asyncBooking: PmcAsyncBookingConfig | null
   financeReportsEnabled: boolean

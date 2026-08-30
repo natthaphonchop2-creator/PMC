@@ -18,6 +18,7 @@ import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '.
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
 import { PMC_BOOKING_PROTOCOL_VERSION } from '../../../shared/pmcBookingProtocol'
 import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
+import type { BookingPrepareFilesInput } from '../../../shared/pmcMiniAppBookingPrepare'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -37,6 +38,7 @@ export interface MiniAppBrowserApi {
   loadDraft(idToken: string, draftId: string, signal?: AbortSignal): Promise<BookingDraftProjection>
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   uploadEvidenceBatch(idToken: string, draftId: string, input: { paymentFiles: File[]; chatFiles: File[] }): Promise<BookingDraftProjection>
+  prepare(idToken: string, draftId: string, version: number, input: BookingPrepareFilesInput): Promise<BookingDraftProjection>
   save(idToken: string, draftId: string, version: number, input: BookingDraftInput, protocolVersion?: BookingProtocolVersion): Promise<BookingDraftProjection>
   confirm(idToken: string, draftId: string, version: number, protocolVersion?: BookingProtocolVersion): Promise<BookingQueuedResult | BookingConfirmationResult>
   cancel(idToken: string, draftId: string, version: number, protocolVersion?: BookingProtocolVersion): Promise<BookingDraftProjection>
@@ -141,6 +143,19 @@ export function createMiniAppApi(options: {
         method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
       })
     },
+    prepare(idToken, draftId, version, input) {
+      const body = new FormData()
+      body.append('input', JSON.stringify({
+        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
+        version,
+        input: exactBookingDraftInputV2(input.input),
+      }))
+      for (const file of input.paymentFiles) body.append('paymentFiles', file)
+      for (const file of input.chatFiles) body.append('chatFiles', file)
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/prepare`, {
+        method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
+      })
+    },
     save(idToken, draftId, version, input, protocolVersion = activeBookingProtocol) {
       const body = protocolVersion === 2
         ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION, version, input }
@@ -198,6 +213,24 @@ export function createMiniAppApi(options: {
       const mapped = stockCommandRequest(command)
       return requestJson(request, mapped.url, authenticatedJson(idToken, mapped.method, mapped.body))
     },
+  }
+}
+
+function exactBookingDraftInputV2(input: BookingDraftInputV2): BookingDraftInputV2 {
+  return {
+    requestId: input.requestId,
+    adminId: input.adminId,
+    aeId: input.aeId,
+    customerName: input.customerName,
+    facebookName: input.facebookName,
+    phone: input.phone,
+    doctorId: input.doctorId,
+    serviceId: input.serviceId,
+    queueType: input.queueType,
+    appointmentDate: input.appointmentDate,
+    appointmentTime: input.appointmentTime,
+    depositAmount: input.depositAmount,
+    channelId: input.channelId,
   }
 }
 

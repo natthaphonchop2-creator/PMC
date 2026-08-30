@@ -120,6 +120,18 @@ export function createPreviewMiniAppApi(options: {
       }
       return structuredClone(current)
     },
+    async prepare(_token, draftId, version, input) {
+      requireDraft(current, draftId, version)
+      const paymentEvidenceIds = input.paymentFiles.map((file, index) => `preview-payment-${index + 1}-${file.name}`)
+      const chatEvidenceIds = input.chatFiles.map((file, index) => `preview-chat-${index + 1}-${file.name}`)
+      current = {
+        ...current!, state: 'READY_TO_CONFIRM', version: current!.version + 1,
+        input: structuredClone(input.input),
+        paymentEvidenceIds: [...current!.paymentEvidenceIds, ...paymentEvidenceIds],
+        chatEvidenceIds: [...current!.chatEvidenceIds, ...chatEvidenceIds],
+      }
+      return structuredClone(current)
+    },
     async save(_token, draftId, version, input: BookingDraftInput) {
       requireDraft(current, draftId, version)
       current = { ...current!, state: 'READY_TO_CONFIRM', version: current!.version + 1, input: structuredClone(input) }
