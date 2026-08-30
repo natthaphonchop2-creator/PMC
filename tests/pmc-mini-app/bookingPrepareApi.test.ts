@@ -457,6 +457,84 @@ describe('PMC Mini App Booking prepare HTTP route', () => {
     expect(fixture.ingress!.callCount()).toBe(0)
   })
 
+  it('skips a failing config read for an exact reserved READY retry', async () => {
+    const fixture = prepareFixture('SYNC')
+    const middleware = createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'), identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store, evidenceIngress: fixture.ingress!, draftStateIngress: fixture.draftStateIngress,
+      now: () => new Date('2026-08-30T10:00:00.000Z'),
+    })
+    expect((await invokePrepare(middleware)).status).toBe(200)
+    const remoteCalls = fixture.ingress!.callCount()
+    const ownerCalls = fixture.draftStateIngress.callCount()
+    fixture.store.resetReadCounts()
+    fixture.store.failConfigReads()
+
+    const retry = await invokePrepare(middleware)
+
+    expect(retry).toMatchObject({ status: 200, body: { state: 'READY_TO_CONFIRM' } })
+    expect(fixture.store.configReadCount()).toBe(0)
+    expect(fixture.ingress!.callCount()).toBe(remoteCalls)
+    expect(fixture.draftStateIngress.callCount()).toBe(ownerCalls)
+  })
+
+  it('skips a failing config read while an exact reserved PARTIAL retry reuses remote evidence', async () => {
+    const fixture = prepareFixture('SYNC')
+    fixture.ingress!.failOnceAt(2)
+    const middleware = createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'), identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store, evidenceIngress: fixture.ingress!, draftStateIngress: fixture.draftStateIngress,
+      now: () => new Date('2026-08-30T10:00:00.000Z'),
+    })
+    expect(await invokePrepare(middleware)).toEqual({ status: 503, body: { error: 'BOOKING_PREPARE_RETRY' } })
+    fixture.store.resetReadCounts()
+    fixture.store.failConfigReads()
+
+    const retry = await invokePrepare(middleware)
+
+    expect(retry).toMatchObject({ status: 200, body: { state: 'READY_TO_CONFIRM', paymentEvidenceCount: 1, chatEvidenceCount: 1 } })
+    expect(fixture.store.configReadCount()).toBe(0)
+    expect(fixture.ingress!.createdCount()).toBe(2)
+  })
+
+  it('skips a failing config read while a terminal same-binding retry retains every reference', async () => {
+    const fixture = prepareFixture('SYNC')
+    fixture.ingress!.failOnceAt(2)
+    const middleware = createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'), identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store, evidenceIngress: fixture.ingress!, draftStateIngress: fixture.draftStateIngress,
+      now: () => new Date('2026-08-30T10:00:00.000Z'),
+    })
+    expect((await invokePrepare(middleware)).status).toBe(503)
+    fixture.store.commitTerminal('CANCELLED')
+    fixture.store.resetReadCounts()
+    fixture.store.failConfigReads()
+
+    const retry = await invokePrepare(middleware)
+
+    expect(retry).toEqual({ status: 409, body: { error: 'BOOKING_PREPARE_CONFLICT' } })
+    expect(fixture.store.configReadCount()).toBe(0)
+    expect(fixture.store.read()).toMatchObject({
+      state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', paymentEvidenceFileIds: ['drive-file-01'],
+      chatEvidenceFileIds: ['drive-file-02'], evidenceCount: 2,
+    })
+    expect(fixture.ingress!.createdCount()).toBe(2)
+  })
+
+  it('fails an unbound prepare closed on one config error before evidence or owner effects', async () => {
+    const fixture = prepareFixture('SYNC')
+    fixture.store.failConfigReads()
+    const response = await invokePrepare(createPmcMiniAppMiddleware({
+      config: routeConfig('SYNC'), identity: { verify: async () => ({ lineUserId: 'Uactive' }) },
+      store: fixture.store, evidenceIngress: fixture.ingress!, draftStateIngress: fixture.draftStateIngress,
+    }))
+
+    expect(response).toEqual({ status: 503, body: { error: 'MINI_APP_STORAGE_UNAVAILABLE' } })
+    expect(fixture.store.configReadCount()).toBe(1)
+    expect(fixture.ingress!.callCount()).toBe(0)
+    expect(fixture.draftStateIngress.callCount()).toBe(0)
+  })
+
   it('serializes protocol-2 cancellation through the owner ingress and recovers a lost response', async () => {
     const fixture = prepareFixture('SYNC')
     fixture.draftStateIngress.loseNextResponse()
@@ -560,6 +638,7 @@ class PrepareStore implements MiniAppStore {
   private staffReads = 0
   private draftReads = 0
   private configReads = 0
+  private configFailure = false
 
   constructor(initial: MiniAppRequestRecord) { this.current = structuredClone(initial) }
   read(): MiniAppRequestRecord { return structuredClone(this.current) }
@@ -568,6 +647,8 @@ class PrepareStore implements MiniAppStore {
   staffReadCount(): number { return this.staffReads }
   draftReadCount(): number { return this.draftReads }
   configReadCount(): number { return this.configReads }
+  resetReadCounts(): void { this.staffReads = 0; this.draftReads = 0; this.configReads = 0 }
+  failConfigReads(): void { this.configFailure = true }
   commitTerminal(state: 'CANCELLED' | 'EXPIRED'): void {
     this.current = {
       ...this.current,
@@ -585,6 +666,7 @@ class PrepareStore implements MiniAppStore {
   }
   async getActiveBookingConfig() {
     this.configReads += 1
+    if (this.configFailure) throw new Error('CONTROLLED_CONFIG_FAILURE')
     return {
       doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
       services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],

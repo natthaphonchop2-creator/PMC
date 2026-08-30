@@ -33,6 +33,7 @@ import {
   BookingPreparePersistenceError,
   persistPrepareEvidence,
   projectionDigest,
+  type PersistPrepareEvidenceInput,
 } from './bookingPrepare.js'
 import type { DraftStateIngressPort } from './draftStateIngressClient.js'
 import type { MiniAppDraftStateResult } from '../../shared/pmcMiniAppDraftState.js'
@@ -1018,12 +1019,28 @@ async function handleBookingPrepare(
     return
   }
 
-  let bookingConfig: Awaited<ReturnType<MiniAppStore['getActiveBookingConfig']>>
-  try {
-    bookingConfig = await deps.store.getActiveBookingConfig()
-  } catch {
-    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+  const hasBinding = draft.evidenceProjectionHash !== null
+  const reserved = hasBinding && hasReservedPrepareAttribution(draft)
+  if (hasBinding && !reserved) {
+    respond(res, 409, { error: 'BOOKING_PREPARE_CONFLICT' })
     return
+  }
+  let bookingContext: PersistPrepareEvidenceInput['bookingContext']
+  if (!reserved) {
+    let bookingConfig: Awaited<ReturnType<MiniAppStore['getActiveBookingConfig']>>
+    try {
+      bookingConfig = await deps.store.getActiveBookingConfig()
+    } catch {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      return
+    }
+    bookingContext = {
+      doctors: bookingConfig.doctors,
+      services: bookingConfig.services,
+      channels: bookingConfig.channels,
+      admins: bookingConfig.admins ?? bookingConfig.aes,
+      aes: bookingConfig.aes,
+    }
   }
 
   let parsed: Awaited<ReturnType<typeof consumeBookingPrepareMultipart>>
@@ -1042,13 +1059,7 @@ async function handleBookingPrepare(
       input: parsed.input,
       paymentFiles: parsed.paymentFiles,
       chatFiles: parsed.chatFiles,
-      bookingContext: {
-        doctors: bookingConfig.doctors,
-        services: bookingConfig.services,
-        channels: bookingConfig.channels,
-        admins: bookingConfig.admins ?? bookingConfig.aes,
-        aes: bookingConfig.aes,
-      },
+      bookingContext,
       persistence,
       store: deps.store,
       draftStateIngress: deps.draftStateIngress,
@@ -1063,6 +1074,11 @@ async function handleBookingPrepare(
     const code = safeBookingError(error)
     respond(res, bookingErrorStatus(error), { error: code })
   }
+}
+
+function hasReservedPrepareAttribution(draft: MiniAppRequestRecord): boolean {
+  return Boolean(draft.recorderName && draft.adminId && draft.adminName)
+    && (draft.aeId === null ? draft.aeName === 'ไม่ระบุ' : Boolean(draft.aeName))
 }
 
 async function cancelP2Draft(

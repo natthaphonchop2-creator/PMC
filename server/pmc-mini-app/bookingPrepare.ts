@@ -38,7 +38,7 @@ export interface PersistPrepareEvidenceInput {
   input: BookingDraftInputV2
   paymentFiles: readonly EvidenceBatchFile[]
   chatFiles: readonly EvidenceBatchFile[]
-  bookingContext: Pick<BookingDraftContextV2, 'doctors' | 'services' | 'channels' | 'admins' | 'aes'>
+  bookingContext?: Pick<BookingDraftContextV2, 'doctors' | 'services' | 'channels' | 'admins' | 'aes'>
   persistence: { type: 'ASYNC'; staging: EvidenceStagingPort } | { type: 'SYNC'; ingress: EvidenceIngressPort }
   store: Pick<MiniAppStore, 'getDraft'>
   draftStateIngress: DraftStateIngressPort
@@ -161,6 +161,8 @@ function placeholderReferences(type: 'ASYNC' | 'SYNC', descriptors: readonly Evi
 function parsedDraft(input: PersistPrepareEvidenceInput, descriptors: readonly EvidenceDescriptor[], persisted: PersistedReferences): MiniAppRequestRecord {
   const asyncEvidence = input.persistence.type === 'ASYNC'
   const reserved = input.draft.evidenceProjectionHash !== null
+  const bookingContext = reserved ? reservedBookingContext(input) : input.bookingContext
+  if (!bookingContext) throw new BookingPreparePersistenceError('BOOKING_PREPARE_CONFLICT')
   let draft: MiniAppRequestRecord
   try {
     draft = parseBookingDraftV2(input.input, {
@@ -168,7 +170,7 @@ function parsedDraft(input: PersistPrepareEvidenceInput, descriptors: readonly E
       staffId: input.draft.staffId,
       recorderName: input.draft.recorderName,
       lineUserIdHash: input.draft.lineUserIdHash,
-      ...(reserved ? reservedBookingContext(input) : input.bookingContext),
+      ...bookingContext,
       paymentEvidenceFileIds: asyncEvidence ? [] : persisted.payment.map(({ value }) => value),
       chatEvidenceFileIds: asyncEvidence ? [] : persisted.chat.map(({ value }) => value),
       paymentEvidenceObjectKeys: asyncEvidence ? persisted.payment.map(({ value }) => value) : [],

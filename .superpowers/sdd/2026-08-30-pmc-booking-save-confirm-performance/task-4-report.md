@@ -113,3 +113,28 @@ Fix-round-2 verification:
 - `git diff --check`: passed.
 
 No deployment, live/external request, evidence upload, Sheet mutation, Apps Script push, queue/property change or allowlist expansion was performed.
+
+---
+
+## Fix round 3 — conditional config read for reserved retries
+
+Reserved retries no longer call `getActiveBookingConfig()` at the HTTP boundary. After authentication and the one owned-draft read, the prepare handler now distinguishes:
+
+- an exact durable reservation with binding plus recorder/Admin/AE snapshots: skip config entirely, parse the bounded multipart once, and let the reserved persistence path verify syntax/canonical semantics and the stored binding;
+- a null-binding draft: require exactly one active Booking-config read before multipart parsing, preserving the original first-BEGIN validation and fail-closed behavior;
+- a non-null binding without complete reserved attribution: reject as `BOOKING_PREPARE_CONFLICT` before config, multipart, remote evidence or owner effects.
+
+`PersistPrepareEvidenceInput.bookingContext` is now optional only at the type boundary. The unbound persistence branch still requires it and fails closed if absent, while the reserved branch constructs no live-config dependency.
+
+New HTTP tests prove exact READY, PARTIAL and terminal same-binding retries continue while the config batch read is forced to throw. Each reserved retry records `configReads=0`; READY performs no additional remote or owner call, PARTIAL reuses the first Drive file and creates only the missing deterministic file, and terminal retry attaches every reference without reopening. A new unbound control still performs one config read and returns 503 before multipart/evidence/owner effects when that read fails. Existing normal-route tests continue to prove one config read on first prepare.
+
+Fix-round-3 verification:
+
+- Focused HTTP/prepare/parser/Wizard/owner gate: **9 files, 237 tests passed**.
+- Full Mini App suite: **72 files, 1,009 tests passed**.
+- Full Apps Script Booking suite: **49 files, 686 tests passed**.
+- `npm run booking:typecheck`, `npm run booking:build`, `npm run build:server`, `npm run build:mini-app`, and full `npm run build`: passed.
+- Full `npm run lint`: zero errors; one pre-existing generated `dist-server` unused-disable warning only.
+- `git diff --check`: passed.
+
+No deployment, live request, external evidence write, Sheet mutation, Apps Script push, queue/property change or allowlist expansion was performed.
