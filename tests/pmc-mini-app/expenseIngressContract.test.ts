@@ -5,6 +5,7 @@ import {
   canonicalMiniAppExpenseCommand,
   canonicalMiniAppExpenseIngress,
   canonicalMiniAppExpenseRecoveryIngress,
+  canonicalMiniAppExpenseResumeIngress,
   type MiniAppExpenseCommand,
 } from '../../shared/pmcMiniAppExpenseIngress'
 import { expenseAttachmentManifestHash } from '../../server/pmc-mini-app/finance/submissionService'
@@ -136,6 +137,18 @@ describe('expense ingress contract', () => {
     })).toBe(
       '{"kind":"MINI_APP_EXPENSE_RECOVERY","version":1,"timestamp":1788000000,"nonce":"recovery-nonce-0001","correlationId":"expense-recovery-0001","worker":{"email":"pmc-mini-app-task-invoker@example.iam.gserviceaccount.com","subject":"google-subject-0001"}}',
     )
+  })
+
+  it('canonicalizes a minimal submitter-owned resume envelope with no form or evidence data', () => {
+    const canonical = canonicalMiniAppExpenseResumeIngress({
+      kind: 'MINI_APP_EXPENSE_RESUME', version: 1, timestamp: 1_788_000_000,
+      nonce: 'resume-nonce-123', rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
+    })
+    expect(canonical).toBe(
+      '{"kind":"MINI_APP_EXPENSE_RESUME","version":1,"timestamp":1788000000,"nonce":"resume-nonce-123","rootRequestId":"expense-request-1","staffId":"ADMIN_01"}',
+    )
+    expect(canonical).not.toContain('amountSatang')
+    expect(canonical).not.toContain('attachment')
   })
 
   it('rejects unknown or unsafe recovery worker fields before signing', () => {

@@ -26,7 +26,7 @@ const REQUIRED_SOURCE_CHECKS = [
 
 const EXPECTED_MASTER_HEADERS = {
   EXPENSE_MONTHLY_INDEX: ['monthKey', 'ledgerSpreadsheetId', 'monthFolderId', 'createdAt', 'updatedAt'],
-  EXPENSE_REQUESTS: ['commandIdempotencyKey', 'rootRequestId', 'commandType', 'commandFingerprint', 'expenseId', 'monthKey', 'recordState', 'resultJson', 'createdAt', 'updatedAt'],
+  EXPENSE_REQUESTS: ['commandIdempotencyKey', 'rootRequestId', 'commandType', 'commandFingerprint', 'commandJson', 'expenseId', 'monthKey', 'recordState', 'resultJson', 'createdAt', 'updatedAt'],
   EXPENSE_AUDIT: ['eventId', 'expenseId', 'actorStaffId', 'action', 'beforeJson', 'afterJson', 'createdAt', 'correlationId'],
 }
 
@@ -42,7 +42,7 @@ const SNAPSHOT_KEYS = ['provenance', 'healthStatus', 'clientConfig', 'flags', 'b
 const PROVENANCE_KEYS = ['schemaVersion', 'profile', 'target', 'environment', 'collectedAt', 'sourceChecks']
 const SUBMIT_ONLY_KEYS = ['history', 'evidence']
 const PERMISSION_RESULT_KEYS = ['status', 'error']
-const FINANCE_READ_KEYS = ['selectedMonth', 'requestedMonths']
+const FINANCE_READ_KEYS = ['selectedMonth', 'requestedMonths', 'bootstrapMonth', 'bootstrapVerified']
 const STAGING_KEYS = ['deleteAfterDays']
 const RECOVERY_KEYS = ['targetPath', 'audienceConfigured', 'identityConfigured']
 const TOPOLOGY_KEYS = ['master', 'month', 'staff']
@@ -142,14 +142,20 @@ export function inspectPmcExpenseRuntime(snapshot, options = {}) {
 
   const financeSource = isRecord(source.financeRead) ? source.financeRead : {}
   const selectedMonth = safeMonth(financeSource.selectedMonth)
+  const bootstrapMonth = safeMonth(financeSource.bootstrapMonth)
   const requestedMonths = Array.isArray(financeSource.requestedMonths)
     ? financeSource.requestedMonths.filter((value) => typeof value === 'string')
     : []
   const financeRead = {
     requestCount: requestedMonths.length,
+    bootstrapVerified: financeSource.bootstrapVerified === true
+      && bootstrapMonth !== null
+      && bootstrapMonth === selectedMonth,
     oneSelectedMonthOnly: selectedMonth !== null
       && requestedMonths.length === 1
-      && requestedMonths[0] === selectedMonth,
+      && requestedMonths[0] === selectedMonth
+      && financeSource.bootstrapVerified === true
+      && bootstrapMonth === selectedMonth,
   }
 
   const stagingSource = isRecord(source.staging) ? source.staging : {}
@@ -288,6 +294,8 @@ function snapshotSchemaReport(source) {
 
   if (!stringArray(source.bindingNames)
     || !stringArray(source.financeRead?.requestedMonths)
+    || typeof source.financeRead?.bootstrapVerified !== 'boolean'
+    || safeMonth(source.financeRead?.bootstrapMonth) === null
     || !stringArray(source.topology?.staff)) safe = false
   if (stringArray(source.bindingNames)) {
     const bindings = new Set(source.bindingNames)

@@ -20,14 +20,18 @@ describe('finance expense read store', () => {
         expenseId: 'EXP-202608-NEW', category: 'BOOK_CLINIC', amountSatang: 12_000, revision: 2,
         counterpartyName: null, paymentMethod: null, bookDailyKey: 'CLINIC:2026-08-29',
         supersedesExpenseId: 'EXP-202608-OLD', submittedAt: '2026-08-30T03:00:00.000Z',
+        committedAt: '2026-08-30T03:01:00.000Z', updatedAt: '2026-08-30T03:01:00.000Z',
       }),
       submissionRow({
         expenseId: 'EXP-202608-PERSONAL', category: 'BOOK_DOCTOR_PERSONAL', scope: 'DOCTOR_PERSONAL',
         amountSatang: 5_000, counterpartyName: null, paymentMethod: null,
         bookDailyKey: 'DOCTOR_PERSONAL:2026-08-29',
       }),
-      submissionRow({ expenseId: 'EXP-202608-PREPARED', recordState: 'PREPARED', committedAt: '' }),
-      submissionRow({ expenseId: 'EXP-202608-VOID', recordState: 'VOID' }),
+      submissionRow({
+        expenseId: 'EXP-202608-PREPARED', recordState: 'PREPARED', committedAt: '', version: 1,
+        updatedAt: '2026-08-29T03:00:00.000Z',
+      }),
+      submissionRow({ expenseId: 'EXP-202608-VOID', recordState: 'VOID', version: 3 }),
     ]
     const finance = financePort({ submissions: rows })
 
@@ -108,9 +112,10 @@ describe('finance expense read store', () => {
     expect(overflow.readMonth).toHaveBeenCalledWith(MONTH_KEY, [SUBMISSIONS_RANGE])
   })
 
-  it('accepts an abandoned PREPARED recovery row as VOID without committedAt and keeps it ineffective', async () => {
+  it('keeps an ABANDON-terminal PREPARED row valid, ineffective, and out of history', async () => {
     const abandoned = financePort({ submissions: [submissionRow({
-      expenseId: 'EXP-202608-ABANDONED', recordState: 'VOID', committedAt: '', version: 2,
+      expenseId: 'EXP-202608-ABANDONED', recordState: 'PREPARED', committedAt: '', version: 1,
+      updatedAt: '2026-08-29T03:00:00.000Z',
     })] })
     const store = createFinanceReadStore({ finance: abandoned })
 
@@ -131,6 +136,30 @@ describe('finance expense read store', () => {
     })] })
     await expect(createFinanceReadStore({ finance: incompleteCommit }).loadMonthlyExpenses(MONTH_KEY))
       .rejects.toEqual(expect.objectContaining({ code: 'EXPENSE_DATA_INTEGRITY_ERROR' }))
+  })
+
+  it('returns retained VOID history and evidence after reload while totals remain zero', async () => {
+    const expenseId = 'EXP-202608-VOIDED'
+    const finance = financePort({
+      submissions: [submissionRow({ expenseId, recordState: 'VOID', version: 3 })],
+      attachments: [attachmentRow({ expenseId, attachmentId: 'ATT-VOIDED', privateFileId: 'file-voided' })],
+    })
+    const store = createFinanceReadStore({ finance })
+
+    await expect(store.loadMonthlyExpenses(MONTH_KEY)).resolves.toMatchObject({
+      clinicCommittedSatang: 0,
+      effectiveExpenseCount: 0,
+    })
+    await expect(store.listExpenseHistory(MONTH_KEY, null, 25)).resolves.toMatchObject({
+      expenses: [{ expenseId, recordState: 'VOID', attachments: [{ attachmentId: 'ATT-VOIDED' }] }],
+      nextCursor: null,
+    })
+    await expect(store.getEvidence(MONTH_KEY, expenseId, 'ATT-VOIDED')).resolves.toEqual({
+      bytes: Buffer.from('private-image'), mimeType: 'image/jpeg',
+    })
+    expect(finance.downloadExpenseFile).toHaveBeenCalledWith(expect.objectContaining({
+      expenseId, fileId: 'file-voided',
+    }))
   })
 
   it('keeps locale-formatted numeric strings invalid instead of coercing financial cells', async () => {

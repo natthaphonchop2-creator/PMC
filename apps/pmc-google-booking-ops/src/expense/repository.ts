@@ -12,6 +12,7 @@ import type {
   ExpenseBookRevisionClaim,
   ExpenseRecoveryCandidate,
   ExpenseRecoveryRequestSnapshot,
+  ExpenseResumeSnapshot,
   ExpenseRepository,
 } from '../ports'
 import { createGoogleExpenseTopologyPort } from '../adapters/googleSheets'
@@ -562,6 +563,38 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
         }
       }
       return selected
+    },
+    resumeSnapshot(rootRequestId): ExpenseResumeSnapshot {
+      if (!SAFE_ID.test(rootRequestId)) throw new Error('EXPENSE_INVALID_REQUEST')
+      const requests = backend.readMaster('EXPENSE_REQUESTS')
+        .map((row, rowIndex) => ({ ...asRequest(row), rowIndex }))
+        .filter((request) => request.rootRequestId === rootRequestId)
+      const requestKeys = requests.map(({ commandIdempotencyKey }) => commandIdempotencyKey)
+      if (new Set(requestKeys).size !== requestKeys.length || requests.length > 4) {
+        throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      }
+      for (const request of requests) {
+        if (backend.sha256Hex(request.commandJson) !== request.commandFingerprint) {
+          throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        }
+      }
+      const identities = new Set(requests.map(({ expenseId, monthKey }) => `${monthKey}\u0000${expenseId}`))
+      if (identities.size > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      const selected = requests[0]
+      if (!selected) return { rootRequestId, requests: [], submission: null, events: [] }
+      const submissions = backend.readMonth(selected.monthKey, 'EXPENSE_SUBMISSIONS')
+        .map(asSubmission)
+        .filter(({ expenseId }) => expenseId === selected.expenseId)
+      if (submissions.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      const events = backend.readMaster('EXPENSE_AUDIT')
+        .map(asAudit)
+        .filter(({ expenseId }) => expenseId === selected.expenseId)
+      return {
+        rootRequestId,
+        requests: clonePlain(requests),
+        submission: submissions[0] ? clonePlain(submissions[0]) : null,
+        events: clonePlain(events),
+      }
     },
   }
   return repository

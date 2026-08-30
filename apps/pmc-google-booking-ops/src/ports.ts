@@ -226,6 +226,13 @@ export interface ExpenseBookRevisionClaim {
   commitAudit: ExpenseAuditEvent
 }
 
+export interface ExpenseResumeSnapshot {
+  rootRequestId: string
+  requests: ExpenseRecoveryRequestSnapshot[]
+  submission: ExpenseSubmission | null
+  events: ExpenseAuditEvent[]
+}
+
 export interface ExpenseRepository {
   ensureMonth(monthKey: string, createdAt: string): {
     ledgerSpreadsheetId: string
@@ -279,6 +286,7 @@ export interface ExpenseRepository {
     attachments: ExpensePrivateAttachment[],
   ): void
   listRecoveryCandidates(limit?: number): ExpenseRecoveryCandidate[]
+  resumeSnapshot(rootRequestId: string): ExpenseResumeSnapshot
 }
 
 export interface DrivePort {

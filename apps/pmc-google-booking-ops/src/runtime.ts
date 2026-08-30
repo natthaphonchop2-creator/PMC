@@ -77,6 +77,7 @@ import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
 import { prepareAutomaticQueue } from './workflows/automaticQueue'
 import {
   applyExpensePermissionGrants,
+  bootstrapExpenseMonth,
   ensureFinanceMasterTopology,
   prepareExpensePermissionRoster,
   type ExpensePermissionRosterItem,
@@ -936,6 +937,40 @@ export function setupExpenseFinanceStorageWorkflow(): {
       masterReady: true,
       createdTabCount: topology.createdTabCount,
       verifiedTabCount: topology.verifiedTabCount,
+    }
+  })
+}
+
+export function bootstrapExpenseMonthWorkflow(monthKey: string): {
+  monthKey: string
+  monthReady: true
+} {
+  return runSafeExpenseOperatorWorkflow('EXPENSE_FINANCE_STORAGE_UNAVAILABLE', () => {
+    const properties = PropertiesService.getScriptProperties().getProperties()
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: requiredExpenseSetupValue(
+        properties[SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId],
+      ),
+      financeFolderId: requiredExpenseSetupValue(
+        properties[SCRIPT_PROPERTY_KEYS.financeFolderId],
+      ),
+    })
+    const lock = LockService.getScriptLock()
+    lock.waitLock(30_000)
+    try {
+      return bootstrapExpenseMonth(
+        monthKey,
+        properties[SCRIPT_PROPERTY_KEYS.expenseMonthBootstrapApproved] ?? '',
+        {
+          ensureMonth: (selectedMonth) => { repository.ensureMonth(selectedMonth, bangkokNow()) },
+          verifyMonth: (selectedMonth) => {
+            repository.listMonth(selectedMonth)
+            return true
+          },
+        },
+      )
+    } finally {
+      lock.releaseLock()
     }
   })
 }

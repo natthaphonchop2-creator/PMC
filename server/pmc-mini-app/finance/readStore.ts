@@ -5,6 +5,7 @@ import {
   isValidExpenseOriginalFileName,
   parseExpenseDate,
   projectMonthlyExpenses,
+  validateExpenseLedger,
   type EnabledExpenseCategory,
   type ExpenseAttachmentSummary,
   type ExpenseHistoryRow,
@@ -61,6 +62,8 @@ interface PrivateExpenseAttachment extends ExpenseAttachmentSummary {
 interface ExpenseSnapshot {
   submissions: ExpenseSubmission[]
   effective: ExpenseSubmission[]
+  retainedVoid: ExpenseSubmission[]
+  auditable: ExpenseSubmission[]
   attachments: PrivateExpenseAttachment[]
 }
 
@@ -98,7 +101,7 @@ export function createFinanceReadStore(input: {
       requireMonthKey(monthKey)
       if (!safeExpenseIdForMonth(expenseId, monthKey) || !SAFE_ID.test(attachmentId)) return null
       const snapshot = await readSnapshot(finance, monthKey)
-      if (!snapshot.effective.some((row) => row.expenseId === expenseId)) return null
+      if (!snapshot.auditable.some((row) => row.expenseId === expenseId)) return null
       const matches = snapshot.attachments.filter((attachment) => (
         attachment.expenseId === expenseId && attachment.attachmentId === attachmentId
       ))
@@ -160,8 +163,11 @@ async function readSnapshot(
   if (attachments.some(({ expenseId }) => !expenseIds.has(expenseId))) throw integrity()
   unique(attachments.map(({ attachmentId }) => attachmentId))
   unique(attachments.map(({ privateFileId }) => privateFileId))
-  const effective = effectiveRows(submissions)
-  for (const row of effective) {
+  const ledger = validatedLedger(submissions)
+  const effective = ledger.effective
+  const retainedVoid = ledger.retainedVoid
+  const auditable = [...effective, ...retainedVoid]
+  for (const row of auditable) {
     const evidence = attachments
       .filter(({ expenseId }) => expenseId === row.expenseId)
       .sort((left, right) => left.ordinal - right.ordinal)
@@ -171,7 +177,7 @@ async function readSnapshot(
       || evidence.some((attachment, index) => attachment.ordinal !== index + 1)
     ) throw integrity()
   }
-  return { submissions, effective, attachments }
+  return { submissions, effective, retainedVoid, auditable, attachments }
 }
 
 async function readMonth(
@@ -207,6 +213,7 @@ function requireBoundedRows(
 function parseSubmissions(rows: unknown[][]): ExpenseSubmission[] {
   const parsed = rows.map(parseSubmission)
   unique(parsed.map(({ expenseId }) => expenseId))
+  validatedLedger(parsed)
   return parsed
 }
 
@@ -297,15 +304,23 @@ function effectiveRows(submissions: ExpenseSubmission[]): ExpenseSubmission[] {
   }
 }
 
+function validatedLedger(submissions: ExpenseSubmission[]) {
+  try {
+    return validateExpenseLedger(submissions)
+  } catch {
+    throw integrity()
+  }
+}
+
 function historyRows(snapshot: ExpenseSnapshot): ExpenseHistoryRow[] {
-  return snapshot.effective.map((submission) => ({
+  return snapshot.auditable.map((submission) => ({
     expenseId: submission.expenseId,
     expenseDate: submission.expenseDate,
     category: submission.category,
     scope: submission.scope,
     amountSatang: submission.amountSatang,
     description: submission.description,
-    recordState: 'COMMITTED' as const,
+    recordState: submission.recordState === 'VOID' ? 'VOID' as const : 'COMMITTED' as const,
     revision: submission.revision,
     submittedByName: submission.submittedByName,
     submittedAt: submission.submittedAt,

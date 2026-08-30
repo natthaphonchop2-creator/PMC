@@ -40,6 +40,7 @@ describe('Apps Script bundle', () => {
       'preparePmcExpensePermissions',
       'applyPmcExpensePermissions',
       'setupPmcExpenseFinanceStorage',
+      'bootstrapPmcExpenseMonth',
       'runPmcExpenseRecovery',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')

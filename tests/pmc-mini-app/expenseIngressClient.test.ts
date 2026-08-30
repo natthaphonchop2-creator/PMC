@@ -68,6 +68,30 @@ describe('signed private expense ingress client', () => {
     })
   })
 
+  it('sends a minimal signed resume envelope and parses only one safe status union', async () => {
+    const request = vi.fn(async () => response(200, {
+      ok: true, result: { status: 'PENDING' },
+    }))
+    const client = clientWith(request)
+
+    await expect(client.resume({
+      rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
+    })).resolves.toEqual({ status: 'PENDING' })
+    const sent = JSON.parse(String(request.mock.calls[0]?.[1].body))
+    expect(sent).toMatchObject({
+      kind: 'MINI_APP_EXPENSE_RESUME', rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
+    })
+    expect(sent.command).toBeUndefined()
+    expect(JSON.stringify(sent)).not.toContain('amountSatang')
+
+    const malformed = clientWith(vi.fn(async () => response(200, {
+      ok: true, result: { status: 'PENDING', history: [] },
+    })))
+    await expect(malformed.resume({
+      rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
+    })).rejects.toMatchObject({ code: 'EXPENSE_STORAGE_UNAVAILABLE' })
+  })
+
   it.each([
     ['success with an extra key', { ok: true, result: prepareResult(), private: 'detail' }],
     ['PREPARE with COMMIT result', { ok: true, result: commitResult() }],

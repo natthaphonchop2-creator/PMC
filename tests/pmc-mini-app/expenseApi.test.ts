@@ -12,6 +12,7 @@ import type { ExpenseReceipt } from '../../shared/pmcExpense'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { FinanceServerDependencies, LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { ExpenseSubmissionError } from '../../server/pmc-mini-app/finance/submissionService'
+import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ingressClient'
 import type { ExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingStore'
 import { signExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingToken'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
@@ -137,6 +138,46 @@ describe('expense capture API', () => {
       status: 503, body: { error: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true },
     })
     expect(JSON.stringify([storageResponse.body, conflictResponse.body, rawResponse.body])).not.toContain('finance-master')
+  })
+
+  it('resumes one root for its authenticated submitter without capture or history access', async () => {
+    const resume = vi.fn(async () => ({ status: 'COMMITTED' as const, receipt: committedReceipt() }))
+    const finance: FinanceServerDependencies = {
+      signingSecret: SECRET,
+      resume: { ingress: { resume } as never },
+    }
+    const deps = dependencies({ finance })
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/expenses/resume/root-request-2', null, 'submit-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 200, body: { status: 'COMMITTED', receipt: committedReceipt() },
+    })
+    expect(resume).toHaveBeenCalledWith({ rootRequestId: 'root-request-2', staffId: 'SUBMIT_01' })
+    expect(finance.reads).toBeUndefined()
+    expect(finance.capture).toBeUndefined()
+  })
+
+  it('denies another submitter and never serializes root history', async () => {
+    const resume = vi.fn(async () => {
+      throw new ExpenseIngressClientError('EXPENSE_RESUME_FORBIDDEN')
+    })
+    const deps = dependencies({ finance: {
+      signingSecret: SECRET,
+      resume: { ingress: { resume } as never },
+    } })
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/expenses/resume/root-request-2', null, 'finance-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 403, body: { error: 'EXPENSE_RESUME_FORBIDDEN', retryable: false },
+    })
+    expect(JSON.stringify(response.body)).not.toContain('expenses')
+    expect(JSON.stringify(response.body)).not.toContain('attachment')
   })
 })
 

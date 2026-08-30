@@ -92,6 +92,7 @@ export interface FinanceServerDependencies {
   signingSecret: string
   now?: () => number
   recovery?: ExpenseRecoveryWorker
+  resume?: { ingress: ExpenseIngressClient }
   reads?: {
     readStore: FinanceReadStore
   }

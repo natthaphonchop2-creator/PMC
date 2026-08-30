@@ -245,6 +245,12 @@ export function createPreviewMiniAppApi(options: {
       }
       return structuredClone(receipt)
     },
+    async resumeExpense(_token, rootRequestId) {
+      const existing = expenseRequests.get(rootRequestId)
+      return existing
+        ? { status: 'COMMITTED' as const, receipt: structuredClone(existing.receipt) }
+        : { status: 'SAFE_TO_RETRY' as const }
+    },
     async replaceExpense(_token, expenseId, input: ExpenseSubmitInput) {
       requirePreviewStaging(stagedExpense, input)
       const index = expenseRows.findIndex((row) => row.expenseId === expenseId && row.recordState === 'COMMITTED')

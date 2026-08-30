@@ -142,10 +142,35 @@ export const MINI_APP_EXPENSE_SAFE_ERROR_CODES = [
   'EXPENSE_REVISION_CONFLICT',
   'EXPENSE_IMMUTABLE_FIELD',
   'EXPENSE_PRIVATE_FILE_INVALID',
+  'EXPENSE_RESUME_FORBIDDEN',
   'EXPENSE_STORAGE_UNAVAILABLE',
 ] as const
 
 export type MiniAppExpenseSafeErrorCode = typeof MINI_APP_EXPENSE_SAFE_ERROR_CODES[number]
+
+export type ExpenseResumeStatus =
+  | { status: 'COMMITTED'; receipt: ExpenseReceipt }
+  | { status: 'PENDING' }
+  | { status: 'SAFE_TO_RETRY' }
+  | { status: 'FAILED'; error: MiniAppExpenseSafeErrorCode }
+
+export interface UnsignedMiniAppExpenseResumeIngressEnvelope {
+  kind: 'MINI_APP_EXPENSE_RESUME'
+  version: 1
+  timestamp: number
+  nonce: string
+  rootRequestId: string
+  staffId: string
+}
+
+export interface MiniAppExpenseResumeIngressEnvelope
+  extends UnsignedMiniAppExpenseResumeIngressEnvelope {
+  signature: string
+}
+
+export type MiniAppExpenseResumeIngressResponse =
+  | { ok: true; result: ExpenseResumeStatus }
+  | { ok: false; error: MiniAppExpenseSafeErrorCode }
 
 export type MiniAppExpenseIngressResponse =
   | { ok: true; result: ExpenseCommandResult }
@@ -206,6 +231,9 @@ const RECOVERY_ENVELOPE_KEYS = [
   'worker',
 ] as const
 const RECOVERY_WORKER_KEYS = ['email', 'subject'] as const
+const RESUME_ENVELOPE_KEYS = [
+  'kind', 'version', 'timestamp', 'nonce', 'rootRequestId', 'staffId',
+] as const
 
 export function canonicalMiniAppExpenseCommand(command: MiniAppExpenseCommand): string {
   return JSON.stringify(orderedCommand(command))
@@ -263,6 +291,65 @@ export function canonicalMiniAppExpenseRecoveryIngress(
       subject: envelope.worker.subject,
     },
   })
+}
+
+export function canonicalMiniAppExpenseResumeIngress(
+  envelope: UnsignedMiniAppExpenseResumeIngressEnvelope,
+): string {
+  if (
+    !hasExactKeys(envelope, RESUME_ENVELOPE_KEYS)
+    || envelope.kind !== 'MINI_APP_EXPENSE_RESUME'
+    || envelope.version !== 1
+    || !Number.isSafeInteger(envelope.timestamp)
+    || envelope.timestamp <= 0
+    || typeof envelope.nonce !== 'string'
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(envelope.nonce)
+    || !safeId(envelope.rootRequestId)
+    || !safeId(envelope.staffId)
+  ) throw new Error('invalid mini app expense resume envelope')
+  return JSON.stringify({
+    kind: 'MINI_APP_EXPENSE_RESUME',
+    version: 1,
+    timestamp: envelope.timestamp,
+    nonce: envelope.nonce,
+    rootRequestId: envelope.rootRequestId,
+    staffId: envelope.staffId,
+  })
+}
+
+export function isExpenseResumeStatus(value: unknown): value is ExpenseResumeStatus {
+  if (!isRecord(value) || typeof value.status !== 'string') return false
+  if (value.status === 'PENDING' || value.status === 'SAFE_TO_RETRY') {
+    return hasExactKeys(value, ['status'] as const)
+  }
+  if (value.status === 'FAILED') {
+    return hasExactKeys(value, ['status', 'error'] as const)
+      && isMiniAppExpenseSafeErrorCode(value.error)
+  }
+  if (value.status !== 'COMMITTED' || !hasExactKeys(value, ['status', 'receipt'] as const)) return false
+  return isExpenseReceipt(value.receipt)
+}
+
+function isExpenseReceipt(value: unknown): value is ExpenseReceipt {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'expenseId', 'receiptNumber', 'expenseDate', 'monthKey', 'category', 'scope',
+    'amountSatang', 'recordState', 'revision', 'committedAt', 'unreviewed',
+  ] as const)) return false
+  return safeId(value.expenseId)
+    && value.receiptNumber === value.expenseId
+    && typeof value.expenseDate === 'string'
+    && /^\d{4}-\d{2}-\d{2}$/.test(value.expenseDate)
+    && typeof value.monthKey === 'string'
+    && value.monthKey === value.expenseDate.slice(0, 7)
+    && isEnabledCategory(value.category)
+    && value.scope === (value.category === 'BOOK_DOCTOR_PERSONAL' ? 'DOCTOR_PERSONAL' : 'CLINIC')
+    && positiveSatang(value.amountSatang)
+    && value.recordState === 'COMMITTED'
+    && safeInteger(value.revision)
+    && value.revision > 0
+    && typeof value.committedAt === 'string'
+    && Number.isFinite(Date.parse(value.committedAt))
+    && value.unreviewed === true
 }
 
 export function isExpenseRecoveryCounts(value: unknown): value is ExpenseRecoveryCounts {

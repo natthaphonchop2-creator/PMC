@@ -3,23 +3,29 @@ import { describe, expect, it } from 'vitest'
 import {
   canonicalMiniAppExpenseIngress,
   canonicalMiniAppExpenseRecoveryIngress,
+  canonicalMiniAppExpenseResumeIngress,
   type MiniAppExpenseCommand,
   type MiniAppExpenseIngressEnvelope,
   type MiniAppExpenseRecoveryIngressEnvelope,
+  type MiniAppExpenseResumeIngressEnvelope,
 } from '../../../shared/pmcMiniAppExpenseIngress'
 import { processBookingDoPost } from '../src/entrypoints'
 import {
   processExpenseIngress,
   processExpenseIngressResponse,
   processExpenseRecoveryIngressResponse,
+  processExpenseResumeIngressResponse,
   type ExpenseIngressPorts,
 } from '../src/expense/ingress'
 import { createTestPorts } from './helpers/fakes'
 import {
   EXPENSE_NOW,
   createExpenseTestPorts,
+  commitCommand,
   prepareCommand,
+  prepareWithManifest,
 } from './helpers/expenseFakes'
+import { executeExpenseCommand, type ExpenseCommandPorts } from '../src/expense/commands'
 
 const SECRET = 'expense-ingress-secret'
 const NOW_SECONDS = Math.floor(Date.parse(EXPENSE_NOW) / 1_000)
@@ -57,6 +63,47 @@ describe('Apps Script Mini App expense ingress', () => {
     })
     if (!response.ok) throw new Error('unexpected recovery failure')
     expect(Object.keys(response.result).sort()).toEqual(['abandoned', 'failed', 'recovered', 'unchanged'])
+  })
+
+  it('returns one submitter-owned durable receipt and denies another staff member without history', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-committed', commandIdempotencyKey: 'resume-committed:prepare',
+    }))
+    const committed = executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-committed', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    if (committed.commandType !== 'COMMIT_EXPENSE') throw new Error('unexpected commit')
+    const receipt = Object.fromEntries(
+      Object.entries(committed).filter(([key]) => key !== 'commandType'),
+    )
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-committed', staffId: 'STAFF_01', nonce: 'resume-owner-123',
+    }), ports)).toEqual({
+      ok: true,
+      result: { status: 'COMMITTED', receipt },
+    })
+    const response = processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-committed', staffId: 'MANAGER_01', nonce: 'resume-other-123',
+    }), ports)
+    expect(response).toEqual({ ok: false, error: 'EXPENSE_RESUME_FORBIDDEN' })
+    expect(JSON.stringify(response)).not.toContain(prepared.prepared.expenseId)
+  })
+
+  it('returns PENDING for an owned PREPARED root and SAFE_TO_RETRY for an unused root', () => {
+    const ports = createExpenseIngressPorts()
+    executeExpenseCommand(prepareCommand({
+      rootRequestId: 'resume-pending', commandIdempotencyKey: 'resume-pending:prepare',
+    }), ports)
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-pending', staffId: 'STAFF_01', nonce: 'resume-pending-1',
+    }), ports)).toEqual({ ok: true, result: { status: 'PENDING' } })
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-unused', staffId: 'STAFF_01', nonce: 'resume-unused-12',
+    }), ports)).toEqual({ ok: true, result: { status: 'SAFE_TO_RETRY' } })
   })
 
   it('routes signed recovery through doPost without exposing worker or private topology', () => {
@@ -161,7 +208,7 @@ describe('Apps Script Mini App expense ingress', () => {
   })
 })
 
-interface TestExpenseIngressPorts extends ExpenseIngressPorts {
+type TestExpenseIngressPorts = ExpenseIngressPorts & ExpenseCommandPorts & {
   expenseBackend: ReturnType<typeof createExpenseTestPorts>['backend']
   hmacCalls(): number
 }
@@ -271,6 +318,27 @@ function signedRecoveryEnvelope(
     ...unsigned,
     signature: createHmac('sha256', SECRET)
       .update(canonicalMiniAppExpenseRecoveryIngress(unsigned))
+      .digest('hex'),
+  }
+}
+
+function signedResumeEnvelope(input: {
+  rootRequestId: string
+  staffId: string
+  nonce: string
+}): MiniAppExpenseResumeIngressEnvelope {
+  const unsigned = {
+    kind: 'MINI_APP_EXPENSE_RESUME' as const,
+    version: 1 as const,
+    timestamp: NOW_SECONDS,
+    nonce: input.nonce,
+    rootRequestId: input.rootRequestId,
+    staffId: input.staffId,
+  }
+  return {
+    ...unsigned,
+    signature: createHmac('sha256', SECRET)
+      .update(canonicalMiniAppExpenseResumeIngress(unsigned))
       .digest('hex'),
   }
 }

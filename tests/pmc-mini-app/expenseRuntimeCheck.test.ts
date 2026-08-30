@@ -32,7 +32,7 @@ describe('read-only expense runtime checker', () => {
       flags: { captureEnabled: false, financeReadsEnabled: true, explicit: true, profileMatch: true, coherent: true },
       bindings: { requiredCount: 7, presentCount: 7, coherent: true },
       submitOnly: { historyDenied: true, evidenceDenied: true },
-      financeRead: { requestCount: 1, oneSelectedMonthOnly: true },
+      financeRead: { requestCount: 1, bootstrapVerified: true, oneSelectedMonthOnly: true },
       staging: { deleteAfterDays: 1, lifecycleReady: true },
       recovery: { exactTarget: true, audienceConfigured: true, identityConfigured: true, ready: true },
       topology: { exactMasterHeaderCount: 3, exactMonthHeaderCount: 3, staffHeaderExact: true, ready: true },
@@ -68,6 +68,17 @@ describe('read-only expense runtime checker', () => {
 
     expect(report.ready).toBe(false)
     expect(report.flags).toMatchObject({ captureEnabled: true, coherent: false })
+  })
+
+  it('requires an exact selected-month bootstrap attestation before the read probe', async () => {
+    const checker = await import('../../scripts/check-pmc-expense-runtime.mjs')
+    const snapshot = validSnapshot()
+    snapshot.financeRead.bootstrapVerified = false
+
+    const report = checker.inspectPmcExpenseRuntime(snapshot, inspectorOptions())
+
+    expect(report.ready).toBe(false)
+    expect(report.financeRead).toMatchObject({ bootstrapVerified: false, oneSelectedMonthOnly: false })
   })
 
   it.each([
@@ -306,7 +317,10 @@ function validSnapshot() {
       history: { status: 403, error: 'EXPENSE_FINANCE_PERMISSION_REQUIRED' },
       evidence: { status: 403, error: 'EXPENSE_FINANCE_PERMISSION_REQUIRED' },
     },
-    financeRead: { selectedMonth: '2026-08', requestedMonths: ['2026-08'] },
+    financeRead: {
+      selectedMonth: '2026-08', requestedMonths: ['2026-08'],
+      bootstrapMonth: '2026-08', bootstrapVerified: true,
+    },
     staging: { deleteAfterDays: 1 },
     recovery: {
       targetPath: '/internal/mini-app/recover-expenses',
@@ -316,7 +330,7 @@ function validSnapshot() {
     topology: {
       master: {
         EXPENSE_MONTHLY_INDEX: ['monthKey', 'ledgerSpreadsheetId', 'monthFolderId', 'createdAt', 'updatedAt'],
-        EXPENSE_REQUESTS: ['commandIdempotencyKey', 'rootRequestId', 'commandType', 'commandFingerprint', 'expenseId', 'monthKey', 'recordState', 'resultJson', 'createdAt', 'updatedAt'],
+        EXPENSE_REQUESTS: ['commandIdempotencyKey', 'rootRequestId', 'commandType', 'commandFingerprint', 'commandJson', 'expenseId', 'monthKey', 'recordState', 'resultJson', 'createdAt', 'updatedAt'],
         EXPENSE_AUDIT: ['eventId', 'expenseId', 'actorStaffId', 'action', 'beforeJson', 'afterJson', 'createdAt', 'correlationId'],
       },
       month: {

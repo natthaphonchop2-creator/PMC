@@ -148,10 +148,11 @@ describe('private finance runtime configuration', () => {
     }
     const staging = {
       put: vi.fn(), get: vi.fn(), deleteVerified: vi.fn(), claimDriveSlot: vi.fn(),
+      registerDriveSlotFile: vi.fn(), readDriveSlotClaim: vi.fn(),
       acquireSubmissionLease: vi.fn(), renewSubmissionLease: vi.fn(),
       assertSubmissionLease: vi.fn(), commitSubmissionLease: vi.fn(),
     }
-    const ingress = { prepare: vi.fn(), commit: vi.fn() }
+    const ingress = { prepare: vi.fn(), commit: vi.fn(), void: vi.fn(), resume: vi.fn() }
     const recovery = { recover: vi.fn() }
     const recoveryIdentity = { verify: vi.fn() }
     const submission = { submit: vi.fn() }
@@ -168,6 +169,7 @@ describe('private finance runtime configuration', () => {
     expect(Boolean(runtime.reads)).toBe(expectReads)
     expect(Boolean(runtime.capture)).toBe(expectCapture)
     expect(runtime.recovery).toBe(recovery)
+    expect(runtime.resume).toBe(ingress)
     expect(runtime.recoveryIdentity).toBe(recoveryIdentity)
     if (runtime.reads) {
       expect(Object.keys(runtime.reads.finance).sort()).toEqual([
@@ -188,7 +190,7 @@ describe('private finance runtime configuration', () => {
       })
     }
     expect(factories.createStaging).toHaveBeenCalledTimes(expectCapture ? 1 : 0)
-    expect(factories.createIngress).toHaveBeenCalledTimes(expectCapture ? 1 : 0)
+    expect(factories.createIngress).toHaveBeenCalledTimes(1)
     expect(factories.createRecovery).toHaveBeenCalledWith({
       url: 'https://script.google.com/macros/s/deployment/exec', secret: 'expense-ingress-secret',
     })

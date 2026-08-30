@@ -33,6 +33,7 @@ import {
   sendProductionFlexPilotWorkflow,
   setupSystem,
   setupExpenseFinanceStorageWorkflow,
+  bootstrapExpenseMonthWorkflow,
   validateProductionFlexMessagesWorkflow,
 } from './runtime'
 import { SCRIPT_PROPERTY_KEYS, SHARED_DOCTOR_CALENDAR_ID } from './config'
@@ -56,6 +57,7 @@ import { processStockIngressResponse, type StockIngressPorts } from './stock/ing
 import {
   processExpenseIngressResponse,
   processExpenseRecoveryIngressResponse,
+  processExpenseResumeIngressResponse,
   type ExpenseIngressPorts,
 } from './expense/ingress'
 
@@ -98,6 +100,9 @@ export function processBookingDoPost(
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE_RECOVERY') {
     return processExpenseRecoveryIngressResponse(parsed, requireExpenseIngressPorts(ports))
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE_RESUME') {
+    return processExpenseResumeIngressResponse(parsed, requireExpenseIngressPorts(ports))
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE') {
     return processExpenseIngressResponse(parsed, requireExpenseIngressPorts(ports))
@@ -220,6 +225,10 @@ export function applyPmcExpensePermissions() {
 
 export function setupPmcExpenseFinanceStorage() {
   return setupExpenseFinanceStorageWorkflow()
+}
+
+export function bootstrapPmcExpenseMonth(monthKey: string) {
+  return bootstrapExpenseMonthWorkflow(monthKey)
 }
 
 export function runPmcExpenseRecovery() {

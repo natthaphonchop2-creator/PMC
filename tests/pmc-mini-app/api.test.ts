@@ -315,6 +315,20 @@ describe('PMC Mini App browser API', () => {
     expect(JSON.stringify(fetch.mock.calls)).not.toContain('staffId')
   })
 
+  it('resumes one expense root through an empty authenticated POST and rejects history-shaped payloads', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'PENDING' }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'PENDING', expenses: [] }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.resumeExpense('raw-id-token', 'root-request-1')).resolves.toEqual({ status: 'PENDING' })
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/mini-app/expenses/resume/root-request-1', {
+      method: 'POST', headers: { authorization: 'Bearer raw-id-token' },
+    })
+    await expect(api.resumeExpense('raw-id-token', 'root-request-1'))
+      .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
+  })
+
   it('rejects malformed staging and committed responses before the shell can show success', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(jsonResponse(200, { stagingTokens: ['duplicate.signature', 'duplicate.signature'] }))

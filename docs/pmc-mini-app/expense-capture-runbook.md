@@ -11,15 +11,16 @@ Do not skip, merge, or reorder these steps.
 1. Deploy Cloud Run and Apps Script code with `PMC_EXPENSE_CAPTURE_ENABLED=false` and `PMC_FINANCE_READS_ENABLED=false`.
 2. Configure the private finance folder, finance master workbook, expense staging bucket, existing Apps Script deployment URL, and a distinct expense-ingress HMAC secret in both Secret Manager/Cloud Run and Apps Script properties. Configure the dedicated recovery OIDC bindings `PMC_EXPENSE_RECOVERY_AUDIENCE` and `PMC_EXPENSE_RECOVERY_TASK_INVOKER_EMAIL`; the audience is the Cloud Run HTTPS origin and the Scheduler/Cloud Tasks target URL ends exactly `/internal/mini-app/recover-expenses`. These bindings are independent of async Booking. Never reuse the Booking ingress secret or Mini App browser-signing secret. Never print secret values or private resource IDs in logs or reports.
 3. Apply a GCS lifecycle rule that deletes expense staging objects after exactly 1 day. The rule must not target committed or voided Drive evidence.
-4. Run `setupPmcExpenseFinanceStorage` and verify exact finance master/month headers and readback before continuing.
+4. Run `setupPmcExpenseFinanceStorage` and verify the exact finance master headers/readback before continuing.
 5. Run the compatible `CONFIG_STAFF` migration and verify that `canSubmitExpense`, `canViewFinance`, and `canManageExpense` are all boolean `false` for every row.
 6. Run `preparePmcExpensePermissions`; review only the safe staff ID/name roster and obtain owner approval. Do not expose LINE user IDs.
 7. Set the explicit submitter IDs and the three owner-verified manager IDs in Apps Script properties, obtain cutover approval, then run `applyPmcExpensePermissions`.
-8. Enable `PMC_FINANCE_READS_ENABLED` for the three managers only, keep `PMC_EXPENSE_CAPTURE_ENABLED=false`, and run the read-only checker.
-9. Grant `canSubmitExpense` initially only to the same three approved IDs, then enable `PMC_EXPENSE_CAPTURE_ENABLED`.
-10. Submit exactly one bill, one clinic-book day, one doctor-personal day, one duplicate-book conflict, and one lost-response retry.
-11. Verify that monthly clinic expense excludes doctor-personal expense and that every durable receipt has private evidence available only through verified finance access.
-12. Obtain a new owner approval, then grant `canSubmitExpense` to additional explicitly reviewed staff IDs. New staff remain denied by default.
+8. Choose the exact current Bangkok month `YYYY-MM`, set `PMC_EXPENSE_MONTH_BOOTSTRAP_APPROVED` to that exact value only, run `bootstrapPmcExpenseMonth(YYYY-MM)`, and require `{monthKey,monthReady:true}` plus exact monthly-ledger header readback. The operation is idempotent and creates no expense/pilot row. Clear the one-time approval property after readback.
+9. Enable `PMC_FINANCE_READS_ENABLED` for the three managers only, keep `PMC_EXPENSE_CAPTURE_ENABLED=false`, and run the read-only checker against that same bootstrapped month.
+10. Grant `canSubmitExpense` initially only to the same three approved IDs, then enable `PMC_EXPENSE_CAPTURE_ENABLED`.
+11. Submit exactly one bill, one clinic-book day, one doctor-personal day, one duplicate-book conflict, and one lost-response retry.
+12. Verify that monthly clinic expense excludes doctor-personal expense and that every durable receipt has private evidence available only through verified finance access.
+13. Obtain a new owner approval, then grant `canSubmitExpense` to additional explicitly reviewed staff IDs. New staff remain denied by default.
 
 ## Disabled-feature preflight and checker
 
@@ -42,7 +43,7 @@ The operator collecting the snapshot must perform these read-only checks against
 1. GET `/api/healthz` and record only the status.
 2. GET `/api/mini-app/config` with the approved manager probe identity and inspect every response key in memory. If a finance-private key is present, do not attest the client-config source check. Persist exactly the five finance booleans and no other config field. The exact manager profile at this gate is `expenseCaptureEnabled=false`, `financeReadsEnabled=true`, `canSubmitExpense=true`, `canViewFinance=true`, and `canManageExpense=true`; step 7 already requires every manager to be included in the approved submitter IDs. Any mismatch fails.
 3. Use the submit-only probe identity against the exact history and evidence-token routes; persist only status and safe error code.
-4. Invoke the finance read port with one selected `YYYY-MM` while wrapping `readMonth`; persist only the selected month and requested-month list.
+4. Attest the exact successful `bootstrapPmcExpenseMonth(YYYY-MM)` readback, then invoke the finance read port for that same selected month while wrapping `readMonth`; persist only `bootstrapMonth`, `bootstrapVerified`, the selected month, and requested-month list.
 5. Read Cloud Run binding names, the GCS lifecycle, and the exact recovery Scheduler/Cloud Tasks target/audience/invoker through approved read-only describe operations; persist names, booleans, path, and lifecycle days only.
 6. Read only header rows from the finance master, one selected monthly ledger, and `CONFIG_STAFF`; persist header strings only.
 7. Add provenance with `schemaVersion=1`, `profile=DISABLED_PREFLIGHT`, the approved logical target/environment, the UTC `collectedAt`, and all seven source checks set true only after their read completed. Do not copy tokens, secret values, URLs, bucket/workbook/folder/file IDs, provider payloads, or evidence into the snapshot.
@@ -56,7 +57,7 @@ The checker verifies:
 - Mini App config contains the five expense/finance permission booleans and no finance-private keys;
 - the disabled-preflight flag profile is exact and all seven required private/recovery binding names are coherent;
 - submit-only history and evidence requests both returned 403 `EXPENSE_FINANCE_PERMISSION_REQUIRED`;
-- the finance projection requested exactly one selected `YYYY-MM` ledger;
+- the finance projection requested exactly one owner-bootstrapped selected `YYYY-MM` ledger and the bootstrap attestation matches that month;
 - the staging lifecycle is exactly 1 day;
 - the recovery target is exactly `/internal/mini-app/recover-expenses` with configured OIDC audience and task-invoker identity; and
 - Apps Script finance master/month topology and the 12-column `CONFIG_STAFF` header are exact.
@@ -87,4 +88,4 @@ Rollback is exactly:
 
 Rollback never deletes committed, voided, or prepared finance data. It never deletes committed or voided evidence. Staging lifecycle cleanup remains limited to the approved 1-day expense staging boundary; committed and voided evidence remains retained until a separately approved finance-retention policy exists.
 
-The authenticated recovery pass in step 4 is the only intentional finance mutation during rollback: it may idempotently finish a durable partial commit or change a stale `PREPARED` row to terminal `VOID` with an append-only `ABANDON` audit. That governed recovery mutation is not a manual ledger edit or deletion.
+The authenticated recovery pass in step 4 is the only intentional finance mutation during rollback: it may idempotently finish a durable partial commit or append a terminal `ABANDON` audit while retaining the stale row as non-effective `PREPARED` version 1. That governed recovery mutation is not a manual ledger edit or deletion.

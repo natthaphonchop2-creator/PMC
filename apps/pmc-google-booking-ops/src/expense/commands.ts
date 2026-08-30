@@ -14,6 +14,7 @@ import {
   MINI_APP_EXPENSE_SAFE_ERROR_CODES,
   type ExpenseCommandResult,
   type ExpensePrivateAttachment,
+  type ExpenseResumeStatus,
   type MiniAppExpenseCommand,
   type MiniAppExpenseSafeErrorCode,
 } from '../../../../shared/pmcMiniAppExpenseIngress'
@@ -108,6 +109,55 @@ export function executeExpenseCommand(
   ports: ExpenseCommandPorts,
 ): ExpenseCommandResult {
   return ports.locks.withLock(() => executeExpenseCommandLocked(command, ports))
+}
+
+export function resolveExpenseResumeStatus(
+  rootRequestId: string,
+  staffId: string,
+  ports: ExpenseCommandPorts,
+): ExpenseResumeStatus {
+  return ports.locks.withLock(() => {
+    requireActiveActor(staffId, ports)
+    const snapshot = ports.expense.resumeSnapshot(rootRequestId)
+    const durableOwner = snapshot.submission?.submittedByStaffId
+      ?? snapshot.events.find(({ action }) => action === 'PREPARE')?.actorStaffId
+      ?? null
+    if (durableOwner !== null && durableOwner !== staffId) throw new Error('EXPENSE_RESUME_FORBIDDEN')
+    if (!snapshot.submission) {
+      return durableOwner === null ? { status: 'SAFE_TO_RETRY' } : { status: 'PENDING' }
+    }
+    requireValidLedger(ports.expense.listMonth(snapshot.submission.monthKey))
+    const commitRequest = snapshot.requests.find(({ commandType }) => commandType === 'COMMIT_EXPENSE')
+    if (commitRequest?.resultJson) {
+      try {
+        const result = replayStoredOutcome(commitRequest.resultJson)
+        if (result.commandType !== 'COMMIT_EXPENSE') throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        return {
+          status: 'COMMITTED',
+          receipt: {
+            expenseId: result.expenseId,
+            receiptNumber: result.receiptNumber,
+            expenseDate: result.expenseDate,
+            monthKey: result.monthKey,
+            category: result.category,
+            scope: result.scope,
+            amountSatang: result.amountSatang,
+            recordState: 'COMMITTED',
+            revision: result.revision,
+            committedAt: result.committedAt,
+            unreviewed: true,
+          },
+        }
+      } catch (error) {
+        const code = safeExpenseError(error)
+        return { status: 'FAILED', error: code }
+      }
+    }
+    if (snapshot.events.some(({ action }) => action === 'ABANDON')) {
+      return { status: 'FAILED', error: 'EXPENSE_PRIVATE_FILE_INVALID' }
+    }
+    return { status: 'PENDING' }
+  })
 }
 
 function executeExpenseCommandLocked(

@@ -12,6 +12,7 @@ import {
 } from '../src/expense/sheetTopology'
 import {
   applyExpensePermissionGrants,
+  bootstrapExpenseMonth,
   ensureExpenseMonthTopology,
   ensureFinanceMasterTopology,
   prepareExpensePermissionRoster,
@@ -497,6 +498,28 @@ describe('expense finance setup', () => {
     expect(appsScript.finance.inserted).toEqual(['EXPENSE_REQUESTS', 'EXPENSE_AUDIT'])
     expect([...appsScript.finance.sheets.values()].map((sheet) => sheet.frozenRows)).toEqual([1, 1, 1])
     expect(log).not.toHaveBeenCalled()
+  })
+
+  it('bootstraps one exact owner-approved month idempotently without a pilot expense write', () => {
+    const months = new Set<string>()
+    const ensureMonth = vi.fn((monthKey: string) => { months.add(monthKey) })
+    const verifyMonth = vi.fn((monthKey: string) => months.has(monthKey))
+    const port = { ensureMonth, verifyMonth }
+
+    expect(() => bootstrapExpenseMonth('2026-08', '2026-09', port)).toThrow(
+      'expense month bootstrap is not approved',
+    )
+    expect(() => bootstrapExpenseMonth('2026-13', '2026-13', port)).toThrow(
+      'invalid expense bootstrap month',
+    )
+    expect(bootstrapExpenseMonth('2026-08', '2026-08', port)).toEqual({
+      monthKey: '2026-08', monthReady: true,
+    })
+    expect(bootstrapExpenseMonth('2026-08', '2026-08', port)).toEqual({
+      monthKey: '2026-08', monthReady: true,
+    })
+    expect(ensureMonth).toHaveBeenCalledTimes(2)
+    expect(verifyMonth).toHaveBeenCalledTimes(2)
   })
 
   it('fails closed when the configured finance master is outside the private folder', () => {

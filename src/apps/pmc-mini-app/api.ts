@@ -26,6 +26,10 @@ import {
   type EnabledExpenseCategory,
   type ExpenseReceipt,
 } from '../../../shared/pmcExpense'
+import {
+  isExpenseResumeStatus,
+  type ExpenseResumeStatus,
+} from '../../../shared/pmcMiniAppExpenseIngress'
 import { isExpenseStagingToken } from './expense/expenseModel'
 
 export interface MiniAppLiffPort {
@@ -65,6 +69,7 @@ export interface MiniAppBrowserApi {
   submitStockCommand(idToken: string, command: StockClientCommand): Promise<StockCommandResult>
   stageExpense(idToken: string, rootRequestId: string, files: File[]): Promise<{ stagingTokens: string[] }>
   submitExpense(idToken: string, input: ExpenseSubmitInput): Promise<ExpenseReceipt>
+  resumeExpense(idToken: string, rootRequestId: string): Promise<ExpenseResumeStatus>
 }
 
 export class MiniAppApiError extends Error {
@@ -221,6 +226,22 @@ export function createMiniAppApi(options: {
     submitExpense(idToken, input) {
       return requestJson(request, '/api/mini-app/expenses', authenticatedJson(idToken, 'POST', input),
         (body, status) => parseExpenseReceiptResponse(body, status, input))
+    },
+    resumeExpense(idToken, rootRequestId) {
+      if (!/^[A-Za-z0-9._:-]{1,116}$/.test(rootRequestId)) {
+        return Promise.reject(new MiniAppApiError('MINI_APP_INVALID_RESPONSE', 0))
+      }
+      return requestJson(
+        request,
+        `/api/mini-app/expenses/resume/${encodeURIComponent(rootRequestId)}`,
+        { method: 'POST', ...authenticated(idToken) },
+        (body, status) => {
+          if (status !== 200 || !isExpenseResumeStatus(body)) {
+            throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+          }
+          return structuredClone(body)
+        },
+      )
     },
     replaceExpense(idToken, expenseId, input) {
       const { expectedRevision, ...replacementInput } = input
