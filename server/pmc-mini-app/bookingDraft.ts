@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts.js'
+import type { BookingDraftInputV1 } from '../../src/apps/pmc-mini-app/contracts.js'
 import type { MiniAppRequestRecord, MiniAppRequestState } from './store.js'
 import type { MiniAppAttributionOption } from './contracts.js'
 import {
@@ -78,7 +78,7 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   if (!isPlainRecord(input)) throw new Error('INVALID_BOOKING_INPUT')
   for (const key of Object.keys(input)) if (!BOOKING_INPUT_KEYS.has(key)) throw new Error('UNKNOWN_BOOKING_FIELD')
 
-  const value = input as unknown as BookingDraftInput
+  const value = input as unknown as BookingDraftInputV1
   const requestId = requiredId(value.requestId, 'INVALID_REQUEST_ID')
   const draftId = requiredId(context.draftId, 'INVALID_DRAFT_ID')
   const staffId = requiredId(context.staffId, 'INVALID_STAFF_ID')
@@ -163,7 +163,9 @@ export function parseBookingDraftV2(input: unknown, context: BookingDraftContext
   const admin = attributionById(input.adminId, context.admins, 'ADMIN_NOT_ALLOWED')
   const ae = input.aeId === null ? null : attributionById(input.aeId, context.aes, 'AE_NOT_ALLOWED')
   const recorderName = requiredText(context.recorderName, 120, 'RECORDER_NAME_REQUIRED')
-  const { adminId: _adminId, aeId: _aeId, ...legacyInput } = input
+  const legacyInput = { ...input }
+  delete legacyInput.adminId
+  delete legacyInput.aeId
   const base = parseBookingDraft({ ...legacyInput, aeName: ae?.name ?? 'ไม่ระบุ' }, {
     draftId: context.draftId,
     staffId: context.staffId,

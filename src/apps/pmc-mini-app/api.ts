@@ -1,7 +1,9 @@
 import liff from '@line/liff'
 import type {
   BookingConfirmationResult,
+  BookingDraftAttributionV2,
   BookingDraftInput,
+  BookingDraftInputV2,
   BookingDraftProjection,
   BookingQueuedResult,
   MiniAppConfig,
@@ -9,11 +11,13 @@ import type {
   MiniAppSession,
   StockProductProjection,
 } from './contracts'
+import { bookingProtocolVersion } from './contracts'
 import { monthSelectionToSearch, type FinanceDailyFilter, type FinanceMonthSelection } from './financeReports'
 import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
 import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '../../../shared/pmcStock'
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
 import { PMC_BOOKING_PROTOCOL_VERSION } from '../../../shared/pmcBookingProtocol'
+import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
 
 export interface MiniAppLiffPort {
   init(input: { liffId: string }): Promise<void>
@@ -28,14 +32,14 @@ export interface MiniAppBrowserApi {
   loadEnrollmentOptions(idToken: string): Promise<MiniAppEnrollmentOptions>
   enroll(idToken: string, staffId: string, pin: string): Promise<MiniAppSession>
   loadConfig(idToken: string): Promise<MiniAppConfig>
-  createDraft(idToken: string): Promise<BookingDraftProjection>
+  createDraft(idToken: string, protocolVersion?: BookingProtocolVersion): Promise<BookingDraftProjection>
   loadLatestActiveDraft(idToken: string): Promise<BookingDraftProjection | null>
   loadDraft(idToken: string, draftId: string, signal?: AbortSignal): Promise<BookingDraftProjection>
   upload(idToken: string, draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   uploadEvidenceBatch(idToken: string, draftId: string, input: { paymentFiles: File[]; chatFiles: File[] }): Promise<BookingDraftProjection>
-  save(idToken: string, draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
-  confirm(idToken: string, draftId: string, version: number): Promise<BookingQueuedResult | BookingConfirmationResult>
-  cancel(idToken: string, draftId: string, version: number): Promise<BookingDraftProjection>
+  save(idToken: string, draftId: string, version: number, input: BookingDraftInput, protocolVersion?: BookingProtocolVersion): Promise<BookingDraftProjection>
+  confirm(idToken: string, draftId: string, version: number, protocolVersion?: BookingProtocolVersion): Promise<BookingQueuedResult | BookingConfirmationResult>
+  cancel(idToken: string, draftId: string, version: number, protocolVersion?: BookingProtocolVersion): Promise<BookingDraftProjection>
   loadReport<T = unknown>(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<JeraClientEnvelope<T>>
   refreshReport(idToken: string, reportType: JeraReportType, filters: ReportFilterState): Promise<{ accepted: true; correlationId: string }>
   loadDailyIncome(idToken: string, filter: FinanceDailyFilter): Promise<DailyIncomeProjection>
@@ -67,6 +71,7 @@ export function createMiniAppApi(options: {
   const request = options.fetch ?? globalThis.fetch
   const liffClient = options.liff ?? liff
   let miniAppId = ''
+  let activeBookingProtocol: BookingProtocolVersion = 1
   if (!request) throw new Error('Browser fetch is unavailable')
 
   return {
@@ -94,12 +99,16 @@ export function createMiniAppApi(options: {
     },
     async loadConfig(idToken) {
       const config = await requestJson<Omit<MiniAppConfig, 'miniAppId'>>(request, '/api/mini-app/config', authenticated(idToken))
-      return { miniAppId, ...config }
+      const projected = { miniAppId, ...config }
+      activeBookingProtocol = bookingProtocolVersion(projected)
+      return projected
     },
-    createDraft(idToken) {
-      return requestJson(request, '/api/mini-app/booking-drafts', authenticatedJson(idToken, 'POST', {
-        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
-      }))
+    createDraft(idToken, protocolVersion = activeBookingProtocol) {
+      return requestJson(request, '/api/mini-app/booking-drafts', authenticatedJson(
+        idToken,
+        'POST',
+        protocolVersion === 2 ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION } : {},
+      ))
     },
     async loadLatestActiveDraft(idToken) {
       try {
@@ -110,7 +119,12 @@ export function createMiniAppApi(options: {
       }
     },
     loadDraft(idToken, draftId, signal) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, { ...authenticated(idToken), signal })
+      return requestJson(
+        request,
+        `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`,
+        { ...authenticated(idToken), signal },
+        parseFullBookingDraftProjection,
+      )
     },
     upload(idToken, draftId, kind, files) {
       const body = new FormData()
@@ -127,24 +141,28 @@ export function createMiniAppApi(options: {
         method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
       })
     },
-    save(idToken, draftId, version, input) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticatedJson(idToken, 'PATCH', {
-        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
-        version,
-        input,
-      }))
+    save(idToken, draftId, version, input, protocolVersion = activeBookingProtocol) {
+      const body = protocolVersion === 2
+        ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION, version, input }
+        : { version, input }
+      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}`, authenticatedJson(idToken, 'PATCH', body))
     },
-    confirm(idToken, draftId, version) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`, authenticatedJson(idToken, 'POST', {
-        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
-        version,
-      }), parseBookingConfirmationResponse)
+    confirm(idToken, draftId, version, protocolVersion = activeBookingProtocol) {
+      const body = protocolVersion === 2 ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION, version } : { version }
+      return requestJson(
+        request,
+        `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/confirm`,
+        authenticatedJson(idToken, 'POST', body),
+        parseBookingConfirmationResponse,
+      )
     },
-    cancel(idToken, draftId, version) {
-      return requestJson(request, `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/cancel`, authenticatedJson(idToken, 'POST', {
-        protocolVersion: PMC_BOOKING_PROTOCOL_VERSION,
-        version,
-      }))
+    cancel(idToken, draftId, version, protocolVersion = activeBookingProtocol) {
+      const body = protocolVersion === 2 ? { protocolVersion: PMC_BOOKING_PROTOCOL_VERSION, version } : { version }
+      return requestJson(
+        request,
+        `/api/mini-app/booking-drafts/${encodeURIComponent(draftId)}/cancel`,
+        authenticatedJson(idToken, 'POST', body),
+      )
     },
     loadReport(idToken, reportType, filters) {
       const query = buildReportSearchParams(reportType, filters)
@@ -251,6 +269,42 @@ function parseFinanceRefreshResponse(body: unknown, status: number): { accepted:
     return { accepted: true, allocationQueued: body.allocationQueued, retryAfterSeconds: safeRetryAfterSeconds(body.retryAfterSeconds)! }
   }
   throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+}
+
+function parseFullBookingDraftProjection(body: unknown, status: number): BookingDraftProjection {
+  if (!isRecord(body)) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  if (!('attribution' in body)) return body as unknown as BookingDraftProjection
+  const attribution = parseBookingAttribution(body.attribution)
+  if (!attribution || !isBookingDraftInputV2(body.input)
+    || attribution.admin.id !== body.input.adminId
+    || (attribution.ae?.id ?? null) !== body.input.aeId) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  return { ...(body as unknown as BookingDraftProjection), attribution }
+}
+
+function parseBookingAttribution(value: unknown): BookingDraftAttributionV2 | null {
+  if (!isRecord(value) || exactKeys(value) !== 'admin,ae,protocolVersion,recorder' || value.protocolVersion !== 2) return null
+  const recorder = parseAttributionIdentity(value.recorder)
+  const admin = parseAttributionIdentity(value.admin)
+  const ae = value.ae === null ? null : parseAttributionIdentity(value.ae)
+  if (!recorder || !admin || value.ae !== null && !ae) return null
+  return { protocolVersion: 2, recorder, admin, ae }
+}
+
+function parseAttributionIdentity(value: unknown): { id: string; name: string } | null {
+  if (!isRecord(value) || exactKeys(value) !== 'id,name') return null
+  if (typeof value.id !== 'string' || !value.id.trim() || value.id.length > 256) return null
+  if (typeof value.name !== 'string' || !value.name.trim() || value.name.length > 256) return null
+  return { id: value.id, name: value.name }
+}
+
+function isBookingDraftInputV2(value: unknown): value is BookingDraftInputV2 {
+  return isRecord(value) && typeof value.adminId === 'string' && (typeof value.aeId === 'string' || value.aeId === null)
+}
+
+function exactKeys(value: Record<string, unknown>): string {
+  return Object.keys(value).sort().join(',')
 }
 
 function safeRetryAfterSeconds(value: unknown): number | null {

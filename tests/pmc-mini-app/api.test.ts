@@ -30,6 +30,9 @@ describe('PMC Mini App browser API', () => {
   it('sends protocol 2 on every new booking mutation', async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
+      if (url.endsWith('/config')) return jsonResponse(200, {
+        bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+      })
       if (url.endsWith('/confirm')) return jsonResponse(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
       return jsonResponse(url.endsWith('/booking-drafts') ? 201 : 200, {
         draftId: 'draft-1', requestId: 'request-1', state: url.endsWith('/cancel') ? 'CANCELLED' : 'DRAFT',
@@ -46,15 +49,50 @@ describe('PMC Mini App browser API', () => {
       appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     }
 
+    await api.loadConfig('raw-id-token')
     await api.createDraft('raw-id-token')
     await api.save('raw-id-token', 'draft-1', 1, input)
     await api.confirm('raw-id-token', 'draft-1', 2)
     await api.cancel('raw-id-token', 'draft-1', 2)
 
-    expect(requestBody(fetch, 0)).toEqual({ protocolVersion: 2 })
-    expect(requestBody(fetch, 1)).toEqual({ protocolVersion: 2, version: 1, input })
-    expect(requestBody(fetch, 2)).toEqual({ protocolVersion: 2, version: 2 })
+    expect(requestBody(fetch, 1)).toEqual({ protocolVersion: 2 })
+    expect(requestBody(fetch, 2)).toEqual({ protocolVersion: 2, version: 1, input })
     expect(requestBody(fetch, 3)).toEqual({ protocolVersion: 2, version: 2 })
+    expect(requestBody(fetch, 4)).toEqual({ protocolVersion: 2, version: 2 })
+  })
+
+  it.each([
+    ['the capability is absent', {}],
+    ['minimumMutation is 1', { bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false } }],
+  ])('keeps exact protocol-1 mutation bodies when %s', async (_label, configResponse) => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return jsonResponse(200, configResponse)
+      if (url.endsWith('/confirm')) return jsonResponse(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+      return jsonResponse(url.endsWith('/booking-drafts') ? 201 : 200, {
+        draftId: 'draft-1', requestId: 'request-1', state: url.endsWith('/cancel') ? 'CANCELLED' : 'DRAFT',
+        retentionState: url.endsWith('/cancel') ? 'PENDING_APPROVAL' : '', version: 2, input: null,
+        paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+        caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+      })
+    })
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = {
+      requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+
+    await api.loadConfig('raw-id-token')
+    await api.createDraft('raw-id-token')
+    await api.save('raw-id-token', 'draft-1', 1, input)
+    await api.confirm('raw-id-token', 'draft-1', 2)
+    await api.cancel('raw-id-token', 'draft-1', 2)
+
+    expect(requestBody(fetch, 1)).toEqual({})
+    expect(requestBody(fetch, 2)).toEqual({ version: 1, input })
+    expect(requestBody(fetch, 3)).toEqual({ version: 2 })
+    expect(requestBody(fetch, 4)).toEqual({ version: 2 })
   })
 
   it('uploads payment and chat evidence together through one async batch request', async () => {
@@ -85,7 +123,7 @@ describe('PMC Mini App browser API', () => {
     await expect(api.confirm('raw-id-token', 'draft-1', 4)).resolves.toEqual({ requestId: 'request-1', status: 'QUEUED', projection })
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/confirm', expect.objectContaining({
       method: 'POST', headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: 2, version: 4 }),
+      body: JSON.stringify({ version: 4 }),
     }))
   })
 
@@ -135,7 +173,7 @@ describe('PMC Mini App browser API', () => {
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/cancel', expect.objectContaining({
       method: 'POST',
       headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: 2, version: 1 }),
+      body: JSON.stringify({ version: 1 }),
     }))
   })
 
@@ -152,6 +190,36 @@ describe('PMC Mini App browser API', () => {
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1', expect.objectContaining({
       headers: { authorization: 'Bearer raw-id-token' },
     }))
+  })
+
+  it('preserves an exact saved attribution snapshot and rejects malformed attribution', async () => {
+    const base = {
+      draftId: 'draft-1', requestId: 'request-1', state: 'READY_TO_CONFIRM', retentionState: '', version: 10,
+      input: {
+        requestId: 'request-1', adminId: 'staff-admin', aeId: 'staff-ae', customerName: 'ลูกค้าทดสอบ',
+        facebookName: 'Facebook Test', phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1',
+        queueType: 'NORMAL', appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900,
+        channelId: 'channel-1',
+      },
+      paymentEvidenceIds: ['payment-1'], chatEvidenceIds: ['chat-1'], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }
+    const attribution = {
+      protocolVersion: 2, recorder: { id: 'staff-1', name: 'มัสเดิม' },
+      admin: { id: 'staff-admin', name: 'แววเดิม' }, ae: { id: 'staff-ae', name: 'หมวยเดิม' },
+    }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { ...base, attribution }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        ...base,
+        attribution: { ...attribution, recorder: { ...attribution.recorder, privateEmail: 'must-not-pass' } },
+      }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadDraft('raw-id-token', 'draft-1')).resolves.toMatchObject({ attribution })
+    await expect(api.loadDraft('raw-id-token', 'draft-1')).rejects.toMatchObject({
+      code: 'MINI_APP_INVALID_RESPONSE', status: 200,
+    })
   })
 
   it('keeps the terminal retry marker and Case ID from the persisted server projection', async () => {

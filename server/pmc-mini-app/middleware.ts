@@ -735,6 +735,14 @@ function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
       appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
       channelId: draft.channelId,
     } : null,
+    ...(draft.protocolVersion === 2 && hasInput ? {
+      attribution: {
+        protocolVersion: 2,
+        recorder: { id: draft.staffId, name: draft.recorderName },
+        admin: { id: draft.adminId, name: draft.adminName },
+        ae: draft.aeId === null ? null : { id: draft.aeId, name: draft.aeName },
+      },
+    } : {}),
     paymentEvidenceIds: [...draft.paymentEvidenceFileIds],
     chatEvidenceIds: [...draft.chatEvidenceFileIds],
     ...evidenceCounts(draft),

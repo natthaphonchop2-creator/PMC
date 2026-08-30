@@ -4,6 +4,7 @@ import { createMiniAppApi, type MiniAppBrowserApi } from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
 import { BookingProcessing, type BookingProcessingAdapter } from './BookingProcessing'
 import {
+  bookingProtocolVersion,
   isBookingTerminalState,
   type BookingDraftProjection,
   type MiniAppConfig,
@@ -75,6 +76,7 @@ export function PmcMiniApp({
   const [stockHistoryLoadingMore, setStockHistoryLoadingMore] = useState(false)
   const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
+  const activeBookingProtocol = config ? bookingProtocolVersion(config) : 1
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
   useEffect(() => { saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters) }, [financeFilterStorage, financeFilters])
@@ -133,10 +135,10 @@ export function PmcMiniApp({
     load: (draftId) => api.loadDraft(idToken, draftId),
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
     uploadEvidenceBatch: (draftId, input) => api.uploadEvidenceBatch(idToken, draftId, input),
-    save: (draftId, version, input) => runBookingMutation(() => api.save(idToken, draftId, version, input)),
-    confirm: (draftId, version) => runBookingMutation(() => api.confirm(idToken, draftId, version)),
-    cancel: (draftId, version) => runBookingMutation(() => api.cancel(idToken, draftId, version)),
-  }), [api, idToken, runBookingMutation])
+    save: (draftId, version, input) => runBookingMutation(() => api.save(idToken, draftId, version, input, activeBookingProtocol)),
+    confirm: (draftId, version) => runBookingMutation(() => api.confirm(idToken, draftId, version, activeBookingProtocol)),
+    cancel: (draftId, version) => runBookingMutation(() => api.cancel(idToken, draftId, version, activeBookingProtocol)),
+  }), [activeBookingProtocol, api, idToken, runBookingMutation])
 
   const processingAdapter = useMemo<BookingProcessingAdapter>(() => ({
     load: (draftId, signal) => api.loadDraft(idToken, draftId, signal),
@@ -196,7 +198,7 @@ export function PmcMiniApp({
         const activeDraft = await api.loadLatestActiveDraft(idToken)
         const nextDraft = activeDraft
           ? await hydrateActiveDraft(api, idToken, activeDraft)
-          : await runBookingMutation(() => api.createDraft(idToken))
+          : await runBookingMutation(() => api.createDraft(idToken, activeBookingProtocol))
         if (requestEpoch !== navigationEpochRef.current) return
         setDraft(nextDraft)
         setView('BOOKING')

@@ -162,7 +162,7 @@ describe('PMC LINE Mini App shell', () => {
     vi.mocked(api.createDraft).mockRejectedValueOnce(new MiniAppApiError('CLIENT_UPGRADE_REQUIRED', 409))
     render(<PmcMiniApp
       initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
-      initialConfig={config}
+      initialConfig={{ ...config, bookingProtocol: undefined }}
       api={api}
     />)
 
@@ -173,6 +173,7 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.queryByRole('heading', { name: 'สวัสดี, มัส' })).not.toBeInTheDocument()
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(api.createDraft).toHaveBeenCalledOnce()
+    expect(api.createDraft).toHaveBeenCalledWith('preview-token', 1)
   })
 
   it('starts on Home and opens the latest active request only after a booking action', async () => {
@@ -201,7 +202,7 @@ describe('PMC LINE Mini App shell', () => {
     const user = userEvent.setup()
     const api = miniAppApi()
     const input = {
-      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      requestId: 'request-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
       phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
       appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     }
@@ -215,6 +216,7 @@ describe('PMC LINE Mini App shell', () => {
     }))
     api.loadDraft = vi.fn(async () => ({
       draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3, input,
+      attribution: savedAttribution(),
       paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
       caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }))
@@ -235,13 +237,14 @@ describe('PMC LINE Mini App shell', () => {
     const user = userEvent.setup()
     const api = miniAppApi()
     const input = {
-      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      requestId: 'request-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
       phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
       appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     }
     const ready = {
       draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM' as const, retentionState: '' as const,
       version: 3, input, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 2, chatEvidenceCount: 1,
+      attribution: savedAttribution(),
       confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }
     api.createDraft = vi.fn(async () => ready)
@@ -473,6 +476,7 @@ const config: MiniAppConfig = {
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+  bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
   admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
   aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
 }
@@ -499,6 +503,15 @@ function miniAppApi(): PmcMiniAppApi {
       hasLedgerActivity: true, version: 2,
     }] })),
     loadStockHistory: vi.fn(), submitStockCommand: vi.fn(),
+  }
+}
+
+function savedAttribution() {
+  return {
+    protocolVersion: 2 as const,
+    recorder: { id: 'ADMIN_01', name: 'มัส' },
+    admin: { id: 'staff-admin', name: 'แวว' },
+    ae: null,
   }
 }
 

@@ -126,16 +126,16 @@ Backfill rules:
 
 ### 5.5 Rolling compatibility and cutover
 
-Use booking protocol version 2. The server exposes the supported/minimum version in authenticated config, and new clients send version 2 on create, prepare, save, and confirm.
+Use booking protocol version 2. The server exposes the supported/minimum version in authenticated config. The deployable client is dual-mode during cutover: when `minimumMutation` is absent or 1 it preserves the exact protocol-1 request shapes and legacy attribution UI while already containing the persistent upgrade handler; when `minimumMutation` is 2 it exposes the new three-role UI and sends version 2 on create, prepare, save, confirm, and cancel.
 
 Deployment order is mandatory:
 
 1. deploy backward-compatible Cloud Run and Apps Script readers that accept both old and new Sheet headers/rows and retain current protocol-1 behavior;
-2. wait until there are zero nonterminal legacy drafts and zero active Cloud Tasks; do not reinterpret an in-flight draft;
-3. pause the queue, create a private Sheet backup, and run the guarded schema/backfill migration;
-4. deploy the version-2 client and set the minimum create/prepare protocol to 2;
-5. return `CLIENT_UPGRADE_REQUIRED` for cached protocol-1 clients attempting new mutation, with UI copy instructing users to close and reopen LINE;
-6. keep protocol-1 read/idempotent terminal recovery until the active-draft TTL has elapsed, then remove it in a later release.
+2. deploy the dual-mode client while the minimum is 1, require staff to close/reopen LINE once, and verify it still emits exact protocol-1 mutations but already contains the persistent upgrade handler;
+3. wait until there are zero nonterminal legacy drafts and zero active Cloud Tasks; do not reinterpret an in-flight draft;
+4. pause mutations, create a private Sheet backup, run the guarded schema/backfill migration, and raise the minimum to 2 before resuming;
+5. freshly opened clients read minimum 2 and use the version-2 UI/protocol; an already-open bridge client that still attempts protocol 1 receives `CLIENT_UPGRADE_REQUIRED` and instructs the user to close/reopen LINE;
+6. keep protocol-1 read/idempotent terminal recovery until the active-draft TTL has elapsed, then remove it in a later release. A pre-bridge page cannot acquire new UI code retroactively, so the maintenance gate must verify the bridge deployment and staff refresh before migration.
 
 Strict readers must fail closed on unknown headers but explicitly normalize both the exact legacy and exact version-2 schemas during the rolling window. Both deployment directions require tests.
 

@@ -275,14 +275,17 @@ git commit -m "feat: resolve booking attribution IDs server-side"
 - Modify: `src/apps/pmc-mini-app/api.ts`
 - Modify: `src/apps/pmc-mini-app/PmcMiniApp.tsx`
 - Modify: `src/apps/pmc-mini-app/preview.ts`
+- Modify: `server/pmc-mini-app/middleware.ts` (browser-safe recovered attribution projection only)
 - Test: `tests/pmc-mini-app/bookingModel.test.ts`
 - Test: `tests/pmc-mini-app/bookingWizard.test.tsx`
 - Test: `tests/pmc-mini-app/api.test.ts`
 - Test: `tests/pmc-mini-app/clientShell.test.tsx`
+- Test: `tests/pmc-mini-app/bookingApi.test.ts` (projection only)
 
 **Interfaces:**
-- Consumes: config `admins`/`aes` and protocol capability from Task 2.
-- Produces: `BookingDraftInputV2` with required `adminId` and nullable `aeId`.
+- Consumes: config `admins`/`aes`; Task 6 adds authenticated `bookingProtocol`, and absence/minimum 1 is the protocol-1 bridge mode.
+- Produces: a dual-mode transition client plus `BookingDraftInputV2` with required `adminId` and nullable `aeId` when minimum 2 is active.
+- Produces: browser-safe, server-owned attribution snapshots for recovered protocol-2 reviews; mutation `input` remains IDs-only.
 
 - [ ] **Step 1: Write failing UI tests**
 
@@ -298,7 +301,7 @@ expect(api.save).toHaveBeenCalledWith(
 )
 ```
 
-Add exact order assertion `ผู้บันทึก → Admin → AE`, required Admin validation, preview labels, and `CLIENT_UPGRADE_REQUIRED` close/reopen copy.
+Add exact order assertion `ผู้บันทึก → Admin → AE`, required Admin validation, preview labels, and `CLIENT_UPGRADE_REQUIRED` close/reopen copy. Add a real bridge-mode protocol-1 mutation test. Add recovered `READY_TO_CONFIRM` tests proving stored recorder/Admin/AE snapshots win across current-config rename/removal and missing/mismatched snapshots fail closed.
 
 - [ ] **Step 2: Run RED tests**
 
@@ -319,7 +322,7 @@ export type BookingDraftInputV2 = Omit<BookingDraftInputV1, 'aeName'> & {
 }
 ```
 
-Render recorder from session read-only. Dropdown option value is staff ID and label is name. Convert AE empty option to null. Every mutation sends protocol 2. New mutations below minimum fail with one persistent instruction to close/reopen LINE.
+Render recorder from session read-only. Dropdown option value is staff ID and label is name. Convert AE empty option to null. When authenticated minimum is 2, every mutation sends protocol 2. When the capability is absent or minimum is 1, retain exact protocol-1 envelopes and legacy attribution behavior as a bridge while already handling `CLIENT_UPGRADE_REQUIRED` persistently; never probe or silently downgrade. A recovered protocol-2 review displays server-owned saved snapshots outside mutation input and fails closed if the snapshot is absent or ID-mismatched.
 
 - [ ] **Step 4: Run GREEN and Mini App build**
 
@@ -554,7 +557,7 @@ Expected: FAIL on missing protocol floor/checker.
 
 - [ ] **Step 3: Implement config gate and no-value checker**
 
-The checker reads deployed env names, exact Sheet headers, nonterminal draft count, queue state/task count, and Apps Script version without printing members, IDs, rows, or secrets. Runbook order is reader compatibility → zero-state preflight → pause/backup/migrate → P2 client → minimum 2 → TTL cleanup.
+The checker reads deployed env names, exact Sheet headers, nonterminal draft count, queue state/task count, Apps Script version, and bridge-client readiness without printing members, IDs, rows, or secrets. Runbook order is reader compatibility/minimum 1 → deploy bridge and require close/reopen → zero-state preflight → pause/backup/migrate → minimum 2 before resume → P2 mode → TTL cleanup.
 
 - [ ] **Step 4: Run complete local gate**
 

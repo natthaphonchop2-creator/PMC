@@ -73,6 +73,96 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(values.slice(0, 3)).toEqual(['มัส', 'แวว', 'ไม่ระบุ'])
   })
 
+  it('keeps the legacy Admin and AE-name UI when the booking cutover capability is absent', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const legacyConfig = { ...config, bookingProtocol: undefined }
+    const current: BookingDraftProjection = {
+      ...draft,
+      input: completeLegacyInput(),
+      paymentEvidenceIds: ['payment-1'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    renderWizard({ draft: current, adapter: app, config: legacyConfig })
+
+    expect(screen.queryByLabelText('ผู้บันทึก')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Admin')).toHaveValue('มัส')
+    expect(screen.getByLabelText('Admin')).toBeDisabled()
+    expect(screen.getByLabelText('AE')).toHaveValue('ไม่ระบุ')
+    await user.selectOptions(screen.getByLabelText('AE'), 'หมวย')
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    await waitFor(() => expect(app.save).toHaveBeenCalledOnce())
+    expect(vi.mocked(app.save).mock.calls[0]![2]).toEqual({
+      ...completeLegacyInput(),
+      aeName: 'หมวย',
+    })
+  })
+
+  it('uses saved attribution snapshots for a recovered review after current config rename or removal', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const recovered: BookingDraftProjection = {
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      input: completeInput({ aeId: 'staff-ae' }),
+      attribution: {
+        protocolVersion: 2,
+        recorder: { id: 'staff-1', name: 'มัสเดิม' },
+        admin: { id: 'staff-admin', name: 'แววเดิม' },
+        ae: { id: 'staff-ae', name: 'หมวยเดิม' },
+      },
+      paymentEvidenceIds: ['payment-1'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    renderWizard({
+      initialStep: 4,
+      draft: recovered,
+      adapter: app,
+      config: { ...config, admins: [], aes: [] },
+    })
+
+    const values = [...document.querySelectorAll('.pmc-preview-list dd')].map((element) => element.textContent)
+    expect(values.slice(0, 3)).toEqual(['มัสเดิม', 'แววเดิม', 'หมวยเดิม'])
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+    expect(app.confirm).toHaveBeenCalledWith('draft-1', 1)
+  })
+
+  it.each([
+    ['missing snapshot', undefined],
+    ['Admin ID mismatch', {
+      protocolVersion: 2 as const,
+      recorder: { id: 'staff-1', name: 'มัสเดิม' },
+      admin: { id: 'other-admin', name: 'แววเดิม' },
+      ae: null,
+    }],
+    ['recorder session mismatch', {
+      protocolVersion: 2 as const,
+      recorder: { id: 'other-recorder', name: 'มัสเดิม' },
+      admin: { id: 'staff-admin', name: 'แววเดิม' },
+      ae: null,
+    }],
+  ])('fails closed on recovered protocol-2 attribution: %s', (_label, attribution) => {
+    const app = adapter()
+    renderWizard({
+      initialStep: 4,
+      adapter: app,
+      draft: {
+        ...draft,
+        state: 'READY_TO_CONFIRM',
+        input: completeInput(),
+        ...(attribution ? { attribution } : {}),
+      },
+    })
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันบันทึก' })).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('ข้อมูลผู้รับผิดชอบของร่างไม่ตรงกับบัญชีนี้')
+    expect(app.confirm).not.toHaveBeenCalled()
+  })
+
   it('shows date and time for a normal queue and removes them for an automatic queue', async () => {
     const user = userEvent.setup()
     renderWizard({ initialStep: 2 })
@@ -225,7 +315,12 @@ describe('PMC Mini App mobile booking wizard', () => {
       paymentEvidenceIds: ['payment-1', 'payment-2', 'payment-3'],
       chatEvidenceIds: ['chat-1'],
     }
-    const latest: BookingDraftProjection = { ...current, state: 'READY_TO_CONFIRM', version: 10 }
+    const latest: BookingDraftProjection = {
+      ...current,
+      state: 'READY_TO_CONFIRM',
+      version: 10,
+      attribution: savedAttribution(),
+    }
     const app = {
       ...adapter(),
       load: vi.fn(async () => latest),
@@ -247,6 +342,7 @@ describe('PMC Mini App mobile booking wizard', () => {
       ...current,
       state: 'READY_TO_CONFIRM',
       version: 3,
+      attribution: savedAttribution(),
       paymentEvidenceCount: 3,
       chatEvidenceCount: 1,
     }
@@ -276,10 +372,11 @@ function renderWizard(options: {
   onExit?: () => void
   onQueued?: (projection: BookingDraftProjection) => void
   onConfirmed?: (result: BookingConfirmationResult) => void
+  config?: MiniAppConfig
 } = {}) {
   return render(<BookingWizard
     session={session}
-    config={config}
+    config={options.config ?? config}
     draft={options.draft ?? draft}
     adapter={options.adapter ?? adapter()}
     initialStep={options.initialStep}
@@ -295,6 +392,7 @@ const config: MiniAppConfig = {
   stockEnabled: false, canManageStock: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+  bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
   admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
   aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
 }
@@ -324,6 +422,23 @@ function completeInputBase() {
     requestId: 'request-1', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
     phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
     appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+  }
+}
+
+function completeLegacyInput() {
+  return {
+    requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+    phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+    appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+  }
+}
+
+function savedAttribution() {
+  return {
+    protocolVersion: 2 as const,
+    recorder: { id: 'staff-1', name: 'มัส' },
+    admin: { id: 'staff-admin', name: 'แวว' },
+    ae: null,
   }
 }
 

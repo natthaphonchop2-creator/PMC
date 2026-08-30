@@ -278,6 +278,33 @@ describe('PMC Mini App booking draft API', () => {
     })
   })
 
+  it('projects only browser-safe persisted attribution snapshots for a protocol-2 review', async () => {
+    const deps = dependencies({ requestSchemaVersion: 2 })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const created = await jsonRequest(middleware, 'POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+    deps.storeFixture.attachEvidence('draft-1')
+    await jsonRequest(middleware, 'PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      version: 1,
+      input: validInputV2({ requestId: created.body.requestId, adminId: 'staff-admin', aeId: 'staff-ae' }),
+    })
+
+    const response = await invoke(middleware, '/api/mini-app/booking-drafts/draft-1', {
+      headers: { authorization: 'Bearer valid-token' },
+    })
+    const body = await response.json() as Record<string, unknown>
+
+    expect(response.status).toBe(200)
+    expect(body.attribution).toEqual({
+      protocolVersion: 2,
+      recorder: { id: 'staff-1', name: 'มัส' },
+      admin: { id: 'staff-admin', name: 'แวว' },
+      ae: { id: 'staff-ae', name: 'หมวย' },
+    })
+    expect(JSON.stringify(body.attribution)).not.toContain('private@example.com')
+    expect(body.input).not.toHaveProperty('adminName')
+    expect(body.input).not.toHaveProperty('aeName')
+  })
+
   it('returns 202 after enqueue and Sheet state without calling Apps Script inline for an owner pilot', async () => {
     const events: string[] = []
     const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])), events })
@@ -788,7 +815,8 @@ function validInput(patch: Record<string, unknown> = {}) {
 }
 
 function validInputV2(patch: Record<string, unknown> = {}) {
-  const { aeName: _aeName, ...base } = validInput()
+  const base = validInput()
+  delete base.aeName
   return { ...base, adminId: 'staff-admin', aeId: null, ...patch }
 }
 

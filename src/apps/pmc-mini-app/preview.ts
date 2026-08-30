@@ -37,6 +37,7 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   channels: [{ id: 'page-tab', name: 'เพจTAB' }, { id: 'page-main', name: 'เพจหลัก' }],
   admins: [{ id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
   aes: [{ id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
+  bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
 }
 
 export function createPreviewMiniAppConfig(options: {
