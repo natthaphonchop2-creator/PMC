@@ -16,6 +16,8 @@ export interface MiniAppConfig {
   reportingEnabled: boolean
   financeReportsEnabled: boolean
   financeUiPreviewEnabled: boolean
+  financePilotDefaultDate?: string | null
+  financeMonthlyIncomeEnabled?: boolean
   stockEnabled: boolean
   expenseCaptureEnabled?: boolean
   financeReadsEnabled?: boolean

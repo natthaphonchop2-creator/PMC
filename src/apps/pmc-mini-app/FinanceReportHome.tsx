@@ -14,6 +14,7 @@ export function FinanceReportHome({
   canViewFinance,
   financeReportsEnabled = true,
   financeUiPreviewEnabled = false,
+  monthlyReportsEnabled = true,
   financeReadsEnabled = false,
   expenseCaptureEnabled = false,
   canSubmitExpense = false,
@@ -23,6 +24,7 @@ export function FinanceReportHome({
   canViewFinance: boolean
   financeReportsEnabled?: boolean
   financeUiPreviewEnabled?: boolean
+  monthlyReportsEnabled?: boolean
   financeReadsEnabled?: boolean
   expenseCaptureEnabled?: boolean
   canSubmitExpense?: boolean
@@ -30,6 +32,10 @@ export function FinanceReportHome({
   onSelectExpense?: (category: EnabledExpenseCategory) => void
 }) {
   const revenueStructureVisible = financeReportsEnabled || financeUiPreviewEnabled
+  const monthlyIncomeAvailable = revenueStructureVisible && monthlyReportsEnabled
+  const monthlyExpenseAvailable = financeReadsEnabled
+  const monthlyAvailable = canViewFinance && (monthlyIncomeAvailable || monthlyExpenseAvailable)
+  const monthlyExpenseOnly = !monthlyIncomeAvailable && monthlyExpenseAvailable
   return <main className="pmc-finance-home">
     <header className="pmc-finance-header">
       <BrandMark />
@@ -53,15 +59,19 @@ export function FinanceReportHome({
       </button>}
       <button
         type="button"
-        aria-disabled={!canViewFinance || undefined}
-        onClick={() => { if (canViewFinance) onSelect('MONTHLY_INCOME') }}
+        aria-disabled={!monthlyAvailable || undefined}
+        onClick={() => { if (monthlyAvailable) onSelect('MONTHLY_INCOME') }}
       >
-        <span className="pmc-finance-card-icon">{canViewFinance
+        <span className="pmc-finance-card-icon">{monthlyAvailable
           ? <CalendarRange aria-hidden="true" />
           : <LockKeyhole aria-hidden="true" />}</span>
-        <span><strong>{revenueStructureVisible ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</strong><small>{canViewFinance
-          ? revenueStructureVisible ? financeReportsEnabled ? 'สรุปรายรับประจำเดือน' : 'ดูโครงร่างหน้ารายงาน' : 'ยอดรายจ่ายและประวัติหลักฐาน'
-          : 'เฉพาะฝ่ายการเงิน'}</small></span>
+        <span><strong>{monthlyExpenseOnly ? 'รายจ่ายรายเดือน' : revenueStructureVisible ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</strong><small>{monthlyExpenseOnly
+          ? 'ยอดรายจ่ายและประวัติหลักฐาน'
+          : revenueStructureVisible && !monthlyReportsEnabled
+          ? 'ยังไม่เปิดข้อมูลย้อนหลัง'
+          : canViewFinance
+            ? revenueStructureVisible ? financeReportsEnabled ? 'สรุปรายรับประจำเดือน' : 'ดูโครงร่างหน้ารายงาน' : 'ยอดรายจ่ายและประวัติหลักฐาน'
+            : 'เฉพาะฝ่ายการเงิน'}</small></span>
         <ChevronRight aria-hidden="true" />
       </button>
     </section>}

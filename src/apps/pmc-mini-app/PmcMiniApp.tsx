@@ -81,7 +81,10 @@ export function PmcMiniApp({
   const [selectedReport, setSelectedReport] = useState<ReportSelection | null>(null)
   const bangkokDate = useMemo(() => currentBangkokDate(), [])
   const financeFilterStorage = useMemo(() => safeFinanceFilterStorage(), [])
-  const [financeFilters, setFinanceFilters] = useState(() => loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate))
+  const [financeFilters, setFinanceFilters] = useState(() => {
+    const loaded = loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate)
+    return initialConfig ? financeFiltersForConfig(loaded, initialConfig) : loaded
+  })
   const [financeView, setFinanceView] = useState<FinanceView>(initialExpenseResumeRoot ? 'EXPENSE_RESUME' : 'FINANCE_HOME')
   const [expenseReceipt, setExpenseReceipt] = useState<ExpenseReceipt | null>(null)
   const [expenseHistory, setExpenseHistory] = useState<{ monthKey: string; page: ExpenseHistoryPage; loading: boolean; error: string } | null>(null)
@@ -96,6 +99,7 @@ export function PmcMiniApp({
   const [stockHistoryMessage, setStockHistoryMessage] = useState('')
   const navigationEpochRef = useRef(0)
   const financeReadAccess = Boolean(config?.financeReadsEnabled && config?.canViewFinance)
+  const financeMonthlyIncomeEnabled = config?.financeMonthlyIncomeEnabled ?? true
   const canManageExpense = Boolean(financeReadAccess && config?.expenseCaptureEnabled && config?.canManageExpense)
   const financeShellEnabled = Boolean(config?.financeReportsEnabled || config?.financeUiPreviewEnabled || config?.expenseCaptureEnabled || config?.financeReadsEnabled)
   const reportNavigationEnabled = Boolean(config?.reportingEnabled || financeShellEnabled)
@@ -106,7 +110,10 @@ export function PmcMiniApp({
   }, [financeShellEnabled])
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
-  useEffect(() => { saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters) }, [financeFilterStorage, financeFilters])
+  useEffect(() => {
+    if (!config) return
+    saveFinanceReportFilterPreferences(financeFilterStorage, financeFilters)
+  }, [config, financeFilterStorage, financeFilters])
 
   const checkExpenseResume = useCallback(async (rootRequestId: string) => {
     if (!idToken) return
@@ -175,6 +182,7 @@ export function PmcMiniApp({
         const nextConfig = await api.loadConfig(token)
         if (!active) return
         setSession(nextSession)
+        setFinanceFilters((current) => financeFiltersForConfig(current, nextConfig))
         setConfig(nextConfig)
       } catch (error) {
         if (!active) return
@@ -459,6 +467,7 @@ export function PmcMiniApp({
       const nextSession = await api.enroll(idToken, staffId, pin)
       const nextConfig = await api.loadConfig(idToken)
       setSession(nextSession)
+      setFinanceFilters((current) => financeFiltersForConfig(current, nextConfig))
       setConfig(nextConfig)
       setEnrollmentStaff(null)
     } catch (error) {
@@ -624,7 +633,7 @@ export function PmcMiniApp({
           : financeReadAccess && financeView === 'MONTHLY_INCOME'
             ? <MonthlyFinancePage
               canViewFinance={financeReadAccess}
-              incomeEnabled={Boolean(config?.financeReportsEnabled)}
+              incomeEnabled={Boolean(config?.financeReportsEnabled && financeMonthlyIncomeEnabled)}
               bangkokDate={bangkokDate}
               initialSelection={financeFilters.monthly}
               adapter={monthlyIncomeAdapter}
@@ -638,6 +647,7 @@ export function PmcMiniApp({
               canViewFinance={financeReadAccess}
               financeReportsEnabled={Boolean(config?.financeReportsEnabled)}
               financeUiPreviewEnabled={Boolean(config?.financeUiPreviewEnabled)}
+              monthlyReportsEnabled={!config?.financeReportsEnabled || financeMonthlyIncomeEnabled}
               financeReadsEnabled={Boolean(config?.financeReadsEnabled)}
               expenseCaptureEnabled={Boolean(config?.expenseCaptureEnabled)}
               canSubmitExpense={Boolean(config?.canSubmitExpense)}
@@ -699,6 +709,19 @@ function sameDailyFilter(left: FinanceDailyFilter, right: FinanceDailyFilter): b
 
 function sameMonthSelection(left: FinanceMonthSelection, right: FinanceMonthSelection): boolean {
   return left.year === right.year && left.month === right.month
+}
+
+function pilotFinanceDailyFilter(date: string): FinanceDailyFilter {
+  return { preset: 'CUSTOM', startDate: date, endDate: date }
+}
+
+function financeFiltersForConfig(
+  current: { daily: FinanceDailyFilter; monthly: FinanceMonthSelection },
+  nextConfig: MiniAppConfig,
+): { daily: FinanceDailyFilter; monthly: FinanceMonthSelection } {
+  return nextConfig.financePilotDefaultDate
+    ? { ...current, daily: pilotFinanceDailyFilter(nextConfig.financePilotDefaultDate) }
+    : current
 }
 
 function safeFinanceFilterStorage(): FinanceReportFilterStorage {

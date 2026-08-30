@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
@@ -173,6 +173,119 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.getByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
     expect(api.loadDailyIncome).not.toHaveBeenCalled()
     expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+  })
+
+  it('uses the sparse-cache pilot date once, then preserves a new daily selection across navigation', async () => {
+    sessionStorage.setItem('pmc-finance-report-filters-v1', JSON.stringify({
+      daily: { preset: 'TODAY' }, monthly: { year: 2026, month: 8 },
+    }))
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'Admin', active: true }}
+      initialConfig={{
+        ...config,
+        financeReportsEnabled: true,
+        financePilotDefaultDate: '2026-08-22',
+        financeMonthlyIncomeEnabled: false,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22',
+    }))
+    expect(api.loadDailyIncome).toHaveBeenCalledOnce()
+    expect(screen.getByLabelText('วันเริ่มต้น')).toHaveValue('2026-08-22')
+    expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22' },
+    })
+
+    fireEvent.change(screen.getByLabelText('วันเริ่มต้น'), { target: { value: '2026-08-23' } })
+    fireEvent.change(screen.getByLabelText('วันสิ้นสุด'), { target: { value: '2026-08-23' } })
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenLastCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-23', endDate: '2026-08-23',
+    }))
+    await waitFor(() => expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-23', endDate: '2026-08-23' },
+    }))
+
+    await user.click(screen.getByRole('button', { name: 'กลับไปรายงาน' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenLastCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-23', endDate: '2026-08-23',
+    }))
+    expect(screen.getByLabelText('วันเริ่มต้น')).toHaveValue('2026-08-23')
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+  })
+
+  it('normalizes stale TODAY storage only after async pilot config loads and never requests TODAY', async () => {
+    sessionStorage.setItem('pmc-finance-report-filters-v1', JSON.stringify({
+      daily: { preset: 'TODAY' }, monthly: { year: 2026, month: 8 },
+    }))
+    const pendingConfig = deferred<MiniAppConfig>()
+    const api = miniAppApi()
+    api.initialize = vi.fn(async () => 'raw-id-token')
+    api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'Admin', active: true as const }))
+    api.loadConfig = vi.fn(() => pendingConfig.promise)
+    render(<PmcMiniApp api={api} />)
+
+    await waitFor(() => expect(api.loadConfig).toHaveBeenCalledWith('raw-id-token'))
+    expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'TODAY' },
+    })
+
+    pendingConfig.resolve({
+      ...config,
+      financeReportsEnabled: true,
+      financePilotDefaultDate: '2026-08-22',
+      financeMonthlyIncomeEnabled: false,
+      financeReadsEnabled: true,
+      canViewFinance: true,
+    })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenCalledWith('raw-id-token', {
+      preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22',
+    }))
+    expect(api.loadDailyIncome).toHaveBeenCalledOnce()
+    expect(api.loadDailyIncome).not.toHaveBeenCalledWith('raw-id-token', expect.objectContaining({ preset: 'TODAY' }))
+    expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22' },
+    })
+  })
+
+  it('keeps monthly expense history available when pilot monthly income is off', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'Admin', active: true }}
+      initialConfig={{
+        ...config,
+        financeReportsEnabled: true,
+        financePilotDefaultDate: '2026-08-22',
+        financeMonthlyIncomeEnabled: false,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายจ่ายรายเดือน/ }))
+
+    expect(await screen.findByText('รายจ่ายคลินิก')).toBeVisible()
+    expect(api.loadMonthlyExpenses).toHaveBeenCalledOnce()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'ประวัติรายจ่าย' }))
+    expect(await screen.findByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
   })
 
   it('routes expense form to a validated durable receipt and clears form state on return', async () => {
@@ -784,7 +897,8 @@ describe('PMC LINE Mini App shell', () => {
 
 const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
-  financeReportsEnabled: false, financeUiPreviewEnabled: false, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
+  financeReportsEnabled: false, financeUiPreviewEnabled: false, financePilotDefaultDate: null,
+  financeMonthlyIncomeEnabled: true, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
