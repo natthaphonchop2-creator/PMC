@@ -68,7 +68,7 @@ Booking step 1 renders:
 3. `AE` — dropdown including `ไม่ระบุ`;
 4. customer identity and phone fields.
 
-Preview, Calendar description, internal LINE booking card, Sheet, and operational reports show role order `ผู้บันทึก → Admin → AE`.
+Preview, Calendar description, internal LINE booking card, `BOOKING_MASTER`, and attribution/commission reports show role order `ผู้บันทึก → Admin → AE`. The compact derived Dashboard keeps its existing Admin/AE operation columns in this release; recorder detail remains available in `BOOKING_MASTER` and dedicated reports.
 
 ## 5. Attribution data model
 
@@ -76,13 +76,14 @@ Preview, Calendar description, internal LINE booking card, Sheet, and operationa
 
 Keep `staffId` as the immutable authorization-bound recorder ID. Add:
 
+- `protocolVersion` — exact request-row protocol version (`1` for normalized legacy rows, `2` for new rows);
 - `recorderName` — snapshot of the mapped staff name when the draft is created;
 - `adminId` and `adminName` — selected Admin ID and server-resolved name snapshot;
 - `aeId` — selected AE ID or null; retain `aeName` as the server-resolved snapshot.
 
 Insert both columns directly after `staffId`, giving the relevant prefix:
 
-`requestId → draftId → staffId → recorderName → adminId → adminName → lineUserIdHash → ... → aeId → aeName → ...`
+`requestId → draftId → protocolVersion → staffId → recorderName → adminId → adminName → lineUserIdHash → ... → aeId → aeName → ...`
 
 `BookingDraftInput` accepts required `adminId` and nullable `aeId`, never Admin/AE names. Add both IDs plus server-resolved snapshots to the signed booking identity, async payload hash, ingress payload, recovery comparisons, and idempotency tests. `recorderName`, `adminName`, and `aeName` are server-derived and must never be accepted from the browser.
 
