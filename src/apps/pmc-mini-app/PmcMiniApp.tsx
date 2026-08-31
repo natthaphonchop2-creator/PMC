@@ -406,7 +406,7 @@ export function PmcMiniApp({
       setMessage('')
       try {
         const activeDraft = await api.loadLatestActiveDraft(idToken)
-        const nextDraft = activeDraft
+        const nextDraft = activeDraft && !isBackgroundBookingEntryState(activeDraft.state)
           ? await hydrateActiveDraft(api, idToken, activeDraft)
           : await runBookingMutation(() => api.createDraft(idToken, activeBookingProtocol))
         if (requestEpoch !== navigationEpochRef.current) return
@@ -853,6 +853,10 @@ function isAdditionalReport(value: ReportSelection): boolean {
 
 function isAsyncBookingState(state: BookingDraftProjection['state']): boolean {
   return state === 'QUEUED' || state === 'PROCESSING' || state === 'RETRYING' || state === 'CONFIRMING'
+}
+
+function isBackgroundBookingEntryState(state: BookingDraftProjection['state']): boolean {
+  return state === 'QUEUED' || state === 'PROCESSING' || state === 'RETRYING'
 }
 
 function isEnabledExpenseCategory(value: FinanceView): value is EnabledExpenseCategory {

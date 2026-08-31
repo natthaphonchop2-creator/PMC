@@ -231,6 +231,108 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.bookingIngress.send).toHaveBeenCalledOnce()
   })
 
+  it('finalizes an exact sync-prepared protocol-2 Drive-only draft without touching staging', async () => {
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        protocolVersion: 2,
+        recorderName: 'มัส',
+        adminId: 'admin-2',
+        adminName: 'แวว',
+        aeId: 'ae-1',
+        aeName: 'หมวย',
+        paymentEvidenceObjectKeys: [],
+        chatEvidenceObjectKeys: [],
+        paymentEvidenceFileIds: ['owner-drive-payment-1'],
+        chatEvidenceFileIds: ['owner-drive-chat-1'],
+        evidenceCount: 2,
+        evidenceProjectionHash: 'p'.repeat(43),
+      }),
+    })
+
+    await expect(fixture.worker.finalize(taskInput(1, fixture.state.read()))).resolves.toEqual({
+      requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED',
+    })
+
+    expect(fixture.state.operations()).toEqual(expect.arrayContaining(['CLAIM', 'PROJECT', 'COMPLETE']))
+    expect(fixture.staging.get).not.toHaveBeenCalled()
+    expect(fixture.staging.describe).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+    expect(fixture.evidenceIngress.upload).not.toHaveBeenCalled()
+    expect(fixture.bookingIngress.send).toHaveBeenCalledOnce()
+    expect(fixture.state.read()).toMatchObject({
+      state: 'CONFIRMED',
+      paymentEvidenceObjectKeys: [],
+      chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'],
+      chatEvidenceFileIds: ['owner-drive-chat-1'],
+      evidenceCount: 2,
+      evidenceProjectionHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    })
+  })
+
+  it('recovers the exact Drive-only rollout incident on task attempt eight without exhausting it', async () => {
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        protocolVersion: 2,
+        recorderName: 'มัส',
+        adminId: 'admin-2',
+        adminName: 'แวว',
+        aeId: 'ae-1',
+        aeName: 'หมวย',
+        state: 'RETRYING',
+        version: 16,
+        attemptCount: 7,
+        paymentEvidenceObjectKeys: [],
+        chatEvidenceObjectKeys: [],
+        paymentEvidenceFileIds: ['owner-drive-payment-1'],
+        chatEvidenceFileIds: ['owner-drive-chat-1'],
+        evidenceCount: 2,
+        evidenceProjectionHash: 'p'.repeat(43),
+        processingOwnerToken: null,
+        processingLeaseUntil: null,
+        safeErrorCode: 'EVIDENCE_COPY_RETRY',
+      }),
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8, fixture.state.read()))).resolves.toEqual({
+      requestId: 'request-1', caseId: 'PMC-202608-0001', state: 'CONFIRMED',
+    })
+
+    expect(fixture.state.operations()).toEqual(expect.arrayContaining(['CLAIM', 'PROJECT', 'COMPLETE']))
+    expect(fixture.state.operations()).not.toContain('EXHAUST')
+    expect(fixture.staging.get).not.toHaveBeenCalled()
+    expect(fixture.evidenceIngress.upload).not.toHaveBeenCalled()
+    expect(fixture.bookingIngress.send).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['missing chat Drive evidence', {
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: [], evidenceCount: 1,
+    }],
+    ['mixed staged and Drive-only evidence', {
+      paymentEvidenceObjectKeys: [paymentKey], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'], evidenceCount: 2,
+    }],
+  ])('fails closed for a protocol-2 %s layout before external side effects', async (_label, evidence) => {
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        protocolVersion: 2,
+        recorderName: 'มัส', adminId: 'admin-2', adminName: 'แวว', aeId: 'ae-1', aeName: 'หมวย',
+        evidenceProjectionHash: 'p'.repeat(43),
+        ...evidence,
+      }),
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8, fixture.state.read()))).resolves.toMatchObject({
+      state: 'NEEDS_REVIEW',
+    })
+    expect(fixture.staging.get).not.toHaveBeenCalled()
+    expect(fixture.evidenceIngress.upload).not.toHaveBeenCalled()
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['Drive retry', { driveState: 'RETRY', calendarState: 'OK', lineState: 'OK' }],
     ['Calendar conflict', { driveState: 'OK', calendarState: 'CONFLICT', lineState: 'OK' }],

@@ -134,6 +134,71 @@ describe('Apps Script Mini App async-state ingress', () => {
     })
   })
 
+  it('projects and completes an exact P2 Drive-only booking already bound by its payload hash', () => {
+    const driveOnly = p2DriveOnlyQueuedRequest()
+    const fixture = stateFixture(driveOnly as unknown as MiniAppAsyncRequestRecord)
+    const boundMutation = (patch: Partial<MiniAppAsyncStateMutation>): MiniAppAsyncStateMutation => mutation({
+      requestId: driveOnly.requestId,
+      draftId: driveOnly.draftId,
+      payloadHash: driveOnly.payloadHash!,
+      taskName: driveOnly.taskName,
+      paymentEvidenceObjectKeys: [],
+      chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'],
+      chatEvidenceFileIds: ['owner-drive-chat-1'],
+      evidenceCount: 2,
+      ...patch,
+    })
+
+    processBookingDoPost(event(envelope(boundMutation({
+      operation: 'CLAIM', expectedVersion: 4, expectedAttempt: 0,
+    }), 'nonce-drive-claim')), fixture.ports)
+    const projected = processBookingDoPost(event(envelope(boundMutation({
+      operation: 'PROJECT', expectedVersion: 5, expectedAttempt: 1,
+    }), 'nonce-drive-project')), fixture.ports)
+    const completed = processBookingDoPost(event(envelope(boundMutation({
+      operation: 'COMPLETE', expectedVersion: 6, expectedAttempt: 1,
+      caseId: 'PMC-202608-0001', confirmationStatus: 'CONFIRMED',
+    }), 'nonce-drive-complete')), fixture.ports)
+
+    expect(projected).toMatchObject({ state: 'PROCESSING', version: 6, outcome: 'APPLIED' })
+    expect(completed).toMatchObject({ state: 'CONFIRMED', version: 7, outcome: 'APPLIED' })
+    expect(fixture.requests.read('request-1')).toMatchObject({
+      state: 'CONFIRMED', paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'],
+      evidenceCount: 2, evidenceProjectionHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+    })
+  })
+
+  it.each([
+    ['missing chat Drive evidence', {
+      paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: [], evidenceCount: 1,
+    }],
+    ['mixed staged and Drive-only evidence', {
+      paymentEvidenceObjectKeys: p2ReadyRequest().paymentEvidenceObjectKeys, chatEvidenceObjectKeys: [],
+      paymentEvidenceFileIds: ['owner-drive-payment-1'], chatEvidenceFileIds: ['owner-drive-chat-1'], evidenceCount: 2,
+    }],
+  ])('rejects a P2 %s layout before an owner claim write', (_label, evidence) => {
+    const invalid = p2DriveOnlyQueuedRequest(evidence)
+    const fixture = stateFixture(invalid as unknown as MiniAppAsyncRequestRecord)
+
+    expect(() => processBookingDoPost(event(envelope(mutation({
+      requestId: invalid.requestId,
+      draftId: invalid.draftId,
+      payloadHash: invalid.payloadHash!,
+      expectedVersion: invalid.version,
+      expectedAttempt: invalid.attemptCount,
+      taskName: invalid.taskName,
+      paymentEvidenceObjectKeys: invalid.paymentEvidenceObjectKeys,
+      chatEvidenceObjectKeys: invalid.chatEvidenceObjectKeys,
+      paymentEvidenceFileIds: invalid.paymentEvidenceFileIds,
+      chatEvidenceFileIds: invalid.chatEvidenceFileIds,
+      evidenceCount: invalid.evidenceCount,
+    }), `nonce-invalid-${invalid.evidenceCount}`)), fixture.ports)).toThrow(/evidence|layout/i)
+    expect(fixture.requests.writeCount).toBe(0)
+  })
+
   it('rejects completion when the persisted projection hash does not match the exact ordered evidence', () => {
     const fixture = stateFixture(queuedRequest({
       state: 'PROCESSING', version: 5, attemptCount: 1, processingOwnerToken: 'worker-owner-token-1',
@@ -325,6 +390,30 @@ function p2ReadyRequest(): PmcMiniAppTargetRequestRecord & { protocolVersion: 2 
     aeId: 'ae-1',
     aeName: 'เอม',
     payloadHash: null,
+  }
+}
+
+function p2DriveOnlyQueuedRequest(
+  patch: Partial<PmcMiniAppTargetRequestRecord & { protocolVersion: 2 }> = {},
+): PmcMiniAppTargetRequestRecord & { protocolVersion: 2 } {
+  const ready = p2ReadyRequest()
+  const queued = {
+    ...ready,
+    state: 'QUEUED' as const,
+    version: 4,
+    paymentEvidenceObjectKeys: [],
+    chatEvidenceObjectKeys: [],
+    paymentEvidenceFileIds: ['owner-drive-payment-1'],
+    chatEvidenceFileIds: ['owner-drive-chat-1'],
+    evidenceCount: 2,
+    taskName: 'task/request-p2-drive',
+    queuedAt: '2026-08-20T08:59:00+07:00',
+    updatedAt: '2026-08-20T08:59:00+07:00',
+    ...patch,
+  }
+  return {
+    ...queued,
+    payloadHash: createHash('sha256').update(canonicalMiniAppP2BookingIdentity(queued)).digest('base64url'),
   }
 }
 

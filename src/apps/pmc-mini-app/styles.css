@@ -890,12 +890,14 @@ button:focus-visible {
 .pmc-preview-evidence span:last-child { border: 0; }
 
 .pmc-form-alert { margin: 0 0 12px; color: var(--pmc-error); text-align: center; }
+.pmc-form-status { margin: 0 0 12px; color: var(--pmc-gold-dark); text-align: center; }
 .pmc-booking-footer { position: sticky; inset-block-end: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; margin-inline: -20px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); border-block-start: 1px solid var(--pmc-line); background: rgba(255, 255, 255, .97); backdrop-filter: blur(12px); }
 .pmc-booking-footer > :only-child { grid-column: 1 / -1; }
 .pmc-primary-button, .pmc-secondary-button { min-height: 52px; padding: 10px 18px; border-radius: 9px; font-weight: 700; }
 .pmc-primary-button { border: 1px solid var(--pmc-gold-dark); color: #fff; background: var(--pmc-gold-dark); }
 .pmc-secondary-button { border: 1px solid #cccccc; color: var(--pmc-text); background: #fff; }
 .pmc-primary-button:disabled { cursor: wait; opacity: .62; }
+.pmc-secondary-button:disabled, .pmc-icon-button:disabled { cursor: default; opacity: .42; }
 
 .pmc-booking-success { display: grid; width: min(100%, 560px); min-height: 100dvh; margin-inline: auto; padding: 36px 24px; place-content: center; justify-items: center; text-align: center; }
 .pmc-success-mark { display: grid; width: 68px; height: 68px; place-items: center; border-radius: 50%; color: #fff; background: var(--pmc-gold-dark); }

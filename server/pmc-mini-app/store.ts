@@ -382,9 +382,11 @@ export function createGoogleMiniAppStore(input: {
     },
     async getLatestActiveDraftByStaff(staffId) {
       if (!safeId(staffId)) return null
-      return (await readRequestTable()).rows
+      const resumable = (await readRequestTable()).rows
         .map(({ value }) => value)
         .filter((draft) => draft.staffId === staffId && ACTIVE_RESUMABLE_STATES.has(draft.state) && validIso(draft.updatedAt))
+      const editable = resumable.filter((draft) => EDITABLE_RESUMABLE_STATES.has(draft.state))
+      return (editable.length > 0 ? editable : resumable)
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null
     },
     updateDraft: mutateDraft,
@@ -650,8 +652,9 @@ const REQUEST_STATES = new Set<MiniAppRequestState>([
 ])
 
 const ACTIVE_RESUMABLE_STATES = new Set<MiniAppRequestState>([
-  'DRAFT', 'READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'NEEDS_REVIEW',
+  'DRAFT', 'READY_TO_CONFIRM', 'NEEDS_REVIEW',
 ])
+const EDITABLE_RESUMABLE_STATES = new Set<MiniAppRequestState>(['DRAFT', 'READY_TO_CONFIRM'])
 const IDENTITY_BOUND_STATES = new Set<MiniAppRequestState>([
   'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMING', 'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW',
   'FAILED_RETRYABLE', 'CANCELLED', 'EXPIRED',

@@ -63,6 +63,7 @@ type TaskSnapshot = {
 }
 
 type FinalAttemptDeadline = number
+type WorkerEvidenceLayout = 'STAGED' | 'DRIVE_ONLY'
 
 export interface AsyncBookingWorker {
   finalize(input: {
@@ -230,19 +231,25 @@ export function createAsyncBookingWorker(input: {
 
   async function copyEvidenceToDrive(context: WorkerContext): Promise<void> {
     const phaseStartedAt = nowDate().getTime()
-    assertEvidenceLayout(context.bound, context.draft, false)
-    await attestProjectedStagedSlots(
-      context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds.length,
-    )
-    await attestProjectedStagedSlots(
-      context, 'CHAT', context.draft.chatEvidenceObjectKeys, context.draft.chatEvidenceFileIds.length,
-    )
-    const paymentEvidenceFileIds = await copyMissingEvidence(
-      context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds,
-    )
-    const chatEvidenceFileIds = await copyMissingEvidence(
-      context, 'CHAT', context.draft.chatEvidenceObjectKeys, context.draft.chatEvidenceFileIds,
-    )
+    const layout = assertEvidenceLayout(context.bound, context.draft, false)
+    if (layout === 'STAGED') {
+      await attestProjectedStagedSlots(
+        context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds.length,
+      )
+      await attestProjectedStagedSlots(
+        context, 'CHAT', context.draft.chatEvidenceObjectKeys, context.draft.chatEvidenceFileIds.length,
+      )
+    }
+    const paymentEvidenceFileIds = layout === 'DRIVE_ONLY'
+      ? [...context.draft.paymentEvidenceFileIds]
+      : await copyMissingEvidence(
+          context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds,
+        )
+    const chatEvidenceFileIds = layout === 'DRIVE_ONLY'
+      ? [...context.draft.chatEvidenceFileIds]
+      : await copyMissingEvidence(
+          context, 'CHAT', context.draft.chatEvidenceObjectKeys, context.draft.chatEvidenceFileIds,
+        )
     await renew(context)
     const previous = context.draft
     const projection = mutation('PROJECT', previous, context.taskAttempt, context.ownerToken, {
@@ -466,6 +473,7 @@ export function createAsyncBookingWorker(input: {
 
   async function cleanupVerifiedStaging(context: WorkerContext): Promise<void> {
     if (!validTerminal(context.snapshot, context.draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
+    if (assertEvidenceLayout(context.bound, context.draft, true) === 'DRIVE_ONLY') return
     for (const [kind, objectKeys] of [
       ['PAYMENT', context.draft.paymentEvidenceObjectKeys],
       ['CHAT', context.draft.chatEvidenceObjectKeys],
@@ -714,15 +722,34 @@ function validOwnedProcessing(
     && Date.parse(draft.processingLeaseUntil!) > nowMs
 }
 
-function assertEvidenceLayout(bound: MiniAppRequestRecord, draft: MiniAppRequestRecord, complete: boolean): void {
+function assertEvidenceLayout(
+  bound: MiniAppRequestRecord,
+  draft: MiniAppRequestRecord,
+  complete: boolean,
+): WorkerEvidenceLayout {
   const paymentCount = bound.paymentEvidenceObjectKeys.length
   const chatCount = bound.chatEvidenceObjectKeys.length
-  if (!validIdentity(bound, draft) || paymentCount < 1 || chatCount < 1
-    || draft.paymentEvidenceFileIds.length > paymentCount || draft.chatEvidenceFileIds.length > chatCount
-    || complete && (draft.paymentEvidenceFileIds.length !== paymentCount || draft.chatEvidenceFileIds.length !== chatCount)
-    || !draft.paymentEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
-    || !draft.chatEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
-    || draft.evidenceCount !== paymentCount + chatCount) throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
+  const safeFiles = draft.paymentEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
+    && draft.chatEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
+  if (!validIdentity(bound, draft) || !safeFiles) {
+    throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
+  }
+  const driveOnly = bound.protocolVersion === 2
+    && paymentCount === 0 && chatCount === 0
+    && draft.paymentEvidenceObjectKeys.length === 0 && draft.chatEvidenceObjectKeys.length === 0
+    && bound.paymentEvidenceFileIds.length >= 1 && bound.chatEvidenceFileIds.length >= 1
+    && sameStrings(bound.paymentEvidenceFileIds, draft.paymentEvidenceFileIds)
+    && sameStrings(bound.chatEvidenceFileIds, draft.chatEvidenceFileIds)
+    && draft.evidenceCount === draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
+  if (driveOnly) return 'DRIVE_ONLY'
+
+  const staged = paymentCount >= 1 && chatCount >= 1
+    && draft.paymentEvidenceFileIds.length <= paymentCount && draft.chatEvidenceFileIds.length <= chatCount
+    && (!complete
+      || draft.paymentEvidenceFileIds.length === paymentCount && draft.chatEvidenceFileIds.length === chatCount)
+    && draft.evidenceCount === paymentCount + chatCount
+  if (staged) return 'STAGED'
+  throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
 }
 
 function validTerminal(snapshot: TaskSnapshot, draft: MiniAppRequestRecord): boolean {
@@ -738,13 +765,23 @@ function validTerminal(snapshot: TaskSnapshot, draft: MiniAppRequestRecord): boo
   return (draft.state === 'CONFIRMED' || draft.state === 'CONFIRMED_WITH_RETRY') && credibleVersionAndAttempt && draft.attemptCount >= 1
     && Boolean(draft.caseId && SAFE_CASE_ID.test(draft.caseId)) && isConfirmationStatus(draft.confirmationStatus ?? '')
     && draft.processingOwnerToken === null && draft.processingLeaseUntil === null
-    && draft.paymentEvidenceFileIds.length === draft.paymentEvidenceObjectKeys.length
-    && draft.chatEvidenceFileIds.length === draft.chatEvidenceObjectKeys.length
-    && draft.paymentEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
-    && draft.chatEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
-    && draft.evidenceCount === draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
+    && completeEvidenceLayout(draft)
     && validProjectionHash(snapshot, draft)
     && (draft.state === 'CONFIRMED' ? draft.safeErrorCode === null : draft.safeErrorCode === 'DOWNSTREAM_RETRY')
+}
+
+function completeEvidenceLayout(draft: MiniAppRequestRecord): boolean {
+  const safeFiles = draft.paymentEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
+    && draft.chatEvidenceFileIds.every((fileId) => SAFE_DRIVE_FILE_ID.test(fileId))
+  if (!safeFiles) return false
+  const staged = draft.paymentEvidenceObjectKeys.length >= 1 && draft.chatEvidenceObjectKeys.length >= 1
+    && draft.paymentEvidenceFileIds.length === draft.paymentEvidenceObjectKeys.length
+    && draft.chatEvidenceFileIds.length === draft.chatEvidenceObjectKeys.length
+  const driveOnly = draft.protocolVersion === 2
+    && draft.paymentEvidenceObjectKeys.length === 0 && draft.chatEvidenceObjectKeys.length === 0
+    && draft.paymentEvidenceFileIds.length >= 1 && draft.chatEvidenceFileIds.length >= 1
+  return (staged || driveOnly)
+    && draft.evidenceCount === draft.paymentEvidenceFileIds.length + draft.chatEvidenceFileIds.length
 }
 
 function validExpectedCompletion(

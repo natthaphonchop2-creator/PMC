@@ -47,7 +47,7 @@ describe('PMC Mini App booking draft API', () => {
     expect(JSON.stringify(body)).not.toContain(`drafts/${draftId}`)
   })
 
-  it('authenticates and returns a PII-free projection of the current owner latest async draft', async () => {
+  it('does not reopen a background async request as the active booking form', async () => {
     const deps = dependencies({ asyncBooking: asyncConfig(new Set(['staff-1'])) })
     await createReadyDraftAndConfirm(deps)
     const response = await invoke(createPmcMiniAppMiddleware(deps), '/api/mini-app/booking-drafts/active', {
@@ -56,8 +56,7 @@ describe('PMC Mini App booking draft API', () => {
     const body = await response.json() as Record<string, unknown>
 
     expect(response.status).toBe(200)
-    expect(body).toMatchObject({ draftId: 'draft-1', requestId: 'request-1', state: 'QUEUED', input: null, paymentEvidenceIds: [], chatEvidenceIds: [] })
-    expect(body).not.toHaveProperty('customerName')
+    expect(body).toBeNull()
     expect(JSON.stringify(body)).not.toContain('ลูกค้าทดสอบ')
     expect(JSON.stringify(body)).not.toContain('drafts/draft-1')
   })
@@ -1158,8 +1157,10 @@ class TestStore implements MiniAppStore {
   }
   async getDraft(draftId: string) { this.draftReads += 1; return this.read(draftId) }
   async getLatestActiveDraftByStaff(staffId: string) {
-    return [...this.drafts.values()]
-      .filter((draft) => draft.staffId === staffId && ['DRAFT', 'READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'NEEDS_REVIEW'].includes(draft.state))
+    const resumable = [...this.drafts.values()]
+      .filter((draft) => draft.staffId === staffId && ['DRAFT', 'READY_TO_CONFIRM', 'NEEDS_REVIEW'].includes(draft.state))
+    const editable = resumable.filter((draft) => draft.state === 'DRAFT' || draft.state === 'READY_TO_CONFIRM')
+    return (editable.length > 0 ? editable : resumable)
       .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null
   }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {

@@ -71,6 +71,7 @@ export function BookingWizard({
   performanceNow?: () => number
 }) {
   const protocolVersion = bookingProtocolVersion(config)
+  const prepareEnabled = protocolVersion === 2 && config.bookingProtocol?.prepare === true
   const initialSavedAttribution = recoveredAttribution(initialDraft, session, protocolVersion)
   const recoveryBlocked = protocolVersion === 2 && initialDraft.state === 'READY_TO_CONFIRM' && !initialSavedAttribution
   const [state, dispatch] = useReducer(
@@ -80,10 +81,13 @@ export function BookingWizard({
   const [draft, setDraft] = useState(initialDraft)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [preparingEvidence, setPreparingEvidence] = useState(false)
   const [failure, setFailure] = useState(recoveryBlocked ? 'ข้อมูลผู้รับผิดชอบของร่างไม่ตรงกับบัญชีนี้ กรุณาตรวจสอบและบันทึกใหม่' : '')
   const [savedAttribution, setSavedAttribution] = useState(initialSavedAttribution)
   const [result, setResult] = useState<BookingConfirmationResult | null>(null)
   const preview = useMemo(() => safePreview(state, config, protocolVersion), [state, config, protocolVersion])
+  const readyToConfirm = !prepareEnabled
+    || draft.state === 'READY_TO_CONFIRM' && savedAttribution !== null
   const evidenceRef = useRef(state.evidence)
   const saveInFlightRef = useRef(false)
   const pendingPreviewTimingRef = useRef<number | null>(null)
@@ -120,13 +124,13 @@ export function BookingWizard({
     if (errors[field]) setErrors((current) => ({ ...current, [field]: '' }))
   }
   const goBack = async () => {
+    if (busy) return
     setFailure('')
     if (state.step > 0) {
       if (state.step === 4) setSavedAttribution(null)
       dispatch({ type: 'GO_BACK' })
       return
     }
-    if (busy) return
     setBusy(true)
     try {
       await adapter.cancel(draft.draftId, draft.version)
@@ -175,22 +179,27 @@ export function BookingWizard({
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
         const newChats = state.evidence.CHAT.flatMap(({ file }) => file ? [file] : [])
-        const usePrepare = protocolVersion === 2 && config.bookingProtocol?.prepare === true
-        if (usePrepare) {
+        if (prepareEnabled) {
           if (!('adminId' in input) || newPayments.length !== state.evidence.PAYMENT.length
             || newChats.length !== state.evidence.CHAT.length) {
             setFailure('กรุณาแนบรูปหลักฐานทั้งหมดใหม่ก่อนตรวจสอบข้อมูล')
             pendingPreviewTimingRef.current = null
             return
           }
+          setPreparingEvidence(true)
+          dispatch({ type: 'GO_TO_STEP', step: 4 })
           current = await adapter.prepare(current.draftId, current.version, {
             input, paymentFiles: newPayments, chatFiles: newChats,
           })
           setDraft(current)
-          setSavedAttribution(recoveredAttribution(current, session, protocolVersion))
+          const preparedAttribution = recoveredAttribution(current, session, protocolVersion)
+          if (current.state !== 'READY_TO_CONFIRM' || !preparedAttribution) {
+            setSavedAttribution(null)
+            throw new Error('PREPARE_NOT_READY')
+          }
+          setSavedAttribution(preparedAttribution)
           replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, current.paymentEvidenceCount, dispatch)
           replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, current.chatEvidenceCount, dispatch)
-          dispatch({ type: 'GO_TO_STEP', step: 4 })
           return
         }
         if (newPayments.length > 0 || newChats.length > 0) {
@@ -213,6 +222,7 @@ export function BookingWizard({
         if (errorCode(error) === 'STALE_DRAFT_VERSION' || errorCode(error) === 'DRAFT_NOT_UPLOADABLE') {
           try {
             const latest = await adapter.load(draft.draftId)
+            if (prepareEnabled) setDraft(latest)
             if (latest.state === 'READY_TO_CONFIRM' && sameBookingInput(latest.input, input)) {
               const recovered = recoveredAttribution(latest, session, protocolVersion)
               if (protocolVersion === 1 || recovered) {
@@ -232,11 +242,13 @@ export function BookingWizard({
         setFailure(draftSaveFailureMessage(error))
       } finally {
         saveInFlightRef.current = false
+        setPreparingEvidence(false)
         setBusy(false)
       }
     }
   }
   const confirm = async () => {
+    if (busy || !readyToConfirm) return
     const homeStartedAt = safeNow(performanceNow)
     pendingConfirmErrorTimingRef.current = null
     setBusy(true)
@@ -324,11 +336,12 @@ export function BookingWizard({
           evidence={state.evidence}
         />}
 
+        {preparingEvidence && <p className="pmc-form-status" role="status" aria-live="polite">กำลังเตรียมหลักฐาน</p>}
         {failure && <p className="pmc-form-alert" role="alert">{failure}</p>}
         <footer className="pmc-booking-footer">
-          {state.step > 0 && <button type="button" className="pmc-secondary-button" onClick={goBack}>ย้อนกลับ</button>}
+          {state.step > 0 && <button type="button" className="pmc-secondary-button" disabled={busy} onClick={goBack}>ย้อนกลับ</button>}
           {state.step < 4 && <button type="submit" className="pmc-primary-button" disabled={busy}>{busy ? 'กำลังบันทึก' : state.step === 3 ? 'ตรวจสอบข้อมูล' : 'ถัดไป'}</button>}
-          {state.step === 4 && <button type="button" className="pmc-primary-button" disabled={busy} onClick={confirm}>{busy ? 'กำลังยืนยัน' : 'ยืนยันบันทึก'}</button>}
+          {state.step === 4 && <button type="button" className="pmc-primary-button" disabled={busy || !readyToConfirm} onClick={confirm}>{preparingEvidence ? 'กำลังเตรียมหลักฐาน' : busy ? 'กำลังยืนยัน' : 'ยืนยันบันทึก'}</button>}
         </footer>
       </form>
     </main>

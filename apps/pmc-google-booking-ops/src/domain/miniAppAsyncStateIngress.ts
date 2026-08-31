@@ -19,6 +19,7 @@ const PAYLOAD_KEYS = [
 ] as const
 const TERMINAL_STATES = new Set(['CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'CANCELLED', 'EXPIRED'])
 const MAX_LEASE_MS = 240_000
+type AsyncEvidenceLayout = 'STAGED' | 'DRIVE_ONLY'
 
 export function mutateMiniAppAsyncState(input: unknown, ports: BookingPorts): MiniAppAsyncStateIngressResult {
   const envelope = verifyEnvelope(input, ports)
@@ -89,11 +90,21 @@ function validateImmutableBindings(
   payload: MiniAppAsyncStateMutation,
   ports: BookingPorts,
 ): void {
-  const persistedHash = current.payloadHash ?? ports.crypto.sha256Base64Url(canonicalRequestIdentity(current))
+  const canonicalHash = ports.crypto.sha256Base64Url(canonicalRequestIdentity(current))
+  const persistedHash = current.payloadHash ?? canonicalHash
+  const layout = evidenceLayout(current)
   if (persistedHash !== payload.payloadHash
     || !sameStrings(current.paymentEvidenceObjectKeys, payload.paymentEvidenceObjectKeys)
     || !sameStrings(current.chatEvidenceObjectKeys, payload.chatEvidenceObjectKeys)) {
     throw new Error('mini app async payload conflict')
+  }
+  if (payload.operation !== 'EXHAUST' && layout === null) throw new Error('mini app async evidence layout rejected')
+  if (layout === 'DRIVE_ONLY'
+    && (canonicalHash !== payload.payloadHash
+      || !sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
+      || !sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
+      || current.evidenceCount !== payload.evidenceCount)) {
+    throw new Error('mini app async Drive evidence binding conflict')
   }
 }
 
@@ -162,10 +173,7 @@ function applyRenew(current: MiniAppRequestStateRecord, payload: MiniAppAsyncSta
 }
 
 function applyProject(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation, ports: BookingPorts) {
-  const completeEvidence = payload.paymentEvidenceFileIds.length === payload.paymentEvidenceObjectKeys.length
-    && payload.chatEvidenceFileIds.length === payload.chatEvidenceObjectKeys.length
-    && payload.evidenceCount === payload.paymentEvidenceFileIds.length + payload.chatEvidenceFileIds.length
-  if (!completeEvidence) throw new Error('mini app async evidence projection rejected')
+  if (!projectableEvidenceBinding(current, payload)) throw new Error('mini app async evidence projection rejected')
   const projectionHash = ports.crypto.sha256Base64Url(canonicalMiniAppEvidenceProjection(projectionBinding(current, payload)))
   if (current.state === 'PROCESSING' && current.processingOwnerToken === payload.leaseOwnerToken
     && current.version === payload.expectedVersion + 1 && current.attemptCount === payload.expectedAttempt
@@ -202,10 +210,7 @@ function applyComplete(current: MiniAppRequestStateRecord, payload: MiniAppAsync
   if (current.state === state && current.version === payload.expectedVersion + 1
     && current.caseId === payload.caseId && current.confirmationStatus === payload.confirmationStatus) return unchanged(current)
   requireOwnedProcessing(current, payload)
-  if (current.paymentEvidenceFileIds.length !== current.paymentEvidenceObjectKeys.length
-    || current.chatEvidenceFileIds.length !== current.chatEvidenceObjectKeys.length
-    || !sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
-    || !sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)) {
+  if (!completeEvidenceBinding(current, payload)) {
     throw new Error('mini app async completion evidence rejected')
   }
   if (current.evidenceProjectionHash !== projectionHash(current, ports)) {
@@ -226,14 +231,7 @@ function applyExhaust(current: MiniAppRequestStateRecord, payload: MiniAppAsyncS
     && current.caseId && /^PMC-\d{6}-\d{4,}$/.test(current.caseId)
     && current.confirmationStatus && ['CONFIRMED', 'TENTATIVE', 'AWAITING_ADMIN_SLOT'].includes(current.confirmationStatus)
     && current.processingOwnerToken === null && current.processingLeaseUntil === null
-    && current.paymentEvidenceFileIds.length === current.paymentEvidenceObjectKeys.length
-    && current.chatEvidenceFileIds.length === current.chatEvidenceObjectKeys.length
-    && current.paymentEvidenceFileIds.every((fileId) => /^[A-Za-z0-9_-]{10,256}$/.test(fileId))
-    && current.chatEvidenceFileIds.every((fileId) => /^[A-Za-z0-9_-]{10,256}$/.test(fileId))
-    && sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
-    && sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
-    && current.evidenceCount === payload.evidenceCount
-    && current.evidenceCount === current.paymentEvidenceFileIds.length + current.chatEvidenceFileIds.length
+    && completeEvidenceBinding(current, payload)
     && current.evidenceProjectionHash === projectionHash(current, ports)) {
     return { write: false as const, next: current, outcome: 'TERMINAL' as const }
   }
@@ -244,6 +242,52 @@ function applyExhaust(current: MiniAppRequestStateRecord, payload: MiniAppAsyncS
     state: 'NEEDS_REVIEW', safeErrorCode: 'RETRY_EXHAUSTED', processingLeaseUntil: null,
     processingOwnerToken: null, lastProgressAt: payload.nowIso, updatedAt: payload.nowIso,
   })
+}
+
+function evidenceLayout(current: MiniAppRequestStateRecord): AsyncEvidenceLayout | null {
+  const staged = current.paymentEvidenceObjectKeys.length >= 1 && current.chatEvidenceObjectKeys.length >= 1
+    && current.paymentEvidenceFileIds.length <= current.paymentEvidenceObjectKeys.length
+    && current.chatEvidenceFileIds.length <= current.chatEvidenceObjectKeys.length
+    && current.evidenceCount === current.paymentEvidenceObjectKeys.length + current.chatEvidenceObjectKeys.length
+  if (staged) return 'STAGED'
+  const driveOnly = 'protocolVersion' in current && current.protocolVersion === 2
+    && current.paymentEvidenceObjectKeys.length === 0 && current.chatEvidenceObjectKeys.length === 0
+    && current.paymentEvidenceFileIds.length >= 1 && current.chatEvidenceFileIds.length >= 1
+    && current.evidenceCount === current.paymentEvidenceFileIds.length + current.chatEvidenceFileIds.length
+  return driveOnly ? 'DRIVE_ONLY' : null
+}
+
+function completeEvidenceBinding(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation): boolean {
+  const layout = evidenceLayout(current)
+  if (!layout || current.evidenceCount !== payload.evidenceCount
+    || !sameStrings(current.paymentEvidenceObjectKeys, payload.paymentEvidenceObjectKeys)
+    || !sameStrings(current.chatEvidenceObjectKeys, payload.chatEvidenceObjectKeys)
+    || !sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
+    || !sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)) return false
+  if (layout === 'DRIVE_ONLY') return true
+  return current.paymentEvidenceFileIds.length === current.paymentEvidenceObjectKeys.length
+    && current.chatEvidenceFileIds.length === current.chatEvidenceObjectKeys.length
+    && current.evidenceCount === current.paymentEvidenceFileIds.length + current.chatEvidenceFileIds.length
+}
+
+function projectableEvidenceBinding(current: MiniAppRequestStateRecord, payload: MiniAppAsyncStateMutation): boolean {
+  const layout = evidenceLayout(current)
+  if (!layout || current.evidenceCount !== payload.evidenceCount
+    || !sameStrings(current.paymentEvidenceObjectKeys, payload.paymentEvidenceObjectKeys)
+    || !sameStrings(current.chatEvidenceObjectKeys, payload.chatEvidenceObjectKeys)) return false
+  if (layout === 'DRIVE_ONLY') {
+    return sameStrings(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
+      && sameStrings(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
+  }
+  return payload.paymentEvidenceFileIds.length === current.paymentEvidenceObjectKeys.length
+    && payload.chatEvidenceFileIds.length === current.chatEvidenceObjectKeys.length
+    && payload.evidenceCount === payload.paymentEvidenceFileIds.length + payload.chatEvidenceFileIds.length
+    && isPrefix(current.paymentEvidenceFileIds, payload.paymentEvidenceFileIds)
+    && isPrefix(current.chatEvidenceFileIds, payload.chatEvidenceFileIds)
+}
+
+function isPrefix(prefix: readonly string[], values: readonly string[]): boolean {
+  return prefix.length <= values.length && prefix.every((value, index) => values[index] === value)
 }
 
 function projectionHash(current: MiniAppRequestStateRecord, ports: BookingPorts): string | null {

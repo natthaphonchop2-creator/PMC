@@ -179,25 +179,61 @@ describe('PMC Mini App Sheet store', () => {
     await expect(store.updateDraft('draft-1', 0, { aeName: 'แวว' })).rejects.toThrow('STALE_DRAFT_VERSION')
   })
 
-  it('resumes only the newest valid active draft owned by the staff member', async () => {
+  it('prefers the newest editable draft over newer worker and review updates', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
-    await store.createDraft(validDraft({ draftId: 'draft-old', requestId: 'request-old', state: 'DRAFT', updatedAt: '2026-08-27T10:00:00.000Z' }))
+    await store.createDraft(validDraft({ draftId: 'draft-editable-old', requestId: 'request-editable-old', state: 'DRAFT', updatedAt: '2026-08-27T10:00:00.000Z' }))
+    await store.createDraft(validDraft({ draftId: 'draft-editable-new', requestId: 'request-editable-new', state: 'READY_TO_CONFIRM', updatedAt: '2026-08-27T10:30:00.000Z' }))
     await store.createDraft(validDraft({ draftId: 'draft-other', requestId: 'request-other', staffId: 'staff-other', updatedAt: '2026-08-28T12:00:00.000Z' }))
     await store.createDraft(validDraft({ draftId: 'draft-terminal', requestId: 'request-terminal', state: 'CONFIRMED', updatedAt: '2026-08-29T12:00:00.000Z' }))
+    await store.createDraft(validDraft({
+      draftId: 'draft-processing', requestId: 'request-processing', state: 'PROCESSING',
+      payloadHash: bookingPayloadHash(validDraft()), processingStartedAt: '2026-08-28T10:00:00.000Z',
+      processingLeaseUntil: '2026-08-28T10:05:00.000Z', lastProgressAt: '2026-08-28T10:01:00.000Z',
+      attemptCount: 1, updatedAt: '2026-08-28T12:01:00.000Z',
+    }))
     await store.createDraft(validDraft({ draftId: 'draft-review', requestId: 'request-review', state: 'NEEDS_REVIEW', updatedAt: '2026-08-28T11:00:00.000Z' }))
 
     await expect(store.getLatestActiveDraftByStaff('staff-active')).resolves.toMatchObject({
-      draftId: 'draft-review', requestId: 'request-review', staffId: 'staff-active', state: 'NEEDS_REVIEW',
+      draftId: 'draft-editable-new', requestId: 'request-editable-new', staffId: 'staff-active', state: 'READY_TO_CONFIRM',
     })
     await expect(store.getLatestActiveDraftByStaff('staff-missing')).resolves.toBeNull()
+  })
+
+  it.each(['QUEUED', 'PROCESSING', 'RETRYING'] as const)(
+    'does not resume a background %s request as the booking form',
+    async (state) => {
+      const sheets = new MemorySheets()
+      const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+      await store.createDraft(validDraft({
+        state,
+        payloadHash: bookingPayloadHash(validDraft()),
+        processingStartedAt: state === 'QUEUED' ? null : '2026-08-28T10:00:00.000Z',
+        processingLeaseUntil: state === 'PROCESSING' ? '2026-08-28T10:05:00.000Z' : null,
+        lastProgressAt: state === 'QUEUED' ? null : '2026-08-28T10:01:00.000Z',
+        attemptCount: state === 'QUEUED' ? 0 : 1,
+      }))
+
+      await expect(store.getLatestActiveDraftByStaff('staff-active')).resolves.toBeNull()
+    },
+  )
+
+  it('returns the newest review request only when no editable draft remains', async () => {
+    const sheets = new MemorySheets()
+    const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
+    await store.createDraft(validDraft({ draftId: 'draft-review-old', requestId: 'request-review-old', state: 'NEEDS_REVIEW', updatedAt: '2026-08-28T10:00:00.000Z' }))
+    await store.createDraft(validDraft({ draftId: 'draft-review-new', requestId: 'request-review-new', state: 'NEEDS_REVIEW', updatedAt: '2026-08-28T11:00:00.000Z' }))
+
+    await expect(store.getLatestActiveDraftByStaff('staff-active')).resolves.toMatchObject({
+      draftId: 'draft-review-new', state: 'NEEDS_REVIEW',
+    })
   })
 
   it('fails closed when the exact target reader encounters a malformed persisted draft date', async () => {
     const sheets = new MemorySheets()
     const store = createGoogleMiniAppStore({ spreadsheetId: 'sheet-1', sheets })
     await store.createDraft(validDraft({
-      draftId: 'draft-invalid', requestId: 'request-invalid', state: 'QUEUED', updatedAt: 'not-a-date',
+      draftId: 'draft-invalid', requestId: 'request-invalid', state: 'DRAFT', updatedAt: 'not-a-date',
     }))
 
     await expect(store.getLatestActiveDraftByStaff('staff-active')).rejects.toThrow('INVALID_DRAFT_DATE')

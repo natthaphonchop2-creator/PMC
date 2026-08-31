@@ -22,6 +22,7 @@ function requestRowNumberFormats(headers: readonly string[]) {
 export function createGoogleMiniAppRequestStatePort(
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
 ): MiniAppRequestStatePort {
+  let pendingRead: ReturnType<typeof readRows> | null = null
   const requireSheet = () => {
     const sheet = spreadsheet.getSheetByName(TAB)
     if (!sheet) throw new Error('missing required sheet: MINI_APP_REQUESTS')
@@ -57,12 +58,15 @@ export function createGoogleMiniAppRequestStatePort(
       return readRows().rows.map(({ value }) => JSON.parse(JSON.stringify(value)) as MiniAppRequestStateRecord)
     },
     getByRequestId(requestId) {
-      const matches = readRows().rows.filter(({ value }) => value.requestId === requestId)
+      const table = readRows()
+      pendingRead = table
+      const matches = table.rows.filter(({ value }) => value.requestId === requestId)
       if (matches.length > 1) throw new Error('duplicate mini app async request identity')
       return matches[0]?.value ?? null
     },
     updateByRequestId(requestId, expectedVersion, next) {
-      const table = readRows()
+      const table = pendingRead ?? readRows()
+      pendingRead = null
       const matches = table.rows.filter(({ value }) => value.requestId === requestId)
       if (matches.length > 1) throw new Error('duplicate mini app async request identity')
       const row = matches[0]

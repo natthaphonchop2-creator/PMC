@@ -25,6 +25,23 @@ describe('Apps Script Mini App request row store', () => {
     expect(fake.clearCalls).toBe(0)
   })
 
+  it('reuses the locked request-table snapshot when updating the row it just read', () => {
+    const fake = fakeSpreadsheet([
+      requestRecord({ requestId: 'request-1', draftId: 'draft-1' }),
+      requestRecord({ requestId: 'request-2', draftId: 'draft-2' }),
+    ])
+    const port = createGoogleMiniAppRequestStatePort(fake.spreadsheet)
+    const current = port.getByRequestId('request-2')!
+
+    port.updateByRequestId('request-2', current.version, {
+      ...current, state: 'QUEUED', version: current.version + 1, payloadHash: 'payload-hash-2',
+    })
+
+    expect(fake.bodyReadCalls).toBe(1)
+    expect(port.getByRequestId('request-2')).toMatchObject({ state: 'QUEUED', version: 2 })
+    expect(fake.bodyReadCalls).toBe(2)
+  })
+
   it('rejects header drift and stale expected versions without writing', () => {
     const fake = fakeSpreadsheet([requestRecord()])
     const port = createGoogleMiniAppRequestStatePort(fake.spreadsheet)
@@ -168,6 +185,7 @@ function fakeSpreadsheet(
   const formats = initial.map(() => Array<string>(headers.length).fill('General'))
   const setRanges: Array<{ row: number; column: number; rows: number; columns: number }> = []
   let clearCalls = 0
+  let bodyReadCalls = 0
   const sheet = {
     getLastColumn: () => headers.length,
     getLastRow: () => values.length + 1,
@@ -175,6 +193,7 @@ function fakeSpreadsheet(
       return {
         getValues() {
           if (row === 1) return [headers.slice(column - 1, column - 1 + columns)]
+          bodyReadCalls += 1
           return values.slice(row - 2, row - 2 + rows).map((item) => item.slice(column - 1, column - 1 + columns))
         },
         setValues(next: unknown[][]) {
@@ -201,7 +220,13 @@ function fakeSpreadsheet(
   const spreadsheet = {
     getSheetByName: (name: string) => name === 'MINI_APP_REQUESTS' ? sheet : null,
   } as unknown as GoogleAppsScript.Spreadsheet.Spreadsheet
-  return { spreadsheet, headers, setRanges, get clearCalls() { return clearCalls } }
+  return {
+    spreadsheet,
+    headers,
+    setRanges,
+    get clearCalls() { return clearCalls },
+    get bodyReadCalls() { return bodyReadCalls },
+  }
 }
 
 function fakeTargetSpreadsheet(initialRows: unknown[][]) {

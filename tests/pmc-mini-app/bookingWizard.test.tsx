@@ -106,6 +106,103 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(values.slice(0, 3)).toEqual(['มัส', 'แวว', 'ไม่ระบุ'])
   })
 
+  it('shows the preview immediately while one P2 prepare request keeps confirmation and back navigation fenced', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    let resolvePrepare!: (value: BookingDraftProjection) => void
+    vi.mocked(app.prepare).mockImplementationOnce(() => new Promise((resolve) => { resolvePrepare = resolve }))
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+    })
+    const payment = new File([pngBytes()], 'slip.png', { type: 'image/png' })
+    const chat = new File([pngBytes()], 'chat.png', { type: 'image/png' })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), payment)
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), chat)
+
+    const submit = screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' })
+    fireEvent.click(submit)
+    fireEvent.click(submit)
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    const pending = screen.getByRole('status')
+    expect(pending).toHaveTextContent('กำลังเตรียมหลักฐาน')
+    expect(pending).toHaveAttribute('aria-live', 'polite')
+    expect(pending).toHaveClass('pmc-form-status')
+    for (const button of screen.getAllByRole('button', { name: 'ย้อนกลับ' })) expect(button).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'กำลังเตรียมหลักฐาน' })).toBeDisabled()
+    expect(app.prepare).toHaveBeenCalledOnce()
+    expect(app.confirm).not.toHaveBeenCalled()
+
+    await act(async () => resolvePrepare({
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 3,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    }))
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'ยืนยันบันทึก' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+    expect(app.confirm).toHaveBeenCalledWith('draft-1', 3)
+  })
+
+  it('never enables confirmation when P2 prepare resolves to an unready authoritative draft', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.prepare).mockResolvedValueOnce({
+      ...draft,
+      state: 'UPLOADING',
+      version: 2,
+      input: completeInput(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    })
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+    })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(await screen.findByRole('alert')).toHaveTextContent('บันทึกร่างไม่สำเร็จ')
+    expect(screen.getByRole('button', { name: 'ยืนยันบันทึก' })).toBeDisabled()
+    expect(app.confirm).not.toHaveBeenCalled()
+  })
+
+  it('never enables confirmation when stale P2 recovery reloads an unready draft', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.prepare).mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+    vi.mocked(app.load).mockResolvedValueOnce({ ...draft, state: 'DRAFT', version: 2, input: completeInput() })
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+    })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    expect(await screen.findByRole('alert')).toHaveTextContent('บันทึกร่างไม่สำเร็จ')
+    expect(screen.getByRole('button', { name: 'ยืนยันบันทึก' })).toBeDisabled()
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.confirm).not.toHaveBeenCalled()
+  })
+
   it('previews recorder, Admin, and AE labels in the same exact order', () => {
     const view = renderWizard({ initialStep: 4, draft: { ...draft, input: completeInput() } })
     const labels = [...view.container.querySelectorAll('.pmc-preview-list dt')].map((element) => element.textContent)
@@ -340,7 +437,7 @@ describe('PMC Mini App mobile booking wizard', () => {
     expect(bookingTiming.mock.calls.filter(([name]) => name === 'confirm_terminal_error')).toHaveLength(1)
   })
 
-  it('does not emit a pending preview timing after the Wizard unmounts', async () => {
+  it('emits preview timing before prepare resolves and does not emit again after unmount', async () => {
     const user = userEvent.setup()
     const app = adapter()
     let resolvePrepare!: (value: BookingDraftProjection) => void
@@ -356,6 +453,7 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
     await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    expect(bookingTiming.mock.calls.filter(([name]) => name === 'navigation_to_preview')).toHaveLength(1)
     view.unmount()
 
     await act(async () => resolvePrepare({
@@ -368,7 +466,7 @@ describe('PMC Mini App mobile booking wizard', () => {
       chatEvidenceCount: 1,
     }))
 
-    expect(bookingTiming).not.toHaveBeenCalled()
+    expect(bookingTiming.mock.calls.filter(([name]) => name === 'navigation_to_preview')).toHaveLength(1)
   })
 
   it('does not send the same valid confirmation twice before React disables the submit button', () => {

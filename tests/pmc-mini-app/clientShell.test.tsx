@@ -630,27 +630,31 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.createDraft).toHaveBeenCalledWith('preview-token', 1)
   })
 
-  it('starts on Home and opens the latest active request only after a booking action', async () => {
-    const user = userEvent.setup()
-    const api = miniAppApi()
-    api.initialize = vi.fn(async () => 'raw-id-token')
-    api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'มัส', active: true }))
-    api.loadConfig = vi.fn(async () => config)
-    api.loadLatestActiveDraft = vi.fn(async () => ({
-      draftId: 'draft-queued', requestId: 'request-queued', state: 'QUEUED', retentionState: '', version: 5, input: null,
-      paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
-      caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: null,
-    }))
-    render(<PmcMiniApp api={api} />)
+  it.each(['QUEUED', 'PROCESSING', 'RETRYING'] as const)(
+    'starts a fresh draft instead of opening a background %s request',
+    async (state) => {
+      const user = userEvent.setup()
+      const api = miniAppApi()
+      api.initialize = vi.fn(async () => 'raw-id-token')
+      api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'มัส', active: true }))
+      api.loadConfig = vi.fn(async () => config)
+      api.loadLatestActiveDraft = vi.fn(async () => ({
+        draftId: 'draft-background', requestId: 'request-background', state, retentionState: '', version: 5, input: null,
+        paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+        caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: null,
+      }))
+      render(<PmcMiniApp api={api} />)
 
-    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
-    expect(api.loadLatestActiveDraft).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+      expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+      expect(api.loadLatestActiveDraft).not.toHaveBeenCalled()
+      await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
 
-    expect(await screen.findByText('รับรายการแล้ว')).toBeVisible()
-    expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
-    expect(api.createDraft).not.toHaveBeenCalled()
-  })
+      expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+      expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
+      expect(api.createDraft).toHaveBeenCalledOnce()
+      expect(screen.queryByText('รับรายการแล้ว')).not.toBeInTheDocument()
+    },
+  )
 
   it('resumes a saved staged draft on preview without asking for evidence again', async () => {
     const user = userEvent.setup()
@@ -847,11 +851,12 @@ describe('PMC LINE Mini App shell', () => {
     expect(throwingTiming).toHaveBeenCalledWith('navigation_to_home', expect.objectContaining({ action: 'home', status: 200 }))
   })
 
-  it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
+  it('single-flights deferred background recovery before creating one fresh draft', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
-    let resolveActive!: (draft: null) => void
-    const activeDraft = new Promise<null>((resolve) => { resolveActive = resolve })
+    type ActiveDraft = Awaited<ReturnType<PmcMiniAppApi['loadLatestActiveDraft']>>
+    let resolveActive!: (draft: ActiveDraft) => void
+    const activeDraft = new Promise<ActiveDraft>((resolve) => { resolveActive = resolve })
     api.loadLatestActiveDraft = vi.fn(async () => activeDraft)
     api.createDraft = vi.fn(async () => ({
       draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
@@ -870,7 +875,11 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
     expect(api.createDraft).not.toHaveBeenCalled()
 
-    resolveActive(null)
+    resolveActive({
+      draftId: 'draft-processing', requestId: 'request-processing', state: 'PROCESSING', retentionState: '',
+      version: 5, input: null, paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: '2026-08-28T10:00:00.000Z', lastProgressAt: '2026-08-28T10:01:00.000Z',
+    })
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
     expect(api.createDraft).toHaveBeenCalledOnce()
   })
