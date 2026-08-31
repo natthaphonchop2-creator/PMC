@@ -34,6 +34,25 @@ describe('PMC Mini App signed draft-state ingress client', () => {
       .update(canonicalMiniAppDraftStateIngress(unsigned)).digest('hex'))
   })
 
+  it('signs PREPARE_READY with the versioned staged-object keys emitted by the staging store', () => {
+    const mutation = prepareMutation('PREPARE_READY')
+    if (mutation.operation !== 'PREPARE_READY') throw new Error('expected ready')
+    const uploadIds = {
+      PAYMENT: '0130199b97b4a7b188297eabe858acaaa34973f78f300a11f4a53ae831fdb5ee',
+      CHAT: '2652b54ae5983aad730d2e3270dea8daa580128c6afa7c0aaa02c571c065f0d9',
+    } as const
+    const evidence = mutation.evidence.map((item) => ({
+      ...item,
+      value: `drafts/v2/request-1/draft-1/${item.kind}/${item.ordinal}/${uploadIds[item.kind]}/${item.contentSha256}.png`,
+    }))
+
+    const built = buildMiniAppDraftStateIngress({ ...mutation, evidence }, {
+      timestamp: 1_800_000_000, nonce: 'nonce-draft-state-v2',
+    }, 'server-secret')
+
+    expect(built.body.payload).toMatchObject({ operation: 'PREPARE_READY', evidence })
+  })
+
   it('posts PREPARE_PARTIAL and accepts only the exact safe digest result', async () => {
     const fetch = vi.fn(async () => response(200, {
       requestId: 'request-1', draftId: 'draft-1', state: 'DRAFT', version: 2,

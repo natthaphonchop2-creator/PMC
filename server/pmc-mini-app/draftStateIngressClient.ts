@@ -1,4 +1,8 @@
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
+import {
+  miniAppEvidenceObjectKeyV2,
+  miniAppEvidenceUploadIdV2,
+} from '../../shared/pmcMiniAppEvidence.js'
 import {
   canonicalMiniAppDraftStateIngress,
   type MiniAppDraftEvidenceItem,
@@ -129,7 +133,7 @@ function validMutation(value: MiniAppDraftStateMutation): boolean {
     && validNormalizedInput(value.input, value.requestId)
     && (value.operation === 'PREPARE_BEGIN'
       ? validEvidenceManifest(value.evidence)
-      : validEvidence(value.evidence, value.draftId, value.operation))
+      : validEvidence(value.evidence, value.requestId, value.draftId, value.operation))
 }
 
 function validEvidenceManifest(values: unknown): boolean {
@@ -150,12 +154,13 @@ function validNormalizedInput(value: MiniAppNormalizedBookingInputV2, requestId:
 
 function validEvidence(
   values: MiniAppDraftEvidenceItem[],
+  requestId: string,
   draftId: string,
   operation: 'PREPARE_READY' | 'PREPARE_PARTIAL',
 ): boolean {
   if (!Array.isArray(values) || values.length < 2 || values.length > 20) return false
   if (!validEvidenceShape(values, EVIDENCE_KEYS)) return false
-  for (const item of values) if (item.value !== null && !validEvidenceValue(item, draftId)) return false
+  for (const item of values) if (item.value !== null && !validEvidenceValue(item, requestId, draftId)) return false
   const persisted = values.filter(({ value }) => value !== null).length
   return operation === 'PREPARE_READY' ? persisted === values.length : persisted > 0 && persisted < values.length
 }
@@ -182,11 +187,21 @@ function validEvidenceShape(
   return true
 }
 
-function validEvidenceValue(item: MiniAppDraftEvidenceItem, draftId: string): boolean {
+function validEvidenceValue(item: MiniAppDraftEvidenceItem, requestId: string, draftId: string): boolean {
   if (typeof item.value !== 'string') return false
   if (item.storage === 'DRIVE_FILE') return /^[A-Za-z0-9_-]{10,256}$/.test(item.value)
   const extension = item.mimeType === 'image/jpeg' ? 'jpg' : 'png'
-  return item.value === `drafts/${draftId}/${item.kind}/${item.contentSha256}.${extension}`
+  const legacy = `drafts/${draftId}/${item.kind}/${item.contentSha256}.${extension}`
+  const slot = {
+    requestId, draftId, evidenceKind: item.kind, ordinal: item.ordinal,
+    mimeType: item.mimeType, contentSha256: item.contentSha256,
+  }
+  const uploadId = miniAppEvidenceUploadIdV2(slot, sha256Utf8)
+  return item.value === legacy || item.value === miniAppEvidenceObjectKeyV2(slot, uploadId)
+}
+
+function sha256Utf8(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
 function isResult(value: unknown): value is MiniAppDraftStateResult {
