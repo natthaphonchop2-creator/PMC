@@ -399,9 +399,11 @@ function hasOnlyDirectFileOwnerDetails(
   details: readonly GoogleAppsScript.Drive_v3.Drive.V3.Schema.PermissionPermissionDetails[] | undefined,
 ): boolean {
   if (!details || details.length === 0) return true
-  return details.every((detail) => detail.inherited === false
-    && detail.permissionType === 'file'
-    && detail.role === 'owner'
+  const directOwners = details.filter((detail) => detail.inherited === false
+    && detail.permissionType === 'file' && detail.role === 'owner')
+  return directOwners.length === 1 && details.every((detail) => detail.permissionType === 'file'
+    && (detail.inherited === false && detail.role === 'owner'
+      || detail.inherited === true && detail.role === 'writer')
     && !hasUnexpectedKeys(detail, ['inherited', 'permissionType', 'role']))
 }
 

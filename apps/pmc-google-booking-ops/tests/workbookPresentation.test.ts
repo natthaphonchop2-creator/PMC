@@ -842,6 +842,30 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(drive.cleanup).not.toHaveBeenCalled()
   })
 
+  it('accepts one direct owner with the same owner inherited as writer from a My Drive parent', () => {
+    const aggregateOwner = {
+      ...ownerPermission(),
+      permissionDetails: [
+        { inherited: true, permissionType: 'file', role: 'writer' },
+        { inherited: false, permissionType: 'file', role: 'owner' },
+      ],
+    }
+    const drive = driveV3BackupFake({
+      folderPermissions: [aggregateOwner],
+      backupPermissions: [aggregateOwner],
+    })
+    vi.stubGlobal('Drive', drive.service)
+    const gateway = createGoogleWorkbookPresentationGateway({
+      spreadsheetId: drive.sourceId,
+      backupFolderId: drive.folderId,
+      sha256Hex,
+    })
+
+    expect(gateway.createPrivateNativeBackup('PMC Booking Presentation Backup').fileId)
+      .toBe('backup-file-test-id')
+    expect(drive.cleanup).not.toHaveBeenCalled()
+  })
+
   it('accepts one direct owner accumulated across bounded permission pages', () => {
     const drive = driveV3BackupFake({
       folderPermissionPages: [[], [directOwnerPermission()]],
