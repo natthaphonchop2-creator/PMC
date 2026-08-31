@@ -74,10 +74,7 @@ describe('PMC Mini App deterministic end-to-end booking flow', () => {
     expect(rejectedCachedConfirm).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
     expect(confirmed).toEqual({
       status: 200,
-      body: {
-        caseId: 'PMC-202608-0001', status: 'CONFIRMED',
-        driveState: 'OK', calendarState: 'OK', lineState: 'OK',
-      },
+      body: { caseId: 'PMC-202608-0001', status: 'CONFIRMED' },
     })
     expect(system.bookings()).toEqual([expect.objectContaining({
       recorderId: 'admin-1', recorderName: 'Admin A', adminId: 'staff-ae', adminName: 'เอม',

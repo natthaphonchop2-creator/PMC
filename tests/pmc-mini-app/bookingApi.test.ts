@@ -360,7 +360,10 @@ describe('PMC Mini App booking draft API', () => {
     vi.mocked(deps.ingress.send).mockImplementationOnce(async (draft) => {
       callOrder.push('BOOKING_INGRESS')
       expect(draft).toMatchObject({ state: 'CONFIRMING', payloadHash: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) })
-      return { caseId: 'PMC-202608-0001', status: 'CONFIRMED' }
+      return {
+        caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+        driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+      }
     })
 
     const response = await confirmP2Draft({ ...deps, draftStateIngress: owner }, Number(ready.version))

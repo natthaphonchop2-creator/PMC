@@ -927,7 +927,7 @@ async function handleBookingDraftRoute(
     }
     const result = await deps.ingress.send(claimed.draft)
     await deps.store.completeConfirmation(draft.requestId, result.caseId, currentIso(deps), result.status)
-    respond(res, 200, result)
+    respond(res, 200, { caseId: result.caseId, status: result.status })
   } catch (error) {
     const code = safeIngressError(error)
     try { await deps.store.failConfirmation(draft.requestId, code, currentIso(deps)) } catch {
@@ -985,7 +985,7 @@ async function confirmOwnerFencedP2(
   const completed = await completeOwnerConfirmation(claim, payloadHash, bookingResult, deps)
   if (completed?.state === 'CONFIRMED' && completed.caseId === bookingResult.caseId
     && completed.confirmationStatus === bookingResult.status) {
-    respond(res, 200, bookingResult)
+    respond(res, 200, { caseId: bookingResult.caseId, status: bookingResult.status })
     return
   }
   respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
