@@ -135,8 +135,18 @@ Expected:
 
 - `EXPIRED_6M` and call tasks cancelled;
 - evidence enters retention approval queue;
-- Drive evidence remains until manager approval;
-- approval trashes only the evidence folder and appends an audit event.
+- Drive/GCS evidence remains after approval;
+- only a separate owner-executed cleanup may trash the exact verified resources; and
+- approval and cleanup append sanitized audit events without customer data, storage identity, object key, filename, hash, principal, or URL.
+
+Cancelled/expired Mini App draft evidence uses the same boundary. The manual Apps Script functions are:
+
+- `previewPmcDraftEvidenceRetention(retentionId)` — safe count/status/digest preview only;
+- `approvePmcDraftEvidenceRetention(retentionId, expectedVersion, approvalDigest, reason)` — binds the effective owner and performs no storage deletion;
+- `executePmcDraftEvidenceRetention(retentionId, expectedVersion)` — claims a lease, preflights every resource, then invokes exact idempotent cleanup; and
+- `readbackPmcDraftEvidenceRetention(retentionId)` — safe status readback.
+
+These four functions must never be installed as Form or clock triggers. `RETENTION_QUEUE` V1-to-V2 migration, `PMC_DRAFT_CLEANUP_URL` installation, and every cleanup execution are separate owner-approved live actions. Daily reconciliation may discover/expire/repair rows but must never delete evidence or retry cleanup automatically. If execute returns `RETENTION_CLEANUP_RETRYABLE`, read back the row first; do not change the manifest, owner, or resource location, and do not rerun until the owner explicitly approves the retry.
 
 ### 9. Duplicate/replay safety
 
@@ -306,48 +316,13 @@ Only the owner may run the two manual functions below. Neither function is an in
 
 ### Private operator workspace
 
-Before opening the maintenance shell, owner creates one environment file outside the repository, sets it to mode `0600`, and populates all values privately. The file must define `PMC_OPERATOR_PROJECT`, `PMC_OPERATOR_REGION`, `PMC_OPERATOR_SERVICE`, `PMC_OPERATOR_QUEUE`, `PMC_OPERATOR_REVISION`, `PMC_OPERATOR_SCRIPT_ID`, `PMC_OPERATOR_DEPLOYMENT_ID`, `PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION`, `PMC_OPERATOR_CLASP_PROFILE`, `PMC_OPERATOR_CLASP_PROJECT_FILE`, `PMC_OPERATOR_PRIVATE_DIR`, `PMC_OPERATOR_PROPERTIES_PREINSTALL`, `PMC_OPERATOR_PROPERTIES_INSTALLED`, `PMC_OPERATOR_ATTESTATION_FILE`, `PMC_OPERATOR_REVIEWED_COMMIT`, `PMC_OPERATOR_REVIEWED_CODE_SHA256`, and `PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION`.
+Owner creates one environment file outside the repository, mode `0600`, plus one owner-only output directory, mode `0700`. The file defines `PMC_OPERATOR_REVIEWED_COMMIT`, `PMC_OPERATOR_REVIEWED_CODE_SHA256`, `PMC_OPERATOR_CLASP_VERSION`, `PMC_OPERATOR_CLASP_PROFILE`, `PMC_OPERATOR_CLASP_PROJECT_FILE`, `PMC_OPERATOR_SCRIPT_ID`, `PMC_OPERATOR_DEPLOYMENT_ID`, `PMC_OPERATOR_EXPECTED_ACCOUNT_EMAIL`, `PMC_OPERATOR_PRIVATE_DIR`, and the later maintenance values `PMC_OPERATOR_PROJECT`, `PMC_OPERATOR_REGION`, `PMC_OPERATOR_SERVICE`, `PMC_OPERATOR_QUEUE`, `PMC_OPERATOR_REVISION`, `PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION`, `PMC_OPERATOR_PROPERTIES_PREINSTALL`, `PMC_OPERATOR_PROPERTIES_INSTALLED`, and `PMC_OPERATOR_ATTESTATION_FILE`.
 
-The secure launcher supplies only the environment-file path as `PMC_BOOKING_PRESENTATION_ENV_FILE`. Do not type resolved project, queue, revision, script, deployment, account, or filesystem values into copied commands.
+Use a new empty private output directory for every reviewed attempt. The runner deliberately refuses to overwrite a preflight, approval, version, clone, or readback artifact from an earlier attempt.
 
-macOS normally opens zsh. Paste this launcher by itself first and wait for the clean Bash prompt; it is also safe when the current shell is already Bash:
+The private clasp project file must be a non-symlink mode-`0600` JSON file with exactly the reviewed `scriptId` and `rootDir: "dist"`. Supply only the environment-file path through `PMC_BOOKING_DEPLOY_ENV_FILE`. Do not type resolved identities, paths, or digests into copied commands.
 
-```bash
-exec /bin/bash --noprofile --norc
-```
-
-Only after the clean Bash prompt appears, run the next block from the reviewed repository root. Bash owns `set +o history`; `HISTFILE=/dev/null`, disabled history, disabled xtrace, and private umask must be in effect before the private environment file is sourced:
-
-```bash
-HISTFILE=/dev/null
-export HISTFILE
-set +o history
-set +x
-umask 077
-test -n "${PMC_BOOKING_PRESENTATION_ENV_FILE:-}"
-chmod 600 "$PMC_BOOKING_PRESENTATION_ENV_FILE"
-source "$PMC_BOOKING_PRESENTATION_ENV_FILE"
-: "${PMC_OPERATOR_PROJECT:?missing PMC_OPERATOR_PROJECT}"
-: "${PMC_OPERATOR_REGION:?missing PMC_OPERATOR_REGION}"
-: "${PMC_OPERATOR_SERVICE:?missing PMC_OPERATOR_SERVICE}"
-: "${PMC_OPERATOR_QUEUE:?missing PMC_OPERATOR_QUEUE}"
-: "${PMC_OPERATOR_REVISION:?missing PMC_OPERATOR_REVISION}"
-: "${PMC_OPERATOR_SCRIPT_ID:?missing PMC_OPERATOR_SCRIPT_ID}"
-: "${PMC_OPERATOR_DEPLOYMENT_ID:?missing PMC_OPERATOR_DEPLOYMENT_ID}"
-: "${PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION:?missing PMC_OPERATOR_MIN_APPS_SCRIPT_VERSION}"
-: "${PMC_OPERATOR_CLASP_PROFILE:?missing PMC_OPERATOR_CLASP_PROFILE}"
-: "${PMC_OPERATOR_CLASP_PROJECT_FILE:?missing PMC_OPERATOR_CLASP_PROJECT_FILE}"
-: "${PMC_OPERATOR_PRIVATE_DIR:?missing PMC_OPERATOR_PRIVATE_DIR}"
-: "${PMC_OPERATOR_PROPERTIES_PREINSTALL:?missing PMC_OPERATOR_PROPERTIES_PREINSTALL}"
-: "${PMC_OPERATOR_PROPERTIES_INSTALLED:?missing PMC_OPERATOR_PROPERTIES_INSTALLED}"
-: "${PMC_OPERATOR_ATTESTATION_FILE:?missing PMC_OPERATOR_ATTESTATION_FILE}"
-: "${PMC_OPERATOR_REVIEWED_COMMIT:?missing PMC_OPERATOR_REVIEWED_COMMIT}"
-: "${PMC_OPERATOR_REVIEWED_CODE_SHA256:?missing PMC_OPERATOR_REVIEWED_CODE_SHA256}"
-: "${PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION:?missing PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION}"
-test -d "$PMC_OPERATOR_PRIVATE_DIR"
-chmod 700 "$PMC_OPERATOR_PRIVATE_DIR"
-test ! -e "$PMC_OPERATOR_ATTESTATION_FILE"
-```
+The checked-in Bash 3.2 runner enforces `set -Eeuo pipefail`, noclobber, `HISTFILE=/dev/null`, disabled history/xtrace, `umask 077`, owner/mode checks, clean reviewed commit, exact bundle hash, pinned local clasp version, exact authorized account, exact project/deployment binding, and JSON readback. Its three phases are intentionally separate: read-only preflight, explicit owner approval, then deploy.
 
 Every generated file remains mode `0600`. Never `cat`, `echo`, paste, or upload an attestation, property value, account identity, project/deployment identity, backup identity, or unrestricted URL into terminal history, chat, screenshots, logs, or rollout evidence.
 
@@ -355,25 +330,29 @@ Every generated file remains mode `0600`. Never `cat`, `echo`, paste, or upload 
 
 Perform these steps in order. Stop immediately if a command fails, a placeholder is unresolved, an identity is wrong, a trigger gate fails, or any digest changes.
 
-1. Deploy the reviewed Apps Script version. Pin the exact reviewed commit and generated `Code.js` SHA-256 before any push. Verify the authorized Google account, Apps Script project ID, deployment ID, and private clasp project binding without allowing their output into the normal transcript.
+1. Deploy the reviewed Apps Script version only through the checked-in runner. Run each phase separately and inspect the mode-`0600` private artifacts before proceeding:
 
 ```bash
-test "$(git rev-parse HEAD)" = "$PMC_OPERATOR_REVIEWED_COMMIT"
-test -z "$(git status --porcelain)"
-npm run booking:build
-shasum -a 256 apps/pmc-google-booking-ops/dist/Code.js > "$PMC_OPERATOR_PRIVATE_DIR/Code.js.sha256"
-chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/Code.js.sha256"
-test "$(awk '{print $1}' "$PMC_OPERATOR_PRIVATE_DIR/Code.js.sha256")" = "$PMC_OPERATOR_REVIEWED_CODE_SHA256"
-npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" show-authorized-user > "$PMC_OPERATOR_PRIVATE_DIR/clasp-account.log" 2>&1
-npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" deployments "$PMC_OPERATOR_SCRIPT_ID" > "$PMC_OPERATOR_PRIVATE_DIR/deployments-before.log" 2>&1
-npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" push > "$PMC_OPERATOR_PRIVATE_DIR/clasp-push.log" 2>&1
-npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" version "PMC Booking workbook presentation" > "$PMC_OPERATOR_PRIVATE_DIR/clasp-version.log" 2>&1
-npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" --project "$PMC_OPERATOR_CLASP_PROJECT_FILE" redeploy "$PMC_OPERATOR_DEPLOYMENT_ID" --versionNumber "$PMC_OPERATOR_REVIEWED_APPS_SCRIPT_VERSION" --description "PMC Booking workbook presentation" > "$PMC_OPERATOR_PRIVATE_DIR/clasp-redeploy.log" 2>&1
-npx clasp --user "$PMC_OPERATOR_CLASP_PROFILE" deployments "$PMC_OPERATOR_SCRIPT_ID" > "$PMC_OPERATOR_PRIVATE_DIR/deployments-after.log" 2>&1
-chmod 600 "$PMC_OPERATOR_PRIVATE_DIR/"*.log
+apps/pmc-google-booking-ops/scripts/deploy-workbook-presentation.sh preflight
+apps/pmc-google-booking-ops/scripts/deploy-workbook-presentation.sh approve
+apps/pmc-google-booking-ops/scripts/deploy-workbook-presentation.sh deploy
 ```
 
-Owner opens the private logs locally and aborts if the account, script project, immutable version, deployment, or generated bundle hash differs from the reviewed values.
+Require `PREFLIGHT_OK`, then `APPROVAL_RECORDED`, then `DEPLOY_VERIFIED`. The runner performs no external mutation before the approved deploy phase has repeated every preflight gate and matched the approval seal. It uses `clasp push --force --json`, creates one new immutable version, proves that version was absent before and present afterward, clones that exact version into the private directory, verifies the cloned `Code.js` hash, redeploys exactly that newly created version, and verifies the final deployment readback. Any failed gate stops later mutation commands.
+
+Only after `DEPLOY_VERIFIED`, open a clean Bash shell and privately source the same file for steps 2 onward:
+
+```bash
+exec /bin/bash --noprofile --norc
+HISTFILE=/dev/null
+export HISTFILE
+set +o history
+set +x
+umask 077
+source "$PMC_BOOKING_DEPLOY_ENV_FILE"
+```
+
+Abort if any required maintenance variable is absent or if `PMC_OPERATOR_ATTESTATION_FILE` already exists.
 
 2. Pause the exact production Booking queue and prove the task list is empty. All identity-bearing output stays in private files.
 
@@ -482,6 +461,7 @@ Require the expected running state. Do not reuse the old queue attestation or pr
 
 ### Abort and manual recovery
 
+- If the deployment runner aborts after `clasp push`, do not assume the previous remote HEAD, immutable version, or deployment changed together. The deployment remains unverified until private read-only inspection proves its exact state. Do not reuse the old output directory or approval seal; diagnose first, then begin a fresh reviewed preflight/approval/deploy cycle.
 - Before the apply attempt: keep the queue paused, correct the failed precondition, create a new valid maintenance window if permitted by the Attribution state, run a new preview, and install only its newly reviewed bare digest. Never reuse the old review digest.
 - If the attempt marker cannot be written and verified, apply stops before backup/batch. Treat the property state as unknown until privately read back; do not retry blindly.
 - If backup, batch, readback, or final approval transition fails after the property became `ATTEMPTED`, keep the queue paused and do not rerun automatically. A replay must fail closed. Do not overwrite `ATTEMPTED` until owner has completed read-only diagnosis and explicitly approved a new preview/review cycle.

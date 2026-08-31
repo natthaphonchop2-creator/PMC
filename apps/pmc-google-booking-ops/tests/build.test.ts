@@ -103,7 +103,7 @@ describe('Apps Script bundle', () => {
     const runbook = readFileSync('apps/pmc-google-booking-ops/docs/pilot-runbook.md', 'utf8')
     const section = runbook.slice(runbook.indexOf('## Owner-gated Booking workbook presentation maintenance'))
     const orderedMarkers = [
-      '1. Deploy the reviewed Apps Script version.',
+      '1. Deploy the reviewed Apps Script version only through',
       '2. Pause the exact production Booking queue',
       '3. Read and verify `PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST`.',
       '4. Run `previewPmcBookingWorkbookPresentation()` once.',
@@ -131,8 +131,13 @@ describe('Apps Script bundle', () => {
     const bashLaunch = section.indexOf('exec /bin/bash --noprofile --norc')
     expect(bashLaunch).toBeGreaterThanOrEqual(0)
     expect(bashLaunch).toBeLessThan(section.indexOf('set +o history'))
-    expect(section).toContain('source "$PMC_BOOKING_PRESENTATION_ENV_FILE"')
-    expect(section).toContain('chmod 600 "$PMC_BOOKING_PRESENTATION_ENV_FILE"')
+    expect(section).toContain('source "$PMC_BOOKING_DEPLOY_ENV_FILE"')
+    expect(section).toContain('deploy-workbook-presentation.sh preflight')
+    expect(section).toContain('deploy-workbook-presentation.sh approve')
+    expect(section).toContain('deploy-workbook-presentation.sh deploy')
+    expect(section).toContain('PREFLIGHT_OK')
+    expect(section).toContain('APPROVAL_RECORDED')
+    expect(section).toContain('DEPLOY_VERIFIED')
     for (const variable of [
       'PMC_OPERATOR_PROJECT', 'PMC_OPERATOR_REGION', 'PMC_OPERATOR_SERVICE',
       'PMC_OPERATOR_QUEUE', 'PMC_OPERATOR_REVISION', 'PMC_OPERATOR_SCRIPT_ID',
@@ -141,6 +146,8 @@ describe('Apps Script bundle', () => {
       'PMC_OPERATOR_PRIVATE_DIR', 'PMC_OPERATOR_PROPERTIES_PREINSTALL',
       'PMC_OPERATOR_PROPERTIES_INSTALLED', 'PMC_OPERATOR_ATTESTATION_FILE',
     ]) expect(section).toContain(`$${variable}`)
+    expect(section).toContain('PMC_OPERATOR_EXPECTED_ACCOUNT_EMAIL')
+    expect(section).toContain('PMC_OPERATOR_CLASP_VERSION')
 
     const bashBlocks = [...section.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]!)
     expect(bashBlocks.join('\n')).not.toMatch(/<(?:operator|absolute|reviewed)-[^>]+>/)

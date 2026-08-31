@@ -379,6 +379,30 @@ describe('Booking attribution migration workflow', () => {
     expect(fake.effects).toEqual(['manifest.read', 'sheet.read'])
   })
 
+  it('accepts authorized presentation metadata drift after COMPLETE without lock, backup, or write', () => {
+    const plan = planBookingAttributionMigration(legacySnapshot())
+    if (plan.kind !== 'MIGRATE') throw new Error('expected migration')
+    const target = targetSnapshotFrom(plan)
+    target.request.preservationFingerprint = sha256('authorized-request-presentation-v2')
+    target.master.preservationFingerprint = sha256('authorized-master-presentation-v2')
+    const manifest = manifestForPlan(plan, 'COMPLETE')
+    const previewFake = workflowFake([target], { manifest })
+    const applyFake = workflowFake([target], { manifest })
+
+    expect(previewBookingAttributionMigration(previewFake.ports)).toMatchObject({ kind: 'NONE' })
+    expect(previewFake.effects).toEqual(['manifest.read', 'sheet.read'])
+    expect(applyBookingAttributionMigration(applyFake.ports)).toEqual({
+      status: 'COMPLETE', readbackVerified: true,
+    })
+    expect(applyFake.effects).toEqual(['manifest.read', 'sheet.read'])
+    for (const effects of [previewFake.effects, applyFake.effects]) {
+      expect(effects).not.toContain('lock.enter')
+      expect(effects).not.toContain('backup.createVerified')
+      expect(effects).not.toContain('sheet.write')
+    }
+    expect(applyFake.manifest()?.state).toBe('COMPLETE')
+  })
+
   it('accepts a valid appended protocol-2 pre-save draft with no Admin selection yet', () => {
     const plan = planBookingAttributionMigration(legacySnapshot())
     if (plan.kind !== 'MIGRATE') throw new Error('expected migration')

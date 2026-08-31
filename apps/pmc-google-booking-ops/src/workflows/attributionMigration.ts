@@ -300,9 +300,7 @@ function verifyCompletedManifest(
     || plan.requestValueHash !== manifest.expected.requestValueHash
     || plan.masterValueHash !== manifest.expected.masterValueHash
     || plan.requestNonTargetValueHash !== manifest.expected.requestNonTargetValueHash
-    || plan.masterNonTargetValueHash !== manifest.expected.masterNonTargetValueHash
-    || plan.requestPreservationFingerprint !== manifest.expected.requestPreservationHash
-    || plan.masterPreservationFingerprint !== manifest.expected.masterPreservationHash) {
+    || plan.masterNonTargetValueHash !== manifest.expected.masterNonTargetValueHash) {
     throw new Error('COMPLETE_MANIFEST_READBACK_MISMATCH')
   }
   validateTargetRows(snapshot)
