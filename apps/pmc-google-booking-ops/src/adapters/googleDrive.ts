@@ -158,14 +158,13 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
     },
     verifyEvidenceFile(input) {
       const file = DriveApp.getFileById(input.fileId)
-      if (file.isTrashed()) return 'ALREADY_TRASHED'
       assertExactEvidenceFile(file, input)
-      return 'PRESENT'
+      return file.isTrashed() ? 'ALREADY_TRASHED' : 'PRESENT'
     },
     trashEvidenceFile(input) {
       const file = DriveApp.getFileById(input.fileId)
-      if (file.isTrashed()) return 'ALREADY_TRASHED'
       assertExactEvidenceFile(file, input)
+      if (file.isTrashed()) return 'ALREADY_TRASHED'
       file.setTrashed(true)
       return 'TRASHED'
     },

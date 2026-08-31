@@ -150,6 +150,7 @@ describe('owner-approved draft evidence cleanup', () => {
     )
     expect(result.status).toBe('CLEANED')
     expect(fixture.ports.drive.trashedEvidenceFileIds()).toEqual([fixture.driveFileId])
+    const cleanupCalls = fixture.cleanup.mock.calls.length
 
     const replay = executeDraftEvidenceRetention(
       fixture.retentionId,
@@ -158,6 +159,38 @@ describe('owner-approved draft evidence cleanup', () => {
       fixture.ports,
     )
     expect(replay).toMatchObject({ status: 'CLEANED', version: result.version })
+    expect(fixture.cleanup).toHaveBeenCalledTimes(cleanupCalls)
+  })
+
+  it('fences a second executor while the first cleanup lease is active', () => {
+    const fixture = cleanupFixture()
+    const preview = previewDraftEvidenceRetention(fixture.retentionId, fixture.ports)
+    const approved = approveDraftEvidenceRetention(
+      fixture.retentionId,
+      preview.version,
+      preview.approvalDigest,
+      'owner cleanup',
+      owner,
+      fixture.ports,
+    )
+    const cleaning = fixture.ports.retention.setStatus(
+      fixture.retentionId,
+      approved.version,
+      'CLEANING',
+      {
+        cleanupAttemptCount: 1,
+        cleanupClaimId: 'a'.repeat(64),
+        cleanupLeaseUntil: '2026-08-20T09:10:00+07:00',
+      },
+    )
+
+    expect(() => executeDraftEvidenceRetention(
+      fixture.retentionId,
+      cleaning.version,
+      owner,
+      fixture.ports,
+    )).toThrow('RETENTION_CLEANUP_CONFLICT')
+    expect(fixture.cleanup).not.toHaveBeenCalled()
   })
 
   it('requires the same effective owner who approved cleanup', () => {
@@ -177,6 +210,49 @@ describe('owner-approved draft evidence cleanup', () => {
       'other-owner@example.com',
       fixture.ports,
     )).toThrow('RETENTION_CLEANUP_OWNER_MISMATCH')
+  })
+
+  it('rejects an already-trashed Drive file whose exact parent or marker changed before retry', () => {
+    const fixture = cleanupFixture()
+    const preview = previewDraftEvidenceRetention(fixture.retentionId, fixture.ports)
+    const approved = approveDraftEvidenceRetention(
+      fixture.retentionId,
+      preview.version,
+      preview.approvalDigest,
+      'owner cleanup',
+      owner,
+      fixture.ports,
+    )
+    const originalSetStatus = fixture.ports.repositories.retention.setStatus
+    let failCompletionOnce = true
+    fixture.ports.repositories.retention.setStatus = (id, version, status, patch) => {
+      if (status === 'CLEANED' && failCompletionOnce) {
+        failCompletionOnce = false
+        throw new Error('sheet completion lost')
+      }
+      return originalSetStatus(id, version, status, patch)
+    }
+    expect(() => executeDraftEvidenceRetention(
+      fixture.retentionId,
+      approved.version,
+      owner,
+      fixture.ports,
+    )).toThrow('RETENTION_CLEANUP_RETRYABLE')
+    fixture.ports.drive.seedEvidenceFile({
+      id: fixture.driveFileId,
+      folderId: 'moved-folder',
+      name: fixture.driveFileName,
+      mimeType: 'image/jpeg',
+      marker: 'changed-marker',
+    })
+    const failed = fixture.ports.retention.get(fixture.retentionId)!
+
+    expect(() => executeDraftEvidenceRetention(
+      fixture.retentionId,
+      failed.version,
+      owner,
+      fixture.ports,
+    )).toThrow('RETENTION_CLEANUP_RETRYABLE')
   })
 })
 
@@ -234,7 +310,7 @@ function cleanupFixture(options: {
   ports.retention.upsert(record, 0)
   const cleanup = vi.fn(() => ({ cleanedCount: 1 }))
   ports.draftCleanup = { clean: cleanup }
-  return { ports, retentionId, driveFileId: chat.fileId, cleanup }
+  return { ports, retentionId, driveFileId: chat.fileId, driveFileName: chat.fileName, cleanup }
 }
 
 function draft(patch: Partial<PmcMiniAppTargetRequestRecord>): PmcMiniAppTargetRequestRecord {

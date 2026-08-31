@@ -38,7 +38,9 @@ describe('Apps Script draft cleanup client', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
     const [url, request] = fetch.mock.calls[0]!
     expect(url).toBe('https://cleanup.example/internal/mini-app/draft-evidence-cleanup')
-    expect(request).toMatchObject({ method: 'post', contentType: 'application/json', muteHttpExceptions: true })
+    expect(request).toMatchObject({
+      method: 'post', contentType: 'application/json', followRedirects: false, muteHttpExceptions: true,
+    })
     const envelope = JSON.parse(String(request.payload))
     expect(envelope.signature).toBe(createHmac('sha256', 'secret')
       .update(canonicalMiniAppDraftCleanup({
@@ -59,12 +61,18 @@ describe('Apps Script draft cleanup client', () => {
       crypto: ports.crypto,
       clock: ports.clock,
     })).toThrow('DRAFT_CLEANUP_NOT_CONFIGURED')
+    expect(() => createAppsScriptDraftCleanupPort({
+      url: 'https://cleanup.example/internal/mini-app/draft-evidence-cleanup?redirect=1',
+      secret: 'secret',
+      crypto: ports.crypto,
+      clock: ports.clock,
+    })).toThrow('DRAFT_CLEANUP_NOT_CONFIGURED')
 
     const payload = {
       cleanupClaimId: 'a'.repeat(64), manifestDigest: 'b'.repeat(64), resources: [],
     }
     const client = createAppsScriptDraftCleanupPort({
-      url: 'https://cleanup.example/path',
+      url: 'https://cleanup.example/internal/mini-app/draft-evidence-cleanup',
       secret: 'secret',
       crypto: ports.crypto,
       clock: ports.clock,

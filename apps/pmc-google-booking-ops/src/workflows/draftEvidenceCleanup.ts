@@ -80,6 +80,7 @@ export function executeDraftEvidenceRetention(
   const owner = ownerEmail(actor)
   let record = ports.locks.withLock(() => claimCleanup(retentionId, expectedVersion, owner, ports))
   const resources = resourcesFor(record, ports)
+  if (record.status === 'CLEANED') return preview(record, resources, ports)
   try {
     preflightResources(record, resources, ports)
     const staged = resources.filter((resource): resource is Extract<
@@ -103,7 +104,11 @@ export function executeDraftEvidenceRetention(
     }
     record = ports.locks.withLock(() => completeCleanup(record, ports))
   } catch (error) {
-    ports.locks.withLock(() => recordCleanupFailure(record, error, ports))
+    try {
+      ports.locks.withLock(() => recordCleanupFailure(record, error, ports))
+    } catch {
+      // The lease remains fail-closed in CLEANING and can only be reclaimed after expiry.
+    }
     throw Object.assign(new Error('RETENTION_CLEANUP_RETRYABLE'), { cause: error })
   }
   appendCleanupAudit(record, 'DRAFT_EVIDENCE_CLEANED', 'CLEANING', record.status, resources.length, ports)
@@ -133,8 +138,7 @@ function claimCleanup(
   }
   if (record.status === 'CLEANING' && record.cleanupClaimId
     && Date.parse(record.cleanupLeaseUntil) > now) {
-    if (record.version !== expectedVersion) throw new Error('RETENTION_CLEANUP_CONFLICT')
-    return record
+    throw new Error('RETENTION_CLEANUP_CONFLICT')
   }
   if (record.version !== expectedVersion
     || !['APPROVED', 'FAILED_RETRYABLE', 'CLEANING'].includes(record.status)) {

@@ -744,17 +744,16 @@ export function createFakeDrive(
     verifyEvidenceFile(input) {
       const file = files.get(input.fileId)
       if (!file) throw new Error('file not found')
-      if (trashedEvidence.has(input.fileId)) return 'ALREADY_TRASHED'
       if (file.folderId !== input.parentFolderId || file.name !== input.fileName
         || file.mimeType !== input.mimeType || file.marker !== input.marker) throw new Error('draft evidence binding mismatch')
-      return 'PRESENT'
+      return trashedEvidence.has(input.fileId) ? 'ALREADY_TRASHED' : 'PRESENT'
     },
     trashEvidenceFile(input) {
       const file = files.get(input.fileId)
       if (!file) throw new Error('file not found')
-      if (trashedEvidence.has(input.fileId)) return 'ALREADY_TRASHED'
       if (file.folderId !== input.parentFolderId || file.name !== input.fileName
         || file.mimeType !== input.mimeType || file.marker !== input.marker) throw new Error('draft evidence binding mismatch')
+      if (trashedEvidence.has(input.fileId)) return 'ALREADY_TRASHED'
       trashedEvidence.add(input.fileId)
       return 'TRASHED'
     },

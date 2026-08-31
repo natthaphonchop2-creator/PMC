@@ -30,7 +30,8 @@ export function createAppsScriptDraftCleanupPort(input: {
       const signature = input.crypto.hmacSha256Hex(canonicalMiniAppDraftCleanup(unsigned), input.secret)
       const envelope: MiniAppDraftCleanupEnvelope = { ...unsigned, signature }
       const response = fetcher(url, {
-        method: 'post', contentType: 'application/json', payload: JSON.stringify(envelope), muteHttpExceptions: true,
+        method: 'post', contentType: 'application/json', payload: JSON.stringify(envelope),
+        followRedirects: false, muteHttpExceptions: true,
       })
       if (response.getResponseCode() !== 200) throw new Error('DRAFT_CLEANUP_FAILED')
       let body: unknown
@@ -48,6 +49,10 @@ export function createAppsScriptDraftCleanupPort(input: {
 function exactHttps(value: string): string | null {
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && url.hostname && !url.username && !url.password ? url.toString() : null
+    return url.protocol === 'https:' && url.hostname && !url.username && !url.password
+      && url.pathname === '/internal/mini-app/draft-evidence-cleanup'
+      && !url.search && !url.hash
+      ? url.toString()
+      : null
   } catch { return null }
 }
