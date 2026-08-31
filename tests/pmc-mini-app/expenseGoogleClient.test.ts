@@ -494,6 +494,25 @@ describe('private finance Google ports', () => {
     })).resolves.toBeUndefined()
   })
 
+  it('waits for a temporarily unavailable Drive checksum before verifying evidence', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    fake.delayChecksumReads(attachment.privateFileId, 1)
+
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+    })).resolves.toBeUndefined()
+  })
+
   it.each(['version', 'bytes', 'metadata'] as const)(
     'rejects a post-commit %s replacement against the pinned ledger attachment descriptor',
     async (mutation) => {
@@ -583,6 +602,7 @@ function financeGoogleFake() {
   let deleteFailureCount = 0
   let afterMediaRead: (() => void) | undefined
   let incompleteSearch: boolean | undefined = false
+  const delayedChecksumReads = new Map<string, number>()
   const monthRows = new Map<string, unknown[][]>([
     ['EXPENSE_SUBMISSIONS', [['EXP-202608-0001']]],
     ['EXPENSE_ATTACHMENTS', []],
@@ -629,6 +649,15 @@ function financeGoogleFake() {
     },
   }))
 
+  const metadataForRead = (selected: FakeItem) => {
+    const metadata = driveMetadata(selected)
+    const remaining = delayedChecksumReads.get(selected.id) ?? 0
+    if (remaining <= 0) return metadata
+    delayedChecksumReads.set(selected.id, remaining - 1)
+    const { sha256Checksum: _delayed, ...withoutChecksum } = metadata
+    return withoutChecksum
+  }
+
   const driveGets = vi.fn(async (input: { fileId: string; alt?: string }) => {
     const selected = items.get(input.fileId)
     if (!selected) throw Object.assign(new Error('private provider not found'), { code: 404 })
@@ -639,7 +668,7 @@ function financeGoogleFake() {
       afterMediaRead = undefined
       return { data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }
     }
-    return { data: driveMetadata(selected) }
+    return { data: metadataForRead(selected) }
   })
 
   const driveLists = vi.fn(async (input: { q?: string }) => {
@@ -746,6 +775,7 @@ function financeGoogleFake() {
     get afterMediaRead() { return afterMediaRead },
     set afterMediaRead(callback: (() => void) | undefined) { afterMediaRead = callback },
     setIncompleteSearch(value: boolean | undefined) { incompleteSearch = value },
+    delayChecksumReads(fileId: string, reads: number) { delayedChecksumReads.set(fileId, reads) },
     setMonthRows(tab: 'EXPENSE_SUBMISSIONS' | 'EXPENSE_ATTACHMENTS' | 'MONTHLY_SUMMARY', rows: unknown[][]) {
       monthRows.set(tab, rows)
     },

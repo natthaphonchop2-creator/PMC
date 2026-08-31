@@ -189,6 +189,7 @@ export interface GoogleExpenseFakeEnvironment {
   setExpenseFileProperties(fileId: string, input: { appProperties: Record<string, string>; properties: Record<string, string> }): void
   setExpenseFileDescription(fileId: string, description: string): void
   setOwnerBlobReadFailure(value: boolean): void
+  setOwnerChecksumDelayReads(reads: number): void
   addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
@@ -248,6 +249,17 @@ export function installGoogleExpenseFakes(options: {
   let incompleteSearch: boolean | undefined = false
   let ownerFileSequence = 0
   let failOwnerBlobReads = false
+  let ownerChecksumDelayReads = 0
+
+  const ownerAdvancedFile = (file: FakeFile) => {
+    const metadata = advancedFile(file)
+    if (file.id.startsWith('owner-file-') && ownerChecksumDelayReads > 0) {
+      ownerChecksumDelayReads -= 1
+      const { sha256Checksum: _delayed, ...withoutChecksum } = metadata
+      return withoutChecksum
+    }
+    return metadata
+  }
 
   vi.stubGlobal('DriveApp', {
     Access: { PRIVATE: 'PRIVATE' },
@@ -256,14 +268,14 @@ export function installGoogleExpenseFakes(options: {
   })
   vi.stubGlobal('Drive', {
     Files: {
-      get: (id: string) => advancedFile(files.get(id)!),
+    get: (id: string) => ownerAdvancedFile(files.get(id)!),
       list: (input: { q?: string }) => {
         const parentId = /'([^']+)'\s+in\s+parents/.exec(input.q ?? '')?.[1]
         return {
           incompleteSearch,
           files: [...files.values()]
             .filter((file) => !parentId || file.parentFolders.some(({ id }) => id === parentId))
-            .map(advancedFile),
+            .map(ownerAdvancedFile),
         }
       },
       create: (
@@ -293,7 +305,7 @@ export function installGoogleExpenseFakes(options: {
         })
         files.set(file.id, file)
         parent.filesByName.set(file.name, [...(parent.filesByName.get(file.name) ?? []), file])
-        return advancedFile(file)
+        return ownerAdvancedFile(file)
       },
     },
   })
@@ -304,6 +316,7 @@ export function installGoogleExpenseFakes(options: {
       return [...createHash('sha256').update(bytes).digest()].map((byte) => byte > 127 ? byte - 256 : byte)
     },
     newBlob: (bytes: number[], mimeType: string, name: string) => ({ bytes: [...bytes], mimeType, name }),
+    sleep: vi.fn(),
   })
   vi.stubGlobal('SpreadsheetApp', {
     openById: (id: string) => spreadsheets.get(id)!,
@@ -372,6 +385,7 @@ export function installGoogleExpenseFakes(options: {
       file.description = description
     },
     setOwnerBlobReadFailure(value) { failOwnerBlobReads = value },
+    setOwnerChecksumDelayReads(reads) { ownerChecksumDelayReads = reads },
     addExpenseAttachment,
     duplicateExpenseAttachment(attachment, bytes) {
       addExpenseAttachment(attachment, bytes, `${attachment.privateFileId}-duplicate`)

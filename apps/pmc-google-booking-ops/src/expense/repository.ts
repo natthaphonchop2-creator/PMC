@@ -79,6 +79,7 @@ interface ExpenseRequestRow {
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const LITERAL_TEXT_PREFIX = '\u200c'
+const OWNER_CHECKSUM_RETRY_DELAYS_MS = [100, 250, 500] as const
 const MUTABLE_SUBMISSION_FIELDS = new Set<keyof ExpenseSubmission>([
   'recordState',
   'committedAt',
@@ -792,7 +793,9 @@ function createGoogleExpenseRepositoryBackend(
         )
         if (before.length > 1) throw new Error('invalid')
         if (before[0]) {
-          return verifiedOwnerAttachment(before[0], input.monthKey, expenseFolder.getId(), attachment, bytes)
+          return verifiedOwnerAttachmentAfterChecksum(
+            before[0], input.monthKey, expenseFolder.getId(), attachment, bytes,
+          )
         }
         if (input.mode === 'FIND_ONLY') throw new Error('invalid')
         const advancedDrive = Drive
@@ -817,7 +820,9 @@ function createGoogleExpenseRepositoryBackend(
           attachment.slotClaimId,
         )
         if (after.length !== 1 || after[0]?.id !== created.id) throw new Error('invalid')
-        return verifiedOwnerAttachment(after[0], input.monthKey, expenseFolder.getId(), attachment, bytes)
+        return verifiedOwnerAttachmentAfterChecksum(
+          after[0], input.monthKey, expenseFolder.getId(), attachment, bytes,
+        )
       } catch {
         throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
       }
@@ -966,6 +971,33 @@ function verifiedOwnerAttachment(
   }
   verifyExpenseFileMetadata(metadata, monthKey, identity.expenseId, folderId, attachment)
   return attachment
+}
+
+function verifiedOwnerAttachmentAfterChecksum(
+  initial: ExpenseDriveMetadata,
+  monthKey: string,
+  folderId: string,
+  identity: ExpensePrivateAttachmentIdentity,
+  expectedBytes: number[],
+): ExpensePrivateAttachment {
+  let metadata = initial
+  for (let attempt = 0; ; attempt += 1) {
+    if (typeof metadata.sha256Checksum === 'string' && metadata.sha256Checksum.length > 0) {
+      return verifiedOwnerAttachment(metadata, monthKey, folderId, identity, expectedBytes)
+    }
+    const delay = OWNER_CHECKSUM_RETRY_DELAYS_MS[attempt]
+    if (delay === undefined) throw new Error('invalid')
+    Utilities.sleep(delay)
+    const matches = matchingExpenseFiles(
+      listExpenseFiles(folderId),
+      identity.expenseId,
+      identity.ordinal,
+      identity.deterministicName,
+      identity.slotClaimId,
+    )
+    if (matches.length !== 1 || matches[0]?.id !== initial.id) throw new Error('invalid')
+    metadata = matches[0]
+  }
 }
 
 function expenseAttachmentDescription(attachment: Pick<ExpensePrivateAttachment, 'originalFileName' | 'uploadedAt'>): string {

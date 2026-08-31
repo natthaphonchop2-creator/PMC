@@ -540,6 +540,34 @@ describe('Google expense repository containment and literal text', () => {
     expect(environment.expenseFileCount(expenseId)).toBe(1)
   })
 
+  it('reuses one owner file when its Drive checksum appears after the first list', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
+    })
+    const expenseId = 'EXP-202608-OWNER-DELAYED-CHECKSUM'
+    const rootRequestId = 'owner-delayed-checksum-request'
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId, rootRequestId, ordinal: 1, mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg', deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256, uploadedByStaffId: 'STAFF_01', uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+    environment.setOwnerChecksumDelayReads(2)
+
+    expect(repository.createOrFindPrivateAttachment({
+      mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
+    })).toMatchObject({ ...attachment, sizeBytes: bytes.length, driveVersion: '1' })
+    expect(environment.expenseFileCount(expenseId)).toBe(1)
+  })
+
   it('replays a metadata-bound owner file when Drive rewrites its display description', () => {
     const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
     const repository = createGoogleExpenseRepository({

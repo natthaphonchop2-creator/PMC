@@ -25,6 +25,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/
 const SAFE_EXPENSE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const VERSION = /^[1-9]\d*$/
+const CHECKSUM_RETRY_DELAYS_MS = [100, 250, 500] as const
 const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,appProperties,properties,permissions(id,type,role,deleted)'
 const DRIVE_LIST_FIELDS = `incompleteSearch,nextPageToken,files(${DRIVE_FIELDS})`
 const MASTER_TABS = new Set(['EXPENSE_MONTHLY_INDEX', 'EXPENSE_REQUESTS', 'EXPENSE_AUDIT'])
@@ -296,6 +297,21 @@ export function createFinanceGooglePorts(
     }
   }
 
+  async function getMetadataAfterChecksum(
+    fileId: string,
+    code: FinanceGoogleErrorCode,
+  ): Promise<DriveMetadata> {
+    let metadata = await getMetadata(fileId, code)
+    for (const delay of CHECKSUM_RETRY_DELAYS_MS) {
+      if (typeof metadata.sha256Checksum === 'string' && metadata.sha256Checksum.length > 0) {
+        return metadata
+      }
+      await new Promise<void>((resolve) => { setTimeout(resolve, delay) })
+      metadata = await getMetadata(fileId, code)
+    }
+    return metadata
+  }
+
   async function listChildren(
     parentId: string,
     code: FinanceGoogleErrorCode,
@@ -534,7 +550,7 @@ export function createFinanceGooglePorts(
     mimeType: ExpenseImageMimeType
     attachment: ExpensePrivateAttachment
   }> {
-    const before = await getMetadata(input.fileId, 'EXPENSE_PRIVATE_FILE_INVALID')
+    const before = await getMetadataAfterChecksum(input.fileId, 'EXPENSE_PRIVATE_FILE_INVALID')
     const attachment = validateExpenseFileMetadata(before, input)
     let media: GoogleResponse<DriveMetadata | ArrayBuffer>
     try {
@@ -563,7 +579,7 @@ export function createFinanceGooglePorts(
     } catch {
       throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     }
-    const after = await getMetadata(input.fileId, 'EXPENSE_PRIVATE_FILE_INVALID')
+    const after = await getMetadataAfterChecksum(input.fileId, 'EXPENSE_PRIVATE_FILE_INVALID')
     validateExpenseFileMetadata(after, input)
     if (canonicalIdentity(before) !== canonicalIdentity(after)) {
       throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
