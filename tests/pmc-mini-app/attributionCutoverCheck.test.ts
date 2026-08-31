@@ -586,6 +586,48 @@ describe('PMC Booking attribution-v2 cutover checker', () => {
     expect(commands.some((command) => command.slice(0, 4).join(' ') === 'gcloud run revisions describe')).toBe(true)
   })
 
+  it('ignores tag-only Cloud Run traffic entries while requiring one exact 100 percent revision', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pmc-attribution-tagged-traffic-'))
+    temporaryDirectories.push(directory)
+    const propertiesFile = join(directory, 'properties.json')
+    await writeFile(propertiesFile, '{}', { mode: 0o600 })
+    const expectedRevision = 'reviewed-revision'
+    const execute = vi.fn(async (command: string[]) => {
+      const signature = command.slice(0, 4).join(' ')
+      if (signature === 'gcloud run services describe') return JSON.stringify({
+        status: { traffic: [
+          { revisionName: expectedRevision, percent: 100 },
+          { revisionName: expectedRevision, tag: 'reviewed-tag', url: 'https://private.example' },
+        ] },
+      })
+      if (signature === 'gcloud tasks queues describe') return JSON.stringify({ state: 'PAUSED' })
+      if (signature === 'gcloud tasks list --queue') return '[]'
+      if (signature === 'npx clasp deployments script-id') return 'deployment-id @42\n'
+      if (signature === 'gcloud run revisions describe') return JSON.stringify({
+        metadata: { name: expectedRevision },
+        spec: { containers: [{ env: Object.entries(legacyMigrationObservations().deployedEnvironment)
+          .map(([name, value]) => ({ name, value })) }] },
+      })
+      throw new Error('unexpected read-only command')
+    })
+
+    const observations = await collectLiveObservations({
+      project: 'project-id', region: 'asia-southeast1', service: 'service-id', queue: 'queue-id',
+      expectedRevision, appsScriptId: 'script-id', appsScriptDeploymentId: 'deployment-id',
+      minimumAppsScriptVersion: 42, scriptPropertiesFile: propertiesFile,
+    }, {
+      execute,
+      readGoogleState: vi.fn(async () => ({
+        requestHeaders: [...MINI_APP_ASYNC_REQUEST_HEADERS_V1], requestRows: [],
+        requestRowsOverflow: false, masterHeaders: [...PMC_BOOKING_MASTER_COLUMNS_V1],
+      })),
+    })
+
+    expect(observations.service.traffic).toEqual([{ revisionName: expectedRevision, percent: 100 }])
+    expect(inspectBookingAttributionCutover(observations, { expectedStage: 'MIGRATION' }).report.cloudRun)
+      .toMatchObject({ trafficAt100Percent: true, bridgeRevisionReady: true })
+  })
+
   it('reads one sentinel row beyond the bounded request-row limit and exposes overflow without returning it', async () => {
     const headers = [...MINI_APP_ASYNC_REQUEST_HEADERS_V1]
     const valid = requestRow(headers, { protocolVersion: 1, state: 'CANCELLED' })

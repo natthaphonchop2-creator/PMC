@@ -602,7 +602,7 @@ function deployedEnvironmentFromRevision(revision) {
 function deployedTrafficFrom(service) {
   const traffic = service?.status?.traffic
   if (!Array.isArray(traffic)) return null
-  return traffic.map((item) => ({
+  return traffic.filter((item) => Number.isSafeInteger(item?.percent)).map((item) => ({
     revisionName: typeof item?.revisionName === 'string' ? item.revisionName : null,
     percent: item?.percent,
   }))

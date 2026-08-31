@@ -98,6 +98,30 @@ describe('PMC Mini App keyless Google ports', () => {
     })
   })
 
+  it('maps a bounded row-only request when Google truncates the response to populated rows', async () => {
+    const batchGet = vi.fn(async () => ({ data: { valueRanges: [
+      { range: "'MINI_APP_REQUESTS'!A1:AL16", values: [['requestId'], ['request-1']] },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get: vi.fn(), batchUpdate: vi.fn(),
+            values: { batchGet, append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.batchGet('sheet-1', ["'MINI_APP_REQUESTS'!1:10002"]))
+      .resolves.toEqual({
+        "'MINI_APP_REQUESTS'!1:10002": [['requestId'], ['request-1']],
+      })
+  })
+
   it('fails closed when a row-only header response belongs to another tab or row', async () => {
     const batchGet = vi.fn(async () => ({ data: { valueRanges: [
       { range: "'$OTHER'!$A$1:$AL$1", values: [['wrong-tab']] },

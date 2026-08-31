@@ -249,7 +249,10 @@ function sheetRangeMatches(requested: string, returned: string): boolean {
   if (expectedRow && boundedActual) {
     const [, expectedSheet, expectedStartRow, expectedEndRow] = expectedRow
     const [, actualSheet, , actualStartRow, , actualEndRow] = boundedActual
-    return expectedSheet === actualSheet && expectedStartRow === actualStartRow && expectedEndRow === actualEndRow
+    const actualEnd = Number(actualEndRow)
+    return expectedSheet === actualSheet && expectedStartRow === actualStartRow
+      && Number.isSafeInteger(actualEnd) && actualEnd >= Number(expectedStartRow)
+      && actualEnd <= Number(expectedEndRow)
   }
   const expectedParts = /^([^!]+)!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(expected)
   const actualParts = /^([^!]+)!([A-Z]+)(\d*):([A-Z]+)(\d*)$/.exec(actual)
