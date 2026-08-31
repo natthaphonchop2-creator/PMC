@@ -48,6 +48,26 @@ describe('expense mobile image normalization', () => {
     await expect(normalizeExpenseUploadFiles([file('empty.heic', 'image/heic')], ports))
       .rejects.toBeInstanceOf(ExpenseImageConversionError)
   })
+
+  it('canonicalizes Android JPEG MIME aliases before multipart upload without recompressing', async () => {
+    const androidJpeg = file('camera.jpeg', 'image/jpg', 21)
+    const genericJpeg = file('download.jpg', 'application/octet-stream', 22)
+    const ports: ExpenseImageConversionPorts = {
+      convertWebp: vi.fn(),
+      convertHeic: vi.fn(),
+    }
+
+    const normalized = await normalizeExpenseUploadFiles([androidJpeg, genericJpeg], ports)
+
+    expect(normalized.map(({ name, type, lastModified }) => ({ name, type, lastModified }))).toEqual([
+      { name: 'camera.jpeg', type: 'image/jpeg', lastModified: 21 },
+      { name: 'download.jpg', type: 'image/jpeg', lastModified: 22 },
+    ])
+    expect(await normalized[0]!.arrayBuffer()).toEqual(await androidJpeg.arrayBuffer())
+    expect(await normalized[1]!.arrayBuffer()).toEqual(await genericJpeg.arrayBuffer())
+    expect(ports.convertWebp).not.toHaveBeenCalled()
+    expect(ports.convertHeic).not.toHaveBeenCalled()
+  })
 })
 
 function file(name: string, type: string, lastModified = 1): File {

@@ -19,7 +19,13 @@ export async function normalizeExpenseUploadFiles(
   const normalized: File[] = []
   for (const file of files) {
     const sourceType = expenseSourceImageType(file)
-    if (sourceType === 'JPEG' || sourceType === 'PNG') {
+    if (sourceType === 'JPEG') {
+      normalized.push(file.type.trim().toLowerCase() === 'image/jpeg'
+        ? file
+        : new File([file], file.name, { type: 'image/jpeg', lastModified: file.lastModified }))
+      continue
+    }
+    if (sourceType === 'PNG') {
       normalized.push(file)
       continue
     }

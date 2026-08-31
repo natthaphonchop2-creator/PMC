@@ -51,6 +51,14 @@ describe('expense capture client model', () => {
     ])).toBe('รูปทั้งหมดต้องมีขนาดรวมไม่เกิน 25 MB')
   })
 
+  it('accepts Android JPEG files whose picker reports an alias or generic MIME type', () => {
+    expect(validateExpenseFiles([imageFile('camera.jpeg', 'image/jpg', 1)])).toBeNull()
+    expect(validateExpenseFiles([imageFile('camera.jpeg', '', 1)])).toBeNull()
+    expect(validateExpenseFiles([imageFile('camera.jpg', 'application/octet-stream', 1)])).toBeNull()
+    expect(validateExpenseFiles([imageFile('camera.png', 'image/jpg', 1)]))
+      .toBe('รองรับรูป JPG, PNG, WebP, HEIC หรือ HEIF')
+  })
+
   it('accepts exactly 160 Unicode filename characters and rejects 161 before upload', () => {
     expect(validateExpenseFiles([imageFile(`${'ก'.repeat(156)}.jpg`, 'image/jpeg', 1)])).toBeNull()
     expect(validateExpenseFiles([imageFile(`${'ก'.repeat(157)}.jpg`, 'image/jpeg', 1)]))

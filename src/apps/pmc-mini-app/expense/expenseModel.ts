@@ -120,7 +120,8 @@ function safeFileName(value: string): boolean {
 
 export function expenseSourceImageType(file: File): ExpenseSourceImageType | null {
   const mimeType = file.type.trim().toLowerCase()
-  if (mimeType === 'image/jpeg' && /\.jpe?g$/i.test(file.name)) return 'JPEG'
+  if (['image/jpeg', 'image/jpg', '', 'application/octet-stream'].includes(mimeType)
+    && /\.jpe?g$/i.test(file.name)) return 'JPEG'
   if (mimeType === 'image/png' && /\.png$/i.test(file.name)) return 'PNG'
   if (mimeType === 'image/webp' && /\.webp$/i.test(file.name)) return 'WEBP'
   if (['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'].includes(mimeType)

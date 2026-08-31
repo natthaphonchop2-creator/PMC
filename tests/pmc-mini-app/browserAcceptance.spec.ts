@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { resolve } from 'node:path'
+import sharp from 'sharp'
 
 const TASK_8_ARTIFACT_DIR = resolve('.superpowers/sdd/2026-08-29-pmc-daily-monthly-finance-reports-implementation')
 // 1,130-byte synthetic HEIC EXIF fixture from gen2brain/heic (MIT), testdata/test_exif.heic.
@@ -261,13 +262,16 @@ test.describe('Expense capture Android acceptance', () => {
     await expect(page.getByText('EXP-202608-PREVIEW', { exact: true })).toBeVisible()
   })
 
-  test('converts real HEIC and WebP sources to JPEG before staging the expense', async ({ page }) => {
+  test('normalizes real HEIC, WebP, and Android JPEG sources before staging the expense', async ({ page }) => {
     await page.goto('/mini-app/?preview=1&expense=enabled&role=staff')
     await openExpenseForm(page, 'บิลเอกสาร')
     await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
     await page.getByLabel('จำนวนเงิน').fill('1250')
     await page.getByLabel('ชื่อร้านหรือผู้รับเงิน').fill('ร้านเวชภัณฑ์')
     await page.getByLabel('วิธีชำระ').selectOption('TRANSFER')
+    const androidJpeg = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: '#ffffff' },
+    }).jpeg().toBuffer()
     await page.getByLabel('รูปหลักฐาน').setInputFiles([
       {
         name: 'mobile-heic.heic',
@@ -279,15 +283,22 @@ test.describe('Expense capture Android acceptance', () => {
         mimeType: 'image/webp',
         buffer: Buffer.from(WEBP_FIXTURE_BASE64, 'base64'),
       },
+      {
+        name: 'android-camera.jpeg',
+        mimeType: 'image/jpg',
+        buffer: androidJpeg,
+      },
     ])
 
     await expect(page.getByText('mobile-heic.jpg', { exact: true })).toBeVisible()
     await expect(page.getByText('mobile-webp.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('android-camera.jpeg', { exact: true })).toBeVisible()
     await expect(page.getByText('mobile-heic.heic', { exact: true })).toHaveCount(0)
     await expect(page.getByText('mobile-webp.webp', { exact: true })).toHaveCount(0)
     await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
     await expect(page.getByText('1. mobile-heic.jpg', { exact: true })).toBeVisible()
     await expect(page.getByText('2. mobile-webp.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('3. android-camera.jpeg', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
     await expect(page.getByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
   })
