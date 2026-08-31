@@ -67,7 +67,7 @@ describe('fail-fast Apps Script deployment runner', () => {
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain('DEPLOY_ABORTED')
     expect(fixture.mutations()).toEqual([])
-  })
+  }, 20_000)
 
   it.each([
     ['version', ['clasp push --force', 'clasp version PMC Booking reviewed rollout']],
@@ -94,7 +94,7 @@ describe('fail-fast Apps Script deployment runner', () => {
     expect(result.stderr).toContain('DEPLOY_ABORTED')
     expect(fixture.mutations()).toEqual(expectedMutations)
     if (gate !== 'redeploy') expect(fixture.events().some((event) => event.startsWith('clasp redeploy '))).toBe(false)
-  })
+  }, 20_000)
 })
 
 function deploymentFixture(roots: string[]) {

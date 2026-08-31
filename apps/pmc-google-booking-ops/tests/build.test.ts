@@ -68,6 +68,8 @@ describe('Apps Script bundle', () => {
     expect(sandbox.planBookingAttributionMigration).toBeUndefined()
     expect(sandbox.writeGoogleBookingAttributionMigration).toBeUndefined()
     expect(sandbox.createPmcBookingAttributionMigrationRuntime).toBeUndefined()
+    expect(readFileSync('apps/pmc-google-booking-ops/src/entrypoints.ts', 'utf8'))
+      .toContain('console.log(JSON.stringify(result))')
   })
 
   it('keeps owner-only presentation entrypoints out of installed form and clock triggers', () => {

@@ -297,11 +297,15 @@ export function configurePmcSharedDoctorCalendar() {
 }
 
 export function previewPmcBookingAttributionMigration() {
-  return previewPmcBookingAttributionMigrationWorkflow()
+  const result = previewPmcBookingAttributionMigrationWorkflow()
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function applyPmcBookingAttributionMigration() {
-  return applyPmcBookingAttributionMigrationWorkflow()
+  const result = applyPmcBookingAttributionMigrationWorkflow()
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function previewPmcBookingWorkbookPresentation() {
