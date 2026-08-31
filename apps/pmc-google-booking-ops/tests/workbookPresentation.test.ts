@@ -48,6 +48,11 @@ const HIDDEN_FIXTURES: ReadonlyArray<{ title: string; headers: readonly string[]
 const sha256Hex = (value: string): string => createHash('sha256').update(value).digest('hex')
 
 describe('guarded Booking workbook presentation policy', () => {
+  it('preserves the production JERA allocation fencing column as hidden system metadata', () => {
+    const headers = KNOWN_HIDDEN_TAB_HEADERS.JERA_ALLOCATION_COVERAGE!
+    expect(headers[headers.length - 1]).toBe('leaseFencingToken')
+  })
+
   it('builds the exact deterministic visible, hidden, freeze, filter, width, format, and status plan', () => {
     const snapshot = canonicalSnapshot()
     const plan = buildPlan(snapshot)

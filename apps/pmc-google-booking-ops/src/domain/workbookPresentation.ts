@@ -189,6 +189,7 @@ export const KNOWN_HIDDEN_TAB_HEADERS: Readonly<Record<string, readonly string[]
     'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
     'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
     'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+    'leaseFencingToken',
   ],
   STOCK_PRODUCTS: [...SHEET_SCHEMAS.STOCK_PRODUCTS!],
   STOCK_LEDGER: [...SHEET_SCHEMAS.STOCK_LEDGER!],
