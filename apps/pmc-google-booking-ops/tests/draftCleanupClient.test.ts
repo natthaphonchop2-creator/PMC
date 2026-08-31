@@ -5,6 +5,31 @@ import { createAppsScriptDraftCleanupPort } from '../src/adapters/draftCleanupCl
 import { createTestPorts } from './helpers/fakes'
 
 describe('Apps Script draft cleanup client', () => {
+  it('accepts the exact cleanup endpoint without a WHATWG URL global', () => {
+    const ports = createTestPorts()
+    const originalUrl = globalThis.URL
+    try {
+      Object.defineProperty(globalThis, 'URL', {
+        configurable: true,
+        writable: true,
+        value: undefined,
+      })
+
+      expect(() => createAppsScriptDraftCleanupPort({
+        url: 'https://cleanup.example/internal/mini-app/draft-evidence-cleanup',
+        secret: 'secret',
+        crypto: ports.crypto,
+        clock: ports.clock,
+      })).not.toThrow()
+    } finally {
+      Object.defineProperty(globalThis, 'URL', {
+        configurable: true,
+        writable: true,
+        value: originalUrl,
+      })
+    }
+  })
+
   it('posts one exact signed envelope and returns only the safe count', () => {
     const ports = createTestPorts()
     const fetch = vi.fn((_url: string, options: GoogleAppsScript.URL_Fetch.URLFetchRequestOptions) => ({

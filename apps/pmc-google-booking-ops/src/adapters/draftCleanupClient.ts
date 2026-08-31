@@ -47,12 +47,13 @@ export function createAppsScriptDraftCleanupPort(input: {
 }
 
 function exactHttps(value: string): string | null {
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && url.hostname && !url.username && !url.password
-      && url.pathname === '/internal/mini-app/draft-evidence-cleanup'
-      && !url.search && !url.hash
-      ? url.toString()
-      : null
-  } catch { return null }
+  const prefix = 'https://'
+  const pathname = '/internal/mini-app/draft-evidence-cleanup'
+  if (!value.startsWith(prefix) || !value.endsWith(pathname)) return null
+  const hostname = value.slice(prefix.length, -pathname.length)
+  if (!hostname || hostname.length > 253 || hostname.includes('@') || hostname.includes(':')) return null
+  const labels = hostname.split('.')
+  if (!labels.every((label) => label.length > 0 && label.length <= 63
+    && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label))) return null
+  return value
 }
