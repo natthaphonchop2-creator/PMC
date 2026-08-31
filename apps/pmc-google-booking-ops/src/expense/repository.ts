@@ -761,22 +761,9 @@ function createGoogleExpenseRepositoryBackend(
         const before = listExpenseFiles(expenseFolder.getId())
         verifyExpenseSiblingSlots(before, monthKey, expenseId, expenseFolder.getId(), attachments)
         for (const attachment of attachments) {
-          const file = DriveApp.getFileById(attachment.privateFileId)
           const metadata = before.find(({ id }) => id === attachment.privateFileId)
-          if (
-            !metadata
-            || file.isTrashed()
-            || file.getSharingAccess() !== DriveApp.Access.PRIVATE
-            || !hasDirectParent(file.getParents(), expenseFolder.getId())
-            || file.getMimeType() !== attachment.mediaType
-            || file.getBlob().getContentType() !== attachment.mediaType
-          ) throw new Error('invalid')
+          if (!metadata) throw new Error('invalid')
           verifyExpenseFileMetadata(metadata, monthKey, expenseId, expenseFolder.getId(), attachment)
-          const bytes = file.getBlob().getBytes()
-          if (
-            bytes.length !== attachment.sizeBytes
-            || sha256Bytes(bytes) !== attachment.sha256
-          ) throw new Error('invalid')
         }
         const after = listExpenseFiles(expenseFolder.getId())
         verifyExpenseSiblingSlots(after, monthKey, expenseId, expenseFolder.getId(), attachments)
@@ -818,7 +805,7 @@ function createGoogleExpenseRepositoryBackend(
           parents: [expenseFolder.getId()],
           properties: expenseAttachmentProperties(input.monthKey, attachment),
         }, Utilities.newBlob(bytes, attachment.mediaType, attachment.deterministicName), {
-          fields: 'id,name,description,mimeType,parents,trashed,size,version,properties,permissions(id,type,role,deleted)',
+          fields: 'id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,properties,permissions(id,type,role,deleted)',
           supportsAllDrives: true,
         })
         if (!created.id) throw new Error('invalid')
@@ -853,7 +840,7 @@ function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
     const response = advancedDrive.Files.list({
       q: `'${folderId}' in parents and trashed = false`,
       spaces: 'drive',
-      fields: 'incompleteSearch,nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,properties,permissions(id,type,role,deleted))',
+      fields: 'incompleteSearch,nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,properties,permissions(id,type,role,deleted))',
       pageSize: 100,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
@@ -903,14 +890,12 @@ function verifyExpenseFileMetadata(
   folderId: string,
   attachment: ExpensePrivateAttachment,
 ): void {
-  const description = expenseAttachmentDescription(attachment)
   const expectedProperties = expenseAttachmentProperties(monthKey, attachment)
   const actualProperties = file.properties
   const permissions = file.permissions
   if (
     file.id !== attachment.privateFileId
     || file.name !== attachment.deterministicName
-    || file.description !== description
     || file.mimeType !== attachment.mediaType
     || file.trashed !== false
     || !Array.isArray(file.parents)
@@ -918,6 +903,7 @@ function verifyExpenseFileMetadata(
     || file.parents[0] !== folderId
     || Number(file.size) !== attachment.sizeBytes
     || file.version !== attachment.driveVersion
+    || file.sha256Checksum !== attachment.sha256
     || !isPrivateExpensePermissions(permissions)
     || !actualProperties
     || Object.keys(actualProperties).length !== Object.keys(expectedProperties).length
@@ -979,14 +965,6 @@ function verifiedOwnerAttachment(
     driveVersion: String(metadata.version),
   }
   verifyExpenseFileMetadata(metadata, monthKey, identity.expenseId, folderId, attachment)
-  const file = DriveApp.getFileById(metadata.id)
-  const blob = file.getBlob()
-  const actualBytes = blob.getBytes().map((byte) => byte & 0xff)
-  if (file.isTrashed()
-    || file.getSharingAccess() !== DriveApp.Access.PRIVATE
-    || blob.getContentType() !== identity.mediaType
-    || actualBytes.length !== expectedBytes.length
-    || sha256Bytes(actualBytes) !== identity.sha256) throw new Error('invalid')
   return attachment
 }
 

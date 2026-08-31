@@ -475,6 +475,25 @@ describe('private finance Google ports', () => {
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
   })
 
+  it('accepts Drive display-description drift when the exact description hash remains bound', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    fake.item(attachment.privateFileId).description = 'Screenshot'
+
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+    })).resolves.toBeUndefined()
+  })
+
   it.each(['version', 'bytes', 'metadata'] as const)(
     'rejects a post-commit %s replacement against the pinned ledger attachment descriptor',
     async (mutation) => {
@@ -540,6 +559,7 @@ interface FakeItem {
   properties: Record<string, string>
   permissions: FakePermission[]
   version: string
+  sha256Checksum?: string
   description?: string
   size?: string
   bytes?: Buffer
@@ -659,7 +679,11 @@ function financeGoogleFake() {
       ...(request.description === undefined ? {} : { description: String(request.description) }),
       permissions: privatePermissions(),
       version: '1',
-      ...(bytes ? { bytes, size: String(bytes.length) } : {}),
+      ...(bytes ? {
+        bytes,
+        size: String(bytes.length),
+        sha256Checksum: createHash('sha256').update(bytes).digest('hex'),
+      } : {}),
     }
     add(item)
     return { data: driveMetadata(item) }
@@ -845,6 +869,7 @@ function driveMetadata(item: FakeItem): Omit<FakeItem, 'bytes'> {
     properties: item.properties,
     permissions: item.permissions,
     version: item.version,
+    ...(item.sha256Checksum === undefined ? {} : { sha256Checksum: item.sha256Checksum }),
     ...(item.description === undefined ? {} : { description: item.description }),
     ...(item.size === undefined ? {} : { size: item.size }),
   })

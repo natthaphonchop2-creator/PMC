@@ -510,6 +510,68 @@ describe('Google expense repository containment and literal text', () => {
     ))).toBe(true)
   })
 
+  it('uses the Drive checksum when immediate DriveApp byte readback is not ready', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
+    })
+    const expenseId = 'EXP-202608-OWNER-DELAYED-BLOB'
+    const rootRequestId = 'owner-delayed-blob-request'
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId, rootRequestId, ordinal: 1, mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg', deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256, uploadedByStaffId: 'STAFF_01', uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+    environment.setOwnerBlobReadFailure(true)
+
+    const prepared = repository.createOrFindPrivateAttachment({
+      mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
+    })
+    expect(prepared).toMatchObject({ ...attachment, sizeBytes: bytes.length, driveVersion: '1' })
+    expect(() => repository.verifyPrivateAttachments('2026-08', expenseId, [prepared])).not.toThrow()
+    expect(environment.expenseFileCount(expenseId)).toBe(1)
+  })
+
+  it('replays a metadata-bound owner file when Drive rewrites its display description', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
+    })
+    const expenseId = 'EXP-202608-OWNER-DESCRIPTION'
+    const rootRequestId = 'owner-description-request'
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId, rootRequestId, ordinal: 1, mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg', deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256, uploadedByStaffId: 'STAFF_01', uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+
+    const first = repository.createOrFindPrivateAttachment({
+      mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
+    })
+    environment.setExpenseFileDescription(first.privateFileId, 'Screenshot')
+
+    expect(repository.createOrFindPrivateAttachment({
+      mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
+    })).toEqual(first)
+    expect(environment.expenseFileCount(expenseId)).toBe(1)
+  })
+
   it('rejects an appProperties-only owner file and never uses a private fallback', () => {
     const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
     const repository = createGoogleExpenseRepository({

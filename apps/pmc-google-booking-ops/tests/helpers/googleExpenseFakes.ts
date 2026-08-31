@@ -139,6 +139,7 @@ class FakeFile {
   version: string
   bytes: number[]
   description: string
+  failBlobRead: boolean
 
   constructor(
     readonly id: string,
@@ -152,6 +153,7 @@ class FakeFile {
       version?: string
       bytes?: number[]
       description?: string
+      failBlobRead?: boolean
     } = {},
   ) {
     this.name = options.name ?? id
@@ -160,6 +162,7 @@ class FakeFile {
     this.version = options.version ?? '1'
     this.bytes = [...(options.bytes ?? [])]
     this.description = options.description ?? ''
+    this.failBlobRead = options.failBlobRead ?? false
   }
 
   getId(): string { return this.id }
@@ -168,6 +171,7 @@ class FakeFile {
   getParents(): FakeIterator<FakeFolder> { return new FakeIterator(this.parentFolders) }
   getMimeType(): string { return this.mimeType }
   getBlob(): { getBytes(): number[]; getContentType(): string } {
+    if (this.failBlobRead) throw new Error('fake DriveApp read-after-write is not ready')
     return {
       getBytes: () => [...this.bytes],
       getContentType: () => this.mimeType,
@@ -183,6 +187,8 @@ export interface GoogleExpenseFakeEnvironment {
   expenseFileCount(expenseId: string): number
   expenseFileMetadata(expenseId: string): { id: string; appProperties: Record<string, string>; properties: Record<string, string> }
   setExpenseFileProperties(fileId: string, input: { appProperties: Record<string, string>; properties: Record<string, string> }): void
+  setExpenseFileDescription(fileId: string, description: string): void
+  setOwnerBlobReadFailure(value: boolean): void
   addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
@@ -241,6 +247,7 @@ export function installGoogleExpenseFakes(options: {
   ])
   let incompleteSearch: boolean | undefined = false
   let ownerFileSequence = 0
+  let failOwnerBlobReads = false
 
   vi.stubGlobal('DriveApp', {
     Access: { PRIVATE: 'PRIVATE' },
@@ -282,6 +289,7 @@ export function installGoogleExpenseFakes(options: {
           version: '1',
           bytes: blob.bytes,
           description: resource.description,
+          failBlobRead: failOwnerBlobReads,
         })
         files.set(file.id, file)
         parent.filesByName.set(file.name, [...(parent.filesByName.get(file.name) ?? []), file])
@@ -358,6 +366,12 @@ export function installGoogleExpenseFakes(options: {
       file.appProperties = { ...input.appProperties }
       file.properties = { ...input.properties }
     },
+    setExpenseFileDescription(fileId, description) {
+      const file = files.get(fileId)
+      if (!file) throw new Error('missing fake expense file')
+      file.description = description
+    },
+    setOwnerBlobReadFailure(value) { failOwnerBlobReads = value },
     addExpenseAttachment,
     duplicateExpenseAttachment(attachment, bytes) {
       addExpenseAttachment(attachment, bytes, `${attachment.privateFileId}-duplicate`)
@@ -382,6 +396,7 @@ function advancedFile(file: FakeFile) {
     trashed: false,
     size: String(file.bytes.length),
     version: file.version,
+    sha256Checksum: createHash('sha256').update(Buffer.from(file.bytes)).digest('hex'),
     appProperties: { ...file.appProperties },
     properties: { ...file.properties },
     permissions: [{ id: 'owner-user', type: 'user', role: 'owner', deleted: false }],

@@ -25,7 +25,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/
 const SAFE_EXPENSE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const VERSION = /^[1-9]\d*$/
-const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,appProperties,properties,permissions(id,type,role,deleted)'
+const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,appProperties,properties,permissions(id,type,role,deleted)'
 const DRIVE_LIST_FIELDS = `incompleteSearch,nextPageToken,files(${DRIVE_FIELDS})`
 const MASTER_TABS = new Set(['EXPENSE_MONTHLY_INDEX', 'EXPENSE_REQUESTS', 'EXPENSE_AUDIT'])
 const MONTH_TABS = new Set(['EXPENSE_SUBMISSIONS', 'EXPENSE_ATTACHMENTS', 'MONTHLY_SUMMARY'])
@@ -62,6 +62,7 @@ interface DriveMetadata {
   trashed?: boolean | null
   size?: string | number | null
   version?: string | number | null
+  sha256Checksum?: string | null
   appProperties?: Record<string, string> | null
   properties?: Record<string, string> | null
   permissions?: DrivePermission[] | null
@@ -592,7 +593,6 @@ export function createFinanceGooglePorts(
     const rootRequestId = expectedIdentity?.rootRequestId
     const uploadedByStaffId = expectedIdentity?.uploadedByStaffId
     const attachmentId = expectedIdentity?.attachmentId
-    const parsedDescription = parseAttachmentDescription(metadata.description)
     if (
       !Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 5
       || typeof sha256 !== 'string' || !SHA256.test(sha256)
@@ -607,16 +607,11 @@ export function createFinanceGooglePorts(
       || expectedIdentity.expenseId !== input.expenseId
       || expectedIdentity.ordinal !== ordinal
       || expectedIdentity.mediaType !== mimeType
-      || expectedIdentity.originalFileName !== parsedDescription.originalFileName
       || expectedIdentity.deterministicName !== deterministicFileName(ordinal, sha256, mimeType)
       || expectedIdentity.sha256 !== sha256
-      || expectedIdentity.uploadedAt !== parsedDescription.uploadedAt
+      || metadata.sha256Checksum !== sha256
     ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     const name = deterministicFileName(ordinal, sha256, mimeType)
-    const description = attachmentDescription(parsedDescription)
-    if (
-      metadata.description !== description
-    ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     requireBaseMetadata(metadata, {
       id: input.fileId,
       name,
@@ -635,7 +630,7 @@ export function createFinanceGooglePorts(
       rootRequestId,
       ordinal,
       mediaType: mimeType,
-      originalFileName: parsedDescription.originalFileName,
+      originalFileName: expectedIdentity.originalFileName,
       privateFileId: input.fileId,
       deterministicName: name,
       sizeBytes,
@@ -643,7 +638,7 @@ export function createFinanceGooglePorts(
       slotClaimId,
       sha256,
       uploadedByStaffId,
-      uploadedAt: parsedDescription.uploadedAt,
+      uploadedAt: expectedIdentity.uploadedAt,
     }
     if (input.expectedAttachment && JSON.stringify(attachment) !== JSON.stringify(input.expectedAttachment)) {
       throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
@@ -1184,21 +1179,6 @@ function deterministicFileName(
   return `${String(ordinal).padStart(3, '0')}-${sha256}.${mimeType === 'image/jpeg' ? 'jpg' : 'png'}`
 }
 
-function parseAttachmentDescription(value: string | null | undefined): {
-  originalFileName: string
-  uploadedAt: string
-} {
-  let parsed: unknown
-  try { parsed = JSON.parse(value ?? '') } catch { parsed = null }
-  if (
-    !isRecord(parsed)
-    || !hasExactKeys(parsed, ['originalFileName', 'uploadedAt'])
-    || !isValidExpenseOriginalFileName(parsed.originalFileName)
-    || !validTimestamp(parsed.uploadedAt)
-  ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
-  return { originalFileName: parsed.originalFileName, uploadedAt: parsed.uploadedAt }
-}
-
 function validTimestamp(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value))
 }
@@ -1213,6 +1193,7 @@ function canonicalIdentity(metadata: DriveMetadata): string {
     trashed: metadata.trashed,
     size: String(metadata.size),
     version: String(metadata.version),
+    sha256Checksum: metadata.sha256Checksum,
     appProperties: metadata.appProperties,
     properties: metadata.properties,
     permissions: [...(metadata.permissions ?? [])]
