@@ -46,6 +46,10 @@ function previewPmcBookingAttributionMigration() { return PmcBooking.previewPmcB
 function applyPmcBookingAttributionMigration() { return PmcBooking.applyPmcBookingAttributionMigration(); }
 function previewPmcBookingWorkbookPresentation() { return PmcBooking.previewPmcBookingWorkbookPresentation(); }
 function applyPmcBookingWorkbookPresentation() { return PmcBooking.applyPmcBookingWorkbookPresentation(); }
+function previewPmcDraftEvidenceRetention(retentionId) { return PmcBooking.previewPmcDraftEvidenceRetention(retentionId); }
+function approvePmcDraftEvidenceRetention(retentionId, expectedVersion, approvalDigest, reason) { return PmcBooking.approvePmcDraftEvidenceRetention(retentionId, expectedVersion, approvalDigest, reason); }
+function executePmcDraftEvidenceRetention(retentionId, expectedVersion) { return PmcBooking.executePmcDraftEvidenceRetention(retentionId, expectedVersion); }
+function readbackPmcDraftEvidenceRetention(retentionId) { return PmcBooking.readbackPmcDraftEvidenceRetention(retentionId); }
 `,
   },
   format: 'iife',

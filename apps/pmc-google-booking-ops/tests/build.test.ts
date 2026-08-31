@@ -47,12 +47,20 @@ describe('Apps Script bundle', () => {
       'applyPmcBookingAttributionMigration',
       'previewPmcBookingWorkbookPresentation',
       'applyPmcBookingWorkbookPresentation',
+      'previewPmcDraftEvidenceRetention',
+      'approvePmcDraftEvidenceRetention',
+      'executePmcDraftEvidenceRetention',
+      'readbackPmcDraftEvidenceRetention',
     ]) {
       expect(sandbox[name]).toBeTypeOf('function')
     }
     for (const name of [
       'previewPmcBookingWorkbookPresentation',
       'applyPmcBookingWorkbookPresentation',
+      'previewPmcDraftEvidenceRetention',
+      'approvePmcDraftEvidenceRetention',
+      'executePmcDraftEvidenceRetention',
+      'readbackPmcDraftEvidenceRetention',
     ]) {
       expect(bundle.match(new RegExp(`^function ${name}\\(`, 'gm'))).toHaveLength(1)
     }
@@ -76,6 +84,10 @@ describe('Apps Script bundle', () => {
       .map(({ handler }) => handler)
     expect(handlers).not.toContain('previewPmcBookingWorkbookPresentation')
     expect(handlers).not.toContain('applyPmcBookingWorkbookPresentation')
+    expect(handlers).not.toContain('previewPmcDraftEvidenceRetention')
+    expect(handlers).not.toContain('approvePmcDraftEvidenceRetention')
+    expect(handlers).not.toContain('executePmcDraftEvidenceRetention')
+    expect(handlers).not.toContain('readbackPmcDraftEvidenceRetention')
 
     const sourceRoot = 'apps/pmc-google-booking-ops/src'
     const source = sourceFiles(sourceRoot).map((file) => readFileSync(file, 'utf8')).join('\n')

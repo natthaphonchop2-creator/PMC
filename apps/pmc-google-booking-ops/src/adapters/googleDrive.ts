@@ -138,8 +138,50 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
     },
     folderUrl: (folderId) => folder(folderId).getUrl(),
     trashFolder(folderId) {
-      folder(folderId).setTrashed(true)
+      const target = folder(folderId)
+      if (!target.isTrashed()) target.setTrashed(true)
     },
+    verifyFolder(folderId) {
+      return folder(folderId).isTrashed() ? 'ALREADY_TRASHED' : 'PRESENT'
+    },
+    evidenceIntakeFolderId() {
+      const candidates = folder(rootFolderId).getFoldersByName('_MINI_APP_INTAKE')
+      const exact: string[] = []
+      while (candidates.hasNext()) {
+        const candidate = candidates.next()
+        if (!candidate.isTrashed() && candidate.getDescription() === 'PMC_MARKER:mini-app-intake:v1') {
+          exact.push(candidate.getId())
+        }
+      }
+      if (exact.length !== 1) throw new Error('draft evidence intake folder mismatch')
+      return exact[0]!
+    },
+    verifyEvidenceFile(input) {
+      const file = DriveApp.getFileById(input.fileId)
+      if (file.isTrashed()) return 'ALREADY_TRASHED'
+      assertExactEvidenceFile(file, input)
+      return 'PRESENT'
+    },
+    trashEvidenceFile(input) {
+      const file = DriveApp.getFileById(input.fileId)
+      if (file.isTrashed()) return 'ALREADY_TRASHED'
+      assertExactEvidenceFile(file, input)
+      file.setTrashed(true)
+      return 'TRASHED'
+    },
+  }
+}
+
+function assertExactEvidenceFile(
+  file: GoogleAppsScript.Drive.File,
+  input: { fileId: string; parentFolderId: string; fileName: string; mimeType: string; marker: string },
+): void {
+  const parents = file.getParents()
+  const parentIds: string[] = []
+  while (parents.hasNext()) parentIds.push(parents.next().getId())
+  if (parentIds.length !== 1 || parentIds[0] !== input.parentFolderId || file.getName() !== input.fileName
+    || file.getMimeType() !== input.mimeType || file.getDescription() !== input.marker) {
+    throw new Error('draft evidence binding mismatch')
   }
 }
 

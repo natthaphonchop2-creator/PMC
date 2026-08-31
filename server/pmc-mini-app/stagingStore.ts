@@ -187,7 +187,7 @@ export function createGoogleEvidenceStagingPort(input: {
       try {
         metadata = verifiedObjectMetadata(parsed, (await file.getMetadata())[0])
       } catch (error) {
-        if (isExactNotFound(error)) return
+        if (isEvidenceStagingNotFound(error)) return
         throw error
       }
       if (metadata.size !== descriptor.size || String(metadata.generation) !== String(descriptor.generation)
@@ -195,7 +195,7 @@ export function createGoogleEvidenceStagingPort(input: {
       try {
         await file.delete({ ifGenerationMatch: descriptor.generation })
       } catch (error) {
-        if (isExactNotFound(error)) return
+        if (isEvidenceStagingNotFound(error)) return
         throw error
       }
     },
@@ -323,6 +323,6 @@ function safeBucketName(value: string): boolean { return /^[a-z0-9][a-z0-9._-]{1
 function isCreateOnlyConflict(error: unknown): boolean {
   return error !== null && typeof error === 'object' && 'code' in error && (error.code === 412 || error.code === '412')
 }
-function isExactNotFound(error: unknown): boolean {
+export function isEvidenceStagingNotFound(error: unknown): boolean {
   return error !== null && typeof error === 'object' && 'code' in error && (error.code === 404 || error.code === '404')
 }

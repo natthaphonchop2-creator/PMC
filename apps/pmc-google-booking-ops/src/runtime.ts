@@ -7,6 +7,7 @@ import {
   createGoogleFormsPort,
 } from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
+import { createAppsScriptDraftCleanupPort } from './adapters/draftCleanupClient'
 import {
   adminBookingMessageBatches,
   adminTentativeMessageBatches,
@@ -84,6 +85,13 @@ import {
 import { sendCallReminderFlexPilot, sendProductionFlexPilot } from './workflows/flexPilot'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
 import { queueEvidenceRetention, reconcileAndExpireDraftEvidenceRetention } from './workflows/retention'
+import {
+  approveDraftEvidenceRetention,
+  executeDraftEvidenceRetention,
+  previewDraftEvidenceRetention,
+  readbackDraftEvidenceRetention,
+  type DraftRetentionPreview,
+} from './workflows/draftEvidenceCleanup'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
 import { prepareAutomaticQueue } from './workflows/automaticQueue'
 import {
@@ -255,6 +263,7 @@ export function createRuntime(): BookingPorts & StockIngressPorts & ExpenseIngre
   const store = createGoogleSheetStore(spreadsheet)
   const clock = { nowIso: bangkokNow }
   const crypto = createAppsScriptCryptoPort()
+  const draftCleanupUrl = properties[SCRIPT_PROPERTY_KEYS.draftCleanupUrl]?.trim() ?? ''
   const stock = createStockRepository(store)
   const expense = createGoogleExpenseRepository({
     masterSpreadsheetId: properties[SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId] ?? '',
@@ -322,6 +331,12 @@ export function createRuntime(): BookingPorts & StockIngressPorts & ExpenseIngre
       properties[SCRIPT_PROPERTY_KEYS.spreadsheetId],
       properties[SCRIPT_PROPERTY_KEYS.backupFolderId],
     ),
+    ...(draftCleanupUrl ? { draftCleanup: createAppsScriptDraftCleanupPort({
+      url: draftCleanupUrl,
+      secret: properties[SCRIPT_PROPERTY_KEYS.bookingIngressSecret],
+      crypto,
+      clock,
+    }) } : {}),
   }
 }
 
@@ -382,6 +397,49 @@ export function applyPmcBookingAttributionMigrationWorkflow(): {
   readbackVerified: boolean
 } {
   return applyBookingAttributionMigration(createPmcBookingAttributionMigrationRuntime())
+}
+
+export function previewPmcDraftEvidenceRetentionWorkflow(retentionId: string): DraftRetentionPreview {
+  requireEffectiveOwnerEmail()
+  return previewDraftEvidenceRetention(retentionId, createRuntime())
+}
+
+export function approvePmcDraftEvidenceRetentionWorkflow(
+  retentionId: string,
+  expectedVersion: number,
+  approvalDigest: string,
+  reason: string,
+): DraftRetentionPreview {
+  const owner = requireEffectiveOwnerEmail()
+  return approveDraftEvidenceRetention(
+    retentionId,
+    expectedVersion,
+    approvalDigest,
+    reason,
+    owner,
+    createRuntime(),
+  )
+}
+
+export function executePmcDraftEvidenceRetentionWorkflow(
+  retentionId: string,
+  expectedVersion: number,
+): DraftRetentionPreview {
+  const owner = requireEffectiveOwnerEmail()
+  return executeDraftEvidenceRetention(retentionId, expectedVersion, owner, createRuntime())
+}
+
+export function readbackPmcDraftEvidenceRetentionWorkflow(retentionId: string): DraftRetentionPreview {
+  requireEffectiveOwnerEmail()
+  return readbackDraftEvidenceRetention(retentionId, createRuntime())
+}
+
+function requireEffectiveOwnerEmail(): string {
+  const email = Session.getEffectiveUser().getEmail().trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
+    throw new Error('RETENTION_OWNER_IDENTITY_REQUIRED')
+  }
+  return email
 }
 
 export interface PmcBookingWorkbookPresentationRuntime extends WorkbookPresentationWorkflowPort {

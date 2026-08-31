@@ -158,10 +158,10 @@ export function retentionQueueMigrationPlan(
     return {
       id: String(row.id ?? ''), scope: 'CASE_FOLDER', caseId, draftId: null,
       trigger: 'LEGACY_CASE_RETENTION', eligibleAt: String(row.eligibleAt ?? ''),
-      status: oldStatus === 'APPROVED' ? 'CLEANED' : 'PENDING', ...manifest,
+      status: oldStatus === 'APPROVED' ? 'APPROVED' : 'PENDING', ...manifest,
       approvedBy: String(row.approvedBy ?? ''), approvedAt, reason: String(row.reason ?? ''),
       cleanupAttemptCount: oldStatus === 'APPROVED' ? 1 : 0, cleanupClaimId: '', cleanupLeaseUntil: '',
-      cleanedAt: oldStatus === 'APPROVED' ? approvedAt : '', safeErrorCode: '', version: Number(row.version),
+      cleanedAt: '', safeErrorCode: '', version: Number(row.version),
     }
   })
   return { kind: 'REPLACE_RETENTION_QUEUE_V2', headers: RETENTION_QUEUE_COLUMNS_V2, rows }

@@ -44,8 +44,10 @@ import type {
   BookingTimingEventName,
   BookingTimingRoute,
 } from './bookingPerformanceTelemetry.js'
+import { cleanupMiniAppDraftEvidence } from './draftCleanup.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const DRAFT_CLEANUP_PATH = '/internal/mini-app/draft-evidence-cleanup'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
 
 export type AsyncBookingWorkerEntrypoint = AsyncBookingWorker
@@ -99,6 +101,22 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     }
 
     const pathname = url.pathname
+    if (pathname === DRAFT_CLEANUP_PATH) {
+      if (req.method !== 'POST') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+      if (!deps.evidenceStaging) return respond(res, 503, { error: 'DRAFT_CLEANUP_UNAVAILABLE' })
+      const body = await readRequiredJson(req, res)
+      if (!body) return
+      try {
+        respond(res, 200, await cleanupMiniAppDraftEvidence(body, {
+          secret: deps.config.bookingIngressSecret,
+          staging: deps.evidenceStaging,
+          nowSeconds: Math.floor((deps.now ?? (() => new Date()))().getTime() / 1_000),
+        }))
+      } catch {
+        respond(res, 400, { error: 'DRAFT_CLEANUP_REJECTED' })
+      }
+      return
+    }
     if (deps.config.bookingMutationsPaused && isUserBookingMutation(pathname, req.method)) {
       respond(res, 503, { error: 'BOOKING_MUTATIONS_PAUSED' })
       return

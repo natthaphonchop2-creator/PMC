@@ -662,6 +662,7 @@ export interface FakeDrivePort extends DrivePort {
   movedFileCount(): number
   publicLinks(): string[]
   trashedFolderIds(): string[]
+  trashedEvidenceFileIds(): string[]
   allowMoves(): void
 }
 
@@ -682,6 +683,7 @@ export function createFakeDrive(
   let moved = 0
   let moveFails = initiallyFailing
   const trashed: string[] = []
+  const trashedEvidence = new Set<string>()
   const createdEvidence: string[] = []
 
   return {
@@ -729,6 +731,33 @@ export function createFakeDrive(
     trashFolder(folderId) {
       if (!trashed.includes(folderId)) trashed.push(folderId)
     },
+    verifyFolder(folderId) {
+      if (!folders.has(folderId)) throw new Error('folder not found')
+      return trashed.includes(folderId) ? 'ALREADY_TRASHED' : 'PRESENT'
+    },
+    evidenceIntakeFolderId() {
+      const exact = [...folders.entries()].filter(([, candidate]) => candidate.parentId === 'drive-root'
+        && candidate.name === '_MINI_APP_INTAKE' && candidate.marker === 'mini-app-intake:v1')
+      if (exact.length !== 1) throw new Error('draft evidence intake folder mismatch')
+      return exact[0]![0]
+    },
+    verifyEvidenceFile(input) {
+      const file = files.get(input.fileId)
+      if (!file) throw new Error('file not found')
+      if (trashedEvidence.has(input.fileId)) return 'ALREADY_TRASHED'
+      if (file.folderId !== input.parentFolderId || file.name !== input.fileName
+        || file.mimeType !== input.mimeType || file.marker !== input.marker) throw new Error('draft evidence binding mismatch')
+      return 'PRESENT'
+    },
+    trashEvidenceFile(input) {
+      const file = files.get(input.fileId)
+      if (!file) throw new Error('file not found')
+      if (trashedEvidence.has(input.fileId)) return 'ALREADY_TRASHED'
+      if (file.folderId !== input.parentFolderId || file.name !== input.fileName
+        || file.mimeType !== input.mimeType || file.marker !== input.marker) throw new Error('draft evidence binding mismatch')
+      trashedEvidence.add(input.fileId)
+      return 'TRASHED'
+    },
     createdFolderCount: () => folders.size,
     createdEvidenceFileIds: () => [...createdEvidence],
     createdEvidenceFiles: () => createdEvidence.map((id) => {
@@ -743,6 +772,7 @@ export function createFakeDrive(
     movedFileCount: () => moved,
     publicLinks: () => [],
     trashedFolderIds: () => [...trashed],
+    trashedEvidenceFileIds: () => [...trashedEvidence],
     allowMoves() {
       moveFails = false
     },

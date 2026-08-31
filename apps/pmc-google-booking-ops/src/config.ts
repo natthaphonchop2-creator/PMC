@@ -21,6 +21,7 @@ export const SCRIPT_PROPERTY_KEYS = {
   expenseSubmitterIds: 'PMC_EXPENSE_SUBMITTER_IDS',
   financeManagerIds: 'PMC_FINANCE_MANAGER_IDS',
   financePermissionCutoverApproved: 'PMC_FINANCE_PERMISSION_CUTOVER_APPROVED',
+  draftCleanupUrl: 'PMC_DRAFT_CLEANUP_URL',
 } as const
 
 export const BOOKING_FORM_LABELS = {

@@ -14,6 +14,7 @@ import {
   createRuntime,
   applyPmcBookingAttributionMigrationWorkflow,
   applyPmcBookingWorkbookPresentationWorkflow,
+  approvePmcDraftEvidenceRetentionWorkflow,
   configureStaffProfileImagesWorkflow,
   configureStockManagersWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
@@ -24,6 +25,7 @@ import {
   prepareExpensePermissionsWorkflow,
   prepareAutoQueueMigrationWorkflow,
   applyAutoQueueMigrationWorkflow,
+  executePmcDraftEvidenceRetentionWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
@@ -32,6 +34,8 @@ import {
   runIntegrityAndBackupWorkflow,
   previewPmcBookingAttributionMigrationWorkflow,
   previewPmcBookingWorkbookPresentationWorkflow,
+  previewPmcDraftEvidenceRetentionWorkflow,
+  readbackPmcDraftEvidenceRetentionWorkflow,
   runExpenseRecoveryWorkflow,
   sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
@@ -306,4 +310,30 @@ export function previewPmcBookingWorkbookPresentation() {
 
 export function applyPmcBookingWorkbookPresentation() {
   return applyPmcBookingWorkbookPresentationWorkflow()
+}
+
+export function previewPmcDraftEvidenceRetention(retentionId: string) {
+  return previewPmcDraftEvidenceRetentionWorkflow(retentionId)
+}
+
+export function approvePmcDraftEvidenceRetention(
+  retentionId: string,
+  expectedVersion: number,
+  approvalDigest: string,
+  reason: string,
+) {
+  return approvePmcDraftEvidenceRetentionWorkflow(
+    retentionId,
+    expectedVersion,
+    approvalDigest,
+    reason,
+  )
+}
+
+export function executePmcDraftEvidenceRetention(retentionId: string, expectedVersion: number) {
+  return executePmcDraftEvidenceRetentionWorkflow(retentionId, expectedVersion)
+}
+
+export function readbackPmcDraftEvidenceRetention(retentionId: string) {
+  return readbackPmcDraftEvidenceRetentionWorkflow(retentionId)
 }

@@ -11,6 +11,7 @@ import type {
   WorkbookPresentationSha256,
 } from './domain/workbookPresentation'
 import type { RetentionRecordV2, RetentionStatus } from '../../../shared/pmcMiniAppDraftRetention'
+import type { MiniAppDraftCleanupPayload } from '../../../shared/pmcMiniAppDraftCleanup'
 
 export interface Clock {
   nowIso(): string
@@ -311,6 +312,26 @@ export interface DrivePort {
   moveAndRenameFile(fileId: string, folderId: string, name: string): string
   folderUrl(folderId: string): string
   trashFolder(folderId: string): void
+  verifyFolder(folderId: string): 'PRESENT' | 'ALREADY_TRASHED'
+  evidenceIntakeFolderId(): string
+  verifyEvidenceFile(input: {
+    fileId: string
+    parentFolderId: string
+    fileName: string
+    mimeType: 'image/jpeg' | 'image/png'
+    marker: string
+  }): 'PRESENT' | 'ALREADY_TRASHED'
+  trashEvidenceFile(input: {
+    fileId: string
+    parentFolderId: string
+    fileName: string
+    mimeType: 'image/jpeg' | 'image/png'
+    marker: string
+  }): 'TRASHED' | 'ALREADY_TRASHED'
+}
+
+export interface DraftCleanupPort {
+  clean(payload: MiniAppDraftCleanupPayload): { cleanedCount: number }
 }
 export interface CalendarEventInput {
   calendarId: string
@@ -451,4 +472,5 @@ export interface BookingPorts {
   media: EvidenceMediaPort
   dashboard: DashboardPort
   backups: BackupPort
+  draftCleanup?: DraftCleanupPort
 }

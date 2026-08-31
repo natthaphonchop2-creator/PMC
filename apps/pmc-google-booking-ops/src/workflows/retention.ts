@@ -63,7 +63,7 @@ export function reconcileAndExpireDraftEvidenceRetention(ports: BookingPorts): {
         return
       }
       if (current.state === 'CANCELLED' || current.state === 'EXPIRED') {
-        if (retention.status !== 'PENDING') {
+        if (retention.status === 'ACTIVE') {
           transitionRetention(current.draftId, 'PENDING', 'DAILY_RECONCILE_TERMINAL', ports); repaired += 1
         }
         return

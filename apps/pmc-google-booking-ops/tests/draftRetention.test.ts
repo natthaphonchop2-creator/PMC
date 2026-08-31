@@ -110,7 +110,7 @@ describe('draft evidence retention lifecycle', () => {
 })
 
 describe('RETENTION_QUEUE V1 to V2 plan', () => {
-  it('backfills one exact case-folder manifest and maps an old approval to CLEANED', () => {
+  it('backfills one exact case-folder manifest and keeps an old approval pending explicit cleanup', () => {
     const plan = retentionQueueMigrationPlan(
       ['id', 'caseId', 'eligibleAt', 'status', 'approvedBy', 'approvedAt', 'reason', 'version'],
       [{
@@ -122,7 +122,7 @@ describe('RETENTION_QUEUE V1 to V2 plan', () => {
     )
     expect(plan).toMatchObject({ kind: 'REPLACE_RETENTION_QUEUE_V2' })
     if (plan.kind !== 'REPLACE_RETENTION_QUEUE_V2') throw new Error('unexpected plan')
-    expect(plan.rows[0]).toMatchObject({ scope: 'CASE_FOLDER', status: 'CLEANED', cleanedAt: now })
+    expect(plan.rows[0]).toMatchObject({ scope: 'CASE_FOLDER', status: 'APPROVED', cleanedAt: '' })
     expect(parseRetentionManifest(plan.rows[0]!.resourceManifestJson, plan.rows[0]!.manifestDigest, sha256Hex))
       .toEqual([{ storage: 'CASE_FOLDER', folderId: 'folder-3' }])
   })
