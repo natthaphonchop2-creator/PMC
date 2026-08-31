@@ -309,11 +309,15 @@ export function applyPmcBookingAttributionMigration() {
 }
 
 export function previewPmcBookingWorkbookPresentation() {
-  return previewPmcBookingWorkbookPresentationWorkflow()
+  const result = previewPmcBookingWorkbookPresentationWorkflow()
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function applyPmcBookingWorkbookPresentation() {
-  return applyPmcBookingWorkbookPresentationWorkflow()
+  const result = applyPmcBookingWorkbookPresentationWorkflow()
+  console.log(JSON.stringify(result))
+  return result
 }
 
 export function previewPmcDraftEvidenceRetention(retentionId: string) {
