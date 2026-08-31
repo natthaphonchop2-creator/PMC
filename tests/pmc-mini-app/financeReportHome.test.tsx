@@ -17,6 +17,31 @@ const EXPENSE_CARDS = [
 ]
 
 describe('finance-first report home', () => {
+  it('groups report, recording, and compensation actions with explicit action labels', () => {
+    const view = render(<FinanceReportHome
+      canViewFinance
+      financeReportsEnabled
+      financeReadsEnabled
+      expenseCaptureEnabled
+      canSubmitExpense
+      onSelect={vi.fn()}
+      onSelectExpense={vi.fn()}
+    />)
+
+    const reportHeading = screen.getByRole('heading', { name: 'ดูรายงาน' })
+    const recordHeading = screen.getByRole('heading', { name: 'บันทึกรายจ่าย' })
+    const compensationHeading = screen.getByRole('heading', { name: 'ค่าตอบแทน' })
+    expect(reportHeading.compareDocumentPosition(recordHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(recordHeading.compareDocumentPosition(compensationHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    expect(screen.getByRole('button', { name: /รายรับรายวัน/ })).toHaveTextContent('ดูรายงาน')
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toHaveTextContent('บันทึก')
+    expect(screen.getByRole('button', { name: 'สมุดรายจ่ายภายในคลินิก บันทึก' })).toHaveTextContent('บันทึก')
+    expect(screen.getByRole('button', { name: 'สมุดรายจ่ายส่วนตัวหมอ บันทึก' })).toHaveTextContent('บันทึก')
+    expect(screen.getByText('เงินเดือนพนักงาน').closest('.pmc-expense-card-deferred')).toHaveTextContent('เตรียมระบบ')
+    expect(view.container.querySelectorAll('.pmc-finance-menu-section')).toHaveLength(3)
+  })
+
   it('shows daily income and a visibly locked monthly report to ordinary staff without finance figures', async () => {
     const user = userEvent.setup()
     const onSelect = vi.fn()
@@ -74,7 +99,7 @@ describe('finance-first report home', () => {
 
     expect(screen.queryByRole('button', { name: /รายรับรายวัน/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /รายงานรายเดือน/ })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
   })
 
   it('shows a monthly expense entry in reads-only mode without exposing revenue actions', async () => {
@@ -115,7 +140,11 @@ describe('finance-first report home', () => {
   it('keeps every deferred expense area compact, unavailable, and free of create actions', () => {
     render(<FinanceReportHome canViewFinance onSelect={vi.fn()} />)
 
-    for (const label of EXPENSE_CARDS) {
+    for (const label of EXPENSE_CARDS.slice(0, 3)) {
+      expect(screen.queryByRole('button', { name: `${label} บันทึก` })).not.toBeInTheDocument()
+      expect(screen.getByText(label).closest('.pmc-expense-card-deferred')).toHaveTextContent('ยังไม่เปิดใช้')
+    }
+    for (const label of EXPENSE_CARDS.slice(3)) {
       expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument()
       expect(screen.getByText(label).closest('.pmc-expense-card-deferred')).toHaveTextContent('เตรียมระบบ')
     }

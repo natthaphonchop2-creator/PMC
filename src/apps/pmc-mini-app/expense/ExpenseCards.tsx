@@ -1,4 +1,4 @@
-import { FileText, HandCoins, ReceiptText, Stethoscope, UserRoundCog, WalletCards } from 'lucide-react'
+import { FileText, HandCoins, Plus, ReceiptText, Stethoscope, UserRoundCog, WalletCards } from 'lucide-react'
 import type { EnabledExpenseCategory } from '../../../../shared/pmcExpense'
 
 const ENABLED_CARDS: Array<{ category: EnabledExpenseCategory; label: string; icon: typeof FileText }> = [
@@ -20,20 +20,49 @@ export function ExpenseCards({
   canSubmitExpense: boolean
   onSelect: (category: EnabledExpenseCategory) => void
 }) {
-  return <div className="pmc-expense-card-grid">
-    {ENABLED_CARDS.map((card) => canSubmitExpense
-      ? <button key={card.category} type="button" aria-label={card.label} onClick={() => onSelect(card.category)}>
-        <card.icon aria-hidden="true" />
-        <span><strong>{card.label}</strong><small>เพิ่มรายการ</small></span>
-      </button>
-      : <DeferredCard key={card.category} label={card.label} icon={card.icon} />)}
-    {DEFERRED_CARDS.map((card) => <DeferredCard key={card.label} {...card} />)}
-  </div>
+  return <>
+    <section className="pmc-finance-menu-section" aria-labelledby="pmc-expense-entry-heading">
+      <header className="pmc-finance-section-heading">
+        <div>
+          <h2 id="pmc-expense-entry-heading">บันทึกรายจ่าย</h2>
+          <p id="pmc-expense-entry-description">เลือกประเภทเพื่อกรอกข้อมูลและแนบหลักฐาน</p>
+        </div>
+      </header>
+      <ul className="pmc-expense-card-grid" role="list">
+        {ENABLED_CARDS.map((card) => <li key={card.category}>{canSubmitExpense
+          ? <button
+            type="button"
+            aria-label={`${card.label} บันทึก`}
+            aria-describedby="pmc-expense-entry-description"
+            onClick={() => onSelect(card.category)}
+          >
+            <span className="pmc-expense-row-icon"><card.icon aria-hidden="true" /></span>
+            <span className="pmc-expense-row-copy"><strong>{card.label}</strong><small>กรอกข้อมูลและแนบหลักฐาน</small></span>
+            <span className="pmc-expense-save-action" aria-hidden="true"><Plus />บันทึก</span>
+          </button>
+          : <DeferredCard label={card.label} icon={card.icon} status="ยังไม่เปิดใช้" />}</li>)}
+      </ul>
+    </section>
+
+    <section className="pmc-finance-menu-section" aria-labelledby="pmc-expense-compensation-heading">
+      <header className="pmc-finance-section-heading">
+        <div>
+          <h2 id="pmc-expense-compensation-heading">ค่าตอบแทน</h2>
+          <p>เงินเดือนและค่าแพทย์</p>
+        </div>
+        <span className="pmc-finance-section-status">เตรียมระบบ</span>
+      </header>
+      <ul className="pmc-expense-card-grid pmc-expense-compensation-list" role="list">
+        {DEFERRED_CARDS.map((card) => <li key={card.label}><DeferredCard {...card} status="เตรียมระบบ" /></li>)}
+      </ul>
+    </section>
+  </>
 }
 
-function DeferredCard({ label, icon: Icon }: { label: string; icon: typeof FileText }) {
+function DeferredCard({ label, icon: Icon, status }: { label: string; icon: typeof FileText; status: string }) {
   return <div className="pmc-expense-card-deferred">
-    <Icon aria-hidden="true" />
-    <span><strong>{label}</strong><small>เตรียมระบบ</small></span>
+    <span className="pmc-expense-row-icon"><Icon aria-hidden="true" /></span>
+    <span className="pmc-expense-row-copy"><strong>{label}</strong><small>{status === 'เตรียมระบบ' ? 'ยังไม่เปิดให้บันทึก' : 'บัญชีนี้ยังบันทึกไม่ได้'}</small></span>
+    <span className="pmc-expense-row-status">{status}</span>
   </div>
 }

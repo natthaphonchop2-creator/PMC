@@ -30,14 +30,14 @@ describe('expense capture cards', () => {
     const onSelect = vi.fn()
     const view = render(<ExpenseCards canSubmitExpense onSelect={onSelect} />)
 
-    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'สมุดรายจ่ายภายในคลินิก' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'สมุดรายจ่ายส่วนตัวหมอ' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'สมุดรายจ่ายภายในคลินิก บันทึก' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'สมุดรายจ่ายส่วนตัวหมอ บันทึก' })).toBeEnabled()
     expect(screen.getByText('เงินเดือนพนักงาน').closest('div')).toHaveTextContent('เตรียมระบบ')
     expect(screen.queryByRole('button', { name: 'เงินเดือนพนักงาน' })).not.toBeInTheDocument()
 
     view.rerender(<ExpenseCards canSubmitExpense={false} onSelect={onSelect} />)
-    expect(screen.queryByRole('button', { name: 'บิลเอกสาร' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร บันทึก' })).not.toBeInTheDocument()
   })
 })
 

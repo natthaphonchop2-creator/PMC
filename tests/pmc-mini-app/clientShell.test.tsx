@@ -99,7 +99,7 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
     expect(screen.queryByRole('button', { name: /รายรับรายวัน/ })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
 
     view.unmount()
     render(<PmcMiniApp
@@ -108,7 +108,7 @@ describe('PMC LINE Mini App shell', () => {
       api={miniAppApi()}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงาน' }))
-    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
   })
 
   it('keeps capture-only navigation reachable but exposes no active create button without submit permission', async () => {
@@ -119,8 +119,9 @@ describe('PMC LINE Mini App shell', () => {
       api={miniAppApi()}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
-    expect(screen.queryByRole('button', { name: 'บิลเอกสาร' })).not.toBeInTheDocument()
-    expect(screen.getByText('บิลเอกสาร').closest('div')).toHaveTextContent('เตรียมระบบ')
+    expect(screen.getByText('บัญชีนี้ยังไม่มีสิทธิ์บันทึกรายจ่าย')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร บันทึก' })).not.toBeInTheDocument()
+    expect(screen.getByText('บิลเอกสาร').closest('div')).toHaveTextContent('ยังไม่เปิดใช้')
 
     view.unmount()
     render(<PmcMiniApp
@@ -129,7 +130,7 @@ describe('PMC LINE Mini App shell', () => {
       api={miniAppApi()}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
-    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
   })
 
   it('shows both revenue and permitted expense actions only in combined mode', async () => {
@@ -141,7 +142,7 @@ describe('PMC LINE Mini App shell', () => {
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     expect(screen.getByRole('button', { name: /รายรับรายวัน/ })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'บิลเอกสาร' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
   })
 
   it('opens revenue UX previews without calling any live revenue adapter', async () => {
@@ -303,7 +304,7 @@ describe('PMC LINE Mini App shell', () => {
       api={api}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
-    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
+    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' }))
     await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
     await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
     await user.type(screen.getByLabelText('จำนวนเงิน'), '1200')
@@ -319,7 +320,7 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: 'กลับหน้ารายงาน' }))
     expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
 
-    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
+    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' }))
     expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('')
   })
 
@@ -455,7 +456,7 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
     expect(await screen.findByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
     expect(financeApi.loadMonthlyIncome).toHaveBeenCalledOnce()
-    expect(screen.queryByRole('button', { name: 'บิลเอกสาร' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร บันทึก' })).not.toBeInTheDocument()
   })
 
   it('drills from a monthly trend into the selected daily range', async () => {
@@ -939,7 +940,7 @@ function miniAppApi(): PmcMiniAppApi {
 
 async function openAndCompleteExpenseBill(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
-  await user.click(screen.getByRole('button', { name: 'บิลเอกสาร' }))
+  await user.click(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' }))
   await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
   await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
   await user.type(screen.getByLabelText('จำนวนเงิน'), '1200')

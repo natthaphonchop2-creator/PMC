@@ -120,16 +120,18 @@ test.describe('Finance report Android acceptance', () => {
     await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
     await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
 
-    const primaryGrid = page.locator('.pmc-finance-primary-grid')
-    expect(await primaryGrid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2)
-    for (const card of await primaryGrid.getByRole('button').all()) {
-      const box = await card.boundingBox()
+    const reportList = page.locator('.pmc-finance-action-list')
+    const reportListBox = await reportList.boundingBox()
+    for (const row of await reportList.getByRole('button').all()) {
+      const box = await row.boundingBox()
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(48)
+      expect(box?.width ?? 0).toBeGreaterThanOrEqual((reportListBox?.width ?? 0) - 2)
     }
     await expect(page.getByRole('button', { name: /รายงานรายเดือน/ })).toHaveAttribute('aria-disabled', 'true')
-    await expect(page.getByText('เตรียมระบบ')).toHaveCount(6)
+    await expect(page.getByText('ยังไม่เปิดใช้', { exact: true })).toHaveCount(4)
+    await expect(page.getByText('เตรียมระบบ', { exact: true })).toHaveCount(4)
     await expect(page.getByRole('button', { name: /บันทึก|ส่งรายจ่าย|แนบ/ })).toHaveCount(0)
-    await expectBottomNavClearance(page, '.pmc-finance-deferred')
+    await expectBottomNavClearance(page, '.pmc-expense-compensation-list')
     await page.screenshot({
       path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-finance-home.png'),
       fullPage: false,
@@ -212,6 +214,28 @@ test.describe('Finance report Android acceptance', () => {
 
 test.describe('Expense capture Android acceptance', () => {
   test.use({ viewport: { width: 390, height: 844 } })
+
+  test('finance home separates report, recording, and future compensation actions', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance=enabled&expense=enabled&finance-reads=enabled&role=finance')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+
+    const reportHeading = page.getByRole('heading', { name: 'ดูรายงาน' })
+    const recordHeading = page.getByRole('heading', { name: 'บันทึกรายจ่าย' })
+    const compensationHeading = page.getByRole('heading', { name: 'ค่าตอบแทน' })
+    await expect(reportHeading).toBeVisible()
+    await expect(recordHeading).toBeVisible()
+    await expect(compensationHeading).toBeVisible()
+    expect((await reportHeading.boundingBox())!.y).toBeLessThan((await recordHeading.boundingBox())!.y)
+    expect((await recordHeading.boundingBox())!.y).toBeLessThan((await compensationHeading.boundingBox())!.y)
+
+    await expect(page.getByRole('button', { name: /รายรับรายวัน/ })).toContainText('ดูรายงาน')
+    await expect(page.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toContainText('บันทึก')
+    await expect(page.locator('.pmc-expense-card-deferred').filter({ hasText: 'เงินเดือนพนักงาน' })).toContainText('เตรียมระบบ')
+    await expect(page.getByRole('button', { name: 'เงินเดือนพนักงาน' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'บิลเอกสาร บันทึก' }).click()
+    await expect(page.getByRole('heading', { name: 'บิลเอกสาร' })).toBeVisible()
+  })
 
   test('submit-only staff records a bill with two images and receives one durable receipt', async ({ page }) => {
     await page.goto('/mini-app/?preview=1&expense=enabled&role=staff')
@@ -460,7 +484,7 @@ async function expectNoStockSheetLink(page: Page) {
 
 async function openExpenseForm(page: Page, category: string): Promise<void> {
   await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
-  await page.getByRole('button', { name: category, exact: true }).click()
+  await page.getByRole('button', { name: `${category} บันทึก`, exact: true }).click()
   await expect(page.getByRole('heading', { name: category })).toBeVisible()
 }
 

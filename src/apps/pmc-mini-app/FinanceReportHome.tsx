@@ -36,52 +36,62 @@ export function FinanceReportHome({
   const monthlyExpenseAvailable = financeReadsEnabled
   const monthlyAvailable = canViewFinance && (monthlyIncomeAvailable || monthlyExpenseAvailable)
   const monthlyExpenseOnly = !monthlyIncomeAvailable && monthlyExpenseAvailable
+  const expenseRecordingAvailable = expenseCaptureEnabled && canSubmitExpense
   return <main className="pmc-finance-home">
     <header className="pmc-finance-header">
       <BrandMark />
       <h1>รายงานคลินิก</h1>
-      <p>{financeReportsEnabled ? 'เลือกดูรายรับตามช่วงเวลาที่ต้องการ' : financeUiPreviewEnabled
-        ? 'ดูโครงร่างรายรับและบันทึกรายจ่ายของคลินิก'
+      <p>{revenueStructureVisible && expenseRecordingAvailable ? 'ดูรายงานและบันทึกรายจ่ายของคลินิก' : financeReportsEnabled
+        ? 'เลือกดูข้อมูลการเงินตามช่วงเวลา' : financeUiPreviewEnabled
+        ? 'ดูโครงร่างรายงานและรายการรายจ่ายของคลินิก'
         : financeReadsEnabled
-        ? 'เลือกดูรายจ่ายที่บันทึกตามเดือน'
-        : 'เลือกประเภทของรายการรายจ่าย'}</p>
+        ? 'ดูยอดรายจ่ายและประวัติหลักฐาน'
+        : expenseCaptureEnabled && !canSubmitExpense
+        ? 'บัญชีนี้ยังไม่มีสิทธิ์บันทึกรายจ่าย'
+        : 'เลือกประเภทเพื่อบันทึกรายจ่าย'}</p>
     </header>
 
     {financeUiPreviewEnabled && !financeReportsEnabled && <p className="pmc-finance-preview-banner" role="status">
       ตัวอย่าง UX/UI — ยังไม่เชื่อมข้อมูลรายรับจริง
     </p>}
 
-    {(revenueStructureVisible || financeReadsEnabled) && <section className="pmc-finance-primary-grid" aria-label={revenueStructureVisible ? 'รายงานรายรับ' : 'รายงานรายจ่าย'}>
-      {revenueStructureVisible && <button type="button" onClick={() => onSelect('DAILY_INCOME')}>
-        <span className="pmc-finance-card-icon"><Banknote aria-hidden="true" /></span>
-        <span><strong>รายรับรายวัน</strong><small>{financeReportsEnabled ? 'วันนี้ เมื่อวาน หรือเลือกช่วงวันที่' : 'ดูโครงร่างหน้ารายงาน'}</small></span>
-        <ChevronRight aria-hidden="true" />
-      </button>}
-      <button
-        type="button"
-        aria-disabled={!monthlyAvailable || undefined}
-        onClick={() => { if (monthlyAvailable) onSelect('MONTHLY_INCOME') }}
-      >
-        <span className="pmc-finance-card-icon">{monthlyAvailable
-          ? <CalendarRange aria-hidden="true" />
-          : <LockKeyhole aria-hidden="true" />}</span>
-        <span><strong>{monthlyExpenseOnly ? 'รายจ่ายรายเดือน' : revenueStructureVisible ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</strong><small>{monthlyExpenseOnly
-          ? 'ยอดรายจ่ายและประวัติหลักฐาน'
-          : revenueStructureVisible && !monthlyReportsEnabled
-          ? 'ยังไม่เปิดข้อมูลย้อนหลัง'
-          : canViewFinance
-            ? revenueStructureVisible ? financeReportsEnabled ? 'สรุปรายรับประจำเดือน' : 'ดูโครงร่างหน้ารายงาน' : 'ยอดรายจ่ายและประวัติหลักฐาน'
-            : 'เฉพาะฝ่ายการเงิน'}</small></span>
-        <ChevronRight aria-hidden="true" />
-      </button>
+    {(revenueStructureVisible || financeReadsEnabled) && <section className="pmc-finance-menu-section" aria-labelledby="pmc-finance-report-heading">
+      <header className="pmc-finance-section-heading">
+        <div>
+          <h2 id="pmc-finance-report-heading">ดูรายงาน</h2>
+          <p>ตรวจยอดตามวันหรือเดือน</p>
+        </div>
+      </header>
+      <ul className="pmc-finance-action-list" role="list">
+        {revenueStructureVisible && <li><button type="button" onClick={() => onSelect('DAILY_INCOME')}>
+          <span className="pmc-finance-card-icon"><Banknote aria-hidden="true" /></span>
+          <span className="pmc-finance-row-copy"><strong>รายรับรายวัน</strong><small>{financeReportsEnabled ? 'วันนี้ เมื่อวาน หรือเลือกช่วงวันที่' : 'ดูโครงร่างหน้ารายงาน'}</small></span>
+          <span className="pmc-finance-row-end"><span className="pmc-finance-row-action">ดูรายงาน</span><ChevronRight aria-hidden="true" /></span>
+        </button></li>}
+        <li><button
+          type="button"
+          aria-disabled={!monthlyAvailable || undefined}
+          onClick={() => { if (monthlyAvailable) onSelect('MONTHLY_INCOME') }}
+        >
+          <span className="pmc-finance-card-icon"><CalendarRange aria-hidden="true" /></span>
+          <span className="pmc-finance-row-copy"><strong>{monthlyExpenseOnly ? 'รายจ่ายรายเดือน' : revenueStructureVisible ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</strong><small>{monthlyExpenseOnly
+            ? 'ยอดรายจ่ายและประวัติหลักฐาน'
+            : revenueStructureVisible && !monthlyReportsEnabled
+            ? 'ยังไม่เปิดข้อมูลย้อนหลัง'
+            : canViewFinance
+              ? revenueStructureVisible ? financeReportsEnabled ? 'สรุปรายรับและรายจ่ายประจำเดือน' : 'ดูโครงร่างหน้ารายงาน' : 'ยอดรายจ่ายและประวัติหลักฐาน'
+              : 'เฉพาะฝ่ายการเงิน'}</small></span>
+          <span className="pmc-finance-row-end">
+            <span className={`pmc-finance-row-action${monthlyAvailable ? '' : ' unavailable'}`}>{monthlyAvailable ? 'ดูรายงาน' : 'ยังไม่เปิดใช้'}</span>
+            {monthlyAvailable ? <ChevronRight aria-hidden="true" /> : <LockKeyhole aria-hidden="true" />}
+          </span>
+        </button></li>
+      </ul>
     </section>}
 
-    <section className="pmc-finance-deferred" aria-labelledby="pmc-finance-deferred-heading">
-      <h2 id="pmc-finance-deferred-heading">รายการรายจ่าย</h2>
-      <ExpenseCards
-        canSubmitExpense={expenseCaptureEnabled && canSubmitExpense}
-        onSelect={onSelectExpense}
-      />
-    </section>
+    <ExpenseCards
+      canSubmitExpense={expenseRecordingAvailable}
+      onSelect={onSelectExpense}
+    />
   </main>
 }
