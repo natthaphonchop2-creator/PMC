@@ -123,7 +123,9 @@ function deploymentFixture(roots: string[]) {
   const codeHash = createHash('sha256').update(code).digest('hex')
   writeFileSync(join(dist, 'Code.js'), code)
   const project = join(appRoot, '.clasp.production.json')
-  writeFileSync(project, JSON.stringify({ scriptId: 'script-id-0001', rootDir: 'dist' }))
+  writeFileSync(project, JSON.stringify({
+    scriptId: 'script-id-0001', rootDir: 'dist', parentId: 'parent-id-0001',
+  }))
   chmodSync(project, 0o600)
 
   const eventLog = join(root, 'events.log')
@@ -144,6 +146,7 @@ function deploymentFixture(roots: string[]) {
     'PMC_OPERATOR_SCRIPT_ID=script-id-0001',
     'PMC_OPERATOR_DEPLOYMENT_ID=deployment-id-0001',
     'PMC_OPERATOR_EXPECTED_ACCOUNT_EMAIL=owner@example.com',
+    'PMC_OPERATOR_PARENT_ID=parent-id-0001',
     `PMC_OPERATOR_PRIVATE_DIR=${privateDir}`,
   ].join('\n'))
   chmodSync(envFile, 0o600)
@@ -173,7 +176,9 @@ function deploymentFixture(roots: string[]) {
   const clearEvents = () => writeFileSync(eventLog, '')
   const breakGate = (gate: string) => {
     if (gate === 'hash') env = { ...env, FAKE_CODE_CONTENT: 'changed Code.js\n' }
-    else if (gate === 'project') writeFileSync(project, JSON.stringify({ scriptId: 'wrong-script', rootDir: 'dist' }))
+    else if (gate === 'project') writeFileSync(project, JSON.stringify({
+      scriptId: 'wrong-script', rootDir: 'dist', parentId: 'parent-id-0001',
+    }))
     else if (gate === 'approval-seal') writeFileSync(join(privateDir, 'approval.seal'), `${'0'.repeat(64)}\n`)
     else env = { ...env, FAKE_FAIL_AT: gate }
   }

@@ -9,8 +9,13 @@ if (operation === 'preflight') {
   requireArgs(args, 6)
   const [projectFile, authFile, deploymentsFile, versionsFile, codeHashFile, outputFile] = args
   const project = jsonObject(projectFile)
-  exactKeys(project, ['scriptId', 'rootDir'])
+  allowedKeys(project, ['scriptId', 'rootDir', 'parentId'])
+  if (!Object.hasOwn(project, 'scriptId') || !Object.hasOwn(project, 'rootDir')) fail()
   if (project.scriptId !== env('PMC_OPERATOR_SCRIPT_ID') || project.rootDir !== 'dist') fail()
+  const expectedParent = process.env.PMC_OPERATOR_PARENT_ID ?? ''
+  if (project.parentId !== undefined
+    && (typeof project.parentId !== 'string' || !safeOpaque(project.parentId)
+      || !expectedParent || project.parentId !== expectedParent)) fail()
   const expectedRoot = realpathSync(env('PMC_OPERATOR_EXPECTED_ROOT_DIR'))
   if (realpathSync(resolve(dirname(projectFile), String(project.rootDir))) !== expectedRoot) fail()
 
@@ -30,6 +35,7 @@ if (operation === 'preflight') {
     codeSha256,
     projectFileSha256: sha256(readFileSync(projectFile)),
     scriptId: project.scriptId,
+    parentId: project.parentId ?? null,
     deploymentId: deployment.deploymentId,
     deploymentVersion: deployment.versionNumber,
     accountEmail: auth.email,

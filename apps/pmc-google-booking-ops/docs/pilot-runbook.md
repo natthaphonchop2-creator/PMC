@@ -320,7 +320,7 @@ Owner creates one environment file outside the repository, mode `0600`, plus one
 
 Use a new empty private output directory for every reviewed attempt. The runner deliberately refuses to overwrite a preflight, approval, version, clone, or readback artifact from an earlier attempt.
 
-The private clasp project file must be a non-symlink mode-`0600` JSON file with exactly the reviewed `scriptId` and `rootDir: "dist"`. Supply only the environment-file path through `PMC_BOOKING_DEPLOY_ENV_FILE`. Do not type resolved identities, paths, or digests into copied commands.
+The private clasp project file must be a non-symlink mode-`0600` JSON file with the reviewed `scriptId`, `rootDir: "dist"`, and optional reviewed `parentId`. When `parentId` is present, the private environment must also define the matching `PMC_OPERATOR_PARENT_ID`. Supply only the environment-file path through `PMC_BOOKING_DEPLOY_ENV_FILE`. Do not type resolved identities, paths, or digests into copied commands.
 
 The checked-in Bash 3.2 runner enforces `set -Eeuo pipefail`, noclobber, `HISTFILE=/dev/null`, disabled history/xtrace, `umask 077`, owner/mode checks, clean reviewed commit, exact bundle hash, pinned local clasp version, exact authorized account, exact project/deployment binding, and JSON readback. Its three phases are intentionally separate: read-only preflight, explicit owner approval, then deploy.
 
