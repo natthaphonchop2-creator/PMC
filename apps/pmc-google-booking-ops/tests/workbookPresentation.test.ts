@@ -660,6 +660,11 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(bookingRanges.some((range) => range.startsWith("'BOOKING_MASTER'!A2:")))
       .toBe(true)
     expect(bookingRanges.every((range) => /!A\d+:[A-Z]+\d+$/.test(range))).toBe(true)
+    const dashboardRanges = dataCall[1].ranges.filter((range) => range.startsWith("'DASHBOARD'!"))
+    for (const row of [10, 13, 14]) {
+      expect(dashboardRanges.some((range) => range.startsWith(`'DASHBOARD'!A${row}:`)))
+        .toBe(true)
+    }
     const fields = dataCall[1].fields
     for (const field of [
       'chipRuns', 'textFormatRuns', 'dataSourceFormula', 'dataSourceTable',

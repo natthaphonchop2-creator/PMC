@@ -245,7 +245,9 @@ export function presentationMetadataRanges(
     const sheet = `'${title.replace(/'/g, "''")}'`
     if (!VISIBLE_TABS.has(title)) return [`${sheet}!1:1`]
     const endColumn = columnName(Number(columns))
-    const sampleRows = [...new Set([1, Math.min(2, Number(rows)), Number(rows)])]
+    const sampleRows = title === 'DASHBOARD'
+      ? [...new Set([1, 2, 10, 13, 14, Number(rows)].filter((row) => row <= Number(rows)))]
+      : [...new Set([1, Math.min(2, Number(rows)), Number(rows)])]
     return sampleRows.map((row) => `${sheet}!A${row}:${endColumn}${row}`)
   })
 }
