@@ -71,6 +71,25 @@ describe('Apps Script Mini App evidence ingress', () => {
     expect(drive.createdEvidenceFileIds()).toEqual(['uploaded-evidence-1'])
   })
 
+  it('fails closed when two Drive files exactly match one protocol-2 slot', () => {
+    const ports = createTestPorts()
+    const drive = ports.drive as TestPorts['drive'] & {
+      seedEvidenceFile(input: { id: string; folderId: string; name: string; mimeType: string; marker: string | null }): void
+      createdEvidenceFileIds(): string[]
+    }
+    const intake = drive.ensureChildFolder(drive.rootFolderId(), '_MINI_APP_INTAKE', 'mini-app-intake:v1')
+    const envelope = v2Envelope(0, 'nonce-v2-duplicate-1')
+    for (const id of ['duplicate-exact-1', 'duplicate-exact-2']) {
+      drive.seedEvidenceFile({
+        id, folderId: intake.id, name: envelope.payload.fileName,
+        mimeType: envelope.payload.mimeType, marker: v2Marker(envelope.payload),
+      })
+    }
+
+    expect(() => processBookingDoPost(event(envelope), ports)).toThrow(/duplicate exact/i)
+    expect(drive.createdEvidenceFileIds()).toEqual([])
+  })
+
   it('rejects image bytes that no longer match the signed content hash', () => {
     const signed = envelope()
     const tampered = { ...signed, payload: { ...signed.payload, bytesBase64: 'R0lGODlh' } }

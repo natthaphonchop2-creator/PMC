@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   bookingPayloadHash,
@@ -7,6 +8,7 @@ import {
   type BookingDraftContext,
   type BookingDraftContextV2,
 } from '../../server/pmc-mini-app/bookingDraft'
+import { miniAppEvidenceObjectKeyV2, miniAppEvidenceUploadIdV2 } from '../../shared/pmcMiniAppEvidence'
 
 describe('PMC Mini App booking draft validation', () => {
   it('requires date and time for NORMAL but forbids them for AUTO', () => {
@@ -114,6 +116,19 @@ describe('PMC Mini App booking draft validation', () => {
       paymentEvidenceObjectKeys: [],
       chatEvidenceObjectKeys: chatKeys,
     }))).toThrow('PAYMENT_EVIDENCE_REQUIRED')
+  })
+
+  it('rejects a protocol-2 staged key owned by a different request identity', () => {
+    const foreign = protocol2StagingKey('other-request', 'PAYMENT', 0)
+    const chat = protocol2StagingKey('request-1', 'CHAT', 0)
+
+    expect(() => parseBookingDraftV2(validInputV2(), contextV2({
+      asyncEvidence: true,
+      paymentEvidenceFileIds: [],
+      chatEvidenceFileIds: [],
+      paymentEvidenceObjectKeys: [foreign],
+      chatEvidenceObjectKeys: [chat],
+    }))).toThrow('PAYMENT_EVIDENCE_INVALID')
   })
 
   it('still requires Drive file IDs in synchronous mode even when staging keys exist', () => {
@@ -240,4 +255,14 @@ function contextV2(patch: Partial<BookingDraftContextV2> = {}): BookingDraftCont
 
 function stagingKey(kind: 'PAYMENT' | 'CHAT', marker: string): string {
   return `drafts/draft-1/${kind}/${marker.repeat(64)}.png`
+}
+
+function protocol2StagingKey(requestId: string, kind: 'PAYMENT' | 'CHAT', ordinal: number): string {
+  const contentSha256 = createHash('sha256').update(`${requestId}:${kind}:${ordinal}`).digest('hex')
+  const slot = {
+    requestId, draftId: 'draft-1', evidenceKind: kind, ordinal,
+    mimeType: 'image/png' as const, contentSha256,
+  }
+  const uploadId = miniAppEvidenceUploadIdV2(slot, (value) => createHash('sha256').update(value).digest('hex'))
+  return miniAppEvidenceObjectKeyV2(slot, uploadId)
 }

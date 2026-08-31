@@ -5,7 +5,11 @@ import { bookingPayloadHash, evidenceProjectionHash } from './bookingDraft.js'
 import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { BookingIngressPort } from './bookingIngressClient.js'
 import type { EvidenceIngressPort } from './evidenceIngressClient.js'
-import type { EvidenceStagingCleanupDescriptor, EvidenceStagingPort } from './stagingStore.js'
+import {
+  assertEvidenceStagingDescriptorSlot,
+  type EvidenceStagingCleanupDescriptor,
+  type EvidenceStagingPort,
+} from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 
@@ -227,6 +231,12 @@ export function createAsyncBookingWorker(input: {
   async function copyEvidenceToDrive(context: WorkerContext): Promise<void> {
     const phaseStartedAt = nowDate().getTime()
     assertEvidenceLayout(context.bound, context.draft, false)
+    await attestProjectedStagedSlots(
+      context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds.length,
+    )
+    await attestProjectedStagedSlots(
+      context, 'CHAT', context.draft.chatEvidenceObjectKeys, context.draft.chatEvidenceFileIds.length,
+    )
     const paymentEvidenceFileIds = await copyMissingEvidence(
       context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds,
     )
@@ -259,6 +269,26 @@ export function createAsyncBookingWorker(input: {
     })
   }
 
+  async function attestProjectedStagedSlots(
+    context: WorkerContext,
+    kind: 'PAYMENT' | 'CHAT',
+    objectKeys: readonly string[],
+    projectedCount: number,
+  ): Promise<void> {
+    for (let ordinal = 0; ordinal < projectedCount; ordinal += 1) {
+      const objectKey = objectKeys[ordinal]!
+      const descriptor = await fencedAwait(context, () => input.staging.describe(objectKey))
+      assertEvidenceStagingDescriptorSlot(descriptor, {
+        objectKey,
+        requestId: context.draft.requestId,
+        draftId: context.draft.draftId,
+        kind,
+        ordinal,
+      })
+      context.cleanupDescriptors.set(objectKey, descriptor)
+    }
+  }
+
   async function copyMissingEvidence(
     context: WorkerContext,
     kind: 'PAYMENT' | 'CHAT',
@@ -268,6 +298,10 @@ export function createAsyncBookingWorker(input: {
     const fileIds = [...existingFileIds]
     for (let ordinal = fileIds.length; ordinal < objectKeys.length; ordinal += 1) {
       const staged = await fencedAwait(context, () => input.staging.get(objectKeys[ordinal]!))
+      assertEvidenceStagingDescriptorSlot(staged.cleanupDescriptor, {
+        objectKey: objectKeys[ordinal]!, requestId: context.draft.requestId,
+        draftId: context.draft.draftId, kind, ordinal,
+      })
       context.cleanupDescriptors.set(objectKeys[ordinal]!, staged.cleanupDescriptor)
       const fileId = await fencedAwait(context, () => input.evidenceIngress.upload({
         draftId: context.draft.draftId,
@@ -432,10 +466,19 @@ export function createAsyncBookingWorker(input: {
 
   async function cleanupVerifiedStaging(context: WorkerContext): Promise<void> {
     if (!validTerminal(context.snapshot, context.draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
-    for (const objectKey of [...context.draft.paymentEvidenceObjectKeys, ...context.draft.chatEvidenceObjectKeys]) {
-      if (context.deadline !== null) requireFinalTime(context.deadline)
-      const descriptor = context.cleanupDescriptors.get(objectKey) ?? await input.staging.describe(objectKey)
-      await input.staging.deleteVerified(descriptor)
+    for (const [kind, objectKeys] of [
+      ['PAYMENT', context.draft.paymentEvidenceObjectKeys],
+      ['CHAT', context.draft.chatEvidenceObjectKeys],
+    ] as const) {
+      for (let ordinal = 0; ordinal < objectKeys.length; ordinal += 1) {
+        if (context.deadline !== null) requireFinalTime(context.deadline)
+        const objectKey = objectKeys[ordinal]!
+        const descriptor = context.cleanupDescriptors.get(objectKey) ?? await input.staging.describe(objectKey)
+        assertEvidenceStagingDescriptorSlot(descriptor, {
+          objectKey, requestId: context.draft.requestId, draftId: context.draft.draftId, kind, ordinal,
+        })
+        await input.staging.deleteVerified(descriptor)
+      }
     }
   }
 

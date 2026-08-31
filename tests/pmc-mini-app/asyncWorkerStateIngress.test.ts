@@ -190,6 +190,31 @@ describe('PMC async worker through Apps Script state ingress', () => {
     expect(fixture.staging.deleteVerified).toHaveBeenCalledTimes(3)
   })
 
+  it('rejects a foreign protocol-2 slot before Drive upload, booking ingress, or cleanup', async () => {
+    const paymentBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7])
+    const foreignPaymentKey = v2ObjectKey('PAYMENT', 0, paymentBytes, 'other-request')
+    const chatBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 8])
+    const currentChatKey = v2ObjectKey('CHAT', 0, chatBytes)
+    const fixture = workerFixture({
+      draft: queuedDraft({
+        protocolVersion: 2,
+        paymentEvidenceObjectKeys: [foreignPaymentKey],
+        chatEvidenceObjectKeys: [currentChatKey],
+        paymentEvidenceFileIds: ['owner-drive-payment-0'],
+        chatEvidenceFileIds: ['owner-drive-chat-0'],
+        evidenceCount: 2,
+      }),
+      stagedBytesByKey: new Map([[foreignPaymentKey, paymentBytes], [currentChatKey, chatBytes]]),
+    })
+
+    await expect(fixture.worker.finalize(taskInput(8, fixture.state.read()))).resolves.toMatchObject({
+      state: 'NEEDS_REVIEW',
+    })
+    expect(fixture.evidenceIngress.upload).not.toHaveBeenCalled()
+    expect(fixture.bookingIngress.send).not.toHaveBeenCalled()
+    expect(fixture.staging.deleteVerified).not.toHaveBeenCalled()
+  })
+
   it('reuses exact existing Drive IDs by ordinal without rereading or reuploading staged bytes', async () => {
     const fixture = workerFixture({
       draft: queuedDraft({
@@ -865,13 +890,13 @@ function queuedDraft(patch: Partial<MiniAppRequestRecord> = {}): MiniAppRequestR
   }
 }
 
-function v2ObjectKey(kind: 'PAYMENT' | 'CHAT', ordinal: number, bytes: Buffer): string {
+function v2ObjectKey(kind: 'PAYMENT' | 'CHAT', ordinal: number, bytes: Buffer, requestId = 'request-1'): string {
   const contentSha256 = createHash('sha256').update(bytes).digest('hex')
   const uploadId = createHash('sha256').update(JSON.stringify({
-    version: 2, requestId: 'request-1', draftId: 'draft-1', evidenceKind: kind,
+    version: 2, requestId, draftId: 'draft-1', evidenceKind: kind,
     ordinal, mimeType: 'image/png', contentSha256,
   })).digest('hex')
-  return `drafts/v2/request-1/draft-1/${kind}/${ordinal}/${uploadId}/${contentSha256}.png`
+  return `drafts/v2/${requestId}/draft-1/${kind}/${ordinal}/${uploadId}/${contentSha256}.png`
 }
 
 function stagingDescriptor(objectKey: string, bytes: Buffer): EvidenceStagingCleanupDescriptor {

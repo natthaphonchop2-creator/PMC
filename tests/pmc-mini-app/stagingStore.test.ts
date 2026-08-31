@@ -1,6 +1,7 @@
 import type { Storage } from '@google-cloud/storage'
 import { describe, expect, it } from 'vitest'
 import {
+  assertEvidenceStagingDescriptorSlot,
   createGoogleEvidenceStagingPort,
   evidenceObjectKey,
 } from '../../server/pmc-mini-app/stagingStore'
@@ -9,6 +10,20 @@ const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x01])
 const jpegSha256 = 'ea42ea6c51e8eae9d737a5e99e89ebc661375c534103544b35e5af2529df45dc'
 
 describe('Google evidence staging port', () => {
+  it('rejects a valid descriptor when the worker slot belongs to another request', async () => {
+    const fake = fakeStorage()
+    const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })
+    const stored = await port.put({
+      requestId: 'request-1', draftId: 'draft-1', kind: 'PAYMENT', ordinal: 0,
+      mimeType: 'image/jpeg', bytes: jpeg,
+    })
+    const descriptor = await port.describe(stored.objectKey)
+
+    expect(() => assertEvidenceStagingDescriptorSlot(descriptor, {
+      objectKey: stored.objectKey, requestId: 'other-request', draftId: 'draft-1', kind: 'PAYMENT', ordinal: 0,
+    })).toThrow('EVIDENCE_STAGING_SLOT_MISMATCH')
+  })
+
   it('stages identical bytes in distinct protocol-2 ordinal slots with exact private metadata', async () => {
     const fake = fakeStorage()
     const port = createGoogleEvidenceStagingPort({ bucketName: 'pmc-private-stage', storage: fake.storage })

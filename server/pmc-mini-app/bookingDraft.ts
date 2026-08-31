@@ -102,10 +102,10 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   const paymentEvidenceFileIds = evidenceIds(context.paymentEvidenceFileIds, 'PAYMENT', !context.asyncEvidence)
   const chatEvidenceFileIds = evidenceIds(context.chatEvidenceFileIds, 'CHAT', !context.asyncEvidence)
   const paymentEvidenceObjectKeys = stagingObjectKeys(
-    context.paymentEvidenceObjectKeys ?? [], context.draftId, 'PAYMENT', Boolean(context.asyncEvidence),
+    context.paymentEvidenceObjectKeys ?? [], requestId, context.draftId, 'PAYMENT', Boolean(context.asyncEvidence),
   )
   const chatEvidenceObjectKeys = stagingObjectKeys(
-    context.chatEvidenceObjectKeys ?? [], context.draftId, 'CHAT', Boolean(context.asyncEvidence),
+    context.chatEvidenceObjectKeys ?? [], requestId, context.draftId, 'CHAT', Boolean(context.asyncEvidence),
   )
   const now = isoTimestamp(context.now)
 
@@ -267,6 +267,7 @@ function evidenceIds(values: readonly string[], kind: 'PAYMENT' | 'CHAT', requir
 
 function stagingObjectKeys(
   values: readonly string[],
+  requestId: string,
   draftId: string,
   kind: 'PAYMENT' | 'CHAT',
   required: boolean,
@@ -281,7 +282,7 @@ function stagingObjectKeys(
       return value
     }
     const v2 = /^drafts\/v2\/([A-Za-z0-9._:-]{1,124})\/([A-Za-z0-9._:-]{1,124})\/(PAYMENT|CHAT)\/([0-9])\/([a-f0-9]{64})\/([a-f0-9]{64})\.(jpg|png)$/.exec(value)
-    if (!v2 || v2[2] !== draftId || v2[3] !== kind || Number(v2[4]) !== ordinal) {
+    if (!v2 || v2[1] !== requestId || v2[2] !== draftId || v2[3] !== kind || Number(v2[4]) !== ordinal) {
       throw new Error(`${kind}_EVIDENCE_INVALID`)
     }
     const mimeType = v2[7] === 'jpg' ? 'image/jpeg' as const : 'image/png' as const

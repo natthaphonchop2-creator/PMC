@@ -66,6 +66,31 @@ export interface EvidenceStagingPort {
   deleteVerified(descriptor: EvidenceStagingCleanupDescriptor): Promise<void>
 }
 
+export interface EvidenceStagingExpectedSlot {
+  objectKey: string
+  requestId: string
+  draftId: string
+  kind: EvidenceKind
+  ordinal: number
+}
+
+export function assertEvidenceStagingDescriptorSlot(
+  descriptor: EvidenceStagingCleanupDescriptor,
+  expected: EvidenceStagingExpectedSlot,
+): void {
+  if (descriptor.objectKey !== expected.objectKey || descriptor.draftId !== expected.draftId
+    || descriptor.kind !== expected.kind || !safeId(expected.requestId)
+    || !safeId(expected.draftId) || !safeOrdinal(expected.ordinal)) {
+    throw new Error('EVIDENCE_STAGING_SLOT_MISMATCH')
+  }
+  const parsed = parseStagingKey(descriptor.objectKey)
+  assertDescriptorMatchesParsed(descriptor, parsed)
+  if (descriptor.version === 2
+    && (descriptor.requestId !== expected.requestId || descriptor.ordinal !== expected.ordinal)) {
+    throw new Error('EVIDENCE_STAGING_SLOT_MISMATCH')
+  }
+}
+
 export function evidenceObjectKey(input: {
   requestId?: string
   draftId: string
