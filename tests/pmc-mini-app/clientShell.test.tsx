@@ -121,7 +121,7 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     expect(screen.getByText('บัญชีนี้ยังไม่มีสิทธิ์บันทึกรายจ่าย')).toBeVisible()
     expect(screen.queryByRole('button', { name: 'บิลเอกสาร บันทึก' })).not.toBeInTheDocument()
-    expect(screen.getByText('บิลเอกสาร').closest('div')).toHaveTextContent('ยังไม่เปิดใช้')
+    expect(screen.getByText('บิลเอกสาร').closest('div')).toHaveTextContent('ไม่มีสิทธิ์')
 
     view.unmount()
     render(<PmcMiniApp

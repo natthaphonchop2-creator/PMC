@@ -90,6 +90,7 @@ export function FinanceReportHome({
     </section>}
 
     <ExpenseCards
+      captureEnabled={expenseCaptureEnabled}
       canSubmitExpense={expenseRecordingAvailable}
       onSelect={onSelectExpense}
     />

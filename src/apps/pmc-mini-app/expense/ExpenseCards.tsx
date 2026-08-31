@@ -14,12 +14,16 @@ const DEFERRED_CARDS = [
 ]
 
 export function ExpenseCards({
+  captureEnabled = false,
   canSubmitExpense,
   onSelect,
 }: {
+  captureEnabled?: boolean
   canSubmitExpense: boolean
   onSelect: (category: EnabledExpenseCategory) => void
 }) {
+  const inactiveStatus = captureEnabled ? 'ไม่มีสิทธิ์' : 'ยังไม่เปิดใช้'
+  const inactiveDescription = captureEnabled ? 'บัญชีนี้ยังบันทึกไม่ได้' : 'ระบบบันทึกรายจ่ายยังไม่เปิด'
   return <>
     <section className="pmc-finance-menu-section" aria-labelledby="pmc-expense-entry-heading">
       <header className="pmc-finance-section-heading">
@@ -40,7 +44,7 @@ export function ExpenseCards({
             <span className="pmc-expense-row-copy"><strong>{card.label}</strong><small>กรอกข้อมูลและแนบหลักฐาน</small></span>
             <span className="pmc-expense-save-action" aria-hidden="true"><Plus />บันทึก</span>
           </button>
-          : <DeferredCard label={card.label} icon={card.icon} status="ยังไม่เปิดใช้" />}</li>)}
+          : <DeferredCard label={card.label} icon={card.icon} description={inactiveDescription} status={inactiveStatus} />}</li>)}
       </ul>
     </section>
 
@@ -53,16 +57,21 @@ export function ExpenseCards({
         <span className="pmc-finance-section-status">เตรียมระบบ</span>
       </header>
       <ul className="pmc-expense-card-grid pmc-expense-compensation-list" role="list">
-        {DEFERRED_CARDS.map((card) => <li key={card.label}><DeferredCard {...card} status="เตรียมระบบ" /></li>)}
+        {DEFERRED_CARDS.map((card) => <li key={card.label}><DeferredCard {...card} description="ยังไม่เปิดให้บันทึก" status="เตรียมระบบ" /></li>)}
       </ul>
     </section>
   </>
 }
 
-function DeferredCard({ label, icon: Icon, status }: { label: string; icon: typeof FileText; status: string }) {
+function DeferredCard({
+  label,
+  icon: Icon,
+  description,
+  status,
+}: { label: string; icon: typeof FileText; description: string; status: string }) {
   return <div className="pmc-expense-card-deferred">
     <span className="pmc-expense-row-icon"><Icon aria-hidden="true" /></span>
-    <span className="pmc-expense-row-copy"><strong>{label}</strong><small>{status === 'เตรียมระบบ' ? 'ยังไม่เปิดให้บันทึก' : 'บัญชีนี้ยังบันทึกไม่ได้'}</small></span>
+    <span className="pmc-expense-row-copy"><strong>{label}</strong><small>{description}</small></span>
     <span className="pmc-expense-row-status">{status}</span>
   </div>
 }

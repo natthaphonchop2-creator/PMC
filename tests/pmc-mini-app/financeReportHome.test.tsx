@@ -42,6 +42,32 @@ describe('finance-first report home', () => {
     expect(view.container.querySelectorAll('.pmc-finance-menu-section')).toHaveLength(3)
   })
 
+  it('distinguishes a closed recording system from an account without submit permission', () => {
+    const view = render(<FinanceReportHome
+      canViewFinance
+      financeReportsEnabled
+      onSelect={vi.fn()}
+    />)
+
+    expect(screen.getByText('บิลเอกสาร').closest('.pmc-expense-card-deferred'))
+      .toHaveTextContent('ระบบบันทึกรายจ่ายยังไม่เปิด')
+    expect(screen.getByText('บิลเอกสาร').closest('.pmc-expense-card-deferred'))
+      .toHaveTextContent('ยังไม่เปิดใช้')
+
+    view.rerender(<FinanceReportHome
+      canViewFinance
+      financeReportsEnabled={false}
+      expenseCaptureEnabled
+      canSubmitExpense={false}
+      onSelect={vi.fn()}
+    />)
+    expect(screen.getByText('บัญชีนี้ยังไม่มีสิทธิ์บันทึกรายจ่าย')).toBeVisible()
+    expect(screen.getByText('บิลเอกสาร').closest('.pmc-expense-card-deferred'))
+      .toHaveTextContent('บัญชีนี้ยังบันทึกไม่ได้')
+    expect(screen.getByText('บิลเอกสาร').closest('.pmc-expense-card-deferred'))
+      .toHaveTextContent('ไม่มีสิทธิ์')
+  })
+
   it('shows daily income and a visibly locked monthly report to ordinary staff without finance figures', async () => {
     const user = userEvent.setup()
     const onSelect = vi.fn()
