@@ -73,8 +73,8 @@ function validatePayloadShape(payload: MiniAppAsyncStateMutation): void {
     || !validIso(payload.nowIso) || payload.leaseUntil !== null && !validIso(payload.leaseUntil)
     || payload.leaseOwnerToken !== null && !safeOwner(payload.leaseOwnerToken)
     || payload.taskName !== null && !/^[A-Za-z0-9._:/-]{1,512}$/.test(payload.taskName)
-    || !validObjectKeys(payload.paymentEvidenceObjectKeys, payload.draftId, 'PAYMENT')
-    || !validObjectKeys(payload.chatEvidenceObjectKeys, payload.draftId, 'CHAT')
+    || !validBoundObjectKeys(payload.paymentEvidenceObjectKeys)
+    || !validBoundObjectKeys(payload.chatEvidenceObjectKeys)
     || !validFileIds(payload.paymentEvidenceFileIds) || !validFileIds(payload.chatEvidenceFileIds)
     || !Number.isSafeInteger(payload.evidenceCount) || payload.evidenceCount < 0 || payload.evidenceCount > 20
     || payload.safeErrorCode !== null && !/^[A-Z0-9_]{1,80}$/.test(payload.safeErrorCode)
@@ -316,10 +316,14 @@ function canonicalRequestIdentity(record: MiniAppRequestStateRecord): string {
     ? canonicalMiniAppP2BookingIdentity({ ...record, protocolVersion: 2 })
     : canonicalMiniAppAsyncIdentity(record)
 }
-function validObjectKeys(values: unknown, draftId: string, kind: 'PAYMENT' | 'CHAT'): values is string[] {
-  const prefix = `drafts/${draftId}/${kind}/`
-  return Array.isArray(values) && values.length <= 10 && values.every((value) => typeof value === 'string'
-    && value.startsWith(prefix) && /^[a-f0-9]{64}\.(?:jpg|png)$/.test(value.slice(prefix.length)))
+function validBoundObjectKeys(values: unknown): values is string[] {
+  // Prepare owns the exact legacy/v2 key format. Async mutations are authorized only when these
+  // bounded keys exactly match the persisted row in validateImmutableBindings().
+  return Array.isArray(values) && values.length <= 10 && values.every((value) => {
+    if (typeof value !== 'string' || value.length < 8 || value.length > 1_024
+      || !value.startsWith('drafts/') || !/^drafts\/[A-Za-z0-9._:/-]+$/.test(value)) return false
+    return value.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+  })
 }
 function validFileIds(values: unknown): values is string[] {
   return Array.isArray(values) && values.length <= 10

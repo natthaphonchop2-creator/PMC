@@ -7,11 +7,31 @@ import {
   type MiniAppAsyncStateIngressEnvelope,
   type MiniAppAsyncStateMutation,
 } from '../../../shared/pmcMiniAppAsyncState'
+import { canonicalMiniAppP2BookingIdentity } from '../../../shared/pmcMiniAppDraftState'
+import type { PmcMiniAppTargetRequestRecord } from '../../../shared/pmcBookingRowContracts'
 import { processBookingDoPost } from '../src/entrypoints'
 import type { BookingPorts } from '../src/ports'
 import { createTestPorts } from './helpers/fakes'
 
 describe('Apps Script Mini App async-state ingress', () => {
+  it('queues a P2 ready row with the exact versioned staged-object bindings', () => {
+    const ready = p2ReadyRequest()
+    const payloadHash = createHash('sha256')
+      .update(canonicalMiniAppP2BookingIdentity(ready)).digest('base64url')
+    const fixture = stateFixture(ready as unknown as MiniAppAsyncRequestRecord)
+
+    const queued = processBookingDoPost(event(envelope(mutation({
+      operation: 'QUEUE', requestId: ready.requestId, draftId: ready.draftId,
+      payloadHash, expectedVersion: ready.version, expectedAttempt: ready.attemptCount,
+      leaseOwnerToken: null, leaseUntil: null, taskName: 'task/request-p2',
+      paymentEvidenceObjectKeys: ready.paymentEvidenceObjectKeys,
+      chatEvidenceObjectKeys: ready.chatEvidenceObjectKeys,
+      paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: ready.evidenceCount,
+    }), 'nonce-queue-p2')), fixture.ports)
+
+    expect(queued).toMatchObject({ state: 'QUEUED', version: 4, outcome: 'APPLIED' })
+  })
+
   it('serializes QUEUE and task-delivery CLAIM without regressing a winning processing row', () => {
     const ready = queuedRequest({ state: 'READY_TO_CONFIRM', version: 1, payloadHash: null, taskName: null, queuedAt: null })
     const queueFirst = stateFixture(ready)
@@ -283,6 +303,28 @@ function queuedRequest(patch: Partial<MiniAppAsyncRequestRecord> = {}): MiniAppA
     payloadHash: patch.payloadHash === undefined
       ? createHash('sha256').update(canonicalMiniAppAsyncIdentity(withPatch)).digest('base64url')
       : patch.payloadHash,
+  }
+}
+
+function p2ReadyRequest(): PmcMiniAppTargetRequestRecord & { protocolVersion: 2 } {
+  const legacy = queuedRequest({
+    state: 'READY_TO_CONFIRM', version: 3, payloadHash: null, taskName: null, queuedAt: null,
+    paymentEvidenceObjectKeys: [
+      `drafts/v2/request-1/draft-1/PAYMENT/0/0130199b97b4a7b188297eabe858acaaa34973f78f300a11f4a53ae831fdb5ee/${'a'.repeat(64)}.png`,
+    ],
+    chatEvidenceObjectKeys: [
+      `drafts/v2/request-1/draft-1/CHAT/0/2652b54ae5983aad730d2e3270dea8daa580128c6afa7c0aaa02c571c065f0d9/${'b'.repeat(64)}.png`,
+    ],
+  })
+  return {
+    ...legacy,
+    protocolVersion: 2,
+    recorderName: 'มัส',
+    adminId: 'admin-1',
+    adminName: 'มัส',
+    aeId: 'ae-1',
+    aeName: 'เอม',
+    payloadHash: null,
   }
 }
 
