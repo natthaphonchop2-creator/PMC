@@ -139,8 +139,13 @@ describe('JERA finance service', () => {
     expect(deps.queue.enqueue).toHaveBeenCalledWith({
       branchUuid: BRANCH, eventDate: '2026-08-29', paymentSetHash: seeded.paymentSetHash,
       metadataSnapshotHash: seeded.metadataSnapshotHash,
-      cursor: 0, attempt: 0, scheduleAt: new Date('2026-08-29T12:00:00.000Z'),
+      cursor: 0, attempt: 0, scheduleAt: new Date('2026-08-29T12:01:35.000Z'),
     })
+    expect(deps.lease.claim).toHaveBeenCalledWith(expect.objectContaining({
+      dayKey: createHash('sha256').update('JERA_ALLOCATION_STORE_V1').digest('hex'),
+    }))
+    expect(deps.lease.release).toHaveBeenCalledOnce()
+    expect(seeded).toMatchObject({ leaseFencingToken: '77' })
   })
 
   it('keeps same-hash COMPLETE coverage as a task no-op', async () => {
@@ -158,6 +163,56 @@ describe('JERA finance service', () => {
     expect(deps.allocationStore.getCoverage).toHaveBeenCalledWith(existing.dayKey)
     expect(deps.allocationStore.saveCoverage).not.toHaveBeenCalled()
     expect(deps.queue.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('rebinds same-hash COMPLETE coverage to refreshed source timestamps without requesting payment detail again', async () => {
+    const existing = coverage({
+      date: '2026-08-29', paymentSetHash: currentPaymentSetHash('2026-08-29'),
+      metadataSnapshotHash: currentMetadataSnapshotHash(),
+      paymentLastSuccessAt: '2026-08-29T10:00:00.000Z',
+      productSalesLastSuccessAt: '2026-08-29T10:00:00.000Z',
+    })
+    const refreshedAt = '2026-08-29T11:00:00.000Z'
+    const deps = fixture({
+      existingCoverage: existing,
+      cache: (query) => {
+        const date = query.filters.startDate
+        if (query.reportType === 'PAYMENT') return envelope([row({ reportType: 'PAYMENT', eventDate: date })], refreshedAt)
+        if (query.reportType === 'REFUND') return envelope([row({
+          reportType: 'REFUND', eventDate: date, sourceUuid: `refund-${date}`, paidAmountSatang: null,
+          transferSatang: null, refundAmountSatang: 0,
+        })], refreshedAt)
+        return envelope([row({
+          reportType: 'PRODUCT_SALES', eventDate: date, sourceUuid: `product-${date}`,
+          paidAmountSatang: null, transferSatang: null, itemCode: 'ITEM-1', type: 'service',
+        })], refreshedAt)
+      },
+    })
+
+    await expect(deps.service.refreshDay({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
+    })).resolves.toEqual({ accepted: true, allocationQueued: false, retryAfterSeconds: 300 })
+
+    expect(deps.queue.enqueue).not.toHaveBeenCalled()
+    expect(deps.allocationStore.saveCoverage).toHaveBeenCalledOnce()
+    expect(deps.allocationStore.saveCoverage).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'COMPLETE', cursor: 1, successfulDetailCount: 1,
+      paymentLastSuccessAt: refreshedAt, productSalesLastSuccessAt: refreshedAt,
+      leaseFencingToken: '77',
+    }))
+  })
+
+  it('fails closed before queue or Sheet mutation when the global allocation lease is no longer current', async () => {
+    const deps = fixture()
+    vi.mocked(deps.lease.assertCurrent).mockResolvedValue(false)
+
+    await expect(deps.service.refreshDay({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
+    })).rejects.toMatchObject({ code: 'FINANCE_REFRESH_UNAVAILABLE' })
+
+    expect(deps.queue.enqueue).not.toHaveBeenCalled()
+    expect(deps.allocationStore.saveCoverage).not.toHaveBeenCalled()
+    expect(deps.lease.release).toHaveBeenCalledOnce()
   })
 
   it('resumes same-hash INCOMPLETE coverage from its saved cursor with a new durable task generation', async () => {
@@ -359,11 +414,22 @@ function fixture(options: {
   const queue = {
     enqueue: vi.fn(async () => ({ taskName: 'task-1', alreadyExists: false, live: true })),
   } as JeraAllocationTaskQueuePort
+  const lease = {
+    claim: vi.fn(async (input: { dayKey: string; owner: string; now: string; ttlMs: number }) => ({
+      dayKey: input.dayKey,
+      owner: input.owner,
+      fencingToken: '77',
+      expiresAt: new Date(Date.parse(input.now) + input.ttlMs).toISOString(),
+    })),
+    renew: vi.fn(),
+    assertCurrent: vi.fn(async () => true),
+    release: vi.fn(async () => undefined),
+  }
   const service = createJeraFinanceService({
-    coordinator, allocationStore, allocationQueue: queue,
+    coordinator, allocationStore, allocationQueue: queue, lease,
     categoryMoneyEnabled: options.categoryMoneyEnabled ?? true, now: () => new Date(now),
   })
-  return { service, coordinator, allocationStore, queue }
+  return { service, coordinator, allocationStore, queue, lease }
 }
 
 function exactQuery(reportType: 'PAYMENT' | 'REFUND' | 'PRODUCT_SALES', date: string): JeraSyncQuery {
@@ -411,7 +477,7 @@ function coverage(input: {
     productSalesLastSuccessAt: input.productSalesLastSuccessAt ?? '2026-08-29T10:00:00.000Z',
     cursor: 1, status: 'COMPLETE', lastAttemptAt: '2026-08-29T10:00:00.000Z',
     lastSuccessAt: '2026-08-29T10:00:00.000Z', safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null,
-    taskAttempt: 0, productSalesRowCount: 1,
+    taskAttempt: 0, productSalesRowCount: 1, leaseFencingToken: null,
   }
 }
 

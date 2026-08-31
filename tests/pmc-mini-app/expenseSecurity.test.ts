@@ -328,7 +328,11 @@ function config(): PmcMiniAppServerConfig {
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'booking-secret',
     signingSecret: SECRET, enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
     bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
-    asyncBooking: null, financeReportsEnabled: false, stockEnabled: false, stockManagerPilotOnly: false,
+    bookingMutationsPaused: false,
+    asyncBooking: null,
+    financeReportsEnabled: false, financeUiPreviewEnabled: false, financeReportsPilotOnly: false,
+    financePilotDefaultDate: null, financeMonthlyIncomeEnabled: false,
+    stockEnabled: false, stockManagerPilotOnly: false,
     finance: null,
   }
 }

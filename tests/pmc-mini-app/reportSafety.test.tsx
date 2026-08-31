@@ -4,6 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { RefundRows, ReportRows } from '../../src/apps/pmc-mini-app/reportViews'
 import { formatBaht } from '../../src/apps/pmc-mini-app/reportFormatting'
+import { MonthlyFinancePage } from '../../src/apps/pmc-mini-app/MonthlyFinancePage'
 
 afterEach(cleanup)
 
@@ -23,6 +24,7 @@ describe('safe JERA report rendering', () => {
     expect(formatBaht(null)).toBe('—')
     expect(formatBaht(-100)).toBe('-1 บาท')
     expect(formatBaht(1_000_000)).toBe('10,000 บาท')
+    expect(formatBaht(Number.MAX_SAFE_INTEGER)).toBe('90,071,992,547,409.91 บาท')
   })
 
   it('contains wide patient rows in an explicitly scrollable table region', () => {
@@ -34,4 +36,32 @@ describe('safe JERA report rendering', () => {
     expect(view.container.querySelector('.pmc-report-table-scroll')).toHaveAttribute('tabindex', '0')
     expect(screen.getByRole('table')).toBeVisible()
   })
+
+  it('subtracts clinic expense but never doctor-personal expense from the estimated balance', async () => {
+    render(<MonthlyFinancePage
+      canViewFinance
+      bangkokDate="2026-08-30"
+      adapter={{ load: async () => monthlyIncomeProjection() }}
+      expenseAdapter={{ load: async () => ({
+        monthKey: '2026-08', clinicCommittedSatang: 120_000, doctorPersonalCommittedSatang: 50_000,
+        clinicByCategorySatang: { BILL_DOCUMENT: 100_000, BOOK_CLINIC: 20_000 }, effectiveExpenseCount: 2, unreviewed: true,
+      }) }}
+      onBack={() => undefined}
+      onDrillDown={() => undefined}
+    />)
+
+    expect(await screen.findByText('ยอดคงเหลือโดยประมาณ')).toHaveTextContent('8,800.00')
+    expect(screen.getByText('รายจ่ายส่วนตัวหมอ').closest('div')).toHaveTextContent('500.00')
+  })
 })
+
+function monthlyIncomeProjection() {
+  return {
+    monthKey: '2026-08', receivedSatang: 1_000_000, refundSatang: 0, netReceivedSatang: 1_000_000,
+    dailyTrend: [], channels: { transferSatang: 0, cashSatang: 0, creditSatang: 0, otherSatang: 0, differenceSatang: 0 },
+    categories: { state: 'READY' as const, serviceSatang: 0, productSatang: 0, unclassifiedSatang: 0, incompleteDates: [] },
+    warnings: [], freshness: {
+      payment: { stale: false, lastSuccessAt: null }, refund: { stale: false, lastSuccessAt: null }, allocation: { stale: false, lastSuccessAt: null },
+    },
+  }
+}

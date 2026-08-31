@@ -157,13 +157,58 @@ describe('Apps Script expense repository and command journal', () => {
       commandIdempotencyKey: 'book-void-a:void',
       staffId: 'MANAGER_01',
       commandType: 'VOID_EXPENSE',
-      payload: { expenseId: replacement.expenseId, expectedVersion: replacement.version, reason: 'ยอดผิดจากสมุดจริง' },
+      payload: {
+        expenseId: replacement.expenseId, expectedVersion: replacement.version,
+        expectedRevision: replacement.revision, reason: 'ยอดผิดจากสมุดจริง',
+      },
     }, ports)
 
     expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toBeNull()
     expect(ports.expense.getSubmission('2026-08', original.prepared.expenseId)).toMatchObject({
       recordState: 'COMMITTED',
     })
+  })
+
+  it('rejects a stale VOID after another manager has committed a replacement revision', () => {
+    const ports = createExpenseTestPorts()
+    const original = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'stale-void-original', expectedRevision: 0, amountSatang: 10_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'stale-void-original', expenseId: original.prepared.expenseId,
+      expectedRevision: 0, attachments: original.attachments,
+    }), ports)
+    const replacement = prepareWithManifest(ports, bookPrepareCommand({
+      rootRequestId: 'stale-void-replacement', expectedRevision: 1, amountSatang: 12_000,
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'stale-void-replacement', expenseId: replacement.prepared.expenseId,
+      expectedRevision: 1, staffId: 'MANAGER_01',
+      attachments: replacement.attachments.map((item) => ({ ...item, uploadedByStaffId: 'MANAGER_01' })),
+    }), ports)
+
+    expect(() => executeExpenseCommand({
+      rootRequestId: 'stale-void-original-action',
+      commandIdempotencyKey: 'stale-void-original-action:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE',
+      payload: {
+        expenseId: original.prepared.expenseId,
+        expectedVersion: 2,
+        expectedRevision: 1,
+        reason: 'คำสั่งยกเลิกจากหน้าจอที่ล้าสมัย',
+      },
+    }, ports)).toThrow('EXPENSE_REVISION_CONFLICT')
+
+    expect(ports.expense.getSubmission('2026-08', original.prepared.expenseId)).toMatchObject({
+      recordState: 'COMMITTED', version: 2, revision: 1,
+    })
+    expect(ports.expense.effectiveByBookDailyKey('2026-08', 'CLINIC:2026-08-29')).toMatchObject({
+      expenseId: replacement.prepared.expenseId, recordState: 'COMMITTED', revision: 2,
+    })
+    expect(ports.expense.auditForExpense(original.prepared.expenseId))
+      .not.toContainEqual(expect.objectContaining({ action: 'VOID' }))
+    expect(ports.expense.listRecoveryCandidates()).toEqual([])
   })
 
   it('never counts PREPARED, VOID, or superseded rows in the monthly summary', () => {
@@ -198,6 +243,31 @@ describe('Apps Script expense repository and command journal', () => {
     ]))
   })
 
+  it.each([
+    ['COMMITTED updatedAt before committedAt', { updatedAt: '2026-08-29T09:59:59+07:00' }],
+    ['unsupported BILL_DOCUMENT payment method', { paymentMethod: 'WIRE' }],
+    ['expense ID month different from monthKey', { expenseId: 'EXP-202607-CORRUPT' }],
+  ])('fails the Apps Script projection for %s', (_case, corruption) => {
+    const ports = createExpenseTestPorts()
+    const first = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'projection-first', commandIdempotencyKey: 'projection-first:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'projection-first', expenseId: first.prepared.expenseId,
+      attachments: first.attachments,
+    }), ports)
+    const rows = ports.backend.months.get('2026-08')!.get('EXPENSE_SUBMISSIONS')!
+    rows[0] = { ...rows[0], ...corruption }
+    const second = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'projection-second', commandIdempotencyKey: 'projection-second:prepare',
+    }))
+
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'projection-second', expenseId: second.prepared.expenseId,
+      attachments: second.attachments,
+    }), ports)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+  })
+
   it('rejects immutable submission patches and conflicting attachment IDs', () => {
     const ports = createExpenseTestPorts()
     const { prepared, attachments } = prepareWithManifest(ports, prepareCommand())
@@ -230,6 +300,101 @@ describe('Apps Script expense repository and command journal', () => {
     }), ports)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
     expect(ports.expense.auditForExpense(prepared.prepared.expenseId))
       .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
+  })
+
+  it.each([
+    ['amount', { amountSatang: 10_001 }],
+    ['date', { expenseDate: '2026-08-30' }],
+    ['month', { expenseDate: '2026-09-01', monthKey: '2026-09' }],
+    ['category and book identity', {
+      category: 'BOOK_CLINIC', counterpartyName: null, paymentMethod: null,
+      bookDailyKey: 'CLINIC:2026-08-29',
+    }],
+    ['scope', { scope: 'DOCTOR_PERSONAL' }],
+    ['payment method', { paymentMethod: 'CASH' }],
+    ['counterparty', { counterpartyName: 'ร้านอื่น' }],
+    ['description', { description: 'เปลี่ยนหลัง PREPARE' }],
+    ['book key', { bookDailyKey: 'CLINIC:2026-08-29' }],
+    ['revision', { revision: 2 }],
+    ['actor', { submittedByStaffId: 'MANAGER_01' }],
+    ['root request', { idempotencyKey: 'different-root' }],
+  ])('rejects direct-sheet %s drift from the signed PREPARE intent', (_case, patch) => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'immutable-intent', commandIdempotencyKey: 'immutable-intent:prepare',
+    }))
+    const rows = ports.backend.months.get('2026-08')!.get('EXPENSE_SUBMISSIONS')!
+    rows[0] = { ...rows[0], ...patch }
+
+    expect(() => executeExpenseCommand(commitCommand({
+      rootRequestId: 'immutable-intent', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
+    expect(ports.expense.auditForExpense(prepared.prepared.expenseId))
+      .not.toContainEqual(expect.objectContaining({ action: 'COMMIT' }))
+    expect(summaryRows(ports.backend, '2026-08')).toEqual([])
+  })
+
+  it('allows an active expense manager to VOID without submit permission', () => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'manager-void-only', commandIdempotencyKey: 'manager-void-only:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'manager-void-only', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const originalFind = ports.staff.findById
+    ports.staff.findById = (staffId) => {
+      const staff = originalFind(staffId)
+      return staffId === 'MANAGER_01' && staff ? { ...staff, canSubmitExpense: false } : staff
+    }
+
+    expect(executeExpenseCommand({
+      rootRequestId: 'manager-void-command',
+      commandIdempotencyKey: 'manager-void-command:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE',
+      payload: {
+        expenseId: prepared.prepared.expenseId,
+        expectedVersion: 2,
+        expectedRevision: 1,
+        reason: 'ยกเลิกรายการตามสิทธิ์ผู้ดูแล',
+      },
+    }, ports)).toMatchObject({ recordState: 'VOID', version: 3 })
+  })
+
+  it('binds VOID to the selected committed book revision before writing audit or state', () => {
+    const ports = createExpenseTestPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'void-revision-cas', commandIdempotencyKey: 'void-revision-cas:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'void-revision-cas', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+
+    expect(() => executeExpenseCommand({
+      rootRequestId: 'void-revision-stale',
+      commandIdempotencyKey: 'void-revision-stale:void',
+      staffId: 'MANAGER_01',
+      commandType: 'VOID_EXPENSE',
+      payload: {
+        expenseId: prepared.prepared.expenseId,
+        expectedVersion: 2,
+        expectedRevision: 2,
+        reason: 'ยกเลิกจาก revision ที่ล้าสมัย',
+      },
+    }, ports)).toThrow('EXPENSE_REVISION_CONFLICT')
+    expect(ports.expense.getSubmission('2026-08', prepared.prepared.expenseId)).toMatchObject({
+      recordState: 'COMMITTED', revision: 1, version: 2,
+    })
+    expect(ports.expense.auditForExpense(prepared.prepared.expenseId))
+      .not.toContainEqual(expect.objectContaining({ action: 'VOID' }))
+    expect(ports.expense.listRecoveryCandidates()).toEqual([])
+    expect(runExpenseRecovery(ports)).toEqual({
+      inspected: 0, recovered: 0, abandoned: 0, errors: [],
+    })
   })
 
   it('rejects unknown or private fields in every stored command-result replay union', () => {
@@ -268,19 +433,23 @@ describe('Apps Script expense repository and command journal', () => {
     expect(() => executeExpenseCommand(commit, commitPorts)).toThrow('EXPENSE_STORAGE_UNAVAILABLE')
 
     const voidPorts = createExpenseTestPorts()
-    const voidPrepared = executeExpenseCommand(prepareCommand({
+    const voidPrepared = prepareWithManifest(voidPorts, prepareCommand({
       rootRequestId: 'replay-void-shape',
       commandIdempotencyKey: 'replay-void-shape:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'replay-void-shape', expenseId: voidPrepared.prepared.expenseId,
+      attachments: voidPrepared.attachments,
     }), voidPorts)
-    if (voidPrepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected result')
     const voidCommand = {
       rootRequestId: 'replay-void-command',
       commandIdempotencyKey: 'replay-void-command:void',
       staffId: 'MANAGER_01',
       commandType: 'VOID_EXPENSE' as const,
       payload: {
-        expenseId: voidPrepared.expenseId,
-        expectedVersion: 1,
+        expenseId: voidPrepared.prepared.expenseId,
+        expectedVersion: 2,
+        expectedRevision: 1,
         reason: 'ยกเลิกรายการทดสอบ',
       },
     }
@@ -299,6 +468,26 @@ describe('Apps Script expense repository and command journal', () => {
 })
 
 describe('Google expense repository containment and literal text', () => {
+  it('persists a date-like month key as literal text and reuses one index row', () => {
+    const environment = installGoogleExpenseFakes({ initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master',
+      financeFolderId: 'finance-root',
+    })
+
+    expect(repository.ensureMonth('2026-08', EXPENSE_NOW)).toEqual({
+      ledgerSpreadsheetId: 'ledger-2026-08',
+      monthFolderId: 'month-folder',
+    })
+    expect(repository.ensureMonth('2026-08', EXPENSE_NOW)).toEqual({
+      ledgerSpreadsheetId: 'ledger-2026-08',
+      monthFolderId: 'month-folder',
+    })
+    const rows = environment.master.getSheetByName('EXPENSE_MONTHLY_INDEX')!.data
+    expect(rows).toHaveLength(2)
+    expect(rows[1]?.[0]).toBe('\u200c2026-08')
+  })
+
   it.each(['bytes', 'version', 'duplicate', 'incomplete-true', 'incomplete-missing'] as const)(
     'rejects a %s mutation before COMMIT audit or effective totals',
     (mutation) => {

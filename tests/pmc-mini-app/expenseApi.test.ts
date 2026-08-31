@@ -12,6 +12,7 @@ import type { ExpenseReceipt } from '../../shared/pmcExpense'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { FinanceServerDependencies, LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { ExpenseSubmissionError } from '../../server/pmc-mini-app/finance/submissionService'
+import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ingressClient'
 import type { ExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingStore'
 import { signExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingToken'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
@@ -138,6 +139,46 @@ describe('expense capture API', () => {
     })
     expect(JSON.stringify([storageResponse.body, conflictResponse.body, rawResponse.body])).not.toContain('finance-master')
   })
+
+  it('resumes one root for its authenticated submitter without capture or history access', async () => {
+    const resume = vi.fn(async () => ({ status: 'COMMITTED' as const, receipt: committedReceipt() }))
+    const finance: FinanceServerDependencies = {
+      signingSecret: SECRET,
+      resume: { ingress: { resume } as never },
+    }
+    const deps = dependencies({ finance })
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/expenses/resume/root-request-2', null, 'submit-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 200, body: { status: 'COMMITTED', receipt: committedReceipt() },
+    })
+    expect(resume).toHaveBeenCalledWith({ rootRequestId: 'root-request-2', staffId: 'SUBMIT_01' })
+    expect(finance.reads).toBeUndefined()
+    expect(finance.capture).toBeUndefined()
+  })
+
+  it('denies another submitter and never serializes root history', async () => {
+    const resume = vi.fn(async () => {
+      throw new ExpenseIngressClientError('EXPENSE_RESUME_FORBIDDEN')
+    })
+    const deps = dependencies({ finance: {
+      signingSecret: SECRET,
+      resume: { ingress: { resume } as never },
+    } })
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/expenses/resume/root-request-2', null, 'finance-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 403, body: { error: 'EXPENSE_RESUME_FORBIDDEN', retryable: false },
+    })
+    expect(JSON.stringify(response.body)).not.toContain('expenses')
+    expect(JSON.stringify(response.body)).not.toContain('attachment')
+  })
 })
 
 describe('finance read and correction APIs', () => {
@@ -231,7 +272,7 @@ describe('finance read and correction APIs', () => {
     const deps = dependencies()
     const middleware = createPmcMiniAppMiddleware(deps)
     const response = await request(middleware, 'POST', `/api/mini-app/finance/expenses/${EXPENSE_ID}/void`, {
-      rootRequestId: 'void-root', expectedVersion: 2, reason: 'ยอดรวมบันทึกผิด',
+      rootRequestId: 'void-root', expectedVersion: 2, expectedRevision: 1, reason: 'ยอดรวมบันทึกผิด',
     }, 'finance-token')
 
     expect(response).toMatchObject({
@@ -240,13 +281,59 @@ describe('finance read and correction APIs', () => {
     })
     expect(deps.finance.capture?.ingress.void).toHaveBeenCalledWith({
       rootRequestId: 'void-root', commandIdempotencyKey: 'void-root:void', staffId: 'FINANCE_01',
-      commandType: 'VOID_EXPENSE', payload: { expenseId: EXPENSE_ID, expectedVersion: 2, reason: 'ยอดรวมบันทึกผิด' },
+      commandType: 'VOID_EXPENSE', payload: {
+        expenseId: EXPENSE_ID, expectedVersion: 2, expectedRevision: 1, reason: 'ยอดรวมบันทึกผิด',
+      },
     })
 
     const approvalField = await request(middleware, 'POST', `/api/mini-app/finance/expenses/${EXPENSE_ID}/void`, {
-      rootRequestId: 'void-root-2', expectedVersion: 2, reason: 'ยอดรวมบันทึกผิด', approved: true,
+      rootRequestId: 'void-root-2', expectedVersion: 2, expectedRevision: 1, reason: 'ยอดรวมบันทึกผิด', approved: true,
     }, 'finance-token')
     expect(approvalField).toMatchObject({ status: 400, body: { error: 'EXPENSE_UNKNOWN_FIELD', retryable: false } })
+  })
+
+  it('rejects a stale VOID expectedRevision before calling the capture ingress', async () => {
+    const deps = dependencies()
+    const response = await request(
+      createPmcMiniAppMiddleware(deps),
+      'POST',
+      `/api/mini-app/finance/expenses/${EXPENSE_ID}/void`,
+      {
+        rootRequestId: 'void-stale-revision',
+        expectedVersion: 2,
+        expectedRevision: 2,
+        reason: 'ยอดรวมจาก revision เก่า',
+      },
+      'finance-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 409,
+      body: { error: 'EXPENSE_REVISION_CONFLICT', retryable: false },
+    })
+    expect(deps.finance.capture?.ingress.void).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [2, 400],
+    [3, 200],
+    [300, 200],
+    [301, 400],
+  ])('enforces VOID reason length %i at the 3..300 server boundary', async (length, expectedStatus) => {
+    const deps = dependencies()
+    const response = await request(
+      createPmcMiniAppMiddleware(deps),
+      'POST',
+      `/api/mini-app/finance/expenses/${EXPENSE_ID}/void`,
+      {
+        rootRequestId: `void-reason-${length}`,
+        expectedVersion: 2,
+        expectedRevision: 1,
+        reason: 'ก'.repeat(length),
+      },
+      'finance-token',
+    )
+    expect(response.status).toBe(expectedStatus)
   })
 
   it('checks manager permission before correction body parsing or capability access', async () => {
@@ -406,7 +493,11 @@ function config(): PmcMiniAppServerConfig {
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'booking-secret',
     signingSecret: SECRET, enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
     bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
-    asyncBooking: null, financeReportsEnabled: false, stockEnabled: false, stockManagerPilotOnly: false,
+    bookingMutationsPaused: false,
+    asyncBooking: null,
+    financeReportsEnabled: false, financeUiPreviewEnabled: false, financeReportsPilotOnly: false,
+    financePilotDefaultDate: null, financeMonthlyIncomeEnabled: false,
+    stockEnabled: false, stockManagerPilotOnly: false,
     finance: null,
   }
 }

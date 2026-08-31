@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isValidExpenseOriginalFileName } from '../../../shared/pmcExpense.js'
 import { google } from 'googleapis'
 import type { ExpensePrivateAttachment } from '../../../shared/pmcMiniAppExpenseIngress.js'
 import { inspectExpenseImage, type ExpenseImageMimeType } from './multipart.js'
@@ -70,6 +71,7 @@ interface FinanceDriveApi {
       incompleteSearch?: boolean | null
     }>
     create: GoogleMethod<DriveMetadata>
+    delete: GoogleMethod<unknown>
   }
 }
 
@@ -108,6 +110,7 @@ export interface FinanceGoogleCapturePorts {
     attachmentId: string
     slotClaim: ExpenseDriveSlotClaim
     allowClaimReplayCreate?: boolean
+    readCurrentClaim?: () => Promise<ExpenseDriveSlotClaim>
   }): Promise<ExpensePrivateAttachment>
   verifyExpenseFile(input: {
     monthKey: string
@@ -118,12 +121,26 @@ export interface FinanceGoogleCapturePorts {
   listVerifiedExpenseImages(
     monthKey: string,
     expenseId: string,
+    registeredSlots?: ExpenseRegisteredSlot[],
   ): Promise<ExpensePrivateAttachment[]>
+  deleteExpenseFileIfUnregistered(input: {
+    monthKey: string
+    expenseId: string
+    fileId: string
+    expectedAttachment: ExpensePrivateAttachment
+    readCurrentClaim: () => Promise<ExpenseDriveSlotClaim>
+  }): Promise<void>
+}
+
+export interface ExpenseRegisteredSlot {
+  claim: ExpenseDriveSlotClaim
+  readCurrentClaim(): Promise<ExpenseDriveSlotClaim>
 }
 
 export interface FinanceGooglePorts extends FinanceGoogleReadPorts, FinanceGoogleCapturePorts {}
 
 type ExpenseImageUploadInput = Parameters<FinanceGooglePorts['uploadExpenseImage']>[0]
+type ExpenseFileCleanupInput = Parameters<FinanceGooglePorts['deleteExpenseFileIfUnregistered']>[0]
 
 export function financeGoogleReadCapability(
   ports: FinanceGooglePorts,
@@ -143,6 +160,7 @@ export function financeGoogleCaptureCapability(
     uploadExpenseImage: ports.uploadExpenseImage,
     verifyExpenseFile: ports.verifyExpenseFile,
     listVerifiedExpenseImages: ports.listVerifiedExpenseImages,
+    deleteExpenseFileIfUnregistered: ports.deleteExpenseFileIfUnregistered,
   }
 }
 
@@ -193,7 +211,10 @@ export function createFinanceGooglePorts(
   const sheetsApi = factory.createSheets(auth)
   const driveApi = factory.createDrive(auth)
   const folderFlights = new Map<string, Promise<string>>()
-  const uploadFlights = new Map<string, Promise<ExpensePrivateAttachment>>()
+  const uploadFlights = new Map<string, {
+    fingerprint: string
+    promise: Promise<ExpensePrivateAttachment>
+  }>()
 
   async function rootContext(code: FinanceGoogleErrorCode): Promise<DriveMetadata> {
     const root = await getMetadata(financeFolderId, code)
@@ -618,6 +639,50 @@ export function createFinanceGooglePorts(
     return attachment
   }
 
+  async function deleteExpenseFileIfUnregisteredInternal(
+    input: ExpenseFileCleanupInput,
+  ): Promise<void> {
+    const initialClaim = registeredClaimForAttachment(
+      await input.readCurrentClaim(),
+      input.expectedAttachment,
+    )
+    if (!initialClaim || input.fileId === initialClaim.registeredFileId) return
+    const context = await existingExpenseFolder(input.monthKey, input.expenseId)
+    await validatedExpenseFile({
+      monthKey: input.monthKey,
+      expenseId: input.expenseId,
+      folderId: context.folderId,
+      fileId: input.fileId,
+      expectedAttachment: input.expectedAttachment,
+    })
+    const before = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+    if (
+      !before.some(({ id }) => id === input.fileId)
+      || !before.some(({ id }) => id === initialClaim.registeredFileId)
+    ) return
+    const currentClaim = registeredClaimForAttachment(
+      await input.readCurrentClaim(),
+      input.expectedAttachment,
+    )
+    if (
+      !currentClaim
+      || currentClaim.registeredFileId !== initialClaim.registeredFileId
+      || registeredClaimIdentity(currentClaim) !== registeredClaimIdentity(initialClaim)
+    ) return
+    try {
+      await driveApi.files.delete({ fileId: input.fileId, supportsAllDrives: true })
+    } catch (error) {
+      throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    const remaining = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+    if (remaining.some(({ id }) => id === input.fileId)) {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    if (!remaining.some(({ id }) => id === currentClaim.registeredFileId)) {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+  }
+
   async function uploadExpenseImageInternal(
     input: ExpenseImageUploadInput,
   ): Promise<ExpensePrivateAttachment> {
@@ -636,9 +701,50 @@ export function createFinanceGooglePorts(
       ...input,
       slotClaimId: input.slotClaim.claimId,
     })
-    if (before.length > 1) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    if (before.length > 1) {
+      if (
+        input.slotClaim.state !== 'REGISTERED'
+        || input.slotClaim.registeredFileId === null
+        || typeof input.readCurrentClaim !== 'function'
+      ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      const winnerMetadata = before.filter(({ id }) => id === input.slotClaim.registeredFileId)
+      if (winnerMetadata.length !== 1) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      const winner = (await validatedExpenseFile({
+        monthKey: input.monthKey,
+        expenseId: input.expenseId,
+        folderId: context.folderId,
+        fileId: input.slotClaim.registeredFileId,
+      })).attachment
+      for (const candidate of before.filter(({ id }) => id !== winner.privateFileId)) {
+        const fileId = requiredId(String(candidate.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+        const loser = (await validatedExpenseFile({
+          monthKey: input.monthKey,
+          expenseId: input.expenseId,
+          folderId: context.folderId,
+          fileId,
+        })).attachment
+        await deleteExpenseFileIfUnregisteredInternal({
+          monthKey: input.monthKey,
+          expenseId: input.expenseId,
+          fileId,
+          expectedAttachment: loser,
+          readCurrentClaim: input.readCurrentClaim,
+        })
+      }
+      const remaining = relevantExpenseFiles(
+        await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
+        { ...input, slotClaimId: input.slotClaim.claimId },
+      )
+      if (remaining.length !== 1 || remaining[0]?.id !== winner.privateFileId) {
+        throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      }
+      return winner
+    }
     if (before[0]) {
       const fileId = requiredId(String(before[0].id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+      if (input.slotClaim.state === 'REGISTERED' && input.slotClaim.registeredFileId !== fileId) {
+        throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+      }
       return (await validatedExpenseFile({
         monthKey: input.monthKey,
         expenseId: input.expenseId,
@@ -646,8 +752,8 @@ export function createFinanceGooglePorts(
         fileId,
       })).attachment
     }
-    if (input.slotClaim.created !== true && input.allowClaimReplayCreate !== true) {
-      throw new FinanceGoogleError('EXPENSE_STORAGE_UNAVAILABLE')
+    if (input.slotClaim.state === 'REGISTERED') {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     }
 
     let created: GoogleResponse<DriveMetadata>
@@ -667,19 +773,20 @@ export function createFinanceGooglePorts(
       throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
     }
     const createdId = requiredId(String(created.data?.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
-    const after = relevantExpenseFiles(
-      await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
-      { ...input, slotClaimId: input.slotClaim.claimId },
-    )
-    if (after.length !== 1 || after[0]?.id !== createdId) {
-      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
-    }
-    return (await validatedExpenseFile({
+    const createdAttachment = (await validatedExpenseFile({
       monthKey: input.monthKey,
       expenseId: input.expenseId,
       folderId: context.folderId,
       fileId: createdId,
     })).attachment
+    const after = relevantExpenseFiles(
+      await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
+      { ...input, slotClaimId: input.slotClaim.claimId },
+    )
+    if (!after.some(({ id }) => id === createdId)) {
+      throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    return createdAttachment
   }
 
   return {
@@ -708,11 +815,28 @@ export function createFinanceGooglePorts(
     },
 
     async uploadExpenseImage(input) {
-      const key = `${input.monthKey}:${input.expenseId}:${input.ordinal}:${input.slotClaim.claimId}`
-      return singleFlight(uploadFlights, key, () => withSafeGoogleError(
-        'EXPENSE_PRIVATE_FILE_INVALID',
-        () => uploadExpenseImageInternal(input),
-      ))
+      try {
+        validateUploadInput(input)
+        const key = `${input.monthKey}:${input.expenseId}:${input.ordinal}:${input.slotClaim.claimId}`
+        const fingerprint = uploadInputFingerprint(input)
+        const current = uploadFlights.get(key)
+        if (current) {
+          if (current.fingerprint !== fingerprint) {
+            throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+          }
+          return current.promise
+        }
+        const promise = withSafeGoogleError(
+          'EXPENSE_PRIVATE_FILE_INVALID',
+          () => uploadExpenseImageInternal(input),
+        ).finally(() => {
+          if (uploadFlights.get(key)?.promise === promise) uploadFlights.delete(key)
+        })
+        uploadFlights.set(key, { fingerprint, promise })
+        return promise
+      } catch (error) {
+        throw safeGoogleError(error, 'EXPENSE_PRIVATE_FILE_INVALID')
+      }
     },
 
     async verifyExpenseFile(input) {
@@ -728,9 +852,49 @@ export function createFinanceGooglePorts(
       })
     },
 
-    async listVerifiedExpenseImages(monthKey, expenseId) {
+    async listVerifiedExpenseImages(monthKey, expenseId, registeredSlots = []) {
       return withSafeGoogleError('EXPENSE_PRIVATE_FILE_INVALID', async () => {
         const context = await existingExpenseFolder(monthKey, expenseId)
+        if (registeredSlots.length > 0) {
+          const ordinals = new Set<number>()
+          for (const slot of registeredSlots) {
+            const claim = slot.claim
+            if (
+              claim.state !== 'REGISTERED'
+              || claim.registeredFileId === null
+              || claim.expenseId !== expenseId
+              || ordinals.has(claim.ordinal)
+              || typeof slot.readCurrentClaim !== 'function'
+            ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+            ordinals.add(claim.ordinal)
+            const children = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
+            const candidates = relevantExpenseFiles(children, {
+              expenseId,
+              ordinal: claim.ordinal,
+              deterministicName: claim.deterministicName,
+              slotClaimId: claim.claimId,
+            })
+            if (!candidates.some(({ id }) => id === claim.registeredFileId)) {
+              throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+            }
+            for (const candidate of candidates.filter(({ id }) => id !== claim.registeredFileId)) {
+              const fileId = requiredId(String(candidate.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+              const loser = (await validatedExpenseFile({
+                monthKey,
+                expenseId,
+                folderId: context.folderId,
+                fileId,
+              })).attachment
+              await deleteExpenseFileIfUnregisteredInternal({
+                monthKey,
+                expenseId,
+                fileId,
+                expectedAttachment: loser,
+                readCurrentClaim: slot.readCurrentClaim,
+              })
+            }
+          }
+        }
         const before = (await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'))
           .filter(({ mimeType }) => mimeType !== FOLDER_MIME)
         if (before.length < 1 || before.length > 5) {
@@ -762,6 +926,13 @@ export function createFinanceGooglePorts(
         }
         return verified
       })
+    },
+
+    async deleteExpenseFileIfUnregistered(input) {
+      await withSafeGoogleError(
+        'EXPENSE_PRIVATE_FILE_INVALID',
+        () => deleteExpenseFileIfUnregisteredInternal(input),
+      )
     },
 
     async downloadExpenseFile(input) {
@@ -869,11 +1040,31 @@ function validateUploadInput(input: ExpenseImageUploadInput): void {
     || !SAFE_EXPENSE_ID.test(input.rootRequestId)
     || !SAFE_EXPENSE_ID.test(input.uploadedByStaffId)
     || !SAFE_EXPENSE_ID.test(input.attachmentId)
-    || !boundedText(input.originalFileName, 160)
-    || input.originalFileName.length < 1
+    || !isValidExpenseOriginalFileName(input.originalFileName)
     || !validTimestamp(input.uploadedAt)
+    || input.readCurrentClaim !== undefined && typeof input.readCurrentClaim !== 'function'
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
   validateSlotClaim(input)
+}
+
+function uploadInputFingerprint(input: ExpenseImageUploadInput): string {
+  return createHash('sha256').update(JSON.stringify({
+    monthKey: input.monthKey,
+    expenseId: input.expenseId,
+    parentId: input.parentId,
+    deterministicName: input.deterministicName,
+    sizeBytes: input.bytes.length,
+    mimeType: input.mimeType,
+    ordinal: input.ordinal,
+    sha256: input.sha256,
+    rootRequestId: input.rootRequestId,
+    uploadedByStaffId: input.uploadedByStaffId,
+    uploadedAt: input.uploadedAt,
+    originalFileName: input.originalFileName,
+    attachmentId: input.attachmentId,
+    slotClaim: input.slotClaim,
+    allowClaimReplayCreate: input.allowClaimReplayCreate === true,
+  }), 'utf8').digest('hex')
 }
 
 function validateSlotClaim(input: ExpenseImageUploadInput): void {
@@ -881,7 +1072,8 @@ function validateSlotClaim(input: ExpenseImageUploadInput): void {
   if (
     !isRecord(claim)
     || !hasExactKeys(claim, [
-      'objectKey', 'claimId', 'generation', 'createdAt', 'created',
+      'objectKey', 'claimId', 'generation', 'createdAt', 'updatedAt', 'state',
+      'leaseId', 'leaseOwnerId', 'leaseGeneration', 'registeredFileId',
       'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName',
     ])
     || claim.rootRequestId !== input.rootRequestId
@@ -894,8 +1086,68 @@ function validateSlotClaim(input: ExpenseImageUploadInput): void {
     || claim.claimId !== expenseDriveSlotClaimId(claim)
     || !VERSION.test(claim.generation)
     || !validTimestamp(claim.createdAt)
-    || typeof claim.created !== 'boolean'
+    || !validTimestamp(claim.updatedAt)
+    || (claim.state !== 'CLAIMED' && claim.state !== 'REGISTERED')
+    || !/^LEASE-[a-f0-9]{64}$/.test(claim.leaseId)
+    || !/^[A-Za-z0-9._:-]{8,128}$/.test(claim.leaseOwnerId)
+    || !VERSION.test(claim.leaseGeneration)
+    || (claim.state === 'CLAIMED' && claim.registeredFileId !== null)
+    || (claim.state === 'REGISTERED' && !SAFE_EXPENSE_ID.test(String(claim.registeredFileId ?? '')))
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+}
+
+function registeredClaimForAttachment(
+  value: unknown,
+  attachment: ExpensePrivateAttachment,
+): ExpenseDriveSlotClaim | null {
+  if (
+    !isRecord(value)
+    || !hasExactKeys(value, [
+      'objectKey', 'claimId', 'generation', 'createdAt', 'updatedAt', 'state',
+      'leaseId', 'leaseOwnerId', 'leaseGeneration', 'registeredFileId',
+      'rootRequestId', 'expenseId', 'ordinal', 'sha256', 'mimeType', 'deterministicName',
+    ])
+    || value.state !== 'REGISTERED'
+    || typeof value.registeredFileId !== 'string'
+    || !SAFE_EXPENSE_ID.test(value.registeredFileId)
+    || value.rootRequestId !== attachment.rootRequestId
+    || value.expenseId !== attachment.expenseId
+    || value.ordinal !== attachment.ordinal
+    || value.sha256 !== attachment.sha256
+    || value.mimeType !== attachment.mediaType
+    || value.deterministicName !== attachment.deterministicName
+    || value.claimId !== attachment.slotClaimId
+    || value.objectKey !== expenseDriveSlotObjectKey(value as unknown as ExpenseDriveSlotClaim)
+    || value.claimId !== expenseDriveSlotClaimId(value as unknown as ExpenseDriveSlotClaim)
+    || !VERSION.test(String(value.generation ?? ''))
+    || !validTimestamp(value.createdAt)
+    || !validTimestamp(value.updatedAt)
+    || !/^LEASE-[a-f0-9]{64}$/.test(String(value.leaseId ?? ''))
+    || !/^[A-Za-z0-9._:-]{8,128}$/.test(String(value.leaseOwnerId ?? ''))
+    || !VERSION.test(String(value.leaseGeneration ?? ''))
+  ) return null
+  return value as unknown as ExpenseDriveSlotClaim
+}
+
+function registeredClaimIdentity(claim: ExpenseDriveSlotClaim): string {
+  return JSON.stringify({
+    objectKey: claim.objectKey,
+    claimId: claim.claimId,
+    generation: claim.generation,
+    createdAt: claim.createdAt,
+    updatedAt: claim.updatedAt,
+    state: claim.state,
+    leaseId: claim.leaseId,
+    leaseOwnerId: claim.leaseOwnerId,
+    leaseGeneration: claim.leaseGeneration,
+    registeredFileId: claim.registeredFileId,
+    rootRequestId: claim.rootRequestId,
+    expenseId: claim.expenseId,
+    ordinal: claim.ordinal,
+    sha256: claim.sha256,
+    mimeType: claim.mimeType,
+    deterministicName: claim.deterministicName,
+  })
 }
 
 function deterministicFileName(
@@ -915,19 +1167,10 @@ function parseAttachmentDescription(value: string | null | undefined): {
   if (
     !isRecord(parsed)
     || !hasExactKeys(parsed, ['originalFileName', 'uploadedAt'])
-    || !boundedText(parsed.originalFileName, 160)
-    || parsed.originalFileName.length < 1
+    || !isValidExpenseOriginalFileName(parsed.originalFileName)
     || !validTimestamp(parsed.uploadedAt)
   ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
   return { originalFileName: parsed.originalFileName, uploadedAt: parsed.uploadedAt }
-}
-
-function boundedText(value: unknown, max: number): value is string {
-  return typeof value === 'string'
-    && value.length <= max
-    && !value.includes('\r')
-    && !value.includes('\n')
-    && !value.includes(String.fromCharCode(0))
 }
 
 function validTimestamp(value: unknown): value is string {

@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http'
 import { createHash } from 'node:crypto'
 import Busboy from 'busboy'
 import sharp from 'sharp'
+import { isValidExpenseOriginalFileName } from '../../../shared/pmcExpense.js'
 
 export const EXPENSE_MAX_FILES = 5
 export const EXPENSE_MAX_FILE_BYTES = 10_000_000
@@ -225,8 +226,5 @@ function imageDimensions(width: number | undefined, height: number | undefined):
 }
 
 function safeOriginalFileName(value: string): boolean {
-  return typeof value === 'string' && value.length > 0 && value.length <= 180 && ![...value].some((character) => {
-    const code = character.charCodeAt(0)
-    return character === '/' || character === '\\' || code < 32 || code === 127
-  })
+  return isValidExpenseOriginalFileName(value)
 }

@@ -20,12 +20,13 @@ import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from 
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppResumeStore, MiniAppStore } from './store.js'
 import type { BookingTaskQueuePort } from './taskQueue.js'
-import { isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
+import { isJeraFinanceApiPath, isJeraMiniAppApiPath, type JeraMiniAppApi } from '../jera/middleware.js'
 import { EnrollmentError, type EnrollmentService } from './enrollment.js'
 import { extractWorkerBearerToken, type WorkerIdentityVerifier } from './workerAuth.js'
 import type { AsyncBookingWorker } from './asyncWorker.js'
 import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
+import { isExpenseRecoveryCounts } from '../../shared/pmcMiniAppExpenseIngress.js'
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 import { handleStockMiniAppApi, isStockMiniAppApiPath } from './stock/middleware.js'
 import { handleFinanceMiniAppApi, isFinanceMiniAppApiPath } from './finance/middleware.js'
@@ -47,6 +48,7 @@ import type {
 import { cleanupMiniAppDraftEvidence } from './draftCleanup.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const EXPENSE_RECOVERY_PATH = '/internal/mini-app/recover-expenses'
 const DRAFT_CLEANUP_PATH = '/internal/mini-app/draft-evidence-cleanup'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
 
@@ -60,6 +62,7 @@ export interface PmcMiniAppMiddlewareDependencies {
   evidenceStaging?: EvidenceStagingPort
   taskQueue?: BookingTaskQueuePort
   workerIdentity?: WorkerIdentityVerifier
+  expenseRecoveryIdentity?: WorkerIdentityVerifier
   asyncWorker?: AsyncBookingWorker
   stateIngress?: AsyncStateIngressPort
   draftStateIngress?: DraftStateIngressPort
@@ -87,6 +90,10 @@ export interface PmcMiniAppMiddlewareDependencies {
 export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencies): ProductionMiddleware {
   return async (req, res) => {
     applySecurityHeaders(res)
+    if (req.url === EXPENSE_RECOVERY_PATH) {
+      await handleExpenseRecoveryRoute(req, res, deps)
+      return
+    }
     if (req.url === ASYNC_WORKER_PATH) {
       await handleAsyncWorkerRoute(req, res, deps)
       return
@@ -184,6 +191,15 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     if (isJeraMiniAppApiPath(pathname)) {
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (deps.config.financeReportsPilotOnly && isJeraFinanceApiPath(pathname) && !authenticated.canViewFinance) {
+        respond(res, 403, { error: 'FINANCE_FORBIDDEN' })
+        return
+      }
+      if (deps.config.financeReportsPilotOnly && pathname === '/api/mini-app/finance/monthly'
+        && !deps.config.financeMonthlyIncomeEnabled) {
+        respond(res, 403, { error: 'FINANCE_FORBIDDEN' })
+        return
+      }
       if (!deps.jera) {
         respond(res, 503, { error: 'JERA_REPORTING_UNAVAILABLE' })
         return
@@ -326,10 +342,19 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
 
     try {
       const bookingConfig = await deps.store.getActiveBookingConfig()
+      const financeReportsEnabled = deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled
+        && (!deps.config.financeReportsPilotOnly || authenticated.canViewFinance)
+      const financePilotEligible = financeReportsEnabled && deps.config.financeReportsPilotOnly
+        && authenticated.canViewFinance
       respond(res, 200, {
         fallbackFormUrl: deps.config.fallbackFormUrl,
         reportingEnabled: Boolean(deps.jera),
-        financeReportsEnabled: deps.jera?.financeServiceReady === true && deps.config.financeReportsEnabled,
+        financeReportsEnabled,
+        financeUiPreviewEnabled: deps.config.financeUiPreviewEnabled,
+        ...(financePilotEligible ? {
+          financePilotDefaultDate: deps.config.financePilotDefaultDate,
+          financeMonthlyIncomeEnabled: deps.config.financeMonthlyIncomeEnabled,
+        } : {}),
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
         expenseCaptureEnabled: Boolean(deps.finance?.capture),
         financeReadsEnabled: Boolean(deps.finance?.reads),
@@ -348,6 +373,61 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     }
   }
+}
+
+async function handleExpenseRecoveryRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+    return
+  }
+  if (!deps.expenseRecoveryIdentity) {
+    respond(res, 503, { error: 'EXPENSE_RECOVERY_UNAVAILABLE' })
+    return
+  }
+  const token = extractWorkerBearerToken(req.headers.authorization)
+  if (!token) {
+    respond(res, 401, { error: 'EXPENSE_RECOVERY_UNAUTHORIZED' })
+    return
+  }
+  let worker: Awaited<ReturnType<WorkerIdentityVerifier['verify']>>
+  try {
+    worker = await deps.expenseRecoveryIdentity.verify(token)
+  } catch {
+    respond(res, 401, { error: 'EXPENSE_RECOVERY_UNAUTHORIZED' })
+    return
+  }
+  if (hasFramedRecoveryBody(req)) {
+    req.resume()
+    res.setHeader('connection', 'close')
+    respond(res, 400, { error: 'EXPENSE_RECOVERY_INVALID_REQUEST' })
+    return
+  }
+  if (!deps.finance?.recovery) {
+    respond(res, 503, { error: 'EXPENSE_RECOVERY_UNAVAILABLE' })
+    return
+  }
+  try {
+    const result = await deps.finance.recovery.recover(worker)
+    if (!isExpenseRecoveryCounts(result)) throw new Error('unsafe expense recovery result')
+    respond(res, 200, {
+      recovered: result.recovered,
+      abandoned: result.abandoned,
+      unchanged: result.unchanged,
+      failed: result.failed,
+    })
+  } catch {
+    respond(res, 503, { error: 'EXPENSE_RECOVERY_FAILED' })
+  }
+}
+
+function hasFramedRecoveryBody(req: IncomingMessage): boolean {
+  if (req.headers['transfer-encoding'] !== undefined || req.headers.expect !== undefined) return true
+  const contentLength = req.headers['content-length']
+  return contentLength !== undefined && contentLength !== '0'
 }
 
 async function handleAsyncWorkerRoute(

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import type { Storage } from '@google-cloud/storage'
 import sharp from 'sharp'
 import { describe, expect, it } from 'vitest'
@@ -36,7 +36,7 @@ describe('expense GCS staging', () => {
       ...intent,
       ownerId: 'lease-owner-process-a',
       state: 'ACTIVE',
-      generation: '4',
+      generation: expect.stringMatching(/^[1-9]\d*$/),
       objectKey: 'expense-submission-leases/EXP-202608-0001.json',
     })
     await expect(secondProcess.acquireSubmissionLease({
@@ -78,12 +78,15 @@ describe('expense GCS staging', () => {
 
   it('atomically claims one Drive slot across processes and rejects a conflicting fingerprint', async () => {
     const fake = fakeStorage()
+    let now = Date.parse(CREATED_AT)
     const firstProcess = createGoogleExpenseStagingPort({
-      bucketName: 'pmc-expense-stage', storage: fake.storage, now: () => CREATED_AT,
+      bucketName: 'pmc-expense-stage', storage: fake.storage, now: () => new Date(now).toISOString(),
     })
     const secondProcess = createGoogleExpenseStagingPort({
-      bucketName: 'pmc-expense-stage', storage: fake.storage, now: () => RETRY_CREATED_AT,
+      bucketName: 'pmc-expense-stage', storage: fake.storage, now: () => new Date(now).toISOString(),
     })
+    const leaseIntent = submissionLeaseIntent()
+    const firstLease = await firstProcess.acquireSubmissionLease({ ...leaseIntent, ownerId: 'lease-owner-a' })
     const claimInput = {
       rootRequestId: ROOT_REQUEST_ID,
       expenseId: 'EXP-202608-0001',
@@ -94,25 +97,47 @@ describe('expense GCS staging', () => {
     }
 
     const [owner, replay] = await Promise.all([
-      firstProcess.claimDriveSlot(claimInput),
-      secondProcess.claimDriveSlot(claimInput),
+      firstProcess.claimDriveSlot({ ...claimInput, lease: firstLease }),
+      firstProcess.claimDriveSlot({ ...claimInput, lease: firstLease }),
     ])
 
     expect(owner).toMatchObject({
       ...claimInput,
       objectKey: 'expense-drive-slots/EXP-202608-0001/001.json',
-      created: true,
-      generation: '4',
+      state: 'CLAIMED',
+      leaseId: firstLease.leaseId,
+      leaseOwnerId: 'lease-owner-a',
+      leaseGeneration: firstLease.generation,
+      registeredFileId: null,
+      generation: expect.stringMatching(/^[1-9]\d*$/),
     })
-    expect(replay).toEqual({ ...owner, created: false })
+    expect(replay).toEqual(owner)
 
     for (const conflict of [
       { ...claimInput, rootRequestId: 'expense-request-2' },
       { ...claimInput, sha256: 'b'.repeat(64), deterministicName: `001-${'b'.repeat(64)}.jpg` },
       { ...claimInput, mimeType: 'image/png' as const, deterministicName: `001-${'a'.repeat(64)}.png` },
     ]) {
-      await expect(secondProcess.claimDriveSlot(conflict)).rejects.toThrow('EXPENSE_DRIVE_SLOT_CONFLICT')
+      await expect(firstProcess.claimDriveSlot({ ...conflict, lease: firstLease })).rejects.toThrow('EXPENSE_DRIVE_SLOT_CONFLICT')
     }
+
+    now = Date.parse(firstLease.expiresAt) + 1
+    const takeoverLease = await secondProcess.acquireSubmissionLease({ ...leaseIntent, ownerId: 'lease-owner-b' })
+    const takeoverClaim = await secondProcess.claimDriveSlot({ ...claimInput, lease: takeoverLease })
+    expect(takeoverClaim).toMatchObject({
+      state: 'CLAIMED', leaseOwnerId: 'lease-owner-b', leaseGeneration: takeoverLease.generation,
+      registeredFileId: null,
+    })
+    await expect(firstProcess.registerDriveSlotFile({
+      claim: owner, lease: firstLease, fileId: 'late-file-a',
+    })).rejects.toThrow('EXPENSE_DRIVE_SLOT_STALE')
+    const registered = await secondProcess.registerDriveSlotFile({
+      claim: takeoverClaim, lease: takeoverLease, fileId: 'winner-file-b',
+    })
+    expect(registered).toMatchObject({
+      state: 'REGISTERED', registeredFileId: 'winner-file-b', leaseOwnerId: 'lease-owner-b',
+    })
+    await expect(firstProcess.readDriveSlotClaim(claimInput)).resolves.toEqual(registered)
   })
 
   it('writes a deterministic private key with CRC32C and returns a bounded receipt', async () => {
@@ -207,7 +232,7 @@ describe('staff-bound expense staging receipt token', () => {
     const receipt = await receiptForToken()
     const token = signExpenseStagingReceipt({ receipt, staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET, now: () => Date.parse(CREATED_AT) })
     const payload = JSON.parse(Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8'))
-    expect(Object.keys(payload).sort()).toEqual(['expiresAt', 'objectKey', 'ordinal', 'rootRequestId', 'sha256', 'staffId', 'version'])
+    expect(Object.keys(payload).sort()).toEqual(['expiresAt', 'issuedAt', 'objectKey', 'ordinal', 'rootRequestId', 'sha256', 'staffId', 'version'])
     expect(JSON.stringify(payload)).not.toContain('bucket')
 
     expect(verifyExpenseStagingReceipt(token, { staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET, now: () => Date.parse(CREATED_AT) }))
@@ -228,6 +253,46 @@ describe('staff-bound expense staging receipt token', () => {
     expect(() => verifyExpenseStagingReceipt(token, { staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET, now: () => issued + 86_400_001 }))
       .toThrow('EXPENSE_STAGING_TOKEN_INVALID')
   })
+
+  it.each([
+    ['future issued-at', 1, 86_400_000],
+    ['extended TTL', 0, 86_400_001],
+    ['short TTL', 0, 86_399_999],
+  ])('rejects %s claims even with a valid signature', async (_case, issuedOffset, ttl) => {
+    const receipt = await receiptForToken()
+    const now = Date.parse(CREATED_AT)
+    const payload = Buffer.from(JSON.stringify({
+      version: 1,
+      objectKey: receipt.objectKey,
+      staffId: 'ADMIN_01',
+      rootRequestId: ROOT_REQUEST_ID,
+      ordinal: 1,
+      sha256: receipt.sha256,
+      issuedAt: now + issuedOffset,
+      expiresAt: now + issuedOffset + ttl,
+    }), 'utf8').toString('base64url')
+    const signature = createHash('sha256').update('placeholder').digest('base64url')
+    const unsigned = `${payload}.${signature}`
+    const validSignature = signTokenPayload(payload)
+    expect(unsigned).not.toBe(`${payload}.${validSignature}`)
+    expect(() => verifyExpenseStagingReceipt(`${payload}.${validSignature}`, {
+      staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET, now: () => now,
+    })).toThrow('EXPENSE_STAGING_TOKEN_INVALID')
+  })
+
+  it('rejects unsafe arithmetic, noncanonical base64url, and oversized token parts', async () => {
+    const receipt = await receiptForToken()
+    expect(() => signExpenseStagingReceipt({
+      receipt, staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET,
+      now: () => Number.MAX_SAFE_INTEGER,
+    })).toThrow('EXPENSE_STAGING_TOKEN_INVALID')
+    expect(() => verifyExpenseStagingReceipt(`${'A'.repeat(1_537)}.${'B'.repeat(43)}`, {
+      staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET,
+    })).toThrow('EXPENSE_STAGING_TOKEN_INVALID')
+    expect(() => verifyExpenseStagingReceipt(`Zh.${signTokenPayload('Zh')}`, {
+      staffId: 'ADMIN_01', rootRequestId: ROOT_REQUEST_ID, secret: SECRET,
+    })).toThrow('EXPENSE_STAGING_TOKEN_INVALID')
+  })
 })
 
 async function receiptForToken(): Promise<ExpenseStagingReceipt> {
@@ -237,6 +302,10 @@ async function receiptForToken(): Promise<ExpenseStagingReceipt> {
     objectKey: expenseStagingObjectKey({ rootRequestId: ROOT_REQUEST_ID, ordinal: 1, sha256, mimeType: 'image/jpeg' }),
     sizeBytes: bytes.length, mimeType: 'image/jpeg', sha256, ordinal: 1, originalFileName: 'receipt.jpg', createdAt: CREATED_AT,
   }
+}
+
+function signTokenPayload(payload: string): string {
+  return createHmac('sha256', SECRET).update(payload, 'utf8').digest('base64url')
 }
 
 function jpeg(): Promise<Buffer> {

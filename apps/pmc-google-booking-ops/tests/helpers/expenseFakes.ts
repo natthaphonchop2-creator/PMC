@@ -38,6 +38,8 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
   failAttachmentAppendCount = 0
   failSubmissionUpdateCount = 0
   failRequestCompletionCount = 0
+  failAuditAppendCount = 0
+  failMonthlySummaryReplaceCount = 0
   privateFilesValid = true
 
   constructor() {
@@ -74,6 +76,10 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
   }
 
   appendMaster(tab: ExpenseRepositoryMasterTab, rows: ExpenseStorageRow[]): void {
+    if (tab === 'EXPENSE_AUDIT' && this.failAuditAppendCount > 0) {
+      this.failAuditAppendCount -= 1
+      throw new Error('simulated audit append failure')
+    }
     this.master.set(tab, [...clone(this.master.get(tab) ?? []), ...clone(rows)])
   }
 
@@ -121,6 +127,10 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
 
   replaceMonth(monthKey: string, tab: ExpenseRepositoryMonthTab, rows: ExpenseStorageRow[]): void {
     this.monthOperationCount += 1
+    if (tab === 'MONTHLY_SUMMARY' && this.failMonthlySummaryReplaceCount > 0) {
+      this.failMonthlySummaryReplaceCount -= 1
+      throw new Error('simulated summary replace failure')
+    }
     this.requireMonth(monthKey).set(tab, clone(rows))
     if (tab === 'MONTHLY_SUMMARY') this.monthlySummaries.set(monthKey, clone(rows))
   }
@@ -319,6 +329,7 @@ export function voidCommand(input: {
   rootRequestId: string
   expenseId: string
   expectedVersion?: number
+  expectedRevision?: number
   reason?: string
 }): Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }> {
   return {
@@ -329,6 +340,7 @@ export function voidCommand(input: {
     payload: {
       expenseId: input.expenseId,
       expectedVersion: input.expectedVersion ?? 1,
+      expectedRevision: input.expectedRevision ?? 1,
       reason: input.reason ?? 'ยกเลิกรายการทดสอบ',
     },
   }

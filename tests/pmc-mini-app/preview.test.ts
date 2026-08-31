@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createPreviewMiniAppApi, createPreviewMiniAppConfig } from '../../src/apps/pmc-mini-app/preview'
 import { defaultReportFilters } from '../../src/apps/pmc-mini-app/reports'
 
@@ -50,6 +50,11 @@ describe('PMC Mini App local visual preview adapter', () => {
     })
     expect(createPreviewMiniAppConfig({ financeReportsEnabled: true, canViewFinance: true })).toMatchObject({
       financeReportsEnabled: true,
+      canViewFinance: true,
+    })
+    expect(createPreviewMiniAppConfig({ financeReadsEnabled: true, canViewFinance: true })).toMatchObject({
+      financeReportsEnabled: false,
+      financeReadsEnabled: true,
       canViewFinance: true,
     })
   })
@@ -112,4 +117,107 @@ describe('PMC Mini App local visual preview adapter', () => {
       },
     })).rejects.toMatchObject({ code: 'STOCK_MANAGER_REQUIRED' })
   })
+
+  it('keeps every expense preview method local across lost retry, history, evidence, replacement, and void', async () => {
+    const originalFetch = globalThis.fetch
+    const fetch = vi.fn(() => { throw new Error('preview attempted outbound network access') })
+    globalThis.fetch = fetch as typeof globalThis.fetch
+    try {
+      const api = createPreviewMiniAppApi({
+        expenseCaptureEnabled: true,
+        financeReadsEnabled: true,
+        canSubmitExpense: true,
+        canViewFinance: true,
+        canManageExpense: true,
+        expenseScenario: 'lost-first-submit',
+      })
+      const billFiles = [previewFile('bill-a.png'), previewFile('bill-b.png')]
+      const staged = await api.stageExpense('preview-token', 'preview-local-bill', billFiles)
+      const billInput = {
+        rootRequestId: 'preview-local-bill', category: 'BILL_DOCUMENT' as const,
+        expenseDate: '2026-08-30', amountSatang: 12_550,
+        counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'CASH' as const,
+        expectedRevision: 0, stagingTokens: staged.stagingTokens,
+      }
+
+      await expect(api.submitExpense('preview-token', billInput)).rejects.toMatchObject({
+        code: 'EXPENSE_STORAGE_UNAVAILABLE',
+      })
+      await expect(api.resumeExpense('preview-token', billInput.rootRequestId)).resolves.toEqual({ status: 'PENDING' })
+      await expect(api.resumeExpense('preview-token', billInput.rootRequestId)).resolves.toEqual({ status: 'PENDING' })
+      const retryReceipt = await api.submitExpense('preview-token', billInput)
+      expect(retryReceipt.expenseId).toBe('EXP-202608-PREVIEW')
+
+      const historyAfterRetry = await api.loadExpenseHistory('preview-token', '2026-08')
+      expect(historyAfterRetry.expenses.filter(({ expenseId }) => expenseId === retryReceipt.expenseId)).toHaveLength(1)
+      await expect(api.loadMonthlyExpenses('preview-token', '2026-08')).resolves.toMatchObject({
+        clinicCommittedSatang: 110_550,
+      })
+
+      const evidenceToken = await api.issueExpenseEvidenceToken('preview-token', 'EXP-202608-BOOK-01', 'ATT-1')
+      await expect(api.downloadExpenseEvidence('preview-token', evidenceToken)).resolves.toMatchObject({ type: 'image/png' })
+
+      const replacementStage = await api.stageExpense('preview-token', 'preview-local-replacement', [previewFile('replacement.png')])
+      const replacement = await api.replaceExpense('preview-token', 'EXP-202608-BOOK-01', {
+        rootRequestId: 'preview-local-replacement', category: 'BOOK_CLINIC', expenseDate: '2026-08-29',
+        amountSatang: 120_000, counterpartyName: null, description: '', paymentMethod: null,
+        expectedRevision: 1, stagingTokens: replacementStage.stagingTokens,
+      })
+      expect(replacement).toMatchObject({ expenseId: 'EXP-202608-PREVIEW-REPLACEMENT', revision: 2 })
+      const historyAfterReplacement = await api.loadExpenseHistory('preview-token', '2026-08')
+      expect(historyAfterReplacement.expenses).toEqual(expect.arrayContaining([
+        expect.objectContaining({ expenseId: replacement.expenseId, recordState: 'COMMITTED', revision: 2 }),
+      ]))
+      expect(historyAfterReplacement.expenses).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ expenseId: 'EXP-202608-BOOK-01' }),
+      ]))
+
+      const secondReplacementStage = await api.stageExpense('preview-token', 'preview-local-replacement-2', [previewFile('replacement-2.png')])
+      const secondReplacement = await api.replaceExpense('preview-token', replacement.expenseId, {
+        rootRequestId: 'preview-local-replacement-2', category: 'BOOK_CLINIC', expenseDate: '2026-08-29',
+        amountSatang: 130_000, counterpartyName: null, description: '', paymentMethod: null,
+        expectedRevision: 2, stagingTokens: secondReplacementStage.stagingTokens,
+      })
+      expect(secondReplacement).toMatchObject({
+        expenseId: 'EXP-202608-PREVIEW-REPLACEMENT-2', revision: 3,
+      })
+      const historyAfterSecondReplacement = await api.loadExpenseHistory('preview-token', '2026-08')
+      expect(historyAfterSecondReplacement.expenses).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          expenseId: secondReplacement.expenseId, recordState: 'COMMITTED', revision: 3,
+          attachments: [expect.objectContaining({
+            attachmentId: 'ATT-202608-PREVIEW-REPLACEMENT-2-1',
+          })],
+        }),
+      ]))
+      expect(historyAfterSecondReplacement.expenses).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ expenseId: replacement.expenseId }),
+      ]))
+
+      await expect(api.voidExpense('preview-token', secondReplacement.expenseId, {
+        rootRequestId: 'preview-local-void', expectedRevision: 3, reason: 'local preview test',
+      })).resolves.toBeUndefined()
+
+      const historyAfterVoid = await api.loadExpenseHistory('preview-token', '2026-08')
+      expect(historyAfterVoid.expenses).toEqual(expect.arrayContaining([
+        expect.objectContaining({ expenseId: secondReplacement.expenseId, recordState: 'VOID', revision: 3 }),
+      ]))
+      expect(historyAfterVoid.expenses).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ expenseId: 'EXP-202608-BOOK-01' }),
+        expect.objectContaining({ expenseId: replacement.expenseId }),
+      ]))
+      await expect(api.loadMonthlyExpenses('preview-token', '2026-08')).resolves.toMatchObject({
+        clinicCommittedSatang: 12_550,
+        effectiveExpenseCount: 1,
+      })
+
+      expect(fetch).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
+
+function previewFile(name: string): File {
+  return new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47)], name, { type: 'image/png' })
+}

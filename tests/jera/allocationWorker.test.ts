@@ -71,13 +71,25 @@ describe('resumable JERA payment-detail worker', () => {
     expect(harness.lease.assertCurrent).toHaveBeenCalledTimes(8)
   })
 
+  it('claims one global allocation-store lease so different day sessions cannot allocate rows concurrently', async () => {
+    const harness = workerHarness(1)
+
+    await harness.worker.run(task(harness.paymentSetHash))
+
+    expect(harness.lease.claim).toHaveBeenCalledWith(expect.objectContaining({
+      dayKey: createHash('sha256').update('JERA_ALLOCATION_STORE_V1').digest('hex'),
+      owner: 'worker-1',
+    }))
+    expect(harness.lease.claim).not.toHaveBeenCalledWith(expect.objectContaining({ dayKey: dayKey() }))
+  })
+
   it('keeps the worker deadline below both the lease and Cloud Tasks deadline', () => {
     expect(JERA_ALLOCATION_WORKER_MAX_RUN_MS).toBeLessThan(JERA_ALLOCATION_LEASE_TTL_MS)
     expect(JERA_ALLOCATION_LEASE_TTL_MS).toBeLessThan(300_000)
   })
 
   it('renews an expiring generation before mutation and releases the renewed token', async () => {
-    const expiring = { dayKey: dayKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 30_000).toISOString() }
+    const expiring = { dayKey: storeLeaseKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 30_000).toISOString() }
     const renewed = { ...expiring, fencingToken: '78', expiresAt: new Date(START + JERA_ALLOCATION_LEASE_TTL_MS).toISOString() }
     const harness = workerHarness(1, { claim: expiring, renew: renewed })
 
@@ -87,7 +99,31 @@ describe('resumable JERA payment-detail worker', () => {
       now: '2026-08-29T10:00:00.000Z', ttlMs: JERA_ALLOCATION_LEASE_TTL_MS,
     })
     expect(harness.lease.release).toHaveBeenLastCalledWith(renewed)
-    expect(harness.coverage).toMatchObject({ leaseOwner: 'worker-1', leaseExpiresAt: renewed.expiresAt })
+    expect(harness.coverage).toMatchObject({
+      leaseOwner: 'worker-1', leaseExpiresAt: renewed.expiresAt, leaseFencingToken: renewed.fencingToken,
+    })
+  })
+
+  it('renews before the pre-commit mutation guard even when the old lease has more than one minute left', async () => {
+    const guarded = { dayKey: storeLeaseKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 70_000).toISOString() }
+    const renewed = { ...guarded, fencingToken: '78', expiresAt: new Date(START + JERA_ALLOCATION_LEASE_TTL_MS).toISOString() }
+    const harness = workerHarness(1, { claim: guarded, renew: renewed })
+
+    await harness.worker.run(task(harness.paymentSetHash))
+
+    expect(harness.lease.renew).toHaveBeenCalled()
+    expect(harness.coverage).toMatchObject({ leaseFencingToken: '78' })
+  })
+
+  it('rejects a renewed lease that does not leave the minimum pre-commit write window', async () => {
+    const guarded = { dayKey: storeLeaseKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 70_000).toISOString() }
+    const tooShort = { ...guarded, fencingToken: '78', expiresAt: new Date(START + 30_000).toISOString() }
+    const harness = workerHarness(1, { claim: guarded, renew: tooShort })
+
+    await expect(harness.worker.run(task(harness.paymentSetHash))).rejects.toThrow('JERA_ALLOCATION_LEASE_LOST')
+
+    expect(harness.runSession.persistPaymentDetail).not.toHaveBeenCalled()
+    expect(harness.coverageWrites).toHaveLength(0)
   })
 
   it('fails closed after takeover and cannot persist COMPLETE for the stale generation', async () => {
@@ -131,6 +167,31 @@ describe('resumable JERA payment-detail worker', () => {
       paymentLastSuccessAt: '2026-08-29T09:58:00.000Z',
       productSalesLastSuccessAt: '2026-08-29T09:59:00.000Z', status: 'COMPLETE', cursor: 1,
     })
+  })
+
+  it('counts cached-detail cursor visits against the twenty-item run budget', async () => {
+    const harness = workerHarness(21)
+    harness.details.push(...harness.payments.map(cachedDetail))
+    harness.coverage = coverage({
+      paymentSetHash: harness.paymentSetHash,
+      metadataSnapshotHash: harness.metadataSnapshotHash,
+      paymentRowCount: 21,
+      successfulDetailCount: 0,
+      cursor: 0,
+      status: 'INCOMPLETE',
+    })
+
+    await expect(harness.worker.run(task(harness.paymentSetHash, 3))).resolves.toEqual({
+      status: 'CONTINUED', processed: 0, nextCursor: 20,
+    })
+
+    expect(harness.client.request).not.toHaveBeenCalled()
+    expect(harness.runSession.saveCoverage).toHaveBeenCalledTimes(21)
+    expect(harness.queue.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      cursor: 20,
+      attempt: 4,
+    }))
+    expect(harness.coverage).toMatchObject({ cursor: 20, status: 'INCOMPLETE' })
   })
 
   it('turns final Retry-After into a durable continuation no earlier than 60 seconds', async () => {
@@ -207,9 +268,9 @@ describe('resumable JERA payment-detail worker', () => {
     expect(harness.queue.enqueue).not.toHaveBeenCalled()
   })
 
-  it('treats a lease conflict as a no-op and releases only the exact claimed fencing token', async () => {
+  it('makes a lease conflict retryable and releases only the exact claimed fencing token', async () => {
     const conflict = workerHarness(1, { claim: null })
-    await expect(conflict.worker.run(task(conflict.paymentSetHash))).resolves.toEqual({ status: 'SKIPPED', processed: 0, nextCursor: null })
+    await expect(conflict.worker.run(task(conflict.paymentSetHash))).rejects.toThrow('JERA_ALLOCATION_LEASE_BUSY')
     expect(conflict.client.request).not.toHaveBeenCalled()
 
     const harness = workerHarness(1)
@@ -220,7 +281,7 @@ describe('resumable JERA payment-detail worker', () => {
   })
 
   it('fails closed when a claimed lease loses its fencing token', async () => {
-    const harness = workerHarness(1, { claim: { dayKey: dayKey(), owner: 'worker-1', expiresAt: new Date(START + 300_000).toISOString() } as JeraAllocationLease })
+    const harness = workerHarness(1, { claim: { dayKey: storeLeaseKey(), owner: 'worker-1', expiresAt: new Date(START + 300_000).toISOString() } as JeraAllocationLease })
 
     await expect(harness.worker.run(task(harness.paymentSetHash))).resolves.toEqual({ status: 'SKIPPED', processed: 0, nextCursor: null })
     expect(harness.client.request).not.toHaveBeenCalled()
@@ -307,7 +368,7 @@ function workerHarness(count: number, leasePatch: {
   let currentCoverage: JeraAllocationCoverage | null = null
   const coverageWrites: JeraAllocationCoverage[] = []
   const claimedLease = leasePatch.claim === undefined
-    ? { dayKey: dayKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 300_000).toISOString() }
+    ? { dayKey: storeLeaseKey(), owner: 'worker-1', fencingToken: '77', expiresAt: new Date(START + 300_000).toISOString() }
     : leasePatch.claim
   const lease: JeraAllocationLeasePort = {
     claim: vi.fn(async () => claimedLease),
@@ -409,7 +470,7 @@ function coverage(patch: Partial<JeraAllocationCoverage>): JeraAllocationCoverag
     paymentSetHash: hash('old'), paymentRowCount: 0, successfulDetailCount: 0, metadataSnapshotHash: metadataHash(),
     paymentLastSuccessAt: null, productSalesLastSuccessAt: null, cursor: 0, status: 'INCOMPLETE', lastAttemptAt: null,
     lastSuccessAt: null, safeErrorCode: null, leaseOwner: null, leaseExpiresAt: null, taskAttempt: 0,
-    productSalesRowCount: 1, ...patch,
+    productSalesRowCount: 1, leaseFencingToken: null, ...patch,
   }
 }
 
@@ -420,6 +481,7 @@ function setHash(rows: JeraNormalizedRow[]): string { return createHash('sha256'
 function metadataHash(): string { return createHash('sha256').update(JSON.stringify([['ITEM-1', 'SERVICE']])).digest('hex') }
 function hash(value: string): string { return createHash('sha256').update(value).digest('hex') }
 function dayKey(): string { return createHash('sha256').update(JSON.stringify([BRANCH, DATE])).digest('hex') }
+function storeLeaseKey(): string { return createHash('sha256').update('JERA_ALLOCATION_STORE_V1').digest('hex') }
 function paymentCacheKey(): string { return jeraCacheKey('PAYMENT', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }) }
 function productCacheKey(): string { return jeraCacheKey('PRODUCT_SALES', { branchUuid: BRANCH, startDate: DATE, endDate: DATE }) }
 

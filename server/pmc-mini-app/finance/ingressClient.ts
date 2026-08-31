@@ -6,13 +6,18 @@ import {
 } from '../../../shared/pmcExpense.js'
 import {
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseResumeIngress,
+  isExpenseResumeStatus,
   isMiniAppExpenseSafeErrorCode,
   type ExpensePrepareResult,
+  type ExpenseResumeStatus,
   type ExpenseCommandResult,
   type MiniAppExpenseCommand,
   type MiniAppExpenseIngressEnvelope,
   type MiniAppExpenseSafeErrorCode,
   type UnsignedMiniAppExpenseIngressEnvelope,
+  type MiniAppExpenseResumeIngressEnvelope,
+  type UnsignedMiniAppExpenseResumeIngressEnvelope,
 } from '../../../shared/pmcMiniAppExpenseIngress.js'
 
 interface IngressResponse {
@@ -49,6 +54,7 @@ export interface ExpenseIngressClient {
   prepare(command: PrepareCommand): Promise<ExpensePrepareResult>
   commit(command: CommitCommand): Promise<ExpenseReceipt>
   void(command: VoidCommand): Promise<VoidResult>
+  resume(input: { rootRequestId: string; staffId: string }): Promise<ExpenseResumeStatus>
 }
 
 export class ExpenseIngressClientError extends Error {
@@ -91,6 +97,35 @@ export function buildMiniAppExpenseIngress(
   const signature = createHmac('sha256', secret).update(canonical, 'utf8').digest('hex')
   return {
     body: { ...unsigned, signature },
+    headers: { 'content-type': 'application/json' },
+  }
+}
+
+export function buildMiniAppExpenseResumeIngress(
+  input: { rootRequestId: string; staffId: string },
+  context: { timestamp: number; nonce: string },
+  secret: string,
+): { body: MiniAppExpenseResumeIngressEnvelope; headers: { 'content-type': 'application/json' } } {
+  const unsigned: UnsignedMiniAppExpenseResumeIngressEnvelope = {
+    kind: 'MINI_APP_EXPENSE_RESUME',
+    version: 1,
+    timestamp: context.timestamp,
+    nonce: context.nonce,
+    rootRequestId: input.rootRequestId,
+    staffId: input.staffId,
+  }
+  let canonical: string
+  try {
+    if (!boundedSecret(secret)) throw new Error('invalid')
+    canonical = canonicalMiniAppExpenseResumeIngress(unsigned)
+  } catch {
+    throw unavailable()
+  }
+  return {
+    body: {
+      ...unsigned,
+      signature: createHmac('sha256', secret).update(canonical, 'utf8').digest('hex'),
+    },
     headers: { 'content-type': 'application/json' },
   }
 }
@@ -159,10 +194,45 @@ export function createExpenseIngressClient(
     }
   }
 
+  async function sendResume(input: {
+    rootRequestId: string
+    staffId: string
+  }): Promise<ExpenseResumeStatus> {
+    const built = buildMiniAppExpenseResumeIngress(input, { timestamp: now(), nonce: nonce() }, secret)
+    const controller = new AbortController()
+    let timedOut = false
+    const timeout = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeoutMs)
+    try {
+      const response = await request(endpoint, {
+        method: 'POST', headers: built.headers, body: JSON.stringify(built.body), signal: controller.signal,
+      })
+      if (!response.ok) throw unavailable()
+      let body: unknown
+      try { body = await response.json() } catch { throw unavailable() }
+      if (hasExactKeys(body, ['ok', 'result']) && body.ok === true && isExpenseResumeStatus(body.result)) {
+        return structuredClone(body.result)
+      }
+      if (hasExactKeys(body, ['ok', 'error']) && body.ok === false && isMiniAppExpenseSafeErrorCode(body.error)) {
+        throw new ExpenseIngressClientError(body.error)
+      }
+      throw unavailable()
+    } catch (error) {
+      if (timedOut) throw unavailable()
+      if (error instanceof ExpenseIngressClientError) throw error
+      throw unavailable()
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
   return {
     prepare(command) { return send(command) },
     commit(command) { return send(command) },
     void(command) { return send(command) },
+    resume(input) { return sendResume(input) },
   }
 }
 

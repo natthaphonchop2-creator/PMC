@@ -62,6 +62,16 @@ describe('payment-level revenue allocation', () => {
     expect(first.snapshotHash).toBe(second.snapshotHash)
   })
 
+  it('maps the observed Thai JERA service label without weakening unknown-type fallback', () => {
+    const metadata = buildItemTypeMetadata([
+      { itemCode: 'SVC-TH-1', type: 'ขายบริการ', sourceHash: '8'.repeat(64) },
+      { itemCode: 'UNKNOWN-1', type: 'ประเภทที่ยังไม่รองรับ', sourceHash: '9'.repeat(64) },
+    ])
+
+    expect(metadata.byItemCode.get('SVC-TH-1')).toBe('SERVICE')
+    expect(metadata.byItemCode.has('UNKNOWN-1')).toBe(false)
+  })
+
   it('fails closed for truncated and zero-weight details', () => {
     const metadata = buildItemTypeMetadata([])
     const truncated = allocatePaymentRevenue({

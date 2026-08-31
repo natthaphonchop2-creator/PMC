@@ -9,6 +9,7 @@ import {
   type FinanceDailyPreset,
 } from './financeReports'
 import { formatBaht } from './reportFormatting'
+import { MiniAppApiError } from './api'
 
 export interface DailyIncomePageAdapter {
   load(filter: FinanceDailyFilter): Promise<DailyIncomeProjection>
@@ -48,10 +49,10 @@ export function DailyIncomePage({
     void adapter.load(filter).then((next) => {
       if (requestEpoch !== requestEpochRef.current) return
       setLoadedProjection({ key: requestKey, value: next })
-    }).catch(() => {
+    }).catch((error) => {
       if (requestEpoch !== requestEpochRef.current) return
       setMessageTone('ERROR')
-      setMessage(projection ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')
+      setMessage(dailyLoadErrorMessage(error, filter, projection !== null))
     }).finally(() => {
       if (requestEpoch === requestEpochRef.current) setLoading(false)
     })
@@ -124,6 +125,18 @@ export function DailyIncomePage({
     {loading && !projection && <p className="pmc-finance-loading">กำลังโหลดรายรับ</p>}
     {projection && <DailyIncomeContent projection={projection} />}
   </main>
+}
+
+function dailyLoadErrorMessage(error: unknown, filter: FinanceDailyFilter, hasProjection: boolean): string {
+  if (error instanceof MiniAppApiError && error.code === 'FINANCE_CACHE_UNAVAILABLE') {
+    const period = filter.startDate === filter.endDate
+      ? `วันที่ ${filter.startDate}`
+      : `ช่วง ${filter.startDate} ถึง ${filter.endDate}`
+    return `ยังไม่มีข้อมูลรายรับสำหรับ${period} กรุณาเลือกวันที่อื่น`
+  }
+  return hasProjection
+    ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง'
+    : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง'
 }
 
 export function DailyIncomeContent({ projection }: { projection: DailyIncomeProjection }) {

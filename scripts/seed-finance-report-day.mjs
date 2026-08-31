@@ -137,15 +137,18 @@ export async function createFinanceOperator(input) {
     queueName: config.allocation.queueName, workerUrl: config.allocation.workerUrl,
     workerAudience: config.allocation.workerAudience, taskInvokerEmail: config.allocation.taskInvokerEmail,
   })
+  const allocationLease = runtime.createGoogleJeraAllocationLeasePort({
+    bucketName: config.allocation.leaseBucket,
+  })
   const noProviderCoordinator = {
     ...coordinator,
     manualRefresh: async () => ({ accepted: true, retryAfterSeconds: config.manualRefreshSeconds }),
   }
   const seeder = runtime.createJeraFinanceService({
-    coordinator: noProviderCoordinator, allocationStore, allocationQueue, categoryMoneyEnabled: false,
+    coordinator: noProviderCoordinator, allocationStore, allocationQueue, lease: allocationLease, categoryMoneyEnabled: false,
   })
   const reader = runtime.createJeraFinanceService({
-    coordinator, allocationStore, allocationQueue, categoryMoneyEnabled: true,
+    coordinator, allocationStore, allocationQueue, lease: allocationLease, categoryMoneyEnabled: true,
   })
   const branchUuid = config.defaultBranchUuid
   const query = (reportType, date) => ({ reportType, filters: { branchUuid, startDate: date, endDate: date } })
@@ -353,11 +356,12 @@ function defaultSleep(milliseconds) { return new Promise((resolve) => setTimeout
 async function runExternal(command) { const { stdout } = await executeFile(command[0], command.slice(1), { maxBuffer: 2_000_000 }); return stdout }
 
 async function loadFinanceRuntime() {
-  const [config, tokenClient, client, store, coordinator, googleClient, allocationStore, allocationQueue, financeService, allocation] = await Promise.all([
+  const [config, tokenClient, client, store, coordinator, googleClient, allocationStore, allocationQueue, allocationLease, financeService, allocation] = await Promise.all([
     import('../dist-server/server/jera/config.js'), import('../dist-server/server/jera/tokenClient.js'),
     import('../dist-server/server/jera/client.js'), import('../dist-server/server/jera/store.js'),
     import('../dist-server/server/jera/syncCoordinator.js'), import('../dist-server/server/pmc-mini-app/googleClient.js'),
     import('../dist-server/server/jera/allocationStore.js'), import('../dist-server/server/jera/allocationTaskQueue.js'),
+    import('../dist-server/server/jera/allocationLeaseStore.js'),
     import('../dist-server/server/jera/financeService.js'),
     import('../dist-server/server/jera/allocation.js'),
   ])
@@ -368,6 +372,7 @@ async function loadFinanceRuntime() {
     createGoogleJeraAllocationStore: allocationStore.createGoogleJeraAllocationStore,
     jeraAllocationDayKey: allocationStore.jeraAllocationDayKey,
     createGoogleJeraAllocationTaskQueue: allocationQueue.createGoogleJeraAllocationTaskQueue,
+    createGoogleJeraAllocationLeasePort: allocationLease.createGoogleJeraAllocationLeasePort,
     createJeraFinanceService: financeService.createJeraFinanceService,
     buildItemTypeMetadata: allocation.buildItemTypeMetadata,
   }

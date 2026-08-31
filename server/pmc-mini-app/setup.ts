@@ -33,7 +33,7 @@ export const JERA_ALLOCATION_COVERAGE_HEADERS = [
   'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
   'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
   'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+  'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount', 'leaseFencingToken',
 ] as const
 
 export const STOCK_PRODUCT_HEADERS = [
@@ -65,6 +65,12 @@ export const MANAGED_TAB_HEADERS = {
   STOCK_LEDGER: STOCK_LEDGER_HEADERS,
   STOCK_AUDIT: STOCK_AUDIT_HEADERS,
 } as const
+
+export const JERA_ALLOCATION_GRID_ROW_COUNTS = Object.freeze({
+  JERA_PAYMENT_DETAIL_CACHE: 50_002,
+  JERA_PAYMENT_DETAIL_LINES: 200_002,
+  JERA_ALLOCATION_COVERAGE: 10_002,
+})
 
 const ASYNC_REQUEST_HEADERS = [
   'paymentEvidenceObjectKeysJson',
@@ -137,7 +143,7 @@ export async function ensureMiniAppWorkbook(input: {
     const actual = (currentHeaders[range]?.[0] ?? []).map(String)
     const expected = [...MANAGED_TAB_HEADERS[title as keyof typeof MANAGED_TAB_HEADERS]]
     const compatibleAllocationCoverage = title === 'JERA_ALLOCATION_COVERAGE'
-      && (sameHeader(actual, expected.slice(0, -1)) || sameHeader(actual, expected.slice(0, -2)))
+      && actual.length >= 18 && actual.length < expected.length && sameHeader(actual, expected.slice(0, actual.length))
     const compatibleRequestHeader = title === 'MINI_APP_REQUESTS'
       && (sameHeader(actual, MINI_APP_ASYNC_REQUEST_HEADERS_V1) || sameHeader(actual, ATTRIBUTION_V2_REQUEST_HEADERS))
     if (actual.length > 0 && !sameHeader(actual, expected) && !compatibleAllocationCoverage && !compatibleRequestHeader) {
@@ -148,7 +154,15 @@ export async function ensureMiniAppWorkbook(input: {
   const missingTitles = Object.keys(MANAGED_TAB_HEADERS).filter((title) => !initialTitles.has(title))
   if (missingTitles.length > 0) {
     await sheets.applyWorkbookRequests(spreadsheetId, missingTitles.map((title) => ({
-      addSheet: { properties: { title } },
+      addSheet: { properties: {
+        title,
+        ...(title in JERA_ALLOCATION_GRID_ROW_COUNTS
+          ? { gridProperties: {
+              rowCount: JERA_ALLOCATION_GRID_ROW_COUNTS[title as keyof typeof JERA_ALLOCATION_GRID_ROW_COUNTS],
+              columnCount: MANAGED_TAB_HEADERS[title as keyof typeof MANAGED_TAB_HEADERS].length,
+            } }
+          : {}),
+      } },
     })))
   }
 
@@ -157,8 +171,8 @@ export async function ensureMiniAppWorkbook(input: {
   const allocationRange = "'JERA_ALLOCATION_COVERAGE'!1:1"
   const allocationHeader = (currentHeaders[allocationRange]?.[0] ?? []).map(String)
   const expectedAllocationHeader = [...JERA_ALLOCATION_COVERAGE_HEADERS]
-  if (sameHeader(allocationHeader, expectedAllocationHeader.slice(0, -1))
-    || sameHeader(allocationHeader, expectedAllocationHeader.slice(0, -2))) {
+  if (allocationHeader.length >= 18 && allocationHeader.length < expectedAllocationHeader.length
+    && sameHeader(allocationHeader, expectedAllocationHeader.slice(0, allocationHeader.length))) {
     const sheet = byTitle.get('JERA_ALLOCATION_COVERAGE')
     if (!sheet) throw new Error('managed tab missing after setup: JERA_ALLOCATION_COVERAGE')
     const requests: Array<Record<string, unknown>> = []
@@ -193,6 +207,28 @@ export async function ensureMiniAppWorkbook(input: {
     const existingRange = `'${title}'!1:1`
     const actual = initialTitles.has(title) ? (currentHeaders[existingRange]?.[0] ?? []).map(String) : []
     if (actual.length === 0) await sheets.update(spreadsheetId, `'${title}'!A1:${columnName(headers.length)}1`, [[...headers]])
+  }
+
+  const rowCapacityRequests: Array<Record<string, unknown>> = []
+  for (const [title, requiredRows] of Object.entries(JERA_ALLOCATION_GRID_ROW_COUNTS)) {
+    const sheet = byTitle.get(title)
+    if (!sheet || !Number.isSafeInteger(sheet.rowCount) || sheet.rowCount! < 1) {
+      throw new Error(`managed tab row capacity unavailable: ${title}`)
+    }
+    if (sheet.rowCount! < requiredRows) {
+      rowCapacityRequests.push({
+        appendDimension: { sheetId: sheet.sheetId, dimension: 'ROWS', length: requiredRows - sheet.rowCount! },
+      })
+    }
+  }
+  if (rowCapacityRequests.length > 0) await sheets.applyWorkbookRequests(spreadsheetId, rowCapacityRequests)
+
+  const capacityReadback = new Map((await sheets.getWorkbook(spreadsheetId)).map((sheet) => [sheet.title, sheet]))
+  for (const [title, requiredRows] of Object.entries(JERA_ALLOCATION_GRID_ROW_COUNTS)) {
+    const rowCount = capacityReadback.get(title)?.rowCount
+    if (!Number.isSafeInteger(rowCount) || rowCount! < requiredRows) {
+      throw new Error(`managed tab row capacity mismatch: ${title}`)
+    }
   }
 
   await sheets.applyWorkbookRequests(spreadsheetId, Object.keys(MANAGED_TAB_HEADERS).map((title) => ({

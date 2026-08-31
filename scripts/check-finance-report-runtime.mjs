@@ -8,7 +8,7 @@ const executeFile = promisify(execFile)
 const FINANCE_SEED_PATH = '/internal/mini-app/finance-daily-seed'
 const ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
 const APPROVED_REGION = 'asia-southeast1'
-const STAGES = new Set(['DISABLED', 'ALLOCATION', 'READY'])
+const STAGES = new Set(['DISABLED', 'ALLOCATION', 'PILOT', 'READY'])
 const REQUIRED_ALLOCATION_NAMES = [
   'JERA_ALLOCATION_PROJECT_ID', 'JERA_ALLOCATION_LOCATION', 'JERA_ALLOCATION_QUEUE',
   'JERA_ALLOCATION_WORKER_URL', 'JERA_ALLOCATION_WORKER_AUDIENCE',
@@ -21,15 +21,20 @@ const EXPECTED_HEADERS = {
     'dayKey', 'branchUuid', 'eventDate', 'paymentCacheKey', 'productSalesCacheKey', 'paymentSetHash',
     'paymentRowCount', 'successfulDetailCount', 'metadataSnapshotHash', 'paymentLastSuccessAt',
     'productSalesLastSuccessAt', 'cursor', 'status', 'lastAttemptAt', 'lastSuccessAt',
-    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount',
+    'safeErrorCode', 'leaseOwner', 'leaseExpiresAt', 'taskAttempt', 'productSalesRowCount', 'leaseFencingToken',
   ],
+}
+const EXPECTED_GRID_ROWS = {
+  JERA_PAYMENT_DETAIL_CACHE: 50_002,
+  JERA_PAYMENT_DETAIL_LINES: 200_002,
+  JERA_ALLOCATION_COVERAGE: 10_002,
 }
 
 export async function runFinanceRuntimeCheck(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout }
   if (parsed.help) {
-    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|READY [stage expected bindings]\n')
+    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|PILOT|READY --expected-finance-pilot-only true|false --expected-finance-ui-preview-enabled true|false --expected-finance-pilot-default-date YYYY-MM-DD|UNSET --expected-finance-monthly-income-enabled true|false [--expected-worker-service <private-service> and stage expected bindings]\n')
     return 0
   }
   const report = await inspectFinanceRuntime(parsed, options)
@@ -45,15 +50,18 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const queueName = safeResource(environment.JERA_ALLOCATION_QUEUE)
   const bucketName = safeResource(environment.JERA_ALLOCATION_LEASE_BUCKET)
   const commandResults = await Promise.all([
+    input.expectedWorkerService ? safeJson(execute, ['gcloud', 'run', 'services', 'describe', input.expectedWorkerService, '--region', input.region, '--project', input.project, '--format=json']) : null,
+    input.expectedWorkerService ? safeJson(execute, ['gcloud', 'auth', 'list', '--filter=status:ACTIVE', '--format=json']) : null,
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'queues', 'describe', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'queues', 'get-iam-policy', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
-    safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', input.service, '--region', input.region, '--project', input.project, '--format=json']),
+    input.expectedWorkerService ? safeJson(execute, ['gcloud', 'run', 'services', 'get-iam-policy', input.expectedWorkerService, '--region', input.region, '--project', input.project, '--format=json']) : null,
+    safeJson(execute, ['gcloud', 'projects', 'get-iam-policy', input.project, '--project', input.project, '--format=json']),
     safeJson(execute, ['gcloud', 'scheduler', 'jobs', 'list', '--location', input.region, '--project', input.project, '--format=json']),
     queueName ? safeJson(execute, ['gcloud', 'tasks', 'list', '--queue', queueName, '--location', input.region, '--project', input.project, '--format=json']) : null,
     bucketName ? safeJson(execute, ['gcloud', 'storage', 'buckets', 'describe', `gs://${bucketName}`, '--project', input.project, '--format=json']) : null,
     bucketName ? safeJson(execute, ['gcloud', 'storage', 'buckets', 'get-iam-policy', `gs://${bucketName}`, '--project', input.project, '--format=json']) : null,
   ])
-  const [queue, queueIam, runIam, schedulerJobs, tasks, bucket, bucketIam] = commandResults
+  const [workerService, activeAuth, queue, queueIam, workerIam, projectIam, schedulerJobs, tasks, bucket, bucketIam] = commandResults
   let googleState = null
   try {
     googleState = await (options.readGoogleState ?? readGoogleState)({ environment, now })
@@ -65,6 +73,21 @@ export async function inspectFinanceRuntime(input, options = {}) {
     revenueAllocationEnabled: explicitBoolean(environment.JERA_REVENUE_ALLOCATION_ENABLED),
     categoryMoneyEnabled: explicitBoolean(environment.JERA_FINANCE_CATEGORY_MONEY_ENABLED),
   }
+  const deployedPilotDate = deployedPilotDateState(environment.PMC_FINANCE_PILOT_DEFAULT_DATE)
+  const pilotControls = {
+    financeReportsPilotOnly: explicitBoolean(environment.PMC_FINANCE_REPORTS_PILOT_ONLY),
+    financeUiPreviewEnabled: explicitBoolean(environment.PMC_FINANCE_UI_PREVIEW_ENABLED),
+    pilotDefaultDatePresent: deployedPilotDate.present,
+    pilotDefaultDateCanonical: deployedPilotDate.canonical,
+    pilotDefaultDateMatches: input.expectedFinancePilotDefaultDate === null
+      ? !deployedPilotDate.present
+      : deployedPilotDate.value === input.expectedFinancePilotDefaultDate,
+    financeMonthlyIncomeEnabled: explicitBoolean(environment.PMC_FINANCE_MONTHLY_INCOME_ENABLED),
+  }
+  pilotControls.exactExpectedControls = pilotControls.financeReportsPilotOnly === input.expectedFinancePilotOnly
+    && pilotControls.financeUiPreviewEnabled === input.expectedFinanceUiPreviewEnabled
+    && pilotControls.pilotDefaultDateMatches
+    && pilotControls.financeMonthlyIncomeEnabled === input.expectedFinanceMonthlyIncomeEnabled
   const allocationConfig = {
     requiredNameCount: REQUIRED_ALLOCATION_NAMES.length,
     presentNameCount: REQUIRED_ALLOCATION_NAMES.filter((name) => Boolean(environment[name]?.trim())).length,
@@ -92,15 +115,22 @@ export async function inspectFinanceRuntime(input, options = {}) {
       && bucket.location.toLowerCase() === input.region.toLowerCase(),
   }
   const runtimeIdentity = serviceAccountMember(service?.spec?.template?.spec?.serviceAccountName)
+  const workerRuntimeIdentity = serviceAccountMember(workerService?.spec?.template?.spec?.serviceAccountName)
   const invokerEmail = safeEmail(environment.JERA_ALLOCATION_TASK_INVOKER_EMAIL)
   const invokerIdentity = invokerEmail ? `serviceAccount:${invokerEmail}` : null
+  const operatorIdentity = activeOperatorMember(activeAuth)
   const queuePolicy = exactIamPolicy(queueIam, new Map([['roles/cloudtasks.enqueuer', new Set([runtimeIdentity].filter(Boolean))]]))
-  const runPolicy = exactIamPolicy(runIam, new Map([['roles/run.invoker', new Set([invokerIdentity].filter(Boolean))]]))
-  const bucketPolicy = exactIamPolicy(bucketIam, new Map([['roles/storage.objectUser', new Set([runtimeIdentity].filter(Boolean))]]))
+  const runPolicy = exactIamPolicy(workerIam, new Map([['roles/run.invoker', new Set([invokerIdentity].filter(Boolean))]]))
+  const bucketPolicy = exactIamPolicy(bucketIam, new Map([
+    ['roles/storage.objectUser', new Set([workerRuntimeIdentity].filter(Boolean))],
+    ['roles/storage.legacyBucketOwner', new Set([operatorIdentity].filter(Boolean))],
+  ]))
+  const projectPolicy = projectIamReport(projectIam, new Set([runtimeIdentity, workerRuntimeIdentity, invokerIdentity].filter(Boolean)))
+  const workerCloudRun = workerCloudRunReport(workerService, runPolicy)
   const bindings = {
     queueEnqueuerPresent: hasBinding(queueIam, 'roles/cloudtasks.enqueuer', runtimeIdentity),
-    oidcInvokerPresent: hasBinding(runIam, 'roles/run.invoker', invokerIdentity),
-    leaseBucketObjectUserPresent: hasBinding(bucketIam, 'roles/storage.objectUser', runtimeIdentity),
+    oidcInvokerPresent: hasBinding(workerIam, 'roles/run.invoker', invokerIdentity),
+    leaseBucketObjectUserPresent: hasBinding(bucketIam, 'roles/storage.objectUser', workerRuntimeIdentity),
     queuePolicyExact: queuePolicy.exact,
     runPolicyExact: runPolicy.exact,
     leaseBucketPolicyExact: bucketPolicy.exact,
@@ -110,39 +140,53 @@ export async function inspectFinanceRuntime(input, options = {}) {
     extraPrincipalCount: queuePolicy.extraPrincipalCount + runPolicy.extraPrincipalCount + bucketPolicy.extraPrincipalCount,
     missingBindingCount: queuePolicy.missingBindingCount + runPolicy.missingBindingCount + bucketPolicy.missingBindingCount,
     invalidBindingCount: queuePolicy.invalidBindingCount + runPolicy.invalidBindingCount + bucketPolicy.invalidBindingCount,
+    projectPolicySafe: projectPolicy.safe,
+    projectPublicMemberCount: projectPolicy.publicMemberCount,
+    projectBroadRoleCount: projectPolicy.broadRoleCount,
+    projectUnexpectedRoleCount: projectPolicy.unexpectedRoleCount,
+    projectInvalidBindingCount: projectPolicy.invalidBindingCount,
   }
   const scheduler = schedulerReport(schedulerJobs, {
     seedUrl: input.expectedFinanceSeedUrl, oidcAudience: input.expectedOidcAudience,
     invoker: input.expectedInvoker,
   })
   const taskReport = tasksReport(tasks)
-  const tabs = tabsReport(googleState?.tabHeaders)
+  const tabs = tabsReport(googleState?.tabHeaders, googleState?.tabGridRows)
   const financePermissions = permissionReport(googleState?.staffRows, input.expectedFinanceViewers, input.approvedFinanceStaffIds)
   const leases = leaseReport(googleState?.coverageRows, now)
   const infrastructureReady = cloudRun.servicePresent
+    && workerCloudRun.servicePresent && workerCloudRun.ready && workerCloudRun.invokerPolicyExact
     && allocationConfig.presentNameCount === allocationConfig.requiredNameCount && allocationConfig.leaseBucketPresent
     && allocationConfig.exactExpectedConfig
     && queueReport.present && queueReport.running && queueReport.maxConcurrentDispatches === 1
     && queueReport.maxDispatchesPerSecond === 0.016 && queueReport.leaseBucketLocationMatches
     && bindings.queueEnqueuerPresent && bindings.oidcInvokerPresent && bindings.leaseBucketObjectUserPresent
     && bindings.queuePolicyExact && bindings.runPolicyExact && bindings.leaseBucketPolicyExact
+    && bindings.projectPolicySafe
     && taskReport.invalidPayloadCount === 0 && tabs.exactHeaderCount === tabs.requiredHeaderCount
+    && tabs.exactGridCapacityCount === tabs.requiredGridCapacityCount
     && financePermissions.exactApprovedSet
     && leases.olderThan15MinutesCount === 0
   const expectedFlags = stageFlags(input.expectedStage)
   const flagsMatch = flags.financeReportsEnabled === expectedFlags.financeReportsEnabled
     && flags.revenueAllocationEnabled === expectedFlags.revenueAllocationEnabled
     && flags.categoryMoneyEnabled === expectedFlags.categoryMoneyEnabled
+  const rolloutControlsMatch = pilotControls.exactExpectedControls
   const stageReady = input.expectedStage === 'DISABLED'
-    ? cloudRun.servicePresent && flagsMatch && scheduler.enabledJobCount === 0
+    ? cloudRun.servicePresent && flagsMatch && rolloutControlsMatch && scheduler.enabledJobCount === 0
     : input.expectedStage === 'ALLOCATION'
-      ? flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
-      : flagsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic
-        && scheduler.enabledFinanceSeedCandidateCount === 1 && scheduler.readyMatchCount === 1
+      ? flagsMatch && rolloutControlsMatch && infrastructureReady
+        && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
+      : input.expectedStage === 'PILOT'
+        ? flagsMatch && rolloutControlsMatch && infrastructureReady
+          && cloudRun.latestReadyHasNoTraffic && scheduler.enabledFinanceSeedCandidateCount === 0
+        : flagsMatch && rolloutControlsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic
+          && scheduler.enabledFinanceSeedCandidateCount === 1 && scheduler.readyMatchCount === 1
   return {
     mode: 'READ_ONLY', expectedStage: input.expectedStage, stageReady, ready: stageReady,
     safeCode: stageReady ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
-    allocationConfig, queue: queueReport, bindings, scheduler, tasks: taskReport, tabs, financePermissions, leases,
+    pilotControls,
+    workerCloudRun, allocationConfig, queue: queueReport, bindings, scheduler, tasks: taskReport, tabs, financePermissions, leases,
   }
 }
 
@@ -151,8 +195,10 @@ function parseArguments(args) {
   const parsed = {
     help: false, allowReadonlyProduction: false, project: null, service: null, region: null,
     expectedFinanceViewers: null, approvedFinanceStaffIds: [], expectedStage: null, expectedQueue: null,
-    expectedWorkerAudience: null, expectedInvoker: null,
+    expectedWorkerService: null, expectedWorkerAudience: null, expectedInvoker: null,
     expectedFinanceSeedUrl: null, expectedOidcAudience: null,
+    expectedFinancePilotOnly: null, expectedFinanceUiPreviewEnabled: null,
+    expectedFinancePilotDefaultDate: undefined, expectedFinanceMonthlyIncomeEnabled: null,
   }
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index]
@@ -165,10 +211,15 @@ function parseArguments(args) {
     else if (value === '--approved-finance-staff-id' && args[index + 1]) parsed.approvedFinanceStaffIds.push(args[++index])
     else if (value.startsWith('--expected-stage=') && parsed.expectedStage === null) parsed.expectedStage = value.slice('--expected-stage='.length)
     else if (value === '--expected-queue' && parsed.expectedQueue === null && args[index + 1]) parsed.expectedQueue = args[++index]
+    else if (value === '--expected-worker-service' && parsed.expectedWorkerService === null && args[index + 1]) parsed.expectedWorkerService = args[++index]
     else if (value === '--expected-worker-audience' && parsed.expectedWorkerAudience === null && args[index + 1]) parsed.expectedWorkerAudience = args[++index]
     else if (value === '--expected-invoker' && parsed.expectedInvoker === null && args[index + 1]) parsed.expectedInvoker = args[++index]
     else if (value === '--expected-finance-seed-url' && parsed.expectedFinanceSeedUrl === null && args[index + 1]) parsed.expectedFinanceSeedUrl = args[++index]
     else if (value === '--expected-oidc-audience' && parsed.expectedOidcAudience === null && args[index + 1]) parsed.expectedOidcAudience = args[++index]
+    else if (value === '--expected-finance-pilot-only' && parsed.expectedFinancePilotOnly === null && args[index + 1]) parsed.expectedFinancePilotOnly = expectedBoolean(args[++index])
+    else if (value === '--expected-finance-ui-preview-enabled' && parsed.expectedFinanceUiPreviewEnabled === null && args[index + 1]) parsed.expectedFinanceUiPreviewEnabled = expectedBoolean(args[++index])
+    else if (value === '--expected-finance-pilot-default-date' && parsed.expectedFinancePilotDefaultDate === undefined && args[index + 1]) parsed.expectedFinancePilotDefaultDate = expectedPilotDate(args[++index])
+    else if (value === '--expected-finance-monthly-income-enabled' && parsed.expectedFinanceMonthlyIncomeEnabled === null && args[index + 1]) parsed.expectedFinanceMonthlyIncomeEnabled = expectedBoolean(args[++index])
     else throw new Error('Unknown finance operator argument')
   }
   if (parsed.help) return parsed
@@ -176,14 +227,19 @@ function parseArguments(args) {
   parsed.project = safeProject(parsed.project)
   if (!safeToken(parsed.service) || !safeToken(parsed.region)) throw new Error('Project, service, and region are required')
   if (parsed.expectedFinanceViewers !== 3) throw new Error('Expected finance viewers must be exactly 3')
-  if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, or READY')
+  if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, PILOT, or READY')
   if (parsed.approvedFinanceStaffIds.length !== parsed.expectedFinanceViewers
     || new Set(parsed.approvedFinanceStaffIds).size !== parsed.expectedFinanceViewers
     || parsed.approvedFinanceStaffIds.some((value) => !safeStaffId(value))) {
     throw new Error('Exactly three unique approved finance staff IDs are required')
   }
+  if (parsed.expectedFinancePilotOnly === null || parsed.expectedFinanceUiPreviewEnabled === null
+    || parsed.expectedFinancePilotDefaultDate === undefined || parsed.expectedFinanceMonthlyIncomeEnabled === null) {
+    throw new Error('All expected finance rollout controls are required')
+  }
   if (parsed.expectedStage !== 'DISABLED') {
-    if (!safeResource(parsed.expectedQueue) || !normalizedOrigin(parsed.expectedWorkerAudience) || !safeEmail(parsed.expectedInvoker)) {
+    if (!safeToken(parsed.expectedWorkerService) || !safeResource(parsed.expectedQueue)
+      || !normalizedOrigin(parsed.expectedWorkerAudience) || !safeEmail(parsed.expectedInvoker)) {
       throw new Error('Allocation stage expected bindings are required')
     }
     parsed.expectedWorkerAudience = normalizedOrigin(parsed.expectedWorkerAudience)
@@ -205,17 +261,19 @@ async function readGoogleState({ environment }) {
   ])
   const sheets = createMiniAppGooglePorts({ spreadsheetId, intakeFolderId }).sheets
   const headerTabs = Object.keys(EXPECTED_HEADERS)
-  const ranges = [...headerTabs.map((tab) => `'${tab}'!1:1`), "'CONFIG_STAFF'!A2:L", "'JERA_ALLOCATION_COVERAGE'!A2:T"]
+  const ranges = [...headerTabs.map((tab) => `'${tab}'!1:1`), "'CONFIG_STAFF'!A2:L", "'JERA_ALLOCATION_COVERAGE'!A2:U"]
   const values = await sheets.batchGet(spreadsheetId, ranges)
+  const workbook = await sheets.getWorkbook(spreadsheetId)
   const tabHeaders = Object.fromEntries(headerTabs.map((tab) => [`${tab}`, (values[`'${tab}'!1:1`]?.[0] ?? []).map(String)]))
+  const tabGridRows = Object.fromEntries(headerTabs.map((tab) => [tab, workbook.find((sheet) => sheet.title === tab)?.rowCount ?? null]))
   const staffRows = (values["'CONFIG_STAFF'!A2:L"] ?? []).map((row) => ({
     id: text(row[0]), name: text(row[1]), lineLinked: text(row[3]).length > 0, active: bool(row[6]), canViewFinance: bool(row[10]),
   }))
-  const coverageRows = (values["'JERA_ALLOCATION_COVERAGE'!A2:T"] ?? []).map((row) => ({
+  const coverageRows = (values["'JERA_ALLOCATION_COVERAGE'!A2:U"] ?? []).map((row) => ({
     lastAttemptAt: text(row[13]), leaseOwner: text(row[16]), leaseExpiresAt: text(row[17]),
   }))
   void setup
-  return { tabHeaders, staffRows, coverageRows }
+  return { tabHeaders, tabGridRows, staffRows, coverageRows }
 }
 
 function cloudRunReport(service) {
@@ -232,6 +290,17 @@ function cloudRunReport(service) {
     latestReadyTrafficPercent,
     trafficPercentTotal: traffic.reduce((total, item) => total + safeNonnegative(item?.percent), 0),
     trafficTargetCount: traffic.length,
+  }
+}
+function workerCloudRunReport(service, policy) {
+  const latestReadyRevisionName = typeof service?.status?.latestReadyRevisionName === 'string'
+    ? service.status.latestReadyRevisionName : null
+  const conditions = Array.isArray(service?.status?.conditions) ? service.status.conditions : []
+  const explicitReady = conditions.some((condition) => condition?.type === 'Ready' && (condition?.status === true || condition?.status === 'True'))
+  return {
+    servicePresent: service !== null,
+    ready: service !== null && (explicitReady || latestReadyRevisionName !== null),
+    invokerPolicyExact: policy.exact,
   }
 }
 function schedulerReport(value, expected) {
@@ -264,10 +333,18 @@ function tasksReport(value) {
   }
   return { pendingCount: tasks.length, validMetadataHashCount, validAttemptCount, invalidPayloadCount }
 }
-function tabsReport(value) {
+function tabsReport(value, gridValue) {
   const headers = value && typeof value === 'object' ? value : {}
+  const gridRows = gridValue && typeof gridValue === 'object' ? gridValue : {}
   const exactHeaderCount = Object.entries(EXPECTED_HEADERS).filter(([tab, expected]) => same(headers[tab], expected)).length
-  return { exactHeaderCount, requiredHeaderCount: Object.keys(EXPECTED_HEADERS).length }
+  const exactGridCapacityCount = Object.entries(EXPECTED_GRID_ROWS)
+    .filter(([tab, expected]) => gridRows[tab] === expected).length
+  return {
+    exactHeaderCount,
+    requiredHeaderCount: Object.keys(EXPECTED_HEADERS).length,
+    exactGridCapacityCount,
+    requiredGridCapacityCount: Object.keys(EXPECTED_GRID_ROWS).length,
+  }
 }
 function permissionReport(value, expectedCount, approvedIds) {
   const rows = Array.isArray(value) ? value : []
@@ -352,7 +429,38 @@ function exactIamPolicy(policy, allowed) {
     publicMemberCount, broadRoleCount, unexpectedRoleCount, extraPrincipalCount, missingBindingCount, invalidBindingCount,
   }
 }
+function projectIamReport(policy, relevantMembers) {
+  const bindings = Array.isArray(policy?.bindings) ? policy.bindings : []
+  let publicMemberCount = 0
+  let broadRoleCount = 0
+  let unexpectedRoleCount = 0
+  let invalidBindingCount = Array.isArray(policy?.bindings) ? 0 : 1
+  for (const binding of bindings) {
+    const role = typeof binding?.role === 'string' ? binding.role : null
+    const members = Array.isArray(binding?.members) ? binding.members : null
+    if (!role || !members) { invalidBindingCount += 1; continue }
+    const relevant = members.filter((member) => relevantMembers.has(member))
+    for (const member of members) {
+      if (member === 'allUsers' || member === 'allAuthenticatedUsers') publicMemberCount += 1
+    }
+    if (relevant.length === 0) continue
+    if (binding.condition !== undefined) invalidBindingCount += 1
+    if (role === 'roles/owner' || role === 'roles/editor') broadRoleCount += relevant.length
+    unexpectedRoleCount += relevant.length
+  }
+  return {
+    safe: Array.isArray(policy?.bindings) && publicMemberCount === 0 && broadRoleCount === 0
+      && unexpectedRoleCount === 0 && invalidBindingCount === 0,
+    publicMemberCount, broadRoleCount, unexpectedRoleCount, invalidBindingCount,
+  }
+}
 function serviceAccountMember(value) { const email = safeEmail(value); return email ? `serviceAccount:${email}` : null }
+function activeOperatorMember(value) {
+  const active = Array.isArray(value) ? value.filter((entry) => entry?.status === 'ACTIVE' && typeof entry?.account === 'string') : []
+  if (active.length !== 1 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(active[0].account)
+    || safeEmail(active[0].account)) return null
+  return `user:${active[0].account}`
+}
 function safeEmail(value) { return typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value) ? value : null }
 function safeResource(value) { return typeof value === 'string' && /^[A-Za-z0-9._-]{1,256}$/.test(value) ? value : null }
 function safeToken(value) { return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(value) }
@@ -379,6 +487,32 @@ function stageFlags(stage) {
   return { financeReportsEnabled: true, revenueAllocationEnabled: true, categoryMoneyEnabled: true }
 }
 function explicitBoolean(value) { return value === 'true' ? true : value === 'false' ? false : null }
+function expectedBoolean(value) {
+  const parsed = explicitBoolean(value)
+  if (parsed === null) throw new Error('Expected finance rollout controls must use exact values')
+  return parsed
+}
+function expectedPilotDate(value) {
+  if (value === 'UNSET') return null
+  const canonical = canonicalPilotDate(value)
+  if (canonical === null) throw new Error('Expected finance rollout controls must use exact values')
+  return canonical
+}
+function deployedPilotDateState(value) {
+  if (value === undefined) return { present: false, canonical: false, value: null }
+  const canonical = canonicalPilotDate(value)
+  return { present: true, canonical: canonical !== null, value: canonical }
+}
+function canonicalPilotDate(value) {
+  if (typeof value !== 'string') return null
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return null
+  const year = Number(match[1]); const month = Number(match[2]); const day = Number(match[3])
+  if (year < 2020 || year > 2100) return null
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day
+    ? value : null
+}
 function taskBody(value) { try { const textValue = Buffer.from(value ?? '', 'base64').toString('utf8'); return JSON.parse(textValue) } catch { return null } }
 function safeNonnegative(value) { return Number.isFinite(value) && value >= 0 ? Number(value) : 0 }
 function safeRate(value) { return Number.isFinite(value) && value >= 0 && value <= 1000 ? Number(value) : 0 }
@@ -392,7 +526,7 @@ async function runExternal(command) { const { stdout } = await executeFile(comma
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runFinanceRuntimeCheck(process.argv.slice(2)).then((code) => { process.exitCode = code }).catch((error) => {
-    const message = error instanceof Error && /^(Explicit|Unknown|Sensitive|Expected|Exactly|Project|Allocation|Ready)/.test(error.message)
+    const message = error instanceof Error && /^(All|Explicit|Unknown|Sensitive|Expected|Exactly|Project|Allocation|Ready)/.test(error.message)
       ? error.message : 'Finance runtime check failed'
     process.stderr.write(`${message}\n`); process.exitCode = 2
   })

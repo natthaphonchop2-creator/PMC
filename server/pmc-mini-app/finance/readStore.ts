@@ -2,8 +2,11 @@ import {
   deriveBookDailyKey,
   deriveExpenseScope,
   effectiveCommittedExpenses,
+  isCanonicalExpenseTimestamp,
+  isValidExpenseOriginalFileName,
   parseExpenseDate,
   projectMonthlyExpenses,
+  validateExpenseLedger,
   type EnabledExpenseCategory,
   type ExpenseAttachmentSummary,
   type ExpenseHistoryRow,
@@ -60,6 +63,8 @@ interface PrivateExpenseAttachment extends ExpenseAttachmentSummary {
 interface ExpenseSnapshot {
   submissions: ExpenseSubmission[]
   effective: ExpenseSubmission[]
+  retainedVoid: ExpenseSubmission[]
+  auditable: ExpenseSubmission[]
   attachments: PrivateExpenseAttachment[]
 }
 
@@ -97,7 +102,7 @@ export function createFinanceReadStore(input: {
       requireMonthKey(monthKey)
       if (!safeExpenseIdForMonth(expenseId, monthKey) || !SAFE_ID.test(attachmentId)) return null
       const snapshot = await readSnapshot(finance, monthKey)
-      if (!snapshot.effective.some((row) => row.expenseId === expenseId)) return null
+      if (!snapshot.auditable.some((row) => row.expenseId === expenseId)) return null
       const matches = snapshot.attachments.filter((attachment) => (
         attachment.expenseId === expenseId && attachment.attachmentId === attachmentId
       ))
@@ -159,8 +164,11 @@ async function readSnapshot(
   if (attachments.some(({ expenseId }) => !expenseIds.has(expenseId))) throw integrity()
   unique(attachments.map(({ attachmentId }) => attachmentId))
   unique(attachments.map(({ privateFileId }) => privateFileId))
-  const effective = effectiveRows(submissions)
-  for (const row of effective) {
+  const ledger = validatedLedger(submissions)
+  const effective = ledger.effective
+  const retainedVoid = ledger.retainedVoid
+  const auditable = [...effective, ...retainedVoid]
+  for (const row of auditable) {
     const evidence = attachments
       .filter(({ expenseId }) => expenseId === row.expenseId)
       .sort((left, right) => left.ordinal - right.ordinal)
@@ -170,7 +178,7 @@ async function readSnapshot(
       || evidence.some((attachment, index) => attachment.ordinal !== index + 1)
     ) throw integrity()
   }
-  return { submissions, effective, attachments }
+  return { submissions, effective, retainedVoid, auditable, attachments }
 }
 
 async function readMonth(
@@ -206,6 +214,7 @@ function requireBoundedRows(
 function parseSubmissions(rows: unknown[][]): ExpenseSubmission[] {
   const parsed = rows.map(parseSubmission)
   unique(parsed.map(({ expenseId }) => expenseId))
+  validatedLedger(parsed)
   return parsed
 }
 
@@ -265,7 +274,7 @@ function parseAttachments(rows: unknown[][]): PrivateExpenseAttachment[] {
       const ordinal = integer(row[3], 1, 5)
       const mediaType = row[4]
       if (mediaType !== 'image/jpeg' && mediaType !== 'image/png') throw integrity()
-      const originalFileName = nonEmptyText(row[5], 180)
+      const originalFileName = nonEmptyText(row[5], 320)
       const privateFileId = id(row[6])
       const deterministicName = nonEmptyText(row[7], 160)
       const sizeBytes = integer(row[8], 1, 10_000_000)
@@ -275,7 +284,7 @@ function parseAttachments(rows: unknown[][]): PrivateExpenseAttachment[] {
       const uploadedByStaffId = id(row[12])
       const uploadedAt = timestamp(row[13])
       const expectedName = `${String(ordinal).padStart(3, '0')}-${sha256}.${mediaType === 'image/jpeg' ? 'jpg' : 'png'}`
-      if (deterministicName !== expectedName) throw integrity()
+      if (deterministicName !== expectedName || !isValidExpenseOriginalFileName(originalFileName)) throw integrity()
       return {
         attachmentId, expenseId, rootRequestId, ordinal, mediaType, originalFileName,
         privateFileId, deterministicName, sizeBytes, driveVersion, slotClaimId, sha256,
@@ -296,15 +305,23 @@ function effectiveRows(submissions: ExpenseSubmission[]): ExpenseSubmission[] {
   }
 }
 
+function validatedLedger(submissions: ExpenseSubmission[]) {
+  try {
+    return validateExpenseLedger(submissions)
+  } catch {
+    throw integrity()
+  }
+}
+
 function historyRows(snapshot: ExpenseSnapshot): ExpenseHistoryRow[] {
-  return snapshot.effective.map((submission) => ({
+  return snapshot.auditable.map((submission) => ({
     expenseId: submission.expenseId,
     expenseDate: submission.expenseDate,
     category: submission.category,
     scope: submission.scope,
     amountSatang: submission.amountSatang,
     description: submission.description,
-    recordState: 'COMMITTED' as const,
+    recordState: submission.recordState === 'VOID' ? 'VOID' as const : 'COMMITTED' as const,
     revision: submission.revision,
     submittedByName: submission.submittedByName,
     submittedAt: submission.submittedAt,
@@ -454,7 +471,7 @@ function nullableTimestamp(value: unknown): string | null {
 }
 
 function validTimestamp(value: string): boolean {
-  return Number.isFinite(Date.parse(value)) && value.length <= 64 && !value.includes('|')
+  return isCanonicalExpenseTimestamp(value) && value.length <= 64 && !value.includes('|')
 }
 
 function stringMatching(value: unknown, pattern: RegExp): string {

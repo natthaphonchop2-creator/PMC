@@ -1,9 +1,15 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalExpenseAttachmentManifest,
   canonicalMiniAppExpenseCommand,
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseRecoveryIngress,
+  canonicalMiniAppExpenseResumeIngress,
+  isExpenseResumeStatus,
   type MiniAppExpenseCommand,
 } from '../../shared/pmcMiniAppExpenseIngress'
+import { expenseAttachmentManifestHash } from '../../server/pmc-mini-app/finance/submissionService'
 
 const manifestHash = 'a'.repeat(64)
 
@@ -78,10 +84,21 @@ const voidCommand: MiniAppExpenseCommand = {
   commandIdempotencyKey: 'expense-request-1:void',
   staffId: 'ADMIN_01',
   commandType: 'VOID_EXPENSE',
-  payload: { expenseId: 'EXP-202608-1', expectedVersion: 2, reason: 'duplicate entry' },
+  payload: { expenseId: 'EXP-202608-1', expectedVersion: 2, expectedRevision: 1, reason: 'duplicate entry' },
 }
 
 describe('expense ingress contract', () => {
+  it('uses one cross-runtime canonical attachment manifest and exact 160-character filename boundary', () => {
+    const attachments = (commitCommand as Extract<MiniAppExpenseCommand, { commandType: 'COMMIT_EXPENSE' }>).payload.attachments
+    const canonical = canonicalExpenseAttachmentManifest(attachments)
+    expect(expenseAttachmentManifestHash(attachments)).toBe(
+      createHash('sha256').update(canonical, 'utf8').digest('hex'),
+    )
+    expect(() => canonicalExpenseAttachmentManifest([{ ...attachments[0]!, originalFileName: `${'ก'.repeat(156)}.jpg` }]))
+      .not.toThrow()
+    expect(() => canonicalExpenseAttachmentManifest([{ ...attachments[0]!, originalFileName: `${'ก'.repeat(157)}.jpg` }]))
+      .toThrow('invalid mini app expense attachment manifest')
+  })
   it('produces deterministic field-order canonical JSON for every command phase', () => {
     expect(canonicalMiniAppExpenseCommand(prepareCommand)).toBe(
       '{"rootRequestId":"expense-request-1","commandIdempotencyKey":"expense-request-1:prepare","staffId":"ADMIN_01","commandType":"PREPARE_EXPENSE","payload":{"expenseDate":"2026-08-29","category":"BOOK_CLINIC","bookDailyKey":"CLINIC:2026-08-29","amountSatang":12000,"counterpartyName":null,"description":"สมุดประจำวันที่ 29","paymentMethod":null,"expectedAttachmentCount":2,"expectedManifestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedRevision":0}}',
@@ -105,6 +122,82 @@ describe('expense ingress contract', () => {
     })).toBe(
       '{"kind":"MINI_APP_EXPENSE","version":1,"timestamp":1788000000,"nonce":"nonce-0001","command":{"rootRequestId":"expense-request-1","commandIdempotencyKey":"expense-request-1:prepare","staffId":"ADMIN_01","commandType":"PREPARE_EXPENSE","payload":{"expenseDate":"2026-08-29","category":"BOOK_CLINIC","bookDailyKey":"CLINIC:2026-08-29","amountSatang":12000,"counterpartyName":null,"description":"สมุดประจำวันที่ 29","paymentMethod":null,"expectedAttachmentCount":2,"expectedManifestHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","expectedRevision":0}}}',
     )
+  })
+
+  it('binds recovery to one verified worker identity and correlation ID in fixed-order canonical JSON', () => {
+    expect(canonicalMiniAppExpenseRecoveryIngress({
+      kind: 'MINI_APP_EXPENSE_RECOVERY',
+      version: 1,
+      timestamp: 1_788_000_000,
+      nonce: 'recovery-nonce-0001',
+      correlationId: 'expense-recovery-0001',
+      worker: {
+        email: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+        subject: 'google-subject-0001',
+      },
+    })).toBe(
+      '{"kind":"MINI_APP_EXPENSE_RECOVERY","version":1,"timestamp":1788000000,"nonce":"recovery-nonce-0001","correlationId":"expense-recovery-0001","worker":{"email":"pmc-mini-app-task-invoker@example.iam.gserviceaccount.com","subject":"google-subject-0001"}}',
+    )
+  })
+
+  it('canonicalizes a minimal submitter-owned resume envelope with no form or evidence data', () => {
+    const canonical = canonicalMiniAppExpenseResumeIngress({
+      kind: 'MINI_APP_EXPENSE_RESUME', version: 1, timestamp: 1_788_000_000,
+      nonce: 'resume-nonce-123', rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
+    })
+    expect(canonical).toBe(
+      '{"kind":"MINI_APP_EXPENSE_RESUME","version":1,"timestamp":1788000000,"nonce":"resume-nonce-123","rootRequestId":"expense-request-1","staffId":"ADMIN_01"}',
+    )
+    expect(canonical).not.toContain('amountSatang')
+    expect(canonical).not.toContain('attachment')
+  })
+
+  it.each([
+    ['impossible calendar date', { expenseDate: '2026-08-32' }],
+    ['expense ID month mismatch', {
+      expenseId: 'EXP-202607-RESULT', receiptNumber: 'EXP-202607-RESULT',
+    }],
+    ['non-canonical committed timestamp', { committedAt: '2026-08-30 04:00:00Z' }],
+    ['wrong terminal state', { recordState: 'PREPARED' }],
+    ['zero revision', { revision: 0 }],
+    ['unexpected lifecycle version', { version: 2 }],
+  ])('rejects a COMMITTED resume receipt with %s', (_case, patch) => {
+    const receipt = {
+      expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT',
+      expenseDate: '2026-08-30', monthKey: '2026-08', category: 'BILL_DOCUMENT',
+      scope: 'CLINIC', amountSatang: 12_000, recordState: 'COMMITTED', revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+      ...patch,
+    }
+
+    expect(isExpenseResumeStatus({ status: 'COMMITTED', receipt })).toBe(false)
+  })
+
+  it('rejects unknown or unsafe recovery worker fields before signing', () => {
+    const recovery = {
+      kind: 'MINI_APP_EXPENSE_RECOVERY' as const,
+      version: 1 as const,
+      timestamp: 1_788_000_000,
+      nonce: 'recovery-nonce-0001',
+      correlationId: 'expense-recovery-0001',
+      worker: {
+        email: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+        subject: 'google-subject-0001',
+      },
+    }
+
+    expect(() => canonicalMiniAppExpenseRecoveryIngress({
+      ...recovery,
+      worker: { ...recovery.worker, lineUserId: 'private-line-id' },
+    } as never)).toThrow('invalid mini app expense recovery worker')
+    expect(() => canonicalMiniAppExpenseRecoveryIngress({
+      ...recovery,
+      worker: { ...recovery.worker, email: 'ordinary-user@example.test' },
+    })).toThrow('invalid mini app expense recovery worker')
+    expect(() => canonicalMiniAppExpenseRecoveryIngress({
+      ...recovery,
+      privateFolderId: 'private-folder-id',
+    } as never)).toThrow('invalid mini app expense recovery envelope')
   })
 
   it('rejects unknown fields at every signed contract boundary', () => {

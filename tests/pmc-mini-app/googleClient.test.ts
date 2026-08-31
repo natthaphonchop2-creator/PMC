@@ -45,11 +45,17 @@ describe('PMC Mini App keyless Google ports', () => {
       "'TAB_A'!A1:B2": [['a']],
       "'TAB_B'!A1:B2": [['b']],
     })
+    expect(batchGet).toHaveBeenCalledWith({
+      spreadsheetId: 'sheet-1',
+      ranges: ["'TAB_A'!A1:B2", "'TAB_B'!A1:B2"],
+      valueRenderOption: 'UNFORMATTED_VALUE',
+      dateTimeRenderOption: 'FORMATTED_STRING',
+    })
     await ports.sheets.batchUpdate('sheet-1', [{ range: "'TAB_A'!A2:B2", values: [['x', 'y']] }])
     expect(batchUpdate).toHaveBeenCalledWith({
       spreadsheetId: 'sheet-1',
       requestBody: { valueInputOption: 'RAW', data: [{ range: "'TAB_A'!A2:B2", values: [['x', 'y']] }] },
-    })
+    }, { timeout: 30_000 })
   })
 
   it('matches an open-ended requested range when Google returns its populated end row', async () => {
@@ -73,6 +79,28 @@ describe('PMC Mini App keyless Google ports', () => {
     await expect(ports.sheets.batchGet('sheet-1', ["'CONFIG_STAFF'!A2:H"])).resolves.toEqual({
       "'CONFIG_STAFF'!A2:H": [['staff-1', 'มัส']],
     })
+  })
+
+  it('matches a populated subrange returned inside an explicit bounded row limit', async () => {
+    const batchGet = vi.fn(async () => ({ data: { valueRanges: [
+      { range: "'$JERA_API_CACHE'!$A$1:$AF$143", values: [['cacheKey', 'reportType']] },
+    ] } }))
+    const base = inertFactory()
+    const ports = createMiniAppGooglePorts(
+      { spreadsheetId: 'sheet-1', intakeFolderId: 'folder-1' },
+      {
+        ...base,
+        createSheets: () => ({
+          spreadsheets: {
+            get: vi.fn(), batchUpdate: vi.fn(),
+            values: { batchGet, append: vi.fn(), update: vi.fn(), batchUpdate: vi.fn() },
+          },
+        }),
+      },
+    )
+
+    await expect(ports.sheets.batchGet('sheet-1', ["'JERA_API_CACHE'!A1:AF50002"]))
+      .resolves.toEqual({ "'JERA_API_CACHE'!A1:AF50002": [['cacheKey', 'reportType']] })
   })
 
   it('maps a row-only header request to Google’s bounded populated range', async () => {
@@ -146,9 +174,9 @@ describe('PMC Mini App keyless Google ports', () => {
     })
   })
 
-  it('returns grid column capacity with workbook metadata', async () => {
+  it('returns grid row and column capacity with workbook metadata', async () => {
     const get = vi.fn(async () => ({ data: { sheets: [
-      { properties: { sheetId: 7, title: 'MINI_APP_REQUESTS', gridProperties: { columnCount: 36 } } },
+      { properties: { sheetId: 7, title: 'MINI_APP_REQUESTS', gridProperties: { columnCount: 36, rowCount: 1_000 } } },
     ] } }))
     const base = inertFactory()
     const ports = createMiniAppGooglePorts(
@@ -165,11 +193,11 @@ describe('PMC Mini App keyless Google ports', () => {
     )
 
     await expect(ports.sheets.getWorkbook('sheet-1')).resolves.toEqual([
-      { sheetId: 7, title: 'MINI_APP_REQUESTS', columnCount: 36 },
+      { sheetId: 7, title: 'MINI_APP_REQUESTS', columnCount: 36, rowCount: 1_000 },
     ])
     expect(get).toHaveBeenCalledWith({
       spreadsheetId: 'sheet-1',
-      fields: 'sheets.properties(sheetId,title,gridProperties.columnCount)',
+      fields: 'sheets.properties(sheetId,title,gridProperties(columnCount,rowCount))',
     })
   })
 

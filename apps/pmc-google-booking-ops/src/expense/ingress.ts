@@ -1,15 +1,36 @@
 import type { MiniAppExpenseCommand } from '../../../../shared/pmcMiniAppExpenseIngress'
 import {
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseRecoveryIngress,
+  canonicalMiniAppExpenseResumeIngress,
   isMiniAppExpenseSafeErrorCode,
+  type ExpenseRecoveryCounts,
   type MiniAppExpenseIngressEnvelope,
   type MiniAppExpenseIngressResponse,
+  type MiniAppExpenseRecoveryIngressEnvelope,
+  type MiniAppExpenseRecoveryIngressResponse,
+  type MiniAppExpenseResumeIngressEnvelope,
+  type MiniAppExpenseResumeIngressResponse,
   type UnsignedMiniAppExpenseIngressEnvelope,
+  type UnsignedMiniAppExpenseRecoveryIngressEnvelope,
+  type UnsignedMiniAppExpenseResumeIngressEnvelope,
 } from '../../../../shared/pmcMiniAppExpenseIngress'
 import type { ExpenseRepository } from '../ports'
-import { executeExpenseCommand } from './commands'
+import { executeExpenseCommand, resolveExpenseResumeStatus, runExpenseRecovery } from './commands'
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'command', 'signature'] as const
+const RECOVERY_ENVELOPE_KEYS = [
+  'kind',
+  'version',
+  'timestamp',
+  'nonce',
+  'correlationId',
+  'worker',
+  'signature',
+] as const
+const RESUME_ENVELOPE_KEYS = [
+  'kind', 'version', 'timestamp', 'nonce', 'rootRequestId', 'staffId', 'signature',
+] as const
 
 export interface ExpenseIngressPorts {
   clock: { nowIso(): string }
@@ -72,6 +93,84 @@ export function processExpenseIngressResponse(
   }
 }
 
+export function processExpenseRecoveryIngress(
+  input: unknown,
+  ports: ExpenseIngressPorts,
+): ExpenseRecoveryCounts {
+  const envelope = verifyRecoveryEnvelope(input, ports)
+  return ports.locks.withLock(() => {
+    if (ports.repositories.lineDirectory.hasNonce(envelope.nonce)) {
+      throw new Error('mini app expense recovery ingress replay detected')
+    }
+    ports.repositories.lineDirectory.rememberNonce(envelope.nonce, ports.clock.nowIso())
+    const result = runExpenseRecovery({
+      clock: ports.clock,
+      locks: { withLock: (operation) => operation() },
+      staff: { findById: (staffId) => ports.config.findStaffById(staffId) },
+      expense: ports.expense,
+      crypto: { sha256Hex: ports.crypto.sha256Hex },
+      commandFingerprint: ports.expenseCommandFingerprint,
+      allocateExpenseId: ports.allocateExpenseId,
+    })
+    const failed = result.errors.length
+    const unchanged = result.inspected - result.recovered - result.abandoned - failed
+    if (
+      unchanged < 0
+      || result.recovered + result.abandoned + unchanged + failed > 100
+    ) throw new Error('invalid expense recovery result')
+    return {
+      recovered: result.recovered,
+      abandoned: result.abandoned,
+      unchanged,
+      failed,
+    }
+  })
+}
+
+export function processExpenseRecoveryIngressResponse(
+  input: unknown,
+  ports: ExpenseIngressPorts,
+): MiniAppExpenseRecoveryIngressResponse {
+  try {
+    return { ok: true, result: processExpenseRecoveryIngress(input, ports) }
+  } catch {
+    return { ok: false, error: 'EXPENSE_STORAGE_UNAVAILABLE' }
+  }
+}
+
+export function processExpenseResumeIngress(
+  input: unknown,
+  ports: ExpenseIngressPorts,
+) {
+  const envelope = verifyResumeEnvelope(input, ports)
+  return ports.locks.withLock(() => {
+    if (ports.repositories.lineDirectory.hasNonce(envelope.nonce)) {
+      throw new Error('mini app expense resume ingress replay detected')
+    }
+    ports.repositories.lineDirectory.rememberNonce(envelope.nonce, ports.clock.nowIso())
+    return resolveExpenseResumeStatus(envelope.rootRequestId, envelope.staffId, {
+      clock: ports.clock,
+      locks: { withLock: (operation) => operation() },
+      staff: { findById: (staffId) => ports.config.findStaffById(staffId) },
+      expense: ports.expense,
+      crypto: { sha256Hex: ports.crypto.sha256Hex },
+      commandFingerprint: ports.expenseCommandFingerprint,
+      allocateExpenseId: ports.allocateExpenseId,
+    })
+  })
+}
+
+export function processExpenseResumeIngressResponse(
+  input: unknown,
+  ports: ExpenseIngressPorts,
+): MiniAppExpenseResumeIngressResponse {
+  try {
+    return { ok: true, result: processExpenseResumeIngress(input, ports) }
+  } catch (error) {
+    return { ok: false, error: safeExpenseIngressError(error) }
+  }
+}
+
 function safeExpenseIngressError(error: unknown) {
   const message = error instanceof Error ? error.message : ''
   return isMiniAppExpenseSafeErrorCode(message) ? message : 'EXPENSE_STORAGE_UNAVAILABLE'
@@ -112,6 +211,72 @@ function verifyEnvelope(
   const nowSeconds = Math.floor(Date.parse(ports.clock.nowIso()) / 1_000)
   if (!Number.isFinite(nowSeconds) || Math.abs(nowSeconds - unsigned.timestamp) > 300) {
     throw new Error('expired mini app expense ingress timestamp')
+  }
+  return { ...unsigned, signature: input.signature }
+}
+
+function verifyRecoveryEnvelope(
+  input: unknown,
+  ports: ExpenseIngressPorts,
+): MiniAppExpenseRecoveryIngressEnvelope {
+  if (!hasExactKeys(input, RECOVERY_ENVELOPE_KEYS)) {
+    throw new Error('invalid mini app expense recovery ingress envelope')
+  }
+  if (typeof input.signature !== 'string' || !/^[a-f0-9]{64}$/.test(input.signature)) {
+    throw new Error('invalid mini app expense recovery ingress signature')
+  }
+  const unsigned: UnsignedMiniAppExpenseRecoveryIngressEnvelope = {
+    kind: input.kind as 'MINI_APP_EXPENSE_RECOVERY',
+    version: input.version as 1,
+    timestamp: input.timestamp as number,
+    nonce: input.nonce as string,
+    correlationId: input.correlationId as string,
+    worker: input.worker as UnsignedMiniAppExpenseRecoveryIngressEnvelope['worker'],
+  }
+  const canonical = canonicalMiniAppExpenseRecoveryIngress(unsigned)
+  const expected = ports.crypto.hmacSha256Hex(
+    canonical,
+    ports.expenseSecrets.expenseIngressSecret(),
+  )
+  if (!constantTimeEqual(input.signature, expected)) {
+    throw new Error('invalid mini app expense recovery ingress signature')
+  }
+  const nowSeconds = Math.floor(Date.parse(ports.clock.nowIso()) / 1_000)
+  if (!Number.isFinite(nowSeconds) || Math.abs(nowSeconds - unsigned.timestamp) > 300) {
+    throw new Error('expired mini app expense recovery ingress timestamp')
+  }
+  return { ...unsigned, signature: input.signature }
+}
+
+function verifyResumeEnvelope(
+  input: unknown,
+  ports: ExpenseIngressPorts,
+): MiniAppExpenseResumeIngressEnvelope {
+  if (!hasExactKeys(input, RESUME_ENVELOPE_KEYS)) {
+    throw new Error('invalid mini app expense resume ingress envelope')
+  }
+  if (typeof input.signature !== 'string' || !/^[a-f0-9]{64}$/.test(input.signature)) {
+    throw new Error('invalid mini app expense resume ingress signature')
+  }
+  const unsigned: UnsignedMiniAppExpenseResumeIngressEnvelope = {
+    kind: input.kind as 'MINI_APP_EXPENSE_RESUME',
+    version: input.version as 1,
+    timestamp: input.timestamp as number,
+    nonce: input.nonce as string,
+    rootRequestId: input.rootRequestId as string,
+    staffId: input.staffId as string,
+  }
+  const canonical = canonicalMiniAppExpenseResumeIngress(unsigned)
+  const expected = ports.crypto.hmacSha256Hex(
+    canonical,
+    ports.expenseSecrets.expenseIngressSecret(),
+  )
+  if (!constantTimeEqual(input.signature, expected)) {
+    throw new Error('invalid mini app expense resume ingress signature')
+  }
+  const nowSeconds = Math.floor(Date.parse(ports.clock.nowIso()) / 1_000)
+  if (!Number.isFinite(nowSeconds) || Math.abs(nowSeconds - unsigned.timestamp) > 300) {
+    throw new Error('expired mini app expense resume ingress timestamp')
   }
   return { ...unsigned, signature: input.signature }
 }

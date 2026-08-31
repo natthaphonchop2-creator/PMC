@@ -6,6 +6,7 @@ import type {
   BookingDraftInputV2,
   BookingDraftProjection,
   BookingQueuedResult,
+  ExpenseSubmitInput,
   MiniAppConfig,
   MiniAppEnrollmentOptions,
   MiniAppSession,
@@ -16,6 +17,23 @@ import { monthSelectionToSearch, type FinanceDailyFilter, type FinanceMonthSelec
 import { buildReportSearchParams, type JeraClientEnvelope, type JeraReportType, type ReportFilterState } from './reports'
 import type { StockClientCommand, StockCommandResult, StockHistoryPage } from '../../../shared/pmcStock'
 import type { DailyIncomeProjection, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
+import {
+  deriveExpenseScope,
+  isExpenseBrowserToken,
+  isValidExpenseOriginalFileName,
+  parseExpenseDate,
+  type ExpenseHistoryPage,
+  type ExpenseHistoryRow,
+  type ExpenseMonthlyProjection,
+  type ExpenseAttachmentSummary,
+  type EnabledExpenseCategory,
+  type ExpenseReceipt,
+} from '../../../shared/pmcExpense'
+import {
+  isExpenseResumeStatus,
+  type ExpenseResumeStatus,
+} from '../../../shared/pmcMiniAppExpenseIngress'
+import { isExpenseStagingToken } from './expense/expenseModel'
 import { PMC_BOOKING_PROTOCOL_VERSION } from '../../../shared/pmcBookingProtocol'
 import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
 import type { BookingPrepareFilesInput } from '../../../shared/pmcMiniAppBookingPrepare'
@@ -47,22 +65,33 @@ export interface MiniAppBrowserApi {
   loadDailyIncome(idToken: string, filter: FinanceDailyFilter): Promise<DailyIncomeProjection>
   refreshDailyIncome(idToken: string, eventDate: string): Promise<{ accepted: true; allocationQueued: boolean; retryAfterSeconds: number }>
   loadMonthlyIncome(idToken: string, selection: FinanceMonthSelection): Promise<MonthlyIncomeProjection>
+  loadMonthlyExpenses(idToken: string, monthKey: string): Promise<ExpenseMonthlyProjection>
+  loadExpenseHistory(idToken: string, monthKey: string, cursor?: string): Promise<ExpenseHistoryPage>
+  issueExpenseEvidenceToken(idToken: string, expenseId: string, attachmentId: string): Promise<string>
+  downloadExpenseEvidence(idToken: string, token: string): Promise<Blob>
+  replaceExpense(idToken: string, expenseId: string, input: ExpenseSubmitInput): Promise<ExpenseReceipt>
+  voidExpense(idToken: string, expenseId: string, input: { rootRequestId: string; expectedRevision: number; reason: string }): Promise<void>
   loadStockProducts(idToken: string): Promise<{ products: StockProductProjection[] }>
   loadStockHistory(idToken: string, cursor?: string): Promise<StockHistoryPage>
   submitStockCommand(idToken: string, command: StockClientCommand): Promise<StockCommandResult>
+  stageExpense(idToken: string, rootRequestId: string, files: File[]): Promise<{ stagingTokens: string[] }>
+  submitExpense(idToken: string, input: ExpenseSubmitInput): Promise<ExpenseReceipt>
+  resumeExpense(idToken: string, rootRequestId: string): Promise<ExpenseResumeStatus>
 }
 
 export class MiniAppApiError extends Error {
   readonly code: string
   readonly status: number
   readonly retryAfterSeconds: number | null
+  readonly retryable: boolean | null
 
-  constructor(code: string, status: number, retryAfterSeconds: number | null = null) {
+  constructor(code: string, status: number, retryAfterSeconds: number | null = null, retryable: boolean | null = null) {
     super(`Mini App API failed: ${code}`)
     this.name = 'MiniAppApiError'
     this.code = code
     this.status = status
     this.retryAfterSeconds = retryAfterSeconds
+    this.retryable = retryable
   }
 }
 
@@ -298,6 +327,26 @@ export function createMiniAppApi(options: MiniAppApiFactoryOptions = {}): MiniAp
       const query = monthSelectionToSearch(selection)
       return requestJson(request, `/api/mini-app/finance/monthly?${query}`, authenticated(idToken))
     },
+    loadMonthlyExpenses(idToken, monthKey) {
+      return requestJson(request, `/api/mini-app/finance/months/${encodeURIComponent(monthKey)}/expenses`, authenticated(idToken),
+        (body, status) => parseExpenseMonthlyProjection(body, status, monthKey))
+    },
+    loadExpenseHistory(idToken, monthKey, cursor) {
+      const query = new URLSearchParams({ month: monthKey })
+      if (cursor) query.set('cursor', cursor)
+      return requestJson(request, `/api/mini-app/finance/expenses?${query}`, authenticated(idToken),
+        (body, status) => parseExpenseHistoryPage(body, status, monthKey))
+    },
+    issueExpenseEvidenceToken(idToken, expenseId, attachmentId) {
+      return requestJson(request,
+        `/api/mini-app/finance/expenses/${encodeURIComponent(expenseId)}/evidence/${encodeURIComponent(attachmentId)}/token`,
+        { method: 'POST', ...authenticated(idToken) },
+        parseEvidenceToken,
+      )
+    },
+    downloadExpenseEvidence(idToken, token) {
+      return requestExpenseBlob(request, `/api/mini-app/finance/evidence?token=${encodeURIComponent(token)}`, authenticated(idToken))
+    },
     loadStockProducts(idToken) {
       return requestJson(request, '/api/mini-app/stock/products', authenticated(idToken))
     },
@@ -309,7 +358,72 @@ export function createMiniAppApi(options: MiniAppApiFactoryOptions = {}): MiniAp
       const mapped = stockCommandRequest(command)
       return requestJson(request, mapped.url, authenticatedJson(idToken, mapped.method, mapped.body))
     },
+    stageExpense(idToken, rootRequestId, files) {
+      const body = new FormData()
+      files.forEach((file, index) => body.append(`file${index + 1}`, file))
+      return requestJson(request, `/api/mini-app/expenses/staging/${encodeURIComponent(rootRequestId)}`, {
+        method: 'POST', headers: { authorization: `Bearer ${idToken}` }, body,
+      }, (responseBody, status) => parseExpenseStagingResponse(responseBody, status, files.length))
+    },
+    submitExpense(idToken, input) {
+      return requestJson(request, '/api/mini-app/expenses', authenticatedJson(idToken, 'POST', input),
+        (body, status) => parseExpenseReceiptResponse(body, status, input))
+    },
+    resumeExpense(idToken, rootRequestId) {
+      if (!/^[A-Za-z0-9._:-]{1,116}$/.test(rootRequestId)) {
+        return Promise.reject(new MiniAppApiError('MINI_APP_INVALID_RESPONSE', 0))
+      }
+      return requestJson(
+        request,
+        `/api/mini-app/expenses/resume/${encodeURIComponent(rootRequestId)}`,
+        { method: 'POST', ...authenticated(idToken) },
+        (body, status) => {
+          if (status !== 200 || !isExpenseResumeStatus(body)) {
+            throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+          }
+          return structuredClone(body)
+        },
+      )
+    },
+    replaceExpense(idToken, expenseId, input) {
+      const { expectedRevision, ...replacementInput } = input
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+        return Promise.reject(new MiniAppApiError('MINI_APP_INVALID_RESPONSE', 0))
+      }
+      return requestJson(request,
+        `/api/mini-app/finance/expenses/${encodeURIComponent(expenseId)}/replace`,
+        authenticatedJson(idToken, 'POST', {
+          expectedVersion: committedExpenseVersion(), expectedRevision, input: replacementInput,
+        }),
+        (body, status) => parseExpenseReceiptResponse(body, status, input),
+      )
+    },
+    async voidExpense(idToken, expenseId, input) {
+      if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+        throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', 0)
+      }
+      await requestJson(request,
+        `/api/mini-app/finance/expenses/${encodeURIComponent(expenseId)}/void`,
+        authenticatedJson(idToken, 'POST', {
+          rootRequestId: input.rootRequestId,
+          expectedVersion: committedExpenseVersion(),
+          expectedRevision: input.expectedRevision,
+          reason: input.reason,
+        }),
+        (body, status) => parseVoidExpenseResponse(
+          body,
+          status,
+          expenseId,
+          committedExpenseVersion(),
+        ),
+      )
+    },
   }
+}
+
+function committedExpenseVersion(): 2 {
+  // PREPARED v1 becomes the immutable browser-visible COMMITTED row at v2.
+  return 2
 }
 
 function exactBookingDraftInputV2(input: BookingDraftInputV2): BookingDraftInputV2 {
@@ -417,9 +531,39 @@ async function requestJson<T>(
     const code = body && typeof body === 'object' && !Array.isArray(body) && 'error' in body ? String(body.error) : 'MINI_APP_REQUEST_FAILED'
     const retryAfterSeconds = body && typeof body === 'object' && !Array.isArray(body) && 'retryAfterSeconds' in body
       && safeRetryAfterSeconds(body.retryAfterSeconds) !== null ? safeRetryAfterSeconds(body.retryAfterSeconds) : null
-    throw new MiniAppApiError(/^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED', response.status, retryAfterSeconds)
+    const retryable = body && typeof body === 'object' && !Array.isArray(body) && 'retryable' in body
+      && typeof body.retryable === 'boolean' ? body.retryable : null
+    throw new MiniAppApiError(
+      /^[A-Z0-9_]{1,80}$/.test(code) ? code : 'MINI_APP_REQUEST_FAILED',
+      response.status,
+      retryAfterSeconds,
+      retryable,
+    )
   }
   return parse ? parse(body, response.status) : body as T
+}
+
+async function requestExpenseBlob(
+  request: typeof globalThis.fetch,
+  url: string,
+  init: RequestInit,
+): Promise<Blob> {
+  let response: Response
+  try { response = await request(url, init) } catch { throw new MiniAppApiError('MINI_APP_NETWORK_FAILED', 0) }
+  if (!response.ok) {
+    let body: unknown = null
+    try { body = await response.json() } catch { /* Deliberately keep private evidence errors opaque. */ }
+    const code = isRecord(body) && typeof body.error === 'string' && /^[A-Z0-9_]{1,80}$/.test(body.error)
+      ? body.error : 'MINI_APP_REQUEST_FAILED'
+    throw new MiniAppApiError(code, response.status)
+  }
+  const mimeType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
+  if (mimeType !== 'image/jpeg' && mimeType !== 'image/png') throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', response.status)
+  const blob = await response.blob()
+  if (blob.size < 1 || blob.size > 10_000_000 || blob.type !== mimeType) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', response.status)
+  }
+  return blob
 }
 
 function parseFinanceRefreshResponse(body: unknown, status: number): { accepted: true; allocationQueued: boolean; retryAfterSeconds: number } {
@@ -468,6 +612,201 @@ function exactKeys(value: Record<string, unknown>): string {
 
 function safeRetryAfterSeconds(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 3_600 ? value : null
+}
+
+function parseExpenseStagingResponse(body: unknown, status: number, expectedCount: number): { stagingTokens: string[] } {
+  if (status !== 200 || !isRecord(body) || Object.keys(body).join(',') !== 'stagingTokens' || !Array.isArray(body.stagingTokens)) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  const tokens = body.stagingTokens
+  if (expectedCount < 1 || expectedCount > 5 || tokens.length !== expectedCount || new Set(tokens).size !== tokens.length
+    || !tokens.every(isExpenseStagingToken)) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  return { stagingTokens: tokens as string[] }
+}
+
+function parseExpenseMonthlyProjection(body: unknown, status: number, expectedMonthKey: string): ExpenseMonthlyProjection {
+  const expected = ['clinicByCategorySatang', 'clinicCommittedSatang', 'doctorPersonalCommittedSatang', 'effectiveExpenseCount', 'monthKey', 'unreviewed']
+  if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== expected.join(',')) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  const categories = body.clinicByCategorySatang
+  if (!validMonthKey(expectedMonthKey) || body.monthKey !== expectedMonthKey
+    || !validMonthKey(body.monthKey)
+    || !positiveOrZeroInteger(body.clinicCommittedSatang)
+    || !positiveOrZeroInteger(body.doctorPersonalCommittedSatang)
+    || !positiveOrZeroInteger(body.effectiveExpenseCount)
+    || body.unreviewed !== true
+    || !isRecord(categories)
+    || Object.keys(categories).sort().join(',') !== 'BILL_DOCUMENT,BOOK_CLINIC'
+    || !positiveOrZeroInteger(categories.BILL_DOCUMENT)
+    || !positiveOrZeroInteger(categories.BOOK_CLINIC)
+    || categories.BILL_DOCUMENT + categories.BOOK_CLINIC !== body.clinicCommittedSatang
+  ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  return {
+    monthKey: body.monthKey,
+    clinicCommittedSatang: body.clinicCommittedSatang,
+    doctorPersonalCommittedSatang: body.doctorPersonalCommittedSatang,
+    clinicByCategorySatang: { BILL_DOCUMENT: categories.BILL_DOCUMENT, BOOK_CLINIC: categories.BOOK_CLINIC },
+    effectiveExpenseCount: body.effectiveExpenseCount,
+    unreviewed: true,
+  }
+}
+
+function parseExpenseHistoryPage(body: unknown, status: number, expectedMonthKey: string): ExpenseHistoryPage {
+  if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== 'expenses,nextCursor'
+    || !Array.isArray(body.expenses) || body.expenses.length > 25
+    || !(body.nextCursor === null || (typeof body.nextCursor === 'string' && body.nextCursor.length >= 3 && body.nextCursor.length <= 256))
+  ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  if (!validMonthKey(expectedMonthKey)) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  const expenses = body.expenses.map((row) => parseExpenseHistoryRow(row, status, expectedMonthKey))
+  if (new Set(expenses.map(({ expenseId }) => expenseId)).size !== expenses.length) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  return { expenses, nextCursor: body.nextCursor }
+}
+
+function parseExpenseHistoryRow(value: unknown, status: number, expectedMonthKey: string): ExpenseHistoryRow {
+  const expected = ['amountSatang', 'attachments', 'category', 'committedAt', 'description', 'expenseDate', 'expenseId', 'recordState', 'revision', 'scope', 'submittedAt', 'submittedByName']
+  const category = isRecord(value) ? enabledExpenseCategory(value.category) : null
+  let parsedExpenseDate: string | null = null
+  if (isRecord(value) && typeof value.expenseDate === 'string') {
+    try { parsedExpenseDate = parseExpenseDate(value.expenseDate).expenseDate } catch { parsedExpenseDate = null }
+  }
+  if (!isRecord(value) || Object.keys(value).sort().join(',') !== expected.join(',')
+    || typeof value.expenseId !== 'string' || !/^EXP-\d{6}-[A-Za-z0-9._:-]{1,107}$/.test(value.expenseId)
+    || parsedExpenseDate === null || parsedExpenseDate.slice(0, 7) !== expectedMonthKey
+    || !new RegExp(`^EXP-${expectedMonthKey.replace('-', '')}-[A-Za-z0-9._:-]{1,107}$`).test(value.expenseId)
+    || !category || value.scope !== deriveExpenseScope(category)
+    || !positiveOrZeroInteger(value.amountSatang) || value.amountSatang < 1
+    || typeof value.description !== 'string' || value.description.length > 500
+    || (value.recordState !== 'COMMITTED' && value.recordState !== 'VOID')
+    || !positiveOrZeroInteger(value.revision) || value.revision < 1
+    || typeof value.submittedByName !== 'string' || value.submittedByName.length < 1 || value.submittedByName.length > 300
+    || typeof value.submittedAt !== 'string' || !canonicalIsoTimestamp(value.submittedAt)
+    || !(value.committedAt === null || (typeof value.committedAt === 'string' && canonicalIsoTimestamp(value.committedAt)))
+    || !Array.isArray(value.attachments) || value.attachments.length > 5
+  ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  const expenseId = value.expenseId as string
+  const attachments = value.attachments.map((attachment) => parseExpenseAttachment(attachment, expenseId, status))
+  if (new Set(attachments.map(({ attachmentId }) => attachmentId)).size !== attachments.length
+    || attachments.some((attachment, index) => attachment.ordinal !== index + 1)) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  return {
+    expenseId,
+    expenseDate: parsedExpenseDate,
+    category,
+    scope: deriveExpenseScope(category),
+    amountSatang: value.amountSatang,
+    description: value.description,
+    recordState: value.recordState,
+    revision: value.revision,
+    submittedByName: value.submittedByName,
+    submittedAt: value.submittedAt,
+    committedAt: value.committedAt,
+    attachments,
+  }
+}
+
+function parseExpenseAttachment(value: unknown, expenseId: string, status: number): ExpenseAttachmentSummary {
+  const expected = ['attachmentId', 'expenseId', 'mediaType', 'ordinal', 'originalFileName']
+  if (!isRecord(value) || Object.keys(value).sort().join(',') !== expected.join(',')
+    || typeof value.attachmentId !== 'string' || !/^[A-Za-z0-9._:-]{1,124}$/.test(value.attachmentId)
+    || value.expenseId !== expenseId || !positiveOrZeroInteger(value.ordinal) || value.ordinal < 1 || value.ordinal > 5
+    || (value.mediaType !== 'image/jpeg' && value.mediaType !== 'image/png')
+    || !isValidExpenseOriginalFileName(value.originalFileName)
+  ) throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  return {
+    attachmentId: value.attachmentId,
+    expenseId,
+    ordinal: value.ordinal,
+    mediaType: value.mediaType,
+    originalFileName: value.originalFileName,
+  }
+}
+
+function parseEvidenceToken(body: unknown, status: number): string {
+  if (status !== 200 || !isRecord(body) || Object.keys(body).join(',') !== 'token'
+    || !isExpenseBrowserToken(body.token)) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  return body.token
+}
+
+function parseVoidExpenseResponse(
+  body: unknown,
+  status: number,
+  expectedExpenseId: string,
+  expectedVersion: number,
+): void {
+  if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== 'expenseId,recordState,updatedAt,version'
+    || body.expenseId !== expectedExpenseId || body.recordState !== 'VOID'
+    || body.version !== expectedVersion + 1 || !canonicalIsoTimestamp(String(body.updatedAt))) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+}
+
+function validMonthKey(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  try { return parseExpenseDate(`${value}-01`).monthKey === value } catch { return false }
+}
+
+function positiveOrZeroInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+export function parseExpenseReceiptResponse(body: unknown, status: number, expected?: ExpenseSubmitInput): ExpenseReceipt {
+  const expectedKeys = [
+    'amountSatang', 'category', 'committedAt', 'expenseDate', 'expenseId', 'monthKey',
+    'receiptNumber', 'recordState', 'revision', 'scope', 'unreviewed',
+  ]
+  if (status !== 200 || !isRecord(body) || Object.keys(body).sort().join(',') !== expectedKeys.join(',')) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  const category = enabledExpenseCategory(body.category)
+  let monthKey: string | null = null
+  if (typeof body.expenseDate === 'string') {
+    try { monthKey = parseExpenseDate(body.expenseDate).monthKey } catch { monthKey = null }
+  }
+  if (!category || !monthKey || body.monthKey !== monthKey
+    || typeof body.expenseId !== 'string'
+    || body.receiptNumber !== body.expenseId
+    || !new RegExp(`^EXP-${monthKey.replace('-', '')}-[A-Za-z0-9._:-]{1,107}$`).test(body.expenseId)
+    || body.scope !== deriveExpenseScope(category)
+    || typeof body.amountSatang !== 'number' || !Number.isSafeInteger(body.amountSatang) || body.amountSatang <= 0
+    || body.recordState !== 'COMMITTED'
+    || typeof body.revision !== 'number' || !Number.isSafeInteger(body.revision) || body.revision < 1
+    || typeof body.committedAt !== 'string' || !canonicalIsoTimestamp(body.committedAt)
+    || body.unreviewed !== true) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  if (expected && (category !== expected.category
+    || body.expenseDate !== expected.expenseDate
+    || body.amountSatang !== expected.amountSatang
+    || body.revision !== expected.expectedRevision + 1)) {
+    throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+  }
+  return {
+    expenseId: body.expenseId,
+    receiptNumber: body.expenseId,
+    expenseDate: body.expenseDate as string,
+    monthKey,
+    category,
+    scope: deriveExpenseScope(category),
+    amountSatang: body.amountSatang,
+    recordState: 'COMMITTED',
+    revision: body.revision,
+    committedAt: body.committedAt,
+    unreviewed: true,
+  }
+}
+
+function enabledExpenseCategory(value: unknown): EnabledExpenseCategory | null {
+  return value === 'BILL_DOCUMENT' || value === 'BOOK_CLINIC' || value === 'BOOK_DOCTOR_PERSONAL' ? value : null
+}
+
+function canonicalIsoTimestamp(value: string): boolean {
+  try { return new Date(value).toISOString() === value } catch { return false }
 }
 
 export function parseBookingConfirmationResponse(body: unknown, status: number): BookingQueuedResult | BookingConfirmationResult {

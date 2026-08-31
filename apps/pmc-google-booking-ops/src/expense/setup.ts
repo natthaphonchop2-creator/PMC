@@ -1,3 +1,4 @@
+import { parseExpenseDate } from '../../../../shared/pmcExpense'
 import type { ExpenseTopologyPort, StaffConfig } from '../ports'
 import { EXPENSE_MASTER_SCHEMAS, EXPENSE_MONTH_SCHEMAS } from './sheetTopology'
 
@@ -33,6 +34,27 @@ export interface ExpensePermissionGrantPlan {
   managerCount: 3
   changedRows: number
   grants: ExpensePermissionGrant[]
+}
+
+export interface ExpenseMonthBootstrapPort {
+  ensureMonth(monthKey: string): void
+  verifyMonth(monthKey: string): boolean
+}
+
+export function bootstrapExpenseMonth(
+  monthKey: string,
+  approvedMonthKey: string,
+  port: ExpenseMonthBootstrapPort,
+): { monthKey: string; monthReady: true } {
+  try {
+    if (parseExpenseDate(`${monthKey}-01`).monthKey !== monthKey) throw new Error('invalid')
+  } catch {
+    throw new Error('invalid expense bootstrap month')
+  }
+  if (approvedMonthKey !== monthKey) throw new Error('expense month bootstrap is not approved')
+  port.ensureMonth(monthKey)
+  if (port.verifyMonth(monthKey) !== true) throw new Error('expense month bootstrap verification failed')
+  return { monthKey, monthReady: true }
 }
 
 function headersEqual(actual: readonly string[], expected: readonly string[]): boolean {

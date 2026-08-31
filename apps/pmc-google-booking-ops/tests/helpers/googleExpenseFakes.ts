@@ -263,6 +263,7 @@ export function installGoogleExpenseFakes(options: {
   vi.stubGlobal('SpreadsheetApp', {
     openById: (id: string) => spreadsheets.get(id)!,
     create: () => { throw new Error('unexpected spreadsheet creation') },
+    flush: vi.fn(),
   })
   function addExpenseAttachment(
     attachment: ExpensePrivateAttachment,

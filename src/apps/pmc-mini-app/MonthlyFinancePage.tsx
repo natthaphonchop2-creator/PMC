@@ -1,42 +1,59 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, LockKeyhole } from 'lucide-react'
 import type { FinanceComponentFreshness, MonthlyIncomeProjection } from '../../../shared/pmcFinance'
+import type { ExpenseMonthlyProjection } from '../../../shared/pmcExpense'
 import {
   defaultFinanceMonthSelection,
   financeMonthSelectionError,
   type FinanceDailyFilter,
   type FinanceMonthSelection,
 } from './financeReports'
-import { formatBaht } from './reportFormatting'
+import { formatBaht, formatBahtFixed } from './reportFormatting'
+import { MonthlyExpensePanel } from './expense/MonthlyExpensePanel'
 
 export interface MonthlyIncomePageAdapter {
   load(selection: FinanceMonthSelection): Promise<MonthlyIncomeProjection>
 }
 
+export interface MonthlyExpensePageAdapter {
+  load(monthKey: string): Promise<ExpenseMonthlyProjection>
+}
+
 export function MonthlyFinancePage({
   canViewFinance,
+  incomeEnabled = true,
   bangkokDate,
   adapter,
+  expenseAdapter,
   onBack,
   onDrillDown,
+  onOpenExpenseHistory,
   initialSelection,
   onSelectionChange,
 }: {
   canViewFinance: boolean
+  incomeEnabled?: boolean
   bangkokDate: string
   adapter: MonthlyIncomePageAdapter
+  expenseAdapter?: MonthlyExpensePageAdapter
   onBack: () => void
   onDrillDown: (filter: FinanceDailyFilter) => void
+  onOpenExpenseHistory?: (monthKey: string) => void
   initialSelection?: FinanceMonthSelection
   onSelectionChange?: (selection: FinanceMonthSelection) => void
 }) {
   const [selection, setSelection] = useState(() => initialSelection ?? defaultFinanceMonthSelection(bangkokDate))
   const [loadedProjection, setLoadedProjection] = useState<{ key: string; value: MonthlyIncomeProjection } | null>(null)
-  const [loading, setLoading] = useState(canViewFinance)
+  const [loading, setLoading] = useState(canViewFinance && incomeEnabled)
   const [error, setError] = useState('')
+  const [loadedExpenseProjection, setLoadedExpenseProjection] = useState<{ key: string; value: ExpenseMonthlyProjection } | null>(null)
+  const [expenseError, setExpenseError] = useState<{ key: string; value: 'EMPTY' | 'UNAVAILABLE' } | null>(null)
   const requestEpochRef = useRef(0)
   const selectionKey = monthSelectionKey(selection)
   const projection = loadedProjection?.key === selectionKey ? loadedProjection.value : null
+  const expenseProjection = loadedExpenseProjection?.key === selectionKey ? loadedExpenseProjection.value : null
+  const currentExpenseError = expenseError?.key === selectionKey ? expenseError.value : null
+  const expenseLoading = Boolean(expenseAdapter && !expenseProjection && currentExpenseError !== 'UNAVAILABLE')
 
   useEffect(() => {
     if (!canViewFinance) return
@@ -44,17 +61,29 @@ export function MonthlyFinancePage({
     const requestKey = monthSelectionKey(selection)
     onSelectionChange?.(selection)
     if (financeMonthSelectionError(selection)) return
-    void adapter.load(selection).then((next) => {
-      if (requestEpoch === requestEpochRef.current) setLoadedProjection({ key: requestKey, value: next })
-    }).catch(() => {
-      if (requestEpoch !== requestEpochRef.current) return
-      setError(projection ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')
-    }).finally(() => {
-      if (requestEpoch === requestEpochRef.current) setLoading(false)
-    })
+    if (incomeEnabled) {
+      void adapter.load(selection).then((next) => {
+        if (requestEpoch === requestEpochRef.current) setLoadedProjection({ key: requestKey, value: next })
+      }).catch(() => {
+        if (requestEpoch !== requestEpochRef.current) return
+        setError(projection ? 'โหลดข้อมูลไม่สำเร็จ ข้อมูลล่าสุดยังแสดงอยู่ กรุณาลองอีกครั้ง' : 'โหลดข้อมูลไม่สำเร็จ กรุณาลองอีกครั้ง')
+      }).finally(() => {
+        if (requestEpoch === requestEpochRef.current) setLoading(false)
+      })
+    }
+    if (expenseAdapter) {
+      void expenseAdapter.load(monthValueForSelection(selection)).then((next) => {
+        if (requestEpoch === requestEpochRef.current) {
+          setLoadedExpenseProjection({ key: requestKey, value: next })
+          setExpenseError(next.effectiveExpenseCount === 0 ? { key: requestKey, value: 'EMPTY' } : null)
+        }
+      }).catch(() => {
+        if (requestEpoch === requestEpochRef.current) setExpenseError({ key: requestKey, value: 'UNAVAILABLE' })
+      })
+    }
   // Keep the last successful projection visible when a later month load fails.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, canViewFinance, onSelectionChange, selection])
+  }, [adapter, canViewFinance, expenseAdapter, incomeEnabled, onSelectionChange, selection])
 
   if (!canViewFinance) return <main className="pmc-finance-page pmc-finance-locked-page">
     <LockKeyhole aria-hidden="true" />
@@ -69,7 +98,9 @@ export function MonthlyFinancePage({
       <button type="button" className="pmc-icon-button" aria-label="กลับไปรายงาน" onClick={onBack}>
         <ArrowLeft aria-hidden="true" />
       </button>
-      <div><h1>รายงานรายเดือน</h1><p>ภาพรวมรายรับของฝ่ายการเงิน</p></div>
+      <div><h1>{incomeEnabled ? 'รายงานรายเดือน' : 'รายจ่ายรายเดือน'}</h1><p>{incomeEnabled
+        ? 'ภาพรวมรายรับของฝ่ายการเงิน'
+        : 'ยอดรายจ่ายที่บันทึกและหลักฐานย้อนหลัง'}</p></div>
     </header>
 
     <section className="pmc-finance-filter pmc-monthly-filter" aria-label="ตัวกรองเดือนรายงาน">
@@ -84,7 +115,8 @@ export function MonthlyFinancePage({
           if (Number.isSafeInteger(year) && Number.isSafeInteger(month)) {
             requestEpochRef.current += 1
             setError('')
-            setLoading(true)
+            setExpenseError(null)
+            setLoading(incomeEnabled)
             setSelection({ year: year!, month: month! })
           }
         }}
@@ -93,16 +125,32 @@ export function MonthlyFinancePage({
 
     {error && <p className="pmc-finance-message error" role="alert">{error}</p>}
     {loading && !projection && <p className="pmc-finance-loading">กำลังโหลดรายงานรายเดือน</p>}
-    {projection && <MonthlyIncomeContent projection={projection} onDrillDown={onDrillDown} />}
+    {projection && <MonthlyIncomeContent projection={projection} onDrillDown={onDrillDown}
+      expenseProjection={expenseProjection} expenseLoading={expenseLoading} expenseError={currentExpenseError}
+      onOpenExpenseHistory={onOpenExpenseHistory ? () => onOpenExpenseHistory(monthValue) : undefined} />}
+    {!incomeEnabled && <MonthlyExpensePanel
+      projection={expenseProjection}
+      loading={expenseLoading}
+      error={currentExpenseError}
+      onOpenHistory={onOpenExpenseHistory ? () => onOpenExpenseHistory(monthValue) : undefined}
+    />}
   </main>
 }
 
 function MonthlyIncomeContent({
   projection,
   onDrillDown,
+  expenseProjection,
+  expenseLoading,
+  expenseError,
+  onOpenExpenseHistory,
 }: {
   projection: MonthlyIncomeProjection
   onDrillDown: (filter: FinanceDailyFilter) => void
+  expenseProjection: ExpenseMonthlyProjection | null
+  expenseLoading: boolean
+  expenseError: 'EMPTY' | 'UNAVAILABLE' | null
+  onOpenExpenseHistory?: () => void
 }) {
   const categoriesReady = projection.categories.state === 'READY'
   const categorySourceLate = projection.warnings.includes('CATEGORY_SOURCE_SNAPSHOT_MISMATCH')
@@ -157,12 +205,11 @@ function MonthlyIncomeContent({
     </section>
 
     <MonthlyFreshnessSection freshness={projection.freshness} />
-
-    <section className="pmc-finance-section pmc-monthly-deferred" aria-labelledby="monthly-deferred-heading">
-      <h2 id="monthly-deferred-heading">ส่วนที่กำลังเตรียม</h2>
-      <p>รายจ่ายที่บันทึก — เตรียมระบบ</p>
-      <p>คงเหลือโดยประมาณ — เตรียมระบบ</p>
-    </section>
+    <MonthlyExpensePanel projection={expenseProjection} loading={expenseLoading} error={expenseError} onOpenHistory={onOpenExpenseHistory} />
+    {expenseProjection && <section className="pmc-finance-section pmc-monthly-balance" aria-labelledby="monthly-balance-heading">
+      <h2 id="monthly-balance-heading">ยอดคงเหลือโดยประมาณ <strong>{formatBahtFixed(estimatedClinicBalance(projection.netReceivedSatang, expenseProjection.clinicCommittedSatang) ?? Number.NaN)}</strong></h2>
+      <small>รับสุทธิ หักเฉพาะรายจ่ายคลินิกที่บันทึกแล้ว ไม่รวมรายจ่ายส่วนตัวหมอ</small>
+    </section>}
   </div>
 }
 
@@ -201,4 +248,13 @@ function formatBangkokTimestamp(value: string): string {
 
 function monthSelectionKey(selection: FinanceMonthSelection): string {
   return `${selection.year}|${selection.month}`
+}
+
+function monthValueForSelection(selection: FinanceMonthSelection): string {
+  return `${selection.year}-${String(selection.month).padStart(2, '0')}`
+}
+
+function estimatedClinicBalance(netReceivedSatang: number, clinicCommittedSatang: number): number | null {
+  const balance = netReceivedSatang - clinicCommittedSatang
+  return Number.isSafeInteger(balance) ? balance : null
 }

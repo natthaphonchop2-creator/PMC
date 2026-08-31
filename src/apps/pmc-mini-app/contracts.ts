@@ -1,4 +1,8 @@
 import type { StockCategory } from '../../../shared/pmcStock'
+import type {
+  EnabledExpenseCategory,
+  ExpensePaymentMethod,
+} from '../../../shared/pmcExpense'
 import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
 import type { BookingPrepareCapability } from '../../../shared/pmcMiniAppBookingPrepare'
 
@@ -13,6 +17,9 @@ export interface MiniAppConfig {
   fallbackFormUrl: string
   reportingEnabled: boolean
   financeReportsEnabled: boolean
+  financeUiPreviewEnabled: boolean
+  financePilotDefaultDate?: string | null
+  financeMonthlyIncomeEnabled?: boolean
   stockEnabled: boolean
   expenseCaptureEnabled?: boolean
   financeReadsEnabled?: boolean
@@ -39,6 +46,18 @@ export interface StockProductProjection {
   active: boolean
   hasLedgerActivity: boolean
   version: number
+}
+
+export interface ExpenseSubmitInput {
+  rootRequestId: string
+  category: EnabledExpenseCategory
+  expenseDate: string
+  amountSatang: number
+  counterpartyName: string | null
+  description: string
+  paymentMethod: ExpensePaymentMethod | null
+  expectedRevision: number
+  stagingTokens: string[]
 }
 
 export interface MiniAppEnrollmentOptions {

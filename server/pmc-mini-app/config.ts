@@ -19,6 +19,10 @@ export interface PmcMiniAppServerConfig {
   bookingMutationsPaused: boolean
   asyncBooking: PmcAsyncBookingConfig | null
   financeReportsEnabled: boolean
+  financeUiPreviewEnabled: boolean
+  financeReportsPilotOnly: boolean
+  financePilotDefaultDate: string | null
+  financeMonthlyIncomeEnabled: boolean
   stockEnabled: boolean
   stockManagerPilotOnly: boolean
   finance: PmcFinanceConfig | null
@@ -59,6 +63,14 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   if (!validOptionalFlag(env.PMC_STOCK_ENABLED)) return null
   if (!validOptionalFlag(env.PMC_STOCK_MANAGER_PILOT_ONLY)) return null
   if (!validOptionalFlag(env.PMC_FINANCE_REPORTS_ENABLED)) return null
+  if (!validOptionalFlag(env.PMC_FINANCE_UI_PREVIEW_ENABLED)) return null
+  if (!validOptionalFlag(env.PMC_FINANCE_REPORTS_PILOT_ONLY)) return null
+  if (!validOptionalFlag(env.PMC_FINANCE_MONTHLY_INCOME_ENABLED)) return null
+  if (!validOptionalPilotDate(env.PMC_FINANCE_PILOT_DEFAULT_DATE)) return null
+  const financeReportsEnabled = env.PMC_FINANCE_REPORTS_ENABLED === 'true'
+  const financeReportsPilotOnly = env.PMC_FINANCE_REPORTS_PILOT_ONLY === 'true'
+  const financePilotDefaultDate = env.PMC_FINANCE_PILOT_DEFAULT_DATE ?? null
+  if (financeReportsEnabled && financeReportsPilotOnly && financePilotDefaultDate === null) return null
   const minimumMutation = bookingProtocolMinimum(env.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION)
   if (minimumMutation === null) return null
   const prepareEnabled = exactOptionalBoolean(env.PMC_BOOKING_PREPARE_ENABLED)
@@ -89,7 +101,11 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     bookingProtocol: { supported: 2, minimumMutation, prepare: prepareEnabled },
     bookingMutationsPaused,
     asyncBooking,
-    financeReportsEnabled: env.PMC_FINANCE_REPORTS_ENABLED === 'true',
+    financeReportsEnabled,
+    financeUiPreviewEnabled: env.PMC_FINANCE_UI_PREVIEW_ENABLED === 'true',
+    financeReportsPilotOnly,
+    financePilotDefaultDate,
+    financeMonthlyIncomeEnabled: env.PMC_FINANCE_MONTHLY_INCOME_ENABLED === 'true',
     stockEnabled: env.PMC_STOCK_ENABLED === 'true',
     stockManagerPilotOnly: env.PMC_STOCK_MANAGER_PILOT_ONLY === 'true',
     finance: readPmcFinanceConfig(env),
@@ -111,6 +127,20 @@ function bookingProtocolMinimum(value: string | undefined): 1 | 2 | null {
 
 function validOptionalFlag(value: string | undefined): boolean {
   return value === undefined || value === 'true' || value === 'false'
+}
+
+function validOptionalPilotDate(value: string | undefined): boolean {
+  if (value === undefined) return true
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (year < 2020 || year > 2100) return false
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
 }
 
 function boundedValue(value: string | undefined): boolean {

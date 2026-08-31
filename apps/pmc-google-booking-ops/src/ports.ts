@@ -220,12 +220,14 @@ export interface StockRepository {
 }
 
 export interface ExpenseRecoveryCandidate {
+  kind: 'PREPARED' | 'VOID' | 'ABANDON'
   expenseId: string
   monthKey: string
   rootRequestId: string
   preparedAt: string
   events: ExpenseAuditEvent[]
   commitRequest: ExpenseRecoveryRequestSnapshot | null
+  voidRequest: ExpenseRecoveryRequestSnapshot | null
   bookRevisionClaims: ExpenseBookRevisionClaim[]
 }
 
@@ -235,6 +237,7 @@ export interface ExpenseRecoveryRequestSnapshot {
   rootRequestId: string
   commandType: MiniAppExpenseCommand['commandType']
   commandFingerprint: string
+  commandJson: string
   expenseId: string
   monthKey: string
   recordState: 'RESERVED' | 'COMPLETED'
@@ -248,6 +251,13 @@ export interface ExpenseBookRevisionClaim {
   commitAudit: ExpenseAuditEvent
 }
 
+export interface ExpenseResumeSnapshot {
+  rootRequestId: string
+  requests: ExpenseRecoveryRequestSnapshot[]
+  submission: ExpenseSubmission | null
+  events: ExpenseAuditEvent[]
+}
+
 export interface ExpenseRepository {
   ensureMonth(monthKey: string, createdAt: string): {
     ledgerSpreadsheetId: string
@@ -258,6 +268,7 @@ export interface ExpenseRepository {
     rootRequestId: string
     commandType: MiniAppExpenseCommand['commandType']
     commandFingerprint: string
+    commandJson: string
     expenseId: string
     monthKey: string
     createdAt: string
@@ -300,6 +311,7 @@ export interface ExpenseRepository {
     attachments: ExpensePrivateAttachment[],
   ): void
   listRecoveryCandidates(limit?: number): ExpenseRecoveryCandidate[]
+  resumeSnapshot(rootRequestId: string): ExpenseResumeSnapshot
 }
 
 export interface DrivePort {

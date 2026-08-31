@@ -70,17 +70,20 @@ function constructJeraRuntime(input: {
     workerAudience: input.config.allocation.workerAudience,
     taskInvokerEmail: input.config.allocation.taskInvokerEmail,
   }) : null
+  const allocationLease = input.config.allocation
+    ? createGoogleJeraAllocationLeasePort({ bucketName: input.config.allocation.leaseBucket })
+    : null
   const allocationWorker = input.config.allocation ? createJeraAllocationWorker({
     client: createJeraReadClient(input.config, tokens, { mode: 'INTERACTIVE', replayUnauthorized: false }),
     reportStore: store,
     allocationStore: allocationStore!,
-    lease: createGoogleJeraAllocationLeasePort({ bucketName: input.config.allocation.leaseBucket }),
+    lease: allocationLease!,
     queue: allocationQueue!,
     maxDetailsPerRun: input.config.allocation.maxDetailsPerRun,
     continuationDelaySeconds: input.config.allocation.continuationDelaySeconds,
   }) : null
   const financeService = allocationStore && allocationQueue ? createJeraFinanceService({
-    coordinator, allocationStore, allocationQueue, categoryMoneyEnabled: input.categoryMoneyEnabled,
+    coordinator, allocationStore, allocationQueue, lease: allocationLease!, categoryMoneyEnabled: input.categoryMoneyEnabled,
   }) : null
   const allocationIdentity = allocationWorker ? createGoogleSchedulerIdentity() : null
   const api = createJeraMiniAppApi({

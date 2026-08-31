@@ -26,6 +26,7 @@ const OCR_API_PATHS = new Set([
   '/api/ocr-ledger/image',
 ])
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const EXPENSE_RECOVERY_PATH = '/internal/mini-app/recover-expenses'
 const JERA_ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
 const FINANCE_DAILY_SEED_PATH = '/internal/mini-app/finance-daily-seed'
 const DRAFT_EVIDENCE_CLEANUP_PATH = '/internal/mini-app/draft-evidence-cleanup'
@@ -37,9 +38,11 @@ const contentTypes: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',
+  '.wasm': 'application/wasm',
   '.webp': 'image/webp',
 }
 
@@ -72,8 +75,9 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
       return
     }
 
-    if (req.url === ASYNC_WORKER_PATH || req.url === JERA_ALLOCATION_WORKER_PATH
-      || req.url === FINANCE_DAILY_SEED_PATH || req.url === DRAFT_EVIDENCE_CLEANUP_PATH) {
+    if (req.url === ASYNC_WORKER_PATH || req.url === EXPENSE_RECOVERY_PATH
+      || req.url === JERA_ALLOCATION_WORKER_PATH || req.url === FINANCE_DAILY_SEED_PATH
+      || req.url === DRAFT_EVIDENCE_CLEANUP_PATH) {
       if (!deps.pmcMiniApp) {
         jsonError(res, 503, 'Mini App is not configured')
         return

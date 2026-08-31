@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -12,7 +12,13 @@ import {
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
-afterEach(() => { cleanup(); vi.useRealTimers(); sessionStorage.clear(); localStorage.clear() })
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  sessionStorage.clear()
+  localStorage.clear()
+})
 
 describe('PMC LINE Mini App shell', () => {
   it('stores finance filter preferences in sessionStorage only at the shell boundary', async () => {
@@ -84,6 +90,337 @@ describe('PMC LINE Mini App shell', () => {
     }
   })
 
+  it('opens the finance home from both Home and bottom navigation in capture-only mode', async () => {
+    const user = userEvent.setup()
+    const appConfig = {
+      ...config, reportingEnabled: false, financeReportsEnabled: false,
+      expenseCaptureEnabled: true, canSubmitExpense: true, financeReadsEnabled: false, canViewFinance: false,
+    }
+    const view = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={appConfig}
+      api={miniAppApi()}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /รายรับรายวัน/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
+
+    view.unmount()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={appConfig}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงาน' }))
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
+  })
+
+  it('keeps capture-only navigation reachable but exposes no active create button without submit permission', async () => {
+    const user = userEvent.setup()
+    const view = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: false, expenseCaptureEnabled: true, canSubmitExpense: false }}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByText('บัญชีนี้ยังไม่มีสิทธิ์บันทึกรายจ่าย')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร บันทึก' })).not.toBeInTheDocument()
+    expect(screen.getByText('บิลเอกสาร').closest('div')).toHaveTextContent('ไม่มีสิทธิ์')
+
+    view.unmount()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: false, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
+  })
+
+  it('shows both revenue and permitted expense actions only in combined mode', async () => {
+    const user = userEvent.setup()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={miniAppApi()}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    expect(screen.getByRole('button', { name: /รายรับรายวัน/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toBeEnabled()
+  })
+
+  it('opens revenue UX previews without calling any live revenue adapter', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={{
+        ...config,
+        financeReportsEnabled: false,
+        financeUiPreviewEnabled: true,
+        expenseCaptureEnabled: true,
+        canSubmitExpense: true,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+    expect(screen.getByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
+    expect(screen.getByText('ยังไม่เชื่อมข้อมูลรายรับจริง')).toBeVisible()
+    expect(api.loadDailyIncome).not.toHaveBeenCalled()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'กลับไปรายงาน' }))
+    await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
+    expect(screen.getByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
+    expect(api.loadDailyIncome).not.toHaveBeenCalled()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+  })
+
+  it('uses the sparse-cache pilot date once, then preserves a new daily selection across navigation', async () => {
+    sessionStorage.setItem('pmc-finance-report-filters-v1', JSON.stringify({
+      daily: { preset: 'TODAY' }, monthly: { year: 2026, month: 8 },
+    }))
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'Admin', active: true }}
+      initialConfig={{
+        ...config,
+        financeReportsEnabled: true,
+        financePilotDefaultDate: '2026-08-22',
+        financeMonthlyIncomeEnabled: false,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22',
+    }))
+    expect(api.loadDailyIncome).toHaveBeenCalledOnce()
+    expect(screen.getByLabelText('วันเริ่มต้น')).toHaveValue('2026-08-22')
+    expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22' },
+    })
+
+    fireEvent.change(screen.getByLabelText('วันเริ่มต้น'), { target: { value: '2026-08-23' } })
+    fireEvent.change(screen.getByLabelText('วันสิ้นสุด'), { target: { value: '2026-08-23' } })
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenLastCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-23', endDate: '2026-08-23',
+    }))
+    await waitFor(() => expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-23', endDate: '2026-08-23' },
+    }))
+
+    await user.click(screen.getByRole('button', { name: 'กลับไปรายงาน' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenLastCalledWith('preview-token', {
+      preset: 'CUSTOM', startDate: '2026-08-23', endDate: '2026-08-23',
+    }))
+    expect(screen.getByLabelText('วันเริ่มต้น')).toHaveValue('2026-08-23')
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+  })
+
+  it('normalizes stale TODAY storage only after async pilot config loads and never requests TODAY', async () => {
+    sessionStorage.setItem('pmc-finance-report-filters-v1', JSON.stringify({
+      daily: { preset: 'TODAY' }, monthly: { year: 2026, month: 8 },
+    }))
+    const pendingConfig = deferred<MiniAppConfig>()
+    const api = miniAppApi()
+    api.initialize = vi.fn(async () => 'raw-id-token')
+    api.loadSession = vi.fn(async () => ({ staffId: 'ADMIN_01', displayName: 'Admin', active: true as const }))
+    api.loadConfig = vi.fn(() => pendingConfig.promise)
+    render(<PmcMiniApp api={api} />)
+
+    await waitFor(() => expect(api.loadConfig).toHaveBeenCalledWith('raw-id-token'))
+    expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'TODAY' },
+    })
+
+    pendingConfig.resolve({
+      ...config,
+      financeReportsEnabled: true,
+      financePilotDefaultDate: '2026-08-22',
+      financeMonthlyIncomeEnabled: false,
+      financeReadsEnabled: true,
+      canViewFinance: true,
+    })
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายรับรายวัน/ }))
+
+    await waitFor(() => expect(api.loadDailyIncome).toHaveBeenCalledWith('raw-id-token', {
+      preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22',
+    }))
+    expect(api.loadDailyIncome).toHaveBeenCalledOnce()
+    expect(api.loadDailyIncome).not.toHaveBeenCalledWith('raw-id-token', expect.objectContaining({ preset: 'TODAY' }))
+    expect(JSON.parse(sessionStorage.getItem('pmc-finance-report-filters-v1') ?? '{}')).toMatchObject({
+      daily: { preset: 'CUSTOM', startDate: '2026-08-22', endDate: '2026-08-22' },
+    })
+  })
+
+  it('keeps monthly expense history available when pilot monthly income is off', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'Admin', active: true }}
+      initialConfig={{
+        ...config,
+        financeReportsEnabled: true,
+        financePilotDefaultDate: '2026-08-22',
+        financeMonthlyIncomeEnabled: false,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายจ่ายรายเดือน/ }))
+
+    expect(await screen.findByText('รายจ่ายคลินิก')).toBeVisible()
+    expect(api.loadMonthlyExpenses).toHaveBeenCalledOnce()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'ประวัติรายจ่าย' }))
+    expect(await screen.findByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
+  })
+
+  it('routes expense form to a validated durable receipt and clears form state on return', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: [`stage-1.${'a'.repeat(43)}`] }))
+    api.submitExpense = vi.fn(async () => ({
+      expenseId: 'EXP-202608-SHELL', receiptNumber: 'EXP-202608-SHELL', expenseDate: '2026-08-30', monthKey: '2026-08',
+      category: 'BILL_DOCUMENT', scope: 'CLINIC', amountSatang: 120_000, recordState: 'COMMITTED', revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true,
+    }))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' }))
+    await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
+    await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
+    await user.type(screen.getByLabelText('จำนวนเงิน'), '1200')
+    await user.type(screen.getByLabelText('ชื่อร้านหรือผู้รับเงิน'), 'ร้านทดสอบ')
+    await user.selectOptions(screen.getByLabelText('วิธีชำระ'), 'CASH')
+    await user.upload(screen.getByLabelText('รูปหลักฐาน'), new File(['image'], 'bill.jpg', { type: 'image/jpeg' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    expect(api.stageExpense).toHaveBeenCalledWith('preview-token', expect.any(String), [expect.objectContaining({ name: 'bill.jpg' })])
+    expect(api.submitExpense).toHaveBeenCalledWith('preview-token', expect.objectContaining({ amountSatang: 120_000 }))
+    await user.click(screen.getByRole('button', { name: 'กลับหน้ารายงาน' }))
+    expect(screen.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' }))
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('')
+  })
+
+  it('keeps the form unlocked and makes zero mutation calls when resume storage quota is unavailable', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
+      if (key === 'pmc-expense-resume:v1') throw new DOMException('quota', 'QuotaExceededError')
+      return originalSetItem.call(this, key, value)
+    })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'อุปกรณ์นี้ไม่สามารถเก็บสถานะป้องกันรายการซ้ำได้ กรุณาตรวจการตั้งค่าเบราว์เซอร์แล้วลองใหม่',
+    )
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('1200')
+    expect(screen.getByRole('button', { name: 'ย้อนกลับ' })).toBeEnabled()
+    expect(api.stageExpense).not.toHaveBeenCalled()
+    expect(api.submitExpense).not.toHaveBeenCalled()
+  })
+
+  it('keeps the form unlocked and makes zero mutation calls when sessionStorage is unavailable', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const originalSetItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function setItem(key, value) {
+      if (key === 'pmc-expense-resume:v1') throw new DOMException('disabled', 'SecurityError')
+      return originalSetItem.call(this, key, value)
+    })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'อุปกรณ์นี้ไม่สามารถเก็บสถานะป้องกันรายการซ้ำได้ กรุณาตรวจการตั้งค่าเบราว์เซอร์แล้วลองใหม่',
+    )
+    expect(screen.getByLabelText('จำนวนเงิน')).toHaveValue('1200')
+    expect(api.stageExpense).not.toHaveBeenCalled()
+    expect(api.submitExpense).not.toHaveBeenCalled()
+  })
+
+  it('reloads from the durable root after a lost response without staging or submitting twice', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const durable = {
+      expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT', expenseDate: '2026-08-30',
+      monthKey: '2026-08', category: 'BILL_DOCUMENT' as const, scope: 'CLINIC' as const,
+      amountSatang: 120_000, recordState: 'COMMITTED' as const, revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
+    }
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: [`stage-1.${'a'.repeat(43)}`] }))
+    api.submitExpense = vi.fn(async () => { throw safeApiError('EXPENSE_STORAGE_UNAVAILABLE', true) })
+    api.resumeExpense = vi.fn()
+      .mockResolvedValueOnce({ status: 'PENDING' as const })
+      .mockResolvedValueOnce({ status: 'COMMITTED' as const, receipt: durable })
+    const first = render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+    expect(await screen.findByText('กำลังตรวจสอบสถานะรายการที่บันทึก')).toBeVisible()
+    const stored = sessionStorage.getItem('pmc-expense-resume:v1')
+    expect(stored).toMatch(/^\{"version":1,"rootRequestId":"[A-Za-z0-9._:-]+"\}$/)
+    first.unmount()
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'STAFF_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+
+    expect(await screen.findByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    expect(api.stageExpense).toHaveBeenCalledTimes(1)
+    expect(api.submitExpense).toHaveBeenCalledTimes(1)
+    expect(api.resumeExpense).toHaveBeenCalledTimes(2)
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBeNull()
+  })
+
   it('keeps the legacy ReportCenter as the exact rollback path when the finance flag is off', async () => {
     const user = userEvent.setup()
     render(<PmcMiniApp
@@ -118,13 +455,14 @@ describe('PMC LINE Mini App shell', () => {
     const financeApi = miniAppApi()
     render(<PmcMiniApp
       initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, financeReadsEnabled: true, canViewFinance: true, expenseCaptureEnabled: false, canSubmitExpense: false }}
       api={financeApi}
     />)
     await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
     await user.click(screen.getByRole('button', { name: /รายงานรายเดือน/ }))
     expect(await screen.findByRole('heading', { name: 'รายงานรายเดือน' })).toBeVisible()
     expect(financeApi.loadMonthlyIncome).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: 'บิลเอกสาร บันทึก' })).not.toBeInTheDocument()
   })
 
   it('drills from a monthly trend into the selected daily range', async () => {
@@ -132,7 +470,7 @@ describe('PMC LINE Mini App shell', () => {
     const api = miniAppApi()
     render(<PmcMiniApp
       initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
-      initialConfig={{ ...config, financeReportsEnabled: true, canViewFinance: true }}
+      initialConfig={{ ...config, financeReportsEnabled: true, financeReadsEnabled: true, canViewFinance: true }}
       api={api}
     />)
 
@@ -144,6 +482,117 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.loadDailyIncome).toHaveBeenCalledWith('preview-token', {
       preset: 'CUSTOM', startDate: '2026-08-29', endDate: '2026-08-29',
     })
+  })
+
+  it('opens expense monthly/history in reads-only mode without calling income', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'FINANCE_01', displayName: 'อาย', active: true }}
+      initialConfig={{
+        ...config,
+        reportingEnabled: false,
+        financeReportsEnabled: false,
+        financeReadsEnabled: true,
+        canViewFinance: true,
+        expenseCaptureEnabled: false,
+        canSubmitExpense: false,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายจ่ายรายเดือน/ }))
+    expect(await screen.findByText('รายจ่ายคลินิก')).toBeVisible()
+    expect(api.loadMonthlyExpenses).toHaveBeenCalledOnce()
+    expect(api.loadMonthlyIncome).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'ประวัติรายจ่าย' }))
+    expect(await screen.findByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
+  })
+
+  it('resumes a durable receipt after WebView reload from only the stored root and clears it', async () => {
+    const api = miniAppApi()
+    const durable = {
+      expenseId: 'EXP-202608-RESULT', receiptNumber: 'EXP-202608-RESULT', expenseDate: '2026-08-30',
+      monthKey: '2026-08', category: 'BILL_DOCUMENT' as const, scope: 'CLINIC' as const,
+      amountSatang: 120_000, recordState: 'COMMITTED' as const, revision: 1,
+      committedAt: '2026-08-30T04:00:00.000Z', unreviewed: true as const,
+    }
+    api.resumeExpense = vi.fn(async () => ({ status: 'COMMITTED' as const, receipt: durable }))
+    sessionStorage.setItem('pmc-expense-resume:v1', '{"version":1,"rootRequestId":"lost-response-root"}')
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'SUBMIT_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+
+    expect(await screen.findByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    expect(api.resumeExpense).toHaveBeenCalledWith('preview-token', 'lost-response-root')
+    expect(api.submitExpense).not.toHaveBeenCalled()
+    expect(api.loadExpenseHistory).not.toHaveBeenCalled()
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBeNull()
+  })
+
+  it('clears a stored root and unlocks navigation after a definite resume rejection', async () => {
+    const api = miniAppApi()
+    api.resumeExpense = vi.fn(async () => { throw safeApiError('EXPENSE_RESUME_FORBIDDEN', false) })
+    sessionStorage.setItem('pmc-expense-resume:v1', '{"version":1,"rootRequestId":"other-staff-root"}')
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'SUBMIT_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+
+    expect(await screen.findByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'ตรวจสอบสถานะอีกครั้ง' })).not.toBeInTheDocument()
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBeNull()
+  })
+
+  it('returns Home after a safe resume result when every report and expense flag is off', async () => {
+    const api = miniAppApi()
+    api.resumeExpense = vi.fn(async () => ({ status: 'SAFE_TO_RETRY' as const }))
+    sessionStorage.setItem('pmc-expense-resume:v1', '{"version":1,"rootRequestId":"rollback-safe-root"}')
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'SUBMIT_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+    />)
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'กำลังตรวจสอบรายการรายจ่าย' })).not.toBeInTheDocument()
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBeNull()
+  })
+
+  it('allows a manage-only finance user to VOID while keeping replacement unavailable', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    api.loadExpenseHistory = vi.fn(async () => ({
+      expenses: [{
+        expenseId: 'EXP-202608-BOOK-01', expenseDate: '2026-08-29', category: 'BOOK_CLINIC' as const,
+        scope: 'CLINIC' as const, amountSatang: 100_000, description: '', submittedByName: 'มัส',
+        submittedAt: '2026-08-29T02:00:00.000Z', recordState: 'COMMITTED' as const,
+        revision: 1, committedAt: '2026-08-29T02:01:00.000Z', attachments: [],
+      }],
+      nextCursor: null,
+    }))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'MANAGER_01', displayName: 'อาย', active: true }}
+      initialConfig={{
+        ...config, financeReadsEnabled: true, canViewFinance: true, expenseCaptureEnabled: true,
+        canSubmitExpense: false, canManageExpense: true,
+      }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+    await user.click(screen.getByRole('button', { name: /รายจ่ายรายเดือน/ }))
+    await user.click(await screen.findByRole('button', { name: 'ประวัติรายจ่าย' }))
+
+    expect(await screen.findByRole('button', { name: /^ยกเลิกรายการ/ })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /^แทนที่ยอดเดิม/ })).not.toBeInTheDocument()
   })
 
   it('opens a server-created booking draft from the home action', async () => {
@@ -600,7 +1049,8 @@ describe('PMC LINE Mini App shell', () => {
 
 const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
-  financeReportsEnabled: false, stockEnabled: false, canManageStock: false,
+  financeReportsEnabled: false, financeUiPreviewEnabled: false, financePilotDefaultDate: null,
+  financeMonthlyIncomeEnabled: true, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
   channels: [{ id: 'channel-1', name: 'เพจTAB' }],
@@ -625,13 +1075,39 @@ function miniAppApi(): PmcMiniAppApi {
     loadDailyIncome: vi.fn(async (_token, filter) => dailyIncomeProjection(filter.startDate, filter.endDate)),
     refreshDailyIncome: vi.fn(async () => ({ accepted: true as const, allocationQueued: true, retryAfterSeconds: 60 })),
     loadMonthlyIncome: vi.fn(async () => monthlyIncomeProjection()),
+    loadMonthlyExpenses: vi.fn(async () => ({
+      monthKey: '2026-08', clinicCommittedSatang: 0, doctorPersonalCommittedSatang: 0,
+      clinicByCategorySatang: { BILL_DOCUMENT: 0, BOOK_CLINIC: 0 }, effectiveExpenseCount: 0, unreviewed: true as const,
+    })),
+    loadExpenseHistory: vi.fn(async () => ({ expenses: [], nextCursor: null })),
+    issueExpenseEvidenceToken: vi.fn(), downloadExpenseEvidence: vi.fn(), replaceExpense: vi.fn(), voidExpense: vi.fn(),
     loadStockProducts: vi.fn(async () => ({ products: [{
       productId: 'STK-000001', name: 'ถุงมือ', category: 'CLINIC_SUPPLY', unit: 'กล่อง',
       minimumQuantityMilli: 5_000, onHandMilli: 4_000, lowStock: true, active: true,
       hasLedgerActivity: true, version: 2,
     }] })),
     loadStockHistory: vi.fn(), submitStockCommand: vi.fn(),
+    stageExpense: vi.fn(), submitExpense: vi.fn(),
+    resumeExpense: vi.fn(async () => ({ status: 'SAFE_TO_RETRY' as const })),
   }
+}
+
+async function openAndCompleteExpenseBill(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole('button', { name: 'รายงานคลินิก' }))
+  await user.click(screen.getByRole('button', { name: 'บิลเอกสาร บันทึก' }))
+  await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
+  await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
+  await user.type(screen.getByLabelText('จำนวนเงิน'), '1200')
+  await user.type(screen.getByLabelText('ชื่อร้านหรือผู้รับเงิน'), 'ร้านทดสอบ')
+  await user.selectOptions(screen.getByLabelText('วิธีชำระ'), 'CASH')
+  await user.upload(
+    screen.getByLabelText('รูปหลักฐาน'),
+    new File(['image'], 'bill.jpg', { type: 'image/jpeg' }),
+  )
+}
+
+function safeApiError(code: string, retryable: boolean) {
+  return Object.assign(new Error(code), { code, retryable })
 }
 
 function savedAttribution() {

@@ -88,6 +88,7 @@ function mapProviderItemType(value: string | null): MappedRevenueCategory | null
       return 'PRODUCT'
     case 'service':
     case 'course':
+    case 'ขายบริการ':
       return 'SERVICE'
     default:
       return null

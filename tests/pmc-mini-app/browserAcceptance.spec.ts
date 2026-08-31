@@ -1,21 +1,35 @@
 import { expect, test, type Page } from '@playwright/test'
 import { resolve } from 'node:path'
+import sharp from 'sharp'
 
 const TASK_8_ARTIFACT_DIR = resolve('.superpowers/sdd/2026-08-29-pmc-daily-monthly-finance-reports-implementation')
+// 1,130-byte synthetic HEIC EXIF fixture from gen2brain/heic (MIT), testdata/test_exif.heic.
+const HEIC_FIXTURE_BASE64 = 'AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljbWlhZgAAAY5tZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAAA5waXRtAAAAAAABAAAANGlsb2MAAAAAREAAAgABAAAAAAGyAAEAAAAAAAAB1AACAAAAAAOGAAEAAAAAAAAA5AAAADhpaW5mAAAAAAACAAAAFWluZmUCAAAAAAEAAGh2YzEAAAAAFWluZmUCAAABAAIAAEV4aWYAAAAAzWlwcnAAAACuaXBjbwAAAHlodmNDAQNwAAAAAAAAAAAAWvAA/P34+AAADwNgAAEAGEABDAH//wNwAAADAJAAAAMAAAMAWroCQGEAAQAsQgEBA3AAAAMAkAAAAwAAAwBaoAUCAeFlupJKa5uAhoMCAAADADIAAAMAAhBiAAEAB0QBwXKwYkAAAAAUaXNwZQAAAAAAAAKAAAAB4AAAABBwaXhpAAAAAAMICAgAAAAJaXJvdAMAAAAXaXBtYQAAAAAAAAABAAEEgQIDhAAAABppcmVmAAAAAAAAAA5jZHNjAAIAAQABAAACwG1kYXQAAAHQKAGvExB7DZ2ufw1k5TKPE//K+YnsdKChs9tP9NRKDeHdR62JE7rBlMqcWFV8SfFPnuCGhviCUvtAd8ZvhLPJ9bLynm9+beFUnrRf354QX0OrRr8ArMJ1fxeAAbLu0VkoI8vAPtKjDIpjCsIC6aulFw6/BFJLAp+J+oueLdF5W7Ld14VzcYejal/pF6oLQxQBEwPoAAADAAADADXgqLFxxDLFToGyXIAlkg25bSijcf+rh9IO04Te79jOlkkRCxTJ5ODQ3mziXw15CIvPfQYKbUfEHoqhWcHAmtFuGLCkZNwotC2m+xbwOIdycWk4afqgRg2X8rzLx6AAAAMAAAMAAAMAAAMAHNAb4h3ClqEPq2GMdJEDvzFT/ciuf3hCSR8fwvx5pOlx1JF0FI2Fv9IaSBrxKLMIqIAC6oAe7AQFAS0AmeBG0CPpJN/5+QRrrheOQ68HxtVVq9L1de4kDTrJykpwnBrZ5TNfjIMXFZEEYfSPRbeKib5Mmm7Os8ytfd4tQeua+s9Zb2m+aoBUTl9FZcZM5fimyYD1BCsl15Ib5DnaexxRaySFnbcy2AAB3AAAAwAAAwAABmyF4lqV8pR+Cks2lPbJ1RXKiAAAAwAAGVAAAAAGRXhpZgAATU0AKgAAAAgACAEPAAIAAAAIAAAAbgEQAAIAAAAJAAAAdgESAAMAAAABAAYAAAEaAAUAAAABAAAAgAEbAAUAAAABAAAAiAEoAAMAAAABAAEAAAITAAMAAAABAAEAAIdpAAQAAAABAAAAkAAAAABUZXN0Q2FtAE1vZGVsMTIzAAAAAAABAAAAAQAAAAEAAAABAAWCnQAFAAAAAQAAANKIJwADAAAAAQMgAACQAAAHAAAABDAyMzKRAQAHAAAABAECAwCgAQADAAAAAf//AAAAAAAAAAAAHAAAAAU='
+const WEBP_FIXTURE_BASE64 = 'UklGRkgAAABXRUJQVlA4IDwAAAAwAwCdASogABgAPlEkj0WjoiEUBAA4BQSygDsAfgAAQZQQAP7weQ///Rh/DD+GH99L//8D8unDEAAAAAA='
 
 const browserErrors = new WeakMap<Page, string[]>()
+const outboundRequests = new WeakMap<Page, string[]>()
 
 test.beforeEach(async ({ page }) => {
   const errors: string[] = []
+  const outbound: string[] = []
   browserErrors.set(page, errors)
+  outboundRequests.set(page, outbound)
   page.on('console', (message) => {
     if (message.type() === 'error') errors.push(`console: ${message.text()}`)
   })
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`))
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if ((url.protocol === 'http:' || url.protocol === 'https:')
+      && url.hostname !== '127.0.0.1'
+      && url.hostname !== 'localhost') outbound.push(`${request.method()} ${url.origin}${url.pathname}`)
+  })
 })
 
 test.afterEach(async ({ page }) => {
   expect(browserErrors.get(page) ?? []).toEqual([])
+  expect(outboundRequests.get(page) ?? []).toEqual([])
 })
 
 test('unknown staff links a LINE account once before entering the app', async ({ page }) => {
@@ -32,6 +46,7 @@ test('active staff can traverse normal booking, multiple evidence, preview, and 
   await expect(page.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
   await page.getByRole('button', { name: 'เริ่มลงนัด' }).click()
 
+  await page.getByRole('combobox', { name: /Admin/ }).selectOption('staff-mus')
   await page.getByLabel('ชื่อลูกค้า', { exact: true }).fill('ลูกค้าตัวอย่าง')
   await page.getByLabel(/ชื่อ Facebook/).fill('Facebook Example')
   await page.getByLabel('เบอร์มือถือ', { exact: true }).fill('0812345678')
@@ -73,6 +88,7 @@ test('active staff can traverse normal booking, multiple evidence, preview, and 
 test('automatic queue removes date and time controls', async ({ page }) => {
   await page.goto('/mini-app/?preview=1')
   await page.getByRole('button', { name: 'เริ่มลงนัด' }).click()
+  await page.getByRole('combobox', { name: /Admin/ }).selectOption('staff-mus')
   await page.getByLabel('ชื่อลูกค้า', { exact: true }).fill('ลูกค้าตัวอย่าง')
   await page.getByLabel(/ชื่อ Facebook/).fill('ไม่มี')
   await page.getByLabel('เบอร์มือถือ', { exact: true }).fill('0812345678')
@@ -110,16 +126,18 @@ test.describe('Finance report Android acceptance', () => {
     await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
     await expect(page.getByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
 
-    const primaryGrid = page.locator('.pmc-finance-primary-grid')
-    expect(await primaryGrid.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)).toBe(2)
-    for (const card of await primaryGrid.getByRole('button').all()) {
-      const box = await card.boundingBox()
+    const reportList = page.locator('.pmc-finance-action-list')
+    const reportListBox = await reportList.boundingBox()
+    for (const row of await reportList.getByRole('button').all()) {
+      const box = await row.boundingBox()
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(48)
+      expect(box?.width ?? 0).toBeGreaterThanOrEqual((reportListBox?.width ?? 0) - 2)
     }
     await expect(page.getByRole('button', { name: /รายงานรายเดือน/ })).toHaveAttribute('aria-disabled', 'true')
-    await expect(page.getByText('เตรียมระบบ')).toHaveCount(6)
+    await expect(page.getByText('ยังไม่เปิดใช้', { exact: true })).toHaveCount(4)
+    await expect(page.getByText('เตรียมระบบ', { exact: true })).toHaveCount(4)
     await expect(page.getByRole('button', { name: /บันทึก|ส่งรายจ่าย|แนบ/ })).toHaveCount(0)
-    await expectBottomNavClearance(page, '.pmc-finance-deferred')
+    await expectBottomNavClearance(page, '.pmc-expense-compensation-list')
     await page.screenshot({
       path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-finance-home.png'),
       fullPage: false,
@@ -165,7 +183,7 @@ test.describe('Finance report Android acceptance', () => {
   })
 
   test('finance staff opens the previous month and drills into an exact daily report', async ({ page }) => {
-    await page.goto('/mini-app/?preview=1&finance=enabled&role=finance')
+    await page.goto('/mini-app/?preview=1&finance=enabled&finance-reads=enabled&role=finance')
     await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
     await page.getByRole('button', { name: /รายงานรายเดือน/ }).click()
 
@@ -182,13 +200,14 @@ test.describe('Finance report Android acceptance', () => {
     const trendDates = await trend.getByRole('button', { name: /ดูรายรับวันที่/ }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute('aria-label')?.replace('ดูรายรับวันที่ ', '')))
     expect(trendDates.length).toBeGreaterThan(27)
     expect(trendDates.every((date) => date?.startsWith(`${previous}-`))).toBe(true)
-    await expect(page.getByText('รายจ่ายที่บันทึก — เตรียมระบบ')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'รายจ่ายที่บันทึก' })).toBeVisible()
+    await expect(page.getByText('ยังไม่ผ่านการตรวจสอบ', { exact: true })).toBeVisible()
     await expectFinanceAuthorityHierarchy(page, 'ยอดรายรับหลักประจำเดือน')
     await page.screenshot({
       path: resolve(TASK_8_ARTIFACT_DIR, 'task-8-monthly-income.png'),
       fullPage: false,
     })
-    await expectBottomNavClearance(page, '.pmc-monthly-deferred')
+    await expectBottomNavClearance(page, '.pmc-monthly-expenses')
 
     const dailyButtons = trend.getByRole('button', { name: /ดูรายรับวันที่/ })
     const selectedDate = (await dailyButtons.last().getAttribute('aria-label'))!.replace('ดูรายรับวันที่ ', '')
@@ -196,6 +215,198 @@ test.describe('Finance report Android acceptance', () => {
     await expect(page.getByRole('heading', { name: 'รายรับรายวัน' })).toBeVisible()
     await expect(page.getByLabel('วันเริ่มต้น')).toHaveValue(selectedDate)
     await expect(page.getByLabel('วันสิ้นสุด')).toHaveValue(selectedDate)
+  })
+})
+
+test.describe('Expense capture Android acceptance', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test('finance home separates report, recording, and future compensation actions', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance=enabled&expense=enabled&finance-reads=enabled&role=finance')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+
+    const reportHeading = page.getByRole('heading', { name: 'ดูรายงาน' })
+    const recordHeading = page.getByRole('heading', { name: 'บันทึกรายจ่าย' })
+    const compensationHeading = page.getByRole('heading', { name: 'ค่าตอบแทน' })
+    await expect(reportHeading).toBeVisible()
+    await expect(recordHeading).toBeVisible()
+    await expect(compensationHeading).toBeVisible()
+    expect((await reportHeading.boundingBox())!.y).toBeLessThan((await recordHeading.boundingBox())!.y)
+    expect((await recordHeading.boundingBox())!.y).toBeLessThan((await compensationHeading.boundingBox())!.y)
+
+    await expect(page.getByRole('button', { name: /รายรับรายวัน/ })).toContainText('ดูรายงาน')
+    await expect(page.getByRole('button', { name: 'บิลเอกสาร บันทึก' })).toContainText('บันทึก')
+    await expect(page.locator('.pmc-expense-card-deferred').filter({ hasText: 'เงินเดือนพนักงาน' })).toContainText('เตรียมระบบ')
+    await expect(page.getByRole('button', { name: 'เงินเดือนพนักงาน' })).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'บิลเอกสาร บันทึก' }).click()
+    await expect(page.getByRole('heading', { name: 'บิลเอกสาร' })).toBeVisible()
+  })
+
+  test('submit-only staff records a bill with two images and receives one durable receipt', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&expense=enabled&role=staff')
+    await openExpenseForm(page, 'บิลเอกสาร')
+    await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
+    await page.getByLabel('จำนวนเงิน').fill('1250.50')
+    await page.getByLabel('ชื่อร้านหรือผู้รับเงิน').fill('ร้านเวชภัณฑ์')
+    await page.getByLabel('วิธีชำระ').selectOption('TRANSFER')
+    await page.getByLabel('รูปหลักฐาน').setInputFiles([imageFile('bill-front.png'), imageFile('bill-back.png')])
+    await expect(page.getByText('เลือกแล้ว 2 รูป')).toBeVisible()
+
+    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
+    await expect(page.getByRole('heading', { name: 'ตรวจสอบข้อมูล' })).toBeVisible()
+    await expect(page.getByText('2 รูป', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+
+    await expect(page.getByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    await expect(page.getByText('EXP-202608-PREVIEW', { exact: true })).toBeVisible()
+  })
+
+  test('normalizes real HEIC, WebP, and Android JPEG sources before staging the expense', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&expense=enabled&role=staff')
+    await openExpenseForm(page, 'บิลเอกสาร')
+    await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
+    await page.getByLabel('จำนวนเงิน').fill('1250')
+    await page.getByLabel('ชื่อร้านหรือผู้รับเงิน').fill('ร้านเวชภัณฑ์')
+    await page.getByLabel('วิธีชำระ').selectOption('TRANSFER')
+    const androidJpeg = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: '#ffffff' },
+    }).jpeg().toBuffer()
+    await page.getByLabel('รูปหลักฐาน').setInputFiles([
+      {
+        name: 'mobile-heic.heic',
+        mimeType: 'image/heic',
+        buffer: Buffer.from(HEIC_FIXTURE_BASE64, 'base64'),
+      },
+      {
+        name: 'mobile-webp.webp',
+        mimeType: 'image/webp',
+        buffer: Buffer.from(WEBP_FIXTURE_BASE64, 'base64'),
+      },
+      {
+        name: 'android-camera.jpeg',
+        mimeType: 'image/jpg',
+        buffer: androidJpeg,
+      },
+    ])
+
+    await expect(page.getByText('mobile-heic.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('mobile-webp.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('android-camera.jpeg', { exact: true })).toBeVisible()
+    await expect(page.getByText('mobile-heic.heic', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('mobile-webp.webp', { exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
+    await expect(page.getByText('1. mobile-heic.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('2. mobile-webp.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('3. android-camera.jpeg', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+    await expect(page.getByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+  })
+
+  test('submit-only staff records one clinic-book daily total with two page images', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&expense=enabled&role=staff')
+    await openExpenseForm(page, 'สมุดรายจ่ายภายในคลินิก')
+    await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
+    await page.getByLabel('ยอดรวมรายวัน').fill('980')
+    await expect(page.getByLabel('ชื่อร้านหรือผู้รับเงิน')).toHaveCount(0)
+    await expect(page.getByLabel('วิธีชำระ')).toHaveCount(0)
+    await page.getByLabel('รูปหลักฐาน').setInputFiles([imageFile('book-1.png'), imageFile('book-2.png')])
+    await expect(page.getByText('เลือกแล้ว 2 รูป')).toBeVisible()
+
+    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
+    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+
+    await expect(page.getByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
+    await expect(page.getByText('EXP-202608-PREVIEW', { exact: true })).toBeVisible()
+  })
+
+  test('submit-only bearer receives 403 from direct finance history and evidence URLs', async ({ request }) => {
+    const headers = { authorization: 'Bearer preview-submit-only-token' }
+    const history = await request.get('/api/mini-app/finance/expenses?month=2026-08', { headers })
+    const evidence = await request.post(
+      '/api/mini-app/finance/expenses/EXP-202608-BOOK-01/evidence/ATT-1/token',
+      { headers },
+    )
+
+    expect({ status: history.status(), body: await history.json() }).toEqual({
+      status: 403, body: { error: 'EXPENSE_FINANCE_PERMISSION_REQUIRED' },
+    })
+    expect({ status: evidence.status(), body: await evidence.json() }).toEqual({
+      status: 403, body: { error: 'EXPENSE_FINANCE_PERMISSION_REQUIRED' },
+    })
+  })
+
+  test('finance staff opens monthly expense history and private evidence', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance=enabled&expense=enabled&finance-reads=enabled&role=finance')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await page.getByRole('button', { name: /รายงานรายเดือน/ }).click()
+    const month = page.getByRole('textbox', { name: 'เดือนรายงาน' })
+    await month.fill('2026-08')
+    await month.blur()
+
+    await expect(page.getByRole('heading', { name: 'รายจ่ายที่บันทึก' })).toBeVisible()
+    await expect(page.locator('.pmc-monthly-expense-summary').getByText('980.00 บาท', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'ประวัติรายจ่าย' }).click()
+    await expect(page.getByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'สมุดรายจ่ายภายในคลินิก' })).toBeVisible()
+    await expect(page.getByText('2026-08-29 · มัส')).toBeVisible()
+    await page.getByRole('button', { name: /^ดูหลักฐาน 1/ }).click()
+    await expect(page.getByRole('img', { name: 'หลักฐาน 1: proof.png' })).toBeVisible()
+  })
+
+  test('reads-only finance staff opens monthly expense and history without income fetch UI', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance-reads=enabled&role=finance')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await page.getByRole('button', { name: /รายจ่ายรายเดือน/ }).click()
+    await expect(page.getByRole('heading', { name: 'รายจ่ายรายเดือน' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'รายจ่ายที่บันทึก' })).toBeVisible()
+    await expect(page.getByText(/ยอดคงเหลือโดยประมาณ/)).toHaveCount(0)
+    await page.getByRole('button', { name: 'ประวัติรายจ่าย' }).click()
+    await expect(page.getByRole('heading', { name: 'ประวัติรายจ่าย' })).toBeVisible()
+  })
+
+  test('finance manager replaces an existing book using its expected revision', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&finance=enabled&expense=enabled&finance-reads=enabled&role=manager')
+    await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+    await page.getByRole('button', { name: /รายงานรายเดือน/ }).click()
+    await page.getByRole('button', { name: 'ประวัติรายจ่าย' }).click()
+    await page.getByRole('button', { name: /^แทนที่ยอดเดิม/ }).click()
+
+    await expect(page.getByLabel('วันที่รายจ่าย')).toHaveValue('2026-08-29')
+    await expect(page.getByLabel('วันที่รายจ่าย')).toHaveAttribute('readonly', '')
+    await page.getByLabel('ยอดรวมรายวัน').fill('1200')
+    await page.getByLabel('รูปหลักฐาน').setInputFiles([imageFile('replacement-1.png'), imageFile('replacement-2.png')])
+    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
+    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+
+    await expect(page.getByText('EXP-202608-PREVIEW-REPLACEMENT', { exact: true })).toBeVisible()
+    await expect(page.getByText('2', { exact: true })).toBeVisible()
+  })
+
+  test('lost first submit response resumes the same receipt after WebView reload', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&expense=enabled&role=staff&expense-scenario=lost-first-submit')
+    await openExpenseForm(page, 'บิลเอกสาร')
+    await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
+    await page.getByLabel('จำนวนเงิน').fill('1250.50')
+    await page.getByLabel('ชื่อร้านหรือผู้รับเงิน').fill('ร้านเวชภัณฑ์')
+    await page.getByLabel('วิธีชำระ').selectOption('CASH')
+    await page.getByLabel('รูปหลักฐาน').setInputFiles([imageFile('retry-1.png'), imageFile('retry-2.png')])
+    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
+    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+
+    await expect(page.getByText('กำลังตรวจสอบสถานะรายการที่บันทึก')).toBeVisible()
+    const stored = await page.evaluate(() => ({
+      keys: Object.keys(sessionStorage),
+      resume: sessionStorage.getItem('pmc-expense-resume:v1'),
+    }))
+    expect(stored.keys.filter((key) => key.startsWith('pmc-expense'))).toEqual(['pmc-expense-resume:v1'])
+    expect(stored.resume).toMatch(/^\{"version":1,"rootRequestId":"[A-Za-z0-9._:-]+"\}$/)
+    expect(stored.resume).not.toMatch(/amount|file|token|receipt|private|staff/i)
+
+    await page.reload()
+
+    await expect(page.getByText('EXP-202608-PREVIEW', { exact: true })).toBeVisible()
+    await expect(page.getByText('EXP-202608-PREVIEW-2')).toHaveCount(0)
   })
 })
 
@@ -316,6 +527,12 @@ function imageFile(name: string) {
 
 async function expectNoStockSheetLink(page: Page) {
   await expect(page.getByRole('link', { name: /Google Sheet/i })).toHaveCount(0)
+}
+
+async function openExpenseForm(page: Page, category: string): Promise<void> {
+  await page.getByRole('button', { name: 'รายงานคลินิก' }).click()
+  await page.getByRole('button', { name: `${category} บันทึก`, exact: true }).click()
+  await expect(page.getByRole('heading', { name: category })).toBeVisible()
 }
 
 async function bangkokDateOffset(page: Page, dayOffset: number): Promise<string> {

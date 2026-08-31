@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -18,6 +18,8 @@ beforeEach(async () => {
   await writeFile(join(distDir, 'index.html'), '<main>private dashboard</main>')
   await writeFile(join(distDir, 'mini-app', 'index.html'), '<main>PMC Mini App shell</main>')
   await writeFile(join(distDir, 'mini-app', 'assets', 'mini-123.js'), 'mini app asset')
+  await writeFile(join(distDir, 'mini-app', 'assets', 'heic-module.mjs'), 'export const decoder = true')
+  await writeFile(join(distDir, 'mini-app', 'assets', 'heic-decoder.wasm'), Buffer.from([0x00, 0x61, 0x73, 0x6d]))
   await writeFile(join(distDir, 'ocr-review', 'index.html'), '<main>OCR shell</main>')
 })
 
@@ -26,12 +28,19 @@ afterEach(async () => {
 })
 
 describe('production PMC Mini App route isolation', () => {
+  it('uses explicit Node ESM extensions across the shared expense runtime boundary', async () => {
+    const source = await readFile(join(process.cwd(), 'shared', 'pmcMiniAppExpenseIngress.ts'), 'utf8')
+    expect(source.match(/from '\.\/pmcExpense\.js'/g)).toHaveLength(2)
+    expect(source).not.toContain("from './pmcExpense'")
+  })
+
   it('keeps Booking, OCR, health, and legacy routes available when Mini App config is absent', async () => {
     const app = handler({ pmcMiniApp: undefined })
 
     expect((await invoke(app, '/api/mini-app/session')).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/jera-allocation-worker', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/finance-daily-seed', { method: 'POST' })).status).toBe(503)
+    expect((await invoke(app, '/internal/mini-app/recover-expenses', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/healthz')).status).toBe(200)
     expect((await invoke(app, '/api/healthz')).status).toBe(200)
@@ -44,6 +53,8 @@ describe('production PMC Mini App route isolation', () => {
     const app = handler()
     const page = await invoke(app, '/mini-app/?customerName=private-customer')
     const asset = await invoke(app, '/mini-app/assets/mini-123.js')
+    const moduleAsset = await invoke(app, '/mini-app/assets/heic-module.mjs')
+    const wasm = await invoke(app, '/mini-app/assets/heic-decoder.wasm')
     const pageText = await page.text()
 
     expect(page.status).toBe(200)
@@ -51,6 +62,9 @@ describe('production PMC Mini App route isolation', () => {
     expect((await invoke(app, '/mini-app')).status).toBe(200)
     expect(await asset.text()).toBe('mini app asset')
     expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect(moduleAsset.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    expect(wasm.headers.get('content-type')).toBe('application/wasm')
+    expect(wasm.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
     expect(pageText).not.toContain('private-customer')
     expect((await invoke(app, '/mini-app-private')).status).toBe(401)
   })
@@ -68,6 +82,7 @@ describe('production PMC Mini App route isolation', () => {
     const internal = await invoke(app, '/internal/mini-app/jera-sync?mode=current', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const allocation = await invoke(app, '/internal/mini-app/jera-allocation-worker', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const financeSeed = await invoke(app, '/internal/mini-app/finance-daily-seed', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
+    const expenseRecovery = await invoke(app, '/internal/mini-app/recover-expenses', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const worker = await invoke(app, '/internal/mini-app/finalize-booking', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const cleanup = await invoke(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const failed = await invoke(app, '/api/mini-app/explode')
@@ -78,6 +93,7 @@ describe('production PMC Mini App route isolation', () => {
     expect(internal.status).toBe(200)
     expect(allocation.status).toBe(200)
     expect(financeSeed.status).toBe(200)
+    expect(expenseRecovery.status).toBe(200)
     expect(worker.status).toBe(200)
     expect(cleanup.status).toBe(200)
     expect({ status: failed.status, body: await failed.json() }).toEqual({ status: 500, body: { error: 'Mini App route failed' } })
@@ -127,6 +143,21 @@ describe('production PMC Mini App route isolation', () => {
     const exact = await invokeRaw(app, '/internal/mini-app/finance-daily-seed', { method: 'POST' })
     const query = await invokeRaw(app, '/internal/mini-app/finance-daily-seed?date=2026-08-29', { method: 'POST' })
     const suffix = await invokeRaw(app, '/internal/mini-app/finance-daily-seed/retry', { method: 'POST' })
+
+    expect(exact.status).toBe(204)
+    expect(exact.headers.get('www-authenticate')).toBeNull()
+    expect(query.status).toBe(401)
+    expect(suffix.status).toBe(401)
+    expect(pmcMiniApp).toHaveBeenCalledOnce()
+  })
+
+  it('keeps only the exact expense recovery route outside Basic Auth and static fallback', async () => {
+    const pmcMiniApp = vi.fn<Middleware>(async (_req, res) => { res.statusCode = 204; res.end() })
+    const app = handler({ pmcMiniApp })
+
+    const exact = await invokeRaw(app, '/internal/mini-app/recover-expenses', { method: 'POST' })
+    const query = await invokeRaw(app, '/internal/mini-app/recover-expenses?force=true', { method: 'POST' })
+    const suffix = await invokeRaw(app, '/internal/mini-app/recover-expenses/retry', { method: 'POST' })
 
     expect(exact.status).toBe(204)
     expect(exact.headers.get('www-authenticate')).toBeNull()

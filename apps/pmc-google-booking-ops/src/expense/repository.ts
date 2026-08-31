@@ -10,7 +10,9 @@ import type {
 } from '../../../../shared/pmcMiniAppExpenseIngress'
 import type {
   ExpenseBookRevisionClaim,
+  ExpenseRecoveryCandidate,
   ExpenseRecoveryRequestSnapshot,
+  ExpenseResumeSnapshot,
   ExpenseRepository,
 } from '../ports'
 import { createGoogleExpenseTopologyPort } from '../adapters/googleSheets'
@@ -54,6 +56,7 @@ interface ExpenseRequestRow {
   rootRequestId: string
   commandType: MiniAppExpenseCommand['commandType']
   commandFingerprint: string
+  commandJson: string
   expenseId: string
   monthKey: string
   recordState: 'RESERVED' | 'COMPLETED'
@@ -91,6 +94,7 @@ function asRequest(row: ExpenseStorageRow): ExpenseRequestRow {
     rootRequestId: String(row.rootRequestId ?? ''),
     commandType: String(row.commandType ?? '') as MiniAppExpenseCommand['commandType'],
     commandFingerprint: String(row.commandFingerprint ?? ''),
+    commandJson: String(row.commandJson ?? ''),
     expenseId: String(row.expenseId ?? ''),
     monthKey: String(row.monthKey ?? ''),
     recordState: String(row.recordState ?? '') as ExpenseRequestRow['recordState'],
@@ -176,6 +180,9 @@ function validateRequestInput(input: Parameters<ExpenseRepository['reserveReques
     || !SAFE_ID.test(input.rootRequestId)
     || !SAFE_ID.test(input.expenseId)
     || !SHA256.test(input.commandFingerprint)
+    || typeof input.commandJson !== 'string'
+    || input.commandJson.length < 2
+    || input.commandJson.length > 8_192
     || !Number.isFinite(Date.parse(input.createdAt))
   ) throw new Error('EXPENSE_INVALID_REQUEST')
 }
@@ -214,6 +221,9 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
     },
     reserveRequest(input) {
       validateRequestInput(input)
+      if (backend.sha256Hex(input.commandJson) !== input.commandFingerprint) {
+        throw new Error('EXPENSE_INVALID_REQUEST')
+      }
       const rows = backend.readMaster('EXPENSE_REQUESTS')
       const matches = rows
         .map(asRequest)
@@ -223,6 +233,7 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
       if (existing) {
         if (
           existing.commandFingerprint !== input.commandFingerprint
+          || existing.commandJson !== input.commandJson
           || existing.rootRequestId !== input.rootRequestId
           || existing.commandType !== input.commandType
         ) throw new Error('EXPENSE_IDEMPOTENCY_CONFLICT')
@@ -378,11 +389,15 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
       )
     },
     effectiveByBookDailyKey(monthKey, bookDailyKey) {
-      const matches = effectiveCommittedExpenses(repository.listMonth(monthKey))
-        .filter((row) => row.bookDailyKey === bookDailyKey)
-        .sort((left, right) => right.revision - left.revision)
-      if (matches.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
-      return matches[0] ? clonePlain(matches[0]) : null
+      try {
+        const matches = effectiveCommittedExpenses(repository.listMonth(monthKey))
+          .filter((row) => row.bookDailyKey === bookDailyKey)
+          .sort((left, right) => right.revision - left.revision)
+        if (matches.length > 1) throw new Error('invalid')
+        return matches[0] ? clonePlain(matches[0]) : null
+      } catch {
+        throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      }
     },
     listBookRevisionClaims(monthKey, bookDailyKey) {
       const submissions = backend.readMonth(monthKey, 'EXPENSE_SUBMISSIONS')
@@ -415,7 +430,12 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
         .filter((row) => row.expenseId === expenseId)
     },
     replaceMonthlySummary(monthKey, projection, calculatedAt) {
-      const effective = effectiveCommittedExpenses(repository.listMonth(monthKey))
+      let effective: ExpenseSubmission[]
+      try {
+        effective = effectiveCommittedExpenses(repository.listMonth(monthKey))
+      } catch {
+        throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      }
       const sourceHash = backend.sha256Hex(JSON.stringify(effective.map((row) => ({
         expenseId: row.expenseId,
         revision: row.revision,
@@ -456,7 +476,8 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
         events.push(audit)
         auditByExpense.set(audit.expenseId, events)
       }
-      const unresolved = audits.filter((event) => event.action === 'PREPARE').flatMap((event) => {
+      const unresolved = audits.filter((event) => event.action === 'PREPARE')
+        .flatMap<ExpenseRecoveryCandidate>((event): ExpenseRecoveryCandidate[] => {
         const after = parseAuditAfter(event)
         const rootRequestId = String(after?.rootRequestId ?? '')
         const monthKey = String(after?.monthKey ?? '')
@@ -465,22 +486,61 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
         if (events.filter((candidate) => candidate.action === 'PREPARE').length !== 1) {
           throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
         }
-        if (events.some((candidate) => candidate.action === 'VOID' || candidate.action === 'ABANDON')) return []
+        const voidAudits = events.filter((candidate) => candidate.action === 'VOID')
+        const abandonAudits = events.filter((candidate) => candidate.action === 'ABANDON')
+        if (voidAudits.length > 1 || abandonAudits.length > 1 || (voidAudits.length && abandonAudits.length)) {
+          throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        }
         const commitAudits = events.filter((candidate) => candidate.action === 'COMMIT')
         if (commitAudits.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
         const commitRequest = requestByKey.get(`${rootRequestId}:commit`) ?? null
+        const voidRequests = requestEntries
+          .map(({ request, rowIndex }) => ({ ...request, rowIndex }))
+          .filter((request) => request.commandType === 'VOID_EXPENSE' && request.expenseId === event.expenseId)
+        if (voidRequests.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        const voidRequest = voidRequests[0] ?? null
+        if (voidAudits.length === 1 || voidRequest) {
+          if (!voidRequest || voidRequest.resultJson !== null) return []
+          return [{
+            kind: 'VOID' as const,
+            expenseId: event.expenseId,
+            monthKey,
+            rootRequestId,
+            preparedAt: event.createdAt,
+            events: clonePlain(events),
+            commitRequest: commitRequest ? clonePlain(commitRequest) : null,
+            voidRequest: clonePlain(voidRequest),
+            bookRevisionClaims: [] as ExpenseBookRevisionClaim[],
+          }]
+        }
+        if (abandonAudits.length === 1) {
+          if (!commitRequest || commitRequest.resultJson !== null) return []
+          return [{
+            kind: 'ABANDON' as const,
+            expenseId: event.expenseId,
+            monthKey,
+            rootRequestId,
+            preparedAt: event.createdAt,
+            events: clonePlain(events),
+            commitRequest: clonePlain(commitRequest),
+            voidRequest: null,
+            bookRevisionClaims: [] as ExpenseBookRevisionClaim[],
+          }]
+        }
         if (commitAudits.length === 1 && !commitRequest) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
         if (commitAudits.length === 1 && commitRequest?.resultJson !== null) return []
         return [{
+          kind: 'PREPARED' as const,
           expenseId: event.expenseId,
           monthKey,
           rootRequestId,
           preparedAt: event.createdAt,
           events: clonePlain(events),
           commitRequest: commitRequest ? clonePlain(commitRequest) : null,
+          voidRequest: null,
           bookRevisionClaims: [] as ExpenseBookRevisionClaim[],
         }]
-      })
+        })
       unresolved.sort((left, right) => (
         Date.parse(left.preparedAt) - Date.parse(right.preparedAt)
         || left.expenseId.localeCompare(right.expenseId)
@@ -503,6 +563,38 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
         }
       }
       return selected
+    },
+    resumeSnapshot(rootRequestId): ExpenseResumeSnapshot {
+      if (!SAFE_ID.test(rootRequestId)) throw new Error('EXPENSE_INVALID_REQUEST')
+      const requests = backend.readMaster('EXPENSE_REQUESTS')
+        .map((row, rowIndex) => ({ ...asRequest(row), rowIndex }))
+        .filter((request) => request.rootRequestId === rootRequestId)
+      const requestKeys = requests.map(({ commandIdempotencyKey }) => commandIdempotencyKey)
+      if (new Set(requestKeys).size !== requestKeys.length || requests.length > 4) {
+        throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      }
+      for (const request of requests) {
+        if (backend.sha256Hex(request.commandJson) !== request.commandFingerprint) {
+          throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+        }
+      }
+      const identities = new Set(requests.map(({ expenseId, monthKey }) => `${monthKey}\u0000${expenseId}`))
+      if (identities.size > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      const selected = requests[0]
+      if (!selected) return { rootRequestId, requests: [], submission: null, events: [] }
+      const submissions = backend.readMonth(selected.monthKey, 'EXPENSE_SUBMISSIONS')
+        .map(asSubmission)
+        .filter(({ expenseId }) => expenseId === selected.expenseId)
+      if (submissions.length > 1) throw new Error('EXPENSE_STORAGE_UNAVAILABLE')
+      const events = backend.readMaster('EXPENSE_AUDIT')
+        .map(asAudit)
+        .filter(({ expenseId }) => expenseId === selected.expenseId)
+      return {
+        rootRequestId,
+        requests: clonePlain(requests),
+        submission: submissions[0] ? clonePlain(submissions[0]) : null,
+        events: clonePlain(events),
+      }
     },
   }
   return repository
@@ -612,6 +704,7 @@ function createGoogleExpenseRepositoryBackend(
         createdAt,
         updatedAt: createdAt,
       }])
+      SpreadsheetApp.flush()
       return { ledgerSpreadsheetId: spreadsheet.getId(), monthFolderId: monthFolder.getId() }
     },
     readMaster(tab) {
@@ -928,9 +1021,10 @@ function replaceRows(
 function encodeCell(value: unknown): string | number | boolean {
   if (value === null || value === undefined) return ''
   if (typeof value === 'string') {
-    return value.startsWith(LITERAL_TEXT_PREFIX) || /^\s*[=+\-@]/.test(value)
-      ? `${LITERAL_TEXT_PREFIX}${value}`
-      : value
+    if (value === '') return ''
+    return value.startsWith(LITERAL_TEXT_PREFIX)
+      ? value
+      : `${LITERAL_TEXT_PREFIX}${value}`
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value
   return JSON.stringify(value)

@@ -61,6 +61,23 @@ export async function handleFinanceMiniAppApi(
     return
   }
 
+  const resumeRoute = new RegExp(`^${EXPENSE_PREFIX}/resume/([A-Za-z0-9._:-]{1,116})$`).exec(pathname)
+  if (resumeRoute) {
+    if (req.method !== 'POST') return methodNotAllowed(res)
+    if (!noQuery(url) || !emptyBody(req)) return invalidField(res)
+    if (!finance?.resume) return routeNotFound(res)
+    try {
+      const result = await finance.resume.ingress.resume({
+        rootRequestId: resumeRoute[1]!,
+        staffId: authenticated.staffId,
+      })
+      json(res, 200, result)
+    } catch (error) {
+      respondMutationError(res, error)
+    }
+    return
+  }
+
   const monthlyRoute = new RegExp(`^${FINANCE_PREFIX}/months/([^/]+)/expenses$`).exec(pathname)
   if (monthlyRoute) {
     if (!requirePermission(authenticated.canViewFinance, res, 'EXPENSE_FINANCE_PERMISSION_REQUIRED')) return
@@ -348,22 +365,24 @@ async function handleVoid(
 ): Promise<void> {
   const body = await readExpenseJson(req, res)
   if (!body) return
-  if (!hasExactKeys(body, ['rootRequestId', 'expectedVersion', 'reason'])) return invalidField(res)
+  if (!hasExactKeys(body, ['rootRequestId', 'expectedVersion', 'expectedRevision', 'reason'])) return invalidField(res)
   const rootRequestId = typeof body.rootRequestId === 'string' && ROOT_REQUEST_ID.test(body.rootRequestId)
     ? body.rootRequestId : null
   const expectedVersion = positiveInteger(body.expectedVersion)
+  const expectedRevision = positiveInteger(body.expectedRevision)
   const reason = boundedReason(body.reason)
-  if (!rootRequestId || expectedVersion === null || !reason) return invalidRequest(res)
+  if (!rootRequestId || expectedVersion === null || expectedRevision === null || !reason) return invalidRequest(res)
   try {
     const context = await finance.reads!.readStore.getExpenseMutationContext(monthKey, expenseId)
     if (!context) return safeError(res, 404, 'EXPENSE_NOT_FOUND', false)
     if (context.version !== expectedVersion) return safeError(res, 409, 'EXPENSE_REVISION_CONFLICT', false)
+    if (context.revision !== expectedRevision) return safeError(res, 409, 'EXPENSE_REVISION_CONFLICT', false)
     const command: Extract<MiniAppExpenseCommand, { commandType: 'VOID_EXPENSE' }> = {
       rootRequestId,
       commandIdempotencyKey: `${rootRequestId}:void`,
       staffId: authenticated.staffId,
       commandType: 'VOID_EXPENSE',
-      payload: { expenseId, expectedVersion, reason },
+      payload: { expenseId, expectedVersion, expectedRevision, reason },
     }
     const result = await finance.capture!.ingress.void(command)
     if (
@@ -590,7 +609,7 @@ function respondReadError(res: ServerResponse, error: unknown): void {
 }
 
 function mutationStatus(code: string): number {
-  if (code === 'EXPENSE_STAFF_REQUIRED' || code.endsWith('_PERMISSION_REQUIRED')) return 403
+  if (code === 'EXPENSE_STAFF_REQUIRED' || code === 'EXPENSE_RESUME_FORBIDDEN' || code.endsWith('_PERMISSION_REQUIRED')) return 403
   if (code === 'EXPENSE_NOT_FOUND') return 404
   if (['EXPENSE_IDEMPOTENCY_CONFLICT', 'EXPENSE_NOT_PREPARED', 'EXPENSE_REVISION_CONFLICT',
     'EXPENSE_IMMUTABLE_FIELD', 'EXPENSE_PRIVATE_FILE_INVALID'].includes(code)) return 409

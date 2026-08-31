@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { MiniAppSheetsPort } from '../pmc-mini-app/googleClient.js'
 import {
   JERA_ALLOCATION_COVERAGE_HEADERS,
+  JERA_ALLOCATION_GRID_ROW_COUNTS,
   JERA_PAYMENT_DETAIL_CACHE_HEADERS,
   JERA_PAYMENT_DETAIL_LINES_HEADERS,
 } from '../pmc-mini-app/setup.js'
@@ -51,6 +52,7 @@ export interface JeraAllocationCoverage {
   leaseExpiresAt: string | null
   taskAttempt: number
   productSalesRowCount: number
+  leaseFencingToken: string | null
 }
 
 export interface JeraAllocationStore {
@@ -89,9 +91,9 @@ const COVERAGE_TAB = 'JERA_ALLOCATION_COVERAGE'
 const mutexes = new Map<string, Promise<void>>()
 
 export const JERA_ALLOCATION_SHEET_OPERATION_BUDGET = Object.freeze({
-  maxDetailRows: 50_000,
-  maxLineRows: 200_000,
-  maxCoverageRows: 10_000,
+  maxDetailRows: JERA_ALLOCATION_GRID_ROW_COUNTS.JERA_PAYMENT_DETAIL_CACHE - 2,
+  maxLineRows: JERA_ALLOCATION_GRID_ROW_COUNTS.JERA_PAYMENT_DETAIL_LINES - 2,
+  maxCoverageRows: JERA_ALLOCATION_GRID_ROW_COUNTS.JERA_ALLOCATION_COVERAGE - 2,
   repeatedFinanceGetBatchGets: 1,
   workerRunBatchGets: 1,
   worker20DetailBatchUpdates: 40,
@@ -99,7 +101,7 @@ export const JERA_ALLOCATION_SHEET_OPERATION_BUDGET = Object.freeze({
 })
 
 export class JeraAllocationStoreError extends Error {
-  readonly code: 'JERA_ALLOCATION_STORE_INCOMPATIBLE_HEADER' | 'JERA_ALLOCATION_STORE_CORRUPT_ROW' | 'JERA_ALLOCATION_STORE_INVALID_INPUT' | 'JERA_ALLOCATION_STORE_ROW_LIMIT'
+  readonly code: 'JERA_ALLOCATION_STORE_INCOMPATIBLE_HEADER' | 'JERA_ALLOCATION_STORE_CORRUPT_ROW' | 'JERA_ALLOCATION_STORE_INVALID_INPUT' | 'JERA_ALLOCATION_STORE_ROW_LIMIT' | 'JERA_ALLOCATION_STORE_STALE_SESSION' | 'JERA_ALLOCATION_STORE_STALE_FENCE'
   constructor(code: JeraAllocationStoreError['code']) { super(code); this.name = 'JeraAllocationStoreError'; this.code = code }
 }
 
@@ -169,6 +171,7 @@ export function createGoogleJeraAllocationStore(input: {
   }
   let cachedSnapshot: { expiresAt: number; value: AllocationSnapshot } | null = null
   let activeSnapshot: Promise<AllocationSnapshot> | null = null
+  let mutationVersion = 0
 
   function boundedRange(tab: string, headers: readonly string[], maxRows: number): string {
     return `'${tab}'!A1:${columnName(headers.length)}${maxRows + 2}`
@@ -235,6 +238,7 @@ export function createGoogleJeraAllocationStore(input: {
   function invalidateSnapshot(): void { cachedSnapshot = null }
 
   function createSession(snapshot: AllocationSnapshot): JeraAllocationRunSession {
+    let sessionVersion = mutationVersion
     const detailsByKey = new Map(snapshot.details.map((row) => [row.value.detailKey, row]))
     const linesByKey = new Map<string, DetailLineRow[]>()
     for (const row of snapshot.lines) linesByKey.set(row.value.detailKey, [...(linesByKey.get(row.value.detailKey) ?? []), row])
@@ -281,6 +285,7 @@ export function createGoogleJeraAllocationStore(input: {
     function coverageWrite(value: JeraAllocationCoverage): { rowNumber: number; value: JeraAllocationCoverage; write: { range: string; values: unknown[][] } } {
       const normalized = validateCoverage(value)
       const current = coverageByDay.get(normalized.dayKey)
+      if (fenceRegressed(current?.value.leaseFencingToken ?? null, normalized.leaseFencingToken)) staleFence()
       const rowNumber = current?.rowNumber ?? takeCoverageRow()
       return {
         rowNumber,
@@ -295,6 +300,7 @@ export function createGoogleJeraAllocationStore(input: {
       const normalized = validateDetail(value)
       if (nextCoverage && (nextCoverage.branchUuid !== normalized.branchUuid || nextCoverage.eventDate !== normalized.eventDate)) invalid()
       await withMutex(mutexKey, async () => {
+        if (sessionVersion !== mutationVersion) staleSession()
         const current = detailsByKey.get(normalized.detailKey)
         const currentValue = current ? hydrated(current) : null
         const unchanged = currentValue !== null && JSON.stringify(currentValue) === JSON.stringify(normalized)
@@ -349,6 +355,8 @@ export function createGoogleJeraAllocationStore(input: {
         if (coverageMutation) coverageByDay.set(coverageMutation.value.dayKey, {
           rowNumber: coverageMutation.rowNumber, value: structuredClone(coverageMutation.value),
         })
+        mutationVersion += 1
+        sessionVersion = mutationVersion
       })
     }
 
@@ -382,9 +390,12 @@ export function createGoogleJeraAllocationStore(input: {
       async saveCoverage(value) {
         const mutation = coverageWrite(value)
         await withMutex(mutexKey, async () => {
+          if (sessionVersion !== mutationVersion) staleSession()
           await sheets.batchUpdate(spreadsheetId, [mutation.write])
           invalidateSnapshot()
           coverageByDay.set(mutation.value.dayKey, { rowNumber: mutation.rowNumber, value: structuredClone(mutation.value) })
+          mutationVersion += 1
+          sessionVersion = mutationVersion
         })
       },
       async listIncompleteCoverage(limit) {
@@ -435,6 +446,7 @@ function validateCoverage(value: JeraAllocationCoverage): JeraAllocationCoverage
   if (value.safeErrorCode !== null && !/^[A-Z0-9_]{1,80}$/.test(value.safeErrorCode)) invalid()
   if (value.leaseOwner !== null) assertToken(value.leaseOwner)
   if ((value.leaseOwner === null) !== (value.leaseExpiresAt === null)) invalid()
+  if (value.leaseFencingToken !== null && !/^[1-9]\d*$/.test(value.leaseFencingToken)) invalid()
   return structuredClone(value)
 }
 
@@ -461,11 +473,11 @@ function detailLine(cells: unknown[]): JeraCachedPaymentDetailLine & { detailKey
   return value
 }
 function coverage(cells: unknown[]): JeraAllocationCoverage { return validateCoverage({
-  dayKey: text(cells[0]), branchUuid: text(cells[1]), eventDate: text(cells[2]), paymentCacheKey: text(cells[3]), productSalesCacheKey: text(cells[4]), paymentSetHash: text(cells[5]), paymentRowCount: integer(cells[6]), successfulDetailCount: integer(cells[7]), metadataSnapshotHash: text(cells[8]), paymentLastSuccessAt: nullable(cells[9]), productSalesLastSuccessAt: nullable(cells[10]), cursor: integer(cells[11]), status: text(cells[12]) as JeraAllocationCoverageStatus, lastAttemptAt: nullable(cells[13]), lastSuccessAt: nullable(cells[14]), safeErrorCode: nullable(cells[15]), leaseOwner: nullable(cells[16]), leaseExpiresAt: nullable(cells[17]), taskAttempt: integer(cells[18]), productSalesRowCount: integer(cells[19]),
+  dayKey: text(cells[0]), branchUuid: text(cells[1]), eventDate: text(cells[2]), paymentCacheKey: text(cells[3]), productSalesCacheKey: text(cells[4]), paymentSetHash: text(cells[5]), paymentRowCount: integer(cells[6]), successfulDetailCount: integer(cells[7]), metadataSnapshotHash: text(cells[8]), paymentLastSuccessAt: nullable(cells[9]), productSalesLastSuccessAt: nullable(cells[10]), cursor: integer(cells[11]), status: text(cells[12]) as JeraAllocationCoverageStatus, lastAttemptAt: nullable(cells[13]), lastSuccessAt: nullable(cells[14]), safeErrorCode: nullable(cells[15]), leaseOwner: nullable(cells[16]), leaseExpiresAt: nullable(cells[17]), taskAttempt: integer(cells[18]), productSalesRowCount: integer(cells[19]), leaseFencingToken: nullable(cells[20]),
 }) }
 function detailCells(value: JeraCachedPaymentDetail): unknown[] { return [value.detailKey, value.branchUuid, value.eventDate, value.paymentUuid, value.paymentSourceHash, value.detailSourceHash, value.detailFetchedAt, value.lineCount, value.truncated] }
 function lineCells(detailKey: string, value: JeraCachedPaymentDetailLine): unknown[] { return [detailKey, value.lineOrdinal, value.lineKind, value.itemCode ?? '', value.netLineSatang] }
-function coverageCells(value: JeraAllocationCoverage): unknown[] { return [value.dayKey, value.branchUuid, value.eventDate, value.paymentCacheKey, value.productSalesCacheKey, value.paymentSetHash, value.paymentRowCount, value.successfulDetailCount, value.metadataSnapshotHash, value.paymentLastSuccessAt ?? '', value.productSalesLastSuccessAt ?? '', value.cursor, value.status, value.lastAttemptAt ?? '', value.lastSuccessAt ?? '', value.safeErrorCode ?? '', value.leaseOwner ?? '', value.leaseExpiresAt ?? '', value.taskAttempt, value.productSalesRowCount] }
+function coverageCells(value: JeraAllocationCoverage): unknown[] { return [value.dayKey, value.branchUuid, value.eventDate, value.paymentCacheKey, value.productSalesCacheKey, value.paymentSetHash, value.paymentRowCount, value.successfulDetailCount, value.metadataSnapshotHash, value.paymentLastSuccessAt ?? '', value.productSalesLastSuccessAt ?? '', value.cursor, value.status, value.lastAttemptAt ?? '', value.lastSuccessAt ?? '', value.safeErrorCode ?? '', value.leaseOwner ?? '', value.leaseExpiresAt ?? '', value.taskAttempt, value.productSalesRowCount, value.leaseFencingToken ?? ''] }
 function stripDetailKey(value: JeraCachedPaymentDetailLine & { detailKey: string }): JeraCachedPaymentDetailLine {
   return {
     lineOrdinal: value.lineOrdinal, lineKind: value.lineKind,
@@ -514,4 +526,11 @@ function columnName(count: number): string { let value = count; let result = '';
 function invalid(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_INVALID_INPUT') }
 function corrupt(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_CORRUPT_ROW') }
 function rowLimit(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_ROW_LIMIT') }
+function staleSession(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_STALE_SESSION') }
+function staleFence(): never { throw new JeraAllocationStoreError('JERA_ALLOCATION_STORE_STALE_FENCE') }
+function fenceRegressed(current: string | null, next: string | null): boolean {
+  if (current === null) return false
+  if (next === null) return true
+  try { return BigInt(next) < BigInt(current) } catch { return true }
+}
 async function withMutex<T>(key: string, operation: () => Promise<T>): Promise<T> { const previous = mutexes.get(key) ?? Promise.resolve(); let release = (): void => undefined; const current = new Promise<void>((resolve) => { release = resolve }); const queued = previous.then(() => current); mutexes.set(key, queued); await previous; try { return await operation() } finally { release(); if (mutexes.get(key) === queued) mutexes.delete(key) } }

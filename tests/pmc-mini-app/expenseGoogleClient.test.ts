@@ -199,6 +199,63 @@ describe('private finance Google ports', () => {
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
   })
 
+  it('rejects concurrent same-slot uploads when immutable metadata differs', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const input = claimedUpload({ parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg` })
+    const release = fake.pauseNextMediaCreate()
+
+    const first = ports.uploadExpenseImage(input)
+    await vi.waitFor(() => expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(1))
+    const conflict = ports.uploadExpenseImage({ ...input, originalFileName: 'different.jpg' })
+    const conflictExpectation = expect(conflict).rejects.toMatchObject({
+      code: 'EXPENSE_PRIVATE_FILE_INVALID',
+    })
+    release()
+
+    await expect(first).resolves.toMatchObject({ originalFileName: 'receipt.jpg' })
+    await conflictExpectation
+  })
+
+  it('never deletes without a terminal REGISTERED claim proving a different winner', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+
+    const input = claimedUpload({ parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg` })
+    const registeredAuthority = {
+      ...input.slotClaim,
+      generation: '5',
+      state: 'REGISTERED' as const,
+      registeredFileId: attachment.privateFileId,
+    }
+    await ports.deleteExpenseFileIfUnregistered({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+      readCurrentClaim: async () => ({ ...registeredAuthority }),
+    })
+    expect(fake.driveDeletes).not.toHaveBeenCalled()
+
+    await ports.deleteExpenseFileIfUnregistered({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+      readCurrentClaim: async () => ({ ...input.slotClaim }),
+    })
+    expect(fake.driveDeletes).not.toHaveBeenCalled()
+  })
+
   it('allows only the atomic slot owner to create across process instances', async () => {
     const fake = financeGoogleFake()
     const ownerProcess = createFinanceGooglePorts(config(), fake.factory)
@@ -215,7 +272,7 @@ describe('private finance Google ports', () => {
       mimeType: 'image/jpeg' as const,
       deterministicName,
     }
-    const baseClaim = slotClaim(claimIntent, true)
+    const baseClaim = slotClaim(claimIntent)
     const upload = {
       monthKey: MONTH_KEY,
       expenseId: EXPENSE_ID,
@@ -234,8 +291,8 @@ describe('private finance Google ports', () => {
 
     await expect(replayProcess.uploadExpenseImage({
       ...upload,
-      slotClaim: { ...baseClaim, created: false },
-    })).rejects.toMatchObject({ code: 'EXPENSE_STORAGE_UNAVAILABLE' })
+      slotClaim: { ...baseClaim, state: 'REGISTERED', registeredFileId: 'winner-not-created' },
+    })).rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
     expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(0)
 
     const attachment = await ownerProcess.uploadExpenseImage({
@@ -244,7 +301,7 @@ describe('private finance Google ports', () => {
     })
     await expect(replayProcess.uploadExpenseImage({
       ...upload,
-      slotClaim: { ...baseClaim, created: false },
+      slotClaim: { ...baseClaim, state: 'REGISTERED', registeredFileId: attachment.privateFileId },
     })).resolves.toEqual(attachment)
     expect(attachment).toMatchObject({
       attachmentId: 'ATT-atomic-slot-1',
@@ -261,6 +318,100 @@ describe('private finance Google ports', () => {
       uploadedAt: '2026-08-29T10:01:00.000Z',
     })
     expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(1)
+  })
+
+  it('recovers each exact descriptor across two-process delayed create and deletes only the fenced loser', async () => {
+    const fake = financeGoogleFake()
+    const delayedProcess = createFinanceGooglePorts(config(), fake.factory)
+    const winnerProcess = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await delayedProcess.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const intent = {
+      rootRequestId: 'expense-request-1', expenseId: EXPENSE_ID, ordinal: 1,
+      sha256, mimeType: 'image/jpeg' as const, deterministicName,
+    }
+    const delayedClaim = slotClaim(intent)
+    const winnerClaim = {
+      ...delayedClaim,
+      generation: '5',
+      updatedAt: '2026-08-29T10:02:00.000Z',
+      leaseOwnerId: 'lease-owner-winner',
+      leaseGeneration: '4',
+    }
+    const upload = {
+      monthKey: MONTH_KEY, expenseId: EXPENSE_ID, parentId, deterministicName, bytes,
+      mimeType: 'image/jpeg' as const, ordinal: 1, sha256,
+      rootRequestId: intent.rootRequestId, uploadedByStaffId: 'ADMIN_01',
+      uploadedAt: '2026-08-29T10:01:00.000Z', originalFileName: 'receipt.jpg',
+      attachmentId: 'ATT-delayed-slot-1',
+    }
+    const release = fake.pauseNextMediaCreate()
+    const delayed = delayedProcess.uploadExpenseImage({ ...upload, slotClaim: delayedClaim })
+    await vi.waitFor(() => expect(fake.driveCreates.mock.calls.filter(([request]) => request.media)).toHaveLength(1))
+    const winner = await winnerProcess.uploadExpenseImage({ ...upload, slotClaim: winnerClaim })
+    release()
+    const loser = await delayed
+    expect(loser.privateFileId).not.toBe(winner.privateFileId)
+
+    const registeredWinner = {
+      ...winnerClaim,
+      generation: '6',
+      state: 'REGISTERED' as const,
+      registeredFileId: winner.privateFileId,
+    }
+    let changingReads = 0
+    await delayedProcess.deleteExpenseFileIfUnregistered({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: loser.privateFileId,
+      expectedAttachment: loser,
+      readCurrentClaim: async () => {
+        changingReads += 1
+        return changingReads === 1
+          ? { ...registeredWinner }
+          : {
+              ...registeredWinner,
+              generation: '7',
+              registeredFileId: loser.privateFileId,
+            }
+      },
+    })
+    expect(changingReads).toBe(2)
+    expect(fake.fileIds(parentId)).toEqual([loser.privateFileId, winner.privateFileId].sort())
+    expect(fake.driveDeletes).not.toHaveBeenCalled()
+
+    await expect(winnerProcess.uploadExpenseImage({
+      ...upload,
+      slotClaim: registeredWinner,
+      readCurrentClaim: async () => { throw new Error('transient claim read failure') },
+    })).rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+    expect(fake.fileIds(parentId)).toEqual([loser.privateFileId, winner.privateFileId].sort())
+
+    fake.failNextDelete()
+    await expect(winnerProcess.uploadExpenseImage({
+      ...upload,
+      slotClaim: registeredWinner,
+      readCurrentClaim: async () => ({ ...registeredWinner }),
+    })).rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+    expect(fake.fileIds(parentId)).toEqual([loser.privateFileId, winner.privateFileId].sort())
+
+    let claimReads = 0
+    const recovered = await winnerProcess.listVerifiedExpenseImages(MONTH_KEY, EXPENSE_ID, [{
+      claim: registeredWinner,
+      readCurrentClaim: async () => {
+        claimReads += 1
+        return { ...registeredWinner }
+      },
+    }])
+
+    expect(recovered).toEqual([winner])
+    expect(claimReads).toBe(2)
+    expect(fake.fileIds(parentId)).toEqual([winner.privateFileId])
+    expect(fake.driveDeletes).toHaveBeenCalledWith(expect.objectContaining({
+      fileId: loser.privateFileId,
+    }))
   })
 
   it('pins file identity around download and validates bytes, MIME, metadata, and direct parent', async () => {
@@ -381,6 +532,7 @@ function financeGoogleFake() {
     '2026-08-01T00:00:00.000Z',
   ]]
   let sequence = 0
+  let deleteFailureCount = 0
   let afterMediaRead: (() => void) | undefined
   let incompleteSearch: boolean | undefined = false
   const monthRows = new Map<string, unknown[][]>([
@@ -450,10 +602,16 @@ function financeGoogleFake() {
     }
   })
 
+  let nextMediaCreateGate: Promise<void> | null = null
   const driveCreates = vi.fn(async (input: {
     requestBody?: Partial<FakeItem>
     media?: { body: Buffer; mimeType: string }
   }) => {
+    if (input.media && nextMediaCreateGate) {
+      const gate = nextMediaCreateGate
+      nextMediaCreateGate = null
+      await gate
+    }
     sequence += 1
     const id = `created-${sequence}`
     const request = input.requestBody ?? {}
@@ -473,6 +631,14 @@ function financeGoogleFake() {
     add(item)
     return { data: driveMetadata(item) }
   })
+  const driveDeletes = vi.fn(async (input: { fileId: string }) => {
+    if (deleteFailureCount > 0) {
+      deleteFailureCount -= 1
+      throw new Error('transient private delete failure')
+    }
+    if (!items.delete(input.fileId)) throw Object.assign(new Error('private provider not found'), { code: 404 })
+    return { data: {} }
+  })
 
   const factory: FinanceGoogleFactory = {
     createAuth(nextScopes) { scopes.push(nextScopes); return { kind: 'adc' } },
@@ -480,7 +646,7 @@ function financeGoogleFake() {
       return { spreadsheets: { values: { batchGet: sheetReads } } }
     },
     createDrive() {
-      return { files: { get: driveGets, list: driveLists, create: driveCreates } }
+      return { files: { get: driveGets, list: driveLists, create: driveCreates, delete: driveDeletes } }
     },
   }
 
@@ -492,6 +658,13 @@ function financeGoogleFake() {
     driveGets,
     driveLists,
     driveCreates,
+    driveDeletes,
+    pauseNextMediaCreate() {
+      let release!: () => void
+      nextMediaCreateGate = new Promise<void>((resolve) => { release = resolve })
+      return release
+    },
+    failNextDelete() { deleteFailureCount += 1 },
     add,
     addExpenseFolder(id: string) {
       add({
@@ -505,6 +678,12 @@ function financeGoogleFake() {
       const selected = items.get(id)
       if (!selected) throw new Error('test fixture missing item')
       return selected
+    },
+    fileIds(parentId: string) {
+      return [...items.values()]
+        .filter((item) => item.parents.includes(parentId) && item.mimeType !== 'application/vnd.google-apps.folder')
+        .map(({ id }) => id)
+        .sort()
     },
     get afterMediaRead() { return afterMediaRead },
     set afterMediaRead(callback: (() => void) | undefined) { afterMediaRead = callback },
@@ -575,7 +754,7 @@ function claimedUpload(input: {
     uploadedAt: '2026-08-29T10:01:00.000Z',
     originalFileName: 'receipt.jpg',
     attachmentId: 'ATT-atomic-slot-1',
-    slotClaim: slotClaim(intent, true),
+    slotClaim: slotClaim(intent),
   }
 }
 
@@ -588,7 +767,6 @@ function slotClaim(
     mimeType: 'image/jpeg' | 'image/png'
     deterministicName: string
   },
-  created: boolean,
 ) {
   const claimId = `SLOT-${createHash('sha256').update(JSON.stringify(intent), 'utf8').digest('hex')}`
   return {
@@ -596,7 +774,12 @@ function slotClaim(
     claimId,
     generation: '4',
     createdAt: '2026-08-29T10:00:00.000Z',
-    created,
+    updatedAt: '2026-08-29T10:00:00.000Z',
+    state: 'CLAIMED' as const,
+    leaseId: `LEASE-${'c'.repeat(64)}`,
+    leaseOwnerId: 'lease-owner-test',
+    leaseGeneration: '3',
+    registeredFileId: null,
     ...intent,
   }
 }

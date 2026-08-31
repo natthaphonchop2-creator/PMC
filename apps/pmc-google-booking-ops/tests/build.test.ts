@@ -42,6 +42,8 @@ describe('Apps Script bundle', () => {
       'preparePmcExpensePermissions',
       'applyPmcExpensePermissions',
       'setupPmcExpenseFinanceStorage',
+      'bootstrapPmcExpenseMonth',
+      'bootstrapCurrentPmcExpenseMonth',
       'runPmcExpenseRecovery',
       'previewPmcBookingAttributionMigration',
       'applyPmcBookingAttributionMigration',
@@ -208,6 +210,18 @@ describe('Apps Script bundle', () => {
     const runtime = readFileSync('apps/pmc-google-booking-ops/src/runtime.ts', 'utf8')
 
     expect(runtime).not.toContain("ensureClockTrigger('pollJeraIncoming'")
+  })
+
+  it('flushes the new month index before the same-execution bootstrap readback', () => {
+    const repository = readFileSync(
+      'apps/pmc-google-booking-ops/src/expense/repository.ts',
+      'utf8',
+    )
+    const appendIndex = repository.indexOf("appendRows(master, 'EXPENSE_MONTHLY_INDEX'")
+    const flushIndex = repository.indexOf('SpreadsheetApp.flush()', appendIndex)
+
+    expect(appendIndex).toBeGreaterThan(-1)
+    expect(flushIndex).toBeGreaterThan(appendIndex)
   })
 
   it('declares the HMAC-protected LINE ingress as a deployable web app', () => {

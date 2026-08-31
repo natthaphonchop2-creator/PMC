@@ -1,8 +1,14 @@
+import {
+  isCanonicalExpenseTimestamp,
+  isExpenseIdForMonth,
+  isValidExpenseOriginalFileName,
+  parseExpenseDate,
+} from './pmcExpense.js'
 import type {
   EnabledExpenseCategory,
   ExpensePaymentMethod,
   ExpenseReceipt,
-} from './pmcExpense'
+} from './pmcExpense.js'
 
 export interface ExpensePrivateAttachment {
   attachmentId: string
@@ -19,6 +25,30 @@ export interface ExpensePrivateAttachment {
   sha256: string
   uploadedByStaffId: string
   uploadedAt: string
+}
+
+export function canonicalExpenseAttachmentManifest(
+  attachments: readonly Pick<
+    ExpensePrivateAttachment,
+    'ordinal' | 'mediaType' | 'originalFileName' | 'sha256'
+  >[],
+): string {
+  if (
+    attachments.length < 1
+    || attachments.length > 5
+    || attachments.some((attachment, index) => (
+      attachment.ordinal !== index + 1
+      || (attachment.mediaType !== 'image/jpeg' && attachment.mediaType !== 'image/png')
+      || !isValidExpenseOriginalFileName(attachment.originalFileName)
+      || !sha256(attachment.sha256)
+    ))
+  ) throw new Error('invalid mini app expense attachment manifest')
+  return JSON.stringify(attachments.map((attachment) => ({
+    ordinal: attachment.ordinal,
+    mediaType: attachment.mediaType,
+    originalFileName: attachment.originalFileName,
+    sha256: attachment.sha256,
+  })))
 }
 
 export type MiniAppExpenseCommand =
@@ -61,6 +91,7 @@ export type MiniAppExpenseCommand =
     payload: {
       expenseId: string
       expectedVersion: number
+      expectedRevision: number
       reason: string
     }
   }
@@ -115,14 +146,69 @@ export const MINI_APP_EXPENSE_SAFE_ERROR_CODES = [
   'EXPENSE_REVISION_CONFLICT',
   'EXPENSE_IMMUTABLE_FIELD',
   'EXPENSE_PRIVATE_FILE_INVALID',
+  'EXPENSE_RESUME_FORBIDDEN',
   'EXPENSE_STORAGE_UNAVAILABLE',
 ] as const
 
 export type MiniAppExpenseSafeErrorCode = typeof MINI_APP_EXPENSE_SAFE_ERROR_CODES[number]
 
+export type ExpenseResumeStatus =
+  | { status: 'COMMITTED'; receipt: ExpenseReceipt }
+  | { status: 'PENDING' }
+  | { status: 'SAFE_TO_RETRY' }
+  | { status: 'FAILED'; error: MiniAppExpenseSafeErrorCode }
+
+export interface UnsignedMiniAppExpenseResumeIngressEnvelope {
+  kind: 'MINI_APP_EXPENSE_RESUME'
+  version: 1
+  timestamp: number
+  nonce: string
+  rootRequestId: string
+  staffId: string
+}
+
+export interface MiniAppExpenseResumeIngressEnvelope
+  extends UnsignedMiniAppExpenseResumeIngressEnvelope {
+  signature: string
+}
+
+export type MiniAppExpenseResumeIngressResponse =
+  | { ok: true; result: ExpenseResumeStatus }
+  | { ok: false; error: MiniAppExpenseSafeErrorCode }
+
 export type MiniAppExpenseIngressResponse =
   | { ok: true; result: ExpenseCommandResult }
   | { ok: false; error: MiniAppExpenseSafeErrorCode }
+
+export interface ExpenseRecoveryCounts {
+  recovered: number
+  abandoned: number
+  unchanged: number
+  failed: number
+}
+
+export interface ExpenseRecoveryWorkerIdentity {
+  email: string
+  subject: string
+}
+
+export interface UnsignedMiniAppExpenseRecoveryIngressEnvelope {
+  kind: 'MINI_APP_EXPENSE_RECOVERY'
+  version: 1
+  timestamp: number
+  nonce: string
+  correlationId: string
+  worker: ExpenseRecoveryWorkerIdentity
+}
+
+export interface MiniAppExpenseRecoveryIngressEnvelope
+  extends UnsignedMiniAppExpenseRecoveryIngressEnvelope {
+  signature: string
+}
+
+export type MiniAppExpenseRecoveryIngressResponse =
+  | { ok: true; result: ExpenseRecoveryCounts }
+  | { ok: false; error: 'EXPENSE_STORAGE_UNAVAILABLE' }
 
 export function isMiniAppExpenseSafeErrorCode(
   value: unknown,
@@ -140,6 +226,18 @@ const COMMAND_KEYS = [
 ] as const
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'command'] as const
+const RECOVERY_ENVELOPE_KEYS = [
+  'kind',
+  'version',
+  'timestamp',
+  'nonce',
+  'correlationId',
+  'worker',
+] as const
+const RECOVERY_WORKER_KEYS = ['email', 'subject'] as const
+const RESUME_ENVELOPE_KEYS = [
+  'kind', 'version', 'timestamp', 'nonce', 'rootRequestId', 'staffId',
+] as const
 
 export function canonicalMiniAppExpenseCommand(command: MiniAppExpenseCommand): string {
   return JSON.stringify(orderedCommand(command))
@@ -163,6 +261,111 @@ export function canonicalMiniAppExpenseIngress(envelope: UnsignedMiniAppExpenseI
     nonce: envelope.nonce,
     command: orderedCommand(envelope.command),
   })
+}
+
+export function canonicalMiniAppExpenseRecoveryIngress(
+  envelope: UnsignedMiniAppExpenseRecoveryIngressEnvelope,
+): string {
+  if (
+    !hasExactKeys(envelope, RECOVERY_ENVELOPE_KEYS)
+    || envelope.kind !== 'MINI_APP_EXPENSE_RECOVERY'
+    || envelope.version !== 1
+    || !Number.isSafeInteger(envelope.timestamp)
+    || envelope.timestamp <= 0
+    || typeof envelope.nonce !== 'string'
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(envelope.nonce)
+    || !safeId(envelope.correlationId)
+  ) throw new Error('invalid mini app expense recovery envelope')
+
+  if (
+    !hasExactKeys(envelope.worker, RECOVERY_WORKER_KEYS)
+    || !serviceAccountEmail(envelope.worker.email)
+    || typeof envelope.worker.subject !== 'string'
+    || !/^[A-Za-z0-9._:@-]{1,255}$/.test(envelope.worker.subject)
+  ) throw new Error('invalid mini app expense recovery worker')
+
+  return JSON.stringify({
+    kind: 'MINI_APP_EXPENSE_RECOVERY',
+    version: 1,
+    timestamp: envelope.timestamp,
+    nonce: envelope.nonce,
+    correlationId: envelope.correlationId,
+    worker: {
+      email: envelope.worker.email,
+      subject: envelope.worker.subject,
+    },
+  })
+}
+
+export function canonicalMiniAppExpenseResumeIngress(
+  envelope: UnsignedMiniAppExpenseResumeIngressEnvelope,
+): string {
+  if (
+    !hasExactKeys(envelope, RESUME_ENVELOPE_KEYS)
+    || envelope.kind !== 'MINI_APP_EXPENSE_RESUME'
+    || envelope.version !== 1
+    || !Number.isSafeInteger(envelope.timestamp)
+    || envelope.timestamp <= 0
+    || typeof envelope.nonce !== 'string'
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(envelope.nonce)
+    || !safeId(envelope.rootRequestId)
+    || !safeId(envelope.staffId)
+  ) throw new Error('invalid mini app expense resume envelope')
+  return JSON.stringify({
+    kind: 'MINI_APP_EXPENSE_RESUME',
+    version: 1,
+    timestamp: envelope.timestamp,
+    nonce: envelope.nonce,
+    rootRequestId: envelope.rootRequestId,
+    staffId: envelope.staffId,
+  })
+}
+
+export function isExpenseResumeStatus(value: unknown): value is ExpenseResumeStatus {
+  if (!isRecord(value) || typeof value.status !== 'string') return false
+  if (value.status === 'PENDING' || value.status === 'SAFE_TO_RETRY') {
+    return hasExactKeys(value, ['status'] as const)
+  }
+  if (value.status === 'FAILED') {
+    return hasExactKeys(value, ['status', 'error'] as const)
+      && isMiniAppExpenseSafeErrorCode(value.error)
+  }
+  if (value.status !== 'COMMITTED' || !hasExactKeys(value, ['status', 'receipt'] as const)) return false
+  return isExpenseReceipt(value.receipt)
+}
+
+function isExpenseReceipt(value: unknown): value is ExpenseReceipt {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'expenseId', 'receiptNumber', 'expenseDate', 'monthKey', 'category', 'scope',
+    'amountSatang', 'recordState', 'revision', 'committedAt', 'unreviewed',
+  ] as const)) return false
+  let parsedDate: { monthKey: string }
+  try {
+    if (typeof value.expenseDate !== 'string') return false
+    parsedDate = parseExpenseDate(value.expenseDate)
+  } catch {
+    return false
+  }
+  return safeId(value.expenseId)
+    && value.receiptNumber === value.expenseId
+    && typeof value.monthKey === 'string'
+    && value.monthKey === parsedDate.monthKey
+    && isExpenseIdForMonth(value.expenseId, value.monthKey)
+    && isEnabledCategory(value.category)
+    && value.scope === (value.category === 'BOOK_DOCTOR_PERSONAL' ? 'DOCTOR_PERSONAL' : 'CLINIC')
+    && positiveSatang(value.amountSatang)
+    && value.recordState === 'COMMITTED'
+    && safeInteger(value.revision)
+    && value.revision > 0
+    && isCanonicalExpenseTimestamp(value.committedAt)
+    && value.unreviewed === true
+}
+
+export function isExpenseRecoveryCounts(value: unknown): value is ExpenseRecoveryCounts {
+  if (!hasExactKeys(value, ['recovered', 'abandoned', 'unchanged', 'failed'] as const)) return false
+  const counts = [value.recovered, value.abandoned, value.unchanged, value.failed]
+  if (!counts.every((count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)) return false
+  return (counts as number[]).reduce((total, count) => total + count, 0) <= 100
 }
 
 function orderedCommand(value: unknown): MiniAppExpenseCommand {
@@ -278,12 +481,14 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
   }
 
   if (value.commandType === 'VOID_EXPENSE') {
-    const keys = ['expenseId', 'expectedVersion', 'reason'] as const
+    const keys = ['expenseId', 'expectedVersion', 'expectedRevision', 'reason'] as const
     if (
       !hasExactKeys(value.payload, keys)
       || !safeId(value.payload.expenseId)
       || !safeInteger(value.payload.expectedVersion)
       || value.payload.expectedVersion < 1
+      || !safeInteger(value.payload.expectedRevision)
+      || value.payload.expectedRevision < 1
       || !boundedText(value.payload.reason, 300)
       || value.payload.reason.trim().length < 3
     ) {
@@ -296,6 +501,7 @@ function orderedCommand(value: unknown): MiniAppExpenseCommand {
       payload: {
         expenseId: value.payload.expenseId,
         expectedVersion: value.payload.expectedVersion,
+        expectedRevision: value.payload.expectedRevision,
         reason: value.payload.reason,
       },
     }
@@ -330,7 +536,7 @@ function orderedAttachment(value: unknown): ExpensePrivateAttachment {
     || value.ordinal < 1
     || value.ordinal > 5
     || (value.mediaType !== 'image/jpeg' && value.mediaType !== 'image/png')
-    || !boundedText(value.originalFileName, 160)
+    || !isValidExpenseOriginalFileName(value.originalFileName)
     || !safeId(value.privateFileId)
     || typeof value.deterministicName !== 'string'
     || !safeInteger(value.sizeBytes)
@@ -396,6 +602,11 @@ function safeId(value: unknown): value is string {
 
 function sha256(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
+function serviceAccountEmail(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^[a-z0-9][a-z0-9._-]{2,62}@[a-z0-9-]{3,63}\.iam\.gserviceaccount\.com$/i.test(value)
 }
 
 function positiveSatang(value: unknown): value is number {
