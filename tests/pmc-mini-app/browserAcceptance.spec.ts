@@ -2,6 +2,9 @@ import { expect, test, type Page } from '@playwright/test'
 import { resolve } from 'node:path'
 
 const TASK_8_ARTIFACT_DIR = resolve('.superpowers/sdd/2026-08-29-pmc-daily-monthly-finance-reports-implementation')
+// 1,130-byte synthetic HEIC EXIF fixture from gen2brain/heic (MIT), testdata/test_exif.heic.
+const HEIC_FIXTURE_BASE64 = 'AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljbWlhZgAAAY5tZXRhAAAAAAAAACFoZGxyAAAAAAAAAABwaWN0AAAAAAAAAAAAAAAAAAAAAA5waXRtAAAAAAABAAAANGlsb2MAAAAAREAAAgABAAAAAAGyAAEAAAAAAAAB1AACAAAAAAOGAAEAAAAAAAAA5AAAADhpaW5mAAAAAAACAAAAFWluZmUCAAAAAAEAAGh2YzEAAAAAFWluZmUCAAABAAIAAEV4aWYAAAAAzWlwcnAAAACuaXBjbwAAAHlodmNDAQNwAAAAAAAAAAAAWvAA/P34+AAADwNgAAEAGEABDAH//wNwAAADAJAAAAMAAAMAWroCQGEAAQAsQgEBA3AAAAMAkAAAAwAAAwBaoAUCAeFlupJKa5uAhoMCAAADADIAAAMAAhBiAAEAB0QBwXKwYkAAAAAUaXNwZQAAAAAAAAKAAAAB4AAAABBwaXhpAAAAAAMICAgAAAAJaXJvdAMAAAAXaXBtYQAAAAAAAAABAAEEgQIDhAAAABppcmVmAAAAAAAAAA5jZHNjAAIAAQABAAACwG1kYXQAAAHQKAGvExB7DZ2ufw1k5TKPE//K+YnsdKChs9tP9NRKDeHdR62JE7rBlMqcWFV8SfFPnuCGhviCUvtAd8ZvhLPJ9bLynm9+beFUnrRf354QX0OrRr8ArMJ1fxeAAbLu0VkoI8vAPtKjDIpjCsIC6aulFw6/BFJLAp+J+oueLdF5W7Ld14VzcYejal/pF6oLQxQBEwPoAAADAAADADXgqLFxxDLFToGyXIAlkg25bSijcf+rh9IO04Te79jOlkkRCxTJ5ODQ3mziXw15CIvPfQYKbUfEHoqhWcHAmtFuGLCkZNwotC2m+xbwOIdycWk4afqgRg2X8rzLx6AAAAMAAAMAAAMAAAMAHNAb4h3ClqEPq2GMdJEDvzFT/ciuf3hCSR8fwvx5pOlx1JF0FI2Fv9IaSBrxKLMIqIAC6oAe7AQFAS0AmeBG0CPpJN/5+QRrrheOQ68HxtVVq9L1de4kDTrJykpwnBrZ5TNfjIMXFZEEYfSPRbeKib5Mmm7Os8ytfd4tQeua+s9Zb2m+aoBUTl9FZcZM5fimyYD1BCsl15Ib5DnaexxRaySFnbcy2AAB3AAAAwAAAwAABmyF4lqV8pR+Cks2lPbJ1RXKiAAAAwAAGVAAAAAGRXhpZgAATU0AKgAAAAgACAEPAAIAAAAIAAAAbgEQAAIAAAAJAAAAdgESAAMAAAABAAYAAAEaAAUAAAABAAAAgAEbAAUAAAABAAAAiAEoAAMAAAABAAEAAAITAAMAAAABAAEAAIdpAAQAAAABAAAAkAAAAABUZXN0Q2FtAE1vZGVsMTIzAAAAAAABAAAAAQAAAAEAAAABAAWCnQAFAAAAAQAAANKIJwADAAAAAQMgAACQAAAHAAAABDAyMzKRAQAHAAAABAECAwCgAQADAAAAAf//AAAAAAAAAAAAHAAAAAU='
+const WEBP_FIXTURE_BASE64 = 'UklGRkgAAABXRUJQVlA4IDwAAAAwAwCdASogABgAPlEkj0WjoiEUBAA4BQSygDsAfgAAQZQQAP7weQ///Rh/DD+GH99L//8D8unDEAAAAAA='
 
 const browserErrors = new WeakMap<Page, string[]>()
 const outboundRequests = new WeakMap<Page, string[]>()
@@ -254,6 +257,37 @@ test.describe('Expense capture Android acceptance', () => {
 
     await expect(page.getByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
     await expect(page.getByText('EXP-202608-PREVIEW', { exact: true })).toBeVisible()
+  })
+
+  test('converts real HEIC and WebP sources to JPEG before staging the expense', async ({ page }) => {
+    await page.goto('/mini-app/?preview=1&expense=enabled&role=staff')
+    await openExpenseForm(page, 'บิลเอกสาร')
+    await page.getByLabel('วันที่รายจ่าย').fill('2026-08-30')
+    await page.getByLabel('จำนวนเงิน').fill('1250')
+    await page.getByLabel('ชื่อร้านหรือผู้รับเงิน').fill('ร้านเวชภัณฑ์')
+    await page.getByLabel('วิธีชำระ').selectOption('TRANSFER')
+    await page.getByLabel('รูปหลักฐาน').setInputFiles([
+      {
+        name: 'mobile-heic.heic',
+        mimeType: 'image/heic',
+        buffer: Buffer.from(HEIC_FIXTURE_BASE64, 'base64'),
+      },
+      {
+        name: 'mobile-webp.webp',
+        mimeType: 'image/webp',
+        buffer: Buffer.from(WEBP_FIXTURE_BASE64, 'base64'),
+      },
+    ])
+
+    await expect(page.getByText('mobile-heic.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('mobile-webp.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('mobile-heic.heic', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('mobile-webp.webp', { exact: true })).toHaveCount(0)
+    await page.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click()
+    await expect(page.getByText('1. mobile-heic.jpg', { exact: true })).toBeVisible()
+    await expect(page.getByText('2. mobile-webp.jpg', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'ยืนยันบันทึก' }).click()
+    await expect(page.getByRole('heading', { name: 'บันทึกแล้ว — ยังไม่ผ่านการตรวจสอบ' })).toBeVisible()
   })
 
   test('submit-only staff records one clinic-book daily total with two page images', async ({ page }) => {

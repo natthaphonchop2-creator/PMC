@@ -30,15 +30,19 @@ describe('expense capture client model', () => {
     })).toMatchObject({ expenseDate: expect.any(String) })
   })
 
-  it('accepts only one-to-five safe named JPEG/PNG files within exact byte budgets', () => {
+  it('accepts one-to-five supported mobile image sources within exact byte budgets', () => {
     const jpg = imageFile('one.jpg', 'image/jpeg', 10_000_000)
     const png = imageFile('two.png', 'image/png', 1)
-    expect(validateExpenseFiles([jpg, png])).toBeNull()
+    const webp = imageFile('three.webp', 'image/webp', 1)
+    const heic = imageFile('four.heic', 'image/heic', 1)
+    const heif = imageFile('five.heif', 'application/octet-stream', 1)
+    expect(validateExpenseFiles([jpg, png, webp, heic, heif])).toBeNull()
     expect(validateExpenseFiles([])).toBe('กรุณาแนบรูปหลักฐานอย่างน้อย 1 รูป')
     expect(validateExpenseFiles(Array.from({ length: 6 }, (_, index) => imageFile(`${index}.png`, 'image/png', 1))))
       .toBe('แนบได้สูงสุด 5 รูป')
     expect(validateExpenseFiles([imageFile('bad/heic.jpg', 'image/jpeg', 1)])).toBe('ชื่อไฟล์ไม่ถูกต้อง กรุณาเปลี่ยนชื่อแล้วแนบใหม่')
-    expect(validateExpenseFiles([imageFile('photo.heic', 'image/heic', 1)])).toBe('รองรับเฉพาะรูป JPG หรือ PNG')
+    expect(validateExpenseFiles([imageFile('photo.gif', 'image/gif', 1)]))
+      .toBe('รองรับรูป JPG, PNG, WebP, HEIC หรือ HEIF')
     expect(validateExpenseFiles([imageFile('large.png', 'image/png', 10_000_001)])).toBe('แต่ละรูปต้องมีขนาดไม่เกิน 10 MB')
     expect(validateExpenseFiles([
       imageFile('a.png', 'image/png', 9_000_000),

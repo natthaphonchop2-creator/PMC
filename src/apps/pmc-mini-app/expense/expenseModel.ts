@@ -9,6 +9,8 @@ export const EXPENSE_MAX_FILES = 5
 export const EXPENSE_MAX_FILE_BYTES = 10_000_000
 export const EXPENSE_MAX_TOTAL_BYTES = 25_000_000
 
+export type ExpenseSourceImageType = 'JPEG' | 'PNG' | 'WEBP' | 'HEIC'
+
 export interface ExpenseFormValues {
   expenseDate: string
   amount: string
@@ -60,7 +62,7 @@ export function validateExpenseFiles(files: File[]): string | null {
   let total = 0
   for (const file of files) {
     if (!safeFileName(file.name)) return 'ชื่อไฟล์ไม่ถูกต้อง กรุณาเปลี่ยนชื่อแล้วแนบใหม่'
-    if (!matchingImageType(file)) return 'รองรับเฉพาะรูป JPG หรือ PNG'
+    if (!expenseSourceImageType(file)) return 'รองรับรูป JPG, PNG, WebP, HEIC หรือ HEIF'
     if (!Number.isSafeInteger(file.size) || file.size <= 0) return 'รูปต้องมีข้อมูลและเปิดอ่านได้'
     if (file.size > EXPENSE_MAX_FILE_BYTES) return 'แต่ละรูปต้องมีขนาดไม่เกิน 10 MB'
     total += file.size
@@ -116,10 +118,16 @@ function safeFileName(value: string): boolean {
   return isValidExpenseOriginalFileName(value)
 }
 
-function matchingImageType(file: File): boolean {
-  if (file.type === 'image/jpeg') return /\.jpe?g$/i.test(file.name)
-  if (file.type === 'image/png') return /\.png$/i.test(file.name)
-  return false
+export function expenseSourceImageType(file: File): ExpenseSourceImageType | null {
+  const mimeType = file.type.trim().toLowerCase()
+  if (mimeType === 'image/jpeg' && /\.jpe?g$/i.test(file.name)) return 'JPEG'
+  if (mimeType === 'image/png' && /\.png$/i.test(file.name)) return 'PNG'
+  if (mimeType === 'image/webp' && /\.webp$/i.test(file.name)) return 'WEBP'
+  if (['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'].includes(mimeType)
+    && /\.(?:heic|heif)$/i.test(file.name)) return 'HEIC'
+  if ((mimeType === '' || mimeType === 'application/octet-stream')
+    && /\.(?:heic|heif)$/i.test(file.name)) return 'HEIC'
+  return null
 }
 
 function isExpensePaymentMethod(value: unknown): value is ExpensePaymentMethod {

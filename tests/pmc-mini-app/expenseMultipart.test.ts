@@ -82,6 +82,11 @@ describe('expense evidence multipart parser', () => {
       filePart(boundary, 'file1', 'not-a-png.png', 'image/png', image), closingPart(boundary),
     ]))).rejects.toMatchObject({ code: 'EXPENSE_UNSUPPORTED_IMAGE' })
 
+    const rawHeic = Buffer.from('0000001866747970686569630000000068656966', 'hex')
+    await expect(consumeExpenseMultipart(multipartRequest(boundary, [
+      filePart(boundary, 'file1', 'raw.heic', 'image/heic', rawHeic), closingPart(boundary),
+    ]))).rejects.toMatchObject({ code: 'EXPENSE_UNSUPPORTED_IMAGE' })
+
     await expect(consumeExpenseMultipart(multipartRequest(boundary, [
       filePart(boundary, 'file2', 'two.jpg', 'image/jpeg', image), closingPart(boundary),
     ]))).rejects.toMatchObject({ code: 'EXPENSE_INVALID_ORDER' })

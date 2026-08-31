@@ -3,6 +3,7 @@ import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, X } from 'lucide-react'
 import type { EnabledExpenseCategory, ExpensePaymentMethod, ExpenseReceipt } from '../../../../shared/pmcExpense'
 import type { ExpenseResumeStatus } from '../../../../shared/pmcMiniAppExpenseIngress'
 import { BrandMark } from '../BrandMark'
+import { normalizeExpenseUploadFiles } from './expenseImageNormalizer'
 import {
   expenseCategoryLabel,
   expenseFileFingerprint,
@@ -43,6 +44,7 @@ export function ExpenseForm({
   adapter,
   expectedRevision = 0,
   lockedExpenseDate,
+  normalizeFiles = normalizeExpenseUploadFiles,
   onCommitted,
   onBack,
 }: {
@@ -50,6 +52,7 @@ export function ExpenseForm({
   adapter: ExpenseFormAdapter
   expectedRevision?: number
   lockedExpenseDate?: string
+  normalizeFiles?: (files: File[]) => Promise<File[]>
   onCommitted: (receipt: ExpenseReceipt) => void
   onBack: () => void
 }) {
@@ -61,6 +64,7 @@ export function ExpenseForm({
   const [reviewing, setReviewing] = useState(false)
   const [failure, setFailure] = useState('')
   const [busy, setBusy] = useState(false)
+  const [convertingFiles, setConvertingFiles] = useState(false)
   const [resumePending, setResumePending] = useState(false)
   const [resumeBusy, setResumeBusy] = useState(false)
   const [initialRootRequestId] = useState(() => globalThis.crypto.randomUUID())
@@ -82,24 +86,42 @@ export function ExpenseForm({
     setFailure('')
   }
 
-  const addFiles = (event: ChangeEvent<HTMLInputElement>) => {
+  const addFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = [...(event.target.files ?? [])]
     event.target.value = ''
-    const combined = [...items.map(({ file }) => file), ...files]
-    const fileError = validateExpenseFiles(combined)
+    if (files.length === 0) return
+    const currentFiles = items.map(({ file }) => file)
+    const fileError = validateExpenseFiles([...currentFiles, ...files])
     if (fileError) {
       setErrors((current) => ({ ...current, files: fileError }))
       return
     }
-    const added = files.map((file): ExpenseFileItem => ({
-      id: ++itemSequenceRef.current,
-      file,
-      previewUrl: typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '',
-    }))
-    stagedRef.current = null
-    setItems((current) => [...current, ...added])
-    setErrors((current) => ({ ...current, files: '' }))
+    setConvertingFiles(true)
     setFailure('')
+    try {
+      const normalized = await normalizeFiles(files)
+      if (normalized.length !== files.length) throw new Error('EXPENSE_IMAGE_CONVERSION_FAILED')
+      const normalizedError = validateExpenseFiles([...currentFiles, ...normalized])
+      if (normalizedError) {
+        setErrors((current) => ({ ...current, files: normalizedError }))
+        return
+      }
+      const added = normalized.map((file): ExpenseFileItem => ({
+        id: ++itemSequenceRef.current,
+        file,
+        previewUrl: typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '',
+      }))
+      stagedRef.current = null
+      setItems((current) => [...current, ...added])
+      setErrors((current) => ({ ...current, files: '' }))
+    } catch {
+      setErrors((current) => ({
+        ...current,
+        files: 'แปลงรูป HEIC หรือ WebP ไม่สำเร็จ กรุณาจับภาพหน้าจอแล้วแนบใหม่',
+      }))
+    } finally {
+      setConvertingFiles(false)
+    }
   }
 
   const removeFile = (id: number) => {
@@ -125,6 +147,7 @@ export function ExpenseForm({
 
   const openReview = (event: FormEvent) => {
     event.preventDefault()
+    if (convertingFiles) return
     const nextErrors = validateExpenseValues(category, values)
     const fileError = validateExpenseFiles(items.map(({ file }) => file))
     if (fileError) nextErrors.files = fileError
@@ -230,7 +253,7 @@ export function ExpenseForm({
 
   return <main className="pmc-expense-page">
     <header className="pmc-expense-header">
-      <button type="button" aria-label="ย้อนกลับ" disabled={busy || resumePending} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
+      <button type="button" aria-label="ย้อนกลับ" disabled={busy || resumePending || convertingFiles} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
       <BrandMark compact />
       <div><p>จัดเก็บรายจ่าย</p><span>{expenseCategoryLabel(category)}</span></div>
     </header>
@@ -279,16 +302,17 @@ export function ExpenseForm({
             onChange={(event) => update('description', event.target.value)} />
         </Field>
 
-        <section className="pmc-expense-evidence">
+        <section className="pmc-expense-evidence" aria-busy={convertingFiles || undefined}>
           <div>
             <h2 id="expense-evidence-heading">รูปหลักฐาน</h2>
             <span>เลือกแล้ว {items.length} รูป</span>
           </div>
           <label className="pmc-expense-add-file" htmlFor="expense-files">
-            <ImagePlus aria-hidden="true" /> เพิ่มรูป
+            <ImagePlus aria-hidden="true" /> <span aria-live="polite">{convertingFiles ? 'กำลังแปลงรูป' : 'เพิ่มรูป'}</span>
             <input ref={fileInputRef} id="expense-files" className="pmc-visually-hidden" aria-label="รูปหลักฐาน" type="file" multiple
+              disabled={convertingFiles}
               aria-invalid={Boolean(errors.files)} aria-describedby={errors.files ? 'expense-files-error' : undefined}
-              accept="image/jpeg,image/png,.jpg,.jpeg,.png" onChange={addFiles} />
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/heic-sequence,image/heif-sequence,.jpg,.jpeg,.png,.webp,.heic,.heif" onChange={(event) => { void addFiles(event) }} />
           </label>
           {errors.files && <p id="expense-files-error" className="pmc-expense-error" role="alert">{errors.files}</p>}
           {items.length > 0 && <ol className="pmc-expense-file-list">
@@ -296,16 +320,16 @@ export function ExpenseForm({
               {item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span className="pmc-expense-file-placeholder"><ImagePlus aria-hidden="true" /></span>}
               <p>{item.file.name}</p>
               <div>
-                <button type="button" aria-label={`เลื่อนรูปที่ ${index + 1} ${item.file.name} ขึ้น`} disabled={index === 0} onClick={() => moveFile(index, -1)}><ArrowUp aria-hidden="true" /></button>
-                <button type="button" aria-label={`เลื่อนรูปที่ ${index + 1} ${item.file.name} ลง`} disabled={index === items.length - 1} onClick={() => moveFile(index, 1)}><ArrowDown aria-hidden="true" /></button>
-                <button type="button" aria-label={`ลบรูปที่ ${index + 1} ${item.file.name}`} onClick={() => removeFile(item.id)}><X aria-hidden="true" /></button>
+                <button type="button" aria-label={`เลื่อนรูปที่ ${index + 1} ${item.file.name} ขึ้น`} disabled={convertingFiles || index === 0} onClick={() => moveFile(index, -1)}><ArrowUp aria-hidden="true" /></button>
+                <button type="button" aria-label={`เลื่อนรูปที่ ${index + 1} ${item.file.name} ลง`} disabled={convertingFiles || index === items.length - 1} onClick={() => moveFile(index, 1)}><ArrowDown aria-hidden="true" /></button>
+                <button type="button" aria-label={`ลบรูปที่ ${index + 1} ${item.file.name}`} disabled={convertingFiles} onClick={() => removeFile(item.id)}><X aria-hidden="true" /></button>
               </div>
             </li>)}
           </ol>}
         </section>
 
         {failure && <p className="pmc-expense-alert" role="alert">{failure}</p>}
-        <footer className="pmc-expense-footer"><button type="submit" disabled={busy}>ตรวจสอบข้อมูล</button></footer>
+        <footer className="pmc-expense-footer"><button type="submit" disabled={busy || convertingFiles}>{convertingFiles ? 'กำลังแปลงรูป' : 'ตรวจสอบข้อมูล'}</button></footer>
       </form>}
 
     {reviewing && <footer className="pmc-expense-footer review">
@@ -376,7 +400,9 @@ function expenseFailureMessage(error: unknown): string {
   if (code === 'EXPENSE_RESUME_STORAGE_UNAVAILABLE') {
     return 'อุปกรณ์นี้ไม่สามารถเก็บสถานะป้องกันรายการซ้ำได้ กรุณาตรวจการตั้งค่าเบราว์เซอร์แล้วลองใหม่'
   }
-  if (code === 'EXPENSE_UNSUPPORTED_IMAGE' || code === 'EXPENSE_INVALID_FILE_NAME') return 'รองรับเฉพาะรูป JPG หรือ PNG กรุณาเปลี่ยนรูปแล้วลองใหม่'
+  if (code === 'EXPENSE_UNSUPPORTED_IMAGE' || code === 'EXPENSE_INVALID_FILE_NAME') {
+    return 'รูปบางรูปไม่รองรับหรือแปลงไม่สำเร็จ กรุณาใช้ JPG, PNG, WebP, HEIC หรือ HEIF'
+  }
   return 'บันทึกรายจ่ายไม่สำเร็จ กรุณาลองอีกครั้ง'
 }
 

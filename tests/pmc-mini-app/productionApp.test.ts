@@ -18,6 +18,8 @@ beforeEach(async () => {
   await writeFile(join(distDir, 'index.html'), '<main>private dashboard</main>')
   await writeFile(join(distDir, 'mini-app', 'index.html'), '<main>PMC Mini App shell</main>')
   await writeFile(join(distDir, 'mini-app', 'assets', 'mini-123.js'), 'mini app asset')
+  await writeFile(join(distDir, 'mini-app', 'assets', 'heic-module.mjs'), 'export const decoder = true')
+  await writeFile(join(distDir, 'mini-app', 'assets', 'heic-decoder.wasm'), Buffer.from([0x00, 0x61, 0x73, 0x6d]))
   await writeFile(join(distDir, 'ocr-review', 'index.html'), '<main>OCR shell</main>')
 })
 
@@ -50,6 +52,8 @@ describe('production PMC Mini App route isolation', () => {
     const app = handler()
     const page = await invoke(app, '/mini-app/?customerName=private-customer')
     const asset = await invoke(app, '/mini-app/assets/mini-123.js')
+    const moduleAsset = await invoke(app, '/mini-app/assets/heic-module.mjs')
+    const wasm = await invoke(app, '/mini-app/assets/heic-decoder.wasm')
     const pageText = await page.text()
 
     expect(page.status).toBe(200)
@@ -57,6 +61,9 @@ describe('production PMC Mini App route isolation', () => {
     expect((await invoke(app, '/mini-app')).status).toBe(200)
     expect(await asset.text()).toBe('mini app asset')
     expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect(moduleAsset.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+    expect(wasm.headers.get('content-type')).toBe('application/wasm')
+    expect(wasm.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
     expect(pageText).not.toContain('private-customer')
     expect((await invoke(app, '/mini-app-private')).status).toBe(401)
   })

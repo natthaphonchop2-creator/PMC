@@ -49,7 +49,10 @@ describe('expense form lifecycle', () => {
     expect(screen.getByLabelText('ชื่อร้านหรือผู้รับเงิน')).toBeVisible()
     expect(screen.getByLabelText('วิธีชำระ')).toBeVisible()
     expect(screen.getByLabelText('หมายเหตุ (ไม่บังคับ)')).toBeVisible()
-    expect(screen.getByLabelText('รูปหลักฐาน')).toHaveAttribute('accept', 'image/jpeg,image/png,.jpg,.jpeg,.png')
+    expect(screen.getByLabelText('รูปหลักฐาน')).toHaveAttribute(
+      'accept',
+      'image/jpeg,image/png,image/webp,image/heic,image/heif,image/heic-sequence,image/heif-sequence,.jpg,.jpeg,.png,.webp,.heic,.heif',
+    )
 
     view.rerender(<ExpenseForm category="BOOK_CLINIC" adapter={adapter()} onCommitted={vi.fn()} onBack={vi.fn()} />)
     expect(screen.getByLabelText('ยอดรวมรายวัน')).toBeVisible()
@@ -182,6 +185,31 @@ describe('expense form lifecycle', () => {
     expect(screen.getByRole('button', { name: 'ลบรูปที่ 2 same.jpg' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'เลื่อนรูปที่ 1 same.jpg ลง' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'เลื่อนรูปที่ 2 same.jpg ขึ้น' })).toBeVisible()
+  })
+
+  it('shows conversion progress and adds the normalized JPEG instead of the HEIC source', async () => {
+    const user = userEvent.setup()
+    const conversion = deferred<File[]>()
+    const normalizeFiles = vi.fn(() => conversion.promise)
+    render(<ExpenseForm
+      category="BILL_DOCUMENT"
+      adapter={adapter()}
+      normalizeFiles={normalizeFiles}
+      onCommitted={vi.fn()}
+      onBack={vi.fn()}
+    />)
+    const input = screen.getByLabelText('รูปหลักฐาน')
+
+    await user.upload(input, imageFile('mobile.heic', 'image/heic'))
+
+    expect(normalizeFiles).toHaveBeenCalledWith([expect.objectContaining({ name: 'mobile.heic', type: 'image/heic' })])
+    expect(screen.getAllByText('กำลังแปลงรูป')).toHaveLength(2)
+    expect(input).toBeDisabled()
+
+    conversion.resolve([imageFile('mobile.jpg', 'image/jpeg')])
+    expect(await screen.findByText('mobile.jpg')).toBeVisible()
+    expect(screen.queryByText('mobile.heic')).not.toBeInTheDocument()
+    expect(input).toBeEnabled()
   })
 
   it('rejects malformed staging tokens at the form boundary before submit', async () => {
