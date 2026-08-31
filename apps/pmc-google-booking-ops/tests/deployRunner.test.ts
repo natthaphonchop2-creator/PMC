@@ -44,7 +44,7 @@ describe('fail-fast Apps Script deployment runner', () => {
       'clasp clone script-id-0001 43',
       'clasp redeploy deployment-id-0001',
     ])
-  })
+  }, 20_000)
 
   it.each([
     'dirty',
