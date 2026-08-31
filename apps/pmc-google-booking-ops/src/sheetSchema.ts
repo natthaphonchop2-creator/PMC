@@ -3,6 +3,7 @@ import {
   PMC_BOOKING_MASTER_COLUMNS_V1,
   PMC_BOOKING_MASTER_COLUMNS_V2,
 } from '../../../shared/pmcBookingRowContracts'
+import { RETENTION_QUEUE_COLUMNS_V2 } from '../../../shared/pmcMiniAppDraftRetention'
 
 export const BOOKING_MASTER_COLUMNS_V1 = PMC_BOOKING_MASTER_COLUMNS_V1
 export const BOOKING_MASTER_COLUMNS = PMC_BOOKING_MASTER_COLUMNS_V2 satisfies readonly (keyof BookingCase)[]
@@ -40,7 +41,7 @@ export const SHEET_SCHEMAS: Record<string, readonly string[]> = {
   LINE_INGRESS_NONCES: ['nonce', 'capturedAt'],
   FORM_RESPONSE_MAP: ['formResponseId', 'caseId'],
   SYSTEM_SEQUENCES: ['month', 'sequence'],
-  RETENTION_QUEUE: ['id', 'caseId', 'eligibleAt', 'status', 'approvedBy', 'approvedAt', 'reason', 'version'],
+  RETENTION_QUEUE: RETENTION_QUEUE_COLUMNS_V2,
   AUDIT_LOG: ['eventId', 'caseId', 'actor', 'action', 'target', 'before', 'after', 'reason', 'timestamp', 'correlationId'],
   STOCK_PRODUCTS: [
     'productId', 'name', 'normalizedName', 'category', 'unit', 'minimumQuantityMilli', 'active',

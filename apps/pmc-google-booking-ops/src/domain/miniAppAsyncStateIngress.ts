@@ -9,6 +9,7 @@ import {
 } from '../../../../shared/pmcMiniAppAsyncState'
 import { canonicalMiniAppP2BookingIdentity } from '../../../../shared/pmcMiniAppDraftState'
 import type { BookingPorts, MiniAppRequestStateRecord } from '../ports'
+import { transitionExistingDraftRetention } from '../workflows/draftRetention'
 
 const ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'payload', 'signature'] as const
 const PAYLOAD_KEYS = [
@@ -27,6 +28,10 @@ export function mutateMiniAppAsyncState(input: unknown, ports: BookingPorts): Mi
     if (!current || current.draftId !== envelope.payload.draftId) throw new Error('mini app async request not found')
     validateImmutableBindings(current, envelope.payload, ports)
     const mutation = applyMutation(current, envelope.payload, ports)
+    if (envelope.payload.operation === 'COMPLETE'
+      && (mutation.next.state === 'CONFIRMED' || mutation.next.state === 'CONFIRMED_WITH_RETRY')) {
+      transitionExistingDraftRetention(current.draftId, 'PROMOTED', 'ASYNC_CONFIRMED', ports)
+    }
     const persisted = mutation.write
       ? ports.miniAppRequests.updateByRequestId(current.requestId, current.version, mutation.next)
       : current

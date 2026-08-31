@@ -13,6 +13,7 @@ import { normalizeAttributionSheetMetadata } from '../domain/attributionSheetMet
 import type { SheetRow, SheetStore } from '../repositories'
 import type { DashboardPort } from '../ports'
 import type { ExpenseTopologyPort } from '../ports'
+import { RETENTION_QUEUE_COLUMNS_V1 } from '../../../../shared/pmcMiniAppDraftRetention'
 
 function requireSheet(spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet, tab: string) {
   const sheet = spreadsheet.getSheetByName(tab)
@@ -34,6 +35,9 @@ export function resolveManagedSheetColumns(tab: string, actual: readonly string[
   if (sameHeader(actual, canonical)) return canonical
   if (tab === 'BOOKING_MASTER' && sameHeader(actual, BOOKING_MASTER_COLUMNS_V1)) {
     return BOOKING_MASTER_COLUMNS_V1
+  }
+  if (tab === 'RETENTION_QUEUE' && sameHeader(actual, RETENTION_QUEUE_COLUMNS_V1)) {
+    return RETENTION_QUEUE_COLUMNS_V1
   }
   throw new Error(`sheet header mismatch: ${tab}`)
 }
@@ -133,6 +137,9 @@ export function createGoogleSheetStore(spreadsheet: GoogleAppsScript.Spreadsheet
     return resolveManagedSheetColumns(tab, actual)
   }
   return {
+    columns(tab: string): readonly string[] {
+      return columnsFor(tab, requireSheet(spreadsheet, tab))
+    },
     read(tab: string): SheetRow[] {
       const sheet = requireSheet(spreadsheet, tab)
       const headers = columnsFor(tab, sheet)

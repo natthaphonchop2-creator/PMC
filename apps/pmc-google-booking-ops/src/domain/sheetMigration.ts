@@ -1,4 +1,10 @@
 import { BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1, STAFF_CONFIG_COLUMNS } from '../sheetSchema'
+import {
+  RETENTION_QUEUE_COLUMNS_V1,
+  RETENTION_QUEUE_COLUMNS_V2,
+  createRetentionManifest,
+  type RetentionRecordV2,
+} from '../../../../shared/pmcMiniAppDraftRetention'
 
 export type BookingMasterMigrationPlan =
   | { kind: 'NONE' }
@@ -123,4 +129,40 @@ export function staffConfigMigrationPlan(existing: string[]): StaffConfigMigrati
     }
   }
   throw new Error('unsupported CONFIG_STAFF header')
+}
+
+export type RetentionQueueMigrationPlan =
+  | { kind: 'NONE' }
+  | { kind: 'REPLACE_RETENTION_QUEUE_V2'; headers: typeof RETENTION_QUEUE_COLUMNS_V2; rows: RetentionRecordV2[] }
+
+export function retentionQueueMigrationPlan(
+  existing: readonly string[],
+  legacyRows: readonly Record<string, unknown>[],
+  bookings: readonly { caseId: string; driveFolderId: string | null }[],
+  sha256Hex: (value: string) => string,
+): RetentionQueueMigrationPlan {
+  if (same(existing, RETENTION_QUEUE_COLUMNS_V2)) return { kind: 'NONE' }
+  if (!same(existing, RETENTION_QUEUE_COLUMNS_V1)) throw new Error('unsupported RETENTION_QUEUE header')
+  const rows = legacyRows.map((row): RetentionRecordV2 => {
+    const caseId = String(row.caseId ?? '')
+    const matches = bookings.filter((booking) => booking.caseId === caseId && booking.driveFolderId)
+    if (!/^PMC-\d{6}-\d{4,}$/.test(caseId) || matches.length !== 1) {
+      throw new Error('RETENTION_CASE_FOLDER_UNRESOLVED')
+    }
+    const approvedAt = String(row.approvedAt ?? '')
+    const oldStatus = String(row.status ?? '')
+    if (oldStatus !== 'PENDING' && oldStatus !== 'APPROVED') throw new Error('RETENTION_STATUS_UNSUPPORTED')
+    const manifest = createRetentionManifest([
+      { storage: 'CASE_FOLDER', folderId: matches[0]!.driveFolderId! },
+    ], sha256Hex)
+    return {
+      id: String(row.id ?? ''), scope: 'CASE_FOLDER', caseId, draftId: null,
+      trigger: 'LEGACY_CASE_RETENTION', eligibleAt: String(row.eligibleAt ?? ''),
+      status: oldStatus === 'APPROVED' ? 'CLEANED' : 'PENDING', ...manifest,
+      approvedBy: String(row.approvedBy ?? ''), approvedAt, reason: String(row.reason ?? ''),
+      cleanupAttemptCount: oldStatus === 'APPROVED' ? 1 : 0, cleanupClaimId: '', cleanupLeaseUntil: '',
+      cleanedAt: oldStatus === 'APPROVED' ? approvedAt : '', safeErrorCode: '', version: Number(row.version),
+    }
+  })
+  return { kind: 'REPLACE_RETENTION_QUEUE_V2', headers: RETENTION_QUEUE_COLUMNS_V2, rows }
 }

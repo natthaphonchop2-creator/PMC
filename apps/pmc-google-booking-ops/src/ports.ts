@@ -10,6 +10,7 @@ import type {
   WorkbookPresentationPlan,
   WorkbookPresentationSha256,
 } from './domain/workbookPresentation'
+import type { RetentionRecordV2, RetentionStatus } from '../../../shared/pmcMiniAppDraftRetention'
 
 export interface Clock {
   nowIso(): string
@@ -91,6 +92,7 @@ export interface ConfigPort {
   listDoctors(): DoctorConfig[]
   listServices(): ServiceConfig[]
   listChannels(): ChannelConfig[]
+  ruleValue(key: string): string | null
 }
 
 export interface BookingRepository {
@@ -172,10 +174,13 @@ export interface LineDirectoryRepository {
 }
 
 export interface RetentionRepository {
-  queue(input: Record<string, unknown>): void
-  pending(): Record<string, unknown>[]
+  get(id: string): RetentionRecordV2 | null
+  getByDraftId(draftId: string): RetentionRecordV2 | null
+  list(): RetentionRecordV2[]
+  upsert(input: RetentionRecordV2, expectedVersion?: number): RetentionRecordV2
+  setStatus(id: string, expectedVersion: number, status: RetentionStatus, patch?: Partial<RetentionRecordV2>): RetentionRecordV2
+  pending(): RetentionRecordV2[]
   hasCase(caseId: string): boolean
-  approve(id: string, approver: string, reason: string): Record<string, unknown>
 }
 
 export interface AuditRepository {
@@ -409,6 +414,7 @@ export interface CryptoPort {
 export type MiniAppRequestStateRecord = MiniAppAsyncRequestRecordV1 | PmcMiniAppTargetRequestRecord
 
 export interface MiniAppRequestStatePort {
+  list?(): MiniAppRequestStateRecord[]
   getByRequestId(requestId: string): MiniAppRequestStateRecord | null
   updateByRequestId(
     requestId: string,

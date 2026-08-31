@@ -351,9 +351,11 @@ export function createTestPorts(options: TestPortOptions = {}): TestPorts {
         { id: 'service-1', name: 'Service One', durationMinutes: 60, active: true },
       ],
       listChannels: () => [{ id: 'เพจหลัก', name: 'เพจหลัก', active: true }],
+      ruleValue: (key) => key === 'MINI_APP_DRAFT_TTL_HOURS' ? '24' : null,
     },
     repositories,
     miniAppRequests: {
+      list: () => [],
       getByRequestId: () => null,
       updateByRequestId: () => { throw new Error('mini app request not configured') },
     },

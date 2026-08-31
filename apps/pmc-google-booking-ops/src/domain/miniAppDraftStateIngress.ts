@@ -19,6 +19,7 @@ import {
   miniAppEvidenceUploadIdV2,
 } from '../../../../shared/pmcMiniAppEvidence'
 import type { BookingPorts, MiniAppRequestStateRecord, StaffConfig } from '../ports'
+import { reconcileDraftRetentionMutation } from '../workflows/draftRetention'
 
 type P2Record = PmcMiniAppTargetRequestRecord & { protocolVersion: 2 }
 
@@ -50,6 +51,7 @@ export function mutateMiniAppDraftState(input: unknown, ports: BookingPorts): Mi
     const current = asP2Record(ports.miniAppRequests.getByRequestId(envelope.payload.requestId))
     if (!current || current.draftId !== envelope.payload.draftId) throw new Error('mini app draft state request not found')
     const mutation = applyOwnerMutation(current, envelope.payload, ports)
+    reconcileDraftRetentionMutation(current, mutation.next, envelope.payload, ports)
     const persisted = mutation.write
       ? asP2Record(ports.miniAppRequests.updateByRequestId(current.requestId, current.version, mutation.next))!
       : current

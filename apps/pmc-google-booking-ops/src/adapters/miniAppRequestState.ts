@@ -53,6 +53,9 @@ export function createGoogleMiniAppRequestStatePort(
   }
 
   return {
+    list() {
+      return readRows().rows.map(({ value }) => JSON.parse(JSON.stringify(value)) as MiniAppRequestStateRecord)
+    },
     getByRequestId(requestId) {
       const matches = readRows().rows.filter(({ value }) => value.requestId === requestId)
       if (matches.length > 1) throw new Error('duplicate mini app async request identity')

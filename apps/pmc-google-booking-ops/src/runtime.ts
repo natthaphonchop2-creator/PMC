@@ -83,7 +83,7 @@ import {
 } from './workflows/flexValidation'
 import { sendCallReminderFlexPilot, sendProductionFlexPilot } from './workflows/flexPilot'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
-import { queueEvidenceRetention } from './workflows/retention'
+import { queueEvidenceRetention, reconcileAndExpireDraftEvidenceRetention } from './workflows/retention'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
 import { prepareAutomaticQueue } from './workflows/automaticQueue'
 import {
@@ -215,6 +215,10 @@ function createConfigPort(
       name: String(row.name),
       active: isActive(row.active),
     }))
+  const ruleValue = (key: string): string | null => {
+    const matches = store.read('CONFIG_RULES').filter((row) => String(row.key ?? '') === key)
+    return matches.length === 1 ? String(matches[0]!.value ?? '') : null
+  }
   return {
     findCloserByEmail: (email) => resolveCloserByEmail(staff(), email),
     findCloserByName: (name) => resolveCloserByName(staff(), name),
@@ -234,6 +238,7 @@ function createConfigPort(
     listDoctors: doctors,
     listServices: services,
     listChannels: channels,
+    ruleValue,
   }
 }
 
@@ -1213,6 +1218,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
 export function runIntegrityAndBackupWorkflow(ports: BookingPorts): string[] {
   const report = runIntegrityReport(ports)
   createDailyBackup(ports)
+  reconcileAndExpireDraftEvidenceRetention(ports)
   queueEvidenceRetention(ports)
   writeDashboard(ports)
   return report.codes
