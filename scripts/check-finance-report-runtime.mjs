@@ -6,8 +6,10 @@ import { APPROVED_FINANCE_PROJECT, assertNoSensitiveFlags, safeProject } from '.
 
 const executeFile = promisify(execFile)
 const FINANCE_SEED_PATH = '/internal/mini-app/finance-daily-seed'
+const FINANCE_CURRENT_SEED_PATH = '/internal/mini-app/finance-current-seed'
 const ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
 const APPROVED_REGION = 'asia-southeast1'
+const FINANCE_SCHEDULER_ATTEMPT_DEADLINE = '180s'
 const STAGES = new Set(['DISABLED', 'ALLOCATION', 'PILOT', 'READY'])
 const REQUIRED_ALLOCATION_NAMES = [
   'JERA_ALLOCATION_PROJECT_ID', 'JERA_ALLOCATION_LOCATION', 'JERA_ALLOCATION_QUEUE',
@@ -34,7 +36,7 @@ export async function runFinanceRuntimeCheck(args, options = {}) {
   const parsed = parseArguments(args)
   const io = options.io ?? { stdout: process.stdout }
   if (parsed.help) {
-    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers 3 --approved-finance-staff-id <id> (repeat exactly 3 times) --expected-stage=DISABLED|ALLOCATION|PILOT|READY --expected-finance-pilot-only true|false --expected-finance-ui-preview-enabled true|false --expected-finance-pilot-default-date YYYY-MM-DD|UNSET --expected-finance-monthly-income-enabled true|false [--expected-worker-service <private-service> and stage expected bindings]\n')
+    io.stdout.write('Usage: check-finance-report-runtime --allow-readonly-production --project <id> --service <name> --region <region> --expected-finance-viewers <1..20> --approved-finance-staff-id <id> (repeat exactly the declared viewer count) --expected-stage=DISABLED|ALLOCATION|PILOT|READY --expected-finance-pilot-only true|false --expected-finance-ui-preview-enabled true|false --expected-finance-pilot-default-date YYYY-MM-DD|UNSET --expected-finance-monthly-income-enabled true|false [--expected-worker-service <private-service> and stage expected bindings] [--expected-finance-current-seed-url <https-url> for PILOT or READY]\n')
     return 0
   }
   const report = await inspectFinanceRuntime(parsed, options)
@@ -47,6 +49,7 @@ export async function inspectFinanceRuntime(input, options = {}) {
   const now = validNow(options.now?.() ?? new Date())
   const service = await safeJson(execute, ['gcloud', 'run', 'services', 'describe', input.service, '--region', input.region, '--project', input.project, '--format=json'])
   const environment = deployedEnvironment(service)
+  const publicServiceOrigin = normalizedOrigin(service?.status?.url)
   const queueName = safeResource(environment.JERA_ALLOCATION_QUEUE)
   const bucketName = safeResource(environment.JERA_ALLOCATION_LEASE_BUCKET)
   const commandResults = await Promise.all([
@@ -147,8 +150,10 @@ export async function inspectFinanceRuntime(input, options = {}) {
     projectInvalidBindingCount: projectPolicy.invalidBindingCount,
   }
   const scheduler = schedulerReport(schedulerJobs, {
-    seedUrl: input.expectedFinanceSeedUrl, oidcAudience: input.expectedOidcAudience,
+    seedUrl: input.expectedFinanceSeedUrl, currentSeedUrl: input.expectedFinanceCurrentSeedUrl,
+    oidcAudience: input.expectedWorkerAudience,
     invoker: input.expectedInvoker,
+    publicServiceOrigin,
   })
   const taskReport = tasksReport(tasks)
   const tabs = tabsReport(googleState?.tabHeaders, googleState?.tabGridRows)
@@ -179,9 +184,13 @@ export async function inspectFinanceRuntime(input, options = {}) {
         && cloudRun.latestReadyHasNoTraffic && scheduler.enabledJobCount === 0
       : input.expectedStage === 'PILOT'
         ? flagsMatch && rolloutControlsMatch && infrastructureReady
-          && cloudRun.latestReadyHasNoTraffic && scheduler.enabledFinanceSeedCandidateCount === 0
-        : flagsMatch && rolloutControlsMatch && infrastructureReady && cloudRun.latestReadyHasNoTraffic
-          && scheduler.enabledFinanceSeedCandidateCount === 1 && scheduler.readyMatchCount === 1
+          && cloudRun.latestReadyReceivesAllTraffic
+          && scheduler.dailySeedCandidateCount === 0
+          && scheduler.currentSeedCandidateCount === 1 && scheduler.currentReadyMatchCount === 1
+        : flagsMatch && rolloutControlsMatch && infrastructureReady && cloudRun.latestReadyReceivesAllTraffic
+          && scheduler.financeSeedCandidateCount === 2
+          && scheduler.dailySeedCandidateCount === 1 && scheduler.readyMatchCount === 1
+          && scheduler.currentSeedCandidateCount === 1 && scheduler.currentReadyMatchCount === 1
   return {
     mode: 'READ_ONLY', expectedStage: input.expectedStage, stageReady, ready: stageReady,
     safeCode: stageReady ? null : 'FINANCE_RUNTIME_INCOMPLETE', cloudRun, flags,
@@ -196,7 +205,7 @@ function parseArguments(args) {
     help: false, allowReadonlyProduction: false, project: null, service: null, region: null,
     expectedFinanceViewers: null, approvedFinanceStaffIds: [], expectedStage: null, expectedQueue: null,
     expectedWorkerService: null, expectedWorkerAudience: null, expectedInvoker: null,
-    expectedFinanceSeedUrl: null, expectedOidcAudience: null,
+    expectedFinanceSeedUrl: null, expectedFinanceCurrentSeedUrl: null,
     expectedFinancePilotOnly: null, expectedFinanceUiPreviewEnabled: null,
     expectedFinancePilotDefaultDate: undefined, expectedFinanceMonthlyIncomeEnabled: null,
   }
@@ -215,7 +224,7 @@ function parseArguments(args) {
     else if (value === '--expected-worker-audience' && parsed.expectedWorkerAudience === null && args[index + 1]) parsed.expectedWorkerAudience = args[++index]
     else if (value === '--expected-invoker' && parsed.expectedInvoker === null && args[index + 1]) parsed.expectedInvoker = args[++index]
     else if (value === '--expected-finance-seed-url' && parsed.expectedFinanceSeedUrl === null && args[index + 1]) parsed.expectedFinanceSeedUrl = args[++index]
-    else if (value === '--expected-oidc-audience' && parsed.expectedOidcAudience === null && args[index + 1]) parsed.expectedOidcAudience = args[++index]
+    else if (value === '--expected-finance-current-seed-url' && parsed.expectedFinanceCurrentSeedUrl === null && args[index + 1]) parsed.expectedFinanceCurrentSeedUrl = args[++index]
     else if (value === '--expected-finance-pilot-only' && parsed.expectedFinancePilotOnly === null && args[index + 1]) parsed.expectedFinancePilotOnly = expectedBoolean(args[++index])
     else if (value === '--expected-finance-ui-preview-enabled' && parsed.expectedFinanceUiPreviewEnabled === null && args[index + 1]) parsed.expectedFinanceUiPreviewEnabled = expectedBoolean(args[++index])
     else if (value === '--expected-finance-pilot-default-date' && parsed.expectedFinancePilotDefaultDate === undefined && args[index + 1]) parsed.expectedFinancePilotDefaultDate = expectedPilotDate(args[++index])
@@ -226,12 +235,16 @@ function parseArguments(args) {
   if (!parsed.allowReadonlyProduction) throw new Error('Explicit read-only production approval is required')
   parsed.project = safeProject(parsed.project)
   if (!safeToken(parsed.service) || !safeToken(parsed.region)) throw new Error('Project, service, and region are required')
-  if (parsed.expectedFinanceViewers !== 3) throw new Error('Expected finance viewers must be exactly 3')
+  if (!Number.isSafeInteger(parsed.expectedFinanceViewers)
+    || parsed.expectedFinanceViewers < 1
+    || parsed.expectedFinanceViewers > 20) {
+    throw new Error('Expected finance viewers must be an integer from 1 to 20')
+  }
   if (!STAGES.has(parsed.expectedStage)) throw new Error('Expected stage must be DISABLED, ALLOCATION, PILOT, or READY')
   if (parsed.approvedFinanceStaffIds.length !== parsed.expectedFinanceViewers
     || new Set(parsed.approvedFinanceStaffIds).size !== parsed.expectedFinanceViewers
     || parsed.approvedFinanceStaffIds.some((value) => !safeStaffId(value))) {
-    throw new Error('Exactly three unique approved finance staff IDs are required')
+    throw new Error('Unique approved finance staff IDs must match the declared viewer count')
   }
   if (parsed.expectedFinancePilotOnly === null || parsed.expectedFinanceUiPreviewEnabled === null
     || parsed.expectedFinancePilotDefaultDate === undefined || parsed.expectedFinanceMonthlyIncomeEnabled === null) {
@@ -244,11 +257,18 @@ function parseArguments(args) {
     }
     parsed.expectedWorkerAudience = normalizedOrigin(parsed.expectedWorkerAudience)
   }
+  if (parsed.expectedStage === 'PILOT' || parsed.expectedStage === 'READY') {
+    if (!exactHttpsUrl(parsed.expectedFinanceCurrentSeedUrl)
+      || safePath(parsed.expectedFinanceCurrentSeedUrl) !== FINANCE_CURRENT_SEED_PATH) {
+      throw new Error('Pilot or ready stage expected current Scheduler bindings are required')
+    }
+    parsed.expectedFinanceCurrentSeedUrl = exactHttpsUrl(parsed.expectedFinanceCurrentSeedUrl)
+  }
   if (parsed.expectedStage === 'READY') {
-    if (!exactHttpsUrl(parsed.expectedFinanceSeedUrl) || safePath(parsed.expectedFinanceSeedUrl) !== FINANCE_SEED_PATH
-      || !normalizedOrigin(parsed.expectedOidcAudience)) throw new Error('Ready stage expected Scheduler bindings are required')
+    if (!exactHttpsUrl(parsed.expectedFinanceSeedUrl) || safePath(parsed.expectedFinanceSeedUrl) !== FINANCE_SEED_PATH) {
+      throw new Error('Ready stage expected Scheduler bindings are required')
+    }
     parsed.expectedFinanceSeedUrl = exactHttpsUrl(parsed.expectedFinanceSeedUrl)
-    parsed.expectedOidcAudience = normalizedOrigin(parsed.expectedOidcAudience)
   }
   return parsed
 }
@@ -283,12 +303,19 @@ function cloudRunReport(service) {
   const latestReadyTrafficPercent = latestReadyRevisionName === null ? 0 : traffic
     .filter((item) => item?.revisionName === latestReadyRevisionName)
     .reduce((total, item) => total + safeNonnegative(item?.percent), 0)
+  const positiveTraffic = traffic.filter((item) => safeNonnegative(item?.percent) > 0)
+  const trafficPercentTotal = traffic.reduce((total, item) => total + safeNonnegative(item?.percent), 0)
   return {
     servicePresent: service !== null,
     latestReadyRevisionPresent: latestReadyRevisionName !== null,
     latestReadyHasNoTraffic: latestReadyRevisionName !== null && latestReadyTrafficPercent === 0,
+    latestReadyReceivesAllTraffic: latestReadyRevisionName !== null
+      && latestReadyTrafficPercent === 100
+      && trafficPercentTotal === 100
+      && positiveTraffic.length === 1
+      && positiveTraffic[0]?.revisionName === latestReadyRevisionName,
     latestReadyTrafficPercent,
-    trafficPercentTotal: traffic.reduce((total, item) => total + safeNonnegative(item?.percent), 0),
+    trafficPercentTotal,
     trafficTargetCount: traffic.length,
   }
 }
@@ -305,19 +332,75 @@ function workerCloudRunReport(service, policy) {
 }
 function schedulerReport(value, expected) {
   const allJobs = Array.isArray(value) ? value : []
-  const jobs = allJobs.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_SEED_PATH)
+  const jobs = allJobs.filter((job) => {
+    const path = safePath(job?.httpTarget?.uri)
+    return path === FINANCE_SEED_PATH || path === FINANCE_CURRENT_SEED_PATH
+  })
   const enabled = jobs.filter((job) => job?.state === 'ENABLED')
-  const matching = enabled.filter((job) => exactHttpsUrl(job?.httpTarget?.uri) === expected.seedUrl)
-  const post = matching.filter((job) => job?.httpTarget?.httpMethod === 'POST')
-  const audience = post.filter((job) => normalizedOrigin(job?.httpTarget?.oidcToken?.audience) === expected.oidcAudience)
-  const invoker = audience.filter((job) => safeEmail(job?.httpTarget?.oidcToken?.serviceAccountEmail) === expected.invoker)
-  const ready = invoker.filter((job) => job?.schedule === '15 2 * * *' && job?.timeZone === 'Asia/Bangkok')
+  const dailyCandidates = jobs.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_SEED_PATH)
+  const currentCandidates = jobs.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_CURRENT_SEED_PATH)
+  const dailyEnabled = enabled.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_SEED_PATH)
+  const currentEnabled = enabled.filter((job) => safePath(job?.httpTarget?.uri) === FINANCE_CURRENT_SEED_PATH)
+  const daily = schedulerTargetReport(
+    dailyEnabled, expected.seedUrl, expected.publicServiceOrigin,
+    expected.oidcAudience, expected.invoker, '15 2 * * *',
+  )
+  const current = schedulerTargetReport(
+    currentEnabled, expected.currentSeedUrl, expected.publicServiceOrigin,
+    expected.oidcAudience, expected.invoker, '*/15 * * * *',
+  )
   return {
     matchingJobCount: jobs.length, enabledJobCount: enabled.length,
+    financeSeedCandidateCount: jobs.length,
+    dailySeedCandidateCount: dailyCandidates.length,
+    currentSeedCandidateCount: currentCandidates.length,
     enabledFinanceSeedCandidateCount: enabled.length,
-    exactTarget: matching.length === 1, postMethod: post.length === 1,
+    enabledDailySeedCandidateCount: dailyEnabled.length,
+    enabledCurrentSeedCandidateCount: currentEnabled.length,
+    exactTarget: daily.exactTarget, serviceOriginMatches: daily.serviceOriginMatches,
+    postMethod: daily.postMethod,
+    oidcAudienceMatches: daily.oidcAudienceMatches, oidcInvokerMatches: daily.oidcInvokerMatches,
+    oidcBindingPresent: daily.oidcInvokerMatches, noBody: daily.noBody,
+    deadlineMatches: daily.deadlineMatches,
+    readyMatchCount: daily.readyMatchCount,
+    currentExactTarget: current.exactTarget,
+    currentServiceOriginMatches: current.serviceOriginMatches,
+    currentPostMethod: current.postMethod,
+    currentOidcAudienceMatches: current.oidcAudienceMatches,
+    currentOidcInvokerMatches: current.oidcInvokerMatches,
+    currentOidcBindingPresent: current.oidcInvokerMatches,
+    currentNoBody: current.noBody,
+    currentDeadlineMatches: current.deadlineMatches,
+    currentReadyMatchCount: current.readyMatchCount,
+  }
+}
+
+function schedulerTargetReport(
+  jobs,
+  expectedUrl,
+  expectedServiceOrigin,
+  expectedAudience,
+  expectedInvoker,
+  expectedSchedule,
+) {
+  const matching = jobs.filter((job) => exactHttpsUrl(job?.httpTarget?.uri) === expectedUrl)
+  const serviceOriginMatches = expectedServiceOrigin !== null
+    && httpsOrigin(expectedUrl) === expectedServiceOrigin
+  const serviceBound = serviceOriginMatches ? matching : []
+  const post = serviceBound.filter((job) => job?.httpTarget?.httpMethod === 'POST')
+  const bodyless = post.filter((job) => job?.httpTarget?.body === undefined)
+  const audience = bodyless.filter((job) => normalizedOrigin(job?.httpTarget?.oidcToken?.audience) === expectedAudience)
+  const invoker = audience.filter((job) => safeEmail(job?.httpTarget?.oidcToken?.serviceAccountEmail) === expectedInvoker)
+  const deadline = invoker.filter((job) => job?.attemptDeadline === FINANCE_SCHEDULER_ATTEMPT_DEADLINE)
+  const ready = deadline.filter((job) => job?.schedule === expectedSchedule && job?.timeZone === 'Asia/Bangkok')
+  return {
+    exactTarget: serviceBound.length === 1,
+    serviceOriginMatches,
+    postMethod: post.length === 1,
+    noBody: bodyless.length === 1,
     oidcAudienceMatches: audience.length === 1, oidcInvokerMatches: invoker.length === 1,
-    oidcBindingPresent: invoker.length === 1, readyMatchCount: ready.length,
+    deadlineMatches: deadline.length === 1,
+    readyMatchCount: ready.length,
   }
 }
 function tasksReport(value) {
@@ -354,10 +437,10 @@ function permissionReport(value, expectedCount, approvedIds) {
   for (const row of safeRows) counts.set(row.id, (counts.get(row.id) ?? 0) + 1)
   const configuredViewers = safeRows.filter((row) => row?.canViewFinance === true)
   const approvedRows = approvedIds.map((id) => safeRows.find((row) => row.id === id) ?? null)
-  const approvedReady = approvedRows.filter((row) => row?.active === true && row?.lineLinked === true && row?.canViewFinance === true)
+  const approvedReady = approvedRows.filter((row) => row?.active === true && row?.canViewFinance === true)
   const invalidStaffRowCount = rows.length - safeRows.length
   const duplicateStaffIdCount = [...counts.values()].filter((count) => count !== 1).length
-  const missingApprovedCount = approvedRows.filter((row) => !row || row.active !== true || row.lineLinked !== true || row.canViewFinance !== true).length
+  const missingApprovedCount = approvedRows.filter((row) => !row || row.active !== true || row.canViewFinance !== true).length
   const inactiveApprovedCount = approvedRows.filter((row) => row && row.active !== true).length
   const unlinkedApprovedCount = approvedRows.filter((row) => row && row.lineLinked !== true).length
   const permissionMissingApprovedCount = approvedRows.filter((row) => row && row.canViewFinance !== true).length
@@ -369,6 +452,7 @@ function permissionReport(value, expectedCount, approvedIds) {
     expectedCount,
     approvedViewerCount: approvedReady.length,
     activeViewerCount: configuredViewers.filter((row) => row.active === true).length,
+    lineLinkedApprovedCount: approvedRows.filter((row) => row?.lineLinked === true).length,
     exactApprovedSet,
     missingApprovedCount,
     inactiveApprovedCount,
@@ -481,6 +565,11 @@ function normalizedOrigin(value) {
       && (url.pathname === '/' || url.pathname === '') ? url.origin : null
   } catch { return null }
 }
+function httpsOrigin(value) {
+  const exact = exactHttpsUrl(value)
+  if (!exact) return null
+  try { return new URL(exact).origin } catch { return null }
+}
 function stageFlags(stage) {
   if (stage === 'DISABLED') return { financeReportsEnabled: false, revenueAllocationEnabled: false, categoryMoneyEnabled: false }
   if (stage === 'ALLOCATION') return { financeReportsEnabled: false, revenueAllocationEnabled: true, categoryMoneyEnabled: false }
@@ -526,7 +615,7 @@ async function runExternal(command) { const { stdout } = await executeFile(comma
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runFinanceRuntimeCheck(process.argv.slice(2)).then((code) => { process.exitCode = code }).catch((error) => {
-    const message = error instanceof Error && /^(All|Explicit|Unknown|Sensitive|Expected|Exactly|Project|Allocation|Ready)/.test(error.message)
+    const message = error instanceof Error && /^(All|Explicit|Unknown|Sensitive|Expected|Unique|Project|Allocation|Pilot|Ready)/.test(error.message)
       ? error.message : 'Finance runtime check failed'
     process.stderr.write(`${message}\n`); process.exitCode = 2
   })

@@ -7,13 +7,22 @@ import {
   type ExpensePaymentMethod,
   type ExpenseReceipt,
 } from '../../../shared/pmcExpense.js'
-import { isMiniAppExpenseSafeErrorCode, type MiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress.js'
+import {
+  isMiniAppExpenseSafeErrorCode,
+  type ExpenseIngressResumeStatus,
+  type ExpenseResumeStatus,
+  type MiniAppExpenseCommand,
+} from '../../../shared/pmcMiniAppExpenseIngress.js'
 import type { AuthenticatedMiniAppContext, FinanceServerDependencies } from '../contracts.js'
 import { FinanceEvidenceTokenError, signFinanceEvidenceToken, verifyFinanceEvidenceToken } from './evidenceToken.js'
 import { ExpenseIngressClientError } from './ingressClient.js'
 import { consumeExpenseMultipart, ExpenseMultipartError } from './multipart.js'
 import { FinanceReadStoreError } from './readStore.js'
-import { ExpenseStagingError, type ExpenseStagingReceipt } from './stagingStore.js'
+import {
+  ExpenseStagingError,
+  type ExpenseStagingReceipt,
+  type ExpenseSubmissionLease,
+} from './stagingStore.js'
 import { ExpenseStagingTokenError, signExpenseStagingReceipt, verifyExpenseStagingReceipt } from './stagingToken.js'
 import { ExpenseSubmissionError } from './submissionService.js'
 
@@ -67,10 +76,16 @@ export async function handleFinanceMiniAppApi(
     if (!noQuery(url) || !emptyBody(req)) return invalidField(res)
     if (!finance?.resume) return routeNotFound(res)
     try {
-      const result = await finance.resume.ingress.resume({
+      const internal = await finance.resume.ingress.resume({
         rootRequestId: resumeRoute[1]!,
         staffId: authenticated.staffId,
       })
+      const result = await projectExpenseResumeStatus(
+        internal,
+        resumeRoute[1]!,
+        authenticated.staffId,
+        finance,
+      )
       json(res, 200, result)
     } catch (error) {
       respondMutationError(res, error)
@@ -212,6 +227,36 @@ export async function handleFinanceMiniAppApi(
   }
 
   routeNotFound(res)
+}
+
+async function projectExpenseResumeStatus(
+  internal: ExpenseIngressResumeStatus,
+  rootRequestId: string,
+  staffId: string,
+  finance: FinanceServerDependencies,
+): Promise<ExpenseResumeStatus> {
+  if (internal.status === 'FAILED' && internal.error === 'EXPENSE_STORAGE_UNAVAILABLE') {
+    throw new ExpenseIngressClientError('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  if (internal.status !== 'PREPARED') return internal
+  let lease: ExpenseSubmissionLease | null
+  try {
+    lease = await finance.resume!.staging.readSubmissionLease(internal.expenseId)
+  } catch {
+    return { status: 'PENDING' }
+  }
+  if (!lease) return { status: 'PREPARED' }
+  if (
+    lease.expenseId !== internal.expenseId
+    || lease.rootRequestId !== rootRequestId
+    || lease.staffId !== staffId
+    || lease.state === 'COMMITTED'
+  ) return { status: 'PENDING' }
+  const now = finance.now?.() ?? Date.now()
+  if (!Number.isSafeInteger(now) || now < 0) return { status: 'PENDING' }
+  return Date.parse(lease.expiresAt) <= now
+    ? { status: 'PREPARED' }
+    : { status: 'PENDING' }
 }
 
 async function handleStaging(

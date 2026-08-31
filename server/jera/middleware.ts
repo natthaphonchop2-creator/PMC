@@ -173,7 +173,8 @@ export function createJeraMiniAppApi(options: {
       return true
     },
     async handleInternal(req, res, url) {
-      if (url.pathname === '/internal/mini-app/finance-daily-seed') {
+      if (url.pathname === '/internal/mini-app/finance-daily-seed'
+        || url.pathname === '/internal/mini-app/finance-current-seed') {
         if (req.method !== 'POST') return handledMethodNotAllowed(res)
         if (!finance?.seed) { respond(res, 503, { error: 'FINANCE_REFRESH_UNAVAILABLE' }); return true }
         const authorized = await authorizeInternal(req, finance.seed)
@@ -182,10 +183,14 @@ export function createJeraMiniAppApi(options: {
         if ([...url.searchParams.keys()].length > 0) { respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return true }
         if (!await requestBodyIsEmpty(req, 256)) { respond(res, 400, { error: 'FINANCE_FILTER_INVALID' }); return true }
         try {
+          const currentDay = url.pathname === '/internal/mini-app/finance-current-seed'
           const result = await finance.service.refreshDay({
             branchUuid: defaultBranchUuid,
-            eventDate: previousBangkokDate(now()),
-            actor: { type: 'SCHEDULER', schedulerId: finance.seed.schedulerId },
+            eventDate: currentDay ? bangkokDate(now()) : previousBangkokDate(now()),
+            actor: {
+              type: 'SCHEDULER',
+              schedulerId: currentDay ? 'finance-current-seed' : finance.seed.schedulerId,
+            },
           })
           respond(res, 202, result)
         } catch (error) {

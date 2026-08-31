@@ -39,6 +39,7 @@ import {
 import type { StockHistoryPage } from '../../../shared/pmcStock'
 import type { EnabledExpenseCategory, ExpenseHistoryPage, ExpenseHistoryRow, ExpenseReceipt } from '../../../shared/pmcExpense'
 import {
+  defaultFinanceDailyFilter,
   loadFinanceReportFilterPreferences,
   saveFinanceReportFilterPreferences,
   type FinanceDailyFilter,
@@ -107,7 +108,7 @@ export function PmcMiniApp({
   const financeFilterStorage = useMemo(() => safeFinanceFilterStorage(), [])
   const [financeFilters, setFinanceFilters] = useState(() => {
     const loaded = loadFinanceReportFilterPreferences(financeFilterStorage, bangkokDate)
-    return initialConfig ? financeFiltersForConfig(loaded, initialConfig) : loaded
+    return initialConfig ? financeFiltersForConfig(loaded, initialConfig, bangkokDate) : loaded
   })
   const [financeView, setFinanceView] = useState<FinanceView>(initialExpenseResumeRoot ? 'EXPENSE_RESUME' : 'FINANCE_HOME')
   const [expenseReceipt, setExpenseReceipt] = useState<ExpenseReceipt | null>(null)
@@ -115,6 +116,7 @@ export function PmcMiniApp({
   const [expenseReplacement, setExpenseReplacement] = useState<ExpenseHistoryRow | null>(null)
   const [expenseResumeRoot, setExpenseResumeRoot] = useState(initialExpenseResumeRoot)
   const [expenseResumeChecking, setExpenseResumeChecking] = useState(false)
+  const [expenseResumeConfirmedPrepared, setExpenseResumeConfirmedPrepared] = useState(false)
   const openingBookingRef = useRef<Promise<void> | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
   const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
@@ -143,10 +145,16 @@ export function PmcMiniApp({
 
   const checkExpenseResume = useCallback(async (rootRequestId: string) => {
     if (!idToken) return
+    setExpenseResumeConfirmedPrepared(false)
     setExpenseResumeChecking(true)
     try {
       const status = await api.resumeExpense(idToken, rootRequestId)
-      if (status.status === 'PENDING') return
+      if (status.status === 'PREPARED' || status.status === 'PENDING') {
+        setExpenseResumeConfirmedPrepared(status.status === 'PREPARED')
+        return
+      }
+      if (status.status === 'FAILED' && status.error === 'EXPENSE_STORAGE_UNAVAILABLE') return
+      setExpenseResumeConfirmedPrepared(false)
       clearExpenseResumeRoot(expenseResumeStorage)
       setExpenseResumeRoot(null)
       if (status.status === 'COMMITTED') {
@@ -161,6 +169,7 @@ export function PmcMiniApp({
       }
     } catch (error) {
       if (definiteExpenseFailure(error)) {
+        setExpenseResumeConfirmedPrepared(false)
         clearExpenseResumeRoot(expenseResumeStorage)
         setExpenseResumeRoot(null)
         setMessageTone('ERROR')
@@ -173,6 +182,15 @@ export function PmcMiniApp({
       setExpenseResumeChecking(false)
     }
   }, [api, expenseResumeStorage, idToken, leaveExpenseResumeWithoutReceipt])
+
+  const stopTrackingConfirmedPreparedExpense = useCallback(() => {
+    clearExpenseResumeRoot(expenseResumeStorage)
+    setExpenseResumeRoot(null)
+    setExpenseResumeConfirmedPrepared(false)
+    setExpenseReceipt(null)
+    setExpenseReplacement(null)
+    leaveExpenseResumeWithoutReceipt()
+  }, [expenseResumeStorage, leaveExpenseResumeWithoutReceipt])
 
   useEffect(() => {
     if (!expenseResumeRoot || !idToken || !session || !config) return
@@ -226,7 +244,7 @@ export function PmcMiniApp({
         const nextConfig = await api.loadConfig(token)
         if (!active) return
         setSession(nextSession)
-        setFinanceFilters((current) => financeFiltersForConfig(current, nextConfig))
+        setFinanceFilters((current) => financeFiltersForConfig(current, nextConfig, bangkokDate))
         setConfig(nextConfig)
       } catch (error) {
         if (!active) return
@@ -238,7 +256,7 @@ export function PmcMiniApp({
       }
     })()
     return () => { active = false }
-  }, [api, initialSession])
+  }, [api, bangkokDate, initialSession])
 
   const bookingAdapter = useMemo<BookingWizardAdapter>(() => ({
     load: (draftId) => api.loadDraft(idToken, draftId),
@@ -296,7 +314,9 @@ export function PmcMiniApp({
     resume: async (rootRequestId) => {
       try {
         const status = await api.resumeExpense(idToken, rootRequestId)
-        if (status.status !== 'PENDING') clearExpenseResumeRoot(expenseResumeStorage)
+        if (!protectedExpenseResumeStatus(status)) {
+          clearExpenseResumeRoot(expenseResumeStorage)
+        }
         return status
       } catch (error) {
         if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
@@ -332,7 +352,9 @@ export function PmcMiniApp({
     resume: async (rootRequestId) => {
       try {
         const status = await api.resumeExpense(idToken, rootRequestId)
-        if (status.status !== 'PENDING') clearExpenseResumeRoot(expenseResumeStorage)
+        if (!protectedExpenseResumeStatus(status)) {
+          clearExpenseResumeRoot(expenseResumeStorage)
+        }
         return status
       } catch (error) {
         if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
@@ -515,7 +537,7 @@ export function PmcMiniApp({
       const nextSession = await api.enroll(idToken, staffId, pin)
       const nextConfig = await api.loadConfig(idToken)
       setSession(nextSession)
-      setFinanceFilters((current) => financeFiltersForConfig(current, nextConfig))
+      setFinanceFilters((current) => financeFiltersForConfig(current, nextConfig, bangkokDate))
       setConfig(nextConfig)
       setEnrollmentStaff(null)
     } catch (error) {
@@ -633,6 +655,7 @@ export function PmcMiniApp({
         setExpenseReceipt(receipt)
         setFinanceView('EXPENSE_RECEIPT')
       }}
+      onStopTrackingPrepared={stopTrackingConfirmedPreparedExpense}
       onBack={() => {
         setExpenseReceipt(null)
         setExpenseReplacement(null)
@@ -643,7 +666,9 @@ export function PmcMiniApp({
   if (view === 'REPORTS' && financeView === 'EXPENSE_RESUME' && expenseResumeRoot) {
     return <ExpenseResumeStatusView
       checking={expenseResumeChecking}
+      confirmedPrepared={expenseResumeConfirmedPrepared}
       onRetry={() => { void checkExpenseResume(expenseResumeRoot) }}
+      onStopTracking={stopTrackingConfirmedPreparedExpense}
     />
   }
   if (view === 'REPORTS' && financeView === 'EXPENSE_HISTORY' && financeReadAccess && expenseHistory) {
@@ -764,16 +789,14 @@ function sameMonthSelection(left: FinanceMonthSelection, right: FinanceMonthSele
   return left.year === right.year && left.month === right.month
 }
 
-function pilotFinanceDailyFilter(date: string): FinanceDailyFilter {
-  return { preset: 'CUSTOM', startDate: date, endDate: date }
-}
-
 function financeFiltersForConfig(
   current: { daily: FinanceDailyFilter; monthly: FinanceMonthSelection },
   nextConfig: MiniAppConfig,
+  bangkokDate: string,
 ): { daily: FinanceDailyFilter; monthly: FinanceMonthSelection } {
-  return nextConfig.financePilotDefaultDate
-    ? { ...current, daily: pilotFinanceDailyFilter(nextConfig.financePilotDefaultDate) }
+  const oldPilotDate = nextConfig.financePilotDefaultDate
+  return oldPilotDate && current.daily.startDate === oldPilotDate && current.daily.endDate === oldPilotDate
+    ? { ...current, daily: defaultFinanceDailyFilter(bangkokDate) }
     : current
 }
 
@@ -827,16 +850,23 @@ function Notice({ children }: { children: string }) {
   return <main className="pmc-mini-app-notice" aria-live="polite"><p>{children}</p></main>
 }
 
-function ExpenseResumeStatusView({ checking, onRetry }: {
+function ExpenseResumeStatusView({ checking, confirmedPrepared, onRetry, onStopTracking }: {
   checking: boolean
+  confirmedPrepared: boolean
   onRetry: () => void
+  onStopTracking: () => void
 }) {
   return <main className="pmc-mini-app-notice" aria-live="polite">
     <h1>กำลังตรวจสอบรายการรายจ่าย</h1>
-    <p>ระบบล็อกการเริ่มรายการใหม่ไว้ชั่วคราว จนกว่าจะยืนยันผลจากเซิร์ฟเวอร์ได้</p>
+    {confirmedPrepared
+      ? <p role="status" aria-live="polite">รายการเดิมยังคงอยู่ฝั่งระบบเพื่อการตรวจสอบ แต่สถานะ PREPARED ยังไม่ถูกนับเป็นรายจ่าย</p>
+      : <p>ระบบล็อกการเริ่มรายการใหม่ไว้ชั่วคราว จนกว่าจะยืนยันผลจากเซิร์ฟเวอร์ได้</p>}
     <button type="button" disabled={checking} onClick={onRetry}>
       {checking ? 'กำลังตรวจสอบ' : 'ตรวจสอบสถานะอีกครั้ง'}
     </button>
+    {confirmedPrepared && <button type="button" className="pmc-secondary-button" disabled={checking} onClick={onStopTracking}>
+      หยุดติดตามรายการเดิมและเริ่มใหม่
+    </button>}
   </main>
 }
 
@@ -878,6 +908,12 @@ function safeErrorCode(error: unknown): string {
 
 function definiteExpenseFailure(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'retryable' in error && error.retryable === false)
+}
+
+function protectedExpenseResumeStatus(status: Awaited<ReturnType<PmcMiniAppApi['resumeExpense']>>): boolean {
+  return status.status === 'PREPARED'
+    || status.status === 'PENDING'
+    || status.status === 'FAILED' && status.error === 'EXPENSE_STORAGE_UNAVAILABLE'
 }
 
 function requireExpenseResumePersistence(storage: Storage | null, rootRequestId: string): void {

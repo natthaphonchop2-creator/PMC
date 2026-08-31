@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import {
   deriveExpenseScope,
   parseExpenseDate,
@@ -6,16 +6,20 @@ import {
 } from '../../../shared/pmcExpense.js'
 import {
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseEvidenceIngress,
   canonicalMiniAppExpenseResumeIngress,
-  isExpenseResumeStatus,
+  isExpenseIngressResumeStatus,
   isMiniAppExpenseSafeErrorCode,
   type ExpensePrepareResult,
-  type ExpenseResumeStatus,
+  type ExpenseEvidenceManifestItem,
+  type ExpensePrivateAttachment,
+  type ExpenseIngressResumeStatus,
   type ExpenseCommandResult,
   type MiniAppExpenseCommand,
   type MiniAppExpenseIngressEnvelope,
   type MiniAppExpenseSafeErrorCode,
   type UnsignedMiniAppExpenseIngressEnvelope,
+  type UnsignedMiniAppExpenseEvidenceIngressEnvelope,
   type MiniAppExpenseResumeIngressEnvelope,
   type UnsignedMiniAppExpenseResumeIngressEnvelope,
 } from '../../../shared/pmcMiniAppExpenseIngress.js'
@@ -54,7 +58,26 @@ export interface ExpenseIngressClient {
   prepare(command: PrepareCommand): Promise<ExpensePrepareResult>
   commit(command: CommitCommand): Promise<ExpenseReceipt>
   void(command: VoidCommand): Promise<VoidResult>
-  resume(input: { rootRequestId: string; staffId: string }): Promise<ExpenseResumeStatus>
+  resume(input: { rootRequestId: string; staffId: string }): Promise<ExpenseIngressResumeStatus>
+  uploadEvidence(input: ExpenseEvidenceIngressUploadInput): Promise<ExpensePrivateAttachment>
+}
+
+export interface ExpenseEvidenceIngressUploadInput {
+  rootRequestId: string
+  expenseId: string
+  monthKey: string
+  staffId: string
+  expectedManifestHash: string
+  manifest: ExpenseEvidenceManifestItem[]
+  attachmentId: string
+  ordinal: number
+  mediaType: 'image/jpeg' | 'image/png'
+  originalFileName: string
+  deterministicName: string
+  slotClaimId: string
+  sha256: string
+  uploadedAt: string
+  bytes: Buffer
 }
 
 export class ExpenseIngressClientError extends Error {
@@ -121,6 +144,48 @@ export function buildMiniAppExpenseResumeIngress(
   } catch {
     throw unavailable()
   }
+  return {
+    body: {
+      ...unsigned,
+      signature: createHmac('sha256', secret).update(canonical, 'utf8').digest('hex'),
+    },
+    headers: { 'content-type': 'application/json' },
+  }
+}
+
+export function buildMiniAppExpenseEvidenceIngress(
+  input: ExpenseEvidenceIngressUploadInput,
+  context: { timestamp: number; nonce: string },
+  secret: string,
+): { body: UnsignedMiniAppExpenseEvidenceIngressEnvelope & { signature: string }; headers: { 'content-type': 'application/json' } } {
+  if (!Buffer.isBuffer(input.bytes) || input.bytes.length < 1 || input.bytes.length > 10_000_000
+    || createHash('sha256').update(input.bytes).digest('hex') !== input.sha256
+    || !boundedSecret(secret)) throw unavailable()
+  const unsigned: UnsignedMiniAppExpenseEvidenceIngressEnvelope = {
+    kind: 'MINI_APP_EXPENSE_EVIDENCE',
+    version: 1,
+    timestamp: context.timestamp,
+    nonce: context.nonce,
+    payload: {
+      rootRequestId: input.rootRequestId,
+      expenseId: input.expenseId,
+      monthKey: input.monthKey,
+      staffId: input.staffId,
+      expectedManifestHash: input.expectedManifestHash,
+      manifest: input.manifest.map((item) => ({ ...item })),
+      attachmentId: input.attachmentId,
+      ordinal: input.ordinal,
+      mediaType: input.mediaType,
+      originalFileName: input.originalFileName,
+      deterministicName: input.deterministicName,
+      slotClaimId: input.slotClaimId,
+      sha256: input.sha256,
+      uploadedAt: input.uploadedAt,
+      bytesBase64: input.bytes.toString('base64'),
+    },
+  }
+  let canonical: string
+  try { canonical = canonicalMiniAppExpenseEvidenceIngress(unsigned) } catch { throw unavailable() }
   return {
     body: {
       ...unsigned,
@@ -197,7 +262,7 @@ export function createExpenseIngressClient(
   async function sendResume(input: {
     rootRequestId: string
     staffId: string
-  }): Promise<ExpenseResumeStatus> {
+  }): Promise<ExpenseIngressResumeStatus> {
     const built = buildMiniAppExpenseResumeIngress(input, { timestamp: now(), nonce: nonce() }, secret)
     const controller = new AbortController()
     let timedOut = false
@@ -212,8 +277,36 @@ export function createExpenseIngressClient(
       if (!response.ok) throw unavailable()
       let body: unknown
       try { body = await response.json() } catch { throw unavailable() }
-      if (hasExactKeys(body, ['ok', 'result']) && body.ok === true && isExpenseResumeStatus(body.result)) {
+      if (hasExactKeys(body, ['ok', 'result']) && body.ok === true && isExpenseIngressResumeStatus(body.result)) {
         return structuredClone(body.result)
+      }
+      if (hasExactKeys(body, ['ok', 'error']) && body.ok === false && isMiniAppExpenseSafeErrorCode(body.error)) {
+        throw new ExpenseIngressClientError(body.error)
+      }
+      throw unavailable()
+    } catch (error) {
+      if (timedOut) throw unavailable()
+      if (error instanceof ExpenseIngressClientError) throw error
+      throw unavailable()
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  async function sendEvidence(input: ExpenseEvidenceIngressUploadInput): Promise<ExpensePrivateAttachment> {
+    const built = buildMiniAppExpenseEvidenceIngress(input, { timestamp: now(), nonce: nonce() }, secret)
+    const controller = new AbortController()
+    let timedOut = false
+    const timeout = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+    try {
+      const response = await request(endpoint, {
+        method: 'POST', headers: built.headers, body: JSON.stringify(built.body), signal: controller.signal,
+      })
+      if (!response.ok) throw unavailable()
+      let body: unknown
+      try { body = await response.json() } catch { throw unavailable() }
+      if (hasExactKeys(body, ['ok', 'attachment']) && body.ok === true) {
+        return parseEvidenceAttachment(body.attachment, input)
       }
       if (hasExactKeys(body, ['ok', 'error']) && body.ok === false && isMiniAppExpenseSafeErrorCode(body.error)) {
         throw new ExpenseIngressClientError(body.error)
@@ -233,7 +326,32 @@ export function createExpenseIngressClient(
     commit(command) { return send(command) },
     void(command) { return send(command) },
     resume(input) { return sendResume(input) },
+    uploadEvidence(input) { return sendEvidence(input) },
   }
+}
+
+function parseEvidenceAttachment(value: unknown, input: ExpenseEvidenceIngressUploadInput): ExpensePrivateAttachment {
+  if (!hasExactKeys(value, [
+    'attachmentId', 'expenseId', 'rootRequestId', 'ordinal', 'mediaType', 'originalFileName',
+    'privateFileId', 'deterministicName', 'sizeBytes', 'driveVersion', 'slotClaimId', 'sha256',
+    'uploadedByStaffId', 'uploadedAt',
+  ])
+    || value.attachmentId !== input.attachmentId
+    || value.expenseId !== input.expenseId
+    || value.rootRequestId !== input.rootRequestId
+    || value.ordinal !== input.ordinal
+    || value.mediaType !== input.mediaType
+    || value.originalFileName !== input.originalFileName
+    || !safeExpenseId(value.privateFileId)
+    || value.deterministicName !== input.deterministicName
+    || value.sizeBytes !== input.bytes.length
+    || typeof value.driveVersion !== 'string' || !/^[1-9]\d*$/.test(value.driveVersion)
+    || value.slotClaimId !== input.slotClaimId
+    || value.sha256 !== input.sha256
+    || value.uploadedByStaffId !== input.staffId
+    || value.uploadedAt !== input.uploadedAt
+  ) throw unavailable()
+  return value as ExpensePrivateAttachment
 }
 
 function parsePrepareResult(value: unknown, command: PrepareCommand): ExpensePrepareResult {

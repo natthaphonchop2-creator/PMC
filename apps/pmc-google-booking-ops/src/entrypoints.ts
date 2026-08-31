@@ -62,9 +62,11 @@ import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
 import { mutateMiniAppDraftState } from './domain/miniAppDraftStateIngress'
 import type { BookingCase } from './domain/types'
 import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
+import { MAX_EXPENSE_EVIDENCE_INGRESS_LENGTH } from '../../../shared/pmcMiniAppExpenseIngress'
 import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
 import {
   processExpenseIngressResponse,
+  processExpenseEvidenceIngressResponse,
   processExpenseRecoveryIngressResponse,
   processExpenseResumeIngressResponse,
   type ExpenseIngressPorts,
@@ -103,7 +105,12 @@ export function processBookingDoPost(
     >>,
 ) {
   const evidenceCandidate = event.postData?.contents.startsWith('{"kind":"MINI_APP_EVIDENCE"')
-  const parsed = parseAppsScriptDoPostBody(event, evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH : undefined)
+  const expenseEvidenceCandidate = event.postData?.contents.startsWith('{"kind":"MINI_APP_EXPENSE_EVIDENCE"')
+  const parsed = parseAppsScriptDoPostBody(
+    event,
+    evidenceCandidate ? MAX_EVIDENCE_INGRESS_LENGTH
+      : expenseEvidenceCandidate ? MAX_EXPENSE_EVIDENCE_INGRESS_LENGTH : undefined,
+  )
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_STOCK') {
     return processStockIngressResponse(parsed, requireStockIngressPorts(ports))
   }
@@ -115,6 +122,9 @@ export function processBookingDoPost(
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE') {
     return processExpenseIngressResponse(parsed, requireExpenseIngressPorts(ports))
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_EXPENSE_EVIDENCE') {
+    return processExpenseEvidenceIngressResponse(parsed, requireExpenseIngressPorts(ports))
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_EVIDENCE') {
     return uploadMiniAppEvidence(parsed, ports)

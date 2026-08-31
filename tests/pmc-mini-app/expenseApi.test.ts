@@ -13,7 +13,7 @@ import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { FinanceServerDependencies, LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { ExpenseSubmissionError } from '../../server/pmc-mini-app/finance/submissionService'
 import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ingressClient'
-import type { ExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingStore'
+import type { ExpenseStagingReceipt, ExpenseSubmissionLease } from '../../server/pmc-mini-app/finance/stagingStore'
 import { signExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingToken'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 import type { MiniAppStaffRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
@@ -144,7 +144,7 @@ describe('expense capture API', () => {
     const resume = vi.fn(async () => ({ status: 'COMMITTED' as const, receipt: committedReceipt() }))
     const finance: FinanceServerDependencies = {
       signingSecret: SECRET,
-      resume: { ingress: { resume } as never },
+      resume: { ingress: { resume } as never, staging: { readSubmissionLease: vi.fn() } as never },
     }
     const deps = dependencies({ finance })
 
@@ -160,13 +160,49 @@ describe('expense capture API', () => {
     expect(finance.capture).toBeUndefined()
   })
 
+  it.each([
+    ['missing lease', null, 'PREPARED'],
+    ['active fresh lease', submissionLease({ expiresAt: new Date(NOW + 1).toISOString() }), 'PENDING'],
+    ['active expired lease', submissionLease({ expiresAt: new Date(NOW - 1).toISOString() }), 'PREPARED'],
+    ['active lease at the expiry boundary', submissionLease({ expiresAt: new Date(NOW).toISOString() }), 'PREPARED'],
+    ['committed lease', submissionLease({ state: 'COMMITTED', expiresAt: new Date(NOW - 1).toISOString() }), 'PENDING'],
+  ] as const)('projects internal PREPARED through a %s without exposing expense identity', async (
+    _case,
+    lease,
+    expectedStatus,
+  ) => {
+    const resume = vi.fn(async () => ({ status: 'PREPARED' as const, expenseId: EXPENSE_ID }))
+    const readSubmissionLease = vi.fn(async () => lease)
+    const finance: FinanceServerDependencies = {
+      signingSecret: SECRET,
+      now: () => NOW,
+      resume: {
+        ingress: { resume } as never,
+        staging: { readSubmissionLease } as never,
+      },
+    }
+
+    const response = await request(
+      createPmcMiniAppMiddleware(dependencies({ finance })),
+      'POST',
+      '/api/mini-app/expenses/resume/root-request-2',
+      null,
+      'submit-token',
+    )
+
+    expect(response).toMatchObject({ status: 200, body: { status: expectedStatus } })
+    expect(Object.keys(response.body as object)).toEqual(['status'])
+    expect(readSubmissionLease).toHaveBeenCalledWith(EXPENSE_ID)
+    expect(JSON.stringify(response.body)).not.toContain(EXPENSE_ID)
+  })
+
   it('denies another submitter and never serializes root history', async () => {
     const resume = vi.fn(async () => {
       throw new ExpenseIngressClientError('EXPENSE_RESUME_FORBIDDEN')
     })
     const deps = dependencies({ finance: {
       signingSecret: SECRET,
-      resume: { ingress: { resume } as never },
+      resume: { ingress: { resume } as never, staging: { readSubmissionLease: vi.fn() } as never },
     } })
 
     const response = await request(
@@ -178,6 +214,27 @@ describe('expense capture API', () => {
     })
     expect(JSON.stringify(response.body)).not.toContain('expenses')
     expect(JSON.stringify(response.body)).not.toContain('attachment')
+  })
+
+  it('projects storage-unavailable resume uncertainty as retryable 503 instead of terminal FAILED', async () => {
+    const resume = vi.fn(async () => ({
+      status: 'FAILED' as const, error: 'EXPENSE_STORAGE_UNAVAILABLE' as const,
+    }))
+    const finance: FinanceServerDependencies = {
+      signingSecret: SECRET,
+      resume: { ingress: { resume } as never, staging: { readSubmissionLease: vi.fn() } as never },
+    }
+
+    const response = await request(
+      createPmcMiniAppMiddleware(dependencies({ finance })),
+      'POST', '/api/mini-app/expenses/resume/root-request-2', null, 'submit-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 503,
+      body: { error: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true },
+    })
+    expect(Object.keys(response.body as object).sort()).toEqual(['error', 'retryable'])
   })
 })
 
@@ -397,7 +454,8 @@ function financeDependencies(staged = new Map<string, ExpenseStagingReceipt & { 
       if (!result) throw new Error('missing')
       return result
     }),
-    deleteVerified: vi.fn(), claimDriveSlot: vi.fn(), acquireSubmissionLease: vi.fn(), renewSubmissionLease: vi.fn(),
+    deleteVerified: vi.fn(), claimDriveSlot: vi.fn(), readSubmissionLease: vi.fn(),
+    acquireSubmissionLease: vi.fn(), renewSubmissionLease: vi.fn(),
     assertSubmissionLease: vi.fn(), commitSubmissionLease: vi.fn(),
   }
   return {
@@ -456,6 +514,30 @@ function stagedReceipt(rootRequestId: string): ExpenseStagingReceipt {
     objectKey: `expenses/${rootRequestId}/1-${'a'.repeat(64)}.jpg`, sizeBytes: 13,
     mimeType: 'image/jpeg', sha256: 'a'.repeat(64), ordinal: 1, originalFileName: 'receipt.jpg',
     createdAt: '2026-08-30T03:00:00.000Z',
+  }
+}
+
+function submissionLease(patch: Partial<ExpenseSubmissionLease> = {}): ExpenseSubmissionLease {
+  return {
+    objectKey: `expense-submission-leases/${EXPENSE_ID}.json`,
+    leaseId: `LEASE-${'a'.repeat(64)}`,
+    ownerId: 'lease-owner-process-a',
+    state: 'ACTIVE',
+    generation: '4',
+    createdAt: new Date(NOW - 60_000).toISOString(),
+    updatedAt: new Date(NOW - 30_000).toISOString(),
+    expiresAt: new Date(NOW + 60_000).toISOString(),
+    rootRequestId: 'root-request-2',
+    expenseId: EXPENSE_ID,
+    expectedManifestHash: 'a'.repeat(64),
+    staffId: 'SUBMIT_01',
+    slots: [{
+      ordinal: 1,
+      sha256: 'a'.repeat(64),
+      mimeType: 'image/jpeg',
+      deterministicName: `001-${'a'.repeat(64)}.jpg`,
+    }],
+    ...patch,
   }
 }
 

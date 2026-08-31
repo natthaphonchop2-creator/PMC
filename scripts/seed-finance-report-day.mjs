@@ -97,7 +97,7 @@ export async function seedApprovedFinanceDay(input) {
   }
 }
 
-export async function createFinanceOperator(input) {
+export async function createFinanceOperator(input, dependencies = {}) {
   const project = safeProject(input.project)
   const execute = input.execute ?? runExternal
   let service
@@ -108,8 +108,8 @@ export async function createFinanceOperator(input) {
     ]))
   } catch { throw new Error('FINANCE_OPERATOR_FAILED') }
   const deployed = deployedEnvironment(service)
-  const secrets = await loadJeraOperatorSecrets({ project })
-  const runtime = await loadFinanceRuntime()
+  const secrets = await (dependencies.loadJeraOperatorSecrets ?? loadJeraOperatorSecrets)({ project })
+  const runtime = dependencies.runtime ?? await loadFinanceRuntime()
   const environment = { ...deployed, ...(input.environment ?? {}) }
   const config = runtime.readJeraConfig(jeraEnvironment({
     ...environment,
@@ -143,6 +143,7 @@ export async function createFinanceOperator(input) {
   const noProviderCoordinator = {
     ...coordinator,
     manualRefresh: async () => ({ accepted: true, retryAfterSeconds: config.manualRefreshSeconds }),
+    scheduledRefresh: async (query) => (await coordinator.readCachedBatch([query]))[0],
   }
   const seeder = runtime.createJeraFinanceService({
     coordinator: noProviderCoordinator, allocationStore, allocationQueue, lease: allocationLease, categoryMoneyEnabled: false,

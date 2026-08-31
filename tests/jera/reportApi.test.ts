@@ -397,6 +397,28 @@ describe('authenticated finance report API', () => {
       branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'SCHEDULER', schedulerId: 'finance-daily-seed' },
     })
   })
+
+  it('authenticates the exact current seed route, rejects caller input, and derives the current Bangkok day', async () => {
+    const deps = financeDependencies({ canViewFinance: true, internalSeed: true })
+    const middleware = createPmcMiniAppMiddleware(deps)
+    const authorization = { authorization: 'Bearer worker-token' }
+
+    expect((await invoke(middleware, '/internal/mini-app/finance-current-seed', { method: 'GET', headers: authorization })).status).toBe(405)
+    expect((await invoke(middleware, '/internal/mini-app/finance-current-seed', { method: 'POST' })).status).toBe(401)
+    expect((await invoke(middleware, '/internal/mini-app/finance-current-seed', { method: 'POST', headers: { authorization: 'Bearer wrong-email' } })).status).toBe(403)
+    expect((await invoke(middleware, '/internal/mini-app/finance-current-seed?date=2026-08-30', { method: 'POST', headers: authorization })).status).toBe(400)
+    expect((await invoke(middleware, '/internal/mini-app/finance-current-seed', {
+      method: 'POST', headers: { ...authorization, 'content-type': 'application/json' }, body: JSON.stringify({ date: '2026-08-30' }),
+    })).status).toBe(400)
+
+    const accepted = await invoke(middleware, '/internal/mini-app/finance-current-seed', { method: 'POST', headers: authorization })
+
+    expect(accepted.status).toBe(202)
+    expect(deps.finance.refreshDay).toHaveBeenCalledOnce()
+    expect(deps.finance.refreshDay).toHaveBeenCalledWith({
+      branchUuid: BRANCH, eventDate: '2026-08-30', actor: { type: 'SCHEDULER', schedulerId: 'finance-current-seed' },
+    })
+  })
 })
 
 function allocationApi(worker: JeraAllocationWorker) {

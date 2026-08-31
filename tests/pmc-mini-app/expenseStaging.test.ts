@@ -39,6 +39,8 @@ describe('expense GCS staging', () => {
       generation: expect.stringMatching(/^[1-9]\d*$/),
       objectKey: 'expense-submission-leases/EXP-202608-0001.json',
     })
+    await expect(firstProcess.readSubmissionLease(intent.expenseId)).resolves.toEqual(firstLease)
+    await expect(firstProcess.readSubmissionLease('EXP-202608-MISSING')).resolves.toBeNull()
     await expect(secondProcess.acquireSubmissionLease({
       ...intent,
       ownerId: 'lease-owner-process-b',
@@ -49,7 +51,13 @@ describe('expense GCS staging', () => {
       ownerId: 'lease-owner-process-b',
     })).rejects.toThrow('EXPENSE_SUBMISSION_LEASE_CONFLICT')
 
-    now = Date.parse(firstLease.expiresAt) + 1
+    now = Date.parse(firstLease.expiresAt)
+    await expect(firstProcess.assertSubmissionLease(firstLease))
+      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
+    await expect(firstProcess.renewSubmissionLease(firstLease))
+      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
+    await expect(firstProcess.commitSubmissionLease(firstLease))
+      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
     const takeover = await secondProcess.acquireSubmissionLease({
       ...intent,
       ownerId: 'lease-owner-process-b',
@@ -59,17 +67,11 @@ describe('expense GCS staging', () => {
       state: 'ACTIVE',
       generation: '5',
     })
-    await expect(firstProcess.assertSubmissionLease(firstLease))
-      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
-    await expect(firstProcess.renewSubmissionLease(firstLease))
-      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
-    await expect(firstProcess.commitSubmissionLease(firstLease))
-      .rejects.toThrow('EXPENSE_SUBMISSION_LEASE_STALE')
-
     const renewed = await secondProcess.renewSubmissionLease(takeover)
     await expect(secondProcess.assertSubmissionLease(renewed)).resolves.toBeUndefined()
     const committed = await secondProcess.commitSubmissionLease(renewed)
     expect(committed).toMatchObject({ state: 'COMMITTED', generation: '7' })
+    await expect(secondProcess.readSubmissionLease(intent.expenseId)).resolves.toEqual(committed)
     await expect(firstProcess.acquireSubmissionLease({
       ...intent,
       ownerId: 'lease-owner-process-c',
@@ -379,7 +381,7 @@ function fakeStorage() {
     },
     async getMetadata() {
       const object = objectAt(objectKey, options?.generation)
-      if (!object) throw new Error('missing')
+      if (!object) throw Object.assign(new Error('missing'), { code: 404 })
       const metadata = { name: objectKey, size: String(object.bytes.length), contentType: object.contentType, cacheControl: object.cacheControl, generation: object.generation, metadata: object.metadata }
       afterMetadataRead?.()
       afterMetadataRead = undefined
@@ -390,7 +392,7 @@ function fakeStorage() {
       if (!generation) throw new Error('generation required')
       downloads.push({ objectKey, generation, options: downloadOptions })
       const object = objectAt(objectKey, generation)
-      if (!object) throw new Error('missing')
+      if (!object) throw Object.assign(new Error('missing'), { code: 404 })
       if (object.downloadError) throw object.downloadError
       return [object.bytes]
     },

@@ -7,6 +7,7 @@ import type {
 import {
   canonicalMiniAppExpenseCommand,
   type ExpensePrivateAttachment,
+  type ExpensePrivateAttachmentIdentity,
   type MiniAppExpenseCommand,
 } from '../../../../shared/pmcMiniAppExpenseIngress'
 import {
@@ -33,6 +34,7 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
   readonly months = new Map<string, Map<ExpenseRepositoryMonthTab, ExpenseStorageRow[]>>()
   readonly monthlySummaries = new Map<string, ExpenseStorageRow[]>()
   readonly verifiedAttachmentIds: string[] = []
+  readonly ownerCreatedFiles: ExpensePrivateAttachment[] = []
   readonly masterReadCount = new Map<ExpenseRepositoryMasterTab, number>()
   monthOperationCount = 0
   failAttachmentAppendCount = 0
@@ -142,6 +144,42 @@ export class MemoryExpenseBackend implements ExpenseRepositoryBackend {
   ): void {
     if (!this.privateFilesValid) throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
     this.verifiedAttachmentIds.push(...attachments.map(({ attachmentId }) => attachmentId))
+  }
+
+  createOrFindPrivateAttachment(input: {
+    mode: 'CREATE_OR_FIND' | 'FIND_ONLY'
+    monthKey: string
+    attachment: ExpensePrivateAttachmentIdentity
+    bytes: number[]
+  }): ExpensePrivateAttachment {
+    const existing = this.ownerCreatedFiles.filter((file) => (
+      file.expenseId === input.attachment.expenseId && file.ordinal === input.attachment.ordinal
+    ))
+    if (existing.length > 1) throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
+    if (existing[0]) {
+      const identity = Object.fromEntries(Object.entries(existing[0]).filter(([key]) => (
+        key !== 'privateFileId' && key !== 'sizeBytes' && key !== 'driveVersion'
+      )))
+      if (JSON.stringify(identity) !== JSON.stringify(input.attachment)
+        || existing[0].sizeBytes !== input.bytes.length
+        || createHash('sha256').update(Buffer.from(input.bytes)).digest('hex') !== input.attachment.sha256) {
+        throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
+      }
+      return clone(existing[0])
+    }
+    if (input.mode === 'FIND_ONLY') throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
+    if (input.monthKey !== '2026-08'
+      || createHash('sha256').update(Buffer.from(input.bytes)).digest('hex') !== input.attachment.sha256) {
+      throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
+    }
+    const created: ExpensePrivateAttachment = {
+      ...clone(input.attachment),
+      privateFileId: `OWNER-FILE-${input.attachment.ordinal}`,
+      sizeBytes: input.bytes.length,
+      driveVersion: '1',
+    }
+    this.ownerCreatedFiles.push(created)
+    return clone(created)
   }
 
   sha256Hex(value: string): string {

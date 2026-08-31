@@ -48,11 +48,18 @@ describe('private finance Google ports', () => {
       const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
       const bytes = await jpeg()
       const sha256 = createHash('sha256').update(bytes).digest('hex')
-      await ports.uploadExpenseImage(claimedUpload({
+      const upload = claimedUpload({
         parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
-      }))
+      })
+      const attachment = await ports.uploadExpenseImage(upload)
       fake.setIncompleteSearch(incompleteSearch)
-      await expect(ports.listVerifiedExpenseImages(MONTH_KEY, EXPENSE_ID))
+      await expect(ports.listVerifiedExpenseImages(MONTH_KEY, EXPENSE_ID, [{
+        claim: { ...upload.slotClaim, state: 'REGISTERED', registeredFileId: attachment.privateFileId },
+        expectedAttachment: attachmentIdentity(attachment),
+        readCurrentClaim: async () => ({
+          ...upload.slotClaim, state: 'REGISTERED' as const, registeredFileId: attachment.privateFileId,
+        }),
+      }]))
         .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
     },
   )
@@ -179,14 +186,13 @@ describe('private finance Google ports', () => {
       size: String(bytes.length),
       mimeType: 'image/jpeg',
       parents: [parentId],
-      appProperties: {
-        pmcExpenseId: EXPENSE_ID,
-        pmcExpenseMonthKey: MONTH_KEY,
-        pmcExpenseOrdinal: '1',
-        pmcExpenseSha256: sha256,
-        pmcExpenseSlotClaimId: input.slotClaim.claimId,
-      },
+      appProperties: {},
     })
+    const publicProperties = fake.item(first.privateFileId).properties
+    expect(publicProperties).toMatchObject({ v: '1', mon: MONTH_KEY, ord: '1', sha: sha256 })
+    expect(Object.entries(publicProperties).every(([key, value]) => (
+      Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8') <= 124
+    ))).toBe(true)
 
     fake.item(first.privateFileId).bytes = Buffer.from('poisoned private bytes')
     fake.item(first.privateFileId).size = String(fake.item(first.privateFileId).bytes!.length)
@@ -197,6 +203,26 @@ describe('private finance Google ports', () => {
 
     await expect(ports.uploadExpenseImage({ ...input, deterministicName: `1-${sha256}.jpg` }))
       .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+  })
+
+  it('rejects appProperties-only evidence instead of falling back across Drive apps', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    const file = fake.item(attachment.privateFileId)
+    file.properties = {}
+
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+    })).rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
   })
 
   it('rejects concurrent same-slot uploads when immutable metadata differs', async () => {
@@ -400,6 +426,7 @@ describe('private finance Google ports', () => {
     let claimReads = 0
     const recovered = await winnerProcess.listVerifiedExpenseImages(MONTH_KEY, EXPENSE_ID, [{
       claim: registeredWinner,
+      expectedAttachment: attachmentIdentity(winner),
       readCurrentClaim: async () => {
         claimReads += 1
         return { ...registeredWinner }
@@ -471,14 +498,14 @@ describe('private finance Google ports', () => {
         file.bytes = replacement
         file.size = String(replacement.length)
         file.name = `001-${replacementHash}.jpg`
-        file.appProperties.pmcExpenseSha256 = replacementHash
+        file.properties.sha = replacementHash
       } else {
         const description = JSON.stringify({
           originalFileName: 'replacement.jpg',
           uploadedAt: attachment.uploadedAt,
         })
         file.description = description
-        file.appProperties.pmcExpenseMetadataSha256 = createHash('sha256')
+        file.properties.msh = createHash('sha256')
           .update(description, 'utf8')
           .digest('hex')
       }
@@ -510,6 +537,7 @@ interface FakeItem {
   parents: string[]
   trashed: boolean
   appProperties: Record<string, string>
+  properties: Record<string, string>
   permissions: FakePermission[]
   version: string
   description?: string
@@ -545,18 +573,22 @@ function financeGoogleFake() {
   add({
     id: 'finance-root', name: 'PMC Finance', mimeType: 'application/vnd.google-apps.folder',
     parents: ['owner-root'], trashed: false, appProperties: {}, permissions: privatePermissions(), version: '1',
+    properties: {},
   })
   add({
     id: 'finance-master', name: 'PMC Finance Master', mimeType: 'application/vnd.google-apps.spreadsheet',
     parents: ['finance-root'], trashed: false, appProperties: {}, permissions: privatePermissions(), version: '1',
+    properties: {},
   })
   add({
     id: 'month-2026-08', name: 'PMC Expenses 2026-08', mimeType: 'application/vnd.google-apps.folder',
     parents: ['finance-root'], trashed: false, appProperties: {}, permissions: privatePermissions(), version: '1',
+    properties: {},
   })
   add({
     id: 'ledger-2026-08', name: 'PMC Expenses 2026-08', mimeType: 'application/vnd.google-apps.spreadsheet',
     parents: ['month-2026-08'], trashed: false, appProperties: {}, permissions: privatePermissions(), version: '1',
+    properties: {},
   })
 
   const sheetReads = vi.fn(async (input: {
@@ -623,6 +655,7 @@ function financeGoogleFake() {
       parents: [...(request.parents ?? [])],
       trashed: false,
       appProperties: { ...(request.appProperties ?? {}) },
+      properties: { ...(request.properties ?? {}) },
       ...(request.description === undefined ? {} : { description: String(request.description) }),
       permissions: privatePermissions(),
       version: '1',
@@ -671,6 +704,7 @@ function financeGoogleFake() {
         id, name: EXPENSE_ID, mimeType: 'application/vnd.google-apps.folder',
         parents: ['month-2026-08'], trashed: false,
         appProperties: { pmcExpenseId: EXPENSE_ID, pmcExpenseMonthKey: MONTH_KEY },
+        properties: {},
         permissions: privatePermissions(), version: '1',
       })
     },
@@ -724,6 +758,22 @@ function committedAttachmentRow(attachment: ExpensePrivateAttachment): unknown[]
     attachment.uploadedByStaffId,
     attachment.uploadedAt,
   ]
+}
+
+function attachmentIdentity(attachment: ExpensePrivateAttachment) {
+  return {
+    attachmentId: attachment.attachmentId,
+    expenseId: attachment.expenseId,
+    rootRequestId: attachment.rootRequestId,
+    ordinal: attachment.ordinal,
+    mediaType: attachment.mediaType,
+    originalFileName: attachment.originalFileName,
+    deterministicName: attachment.deterministicName,
+    slotClaimId: attachment.slotClaimId,
+    sha256: attachment.sha256,
+    uploadedByStaffId: attachment.uploadedByStaffId,
+    uploadedAt: attachment.uploadedAt,
+  }
 }
 
 function claimedUpload(input: {
@@ -792,6 +842,7 @@ function driveMetadata(item: FakeItem): Omit<FakeItem, 'bytes'> {
     parents: item.parents,
     trashed: item.trashed,
     appProperties: item.appProperties,
+    properties: item.properties,
     permissions: item.permissions,
     version: item.version,
     ...(item.description === undefined ? {} : { description: item.description }),

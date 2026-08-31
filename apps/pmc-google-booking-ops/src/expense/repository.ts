@@ -1,13 +1,18 @@
 import {
   effectiveCommittedExpenses,
+  isCanonicalExpenseTimestamp,
+  isExpenseIdForMonth,
+  isValidExpenseOriginalFileName,
   parseExpenseDate,
   type ExpenseAuditEvent,
   type ExpenseSubmission,
 } from '../../../../shared/pmcExpense'
 import type {
   ExpensePrivateAttachment,
+  ExpensePrivateAttachmentIdentity,
   MiniAppExpenseCommand,
 } from '../../../../shared/pmcMiniAppExpenseIngress'
+import { expenseFilePublicProperties } from '../../../../shared/pmcMiniAppExpenseIngress'
 import type {
   ExpenseBookRevisionClaim,
   ExpenseRecoveryCandidate,
@@ -48,6 +53,12 @@ export interface ExpenseRepositoryBackend {
     expenseId: string,
     attachments: ExpensePrivateAttachment[],
   ): void
+  createOrFindPrivateAttachment(input: {
+    mode: 'CREATE_OR_FIND' | 'FIND_ONLY'
+    monthKey: string
+    attachment: ExpensePrivateAttachmentIdentity
+    bytes: number[]
+  }): ExpensePrivateAttachment
   sha256Hex(value: string): string
 }
 
@@ -458,6 +469,14 @@ export function createExpenseRepository(backend: ExpenseRepositoryBackend): Expe
     verifyPrivateAttachments(monthKey, expenseId, attachments) {
       backend.verifyPrivateAttachments(monthKey, expenseId, attachments)
     },
+    createOrFindPrivateAttachment(input) {
+      return clonePlain(backend.createOrFindPrivateAttachment({
+        mode: input.mode,
+        monthKey: input.monthKey,
+        attachment: clonePlain(input.attachment),
+        bytes: [...input.bytes],
+      }))
+    },
     listRecoveryCandidates(limit = 100) {
       const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 100) : 100
       const audits = backend.readMaster('EXPENSE_AUDIT').map(asAudit)
@@ -765,6 +784,57 @@ function createGoogleExpenseRepositoryBackend(
         throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
       }
     },
+    createOrFindPrivateAttachment(input) {
+      try {
+        const attachment = input.attachment
+        const bytes = input.bytes.map((byte) => byte & 0xff)
+        validateOwnerAttachmentInput(input.monthKey, attachment, bytes)
+        const { monthFolder } = monthContext(input.monthKey)
+        const expenseFolders = iteratorValues(monthFolder.getFoldersByName(attachment.expenseId))
+        if (expenseFolders.length !== 1) throw new Error('invalid')
+        const expenseFolder = expenseFolders[0]!
+        if (expenseFolder.isTrashed()
+          || expenseFolder.getSharingAccess() !== DriveApp.Access.PRIVATE
+          || !hasDirectParent(expenseFolder.getParents(), monthFolder.getId())) throw new Error('invalid')
+        const before = matchingExpenseFiles(
+          listExpenseFiles(expenseFolder.getId()),
+          attachment.expenseId,
+          attachment.ordinal,
+          attachment.deterministicName,
+          attachment.slotClaimId,
+        )
+        if (before.length > 1) throw new Error('invalid')
+        if (before[0]) {
+          return verifiedOwnerAttachment(before[0], input.monthKey, expenseFolder.getId(), attachment, bytes)
+        }
+        if (input.mode === 'FIND_ONLY') throw new Error('invalid')
+        const advancedDrive = Drive
+        if (!advancedDrive) throw new Error('invalid')
+        const description = expenseAttachmentDescription(attachment)
+        const created = advancedDrive.Files.create({
+          name: attachment.deterministicName,
+          description,
+          mimeType: attachment.mediaType,
+          parents: [expenseFolder.getId()],
+          properties: expenseAttachmentProperties(input.monthKey, attachment),
+        }, Utilities.newBlob(bytes, attachment.mediaType, attachment.deterministicName), {
+          fields: 'id,name,description,mimeType,parents,trashed,size,version,properties,permissions(id,type,role,deleted)',
+          supportsAllDrives: true,
+        })
+        if (!created.id) throw new Error('invalid')
+        const after = matchingExpenseFiles(
+          listExpenseFiles(expenseFolder.getId()),
+          attachment.expenseId,
+          attachment.ordinal,
+          attachment.deterministicName,
+          attachment.slotClaimId,
+        )
+        if (after.length !== 1 || after[0]?.id !== created.id) throw new Error('invalid')
+        return verifiedOwnerAttachment(after[0], input.monthKey, expenseFolder.getId(), attachment, bytes)
+      } catch {
+        throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
+      }
+    },
     sha256Hex(value) {
       const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value)
       return bytes.map((byte) => ((byte + 256) % 256).toString(16).padStart(2, '0')).join('')
@@ -783,7 +853,7 @@ function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
     const response = advancedDrive.Files.list({
       q: `'${folderId}' in parents and trashed = false`,
       spaces: 'drive',
-      fields: 'incompleteSearch,nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,appProperties,permissions(id,type,role,deleted))',
+      fields: 'incompleteSearch,nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,properties,permissions(id,type,role,deleted))',
       pageSize: 100,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
@@ -815,9 +885,9 @@ function verifyExpenseSiblingSlots(
   for (const attachment of attachments) {
     const matches = files.filter((file) => (
       file.name === attachment.deterministicName
-      || file.appProperties?.pmcExpenseId === expenseId
-        && file.appProperties?.pmcExpenseOrdinal === String(attachment.ordinal)
-      || file.appProperties?.pmcExpenseSlotClaimId === attachment.slotClaimId
+      || file.properties?.eid === sha256String(expenseId)
+        && file.properties?.ord === String(attachment.ordinal)
+      || file.properties?.sid === attachment.slotClaimId
     ))
     if (matches.length !== 1 || matches[0]?.id !== attachment.privateFileId) {
       throw new Error('invalid')
@@ -833,22 +903,9 @@ function verifyExpenseFileMetadata(
   folderId: string,
   attachment: ExpensePrivateAttachment,
 ): void {
-  const description = JSON.stringify({
-    originalFileName: attachment.originalFileName,
-    uploadedAt: attachment.uploadedAt,
-  })
-  const expectedProperties: Record<string, string> = {
-    pmcExpenseId: expenseId,
-    pmcExpenseMonthKey: monthKey,
-    pmcExpenseOrdinal: String(attachment.ordinal),
-    pmcExpenseSha256: attachment.sha256,
-    pmcExpenseSlotClaimId: attachment.slotClaimId,
-    pmcExpenseRootRequestId: attachment.rootRequestId,
-    pmcExpenseUploadedByStaffId: attachment.uploadedByStaffId,
-    pmcExpenseAttachmentId: attachment.attachmentId,
-    pmcExpenseMetadataSha256: sha256String(description),
-  }
-  const actualProperties = file.appProperties
+  const description = expenseAttachmentDescription(attachment)
+  const expectedProperties = expenseAttachmentProperties(monthKey, attachment)
+  const actualProperties = file.properties
   const permissions = file.permissions
   if (
     file.id !== attachment.privateFileId
@@ -866,6 +923,82 @@ function verifyExpenseFileMetadata(
     || Object.keys(actualProperties).length !== Object.keys(expectedProperties).length
     || Object.keys(expectedProperties).some((key) => String(actualProperties[key] ?? '') !== expectedProperties[key])
   ) throw new Error('invalid')
+}
+
+function validateOwnerAttachmentInput(
+  monthKey: string,
+  attachment: ExpensePrivateAttachmentIdentity,
+  bytes: number[],
+): void {
+  const extension = attachment.mediaType === 'image/jpeg' ? 'jpg' : 'png'
+  if (
+    !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(monthKey)
+    || !isExpenseIdForMonth(attachment.expenseId, monthKey)
+    || !SAFE_ID.test(attachment.rootRequestId)
+    || !/^ATT-[a-f0-9]{40}$/.test(attachment.attachmentId)
+    || !Number.isSafeInteger(attachment.ordinal) || attachment.ordinal < 1 || attachment.ordinal > 5
+    || (attachment.mediaType !== 'image/jpeg' && attachment.mediaType !== 'image/png')
+    || !isValidExpenseOriginalFileName(attachment.originalFileName)
+    || !SHA256.test(attachment.sha256)
+    || attachment.deterministicName !== `${String(attachment.ordinal).padStart(3, '0')}-${attachment.sha256}.${extension}`
+    || !/^SLOT-[a-f0-9]{64}$/.test(attachment.slotClaimId)
+    || !SAFE_ID.test(attachment.uploadedByStaffId)
+    || !isCanonicalExpenseTimestamp(attachment.uploadedAt)
+    || bytes.length < 1 || bytes.length > 10_000_000
+    || sha256Bytes(bytes) !== attachment.sha256
+  ) throw new Error('invalid')
+}
+
+function matchingExpenseFiles(
+  files: ExpenseDriveMetadata[],
+  expenseId: string,
+  ordinal: number,
+  deterministicName: string,
+  slotClaimId: string,
+): ExpenseDriveMetadata[] {
+  return files.filter((file) => (
+    file.name === deterministicName
+    || file.properties?.eid === sha256String(expenseId)
+      && file.properties?.ord === String(ordinal)
+    || file.properties?.sid === slotClaimId
+  ))
+}
+
+function verifiedOwnerAttachment(
+  metadata: ExpenseDriveMetadata,
+  monthKey: string,
+  folderId: string,
+  identity: ExpensePrivateAttachmentIdentity,
+  expectedBytes: number[],
+): ExpensePrivateAttachment {
+  if (!metadata.id || !metadata.version || Number(metadata.size) !== expectedBytes.length) throw new Error('invalid')
+  const attachment: ExpensePrivateAttachment = {
+    ...identity,
+    privateFileId: metadata.id,
+    sizeBytes: expectedBytes.length,
+    driveVersion: String(metadata.version),
+  }
+  verifyExpenseFileMetadata(metadata, monthKey, identity.expenseId, folderId, attachment)
+  const file = DriveApp.getFileById(metadata.id)
+  const blob = file.getBlob()
+  const actualBytes = blob.getBytes().map((byte) => byte & 0xff)
+  if (file.isTrashed()
+    || file.getSharingAccess() !== DriveApp.Access.PRIVATE
+    || blob.getContentType() !== identity.mediaType
+    || actualBytes.length !== expectedBytes.length
+    || sha256Bytes(actualBytes) !== identity.sha256) throw new Error('invalid')
+  return attachment
+}
+
+function expenseAttachmentDescription(attachment: Pick<ExpensePrivateAttachment, 'originalFileName' | 'uploadedAt'>): string {
+  return JSON.stringify({ originalFileName: attachment.originalFileName, uploadedAt: attachment.uploadedAt })
+}
+
+function expenseAttachmentProperties(
+  monthKey: string,
+  attachment: ExpensePrivateAttachmentIdentity,
+): Record<string, string> {
+  return expenseFilePublicProperties({ monthKey, attachment }, sha256String)
 }
 
 function isPrivateExpensePermissions(

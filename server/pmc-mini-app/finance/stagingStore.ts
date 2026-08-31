@@ -158,7 +158,7 @@ async function saveSubmissionLease(
   })
 }
 
-async function readSubmissionLease(
+async function readSubmissionLeaseObject(
   bucket: Bucket,
   objectKey: string,
 ): Promise<ExpenseSubmissionLease> {
@@ -170,6 +170,7 @@ async function readSubmissionLease(
     return submissionLeaseFromStorage(objectKey, generation, metadata, bytes)
   } catch (error) {
     if (error instanceof ExpenseStagingError) throw error
+    if (isNotFound(error)) throw error
     throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_UNAVAILABLE')
   }
 }
@@ -347,6 +348,7 @@ export interface ExpenseStagingPort {
     fileId: string
   }): Promise<ExpenseDriveSlotClaim>
   readDriveSlotClaim(input: ExpenseDriveSlotClaimInput): Promise<ExpenseDriveSlotClaim>
+  readSubmissionLease(expenseId: string): Promise<ExpenseSubmissionLease | null>
   acquireSubmissionLease(
     input: ExpenseSubmissionLeaseIntent & { ownerId: string },
   ): Promise<ExpenseSubmissionLease>
@@ -399,6 +401,18 @@ export function createGoogleExpenseStagingPort(input: {
   const now = input.now ?? (() => new Date().toISOString())
 
   return {
+    async readSubmissionLease(expenseId) {
+      try {
+        if (!EXPENSE_ID.test(expenseId)) {
+          throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_CONFLICT')
+        }
+        return await readSubmissionLeaseObject(bucket, submissionLeaseObjectKey(expenseId))
+      } catch (error) {
+        if (isNotFound(error)) return null
+        throw safeStagingError(error)
+      }
+    },
+
     async acquireSubmissionLease(request) {
       try {
         const { ownerId, ...intent } = validSubmissionLeaseAcquire(request)
@@ -417,11 +431,11 @@ export function createGoogleExpenseStagingPort(input: {
         })
         try {
           await saveSubmissionLease(file, initial, 0)
-          return readSubmissionLease(bucket, objectKey)
+          return readSubmissionLeaseObject(bucket, objectKey)
         } catch (error) {
           if (!isCreateOnlyConflict(error)) throw error
         }
-        const existing = await readSubmissionLease(bucket, objectKey)
+        const existing = await readSubmissionLeaseObject(bucket, objectKey)
         if (!sameSubmissionLeaseIntent(existing, intent) || existing.leaseId !== leaseId) {
           throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_CONFLICT')
         }
@@ -444,7 +458,7 @@ export function createGoogleExpenseStagingPort(input: {
         })
         try {
           await saveSubmissionLease(file, takeover, existing.generation)
-          return readSubmissionLease(bucket, objectKey)
+          return readSubmissionLeaseObject(bucket, objectKey)
         } catch {
           throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_UNAVAILABLE')
         }
@@ -457,7 +471,7 @@ export function createGoogleExpenseStagingPort(input: {
       try {
         const expected = validSubmissionLease(lease)
         const objectKey = submissionLeaseObjectKey(expected.expenseId)
-        const current = await readSubmissionLease(bucket, objectKey)
+        const current = await readSubmissionLeaseObject(bucket, objectKey)
         const capturedAt = validCreatedAt(now())
         assertCurrentSubmissionLease(current, expected, capturedAt)
         const renewed = submissionLeasePersisted({
@@ -471,7 +485,7 @@ export function createGoogleExpenseStagingPort(input: {
         })
         try {
           await saveSubmissionLease(bucket.file(objectKey), renewed, expected.generation)
-          return readSubmissionLease(bucket, objectKey)
+          return readSubmissionLeaseObject(bucket, objectKey)
         } catch {
           throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_STALE')
         }
@@ -483,7 +497,7 @@ export function createGoogleExpenseStagingPort(input: {
     async assertSubmissionLease(lease) {
       try {
         const expected = validSubmissionLease(lease)
-        const current = await readSubmissionLease(
+        const current = await readSubmissionLeaseObject(
           bucket,
           submissionLeaseObjectKey(expected.expenseId),
         )
@@ -497,7 +511,7 @@ export function createGoogleExpenseStagingPort(input: {
       try {
         const expected = validSubmissionLease(lease)
         const objectKey = submissionLeaseObjectKey(expected.expenseId)
-        const current = await readSubmissionLease(bucket, objectKey)
+        const current = await readSubmissionLeaseObject(bucket, objectKey)
         const capturedAt = validCreatedAt(now())
         assertCurrentSubmissionLease(current, expected, capturedAt)
         const committed = submissionLeasePersisted({
@@ -511,7 +525,7 @@ export function createGoogleExpenseStagingPort(input: {
         })
         try {
           await saveSubmissionLease(bucket.file(objectKey), committed, expected.generation)
-          return readSubmissionLease(bucket, objectKey)
+          return readSubmissionLeaseObject(bucket, objectKey)
         } catch {
           throw new ExpenseStagingError('EXPENSE_SUBMISSION_LEASE_STALE')
         }
@@ -778,7 +792,7 @@ async function assertLeaseForDriveSlot(
   intent: ExpenseDriveSlotClaimInput,
   capturedAt: string,
 ): Promise<void> {
-  const current = await readSubmissionLease(bucket, submissionLeaseObjectKey(lease.expenseId))
+  const current = await readSubmissionLeaseObject(bucket, submissionLeaseObjectKey(lease.expenseId))
   assertCurrentSubmissionLease(current, lease, capturedAt)
   const slot = lease.slots[intent.ordinal - 1]
   if (
@@ -1084,6 +1098,7 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return actual.length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
 }
 function isCreateOnlyConflict(error: unknown): boolean { return isRecord(error) && (error.code === 412 || error.code === '412') }
+function isNotFound(error: unknown): boolean { return isRecord(error) && (error.code === 404 || error.code === '404') }
 function safeStagingError(error: unknown): ExpenseStagingError {
   return error instanceof ExpenseStagingError ? error : new ExpenseStagingError('EXPENSE_STAGING_UNAVAILABLE')
 }

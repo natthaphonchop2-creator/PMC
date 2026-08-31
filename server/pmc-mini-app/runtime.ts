@@ -48,6 +48,7 @@ import {
 export interface PmcFinanceRuntime {
   config: PmcFinanceConfig
   resume: ExpenseIngressClient
+  staging: ExpenseStagingPort
   recovery: ExpenseRecoveryWorker
   recoveryIdentity: WorkerIdentityVerifier
   reads?: {
@@ -106,7 +107,10 @@ export function createPmcFinanceRuntime(
     url: config.expenseIngressUrl,
     secret: config.expenseIngressSecret,
   })
-  if (!config.readsEnabled && !config.captureEnabled) return { config, resume, recovery, recoveryIdentity }
+  const staging = factories.createStaging({ bucketName: config.stagingBucketName })
+  if (!config.readsEnabled && !config.captureEnabled) {
+    return { config, resume, staging, recovery, recoveryIdentity }
+  }
   const finance = factories.createGoogle({
     masterSpreadsheetId: config.masterSpreadsheetId,
     folderId: config.folderId,
@@ -115,14 +119,13 @@ export function createPmcFinanceRuntime(
     ? { finance: financeGoogleReadCapability(finance) }
     : undefined
   if (!config.captureEnabled) {
-    return { config, resume, recovery, recoveryIdentity, ...(reads ? { reads } : {}) }
+    return { config, resume, staging, recovery, recoveryIdentity, ...(reads ? { reads } : {}) }
   }
   const captureFinance = financeGoogleCaptureCapability(finance)
-  const staging = factories.createStaging({ bucketName: config.stagingBucketName })
   const ingress = resume
   const submission = factories.createSubmission({ ingress, finance: captureFinance, staging })
   const capture = { finance: captureFinance, staging, ingress, submission }
-  return { config, resume, recovery, recoveryIdentity, ...(reads ? { reads } : {}), capture }
+  return { config, resume, staging, recovery, recoveryIdentity, ...(reads ? { reads } : {}), capture }
 }
 
 export function createPmcMiniAppRuntime(
@@ -163,7 +166,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
     signingSecret: config.signingSecret,
     now: () => now().getTime(),
     recovery: expenseFinance.recovery,
-    resume: { ingress: expenseFinance.resume },
+    resume: { ingress: expenseFinance.resume, staging: expenseFinance.staging },
     ...(expenseFinance.reads ? {
       reads: { readStore: createFinanceReadStore({ finance: expenseFinance.reads.finance }) },
     } : {}),

@@ -504,14 +504,16 @@ describe('PMC Mini App browser API', () => {
 
   it('resumes one expense root through an empty authenticated POST and rejects history-shaped payloads', async () => {
     const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'PREPARED' }))
       .mockResolvedValueOnce(jsonResponse(200, { status: 'PENDING' }))
       .mockResolvedValueOnce(jsonResponse(200, { status: 'PENDING', expenses: [] }))
     const api = createMiniAppApi({ fetch, liff: inertLiff() })
 
-    await expect(api.resumeExpense('raw-id-token', 'root-request-1')).resolves.toEqual({ status: 'PENDING' })
+    await expect(api.resumeExpense('raw-id-token', 'root-request-1')).resolves.toEqual({ status: 'PREPARED' })
     expect(fetch).toHaveBeenNthCalledWith(1, '/api/mini-app/expenses/resume/root-request-1', {
       method: 'POST', headers: { authorization: 'Bearer raw-id-token' },
     })
+    await expect(api.resumeExpense('raw-id-token', 'root-request-1')).resolves.toEqual({ status: 'PENDING' })
     await expect(api.resumeExpense('raw-id-token', 'root-request-1'))
       .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE' })
   })

@@ -3,6 +3,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { JERA_OPERATOR_PROJECT } from '../../scripts/jera-operator-secrets.mjs'
+import { buildItemTypeMetadata } from '../../server/jera/allocation'
+import { createJeraFinanceService } from '../../server/jera/financeService'
+import type { JeraSyncCoordinator, JeraSyncQuery } from '../../server/jera/syncCoordinator'
 
 const PROJECT = JERA_OPERATOR_PROJECT
 const SERVICE = 'pmc-mini-app'
@@ -11,11 +14,14 @@ const REGION = 'asia-southeast1'
 const APPROVED_DAY = '2026-08-22'
 const NOW = '2026-08-30T02:00:00.000Z'
 const QUEUE = 'pmc-revenue-allocation'
+const PUBLIC_SERVICE_ORIGIN = 'https://pmc-mini-app.example'
 const AUDIENCE = 'https://private.example'
 const INVOKER = 'invoker@example.iam.gserviceaccount.com'
 const OPERATOR_ACCOUNT = 'operator@example.com'
-const SEED_URL = `${AUDIENCE}/internal/mini-app/finance-daily-seed`
-const APPROVED_FINANCE_STAFF_IDS = ['ADMIN_01', 'DOCTOR_01', 'ADMIN_09'] as const
+const SEED_URL = `${PUBLIC_SERVICE_ORIGIN}/internal/mini-app/finance-daily-seed`
+const CURRENT_SEED_URL = `${PUBLIC_SERVICE_ORIGIN}/internal/mini-app/finance-current-seed`
+const APPROVED_FINANCE_STAFF_IDS = ['ADMIN_01', 'DOCTOR_01', 'DOCTOR_02', 'ADMIN_09'] as const
+const EXPECTED_FINANCE_VIEWERS = String(APPROVED_FINANCE_STAFF_IDS.length)
 const APPROVED_FINANCE_STAFF_ARGS = APPROVED_FINANCE_STAFF_IDS.flatMap((id) => ['--approved-finance-staff-id', id])
 const DISABLED_FINANCE_CONTROL_ARGS = [
   '--expected-finance-pilot-only', 'false',
@@ -51,7 +57,8 @@ describe('finance operator script approval gates', () => {
     const external = vi.fn(async () => { throw new Error('must not execute') })
 
     await expect(check.runFinanceRuntimeCheck([
-      '--project', PROJECT, '--service', SERVICE, '--region', REGION, '--expected-finance-viewers', '3',
+      '--project', PROJECT, '--service', SERVICE, '--region', REGION,
+      '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS,
     ], { execute: external })).rejects.toThrow('Explicit read-only production approval is required')
     await expect(seed.seedFinanceReportDay([
       '--allow-readonly-production', '--project', PROJECT, '--date', APPROVED_DAY,
@@ -72,7 +79,7 @@ describe('finance operator script approval gates', () => {
     for (const flag of forbidden) {
       await expect(check.runFinanceRuntimeCheck([
         '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-        '--expected-finance-viewers', '3', flag, 'private-value',
+        '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, flag, 'private-value',
       ], { execute: external })).rejects.toThrow('Sensitive command-line arguments are forbidden')
     }
     await expect(seed.seedFinanceReportDay([
@@ -97,6 +104,21 @@ describe('finance operator script approval gates', () => {
       expect(stdout.text()).toContain('Usage:')
       expect(external).not.toHaveBeenCalled()
     }
+  })
+
+  it('documents bounded viewer input and removes an independent Scheduler audience flag', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const external = vi.fn(async () => { throw new Error('must not execute') })
+
+    await expect(check.runFinanceRuntimeCheck(['--help'], { execute: external, io: { stdout } })).resolves.toBe(0)
+    expect(stdout.text()).toContain('--expected-finance-viewers <1..20>')
+    expect(stdout.text()).toContain('repeat exactly the declared viewer count')
+    expect(stdout.text()).not.toContain('--expected-oidc-audience')
+    await expect(check.runFinanceRuntimeCheck([
+      ...checkerArgs('PILOT'), '--expected-oidc-audience', AUDIENCE,
+    ], { execute: external })).rejects.toThrow('Unknown finance operator argument')
+    expect(external).not.toHaveBeenCalled()
   })
 })
 
@@ -136,7 +158,7 @@ describe('read-only finance runtime checker', () => {
 
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+      '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
       ...DISABLED_FINANCE_CONTROL_ARGS,
     ], { execute, readGoogleState: googleReads, now: () => new Date(NOW), io: { stdout } })
 
@@ -160,19 +182,22 @@ describe('read-only finance runtime checker', () => {
       tasks: { pendingCount: 1, validMetadataHashCount: 1, validAttemptCount: 1, invalidPayloadCount: 0 },
       tabs: { exactHeaderCount: 3, requiredHeaderCount: 3, exactGridCapacityCount: 3, requiredGridCapacityCount: 3 },
       financePermissions: {
-        expectedCount: 3, approvedViewerCount: 3, activeViewerCount: 3, exactApprovedSet: true,
-        missingApprovedCount: 0, unlinkedApprovedCount: 0, extraViewerCount: 0, invalidStaffRowCount: 0,
+        expectedCount: 4, approvedViewerCount: 4, activeViewerCount: 4, exactApprovedSet: true,
+        missingApprovedCount: 0, lineLinkedApprovedCount: 3, unlinkedApprovedCount: 1,
+        extraViewerCount: 0, invalidStaffRowCount: 0,
       },
       leases: { activeCount: 1, olderThan15MinutesCount: 0, oldestActiveAgeSeconds: 300 },
     })
     expect(report.financePermissions.viewers).toEqual([
       { staffId: 'ADMIN_01', name: 'Owner' },
       { staffId: 'DOCTOR_01', name: 'Doctor' },
+      { staffId: 'DOCTOR_02', name: 'Doctor latent' },
       { staffId: 'ADMIN_09', name: 'Mus' },
     ])
     expect(stdout.text()).not.toContain('U-secret')
     expect(stdout.text()).not.toContain('private-spreadsheet')
     expect(stdout.text()).not.toContain('private.example')
+    expect(stdout.text()).not.toContain('pmc-mini-app.example')
     expect(stdout.text()).not.toContain('runtime@example')
   })
 
@@ -183,7 +208,7 @@ describe('read-only finance runtime checker', () => {
 
     const code = await check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+      '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
       ...DISABLED_FINANCE_CONTROL_ARGS,
     ], { execute, readGoogleState: vi.fn(async () => { throw new Error('sheet private-spreadsheet') }), io: { stdout } })
 
@@ -200,11 +225,25 @@ describe('read-only finance runtime checker', () => {
       const stageArg = stage ? [`--expected-stage=${stage}`] : []
       await expect(check.runFinanceRuntimeCheck([
         '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-        '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, ...stageArg,
+        '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, ...APPROVED_FINANCE_STAFF_ARGS, ...stageArg,
       ], { execute })).rejects.toThrow('Expected stage must be DISABLED, ALLOCATION, PILOT, or READY')
     }
     expect(execute).not.toHaveBeenCalled()
   })
+
+  it.each(['0', '21', '1.5', 'NaN'])(
+    'rejects out-of-range expected finance viewer count %s before external access',
+    async (count) => {
+      const [check] = await loadScripts()
+      const execute = vi.fn(async () => { throw new Error('must not execute') })
+      await expect(check.runFinanceRuntimeCheck([
+        '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
+        '--expected-finance-viewers', count, ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+        ...DISABLED_FINANCE_CONTROL_ARGS,
+      ], { execute })).rejects.toThrow('Expected finance viewers must be an integer from 1 to 20')
+      expect(execute).not.toHaveBeenCalled()
+    },
+  )
 
   it('requires all four exact finance rollout expectations together before external access', async () => {
     const [check] = await loadScripts()
@@ -215,7 +254,7 @@ describe('read-only finance runtime checker', () => {
       const args = controls.filter((_value, index) => index !== omitted && index !== omitted + 1)
       await expect(check.runFinanceRuntimeCheck([
         '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-        '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+        '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
         ...args,
       ], { execute })).rejects.toThrow('All expected finance rollout controls are required')
     }
@@ -238,7 +277,7 @@ describe('read-only finance runtime checker', () => {
 
     await expect(check.runFinanceRuntimeCheck([
       '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-      '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
+      '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, ...APPROVED_FINANCE_STAFF_ARGS, '--expected-stage=DISABLED',
       ...controls,
     ], { execute })).rejects.toThrow(/^Expected finance rollout controls must use exact values/)
     expect(execute).not.toHaveBeenCalled()
@@ -275,17 +314,17 @@ describe('read-only finance runtime checker', () => {
     })
   })
 
-  it('makes PILOT ready with exact true flags, pinned controls, zero Scheduler, and a no-traffic latest revision', async () => {
+  it('makes PILOT ready only after deterministic 100% cutover with one current-day Scheduler', async () => {
     const [check] = await loadScripts()
     const stdout = bufferWriter()
     const service = cloudRunService({
       flags: { reports: true, allocation: true, category: true },
       financeControls: { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false },
-      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+      latestReadyRevisionName: 'private-live-revision', trafficRevisionName: 'private-live-revision',
     })
 
     const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
-      execute: runtimeExecute({ service, schedulerJobs: [] }), readGoogleState: vi.fn(async () => googleState()),
+      execute: runtimeExecute({ service, schedulerJobs: [currentSchedulerJob()] }), readGoogleState: vi.fn(async () => googleState()),
       now: () => new Date(NOW), io: { stdout },
     })
 
@@ -302,13 +341,38 @@ describe('read-only finance runtime checker', () => {
         financeMonthlyIncomeEnabled: false,
         exactExpectedControls: true,
       },
-      cloudRun: { latestReadyRevisionPresent: true, latestReadyHasNoTraffic: true },
-      scheduler: { enabledJobCount: 0 },
+      cloudRun: { latestReadyRevisionPresent: true, latestReadyReceivesAllTraffic: true },
+      scheduler: { enabledJobCount: 1, enabledCurrentSeedCandidateCount: 1, currentReadyMatchCount: 1 },
     })
     expect(stdout.text()).not.toContain(APPROVED_DAY)
   })
 
-  it('fails PILOT when any finance seed Scheduler is enabled', async () => {
+  it.each([
+    ['zero traffic', [{ revisionName: 'private-live-revision', percent: 0 }, { revisionName: 'rollback-revision', percent: 100 }]],
+    ['split traffic', [{ revisionName: 'private-live-revision', percent: 10 }, { revisionName: 'rollback-revision', percent: 90 }]],
+  ] as const)('fails PILOT while the reviewed revision has %s', async (_label, traffic) => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false },
+      latestReadyRevisionName: 'private-live-revision', trafficRevisionName: 'private-live-revision',
+    })
+    service.status.traffic = [...traffic]
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
+      execute: runtimeExecute({ service, schedulerJobs: [currentSchedulerJob()] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'PILOT', stageReady: false,
+      cloudRun: { latestReadyReceivesAllTraffic: false },
+    })
+  })
+
+  it('fails PILOT when the current-day Scheduler is missing', async () => {
     const [check] = await loadScripts()
     const stdout = bufferWriter()
     const service = cloudRunService({
@@ -325,8 +389,115 @@ describe('read-only finance runtime checker', () => {
     expect(code).toBe(1)
     expect(JSON.parse(stdout.text())).toMatchObject({
       expectedStage: 'PILOT', stageReady: false,
-      scheduler: { enabledFinanceSeedCandidateCount: 1 },
+      scheduler: { enabledCurrentSeedCandidateCount: 0, currentReadyMatchCount: 0 },
     })
+  })
+
+  it('fails PILOT when the current-day Scheduler deadline can overlap the next interval', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
+      execute: runtimeExecute({ service, schedulerJobs: [currentSchedulerJob({ attemptDeadline: '900s' })] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'PILOT', stageReady: false,
+      scheduler: { currentDeadlineMatches: false, currentReadyMatchCount: 0 },
+    })
+  })
+
+  it('fails PILOT when the Scheduler sends any HTTP body', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
+      execute: runtimeExecute({ service, schedulerJobs: [currentSchedulerJob({ body: 'e30=' })] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: 'PILOT', stageReady: false,
+      scheduler: { currentNoBody: false, currentReadyMatchCount: 0 },
+    })
+  })
+
+  it.each([
+    ['PILOT paused previous-day candidate', 'PILOT', [currentSchedulerJob(), schedulerJob({ state: 'PAUSED' })], { dailySeedCandidateCount: 1 }],
+    ['PILOT paused current-day duplicate', 'PILOT', [currentSchedulerJob(), currentSchedulerJob({ state: 'PAUSED' })], { currentSeedCandidateCount: 2 }],
+    ['READY paused previous-day duplicate', 'READY', [currentSchedulerJob(), schedulerJob(), schedulerJob({ state: 'PAUSED' })], { dailySeedCandidateCount: 2 }],
+    ['READY paused current-day duplicate', 'READY', [currentSchedulerJob(), currentSchedulerJob({ state: 'PAUSED' }), schedulerJob()], { currentSeedCandidateCount: 2 }],
+  ] as const)('fails %s across all Scheduler states', async (_label, stage, schedulerJobs, expected) => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: stage === 'PILOT'
+        ? { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false }
+        : { pilotOnly: false, preview: false, pilotDate: undefined, monthly: true },
+      latestReadyRevisionName: 'private-live-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs(stage), {
+      execute: runtimeExecute({ service, schedulerJobs: [...schedulerJobs] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: stage, stageReady: false, scheduler: expected,
+    })
+  })
+
+  it.each([
+    ['PILOT current-day URL', 'PILOT', '--expected-finance-current-seed-url', 'https://wrong.example/internal/mini-app/finance-current-seed', [currentSchedulerJob({ uri: 'https://wrong.example/internal/mini-app/finance-current-seed' })]],
+    ['READY previous-day URL', 'READY', '--expected-finance-seed-url', 'https://wrong.example/internal/mini-app/finance-daily-seed', [currentSchedulerJob(), schedulerJob({ uri: 'https://wrong.example/internal/mini-app/finance-daily-seed' })]],
+  ] as const)('rejects a correct-path %s whose host does not match public service status.url', async (
+    _label,
+    stage,
+    flag,
+    wrongUrl,
+    schedulerJobs,
+  ) => {
+    const [check] = await loadScripts()
+    const args = checkerArgs(stage)
+    args[args.indexOf(flag) + 1] = wrongUrl
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: true, allocation: true, category: true },
+      financeControls: stage === 'PILOT'
+        ? { pilotOnly: true, preview: false, pilotDate: APPROVED_DAY, monthly: false }
+        : { pilotOnly: false, preview: false, pilotDate: undefined, monthly: true },
+      latestReadyRevisionName: 'private-live-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(args, {
+      execute: runtimeExecute({ service, schedulerJobs: [...schedulerJobs] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(1)
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      expectedStage: stage,
+      stageReady: false,
+      scheduler: stage === 'PILOT'
+        ? { currentServiceOriginMatches: false, currentReadyMatchCount: 0 }
+        : { serviceOriginMatches: false, readyMatchCount: 0 },
+    })
+    expect(stdout.text()).not.toContain(wrongUrl)
+    expect(stdout.text()).not.toContain(PUBLIC_SERVICE_ORIGIN)
   })
 
   it('requires an explicit private worker service instead of applying worker IAM rules to the public LIFF service', async () => {
@@ -351,13 +522,10 @@ describe('read-only finance runtime checker', () => {
   it.each([
     ['wrong approved recipient', (state: ReturnType<typeof googleState>) => {
       state.staffRows[0]!.canViewFinance = false
-      state.staffRows[3]!.canViewFinance = true
+      state.staffRows[4]!.canViewFinance = true
     }, { missingApprovedCount: 1, extraViewerCount: 1 }],
-    ['unlinked approved recipient', (state: ReturnType<typeof googleState>) => {
-      state.staffRows[1]!.lineLinked = false
-    }, { unlinkedApprovedCount: 1 }],
     ['extra finance viewer', (state: ReturnType<typeof googleState>) => {
-      state.staffRows[3]!.canViewFinance = true
+      state.staffRows[4]!.canViewFinance = true
     }, { extraViewerCount: 1 }],
   ])('rejects %s against the exact operator-provided staff ID set', async (_case, mutate, expected) => {
     const [check] = await loadScripts()
@@ -375,6 +543,28 @@ describe('read-only finance runtime checker', () => {
 
     expect(code).toBe(1)
     expect(JSON.parse(stdout.text()).financePermissions).toMatchObject({ exactApprovedSet: false, ...expected })
+  })
+
+  it('reports but accepts an explicitly approved latent finance viewer without LINE linkage', async () => {
+    const [check] = await loadScripts()
+    const stdout = bufferWriter()
+    const service = cloudRunService({
+      flags: { reports: false, allocation: true, category: false },
+      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+    })
+
+    const code = await check.runFinanceRuntimeCheck(checkerArgs('ALLOCATION'), {
+      execute: runtimeExecute({ service, schedulerJobs: [] }),
+      readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
+    })
+
+    expect(code).toBe(0)
+    expect(JSON.parse(stdout.text()).financePermissions).toMatchObject({
+      exactApprovedSet: true,
+      approvedViewerCount: 4,
+      lineLinkedApprovedCount: 3,
+      unlinkedApprovedCount: 1,
+    })
   })
 
   it.each([
@@ -451,9 +641,10 @@ describe('read-only finance runtime checker', () => {
     const validService = cloudRunService({
       flags: { reports: true, allocation: true, category: true },
       financeControls: { pilotOnly: false, preview: false, pilotDate: undefined, monthly: true },
-      latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision',
+      latestReadyRevisionName: 'private-live-revision', trafficRevisionName: 'private-live-revision',
     })
     const validJob = schedulerJob()
+    const validCurrentJob = currentSchedulerJob()
     const mutations = [
       { service: cloudRunService({ flags: { reports: true, allocation: true, category: true }, allocationProject: 'wrong-project', latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision' }), job: validJob },
       { service: cloudRunService({ flags: { reports: true, allocation: true, category: true }, queue: 'wrong-queue', latestReadyRevisionName: 'private-no-traffic-revision', trafficRevisionName: 'private-live-revision' }), job: validJob },
@@ -467,7 +658,7 @@ describe('read-only finance runtime checker', () => {
     for (const mutation of mutations) {
       const stdout = bufferWriter()
       const code = await check.runFinanceRuntimeCheck(checkerArgs('READY'), {
-        execute: runtimeExecute({ service: mutation.service, schedulerJobs: [mutation.job] }),
+        execute: runtimeExecute({ service: mutation.service, schedulerJobs: [validCurrentJob, mutation.job] }),
         readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
       })
       expect(code).toBe(1)
@@ -476,7 +667,7 @@ describe('read-only finance runtime checker', () => {
 
     const stdout = bufferWriter()
     const code = await check.runFinanceRuntimeCheck(checkerArgs('READY'), {
-      execute: runtimeExecute({ service: validService, schedulerJobs: [validJob] }),
+      execute: runtimeExecute({ service: validService, schedulerJobs: [validCurrentJob, validJob] }),
       readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
     })
     expect(code).toBe(0)
@@ -491,7 +682,11 @@ describe('read-only finance runtime checker', () => {
         financeMonthlyIncomeEnabled: true,
         exactExpectedControls: true,
       },
-      scheduler: { exactTarget: true, postMethod: true, oidcAudienceMatches: true, oidcInvokerMatches: true },
+      scheduler: {
+        exactTarget: true, postMethod: true, oidcAudienceMatches: true, oidcInvokerMatches: true,
+        currentExactTarget: true, currentPostMethod: true, currentOidcAudienceMatches: true,
+        currentOidcInvokerMatches: true, currentReadyMatchCount: 1,
+      },
     })
     expect(stdout.text()).not.toContain(APPROVED_DAY)
   })
@@ -515,7 +710,7 @@ describe('read-only finance runtime checker', () => {
     })
 
     const code = await check.runFinanceRuntimeCheck(checkerArgs('PILOT'), {
-      execute: runtimeExecute({ service, schedulerJobs: [] }),
+      execute: runtimeExecute({ service, schedulerJobs: [currentSchedulerJob()] }),
       readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
     })
 
@@ -560,7 +755,10 @@ describe('read-only finance runtime checker', () => {
     const code = await check.runFinanceRuntimeCheck(checkerArgs('READY'), {
       execute: runtimeExecute({
         service,
-        schedulerJobs: [schedulerJob(), schedulerJob({ uri: 'https://wrong.example/internal/mini-app/finance-daily-seed' })],
+        schedulerJobs: [
+          currentSchedulerJob(), schedulerJob(),
+          schedulerJob({ uri: 'https://wrong.example/internal/mini-app/finance-daily-seed' }),
+        ],
       }),
       readGoogleState: vi.fn(async () => googleState()), now: () => new Date(NOW), io: { stdout },
     })
@@ -568,7 +766,7 @@ describe('read-only finance runtime checker', () => {
     expect(code).toBe(1)
     expect(JSON.parse(stdout.text())).toMatchObject({
       expectedStage: 'READY', stageReady: false,
-      scheduler: { enabledJobCount: 2, enabledFinanceSeedCandidateCount: 2 },
+      scheduler: { enabledJobCount: 3, enabledFinanceSeedCandidateCount: 3 },
     })
   })
 })
@@ -617,6 +815,35 @@ describe('one-day finance seed', () => {
     })
     expect(stdout.text()).not.toContain('Patient Private')
     expect(stdout.text()).not.toContain('payment-private-id')
+  })
+
+  it('makes exactly three provider refreshes before the allocation-only phase', async () => {
+    const [, seed] = await loadScripts()
+    const providerRefresh = vi.fn(async (query: JeraSyncQuery) => financeOperatorEnvelope(query))
+    const runtime = financeOperatorRuntime(providerRefresh)
+    const operator = await seed.createFinanceOperator({
+      project: PROJECT,
+      execute: vi.fn(async () => JSON.stringify({ spec: { template: { spec: { containers: [{ env: [] }] } } } })),
+      environment: {
+        PMC_SPREADSHEET_ID: 'synthetic-spreadsheet',
+        PMC_DRIVE_INTAKE_FOLDER_ID: 'synthetic-intake-folder',
+      },
+    }, {
+      runtime,
+      loadJeraOperatorSecrets: vi.fn(async () => ({
+        baseUrl: 'https://jera.example', username: 'synthetic-user', password: 'synthetic-password',
+      })),
+    })
+
+    await seed.seedApprovedFinanceDay({
+      date: APPROVED_DAY, operator, sleep: vi.fn(async () => undefined),
+      reportDelayMs: 20_000, statusDelayMs: 60_000, maxStatusReads: 1,
+    })
+
+    expect(providerRefresh).toHaveBeenCalledTimes(3)
+    expect(providerRefresh.mock.calls.map(([query]) => query.reportType)).toEqual([
+      'PAYMENT', 'REFUND', 'PRODUCT_SALES',
+    ])
   })
 
   it('allows only the approved comparison day through the one-day CLI', async () => {
@@ -1040,15 +1267,18 @@ function checkerArgs(stage: 'DISABLED' | 'ALLOCATION' | 'PILOT' | 'READY') {
       : DISABLED_FINANCE_CONTROL_ARGS
   const args = [
     '--allow-readonly-production', '--project', PROJECT, '--service', SERVICE, '--region', REGION,
-    '--expected-finance-viewers', '3', ...APPROVED_FINANCE_STAFF_ARGS, `--expected-stage=${stage}`,
+    '--expected-finance-viewers', EXPECTED_FINANCE_VIEWERS, ...APPROVED_FINANCE_STAFF_ARGS, `--expected-stage=${stage}`,
     ...financeControls,
   ]
   if (stage !== 'DISABLED') args.push(
     '--expected-worker-service', WORKER_SERVICE,
     '--expected-queue', QUEUE, '--expected-worker-audience', AUDIENCE, '--expected-invoker', INVOKER,
   )
+  if (stage === 'PILOT' || stage === 'READY') args.push(
+    '--expected-finance-current-seed-url', CURRENT_SEED_URL,
+  )
   if (stage === 'READY') args.push(
-    '--expected-finance-seed-url', SEED_URL, '--expected-oidc-audience', AUDIENCE,
+    '--expected-finance-seed-url', SEED_URL,
   )
   return args
 }
@@ -1095,10 +1325,31 @@ function runtimeExecute({
 
 function schedulerJob({
   uri = SEED_URL, method = 'POST', oidcAudience = AUDIENCE, invoker = INVOKER,
+  attemptDeadline = '180s', state = 'ENABLED', body = undefined,
 } = {}) {
+  const httpTarget = {
+    uri, httpMethod: method, oidcToken: { audience: oidcAudience, serviceAccountEmail: invoker },
+    ...(body === undefined ? {} : { body }),
+  }
   return {
-    state: 'ENABLED', schedule: '15 2 * * *', timeZone: 'Asia/Bangkok',
-    httpTarget: { uri, httpMethod: method, oidcToken: { audience: oidcAudience, serviceAccountEmail: invoker } },
+    state, schedule: '15 2 * * *', timeZone: 'Asia/Bangkok',
+    attemptDeadline,
+    httpTarget,
+  }
+}
+
+function currentSchedulerJob({
+  uri = CURRENT_SEED_URL, method = 'POST', oidcAudience = AUDIENCE, invoker = INVOKER,
+  attemptDeadline = '180s', state = 'ENABLED', body = undefined,
+} = {}) {
+  const httpTarget = {
+    uri, httpMethod: method, oidcToken: { audience: oidcAudience, serviceAccountEmail: invoker },
+    ...(body === undefined ? {} : { body }),
+  }
+  return {
+    state, schedule: '*/15 * * * *', timeZone: 'Asia/Bangkok',
+    attemptDeadline,
+    httpTarget,
   }
 }
 
@@ -1134,7 +1385,11 @@ function cloudRunService({
   ].map(([name, value]) => ({ name, value }))
   return {
     spec: { template: { metadata: { name: latestReadyRevisionName }, spec: { serviceAccountName: 'runtime@example.iam.gserviceaccount.com', containers: [{ env }] } } },
-    status: { latestReadyRevisionName, traffic: [{ revisionName: trafficRevisionName, percent: 100 }] },
+    status: {
+      url: PUBLIC_SERVICE_ORIGIN,
+      latestReadyRevisionName,
+      traffic: [{ revisionName: trafficRevisionName, percent: 100 }],
+    },
   }
 }
 
@@ -1173,6 +1428,7 @@ function googleState() {
     staffRows: [
       { id: 'ADMIN_01', name: 'Owner', lineLinked: true, canViewFinance: true, active: true },
       { id: 'DOCTOR_01', name: 'Doctor', lineLinked: true, canViewFinance: true, active: true },
+      { id: 'DOCTOR_02', name: 'Doctor latent', lineLinked: false, canViewFinance: true, active: true },
       { id: 'ADMIN_09', name: 'Mus', lineLinked: true, canViewFinance: true, active: true },
       { id: 'ADMIN_10', name: 'Staff', lineLinked: true, canViewFinance: false, active: true },
     ],
@@ -1222,6 +1478,86 @@ function operatorFixture({ completeImmediately = false } = {}) {
         warnings: [], patientName: 'Patient Private', paymentUuid: 'payment-private-id',
       }
     },
+  }
+}
+
+function financeOperatorRuntime(providerRefresh: (query: JeraSyncQuery) => Promise<ReturnType<typeof financeOperatorEnvelope>>) {
+  let savedCoverage: Record<string, unknown> | null = null
+  const coordinator = {
+    readAndRefresh: vi.fn(async (query: JeraSyncQuery) => financeOperatorEnvelope(query)),
+    readCachedBatch: vi.fn(async (queries: JeraSyncQuery[]) => queries.map(financeOperatorEnvelope)),
+    manualRefresh: vi.fn(async () => ({ accepted: true, retryAfterSeconds: 300 })),
+    scheduledRefresh: providerRefresh,
+    dailyLookback: vi.fn(async () => []),
+    waitForIdle: vi.fn(async () => undefined),
+  } as unknown as JeraSyncCoordinator
+  const allocationStore = {
+    getCoverage: vi.fn(async () => savedCoverage),
+    saveCoverage: vi.fn(async (coverage: Record<string, unknown>) => { savedCoverage = structuredClone(coverage) }),
+  }
+  let financeServiceCount = 0
+  return {
+    readJeraConfig: vi.fn(() => ({
+      defaultBranchUuid: '11111111-2222-4333-8444-555555555555', manualRefreshSeconds: 300,
+      syncIntervalMinutes: 15,
+      allocation: {
+        projectId: PROJECT, location: REGION, queueName: QUEUE,
+        workerUrl: 'https://private.example/internal/mini-app/jera-allocation-worker',
+        workerAudience: AUDIENCE, taskInvokerEmail: INVOKER, leaseBucket: 'synthetic-lease-bucket',
+      },
+    })),
+    createMiniAppGooglePorts: vi.fn(() => ({ sheets: {} })),
+    createJeraTokenClient: vi.fn(() => ({})),
+    createJeraReadClient: vi.fn(() => ({})),
+    createGoogleJeraReportStore: vi.fn(() => ({})),
+    createJeraSyncCoordinator: vi.fn(() => coordinator),
+    createGoogleJeraAllocationStore: vi.fn(() => allocationStore),
+    createGoogleJeraAllocationTaskQueue: vi.fn(() => ({
+      enqueue: vi.fn(async () => ({ taskName: 'synthetic-task', alreadyExists: false, live: true })),
+    })),
+    createGoogleJeraAllocationLeasePort: vi.fn(() => ({
+      claim: vi.fn(async (input: { dayKey: string; owner: string; now: string; ttlMs: number }) => ({
+        dayKey: input.dayKey, owner: input.owner, fencingToken: '1',
+        expiresAt: new Date(Date.parse(input.now) + input.ttlMs).toISOString(),
+      })),
+      renew: vi.fn(async () => null),
+      assertCurrent: vi.fn(async () => true),
+      release: vi.fn(async () => undefined),
+    })),
+    createJeraFinanceService: vi.fn((options: Parameters<typeof createJeraFinanceService>[0]) => {
+      financeServiceCount += 1
+      if (financeServiceCount === 1) {
+        return createJeraFinanceService({ ...options, now: () => new Date(NOW) })
+      }
+      return {
+        readDaily: vi.fn(async () => ({
+          receivedSatang: 100_000, refundSatang: 0,
+          channels: { transferSatang: 100_000, cashSatang: 0, creditSatang: 0, otherSatang: 0 },
+          categories: { serviceSatang: null, productSatang: null, unclassifiedSatang: null }, warnings: [],
+        })),
+        readMonthly: vi.fn(async () => { throw new Error('not used') }),
+        refreshDay: vi.fn(async () => { throw new Error('not used') }),
+      }
+    }),
+    jeraAllocationDayKey: vi.fn(() => 'synthetic-day-key'),
+    buildItemTypeMetadata,
+  }
+}
+
+function financeOperatorEnvelope(query: JeraSyncQuery) {
+  const common = {
+    cacheKey: `synthetic:${query.reportType}`, reportType: query.reportType,
+    sourceUuid: `${query.reportType.toLowerCase()}-uuid`, branchUuid: query.filters.branchUuid,
+    eventDate: query.filters.startDate, sourceHash: `${query.reportType.toLowerCase()}-hash`,
+  }
+  const data = query.reportType === 'PAYMENT'
+    ? [{ ...common, paidAmountSatang: 100_000 }]
+    : query.reportType === 'REFUND'
+      ? [{ ...common, refundAmountSatang: 0 }]
+      : [{ ...common, itemCode: 'ITEM-1', type: 'service' }]
+  return {
+    data, source: 'CACHE' as const, fetchedAt: NOW, lastSuccessAt: NOW,
+    refreshing: false, stale: false, warningCode: null,
   }
 }
 

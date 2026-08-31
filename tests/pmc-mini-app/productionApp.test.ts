@@ -40,6 +40,7 @@ describe('production PMC Mini App route isolation', () => {
     expect((await invoke(app, '/api/mini-app/session')).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/jera-allocation-worker', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/finance-daily-seed', { method: 'POST' })).status).toBe(503)
+    expect((await invoke(app, '/internal/mini-app/finance-current-seed', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/recover-expenses', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/healthz')).status).toBe(200)
@@ -143,6 +144,21 @@ describe('production PMC Mini App route isolation', () => {
     const exact = await invokeRaw(app, '/internal/mini-app/finance-daily-seed', { method: 'POST' })
     const query = await invokeRaw(app, '/internal/mini-app/finance-daily-seed?date=2026-08-29', { method: 'POST' })
     const suffix = await invokeRaw(app, '/internal/mini-app/finance-daily-seed/retry', { method: 'POST' })
+
+    expect(exact.status).toBe(204)
+    expect(exact.headers.get('www-authenticate')).toBeNull()
+    expect(query.status).toBe(401)
+    expect(suffix.status).toBe(401)
+    expect(pmcMiniApp).toHaveBeenCalledOnce()
+  })
+
+  it('keeps only the exact finance current seed route outside Basic Auth and static fallback', async () => {
+    const pmcMiniApp = vi.fn<Middleware>(async (_req, res) => { res.statusCode = 204; res.end() })
+    const app = handler({ pmcMiniApp })
+
+    const exact = await invokeRaw(app, '/internal/mini-app/finance-current-seed', { method: 'POST' })
+    const query = await invokeRaw(app, '/internal/mini-app/finance-current-seed?date=2026-08-30', { method: 'POST' })
+    const suffix = await invokeRaw(app, '/internal/mini-app/finance-current-seed/retry', { method: 'POST' })
 
     expect(exact.status).toBe(204)
     expect(exact.headers.get('www-authenticate')).toBeNull()

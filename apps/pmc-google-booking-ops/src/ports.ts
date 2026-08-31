@@ -4,7 +4,11 @@ import type { MiniAppAsyncRequestRecordV1 } from '../../../shared/pmcMiniAppAsyn
 import type { PmcMiniAppTargetRequestRecord } from '../../../shared/pmcBookingRowContracts'
 import type { StockAuditEvent, StockDocumentSummary, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
 import type { ExpenseAuditEvent, ExpenseMonthlyProjection, ExpenseSubmission } from '../../../shared/pmcExpense'
-import type { ExpensePrivateAttachment, MiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress'
+import type {
+  ExpensePrivateAttachment,
+  ExpensePrivateAttachmentIdentity,
+  MiniAppExpenseCommand,
+} from '../../../shared/pmcMiniAppExpenseIngress'
 import type {
   WorkbookMetadataSnapshot,
   WorkbookPresentationPlan,
@@ -310,6 +314,12 @@ export interface ExpenseRepository {
     expenseId: string,
     attachments: ExpensePrivateAttachment[],
   ): void
+  createOrFindPrivateAttachment(input: {
+    mode: 'CREATE_OR_FIND' | 'FIND_ONLY'
+    monthKey: string
+    attachment: ExpensePrivateAttachmentIdentity
+    bytes: number[]
+  }): ExpensePrivateAttachment
   listRecoveryCandidates(limit?: number): ExpenseRecoveryCandidate[]
   resumeSnapshot(rootRequestId: string): ExpenseResumeSnapshot
 }

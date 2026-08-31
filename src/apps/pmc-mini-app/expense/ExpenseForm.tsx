@@ -46,6 +46,7 @@ export function ExpenseForm({
   lockedExpenseDate,
   normalizeFiles = normalizeExpenseUploadFiles,
   onCommitted,
+  onStopTrackingPrepared,
   onBack,
 }: {
   category: EnabledExpenseCategory
@@ -54,6 +55,7 @@ export function ExpenseForm({
   lockedExpenseDate?: string
   normalizeFiles?: (files: File[]) => Promise<File[]>
   onCommitted: (receipt: ExpenseReceipt) => void
+  onStopTrackingPrepared: () => void
   onBack: () => void
 }) {
   const [values, setValues] = useState<ExpenseFormValues>(() => ({
@@ -65,7 +67,7 @@ export function ExpenseForm({
   const [failure, setFailure] = useState('')
   const [busy, setBusy] = useState(false)
   const [convertingFiles, setConvertingFiles] = useState(false)
-  const [resumePending, setResumePending] = useState(false)
+  const [resumeStatus, setResumeStatus] = useState<'PENDING' | 'PREPARED' | null>(null)
   const [resumeBusy, setResumeBusy] = useState(false)
   const [initialRootRequestId] = useState(() => globalThis.crypto.randomUUID())
   const rootRequestIdRef = useRef(initialRootRequestId)
@@ -167,21 +169,27 @@ export function ExpenseForm({
 
   const checkResume = async () => {
     if (resumeBusy) return
+    setResumeStatus('PENDING')
     setResumeBusy(true)
     try {
       const status = await adapter.resume(rootRequestIdRef.current)
       if (status.status === 'COMMITTED') {
-        setResumePending(false)
+        setResumeStatus(null)
         onCommitted(status.receipt)
         return
       }
-      if (status.status === 'PENDING') {
-        setResumePending(true)
+      if (status.status === 'PREPARED' || status.status === 'PENDING') {
+        setResumeStatus(status.status)
+        setReviewing(true)
+        return
+      }
+      if (status.status === 'FAILED' && status.error === 'EXPENSE_STORAGE_UNAVAILABLE') {
+        setResumeStatus('PENDING')
         setReviewing(true)
         return
       }
       rotateRootRequest()
-      setResumePending(false)
+      setResumeStatus(null)
       setReviewing(false)
       setFailure(status.status === 'FAILED'
         ? 'รายการเดิมสิ้นสุดแล้ว กรุณาตรวจข้อมูลและเริ่มบันทึกใหม่'
@@ -189,11 +197,11 @@ export function ExpenseForm({
     } catch (error) {
       if (!ambiguousExpenseResult(error)) {
         rotateRootRequest()
-        setResumePending(false)
+        setResumeStatus(null)
         setReviewing(false)
         setFailure(expenseFailureMessage(error))
       } else {
-        setResumePending(true)
+        setResumeStatus('PENDING')
         setReviewing(true)
         setFailure('')
       }
@@ -236,7 +244,7 @@ export function ExpenseForm({
     } catch (error) {
       if (requiresFreshExpenseStaging(error)) stagedRef.current = null
       if (ambiguousExpenseResult(error)) {
-        setResumePending(true)
+        setResumeStatus('PENDING')
         setReviewing(true)
         setFailure('')
         await checkResume()
@@ -253,7 +261,7 @@ export function ExpenseForm({
 
   return <main className="pmc-expense-page">
     <header className="pmc-expense-header">
-      <button type="button" aria-label="ย้อนกลับ" disabled={busy || resumePending || convertingFiles} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
+      <button type="button" aria-label="ย้อนกลับ" disabled={busy || resumeStatus !== null || convertingFiles} onClick={onBack}><ArrowLeft aria-hidden="true" /></button>
       <BrandMark compact />
       <div><p>จัดเก็บรายจ่าย</p><span>{expenseCategoryLabel(category)}</span></div>
     </header>
@@ -261,7 +269,11 @@ export function ExpenseForm({
     {reviewing
       ? <>
         <ExpenseReview category={category} values={values} files={items.map(({ file }) => file)} />
-        {resumePending && <p className="pmc-expense-alert" role="status">กำลังตรวจสอบสถานะรายการที่บันทึก</p>}
+        {resumeStatus === 'PREPARED'
+          ? <p className="pmc-expense-alert" role="status">รายการเดิมยังคงอยู่ฝั่งระบบเพื่อการตรวจสอบ แต่สถานะ PREPARED ยังไม่ถูกนับเป็นรายจ่าย</p>
+          : resumeStatus === 'PENDING'
+            ? <p className="pmc-expense-alert" role="status">กำลังตรวจสอบสถานะรายการที่บันทึก</p>
+            : null}
       </>
       : <form className="pmc-expense-form" onSubmit={openReview} noValidate>
         <div className="pmc-expense-heading">
@@ -333,10 +345,18 @@ export function ExpenseForm({
       </form>}
 
     {reviewing && <footer className="pmc-expense-footer review">
-      {resumePending
-        ? <button type="button" disabled={busy || resumeBusy} onClick={() => { void checkResume() }}>
-          {resumeBusy ? 'กำลังตรวจสอบ' : 'ตรวจสอบสถานะอีกครั้ง'}
-        </button>
+      {resumeStatus !== null
+        ? <>
+          <button type="button" disabled={busy || resumeBusy} onClick={() => { void checkResume() }}>
+            {resumeBusy ? 'กำลังตรวจสอบ' : 'ตรวจสอบสถานะอีกครั้ง'}
+          </button>
+          {resumeStatus === 'PREPARED' && <button
+            type="button"
+            className="secondary"
+            disabled={busy || resumeBusy}
+            onClick={onStopTrackingPrepared}
+          >หยุดติดตามรายการเดิมและเริ่มใหม่</button>}
+        </>
         : <>
           <button type="button" className="secondary" disabled={busy} onClick={() => setReviewing(false)}>แก้ไขข้อมูล</button>
           <button type="button" disabled={busy} onClick={() => { void confirm() }}>{busy ? 'กำลังยืนยัน' : 'ยืนยันบันทึก'}</button>

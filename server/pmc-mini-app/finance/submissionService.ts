@@ -139,6 +139,23 @@ export async function submitExpense(
         const intent = driveSlotIntent(validated, prepared, receipt)
         return {
           claim: await dependencies.staging.readDriveSlotClaim(intent),
+          expectedAttachment: {
+            attachmentId: deterministicAttachmentId(
+              validated.rootRequestId,
+              prepared.expenseId,
+              receipt.ordinal,
+            ),
+            expenseId: prepared.expenseId,
+            rootRequestId: validated.rootRequestId,
+            ordinal: receipt.ordinal,
+            mediaType: receipt.mimeType,
+            originalFileName: receipt.originalFileName,
+            deterministicName: deterministicNameFor(receipt),
+            slotClaimId: expenseDriveSlotClaimIdFor(intent),
+            sha256: receipt.sha256,
+            uploadedByStaffId: validated.staffId,
+            uploadedAt: receipt.createdAt,
+          },
           readCurrentClaim: () => dependencies.staging.readDriveSlotClaim(intent),
         }
       }))
@@ -166,10 +183,16 @@ export async function submitExpense(
     lease = claimed.lease
     lease = await dependencies.staging.renewSubmissionLease(lease)
     await dependencies.staging.assertSubmissionLease(lease)
-    const folderId = await dependencies.finance.ensureExpenseFolder(
+    await dependencies.finance.ensureExpenseFolder(
       prepared.monthKey,
       prepared.expenseId,
     )
+    const manifest = validated.stagingReceipts.map((receipt) => ({
+      ordinal: receipt.ordinal,
+      mediaType: receipt.mimeType,
+      originalFileName: receipt.originalFileName,
+      sha256: receipt.sha256,
+    }))
     const attachments: ExpensePrivateAttachment[] = []
     for (const receipt of validated.stagingReceipts) {
       lease = await dependencies.staging.renewSubmissionLease(lease)
@@ -188,25 +211,22 @@ export async function submitExpense(
       })
       let attachment: ExpensePrivateAttachment | null = null
       try {
-        attachment = await dependencies.finance.uploadExpenseImage({
+        attachment = await dependencies.ingress.uploadEvidence({
+          expectedManifestHash: prepared.expectedManifestHash,
+          manifest,
           monthKey: prepared.monthKey,
           expenseId: prepared.expenseId,
-          parentId: folderId,
           deterministicName,
           bytes: staged.bytes,
-          mimeType: receipt.mimeType,
+          mediaType: receipt.mimeType,
           ordinal: receipt.ordinal,
           sha256: receipt.sha256,
           rootRequestId: validated.rootRequestId,
-          uploadedByStaffId: validated.staffId,
+          staffId: validated.staffId,
           uploadedAt: receipt.createdAt,
           originalFileName: receipt.originalFileName,
           attachmentId,
-          slotClaim: claim,
-          allowClaimReplayCreate: true,
-          readCurrentClaim: () => dependencies.staging.readDriveSlotClaim(
-            driveSlotIntent(validated, prepared, receipt),
-          ),
+          slotClaimId: claim.claimId,
         })
         const registered = await dependencies.staging.registerDriveSlotFile({
           claim,
@@ -264,6 +284,7 @@ export async function submitExpense(
     lease = await dependencies.staging.renewSubmissionLease(lease)
     await dependencies.staging.assertSubmissionLease(lease)
     await assertRegisteredAttachments(validated, prepared, attachments, dependencies.staging)
+    await dependencies.staging.assertSubmissionLease(lease)
     const receipt = await commitPreparedExpense(
       prepared,
       validated,
@@ -280,6 +301,17 @@ export async function submitExpense(
   } catch (error) {
     throw safeSubmissionError(error)
   }
+}
+
+function expenseDriveSlotClaimIdFor(input: ReturnType<typeof driveSlotIntent>): string {
+  return `SLOT-${createHash('sha256').update(JSON.stringify({
+    rootRequestId: input.rootRequestId,
+    expenseId: input.expenseId,
+    ordinal: input.ordinal,
+    sha256: input.sha256,
+    mimeType: input.mimeType,
+    deterministicName: input.deterministicName,
+  }), 'utf8').digest('hex')}`
 }
 
 export function expenseAttachmentManifestHash(

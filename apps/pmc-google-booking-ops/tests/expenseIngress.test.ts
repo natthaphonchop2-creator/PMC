@@ -1,18 +1,23 @@
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  canonicalExpenseAttachmentManifest,
   canonicalMiniAppExpenseCommand,
+  canonicalMiniAppExpenseEvidenceIngress,
   canonicalMiniAppExpenseIngress,
   canonicalMiniAppExpenseRecoveryIngress,
   canonicalMiniAppExpenseResumeIngress,
   type MiniAppExpenseCommand,
   type MiniAppExpenseIngressEnvelope,
+  type MiniAppExpenseEvidenceIngressEnvelope,
   type MiniAppExpenseRecoveryIngressEnvelope,
   type MiniAppExpenseResumeIngressEnvelope,
+  MAX_EXPENSE_EVIDENCE_INGRESS_LENGTH,
 } from '../../../shared/pmcMiniAppExpenseIngress'
 import { processBookingDoPost } from '../src/entrypoints'
 import {
   processExpenseIngress,
+  processExpenseEvidenceIngressResponse,
   processExpenseIngressResponse,
   processExpenseRecoveryIngressResponse,
   processExpenseResumeIngressResponse,
@@ -32,6 +37,402 @@ const SECRET = 'expense-ingress-secret'
 const NOW_SECONDS = Math.floor(Date.parse(EXPENSE_NOW) / 1_000)
 
 describe('Apps Script Mini App expense ingress', () => {
+  it('creates owner-backed evidence only for the exact prepared manifest and replays one file', () => {
+    const ports = createExpenseIngressPorts()
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+    const rootRequestId = 'owner-evidence-1'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+
+    const first = processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId,
+      expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash,
+      manifest,
+      bytes,
+    }, 'owner-evidence-upload-1'), ports)
+    const replay = processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId,
+      expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash,
+      manifest,
+      bytes,
+    }, 'owner-evidence-upload-2'), ports)
+
+    expect(first).toEqual(replay)
+    expect(first).toMatchObject({
+      ok: true,
+      attachment: {
+        expenseId: prepared.expenseId,
+        rootRequestId,
+        ordinal: 1,
+        mediaType: 'image/jpeg',
+        sha256,
+        uploadedByStaffId: 'STAFF_01',
+      },
+    })
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(1)
+
+    const routed = createRoutedPorts()
+    const routedRoot = 'owner-evidence-routed'
+    const routedPrepare = processBookingDoPost(event(signedEnvelope(prepareCommand({
+      rootRequestId: routedRoot,
+      commandIdempotencyKey: `${routedRoot}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-routed-prepare')), routed)
+    const routedResult = routedPrepare as { ok?: unknown; result?: Record<string, unknown> }
+    if (routedResult.ok !== true || !routedResult.result) {
+      throw new Error('unexpected routed prepare result')
+    }
+    expect(processBookingDoPost(event(signedEvidenceEnvelope({
+      rootRequestId: routedRoot,
+      expenseId: String(routedResult.result.expenseId),
+      expectedManifestHash: String(routedResult.result.expectedManifestHash),
+      manifest,
+      bytes,
+    }, 'owner-evidence-routed-upload')), routed)).toMatchObject({
+      ok: true,
+      attachment: { rootRequestId: routedRoot, ordinal: 1 },
+    })
+  })
+
+  it('rejects advertised JPEG metadata when owner-ingress bytes have PNG magic', () => {
+    const ports = createExpenseIngressPorts()
+    const bytes = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+    const rootRequestId = 'owner-evidence-mime-mismatch'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-mime-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId, expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash, manifest, bytes,
+    }, 'owner-evidence-mime-upload'), ports)).toEqual({
+      ok: false,
+      error: 'EXPENSE_PRIVATE_FILE_INVALID',
+    })
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(0)
+  })
+
+  it('rejects expense evidence postData larger than its exact route limit before JSON parsing', () => {
+    const routed = createRoutedPorts()
+    expect(() => processBookingDoPost({
+      postData: {
+        contents: '{"kind":"MINI_APP_EXPENSE_EVIDENCE"}',
+        length: MAX_EXPENSE_EVIDENCE_INGRESS_LENGTH + 1,
+        name: 'postData',
+        type: 'application/json',
+      },
+    }, routed)).toThrow('invalid mini app ingress event')
+  })
+
+  it('fails closed before owner storage for a mixed prepared manifest', () => {
+    const ports = createExpenseIngressPorts()
+    const originalBytes = [0xff, 0xd8, 0xff, 0xd9]
+    const originalSha = createHash('sha256').update(Buffer.from(originalBytes)).digest('hex')
+    const originalManifest = [{
+      ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256: originalSha,
+    }]
+    const rootRequestId = 'owner-evidence-mixed'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(originalManifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-mixed-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+    const differentBytes = [0xff, 0xd8, 0xff, 0xda]
+    const differentSha = createHash('sha256').update(Buffer.from(differentBytes)).digest('hex')
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId,
+      expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash,
+      manifest: [{
+        ordinal: 1, mediaType: 'image/jpeg', originalFileName: 'different.jpg', sha256: differentSha,
+      }],
+      bytes: differentBytes,
+    }, 'owner-evidence-mixed-upload'), ports)).toEqual({
+      ok: false,
+      error: 'EXPENSE_PRIVATE_FILE_INVALID',
+    })
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(0)
+  })
+
+  it('rejects a prepared audit with an unexpected field before creating evidence', () => {
+    const ports = createExpenseIngressPorts()
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+    const rootRequestId = 'owner-evidence-audit'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-audit-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+    const audit = ports.expenseBackend.master.get('EXPENSE_AUDIT')![0]!
+    audit.afterJson = JSON.stringify({ ...JSON.parse(String(audit.afterJson)), unexpected: true })
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId,
+      expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash,
+      manifest,
+      bytes,
+    }, 'owner-evidence-audit-upload'), ports)).toEqual({
+      ok: false,
+      error: 'EXPENSE_STORAGE_UNAVAILABLE',
+    })
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(0)
+  })
+
+  it('rejects well-shaped prepare hashes that do not recompute from the durable request and submission', () => {
+    const ports = createExpenseIngressPorts()
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+    const rootRequestId = 'owner-evidence-semantic'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-semantic-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+    const audit = ports.expenseBackend.master.get('EXPENSE_AUDIT')![0]!
+    const tamperedFingerprint = 'f'.repeat(64)
+    audit.afterJson = JSON.stringify({
+      ...JSON.parse(String(audit.afterJson)),
+      commandFingerprint: tamperedFingerprint,
+      prepareIntentHash: 'e'.repeat(64),
+    })
+    audit.eventId = `EAUD:${tamperedFingerprint.slice(0, 48)}:P`
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId,
+      expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash,
+      manifest,
+      bytes,
+    }, 'owner-evidence-semantic-upload'), ports)).toEqual({
+      ok: false,
+      error: 'EXPENSE_STORAGE_UNAVAILABLE',
+    })
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(0)
+  })
+
+  it('rejects an abandoned PREPARED root before any owner file lookup or creation', () => {
+    const ports = createExpenseIngressPorts()
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+    const rootRequestId = 'owner-evidence-abandoned'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-abandoned-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+    ports.expenseBackend.appendMaster('EXPENSE_AUDIT', [{
+      eventId: 'EAUD:abandoned:A', expenseId: prepared.expenseId, actorStaffId: 'STAFF_01',
+      action: 'ABANDON', beforeJson: '{}', afterJson: '{"recordState":"PREPARED","terminal":true}',
+      createdAt: EXPENSE_NOW, correlationId: `${rootRequestId}:abandon`,
+    }])
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId, expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash, manifest, bytes,
+    }, 'owner-evidence-abandoned-upload'), ports)).toEqual({
+      ok: false,
+      error: 'EXPENSE_NOT_PREPARED',
+    })
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(0)
+  })
+
+  it('finds committed evidence without creating after a lost COMMIT response and replays one receipt', () => {
+    const ports = createExpenseIngressPorts()
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+    const rootRequestId = 'owner-evidence-lost-commit'
+    const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: createHash('sha256')
+          .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+      },
+    }), 'owner-evidence-lost-prepare'), ports)
+    if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+    const upload = signedEvidenceEnvelope({
+      rootRequestId, expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash, manifest, bytes,
+    }, 'owner-evidence-lost-upload-1')
+    const uploaded = processExpenseEvidenceIngressResponse(upload, ports)
+    if (!uploaded.ok) throw new Error('unexpected evidence failure')
+    const commit = commitCommand({
+      rootRequestId,
+      expenseId: prepared.expenseId,
+      attachments: [uploaded.attachment],
+    })
+    const firstCommit = processExpenseIngressResponse(
+      signedEnvelope(commit, 'owner-evidence-lost-commit-1'),
+      ports,
+    )
+    if (!firstCommit.ok) throw new Error('unexpected commit failure')
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId,
+      staffId: 'STAFF_01',
+      nonce: 'owner-evidence-lost-resume',
+    }), ports)).toMatchObject({ ok: true, result: { status: 'COMMITTED' } })
+
+    const replayUpload = processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId, expenseId: prepared.expenseId,
+      expectedManifestHash: prepared.expectedManifestHash, manifest, bytes,
+    }, 'owner-evidence-lost-upload-2'), ports)
+    const replayCommit = processExpenseIngressResponse(
+      signedEnvelope(commit, 'owner-evidence-lost-commit-2'),
+      ports,
+    )
+
+    expect(replayUpload).toEqual(uploaded)
+    expect(replayCommit).toEqual(firstCommit)
+    expect(ports.expenseBackend.ownerCreatedFiles).toHaveLength(1)
+    expect(ports.expense.listMonth('2026-08')).toHaveLength(1)
+    expect(ports.expense.listAttachments('2026-08', prepared.expenseId)).toHaveLength(1)
+  })
+
+  it('uses find-only evidence replay after an exact reserved COMMIT on a PREPARED row', () => {
+    const fixture = prepareOwnerEvidenceFixture('owner-evidence-reserved-commit')
+    const commit = commitCommand({
+      rootRequestId: fixture.rootRequestId,
+      expenseId: fixture.prepared.expenseId,
+      attachments: [fixture.uploaded],
+    })
+    const commandJson = canonicalMiniAppExpenseCommand(commit)
+    fixture.ports.expense.reserveRequest({
+      commandIdempotencyKey: commit.commandIdempotencyKey,
+      rootRequestId: commit.rootRequestId,
+      commandType: commit.commandType,
+      commandFingerprint: fixture.ports.crypto.sha256Hex(commandJson),
+      commandJson,
+      expenseId: fixture.prepared.expenseId,
+      monthKey: '2026-08',
+      createdAt: EXPENSE_NOW,
+    })
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId: fixture.rootRequestId,
+      expenseId: fixture.prepared.expenseId,
+      expectedManifestHash: fixture.prepared.expectedManifestHash,
+      manifest: fixture.manifest,
+      bytes: fixture.bytes,
+    }, 'owner-evidence-reserved-replay'), fixture.ports)).toEqual({
+      ok: true,
+      attachment: fixture.uploaded,
+    })
+    expect(fixture.ports.expenseBackend.ownerCreatedFiles).toHaveLength(1)
+  })
+
+  it('finds committed evidence when COMMIT audit/state persisted before request resultJson', () => {
+    const fixture = prepareOwnerEvidenceFixture('owner-evidence-partial-commit')
+    const commit = commitCommand({
+      rootRequestId: fixture.rootRequestId,
+      expenseId: fixture.prepared.expenseId,
+      attachments: [fixture.uploaded],
+    })
+    const committed = processExpenseIngressResponse(
+      signedEnvelope(commit, 'owner-evidence-partial-commit-run'),
+      fixture.ports,
+    )
+    if (!committed.ok) throw new Error('unexpected commit failure')
+    const requests = fixture.ports.expenseBackend.master.get('EXPENSE_REQUESTS')!
+    const commitRow = requests.find((row) => row.commandType === 'COMMIT_EXPENSE')!
+    commitRow.recordState = 'RESERVED'
+    commitRow.resultJson = null
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId: fixture.rootRequestId,
+      expenseId: fixture.prepared.expenseId,
+      expectedManifestHash: fixture.prepared.expectedManifestHash,
+      manifest: fixture.manifest,
+      bytes: fixture.bytes,
+    }, 'owner-evidence-partial-replay'), fixture.ports)).toEqual({
+      ok: true,
+      attachment: fixture.uploaded,
+    })
+    expect(fixture.ports.expenseBackend.ownerCreatedFiles).toHaveLength(1)
+  })
+
+  it('rejects a COMMIT audit attachment with an extra field before find-only evidence I/O', () => {
+    const fixture = prepareOwnerEvidenceFixture('owner-evidence-commit-audit-extra')
+    const commit = commitCommand({
+      rootRequestId: fixture.rootRequestId,
+      expenseId: fixture.prepared.expenseId,
+      attachments: [fixture.uploaded],
+    })
+    const committed = processExpenseIngressResponse(
+      signedEnvelope(commit, 'owner-evidence-commit-audit-run'), fixture.ports,
+    )
+    if (!committed.ok) throw new Error('unexpected commit failure')
+    const audit = fixture.ports.expenseBackend.master.get('EXPENSE_AUDIT')!
+      .find((row) => row.action === 'COMMIT')!
+    const after = JSON.parse(String(audit.afterJson))
+    after.attachments[0].unexpected = true
+    audit.afterJson = JSON.stringify(after)
+
+    expect(processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+      rootRequestId: fixture.rootRequestId,
+      expenseId: fixture.prepared.expenseId,
+      expectedManifestHash: fixture.prepared.expectedManifestHash,
+      manifest: fixture.manifest,
+      bytes: fixture.bytes,
+    }, 'owner-evidence-commit-audit-replay'), fixture.ports)).toEqual({
+      ok: false,
+      error: 'EXPENSE_STORAGE_UNAVAILABLE',
+    })
+    expect(fixture.ports.expenseBackend.ownerCreatedFiles).toHaveLength(1)
+  })
+
   it('accepts a signed PREPARE, routes MINI_APP_EXPENSE through doPost, and consumes the nonce', () => {
     const ports = createExpenseIngressPorts()
     const command = prepareCommand({ rootRequestId: 'ingress-direct', commandIdempotencyKey: 'ingress-direct:prepare' })
@@ -93,7 +494,7 @@ describe('Apps Script Mini App expense ingress', () => {
     expect(JSON.stringify(response)).not.toContain(prepared.prepared.expenseId)
   })
 
-  it('returns PENDING for an owned PREPARED root and SAFE_TO_RETRY for an unused root', () => {
+  it('returns PREPARED only for an owned prepared root with no commit request', () => {
     const ports = createExpenseIngressPorts()
     executeExpenseCommand(prepareCommand({
       rootRequestId: 'resume-pending', commandIdempotencyKey: 'resume-pending:prepare',
@@ -101,10 +502,58 @@ describe('Apps Script Mini App expense ingress', () => {
 
     expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
       rootRequestId: 'resume-pending', staffId: 'STAFF_01', nonce: 'resume-pending-1',
-    }), ports)).toEqual({ ok: true, result: { status: 'PENDING' } })
+    }), ports)).toEqual({
+      ok: true,
+      result: { status: 'PREPARED', expenseId: expect.stringMatching(/^EXP-202608-/) },
+    })
     expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
       rootRequestId: 'resume-unused', staffId: 'STAFF_01', nonce: 'resume-unused-12',
     }), ports)).toEqual({ ok: true, result: { status: 'SAFE_TO_RETRY' } })
+  })
+
+  it('keeps a prepared ledger protected when a commit request already exists', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-commit-in-flight', commandIdempotencyKey: 'resume-commit-in-flight:prepare',
+    }))
+    const command = commitCommand({
+      rootRequestId: 'resume-commit-in-flight', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    })
+    const commandJson = canonicalMiniAppExpenseCommand(command)
+    ports.expense.reserveRequest({
+      commandIdempotencyKey: command.commandIdempotencyKey,
+      rootRequestId: command.rootRequestId,
+      commandType: command.commandType,
+      commandFingerprint: ports.crypto.sha256Hex(commandJson),
+      commandJson,
+      expenseId: command.payload.expenseId,
+      monthKey: '2026-08',
+      createdAt: EXPENSE_NOW,
+    })
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: command.rootRequestId, staffId: 'STAFF_01', nonce: 'resume-commit-flight',
+    }), ports)).toEqual({ ok: true, result: { status: 'PENDING' } })
+  })
+
+  it('keeps a committed ledger protected while the commit request result is missing', () => {
+    const ports = createExpenseIngressPorts()
+    const prepared = prepareWithManifest(ports, prepareCommand({
+      rootRequestId: 'resume-commit-result-lost', commandIdempotencyKey: 'resume-commit-result-lost:prepare',
+    }))
+    executeExpenseCommand(commitCommand({
+      rootRequestId: 'resume-commit-result-lost', expenseId: prepared.prepared.expenseId,
+      attachments: prepared.attachments,
+    }), ports)
+    const commitRequest = ports.expenseBackend.master.get('EXPENSE_REQUESTS')!
+      .find((row) => row.commandIdempotencyKey === 'resume-commit-result-lost:commit')!
+    commitRequest.resultJson = null
+    commitRequest.recordState = 'RESERVED'
+
+    expect(processExpenseResumeIngressResponse(signedResumeEnvelope({
+      rootRequestId: 'resume-commit-result-lost', staffId: 'STAFF_01', nonce: 'resume-result-lost',
+    }), ports)).toEqual({ ok: true, result: { status: 'PENDING' } })
   })
 
   it('derives reservation-only resume ownership from the verified canonical command', () => {
@@ -383,6 +832,29 @@ describe('Apps Script Mini App expense ingress', () => {
   })
 })
 
+function prepareOwnerEvidenceFixture(rootRequestId: string) {
+  const ports = createExpenseIngressPorts()
+  const bytes = [0xff, 0xd8, 0xff, 0xd9]
+  const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+  const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+  const prepared = processExpenseIngress(signedEnvelope(prepareCommand({
+    rootRequestId,
+    commandIdempotencyKey: `${rootRequestId}:prepare`,
+    payload: {
+      ...prepareCommand().payload,
+      expectedManifestHash: createHash('sha256')
+        .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+    },
+  }), `${rootRequestId}-prepare`), ports)
+  if (prepared.commandType !== 'PREPARE_EXPENSE') throw new Error('unexpected prepare result')
+  const uploadedResult = processExpenseEvidenceIngressResponse(signedEvidenceEnvelope({
+    rootRequestId, expenseId: prepared.expenseId,
+    expectedManifestHash: prepared.expectedManifestHash, manifest, bytes,
+  }, `${rootRequestId}-upload`), ports)
+  if (!uploadedResult.ok) throw new Error('unexpected upload result')
+  return { ports, rootRequestId, bytes, manifest, prepared, uploaded: uploadedResult.attachment }
+}
+
 type TestExpenseIngressPorts = ExpenseIngressPorts & ExpenseCommandPorts & {
   expenseBackend: ReturnType<typeof createExpenseTestPorts>['backend']
   hmacCalls(): number
@@ -411,6 +883,8 @@ function createExpenseIngressPorts(options: { denySubmit?: boolean } = {}): Test
     expenseCommandFingerprint: commandPorts.commandFingerprint,
     crypto: {
       sha256Hex: commandPorts.crypto.sha256Hex,
+      sha256BytesHex: (value) => createHash('sha256').update(Buffer.from(value)).digest('hex'),
+      base64Decode: (value) => [...Buffer.from(value, 'base64')],
       hmacSha256Hex(value, secret) {
         calls += 1
         return createHmac('sha256', secret).update(value).digest('hex')
@@ -470,6 +944,53 @@ function signedEnvelope(
     ...unsigned,
     signature: createHmac('sha256', SECRET)
       .update(canonicalMiniAppExpenseIngress(unsigned))
+      .digest('hex'),
+  }
+}
+
+function signedEvidenceEnvelope(input: {
+  rootRequestId: string
+  expenseId: string
+  expectedManifestHash: string
+  manifest: Array<{ ordinal: number; mediaType: 'image/jpeg' | 'image/png'; originalFileName: string; sha256: string }>
+  bytes: number[]
+}, nonce: string): MiniAppExpenseEvidenceIngressEnvelope {
+  const slot = input.manifest[0]!
+  const deterministicName = `001-${slot.sha256}.jpg`
+  const unsigned = {
+    kind: 'MINI_APP_EXPENSE_EVIDENCE' as const,
+    version: 1 as const,
+    timestamp: NOW_SECONDS,
+    nonce,
+    payload: {
+      rootRequestId: input.rootRequestId,
+      expenseId: input.expenseId,
+      monthKey: '2026-08',
+      staffId: 'STAFF_01',
+      expectedManifestHash: input.expectedManifestHash,
+      manifest: input.manifest,
+      attachmentId: `ATT-${createHash('sha256').update(`${input.rootRequestId}:${input.expenseId}:1`, 'utf8').digest('hex').slice(0, 40)}`,
+      ordinal: 1,
+      mediaType: slot.mediaType,
+      originalFileName: slot.originalFileName,
+      deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId: input.rootRequestId,
+        expenseId: input.expenseId,
+        ordinal: 1,
+        sha256: slot.sha256,
+        mimeType: slot.mediaType,
+        deterministicName,
+      }), 'utf8').digest('hex')}`,
+      sha256: slot.sha256,
+      uploadedAt: EXPENSE_NOW,
+      bytesBase64: Buffer.from(input.bytes).toString('base64'),
+    },
+  }
+  return {
+    ...unsigned,
+    signature: createHmac('sha256', SECRET)
+      .update(canonicalMiniAppExpenseEvidenceIngress(unsigned))
       .digest('hex'),
   }
 }

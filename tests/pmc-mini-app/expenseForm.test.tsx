@@ -54,7 +54,7 @@ describe('expense form lifecycle', () => {
       'image/jpeg,image/png,image/webp,image/heic,image/heif,image/heic-sequence,image/heif-sequence,.jpg,.jpeg,.png,.webp,.heic,.heif',
     )
 
-    view.rerender(<ExpenseForm category="BOOK_CLINIC" adapter={adapter()} onCommitted={vi.fn()} onBack={vi.fn()} />)
+    view.rerender(<ExpenseForm category="BOOK_CLINIC" adapter={adapter()} onCommitted={vi.fn()} onStopTrackingPrepared={vi.fn()} onBack={vi.fn()} />)
     expect(screen.getByLabelText('ยอดรวมรายวัน')).toBeVisible()
     expect(screen.queryByLabelText('ชื่อร้านหรือผู้รับเงิน')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('วิธีชำระ')).not.toBeInTheDocument()
@@ -196,6 +196,7 @@ describe('expense form lifecycle', () => {
       adapter={adapter()}
       normalizeFiles={normalizeFiles}
       onCommitted={vi.fn()}
+      onStopTrackingPrepared={vi.fn()}
       onBack={vi.fn()}
     />)
     const input = screen.getByLabelText('รูปหลักฐาน')
@@ -276,7 +277,7 @@ describe('expense form lifecycle', () => {
     const app = adapter()
     vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_REVISION_CONFLICT', false))
     const onCommitted = vi.fn()
-    render(<ExpenseForm category="BOOK_CLINIC" adapter={app} onCommitted={onCommitted} onBack={vi.fn()} />)
+    render(<ExpenseForm category="BOOK_CLINIC" adapter={app} onCommitted={onCommitted} onStopTrackingPrepared={vi.fn()} onBack={vi.fn()} />)
     await user.clear(screen.getByLabelText('วันที่รายจ่าย'))
     await user.type(screen.getByLabelText('วันที่รายจ่าย'), '2026-08-30')
     await user.type(screen.getByLabelText('ยอดรวมรายวัน'), '1200')
@@ -288,15 +289,17 @@ describe('expense form lifecycle', () => {
     expect(onCommitted).not.toHaveBeenCalled()
   })
 
-  it('locks editing and new-root submission while an ambiguous result remains server-pending', async () => {
+  it.each(['PENDING'] as const)(
+    'locks editing and new-root submission while an ambiguous result remains server-%s',
+    async (resumeStatus) => {
     const user = userEvent.setup()
     const app = adapter()
     vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE', true))
     vi.mocked(app.resume)
-      .mockResolvedValueOnce({ status: 'PENDING' })
+      .mockResolvedValueOnce({ status: resumeStatus })
       .mockResolvedValueOnce({ status: 'COMMITTED', receipt: receipt() })
     const onCommitted = vi.fn()
-    render(<ExpenseForm category="BILL_DOCUMENT" adapter={app} onCommitted={onCommitted} onBack={vi.fn()} />)
+    render(<ExpenseForm category="BILL_DOCUMENT" adapter={app} onCommitted={onCommitted} onStopTrackingPrepared={vi.fn()} onBack={vi.fn()} />)
     await completeBill(user, [imageFile('a.jpg')])
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
@@ -310,6 +313,61 @@ describe('expense form lifecycle', () => {
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบสถานะอีกครั้ง' }))
     await waitFor(() => expect(onCommitted).toHaveBeenCalledWith(receipt()))
     expect(app.submit).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('offers honest local stop-tracking directly for authoritative PREPARED', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE', true))
+    vi.mocked(app.resume).mockResolvedValueOnce({ status: 'PREPARED' })
+    const onCommitted = vi.fn()
+    const onStopTrackingPrepared = vi.fn()
+    render(<ExpenseForm
+      category="BILL_DOCUMENT"
+      adapter={app}
+      onCommitted={onCommitted}
+      onStopTrackingPrepared={onStopTrackingPrepared}
+      onBack={vi.fn()}
+    />)
+    await completeBill(user, [imageFile('a.jpg')])
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'รายการเดิมยังคงอยู่ฝั่งระบบเพื่อการตรวจสอบ แต่สถานะ PREPARED ยังไม่ถูกนับเป็นรายจ่าย',
+    )
+    await user.click(screen.getByRole('button', { name: 'หยุดติดตามรายการเดิมและเริ่มใหม่' }))
+
+    expect(onStopTrackingPrepared).toHaveBeenCalledOnce()
+    expect(onCommitted).not.toHaveBeenCalled()
+    expect(app.submit).toHaveBeenCalledOnce()
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the root protected for a storage-unavailable FAILED resume result', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE', true))
+    vi.mocked(app.resume).mockResolvedValueOnce({
+      status: 'FAILED', error: 'EXPENSE_STORAGE_UNAVAILABLE',
+    })
+    const onStopTrackingPrepared = vi.fn()
+    render(<ExpenseForm
+      category="BILL_DOCUMENT"
+      adapter={app}
+      onCommitted={vi.fn()}
+      onStopTrackingPrepared={onStopTrackingPrepared}
+      onBack={vi.fn()}
+    />)
+    await completeBill(user, [imageFile('a.jpg')])
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByText('กำลังตรวจสอบสถานะรายการที่บันทึก')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'หยุดติดตามรายการเดิมและเริ่มใหม่' })).not.toBeInTheDocument()
+    expect(onStopTrackingPrepared).not.toHaveBeenCalled()
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(1)
   })
 
   it('unlocks and rotates the root after a definite resume rejection', async () => {
@@ -322,7 +380,7 @@ describe('expense form lifecycle', () => {
     vi.mocked(app.submit).mockRejectedValueOnce(safeError('EXPENSE_STORAGE_UNAVAILABLE', true))
     vi.mocked(app.resume).mockRejectedValueOnce(safeError('EXPENSE_RESUME_FORBIDDEN', false))
     const onCommitted = vi.fn()
-    render(<ExpenseForm category="BILL_DOCUMENT" adapter={app} onCommitted={onCommitted} onBack={vi.fn()} />)
+    render(<ExpenseForm category="BILL_DOCUMENT" adapter={app} onCommitted={onCommitted} onStopTrackingPrepared={vi.fn()} onBack={vi.fn()} />)
     await completeBill(user, [imageFile('a.jpg')])
     await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
@@ -340,7 +398,7 @@ describe('expense form lifecycle', () => {
 })
 
 function renderForm(category: 'BILL_DOCUMENT' | 'BOOK_CLINIC' | 'BOOK_DOCTOR_PERSONAL', app = adapter()) {
-  return render(<ExpenseForm category={category} adapter={app} onCommitted={vi.fn()} onBack={vi.fn()} />)
+  return render(<ExpenseForm category={category} adapter={app} onCommitted={vi.fn()} onStopTrackingPrepared={vi.fn()} onBack={vi.fn()} />)
 }
 
 async function completeBill(user: ReturnType<typeof userEvent.setup>, files: File[]) {

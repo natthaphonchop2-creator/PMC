@@ -148,6 +148,21 @@ describe('JERA finance service', () => {
     expect(seeded).toMatchObject({ leaseFencingToken: '77' })
   })
 
+  it('uses scheduled refresh semantics without consuming the staff manual-refresh cooldown', async () => {
+    const deps = fixture()
+
+    const result = await deps.service.refreshDay({
+      branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'SCHEDULER', schedulerId: 'finance-current-seed' },
+    })
+
+    expect(result).toEqual({ accepted: true, allocationQueued: true, retryAfterSeconds: 300 })
+    expect(deps.coordinator.scheduledRefresh).toHaveBeenCalledTimes(3)
+    expect(deps.coordinator.scheduledRefresh).toHaveBeenNthCalledWith(1, exactQuery('PAYMENT', '2026-08-29'))
+    expect(deps.coordinator.scheduledRefresh).toHaveBeenNthCalledWith(2, exactQuery('REFUND', '2026-08-29'))
+    expect(deps.coordinator.scheduledRefresh).toHaveBeenNthCalledWith(3, exactQuery('PRODUCT_SALES', '2026-08-29'))
+    expect(deps.coordinator.manualRefresh).not.toHaveBeenCalled()
+  })
+
   it('keeps same-hash COMPLETE coverage as a task no-op', async () => {
     const existing = coverage({
       date: '2026-08-29', paymentSetHash: currentPaymentSetHash('2026-08-29'),
@@ -366,7 +381,7 @@ describe('JERA finance service', () => {
     let error: unknown
     try {
       await deps.service.refreshDay({
-        branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'SCHEDULER', schedulerId: 'finance-daily-seed' },
+        branchUuid: BRANCH, eventDate: '2026-08-29', actor: { type: 'STAFF', staffId: 'staff-1' },
       })
     } catch (value) { error = value }
 
@@ -401,6 +416,7 @@ function fixture(options: {
   const coordinator = {
     readCachedBatch: vi.fn(async (queries: JeraSyncQuery[]) => queries.map(cache)),
     manualRefresh: vi.fn(async () => ({ accepted: true, retryAfterSeconds: 300 })),
+    scheduledRefresh: vi.fn(async (query: JeraSyncQuery) => cache(query)),
   } as unknown as JeraSyncCoordinator
   const allocationStore = {
     readDays: vi.fn(async (inputs: Array<{ branchUuid: string; eventDate: string; paymentSetHash: string; metadataSnapshotHash: string }>) => inputs.map((input) => ({

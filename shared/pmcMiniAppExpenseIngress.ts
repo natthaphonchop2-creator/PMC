@@ -27,6 +27,52 @@ export interface ExpensePrivateAttachment {
   uploadedAt: string
 }
 
+export type ExpensePrivateAttachmentIdentity = Omit<
+  ExpensePrivateAttachment,
+  'privateFileId' | 'sizeBytes' | 'driveVersion'
+>
+
+const EXPENSE_FILE_PUBLIC_PROPERTY_KEYS = [
+  'v', 'eid', 'mon', 'ord', 'sha', 'sid', 'rid', 'uid', 'aid', 'msh',
+] as const
+
+export function expenseFilePublicProperties(
+  input: { monthKey: string; attachment: ExpensePrivateAttachmentIdentity },
+  sha256Hex: (value: string) => string,
+): Record<(typeof EXPENSE_FILE_PUBLIC_PROPERTY_KEYS)[number], string> {
+  const attachment = input.attachment
+  const description = JSON.stringify({
+    originalFileName: attachment.originalFileName,
+    uploadedAt: attachment.uploadedAt,
+  })
+  const values = {
+    v: '1',
+    eid: sha256Hex(attachment.expenseId),
+    mon: input.monthKey,
+    ord: String(attachment.ordinal),
+    sha: attachment.sha256,
+    sid: attachment.slotClaimId,
+    rid: sha256Hex(attachment.rootRequestId),
+    uid: sha256Hex(attachment.uploadedByStaffId),
+    aid: attachment.attachmentId,
+    msh: sha256Hex(description),
+  }
+  if (
+    Object.keys(values).length !== EXPENSE_FILE_PUBLIC_PROPERTY_KEYS.length
+    || EXPENSE_FILE_PUBLIC_PROPERTY_KEYS.some((key) => (
+      typeof values[key] !== 'string'
+      || !/^[\x20-\x7e]+$/.test(key)
+      || !/^[\x20-\x7e]+$/.test(values[key])
+      || key.length + values[key].length > 124
+    ))
+    || !sha256(values.eid)
+    || !sha256(values.rid)
+    || !sha256(values.uid)
+    || !sha256(values.msh)
+  ) throw new Error('invalid expense file public properties')
+  return values
+}
+
 export function canonicalExpenseAttachmentManifest(
   attachments: readonly Pick<
     ExpensePrivateAttachment,
@@ -107,6 +153,48 @@ export interface ExpensePrepareResult {
   expectedManifestHash: string
 }
 
+export interface ExpenseEvidenceManifestItem {
+  ordinal: number
+  mediaType: 'image/jpeg' | 'image/png'
+  originalFileName: string
+  sha256: string
+}
+
+export interface ExpenseEvidenceUploadPayload {
+  rootRequestId: string
+  expenseId: string
+  monthKey: string
+  staffId: string
+  expectedManifestHash: string
+  manifest: ExpenseEvidenceManifestItem[]
+  attachmentId: string
+  ordinal: number
+  mediaType: 'image/jpeg' | 'image/png'
+  originalFileName: string
+  deterministicName: string
+  slotClaimId: string
+  sha256: string
+  uploadedAt: string
+  bytesBase64: string
+}
+
+export interface UnsignedMiniAppExpenseEvidenceIngressEnvelope {
+  kind: 'MINI_APP_EXPENSE_EVIDENCE'
+  version: 1
+  timestamp: number
+  nonce: string
+  payload: ExpenseEvidenceUploadPayload
+}
+
+export interface MiniAppExpenseEvidenceIngressEnvelope
+  extends UnsignedMiniAppExpenseEvidenceIngressEnvelope {
+  signature: string
+}
+
+export type MiniAppExpenseEvidenceIngressResponse =
+  | { ok: true; attachment: ExpensePrivateAttachment }
+  | { ok: false; error: MiniAppExpenseSafeErrorCode }
+
 export type ExpenseCommandResult =
   | ExpensePrepareResult
   | ({ commandType: 'COMMIT_EXPENSE' } & ExpenseReceipt)
@@ -154,9 +242,14 @@ export type MiniAppExpenseSafeErrorCode = typeof MINI_APP_EXPENSE_SAFE_ERROR_COD
 
 export type ExpenseResumeStatus =
   | { status: 'COMMITTED'; receipt: ExpenseReceipt }
+  | { status: 'PREPARED' }
   | { status: 'PENDING' }
   | { status: 'SAFE_TO_RETRY' }
   | { status: 'FAILED'; error: MiniAppExpenseSafeErrorCode }
+
+export type ExpenseIngressResumeStatus =
+  | Exclude<ExpenseResumeStatus, { status: 'PREPARED' }>
+  | { status: 'PREPARED'; expenseId: string }
 
 export interface UnsignedMiniAppExpenseResumeIngressEnvelope {
   kind: 'MINI_APP_EXPENSE_RESUME'
@@ -173,7 +266,7 @@ export interface MiniAppExpenseResumeIngressEnvelope
 }
 
 export type MiniAppExpenseResumeIngressResponse =
-  | { ok: true; result: ExpenseResumeStatus }
+  | { ok: true; result: ExpenseIngressResumeStatus }
   | { ok: false; error: MiniAppExpenseSafeErrorCode }
 
 export type MiniAppExpenseIngressResponse =
@@ -238,6 +331,15 @@ const RECOVERY_WORKER_KEYS = ['email', 'subject'] as const
 const RESUME_ENVELOPE_KEYS = [
   'kind', 'version', 'timestamp', 'nonce', 'rootRequestId', 'staffId',
 ] as const
+const EVIDENCE_ENVELOPE_KEYS = ['kind', 'version', 'timestamp', 'nonce', 'payload'] as const
+const EVIDENCE_PAYLOAD_KEYS = [
+  'rootRequestId', 'expenseId', 'monthKey', 'staffId', 'expectedManifestHash', 'manifest',
+  'attachmentId', 'ordinal', 'mediaType', 'originalFileName', 'deterministicName',
+  'slotClaimId', 'sha256', 'uploadedAt', 'bytesBase64',
+] as const
+const EVIDENCE_MANIFEST_KEYS = ['ordinal', 'mediaType', 'originalFileName', 'sha256'] as const
+const MAX_EXPENSE_EVIDENCE_BYTES = 10_000_000
+export const MAX_EXPENSE_EVIDENCE_INGRESS_LENGTH = Math.ceil(MAX_EXPENSE_EVIDENCE_BYTES / 3) * 4 + 8_192
 
 export function canonicalMiniAppExpenseCommand(command: MiniAppExpenseCommand): string {
   return JSON.stringify(orderedCommand(command))
@@ -321,9 +423,118 @@ export function canonicalMiniAppExpenseResumeIngress(
   })
 }
 
+export function canonicalMiniAppExpenseEvidenceIngress(
+  envelope: UnsignedMiniAppExpenseEvidenceIngressEnvelope,
+): string {
+  if (
+    !hasExactKeys(envelope, EVIDENCE_ENVELOPE_KEYS)
+    || envelope.kind !== 'MINI_APP_EXPENSE_EVIDENCE'
+    || envelope.version !== 1
+    || !Number.isSafeInteger(envelope.timestamp)
+    || envelope.timestamp <= 0
+    || typeof envelope.nonce !== 'string'
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(envelope.nonce)
+  ) throw new Error('invalid mini app expense evidence envelope')
+  if (!isRecord(envelope.payload) || !hasExactKeys(envelope.payload, EVIDENCE_PAYLOAD_KEYS)) {
+    throw new Error('invalid mini app expense evidence payload')
+  }
+  const payload = envelope.payload
+  const extension = payload.mediaType === 'image/jpeg' ? 'jpg' : 'png'
+  if (
+    !safeId(payload.rootRequestId)
+    || !safeId(payload.expenseId)
+    || !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(payload.monthKey)
+    || !isExpenseIdForMonth(payload.expenseId, payload.monthKey)
+    || !safeId(payload.staffId)
+    || !sha256(payload.expectedManifestHash)
+    || !Array.isArray(payload.manifest)
+    || payload.manifest.length < 1
+    || payload.manifest.length > 5
+    || !/^ATT-[a-f0-9]{40}$/.test(payload.attachmentId)
+    || !Number.isSafeInteger(payload.ordinal)
+    || payload.ordinal < 1
+    || payload.ordinal > payload.manifest.length
+    || (payload.mediaType !== 'image/jpeg' && payload.mediaType !== 'image/png')
+    || !isValidExpenseOriginalFileName(payload.originalFileName)
+    || !sha256(payload.sha256)
+    || payload.deterministicName !== `${String(payload.ordinal).padStart(3, '0')}-${payload.sha256}.${extension}`
+    || !/^SLOT-[a-f0-9]{64}$/.test(payload.slotClaimId)
+    || !isCanonicalExpenseTimestamp(payload.uploadedAt)
+    || typeof payload.bytesBase64 !== 'string'
+    || payload.bytesBase64.length < 4
+    || payload.bytesBase64.length > Math.ceil(MAX_EXPENSE_EVIDENCE_BYTES / 3) * 4
+    || !validStandardBase64(payload.bytesBase64)
+  ) throw new Error('invalid mini app expense evidence payload')
+  const manifest = payload.manifest.map((item, index) => {
+    if (
+      !isRecord(item)
+      || !hasExactKeys(item, EVIDENCE_MANIFEST_KEYS)
+      || item.ordinal !== index + 1
+      || (item.mediaType !== 'image/jpeg' && item.mediaType !== 'image/png')
+      || !isValidExpenseOriginalFileName(item.originalFileName)
+      || !sha256(item.sha256)
+    ) throw new Error('invalid mini app expense evidence payload')
+    return {
+      ordinal: item.ordinal,
+      mediaType: item.mediaType,
+      originalFileName: item.originalFileName,
+      sha256: item.sha256,
+    }
+  })
+  const selected = manifest[payload.ordinal - 1]
+  if (
+    !selected
+    || selected.mediaType !== payload.mediaType
+    || selected.originalFileName !== payload.originalFileName
+    || selected.sha256 !== payload.sha256
+  ) throw new Error('invalid mini app expense evidence payload')
+  return JSON.stringify({
+    kind: 'MINI_APP_EXPENSE_EVIDENCE',
+    version: 1,
+    timestamp: envelope.timestamp,
+    nonce: envelope.nonce,
+    payload: {
+      rootRequestId: payload.rootRequestId,
+      expenseId: payload.expenseId,
+      monthKey: payload.monthKey,
+      staffId: payload.staffId,
+      expectedManifestHash: payload.expectedManifestHash,
+      manifest,
+      attachmentId: payload.attachmentId,
+      ordinal: payload.ordinal,
+      mediaType: payload.mediaType,
+      originalFileName: payload.originalFileName,
+      deterministicName: payload.deterministicName,
+      slotClaimId: payload.slotClaimId,
+      sha256: payload.sha256,
+      uploadedAt: payload.uploadedAt,
+      bytesBase64: payload.bytesBase64,
+    },
+  })
+}
+
+function validStandardBase64(value: string): boolean {
+  if (value.length % 4 !== 0) return false
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  const contentLength = value.length - padding
+  for (let index = 0; index < contentLength; index += 1) {
+    const code = value.charCodeAt(index)
+    const valid = code >= 65 && code <= 90
+      || code >= 97 && code <= 122
+      || code >= 48 && code <= 57
+      || code === 43
+      || code === 47
+    if (!valid) return false
+  }
+  for (let index = contentLength; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 61) return false
+  }
+  return true
+}
+
 export function isExpenseResumeStatus(value: unknown): value is ExpenseResumeStatus {
   if (!isRecord(value) || typeof value.status !== 'string') return false
-  if (value.status === 'PENDING' || value.status === 'SAFE_TO_RETRY') {
+  if (value.status === 'PREPARED' || value.status === 'PENDING' || value.status === 'SAFE_TO_RETRY') {
     return hasExactKeys(value, ['status'] as const)
   }
   if (value.status === 'FAILED') {
@@ -332,6 +543,16 @@ export function isExpenseResumeStatus(value: unknown): value is ExpenseResumeSta
   }
   if (value.status !== 'COMMITTED' || !hasExactKeys(value, ['status', 'receipt'] as const)) return false
   return isExpenseReceipt(value.receipt)
+}
+
+export function isExpenseIngressResumeStatus(value: unknown): value is ExpenseIngressResumeStatus {
+  if (!isRecord(value) || typeof value.status !== 'string') return false
+  if (value.status === 'PREPARED') {
+    return hasExactKeys(value, ['status', 'expenseId'] as const)
+      && typeof value.expenseId === 'string'
+      && /^EXP-\d{6}-[A-Za-z0-9._:-]{1,107}$/.test(value.expenseId)
+  }
+  return isExpenseResumeStatus(value)
 }
 
 function isExpenseReceipt(value: unknown): value is ExpenseReceipt {

@@ -4,10 +4,14 @@ import {
   canonicalExpenseAttachmentManifest,
   canonicalMiniAppExpenseCommand,
   canonicalMiniAppExpenseIngress,
+  canonicalMiniAppExpenseEvidenceIngress,
+  expenseFilePublicProperties,
   canonicalMiniAppExpenseRecoveryIngress,
   canonicalMiniAppExpenseResumeIngress,
+  isExpenseIngressResumeStatus,
   isExpenseResumeStatus,
   type MiniAppExpenseCommand,
+  type UnsignedMiniAppExpenseEvidenceIngressEnvelope,
 } from '../../shared/pmcMiniAppExpenseIngress'
 import { expenseAttachmentManifestHash } from '../../server/pmc-mini-app/finance/submissionService'
 
@@ -152,6 +156,72 @@ describe('expense ingress contract', () => {
     expect(canonical).not.toContain('attachment')
   })
 
+  it('binds owner-created expense evidence to the prepared manifest, exact slot, and bytes', () => {
+    const envelope: UnsignedMiniAppExpenseEvidenceIngressEnvelope = {
+      kind: 'MINI_APP_EXPENSE_EVIDENCE',
+      version: 1,
+      timestamp: 1_788_000_000,
+      nonce: 'expense-evidence-nonce-1',
+      payload: {
+        rootRequestId: 'expense-request-1',
+        expenseId: 'EXP-202608-1',
+        monthKey: '2026-08',
+        staffId: 'ADMIN_01',
+        expectedManifestHash: manifestHash,
+        manifest: [{
+          ordinal: 1,
+          mediaType: 'image/jpeg',
+          originalFileName: 'receipt-1.jpg',
+          sha256: 'b'.repeat(64),
+        }],
+        attachmentId: `ATT-${'c'.repeat(40)}`,
+        ordinal: 1,
+        mediaType: 'image/jpeg',
+        originalFileName: 'receipt-1.jpg',
+        deterministicName: `001-${'b'.repeat(64)}.jpg`,
+        slotClaimId: `SLOT-${'d'.repeat(64)}`,
+        sha256: 'b'.repeat(64),
+        uploadedAt: '2026-08-29T10:00:00.000Z',
+        bytesBase64: '/9j/',
+      },
+    }
+
+    const canonical = canonicalMiniAppExpenseEvidenceIngress(envelope)
+    expect(canonical).toContain('"kind":"MINI_APP_EXPENSE_EVIDENCE"')
+    expect(canonical).toContain(`"slotClaimId":"SLOT-${'d'.repeat(64)}"`)
+    expect(canonical).toContain('"bytesBase64":"/9j/"')
+    expect(() => canonicalMiniAppExpenseEvidenceIngress({
+      ...envelope,
+      payload: { ...envelope.payload, privateFolderId: 'forbidden' },
+    } as never)).toThrow('invalid mini app expense evidence payload')
+  })
+
+  it('hashes long cross-principal identities into exact public Drive properties below 124 bytes', () => {
+    const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
+    const properties = expenseFilePublicProperties({
+      monthKey: '2026-08',
+      attachment: {
+        attachmentId: `ATT-${'a'.repeat(40)}`,
+        expenseId: `EXP-202608-${'x'.repeat(107)}`,
+        rootRequestId: 'r'.repeat(124),
+        ordinal: 1,
+        mediaType: 'image/jpeg',
+        originalFileName: 'receipt.jpg',
+        deterministicName: `001-${'b'.repeat(64)}.jpg`,
+        slotClaimId: `SLOT-${'c'.repeat(64)}`,
+        sha256: 'b'.repeat(64),
+        uploadedByStaffId: 's'.repeat(124),
+        uploadedAt: '2026-08-29T10:00:00.000Z',
+      },
+    }, sha)
+
+    expect(Object.keys(properties)).toHaveLength(10)
+    expect(Object.entries(properties).every(([key, value]) => key.length + value.length <= 124)).toBe(true)
+    expect(JSON.stringify(properties)).not.toContain('r'.repeat(124))
+    expect(JSON.stringify(properties)).not.toContain('s'.repeat(124))
+    expect(JSON.stringify(properties)).not.toContain(`EXP-202608-${'x'.repeat(107)}`)
+  })
+
   it.each([
     ['impossible calendar date', { expenseDate: '2026-08-32' }],
     ['expense ID month mismatch', {
@@ -171,6 +241,13 @@ describe('expense ingress contract', () => {
     }
 
     expect(isExpenseResumeStatus({ status: 'COMMITTED', receipt })).toBe(false)
+  })
+
+  it('accepts only the exact explicit PREPARED resume status', () => {
+    expect(isExpenseResumeStatus({ status: 'PREPARED' })).toBe(true)
+    expect(isExpenseResumeStatus({ status: 'PREPARED', requestId: 'private' })).toBe(false)
+    expect(isExpenseIngressResumeStatus({ status: 'PREPARED', expenseId: 'EXP-202608-RESULT' })).toBe(true)
+    expect(isExpenseIngressResumeStatus({ status: 'PREPARED' })).toBe(false)
   })
 
   it('rejects unknown or unsafe recovery worker fields before signing', () => {

@@ -135,6 +135,7 @@ class FakeFolder {
 class FakeFile {
   name: string
   appProperties: Record<string, string>
+  properties: Record<string, string>
   version: string
   bytes: number[]
   description: string
@@ -147,6 +148,7 @@ class FakeFile {
     options: {
       name?: string
       appProperties?: Record<string, string>
+      properties?: Record<string, string>
       version?: string
       bytes?: number[]
       description?: string
@@ -154,6 +156,7 @@ class FakeFile {
   ) {
     this.name = options.name ?? id
     this.appProperties = { ...(options.appProperties ?? {}) }
+    this.properties = { ...(options.properties ?? {}) }
     this.version = options.version ?? '1'
     this.bytes = [...(options.bytes ?? [])]
     this.description = options.description ?? ''
@@ -176,6 +179,10 @@ class FakeFile {
 export interface GoogleExpenseFakeEnvironment {
   master: FakeExpenseSpreadsheet
   ledger: FakeExpenseSpreadsheet
+  ensureExpenseFolder(expenseId: string): void
+  expenseFileCount(expenseId: string): number
+  expenseFileMetadata(expenseId: string): { id: string; appProperties: Record<string, string>; properties: Record<string, string> }
+  setExpenseFileProperties(fileId: string, input: { appProperties: Record<string, string>; properties: Record<string, string> }): void
   addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
@@ -233,6 +240,7 @@ export function installGoogleExpenseFakes(options: {
     [ledger.id, ledger],
   ])
   let incompleteSearch: boolean | undefined = false
+  let ownerFileSequence = 0
 
   vi.stubGlobal('DriveApp', {
     Access: { PRIVATE: 'PRIVATE' },
@@ -251,6 +259,34 @@ export function installGoogleExpenseFakes(options: {
             .map(advancedFile),
         }
       },
+      create: (
+        resource: {
+          name: string
+          description: string
+          mimeType: string
+          parents: string[]
+          appProperties?: Record<string, string>
+          properties?: Record<string, string>
+        },
+        blob: { bytes: number[]; mimeType: string; name: string },
+      ) => {
+        const parent = folders.get(resource.parents[0]!)
+        if (!parent || blob.mimeType !== resource.mimeType || blob.name !== resource.name) {
+          throw new Error('invalid fake Drive create')
+        }
+        ownerFileSequence += 1
+        const file = new FakeFile(`owner-file-${ownerFileSequence}`, 'PRIVATE', [parent], resource.mimeType, {
+          name: resource.name,
+          appProperties: resource.appProperties,
+          properties: resource.properties,
+          version: '1',
+          bytes: blob.bytes,
+          description: resource.description,
+        })
+        files.set(file.id, file)
+        parent.filesByName.set(file.name, [...(parent.filesByName.get(file.name) ?? []), file])
+        return advancedFile(file)
+      },
     },
   })
   vi.stubGlobal('Utilities', {
@@ -259,6 +295,7 @@ export function installGoogleExpenseFakes(options: {
       const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value)
       return [...createHash('sha256').update(bytes).digest()].map((byte) => byte > 127 ? byte - 256 : byte)
     },
+    newBlob: (bytes: number[], mimeType: string, name: string) => ({ bytes: [...bytes], mimeType, name }),
   })
   vi.stubGlobal('SpreadsheetApp', {
     openById: (id: string) => spreadsheets.get(id)!,
@@ -285,17 +322,7 @@ export function installGoogleExpenseFakes(options: {
       version: attachment.driveVersion,
       bytes,
       description,
-      appProperties: {
-        pmcExpenseId: attachment.expenseId,
-        pmcExpenseMonthKey: '2026-08',
-        pmcExpenseOrdinal: String(attachment.ordinal),
-        pmcExpenseSha256: attachment.sha256,
-        pmcExpenseSlotClaimId: attachment.slotClaimId,
-        pmcExpenseRootRequestId: attachment.rootRequestId,
-        pmcExpenseUploadedByStaffId: attachment.uploadedByStaffId,
-        pmcExpenseAttachmentId: attachment.attachmentId,
-        pmcExpenseMetadataSha256: createHash('sha256').update(description, 'utf8').digest('hex'),
-      },
+      properties: expensePublicPropertiesForTest('2026-08', attachment, description),
     })
     files.set(fileId, file)
     const byName = expenseFolder.filesByName.get(file.name) ?? []
@@ -305,6 +332,32 @@ export function installGoogleExpenseFakes(options: {
   return {
     master,
     ledger,
+    ensureExpenseFolder(expenseId) {
+      if (month.foldersByName.get(expenseId)?.length) return
+      const expenseFolder = new FakeFolder(`folder-${expenseId}`, 'PRIVATE', [month])
+      month.foldersByName.set(expenseId, [expenseFolder])
+      folders.set(expenseFolder.id, expenseFolder)
+    },
+    expenseFileCount(expenseId) {
+      const expenseFolder = (month.foldersByName.get(expenseId) ?? [])[0]
+      return expenseFolder ? [...expenseFolder.filesByName.values()].flat().length : 0
+    },
+    expenseFileMetadata(expenseId) {
+      const expenseFolder = (month.foldersByName.get(expenseId) ?? [])[0]
+      const file = expenseFolder ? [...expenseFolder.filesByName.values()].flat()[0] : undefined
+      if (!file) throw new Error('missing fake expense file')
+      return {
+        id: file.id,
+        appProperties: { ...file.appProperties },
+        properties: { ...file.properties },
+      }
+    },
+    setExpenseFileProperties(fileId, input) {
+      const file = files.get(fileId)
+      if (!file) throw new Error('missing fake expense file')
+      file.appProperties = { ...input.appProperties }
+      file.properties = { ...input.properties }
+    },
     addExpenseAttachment,
     duplicateExpenseAttachment(attachment, bytes) {
       addExpenseAttachment(attachment, bytes, `${attachment.privateFileId}-duplicate`)
@@ -330,6 +383,20 @@ function advancedFile(file: FakeFile) {
     size: String(file.bytes.length),
     version: file.version,
     appProperties: { ...file.appProperties },
+    properties: { ...file.properties },
     permissions: [{ id: 'owner-user', type: 'user', role: 'owner', deleted: false }],
+  }
+}
+
+function expensePublicPropertiesForTest(
+  monthKey: string,
+  attachment: ExpensePrivateAttachment,
+  description: string,
+): Record<string, string> {
+  const sha = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
+  return {
+    v: '1', eid: sha(attachment.expenseId), mon: monthKey, ord: String(attachment.ordinal),
+    sha: attachment.sha256, sid: attachment.slotClaimId, rid: sha(attachment.rootRequestId),
+    uid: sha(attachment.uploadedByStaffId), aid: attachment.attachmentId, msh: sha(description),
   }
 }

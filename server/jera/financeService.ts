@@ -48,6 +48,7 @@ export class JeraFinanceServiceError extends Error {
 }
 
 const FINANCE_REPORT_TYPES = ['PAYMENT', 'REFUND', 'PRODUCT_SALES'] as const
+const SCHEDULED_REFRESH_RETRY_AFTER_SECONDS = 300
 export const JERA_FINANCE_REFRESH_LEASE_TTL_MS = 90_000
 export const JERA_FINANCE_ALLOCATION_START_DELAY_MS = 5_000
 
@@ -148,6 +149,11 @@ export function createJeraFinanceService(options: {
       try {
         const dayKey = jeraAllocationDayKey(branchUuid, eventDate)
         for (const reportType of FINANCE_REPORT_TYPES) {
+          if (input.actor.type === 'SCHEDULER') {
+            await options.coordinator.scheduledRefresh(exactQuery(reportType, branchUuid, eventDate))
+            retryAfterSeconds.push(SCHEDULED_REFRESH_RETRY_AFTER_SECONDS)
+            continue
+          }
           const result = await options.coordinator.manualRefresh(exactQuery(reportType, branchUuid, eventDate), actorId)
           retryAfterSeconds.push(safeRetry(result.retryAfterSeconds))
           if (!result.accepted) {

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExpenseReceipt } from '../../shared/pmcExpense'
 import type {
@@ -6,6 +6,19 @@ import type {
   ExpensePrivateAttachment,
 } from '../../shared/pmcMiniAppExpenseIngress'
 import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ingressClient'
+import type { ExpenseIngressClient } from '../../server/pmc-mini-app/finance/ingressClient'
+import {
+  buildMiniAppExpenseEvidenceIngress,
+  buildMiniAppExpenseIngress,
+} from '../../server/pmc-mini-app/finance/ingressClient'
+import {
+  processExpenseEvidenceIngressResponse,
+  processExpenseIngressResponse,
+  type ExpenseIngressPorts,
+} from '../../apps/pmc-google-booking-ops/src/expense/ingress'
+import {
+  createExpenseTestPorts,
+} from '../../apps/pmc-google-booking-ops/tests/helpers/expenseFakes'
 import type {
   ExpenseDriveSlotClaim,
   ExpenseStagingReceipt,
@@ -33,10 +46,11 @@ describe('expense submission orchestration', () => {
       'lease-renew', 'lease-assert',
       'ensure-folder',
       'lease-renew', 'lease-assert',
-      'staging-get-1', 'claim-1', 'upload-1', 'register-1', 'verify-1', 'lease-assert',
+      'staging-get-1', 'claim-1', 'owner-upload-1', 'register-1', 'verify-1', 'lease-assert',
       'lease-renew', 'lease-assert',
-      'staging-get-2', 'claim-2', 'upload-2', 'register-2', 'verify-2', 'lease-assert',
+      'staging-get-2', 'claim-2', 'owner-upload-2', 'register-2', 'verify-2', 'lease-assert',
       'lease-renew', 'lease-assert',
+      'lease-assert',
       'commit', 'lease-assert', 'lease-commit',
       'staging-delete-1', 'staging-delete-2',
     ])
@@ -53,10 +67,11 @@ describe('expense submission orchestration', () => {
         expectedManifestHash: expenseAttachmentManifestHash(fixture.stagingReceipts),
       }),
     }))
-    expect(fixture.finance.uploadExpenseImage.mock.calls.map(([input]) => input.deterministicName)).toEqual([
+    expect(fixture.ingress.uploadEvidence.mock.calls.map(([input]) => input.deterministicName)).toEqual([
       `001-${fixture.stagingReceipts[0]!.sha256}.jpg`,
       `002-${fixture.stagingReceipts[1]!.sha256}.png`,
     ])
+    expect(fixture.finance.uploadExpenseImage).not.toHaveBeenCalled()
     expect(fixture.ingress.commit).toHaveBeenCalledWith(expect.objectContaining({
       rootRequestId: 'expense-request-1',
       commandIdempotencyKey: 'expense-request-1:commit',
@@ -128,15 +143,40 @@ describe('expense submission orchestration', () => {
     expect(fixture.ingress.prepare).toHaveBeenCalledTimes(2)
     expect(fixture.ingress.commit).toHaveBeenCalledTimes(2)
     expect(fixture.finance.ensureExpenseFolder).toHaveBeenCalledTimes(2)
-    expect(fixture.finance.uploadExpenseImage).toHaveBeenCalledTimes(4)
-    expect(new Set(fixture.finance.uploadExpenseImage.mock.calls.map(([arg]) => arg.deterministicName)).size).toBe(2)
+    expect(fixture.ingress.uploadEvidence).toHaveBeenCalledTimes(4)
+    expect(new Set(fixture.ingress.uploadEvidence.mock.calls.map(([arg]) => arg.deterministicName)).size).toBe(2)
     expect(new Set(fixture.ingress.commit.mock.calls.map(([command]) => JSON.stringify(command.payload.attachments))).size).toBe(1)
     expect(fixture.staging.deleteVerified).toHaveBeenCalledTimes(2)
   })
 
+  it('converges an ACTIVE GCS lease after Apps Script durably COMMITs before the HTTP response is lost', async () => {
+    const state = serviceState()
+    const fixture = serviceFixture([], state)
+    fixture.input.staffId = 'STAFF_01'
+    const apps = realAppsExpenseIngress(state)
+    Object.assign(fixture.ingress, apps.ingress)
+
+    await expect(fixture.service.submit(fixture.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(apps.ports.expense.listMonth('2026-08')).toContainEqual(
+      expect.objectContaining({ expenseId: 'EXP-202608-0001', recordState: 'COMMITTED' }),
+    )
+    expect(state.lease).toMatchObject({ state: 'ACTIVE' })
+    expect(state.driveAttachments).toHaveLength(2)
+
+    await expect(fixture.service.submit(fixture.input)).resolves.toMatchObject({
+      expenseId: 'EXP-202608-0001', recordState: 'COMMITTED', unreviewed: true,
+    })
+    expect(state.lease).toMatchObject({ state: 'COMMITTED' })
+    expect(state.driveAttachments).toHaveLength(2)
+    expect(apps.ports.expense.listMonth('2026-08')).toHaveLength(1)
+    expect(apps.ports.expense.listAttachments('2026-08', 'EXP-202608-0001')).toHaveLength(2)
+  })
+
   it('leaves PREPARED out of success and preserves reusable staging after an earlier upload failure', async () => {
     const fixture = serviceFixture()
-    fixture.finance.uploadExpenseImage
+    fixture.ingress.uploadEvidence
       .mockRejectedValueOnce(Object.assign(new Error('private provider detail'), {
         code: 'EXPENSE_STORAGE_UNAVAILABLE',
       }))
@@ -165,13 +205,13 @@ describe('expense submission orchestration', () => {
     const firstProcess = serviceFixture([], state)
     await expect(firstProcess.service.submit(firstProcess.input)).resolves.toEqual(firstProcess.receipt)
     expect(state.deletedObjectKeys.size).toBe(2)
-    expect(firstProcess.finance.uploadExpenseImage).toHaveBeenCalledTimes(2)
+    expect(firstProcess.ingress.uploadEvidence).toHaveBeenCalledTimes(2)
 
     const restarted = serviceFixture([], state)
     await expect(restarted.service.submit(restarted.input)).resolves.toEqual(restarted.receipt)
 
     expect(restarted.staging.get).not.toHaveBeenCalled()
-    expect(restarted.finance.uploadExpenseImage).not.toHaveBeenCalled()
+    expect(restarted.ingress.uploadEvidence).not.toHaveBeenCalled()
     expect(restarted.finance.listVerifiedExpenseImages).toHaveBeenCalledOnce()
     expect(restarted.finance.ensureExpenseFolder).not.toHaveBeenCalled()
     expect(JSON.stringify(restarted.ingress.commit.mock.calls[0]?.[0].payload.attachments))
@@ -223,7 +263,7 @@ describe('expense submission orchestration', () => {
       code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
     })
     expect(secondProcess.finance.ensureExpenseFolder).not.toHaveBeenCalled()
-    expect(secondProcess.finance.uploadExpenseImage).not.toHaveBeenCalled()
+    expect(secondProcess.ingress.uploadEvidence).not.toHaveBeenCalled()
 
     state.now = Date.parse(state.lease!.expiresAt) + 1
     await secondProcess.staging.acquireSubmissionLease({
@@ -242,9 +282,30 @@ describe('expense submission orchestration', () => {
 
     const replayProcess = serviceFixture([], state, 'lease-owner-process-c')
     await expect(replayProcess.service.submit(replayProcess.input)).resolves.toEqual(replayProcess.receipt)
-    expect(replayProcess.finance.uploadExpenseImage).not.toHaveBeenCalled()
+    expect(replayProcess.ingress.uploadEvidence).not.toHaveBeenCalled()
     expect(JSON.stringify(replayProcess.ingress.commit.mock.calls[0]?.[0].payload.attachments))
       .toBe(JSON.stringify(secondProcess.ingress.commit.mock.calls[0]?.[0].payload.attachments))
+  })
+
+  it('fences an expiry after attachment verification before Apps Script COMMIT', async () => {
+    const state = serviceState()
+    const fixture = serviceFixture([], state, 'lease-owner-process-a')
+    const readClaim = vi.mocked(fixture.staging.readDriveSlotClaim)
+    const readCurrent = readClaim.getMockImplementation()!
+    let readCount = 0
+    readClaim.mockImplementation(async (intent) => {
+      const claim = await readCurrent(intent)
+      readCount += 1
+      if (readCount === fixture.input.stagingReceipts.length) {
+        state.now = Date.parse(state.lease!.expiresAt)
+      }
+      return claim
+    })
+
+    await expect(fixture.service.submit(fixture.input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true,
+    })
+    expect(fixture.ingress.commit).not.toHaveBeenCalled()
   })
 
   it('registers only the takeover winner and safely deletes a stale late Drive create', async () => {
@@ -376,6 +437,86 @@ describe('expense submission orchestration', () => {
   })
 })
 
+function realAppsExpenseIngress(state: ReturnType<typeof serviceState>): {
+  ingress: ExpenseIngressClient
+  ports: ExpenseIngressPorts
+} {
+  const commandPorts = createExpenseTestPorts()
+  const nonces = new Set<string>()
+  const secret = 'expense-ingress-secret'
+  let nonceSequence = 0
+  let loseFirstCommitResponse = true
+  const ports: ExpenseIngressPorts = {
+    ...commandPorts,
+    config: {
+      findStaffById(staffId) {
+        return commandPorts.staff.findById(staffId)
+      },
+    },
+    repositories: {
+      lineDirectory: {
+        hasNonce: (nonce) => nonces.has(nonce),
+        rememberNonce: (nonce) => { nonces.add(nonce) },
+      },
+    },
+    expenseSecrets: { expenseIngressSecret: () => secret },
+    expenseCommandFingerprint: commandPorts.commandFingerprint,
+    crypto: {
+      sha256Hex: commandPorts.crypto.sha256Hex,
+      sha256BytesHex: (value) => createHash('sha256').update(Buffer.from(value)).digest('hex'),
+      base64Decode: (value) => [...Buffer.from(value, 'base64')],
+      hmacSha256Hex: (value, key) => createHmac('sha256', key).update(value, 'utf8').digest('hex'),
+    },
+  }
+  const context = () => ({
+    timestamp: Math.floor(Date.parse('2026-08-29T10:00:00+07:00') / 1_000),
+    nonce: `owner-integration-${++nonceSequence}`,
+  })
+  const ingress: ExpenseIngressClient = {
+    async prepare(command) {
+      const response = processExpenseIngressResponse(
+        buildMiniAppExpenseIngress(command, context(), secret).body,
+        ports,
+      )
+      if (!response.ok || response.result.commandType !== 'PREPARE_EXPENSE') {
+        throw new ExpenseIngressClientError(response.ok ? 'EXPENSE_STORAGE_UNAVAILABLE' : response.error)
+      }
+      return response.result
+    },
+    async uploadEvidence(input) {
+      const response = processExpenseEvidenceIngressResponse(
+        buildMiniAppExpenseEvidenceIngress(input, context(), secret).body,
+        ports,
+      )
+      if (!response.ok) throw new ExpenseIngressClientError(response.error)
+      if (!state.driveAttachments.some(({ privateFileId }) => privateFileId === response.attachment.privateFileId)) {
+        state.driveAttachments.push({ ...response.attachment })
+      }
+      return response.attachment
+    },
+    async commit(command) {
+      const response = processExpenseIngressResponse(
+        buildMiniAppExpenseIngress(command, context(), secret).body,
+        ports,
+      )
+      if (!response.ok || response.result.commandType !== 'COMMIT_EXPENSE') {
+        throw new ExpenseIngressClientError(response.ok ? 'EXPENSE_STORAGE_UNAVAILABLE' : response.error)
+      }
+      const receipt = Object.fromEntries(
+        Object.entries(response.result).filter(([key]) => key !== 'commandType'),
+      ) as unknown as ExpenseReceipt
+      if (loseFirstCommitResponse) {
+        loseFirstCommitResponse = false
+        throw new ExpenseIngressClientError('EXPENSE_STORAGE_UNAVAILABLE')
+      }
+      return receipt
+    },
+    async void() { throw new ExpenseIngressClientError('EXPENSE_STORAGE_UNAVAILABLE') },
+    async resume() { return { status: 'PENDING' } },
+  }
+  return { ingress, ports }
+}
+
 function serviceFixture(
   events: string[] = [],
   state = serviceState(),
@@ -409,57 +550,52 @@ function serviceFixture(
   const ingress = {
     prepare: vi.fn(async () => { events.push('prepare'); return prepared }),
     commit: vi.fn(async () => { events.push('commit'); return receipt }),
-  }
-  const finance = {
-    readMaster: vi.fn(),
-    readMonth: vi.fn(),
-    ensureExpenseFolder: vi.fn(async () => { events.push('ensure-folder'); return 'expense-folder-1' }),
-    uploadExpenseImage: vi.fn(async (input: {
+    uploadEvidence: vi.fn(async (input: {
       ordinal: number
       expenseId: string
       rootRequestId: string
-      mimeType: 'image/jpeg' | 'image/png'
+      mediaType: 'image/jpeg' | 'image/png'
       originalFileName: string
       deterministicName: string
       bytes: Buffer
       sha256: string
-      uploadedByStaffId: string
+      staffId: string
       uploadedAt: string
       attachmentId: string
-      slotClaim: ExpenseDriveSlotClaim
-      allowClaimReplayCreate?: boolean
+      slotClaimId: string
     }) => {
-      events.push(`upload-${input.ordinal}`)
+      events.push(`owner-upload-${input.ordinal}`)
+      const currentClaim = state.claims.get(`${input.expenseId}:${input.ordinal}`)
+      if (!currentClaim || currentClaim.claimId !== input.slotClaimId) throw new Error('missing slot claim')
       if (state.failUploadOrdinalOnce === input.ordinal) {
         state.failUploadOrdinalOnce = null
         throw new Error('controlled partial upload failure')
       }
       if (
         state.delayedUpload
-        && state.delayedUpload.ownerId === input.slotClaim.leaseOwnerId
+        && state.delayedUpload.ownerId === currentClaim.leaseOwnerId
         && state.delayedUpload.ordinal === input.ordinal
       ) {
         const delayed = state.delayedUpload
         state.delayedUpload = null
         delayed.markStarted()
         await delayed.wait
-        const late = attachmentFromUpload(input, `late-private-file-${input.ordinal}`)
+        const late = attachmentFromOwnerUpload(input, `late-private-file-${input.ordinal}`)
         state.driveAttachments.push(late)
         return { ...late }
       }
       const existing = state.driveAttachments.find(({ ordinal }) => ordinal === input.ordinal)
       if (existing) return { ...existing }
-      if (input.slotClaim.state === 'REGISTERED') {
-        const registered = state.driveAttachments.find(({ privateFileId }) => (
-          privateFileId === input.slotClaim.registeredFileId
-        ))
-        if (!registered) throw new Error('registered Drive file is missing')
-        return { ...registered }
-      }
-      const attachment = attachmentFromUpload(input, `private-file-${input.ordinal}`)
+      const attachment = attachmentFromOwnerUpload(input, `private-file-${input.ordinal}`)
       state.driveAttachments.push(attachment)
       return { ...attachment }
     }),
+  }
+  const finance = {
+    readMaster: vi.fn(),
+    readMonth: vi.fn(),
+    ensureExpenseFolder: vi.fn(async () => { events.push('ensure-folder'); return 'expense-folder-1' }),
+    uploadExpenseImage: vi.fn(),
     verifyExpenseFile: vi.fn(async (input: { fileId: string; expectedAttachment?: ExpensePrivateAttachment }) => {
       events.push(`verify-${input.fileId.endsWith('-1') ? 1 : 2}`)
       const existing = state.driveAttachments.find(({ privateFileId }) => privateFileId === input.fileId)
@@ -595,6 +731,9 @@ function serviceFixture(
       if (!claim) throw new ExpenseStagingError('EXPENSE_DRIVE_SLOT_CONFLICT')
       return { ...claim }
     }),
+    readSubmissionLease: vi.fn(async (expenseId: string) => (
+      state.lease?.expenseId === expenseId ? { ...state.lease } : null
+    )),
     acquireSubmissionLease: vi.fn(async (
       request: ExpenseSubmissionLeaseIntent & { ownerId: string },
     ) => {
@@ -652,34 +791,34 @@ function serviceFixture(
   }
 }
 
-function attachmentFromUpload(input: {
+function attachmentFromOwnerUpload(input: {
   attachmentId: string
   expenseId: string
   rootRequestId: string
   ordinal: number
-  mimeType: 'image/jpeg' | 'image/png'
+  mediaType: 'image/jpeg' | 'image/png'
   originalFileName: string
   deterministicName: string
   bytes: Buffer
   sha256: string
-  uploadedByStaffId: string
+  staffId: string
   uploadedAt: string
-  slotClaim: ExpenseDriveSlotClaim
+  slotClaimId: string
 }, privateFileId: string): ExpensePrivateAttachment {
   return {
     attachmentId: input.attachmentId,
     expenseId: input.expenseId,
     rootRequestId: input.rootRequestId,
     ordinal: input.ordinal,
-    mediaType: input.mimeType,
+    mediaType: input.mediaType,
     originalFileName: input.originalFileName,
     privateFileId,
     deterministicName: input.deterministicName,
     sizeBytes: input.bytes.length,
     driveVersion: String(6 + input.ordinal),
-    slotClaimId: input.slotClaim.claimId,
+    slotClaimId: input.slotClaimId,
     sha256: input.sha256,
-    uploadedByStaffId: input.uploadedByStaffId,
+    uploadedByStaffId: input.staffId,
     uploadedAt: input.uploadedAt,
   }
 }
@@ -805,5 +944,7 @@ function stagingReceipt(
 }
 
 function imageBytes(ordinal: number): Buffer {
-  return Buffer.from(`verified-staging-image-${ordinal}`)
+  return ordinal === 1
+    ? Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+    : Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 }

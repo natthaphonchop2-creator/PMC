@@ -1,10 +1,12 @@
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   ExpenseCommandResult,
   MiniAppExpenseCommand,
 } from '../../shared/pmcMiniAppExpenseIngress'
+import { canonicalExpenseAttachmentManifest } from '../../shared/pmcMiniAppExpenseIngress'
 import {
+  buildMiniAppExpenseEvidenceIngress,
   buildMiniAppExpenseIngress,
   createExpenseIngressClient,
 } from '../../server/pmc-mini-app/finance/ingressClient'
@@ -12,6 +14,50 @@ import {
 const MANIFEST_HASH = 'a'.repeat(64)
 
 describe('signed private expense ingress client', () => {
+  it('sends owner evidence with exact bytes and accepts only the bound attachment response', async () => {
+    const input = evidenceUploadInput()
+    const attachment = {
+      attachmentId: input.attachmentId, expenseId: input.expenseId, rootRequestId: input.rootRequestId,
+      ordinal: input.ordinal, mediaType: input.mediaType, originalFileName: input.originalFileName,
+      privateFileId: 'owner-drive-file-1', deterministicName: input.deterministicName,
+      sizeBytes: input.bytes.length, driveVersion: '1', slotClaimId: input.slotClaimId,
+      sha256: input.sha256, uploadedByStaffId: input.staffId, uploadedAt: input.uploadedAt,
+    }
+    const request = vi.fn(async () => response(200, { ok: true, attachment }))
+    const client = clientWith(request)
+
+    await expect(client.uploadEvidence(input)).resolves.toEqual(attachment)
+    const sent = JSON.parse(String(request.mock.calls[0]?.[1].body))
+    expect(sent).toMatchObject({
+      kind: 'MINI_APP_EXPENSE_EVIDENCE',
+      payload: {
+        expenseId: input.expenseId,
+        expectedManifestHash: input.expectedManifestHash,
+        slotClaimId: input.slotClaimId,
+        bytesBase64: input.bytes.toString('base64'),
+      },
+    })
+    const malformed = clientWith(vi.fn(async () => response(200, {
+      ok: true, attachment: { ...attachment, privateFolderId: 'forbidden' },
+    })))
+    await expect(malformed.uploadEvidence(input)).rejects.toMatchObject({
+      code: 'EXPENSE_STORAGE_UNAVAILABLE',
+    })
+  })
+
+  it('accepts exactly 10,000,000 decoded bytes and rejects 10,000,001 before transport', () => {
+    const exact = evidenceUploadInput(Buffer.alloc(10_000_000, 0x61))
+    expect(buildMiniAppExpenseEvidenceIngress(exact, {
+      timestamp: 1_800_000_000,
+      nonce: 'expense-max-bytes',
+    }, 'expense-ingress-secret').body.payload.bytesBase64.length).toBe(Math.ceil(10_000_000 / 3) * 4)
+    const oversized = evidenceUploadInput(Buffer.alloc(10_000_001, 0x61))
+    expect(() => buildMiniAppExpenseEvidenceIngress(oversized, {
+      timestamp: 1_800_000_000,
+      nonce: 'expense-over-bytes',
+    }, 'expense-ingress-secret')).toThrow('Expense ingress failed: EXPENSE_STORAGE_UNAVAILABLE')
+  })
+
   it('signs the exact canonical expense envelope without exposing its distinct secret', () => {
     const built = buildMiniAppExpenseIngress(prepareCommand(), {
       timestamp: 1_800_000_000,
@@ -70,13 +116,13 @@ describe('signed private expense ingress client', () => {
 
   it('sends a minimal signed resume envelope and parses only one safe status union', async () => {
     const request = vi.fn(async () => response(200, {
-      ok: true, result: { status: 'PENDING' },
+      ok: true, result: { status: 'PREPARED', expenseId: 'EXP-202608-RESULT' },
     }))
     const client = clientWith(request)
 
     await expect(client.resume({
       rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
-    })).resolves.toEqual({ status: 'PENDING' })
+    })).resolves.toEqual({ status: 'PREPARED', expenseId: 'EXP-202608-RESULT' })
     const sent = JSON.parse(String(request.mock.calls[0]?.[1].body))
     expect(sent).toMatchObject({
       kind: 'MINI_APP_EXPENSE_RESUME', rootRequestId: 'expense-request-1', staffId: 'ADMIN_01',
@@ -170,6 +216,31 @@ describe('signed private expense ingress client', () => {
     expect(request.mock.calls[0]?.[1].signal.aborted).toBe(true)
   })
 })
+
+function evidenceUploadInput(bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9])) {
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  const manifest = [{ ordinal: 1, mediaType: 'image/jpeg' as const, originalFileName: 'receipt.jpg', sha256 }]
+  const rootRequestId = 'expense-request-1'
+  const expenseId = 'EXP-202608-0001'
+  const deterministicName = `001-${sha256}.jpg`
+  return {
+    rootRequestId, expenseId, monthKey: '2026-08', staffId: 'ADMIN_01',
+    expectedManifestHash: createHash('sha256')
+      .update(canonicalExpenseAttachmentManifest(manifest), 'utf8').digest('hex'),
+    manifest,
+    attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+    ordinal: 1,
+    mediaType: 'image/jpeg' as const,
+    originalFileName: 'receipt.jpg',
+    deterministicName,
+    slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+      rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+    })).digest('hex')}`,
+    sha256,
+    uploadedAt: '2026-08-29T10:00:00.000Z',
+    bytes,
+  }
+}
 
 function clientWith(request: ReturnType<typeof vi.fn>) {
   return createExpenseIngressClient({

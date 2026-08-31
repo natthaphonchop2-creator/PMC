@@ -129,9 +129,11 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       return
     }
     if (pathname === '/internal/mini-app/jera-sync' || pathname === '/internal/mini-app/jera-allocation-worker'
-      || pathname === '/internal/mini-app/finance-daily-seed') {
+      || pathname === '/internal/mini-app/finance-daily-seed'
+      || pathname === '/internal/mini-app/finance-current-seed') {
       if (!deps.jera) {
         respond(res, 503, { error: pathname === '/internal/mini-app/finance-daily-seed'
+          || pathname === '/internal/mini-app/finance-current-seed'
           ? 'FINANCE_REFRESH_UNAVAILABLE' : 'JERA_SCHEDULER_UNAVAILABLE' })
         return
       }

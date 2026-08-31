@@ -42,12 +42,13 @@ Deploy a tagged revision with zero traffic. Do not print or commit its URL, envi
 
 Run the stage-specific read-only check. At `DISABLED`, an absent/paused Scheduler and an absent latest no-traffic ready revision are valid; the three feature flags and all four rollout controls must match exactly. A missing boolean is not equivalent to explicit `false`:
 
-Before every checker invocation, the operator must set the three owner-approved immutable `CONFIG_STAFF.id` values in the current shell. These values are operator input; do not hard-code or commit them:
+Before every checker invocation, the operator must declare the owner-approved immutable `CONFIG_STAFF.id` set in the current shell. The checker accepts 1–20 unique IDs and requires the repeated ID count to match `--expected-finance-viewers` exactly. The live approved set currently contains four IDs. These values are operator input; do not hard-code or commit them:
 
 ```bash
 export OPERATOR_FINANCE_STAFF_ID_1="<approved-staff-id-1>"
 export OPERATOR_FINANCE_STAFF_ID_2="<approved-staff-id-2>"
 export OPERATOR_FINANCE_STAFF_ID_3="<approved-staff-id-3>"
+export OPERATOR_FINANCE_STAFF_ID_4="<approved-staff-id-4>"
 ```
 
 ```bash
@@ -56,10 +57,11 @@ node scripts/check-finance-report-runtime.mjs \
   --project "$(gcloud config get-value project)" \
   --service pmc-mini-app \
   --region asia-southeast1 \
-  --expected-finance-viewers 3 \
+  --expected-finance-viewers 4 \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_4" \
   --expected-stage=DISABLED \
   --expected-finance-pilot-only false \
   --expected-finance-ui-preview-enabled false \
@@ -77,7 +79,7 @@ max concurrent dispatches: 1
 max dispatch rate: 0.016 tasks/second
 ```
 
-Deploy the reviewed image as a separate private Cloud Run service named `pmc-finance-worker`. The public `pmc-mini-app` LIFF service must not be treated as the worker IAM boundary. Queue and Scheduler OIDC requests target only the private worker service; the worker policy contains only the dedicated invoker.
+Deploy the reviewed image as a separate private Cloud Run service named `pmc-finance-worker`. The public `pmc-mini-app` LIFF service must not be treated as the worker IAM boundary. Cloud Tasks targets only the private worker service. Finance seed Scheduler HTTP targets use the exact deployed public `pmc-mini-app` `status.url`; their OIDC audience intentionally remains the private allocation-worker origin and is verified by the application. The worker policy contains only the dedicated invoker.
 
 Grant only the runtime identity permission to enqueue that queue, the verified OIDC identity permission to invoke the no-traffic service, and the runtime identity the minimum object permission on the dedicated allocation lease bucket. Do not grant project Owner, Editor, broad Secret Manager, Cloud Tasks admin, Storage admin, or broad Cloud Run invoker roles.
 
@@ -133,9 +135,9 @@ If the migration reports another shape, a non-12 column count, an incompatible h
 
 ## Gate 6 — owner approval for immutable finance staff IDs
 
-Keep every finance permission false while producing a roster containing only immutable staff ID, name, active status, and the three finance booleans. The owner must separately confirm exactly three immutable IDs: owner, doctor, and Mus.
+Produce a read-only roster containing only immutable staff ID, name, active status, and the three finance booleans. The owner must separately confirm the four current immutable finance IDs before the exact `canViewFinance` set is checked.
 
-Set `canViewFinance=true` only for those three confirmed IDs. Leave `canSubmitExpense=false` and `canManageExpense=false` for every row in this report-only release. Never derive a role from a name, email, or LINE user ID, and never print LINE user IDs.
+Set `canViewFinance=true` only for those four confirmed IDs. This checker gates the exact report-view set only. `canSubmitExpense` and `canManageExpense` are validated by the separate expense-permission acceptance gate and must not be forced false here; the four live approved holders may legitimately have those permissions. Never derive a role from a name, email, or LINE user ID, and never print LINE user IDs.
 
 Build the server before using the checker, then run the read-only preflight:
 
@@ -146,10 +148,11 @@ node scripts/check-finance-report-runtime.mjs \
   --project "$(gcloud config get-value project)" \
   --service pmc-mini-app \
   --region asia-southeast1 \
-  --expected-finance-viewers 3 \
+  --expected-finance-viewers 4 \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_4" \
   --expected-stage=DISABLED \
   --expected-finance-pilot-only false \
   --expected-finance-ui-preview-enabled false \
@@ -157,7 +160,7 @@ node scripts/check-finance-report-runtime.mjs \
   --expected-finance-monthly-income-enabled false
 ```
 
-Require the exact three operator-provided IDs, with each row active, LINE-linked, and `canViewFinance=true`, and no additional `canViewFinance=true` row. The `DISABLED` stage itself requires exact false feature flags, exact disabled rollout controls, no enabled finance Scheduler, and a readable service; later stages make staff, infrastructure, IAM, and schema evidence blocking. `check` is read-only; it must never mutate Cloud or Sheets.
+Require the exact operator-provided ID set, with every configured row active and `canViewFinance=true`, and no additional `canViewFinance=true` row. LINE linkage is reported separately: an explicitly approved active finance grant may remain latent/unlinked without invalidating the permission set. The `DISABLED` stage itself requires exact false feature flags, exact disabled rollout controls, no enabled finance Scheduler, and a readable service; later stages make staff, infrastructure, IAM, and schema evidence blocking. `check` is read-only; it must never mutate Cloud or Sheets.
 
 ## Gate 7 — owner approval to enable allocation on zero traffic
 
@@ -171,10 +174,11 @@ node scripts/check-finance-report-runtime.mjs \
   --project "$(gcloud config get-value project)" \
   --service pmc-mini-app \
   --region asia-southeast1 \
-  --expected-finance-viewers 3 \
+  --expected-finance-viewers 4 \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_4" \
   --expected-stage=ALLOCATION \
   --expected-finance-pilot-only false \
   --expected-finance-ui-preview-enabled false \
@@ -186,7 +190,7 @@ node scripts/check-finance-report-runtime.mjs \
   --expected-invoker "$OPERATOR_EXPECTED_INVOKER"
 ```
 
-Require exact false/true/false flags, the approved project and region, exact queue/worker destination/invoker, queue and lease-bucket location/configuration, exact least-privilege queue/lease/Cloud Run policies with no public, broad, unexpected, or extra principal, a latest ready revision receiving zero traffic, three exact allocation headers, the exact three active LINE-linked immutable finance viewers, valid pending task hash/attempt fields, and no active lease older than 15 minutes. Scheduler absent or paused remains valid at this stage.
+Require exact false/true/false flags, the approved project and region, exact queue/worker destination/invoker, queue and lease-bucket location/configuration, exact least-privilege queue/lease/Cloud Run policies with no public, broad, unexpected, or extra principal, a latest ready revision receiving zero traffic, three exact allocation headers, the exact four currently approved active immutable finance viewers, valid pending task hash/attempt fields, and no active lease older than 15 minutes. Report LINE linkage separately without revoking an approved latent grant. Scheduler absent or paused remains valid at this stage.
 
 The checker must also inspect project-level IAM. A public project member or any project-level role granted to the runtime or OIDC invoker identity blocks `ALLOCATION`, `PILOT`, and `READY`, even when each resource policy is exact. Unrelated human/project administration bindings are reported only as unrelated and do not expand either runtime identity.
 
@@ -225,19 +229,25 @@ node scripts/backfill-finance-report-days.mjs \
 
 The range must contain 1–31 exact dates. The script reuses the one-day seed workflow, waits at least 20 seconds between source report types and at least 60 seconds between dates, and never requests payment detail directly. Its atomic resume file contains only `version`, `startDate`, `endDate`, `nextDate`, `completedDates`, and `safeFailures`. Resume from `nextDate`; stop on schema or authentication failure. After completion, require exact-day `PAYMENT`, `REFUND`, and `PRODUCT_SALES` cache state and coverage evidence for every day.
 
-## Gate 10 — deferred full-rollout Cloud Scheduler
+## Gate 10 — define Scheduler jobs without enabling them
 
-Do not create or enable the finance Scheduler for the one-day pilot. The `PILOT` preflight requires zero enabled finance-seed Scheduler candidates.
+Record the intended jobs but do not create or enable either Scheduler while the reviewed revision has zero traffic or split traffic. The current-day job is one bodyless POST every 15 minutes in `Asia/Bangkok` to the exact public `pmc-mini-app` `status.url` plus `/internal/mini-app/finance-current-seed`. Its OIDC audience is intentionally the verified private `JERA_ALLOCATION_WORKER_AUDIENCE`, and its attempt deadline is exactly 180 seconds.
 
-Only when leaving the one-day pilot for full `READY`, create one daily POST at `02:15 Asia/Bangkok` to `/internal/mini-app/finance-daily-seed` using the verified OIDC invoker. The route derives the previous completed Bangkok day; it does not accept a caller-supplied date and refreshes no other date. Verify schedule, time zone, enabled status, route, and OIDC binding by presence/status only. Do not record the target URL or identity value.
+The deferred previous-day job is one bodyless POST at `02:15 Asia/Bangkok` to the same exact public service origin plus `/internal/mini-app/finance-daily-seed`, with the same invoker, audience, and deadline. Do not record target URLs or identity values.
 
-## Gate 11 — explicit category-money approval
+## Gate 11 — no-traffic tagged smoke and authorization rejection
 
-Present the source-day comparison to the owner. Only after separate explicit approval set `JERA_FINANCE_CATEGORY_MONEY_ENABLED=true` and `PMC_FINANCE_REPORTS_ENABLED=true` on a zero-traffic one-day pilot revision. Set `PMC_FINANCE_REPORTS_PILOT_ONLY=true`, `PMC_FINANCE_UI_PREVIEW_ENABLED=false`, `PMC_FINANCE_PILOT_DEFAULT_DATE=2026-08-22`, and `PMC_FINANCE_MONTHLY_INCOME_ENABLED=false` explicitly. Keep the finance Scheduler absent.
+Present the source-day comparison to the owner. Only after separate explicit approval set `JERA_FINANCE_CATEGORY_MONEY_ENABLED=true` and `PMC_FINANCE_REPORTS_ENABLED=true` on a tagged zero-traffic revision. Set `PMC_FINANCE_REPORTS_PILOT_ONLY=true`, `PMC_FINANCE_UI_PREVIEW_ENABLED=false`, `PMC_FINANCE_PILOT_DEFAULT_DATE=2026-08-22`, and `PMC_FINANCE_MONTHLY_INCOME_ENABLED=false` explicitly.
 
-Run the one-day daily report, ordinary-staff 403, finance-staff 200, and direct monthly 403 checks against the tagged zero-traffic revision. Confirm no provider write and no report GET-triggered refresh, Sheet write, task, or polling loop.
+Keep both finance Scheduler jobs absent. Smoke the tagged revision directly: require health success, ordinary report authorization behavior, and explicit rejection from both seed routes when OIDC is missing or invalid. Confirm no provider write, Sheet write, task, or polling loop. Do not enable a Scheduler and do not run the `PILOT` checker while the reviewed revision is at 0% or any traffic split.
 
-Run the exact `PILOT` preflight with operator-owned expected infrastructure values:
+## Gate 12 — deterministic 100% cutover
+
+After the tagged smoke passes, obtain separate approval and route exactly 100% to the one reviewed revision in a single deterministic cutover. Do not use a 10% split for this hotfix. Before creating any Scheduler, repeat health, daily/history/monthly, ordinary-staff, finance-staff, Booking, Stock, OCR, Drive, Calendar, LINE, Form fallback, and device checks. Stop and route 100% to the recorded rollback revision for any unexpected 5xx, Sheets 429, provider write, permission widening, stale/missing category guard, or regression.
+
+## Gate 13 — post-cutover Scheduler and freshness verification
+
+Only after the reviewed revision receives exactly 100% traffic on one target, create and enable the current-day Scheduler from Gate 10. Run it once, verify a successful current-day source refresh and fresh allocation coverage, then run the exact `PILOT` checker:
 
 ```bash
 node scripts/check-finance-report-runtime.mjs \
@@ -245,10 +255,11 @@ node scripts/check-finance-report-runtime.mjs \
   --project "$(gcloud config get-value project)" \
   --service pmc-mini-app \
   --region asia-southeast1 \
-  --expected-finance-viewers 3 \
+  --expected-finance-viewers 4 \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
   --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
+  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_4" \
   --expected-stage=PILOT \
   --expected-finance-pilot-only true \
   --expected-finance-ui-preview-enabled false \
@@ -257,53 +268,19 @@ node scripts/check-finance-report-runtime.mjs \
   --expected-worker-service pmc-finance-worker \
   --expected-queue pmc-revenue-allocation \
   --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
-  --expected-invoker "$OPERATOR_EXPECTED_INVOKER"
-```
-
-Require exact true/true/true flags, exact one-day pilot controls, every `ALLOCATION` requirement, and zero enabled finance-seed Scheduler candidates. A missing or malformed boolean is not `false`; an absent, malformed, or different pilot date fails closed. `PILOT` must pass before any pilot traffic.
-
-For a later full rollout, backfill and verify the approved range, then explicitly set `PMC_FINANCE_REPORTS_PILOT_ONLY=false`, `PMC_FINANCE_UI_PREVIEW_ENABLED=false`, unset `PMC_FINANCE_PILOT_DEFAULT_DATE`, and set `PMC_FINANCE_MONTHLY_INCOME_ENABLED=true`. Enable the single Scheduler described in Gate 10 and run the full `READY` preflight:
-
-```bash
-node scripts/check-finance-report-runtime.mjs \
-  --allow-readonly-production \
-  --project "$(gcloud config get-value project)" \
-  --service pmc-mini-app \
-  --region asia-southeast1 \
-  --expected-finance-viewers 3 \
-  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_1" \
-  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_2" \
-  --approved-finance-staff-id "$OPERATOR_FINANCE_STAFF_ID_3" \
-  --expected-stage=READY \
-  --expected-finance-pilot-only false \
-  --expected-finance-ui-preview-enabled false \
-  --expected-finance-pilot-default-date UNSET \
-  --expected-finance-monthly-income-enabled true \
-  --expected-worker-service pmc-finance-worker \
-  --expected-queue pmc-revenue-allocation \
-  --expected-worker-audience "$OPERATOR_EXPECTED_WORKER_AUDIENCE" \
   --expected-invoker "$OPERATOR_EXPECTED_INVOKER" \
-  --expected-finance-seed-url "$OPERATOR_EXPECTED_FINANCE_SEED_URL" \
-  --expected-oidc-audience "$OPERATOR_EXPECTED_OIDC_AUDIENCE"
+  --expected-finance-current-seed-url "$OPERATOR_EXPECTED_FINANCE_CURRENT_SEED_URL"
 ```
 
-`READY` requires exact true/true/true flags, exact full-rollout controls, every `ALLOCATION` requirement, and exactly one enabled Scheduler candidate whose URL path is the finance daily-seed path. That sole candidate must use the exact HTTPS target, POST method, `02:15 Asia/Bangkok`, OIDC audience, and OIDC invoker. A duplicate candidate or any wrong project, region, queue destination, worker host/path, Scheduler host/path/method, audience, or invoker fails closed. Unrelated enabled Scheduler paths are ignored.
+`PILOT` requires the latest ready revision to receive exactly 100% traffic on one deterministic target, exactly one current-day candidate across all Scheduler states that is enabled and exact, and zero previous-day candidates. Its target origin must equal the described public service `status.url`; its OIDC audience must equal the deployed private worker audience. A paused duplicate fails.
 
-## Gate 12 — explicit 10% traffic approval
-
-Route exactly 10% to the approved finance revision. Observe at least 30 minutes. Stop and roll back for unexpected 5xx, Sheets 429, queue retry storm, Scheduler error, provider write, permission widening, allocation mismatch, stale/missing category guard, or regression in Booking, Stock, OCR, Drive, Calendar, LINE, or Form fallback.
-
-Record only approved revision labels, traffic percentages, aggregate request/error counts, queue status/counts, viewer count, and timestamps.
-
-## Gate 13 — explicit 100% traffic approval
-
-After the 10% observation passes, obtain separate approval to route 100%. Repeat daily, history, monthly, ordinary-staff, finance-staff, and device checks. Record exact approved revision labels and safe counts; never record URLs, resource IDs, tokens, provider rows, patient data, Sheet IDs, or LINE IDs.
+For a later full `READY`, backfill and verify the approved range, set full-rollout controls, add the previous-day Scheduler, run it once, and verify freshness before the `READY` checker. `READY` requires latest-ready 100% traffic plus exactly one enabled exact candidate of each kind across all states. A paused/enabled duplicate or wrong host, path, method, body, schedule, audience, or invoker fails. Rollback begins by pausing both Scheduler jobs.
 
 ## Gate 14 — rollback approval and procedure
 
 Rollback does not require deleting data:
 
-1. pause the finance daily Scheduler;
+1. pause both finance Scheduler jobs;
 2. route 100% traffic to the rollback revision recorded before Gate 1;
 3. verify health and ordinary authorization behavior; and
 4. preserve JERA source cache, allocation cache, permission columns, Booking, Stock, OCR, Drive, Calendar, and LINE evidence for investigation.
@@ -312,4 +289,4 @@ Do not delete queues, cache tabs, allocation tabs, audit rows, permissions, evid
 
 ## Production approval stop
 
-Before any live action, present the exact proposed no-traffic revision, rollback revision, queue settings, schema diff, three approved immutable staff IDs, source-day reconciliation table, test counts, and expected recurring runtime cost. This repository intentionally contains no completed Task 9 rollout evidence because no such live rollout has been approved or executed.
+Before any live action, present the exact proposed no-traffic revision, rollback revision, queue settings, schema diff, four approved immutable staff IDs, source-day reconciliation table, test counts, and expected recurring runtime cost. This repository intentionally contains no completed Task 9 rollout evidence because no such live rollout has been approved or executed.

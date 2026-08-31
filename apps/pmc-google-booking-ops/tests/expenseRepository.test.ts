@@ -468,6 +468,114 @@ describe('Apps Script expense repository and command journal', () => {
 })
 
 describe('Google expense repository containment and literal text', () => {
+  it('creates one owner-backed private attachment and returns the same file after response loss', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master',
+      financeFolderId: 'finance-root',
+    })
+    const expenseId = 'EXP-202608-OWNER-1'
+    const rootRequestId = 'owner-upload-request-1'
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId,
+      rootRequestId,
+      ordinal: 1,
+      mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg',
+      deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256,
+      uploadedByStaffId: 'STAFF_01',
+      uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+
+    const first = repository.createOrFindPrivateAttachment({ mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes })
+    const replay = repository.createOrFindPrivateAttachment({ mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes })
+
+    expect(replay).toEqual(first)
+    expect(first).toMatchObject({ ...attachment, sizeBytes: bytes.length, driveVersion: '1' })
+    expect(environment.expenseFileCount(expenseId)).toBe(1)
+    const metadata = environment.expenseFileMetadata(expenseId)
+    expect(metadata.appProperties).toEqual({})
+    expect(metadata.properties).toMatchObject({ v: '1', mon: '2026-08', ord: '1', sha: sha256 })
+    expect(Object.entries(metadata.properties).every(([key, value]) => (
+      Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8') <= 124
+    ))).toBe(true)
+  })
+
+  it('rejects an appProperties-only owner file and never uses a private fallback', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
+    })
+    const expenseId = 'EXP-202608-OWNER-PRIVATE'
+    const rootRequestId = 'owner-private-request'
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId, rootRequestId, ordinal: 1, mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg', deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256, uploadedByStaffId: 'STAFF_01', uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+    const created = repository.createOrFindPrivateAttachment({ mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes })
+    const metadata = environment.expenseFileMetadata(expenseId)
+    environment.setExpenseFileProperties(created.privateFileId, {
+      properties: {},
+      appProperties: Object.keys(metadata.appProperties).length > 0
+        ? metadata.appProperties
+        : metadata.properties,
+    })
+
+    expect(() => repository.createOrFindPrivateAttachment({ mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes }))
+      .toThrow('EXPENSE_PRIVATE_FILE_INVALID')
+  })
+
+  it('keeps every public property key plus hashed maximum-length identity within 124 bytes', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
+    })
+    const expenseId = `EXP-202608-${'x'.repeat(107)}`
+    const rootRequestId = 'r'.repeat(124)
+    const staffId = 's'.repeat(124)
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId, rootRequestId, ordinal: 1, mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg', deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256, uploadedByStaffId: staffId, uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+
+    repository.createOrFindPrivateAttachment({ mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes })
+    const properties = environment.expenseFileMetadata(expenseId).properties
+    expect(Object.keys(properties)).toHaveLength(10)
+    expect(Object.entries(properties).every(([key, value]) => (
+      Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8') <= 124
+    ))).toBe(true)
+    expect(JSON.stringify(properties)).not.toContain(rootRequestId)
+    expect(JSON.stringify(properties)).not.toContain(staffId)
+    expect(JSON.stringify(properties)).not.toContain(expenseId)
+  })
+
   it('persists a date-like month key as literal text and reuses one index row', () => {
     const environment = installGoogleExpenseFakes({ initializedLedger: true })
     const repository = createGoogleExpenseRepository({

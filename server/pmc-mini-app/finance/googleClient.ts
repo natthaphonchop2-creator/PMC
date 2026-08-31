@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto'
 import { isValidExpenseOriginalFileName } from '../../../shared/pmcExpense.js'
 import { google } from 'googleapis'
-import type { ExpensePrivateAttachment } from '../../../shared/pmcMiniAppExpenseIngress.js'
+import type {
+  ExpensePrivateAttachment,
+  ExpensePrivateAttachmentIdentity,
+} from '../../../shared/pmcMiniAppExpenseIngress.js'
+import { expenseFilePublicProperties } from '../../../shared/pmcMiniAppExpenseIngress.js'
 import { inspectExpenseImage, type ExpenseImageMimeType } from './multipart.js'
 import {
   expenseDriveSlotClaimId,
@@ -21,7 +25,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/
 const SAFE_EXPENSE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const VERSION = /^[1-9]\d*$/
-const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,appProperties,permissions(id,type,role,deleted)'
+const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,appProperties,properties,permissions(id,type,role,deleted)'
 const DRIVE_LIST_FIELDS = `incompleteSearch,nextPageToken,files(${DRIVE_FIELDS})`
 const MASTER_TABS = new Set(['EXPENSE_MONTHLY_INDEX', 'EXPENSE_REQUESTS', 'EXPENSE_AUDIT'])
 const MONTH_TABS = new Set(['EXPENSE_SUBMISSIONS', 'EXPENSE_ATTACHMENTS', 'MONTHLY_SUMMARY'])
@@ -59,6 +63,7 @@ interface DriveMetadata {
   size?: string | number | null
   version?: string | number | null
   appProperties?: Record<string, string> | null
+  properties?: Record<string, string> | null
   permissions?: DrivePermission[] | null
 }
 
@@ -134,6 +139,7 @@ export interface FinanceGoogleCapturePorts {
 
 export interface ExpenseRegisteredSlot {
   claim: ExpenseDriveSlotClaim
+  expectedAttachment: ExpensePrivateAttachmentIdentity
   readCurrentClaim(): Promise<ExpenseDriveSlotClaim>
 }
 
@@ -468,26 +474,12 @@ export function createFinanceGooglePorts(
 
   function expectedFileProperties(input: {
     monthKey: string
-    expenseId: string
-    ordinal: number
-    sha256: string
-    slotClaimId: string
-    rootRequestId: string
-    uploadedByStaffId: string
-    attachmentId: string
-    metadataSha256: string
+    attachment: ExpensePrivateAttachmentIdentity
   }): Record<string, string> {
-    return {
-      pmcExpenseId: input.expenseId,
-      pmcExpenseMonthKey: input.monthKey,
-      pmcExpenseOrdinal: String(input.ordinal),
-      pmcExpenseSha256: input.sha256,
-      pmcExpenseSlotClaimId: input.slotClaimId,
-      pmcExpenseRootRequestId: input.rootRequestId,
-      pmcExpenseUploadedByStaffId: input.uploadedByStaffId,
-      pmcExpenseAttachmentId: input.attachmentId,
-      pmcExpenseMetadataSha256: input.metadataSha256,
-    }
+    return expenseFilePublicProperties({
+      monthKey: input.monthKey,
+      attachment: input.attachment,
+    }, (value) => createHash('sha256').update(value, 'utf8').digest('hex'))
   }
 
   function relevantExpenseFiles(
@@ -501,11 +493,30 @@ export function createFinanceGooglePorts(
   ): DriveMetadata[] {
     return children.filter((candidate) => candidate.mimeType !== FOLDER_MIME && (
       candidate.name === input.deterministicName
-      || candidate.appProperties?.pmcExpenseId === input.expenseId
-        && candidate.appProperties?.pmcExpenseOrdinal === String(input.ordinal)
+      || candidate.properties?.eid === createHash('sha256').update(input.expenseId, 'utf8').digest('hex')
+        && candidate.properties?.ord === String(input.ordinal)
       || input.slotClaimId !== undefined
-        && candidate.appProperties?.pmcExpenseSlotClaimId === input.slotClaimId
+        && candidate.properties?.sid === input.slotClaimId
     ))
+  }
+
+  function uploadIdentity(
+    input: ExpenseImageUploadInput,
+    slotClaimId: string,
+  ): ExpensePrivateAttachmentIdentity {
+    return {
+      attachmentId: input.attachmentId,
+      expenseId: input.expenseId,
+      rootRequestId: input.rootRequestId,
+      ordinal: input.ordinal,
+      mediaType: input.mimeType,
+      originalFileName: input.originalFileName,
+      deterministicName: input.deterministicName,
+      slotClaimId,
+      sha256: input.sha256,
+      uploadedByStaffId: input.uploadedByStaffId,
+      uploadedAt: input.uploadedAt,
+    }
   }
 
   async function validatedExpenseFile(
@@ -515,6 +526,7 @@ export function createFinanceGooglePorts(
       folderId: string
       fileId: string
       expectedAttachment?: ExpensePrivateAttachment
+      expectedIdentity?: ExpensePrivateAttachmentIdentity
     },
   ): Promise<{
     bytes: Buffer
@@ -566,19 +578,20 @@ export function createFinanceGooglePorts(
       folderId: string
       fileId: string
       expectedAttachment?: ExpensePrivateAttachment
+      expectedIdentity?: ExpensePrivateAttachmentIdentity
     },
   ): ExpensePrivateAttachment {
-    const properties = metadata.appProperties
-    const ordinal = Number(properties?.pmcExpenseOrdinal)
-    const sha256 = properties?.pmcExpenseSha256
+    const properties = metadata.properties
+    const ordinal = Number(properties?.ord)
+    const sha256 = properties?.sha
     const mimeType = metadata.mimeType
     const sizeBytes = Number(metadata.size)
     const driveVersion = String(metadata.version ?? '')
-    const slotClaimId = properties?.pmcExpenseSlotClaimId
-    const rootRequestId = properties?.pmcExpenseRootRequestId
-    const uploadedByStaffId = properties?.pmcExpenseUploadedByStaffId
-    const attachmentId = properties?.pmcExpenseAttachmentId
-    const metadataSha256 = properties?.pmcExpenseMetadataSha256
+    const expectedIdentity = input.expectedAttachment ?? input.expectedIdentity
+    const slotClaimId = expectedIdentity?.slotClaimId
+    const rootRequestId = expectedIdentity?.rootRequestId
+    const uploadedByStaffId = expectedIdentity?.uploadedByStaffId
+    const attachmentId = expectedIdentity?.attachmentId
     const parsedDescription = parseAttachmentDescription(metadata.description)
     if (
       !Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 5
@@ -590,13 +603,19 @@ export function createFinanceGooglePorts(
       || typeof rootRequestId !== 'string' || !SAFE_EXPENSE_ID.test(rootRequestId)
       || typeof uploadedByStaffId !== 'string' || !SAFE_EXPENSE_ID.test(uploadedByStaffId)
       || typeof attachmentId !== 'string' || !SAFE_EXPENSE_ID.test(attachmentId)
-      || typeof metadataSha256 !== 'string' || !SHA256.test(metadataSha256)
+      || !expectedIdentity
+      || expectedIdentity.expenseId !== input.expenseId
+      || expectedIdentity.ordinal !== ordinal
+      || expectedIdentity.mediaType !== mimeType
+      || expectedIdentity.originalFileName !== parsedDescription.originalFileName
+      || expectedIdentity.deterministicName !== deterministicFileName(ordinal, sha256, mimeType)
+      || expectedIdentity.sha256 !== sha256
+      || expectedIdentity.uploadedAt !== parsedDescription.uploadedAt
     ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     const name = deterministicFileName(ordinal, sha256, mimeType)
     const description = attachmentDescription(parsedDescription)
     if (
       metadata.description !== description
-      || createHash('sha256').update(description, 'utf8').digest('hex') !== metadataSha256
     ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     requireBaseMetadata(metadata, {
       id: input.fileId,
@@ -608,14 +627,7 @@ export function createFinanceGooglePorts(
     })
     requireExactProperties(properties, expectedFileProperties({
       monthKey: input.monthKey,
-      expenseId: input.expenseId,
-      ordinal,
-      sha256,
-      slotClaimId,
-      rootRequestId,
-      uploadedByStaffId,
-      attachmentId,
-      metadataSha256,
+      attachment: expectedIdentity,
     }), 'EXPENSE_PRIVATE_FILE_INVALID')
     const attachment: ExpensePrivateAttachment = {
       attachmentId,
@@ -690,12 +702,8 @@ export function createFinanceGooglePorts(
     const context = await existingExpenseFolder(input.monthKey, input.expenseId)
     if (context.folderId !== input.parentId) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     const description = attachmentDescription(input)
-    const metadataSha256 = createHash('sha256').update(description, 'utf8').digest('hex')
-    const expectedProperties = expectedFileProperties({
-      ...input,
-      slotClaimId: input.slotClaim.claimId,
-      metadataSha256,
-    })
+    const expectedIdentity = uploadIdentity(input, input.slotClaim.claimId)
+    const expectedProperties = expectedFileProperties({ monthKey: input.monthKey, attachment: expectedIdentity })
     const children = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
     const before = relevantExpenseFiles(children, {
       ...input,
@@ -712,8 +720,9 @@ export function createFinanceGooglePorts(
       const winner = (await validatedExpenseFile({
         monthKey: input.monthKey,
         expenseId: input.expenseId,
-        folderId: context.folderId,
-        fileId: input.slotClaim.registeredFileId,
+          folderId: context.folderId,
+          fileId: input.slotClaim.registeredFileId,
+          expectedIdentity,
       })).attachment
       for (const candidate of before.filter(({ id }) => id !== winner.privateFileId)) {
         const fileId = requiredId(String(candidate.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
@@ -722,6 +731,7 @@ export function createFinanceGooglePorts(
           expenseId: input.expenseId,
           folderId: context.folderId,
           fileId,
+          expectedIdentity,
         })).attachment
         await deleteExpenseFileIfUnregisteredInternal({
           monthKey: input.monthKey,
@@ -750,6 +760,7 @@ export function createFinanceGooglePorts(
         expenseId: input.expenseId,
         folderId: context.folderId,
         fileId,
+        expectedIdentity,
       })).attachment
     }
     if (input.slotClaim.state === 'REGISTERED') {
@@ -763,7 +774,7 @@ export function createFinanceGooglePorts(
           name: input.deterministicName,
           description,
           parents: [context.folderId],
-          appProperties: expectedProperties,
+          properties: expectedProperties,
         },
         media: { mimeType: input.mimeType, body: input.bytes },
         fields: DRIVE_FIELDS,
@@ -778,6 +789,7 @@ export function createFinanceGooglePorts(
       expenseId: input.expenseId,
       folderId: context.folderId,
       fileId: createdId,
+      expectedIdentity,
     })).attachment
     const after = relevantExpenseFiles(
       await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID'),
@@ -855,7 +867,10 @@ export function createFinanceGooglePorts(
     async listVerifiedExpenseImages(monthKey, expenseId, registeredSlots = []) {
       return withSafeGoogleError('EXPENSE_PRIVATE_FILE_INVALID', async () => {
         const context = await existingExpenseFolder(monthKey, expenseId)
-        if (registeredSlots.length > 0) {
+        if (registeredSlots.length < 1 || registeredSlots.length > 5) {
+          throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
+        }
+        {
           const ordinals = new Set<number>()
           for (const slot of registeredSlots) {
             const claim = slot.claim
@@ -865,6 +880,13 @@ export function createFinanceGooglePorts(
               || claim.expenseId !== expenseId
               || ordinals.has(claim.ordinal)
               || typeof slot.readCurrentClaim !== 'function'
+              || slot.expectedAttachment.expenseId !== expenseId
+              || slot.expectedAttachment.rootRequestId !== claim.rootRequestId
+              || slot.expectedAttachment.ordinal !== claim.ordinal
+              || slot.expectedAttachment.mediaType !== claim.mimeType
+              || slot.expectedAttachment.deterministicName !== claim.deterministicName
+              || slot.expectedAttachment.slotClaimId !== claim.claimId
+              || slot.expectedAttachment.sha256 !== claim.sha256
             ) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
             ordinals.add(claim.ordinal)
             const children = await listChildren(context.folderId, 'EXPENSE_PRIVATE_FILE_INVALID')
@@ -884,6 +906,7 @@ export function createFinanceGooglePorts(
                 expenseId,
                 folderId: context.folderId,
                 fileId,
+                expectedIdentity: slot.expectedAttachment,
               })).attachment
               await deleteExpenseFileIfUnregisteredInternal({
                 monthKey,
@@ -903,11 +926,14 @@ export function createFinanceGooglePorts(
         const verified: ExpensePrivateAttachment[] = []
         for (const metadata of before) {
           const fileId = requiredId(String(metadata.id ?? ''), 'EXPENSE_PRIVATE_FILE_INVALID')
+          const slot = registeredSlots.find(({ claim }) => claim.registeredFileId === fileId)
+          if (!slot) throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
           verified.push((await validatedExpenseFile({
             monthKey,
             expenseId,
             folderId: context.folderId,
             fileId,
+            expectedIdentity: slot.expectedAttachment,
           })).attachment)
         }
         verified.sort((left, right) => left.ordinal - right.ordinal)
@@ -1188,6 +1214,7 @@ function canonicalIdentity(metadata: DriveMetadata): string {
     size: String(metadata.size),
     version: String(metadata.version),
     appProperties: metadata.appProperties,
+    properties: metadata.properties,
     permissions: [...(metadata.permissions ?? [])]
       .map((permission) => ({
         id: permission.id,
