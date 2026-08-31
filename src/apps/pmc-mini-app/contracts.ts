@@ -3,6 +3,8 @@ import type {
   EnabledExpenseCategory,
   ExpensePaymentMethod,
 } from '../../../shared/pmcExpense'
+import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
+import type { BookingPrepareCapability } from '../../../shared/pmcMiniAppBookingPrepare'
 
 export interface MiniAppSession {
   staffId: string
@@ -28,7 +30,9 @@ export interface MiniAppConfig {
   doctors: Array<{ id: string; name: string }>
   services: Array<{ id: string; name: string; durationMinutes: number }>
   channels: Array<{ id: string; name: string }>
+  admins: Array<{ id: string; name: string }>
   aes: Array<{ id: string; name: string }>
+  bookingProtocol?: BookingPrepareCapability
 }
 
 export interface StockProductProjection {
@@ -62,9 +66,8 @@ export interface MiniAppEnrollmentOptions {
 
 export type BookingQueueType = 'NORMAL' | 'AUTO'
 
-export interface BookingDraftInput {
+export interface BookingDraftInputBase {
   requestId: string
-  aeName: string
   customerName: string
   facebookName: string
   phone: string
@@ -75,6 +78,28 @@ export interface BookingDraftInput {
   appointmentTime: string | null
   depositAmount: number
   channelId: string
+}
+
+export interface BookingDraftInputV1 extends BookingDraftInputBase {
+  aeName: string
+}
+
+export interface BookingDraftInputV2 extends BookingDraftInputBase {
+  adminId: string
+  aeId: string | null
+}
+
+export type BookingDraftInput = BookingDraftInputV1 | BookingDraftInputV2
+
+export interface BookingDraftAttributionV2 {
+  protocolVersion: 2
+  recorder: { id: string; name: string }
+  admin: { id: string; name: string }
+  ae: { id: string; name: string } | null
+}
+
+export function bookingProtocolVersion(config: Pick<MiniAppConfig, 'bookingProtocol'>): BookingProtocolVersion {
+  return config.bookingProtocol?.supported === 2 && config.bookingProtocol.minimumMutation === 2 ? 2 : 1
 }
 
 export type BookingDraftState =
@@ -99,6 +124,7 @@ export interface BookingDraftProjection {
   retentionState: '' | 'PENDING_APPROVAL'
   version: number
   input: BookingDraftInput | null
+  attribution?: BookingDraftAttributionV2
   paymentEvidenceIds: string[]
   chatEvidenceIds: string[]
   paymentEvidenceCount?: number

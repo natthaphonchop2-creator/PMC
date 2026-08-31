@@ -46,7 +46,9 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
     { id: 'eyelid', name: 'ทำตาสองชั้น', durationMinutes: 60 },
   ],
   channels: [{ id: 'page-tab', name: 'เพจTAB' }, { id: 'page-main', name: 'เพจหลัก' }],
-  aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
+  admins: [{ id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
+  aes: [{ id: 'staff-mus', name: 'มัส' }, { id: 'staff-muay', name: 'หมวย' }],
+  bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
 }
 
 export function createPreviewMiniAppConfig(options: {
@@ -156,6 +158,18 @@ export function createPreviewMiniAppApi(options: {
       const chatEvidenceIds = input.chatFiles.map((file, index) => `preview-chat-${index + 1}-${file.name}`)
       current = {
         ...current!, version: current!.version + 1,
+        paymentEvidenceIds: [...current!.paymentEvidenceIds, ...paymentEvidenceIds],
+        chatEvidenceIds: [...current!.chatEvidenceIds, ...chatEvidenceIds],
+      }
+      return structuredClone(current)
+    },
+    async prepare(_token, draftId, version, input) {
+      requireDraft(current, draftId, version)
+      const paymentEvidenceIds = input.paymentFiles.map((file, index) => `preview-payment-${index + 1}-${file.name}`)
+      const chatEvidenceIds = input.chatFiles.map((file, index) => `preview-chat-${index + 1}-${file.name}`)
+      current = {
+        ...current!, state: 'READY_TO_CONFIRM', version: current!.version + 1,
+        input: structuredClone(input.input),
         paymentEvidenceIds: [...current!.paymentEvidenceIds, ...paymentEvidenceIds],
         chatEvidenceIds: [...current!.chatEvidenceIds, ...chatEvidenceIds],
       }

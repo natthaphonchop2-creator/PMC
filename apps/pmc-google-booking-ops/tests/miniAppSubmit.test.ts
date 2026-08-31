@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import type { MiniAppBookingIngressPayload } from '../../../shared/pmcMiniAppBooking'
+import type {
+  MiniAppBookingIngressPayloadV1,
+  MiniAppBookingIngressPayloadV2,
+} from '../../../shared/pmcMiniAppBooking'
 import type { BookingCase } from '../src/domain/types'
 import { submitMiniAppBooking } from '../src/workflows/miniAppSubmit'
 import { createTestPorts } from './helpers/fakes'
 
 describe('Mini App canonical booking submission', () => {
+  it('persists verified recorder separately from selected Admin and AE in protocol 2', () => {
+    const result = submitMiniAppBooking(validMiniAppInputV2(), createTestPorts())
+
+    expect(result).toMatchObject({
+      recorderId: 'admin-1',
+      recorderName: 'Admin A',
+      recorderSource: 'VERIFIED_LINE',
+      adminId: 'staff-ae',
+      adminName: 'เอม',
+      aeId: 'admin-1',
+      aeName: 'Admin A',
+      callOwnerAdminId: 'staff-ae',
+      commissionEligibility: 'NOT_ELIGIBLE',
+      commissionAmount: null,
+    })
+  })
+
   it('creates one canonical booking and returns it on a duplicate request', () => {
     const ports = createTestPorts()
     const first = submitMiniAppBooking(validMiniAppInput(), ports)
@@ -432,13 +452,42 @@ describe('Mini App canonical booking submission', () => {
   })
 })
 
-function validMiniAppInput(patch: Partial<MiniAppBookingIngressPayload> = {}): MiniAppBookingIngressPayload {
+function validMiniAppInput(patch: Partial<MiniAppBookingIngressPayloadV1> = {}): MiniAppBookingIngressPayloadV1 {
   return {
     requestId: 'request-1', payloadHash: 'payload-hash-1', staffId: 'admin-1', aeName: 'Admin A',
     customerName: 'ลูกค้าทดสอบ', facebookName: 'PMC Beauty', phoneNormalized: '0812345678', doctorId: 'doctor-1',
     serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-08-20', appointmentTime: '13:00',
     depositAmount: 1000, channelId: 'เพจหลัก', paymentEvidenceFileIds: ['payment-file-1'],
     chatEvidenceFileIds: ['chat-file-1'], ...patch,
+  }
+}
+
+function validMiniAppInputV2(
+  patch: Partial<MiniAppBookingIngressPayloadV2> = {},
+): MiniAppBookingIngressPayloadV2 {
+  return {
+    protocolVersion: 2,
+    requestId: 'request-v2-1',
+    payloadHash: 'payload-hash-v2-1',
+    staffId: 'admin-1',
+    recorderName: 'Admin A',
+    adminId: 'staff-ae',
+    adminName: 'เอม',
+    aeId: 'admin-1',
+    aeName: 'Admin A',
+    customerName: 'ลูกค้าทดสอบ',
+    facebookName: 'PMC Beauty',
+    phoneNormalized: '0812345678',
+    doctorId: 'doctor-1',
+    serviceId: 'service-1',
+    queueType: 'NORMAL',
+    appointmentDate: '2026-08-20',
+    appointmentTime: '13:00',
+    depositAmount: 1000,
+    channelId: 'เพจหลัก',
+    paymentEvidenceFileIds: ['payment-file-1'],
+    chatEvidenceFileIds: ['chat-file-1'],
+    ...patch,
   }
 }
 
@@ -455,7 +504,7 @@ function failMiniIngressAuditOnce(ports: ReturnType<typeof createTestPorts>): vo
 }
 
 function recoverableLineRetry(
-  input: MiniAppBookingIngressPayload,
+  input: MiniAppBookingIngressPayloadV1,
   operation: 'ADMIN_BOOKING_LINE_BATCH' | 'DOCTOR_LINE' | 'ADMIN_EVIDENCE_LINE' | 'ADMIN_AUTOMATIC_LINE_BATCH',
   patch: Record<string, unknown> = {},
   bookingPatch: Partial<BookingCase> = {},

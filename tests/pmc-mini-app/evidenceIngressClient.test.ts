@@ -61,6 +61,41 @@ describe('Mini App owner evidence ingress client', () => {
     expect(retry.body.payload.fileName).toBe(first.body.payload.fileName)
   })
 
+  it('binds protocol-2 Drive identity to the evidence ordinal while exact slot retries stay stable', () => {
+    const slot = {
+      draftId: 'draft-1', requestId: 'request-1', kind: 'PAYMENT' as const,
+      mimeType: 'image/jpeg' as const, bytes: jpeg,
+    }
+    const first = buildMiniAppEvidenceIngress({ ...slot, ordinal: 0 } as never,
+      { timestamp: 1_787_882_400, nonce: 'nonce-evidence-1' }, 'ingress-secret')
+    const retry = buildMiniAppEvidenceIngress({ ...slot, ordinal: 0 } as never,
+      { timestamp: 1_787_882_401, nonce: 'nonce-evidence-2' }, 'ingress-secret')
+    const second = buildMiniAppEvidenceIngress({ ...slot, ordinal: 1 } as never,
+      { timestamp: 1_787_882_402, nonce: 'nonce-evidence-3' }, 'ingress-secret')
+
+    expect(first.body.version).toBe(2)
+    expect(first.body.payload).toMatchObject({
+      requestId: 'request-1', draftId: 'draft-1', evidenceKind: 'PAYMENT', ordinal: 0,
+      mimeType: 'image/jpeg',
+      contentSha256: 'fc16d7dcee9cae83ef3923222a81ccd8fe96c9d25fdb7f504d66f1011e0cd870',
+    })
+    expect(retry.body.payload.uploadId).toBe(first.body.payload.uploadId)
+    expect(retry.body.payload.fileName).toBe(first.body.payload.fileName)
+    expect(second.body.payload.uploadId).not.toBe(first.body.payload.uploadId)
+    expect(second.body.payload.fileName).not.toBe(first.body.payload.fileName)
+    expect(first.body.payload.fileName).toMatch(/^payment-00-[a-f0-9]{64}\.jpg$/)
+    expect(second.body.payload.fileName).toMatch(/^payment-01-[a-f0-9]{64}\.jpg$/)
+    const canonical = JSON.stringify({
+      kind: 'MINI_APP_EVIDENCE', version: 2, timestamp: 1_787_882_400, nonce: 'nonce-evidence-1',
+      payload: {
+        requestId: 'request-1', draftId: 'draft-1', evidenceKind: 'PAYMENT', ordinal: 0,
+        mimeType: 'image/jpeg', contentSha256: first.body.payload.contentSha256,
+        uploadId: first.body.payload.uploadId, fileName: first.body.payload.fileName,
+      },
+    })
+    expect(first.body.signature).toBe(createHmac('sha256', 'ingress-secret').update(canonical).digest('hex'))
+  })
+
   it('rejects a file above the existing 10 MB evidence limit before making a request', async () => {
     const request = vi.fn()
     const client = createEvidenceIngressClient({

@@ -67,6 +67,7 @@ describe('Minimal Receipt Flex', () => {
   it('uses short team labels and locks avatar/name columns across both rows', () => {
     const booking = bookingFixture({ adminName: 'มัส', aeName: 'แวว' })
     const profiles = {
+      recorder: 'https://media.example/assets/staff-profiles/recorder.jpg',
       closer: 'https://media.example/assets/staff-profiles/mus.jpg',
       ae: 'https://media.example/assets/staff-profiles/waew.jpg',
     }
@@ -84,14 +85,14 @@ describe('Minimal Receipt Flex', () => {
         if (
           component.type === 'box' &&
           component.layout === 'horizontal' &&
-          ['Admin', 'AE', 'ปิดการจอง', 'AE เปิดแชท'].includes(String(firstText))
+          ['ผู้บันทึก', 'Admin', 'AE', 'ปิดการจอง', 'AE เปิดแชท'].includes(String(firstText))
         ) rows.push(component)
         Object.values(component).forEach(visit)
       }
       visit(message)
 
       expect(rows.map((row) => (row.contents as Array<Record<string, unknown>>)[0].text))
-        .toEqual(['Admin', 'AE'])
+        .toEqual(['ผู้บันทึก', 'Admin', 'AE'])
       for (const row of rows) {
         const valueBox = (row.contents as Array<Record<string, unknown>>)[1]
         expect(valueBox).toMatchObject({
@@ -110,6 +111,7 @@ describe('Minimal Receipt Flex', () => {
   it('shows circular profile images before closer and AE names in both audiences', () => {
     const booking = bookingFixture({ adminName: 'มัส', aeName: 'แวว' })
     const profiles = {
+      recorder: 'https://media.example/assets/staff-profiles/recorder.jpg',
       closer: 'https://media.example/assets/staff-profiles/mus.jpg',
       ae: 'https://media.example/assets/staff-profiles/waew.jpg',
     }
@@ -118,6 +120,7 @@ describe('Minimal Receipt Flex', () => {
       buildDoctorMinimalReceipt(booking, 'BOOKING_CONFIRMED', logoUrl, profiles),
     ]) {
       const json = JSON.stringify(message)
+      expect(json).toContain(profiles.recorder)
       expect(json).toContain(profiles.closer)
       expect(json).toContain(profiles.ae)
 
@@ -135,7 +138,7 @@ describe('Minimal Receipt Flex', () => {
         Object.values(component).forEach(visit)
       }
       visit(message)
-      expect(avatars).toHaveLength(2)
+      expect(avatars).toHaveLength(3)
       for (const avatar of avatars) {
         expect(JSON.stringify(avatar)).toContain('"aspectRatio":"1:1"')
         expect(JSON.stringify(avatar)).toContain('"aspectMode":"cover"')
@@ -155,7 +158,7 @@ describe('Minimal Receipt Flex', () => {
         { closer: null, ae: null },
       ),
     )
-    expect((json.match(/"width":"32px"/g) ?? [])).toHaveLength(2)
+    expect((json.match(/"width":"32px"/g) ?? [])).toHaveLength(3)
     expect(json).toContain('"backgroundColor":"#F4F1EC"')
     expect(json).not.toContain('staff-profiles')
   })

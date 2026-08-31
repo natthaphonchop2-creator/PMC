@@ -25,6 +25,12 @@ export function normalizeStaffEmail(value: string): string {
   return value.trim().toLowerCase()
 }
 
+export function isReservedAttributionOption(
+  staff: Pick<StaffConfig, 'id' | 'name'>,
+): boolean {
+  return staff.id.trim().toUpperCase() === 'NONE' || staff.name.trim() === 'ไม่ระบุ'
+}
+
 export function validateStaffDirectory(staff: StaffConfig[]): {
   activeClosers: StaffConfig[]
   activeAes: StaffConfig[]
@@ -72,7 +78,67 @@ export function resolveEligibleAeByName(staff: StaffConfig[], name: string): Sta
   const normalized = name.trim()
   if (!normalized) return null
   const matches = staff.filter(
-    (item) => item.active && item.canBeAe && item.name === normalized,
+    (item) =>
+      item.active &&
+      item.canBeAe &&
+      !isReservedAttributionOption(item) &&
+      item.name === normalized,
+  )
+  return matches.length === 1 ? matches[0] : null
+}
+
+export function resolveSelectableAdminById(staff: StaffConfig[], id: string): StaffConfig | null {
+  const normalized = id.trim()
+  if (!normalized || normalized !== id) return null
+  const matches = staff.filter(
+    (item) =>
+      item.active &&
+      item.canBeAe &&
+      !isReservedAttributionOption(item) &&
+      item.id === normalized,
+  )
+  return matches.length === 1 ? matches[0] : null
+}
+
+export function resolveEligibleAeById(staff: StaffConfig[], id: string): StaffConfig | null {
+  return resolveSelectableAdminById(staff, id)
+}
+
+export function activeAttributionStaff(staff: StaffConfig[]): StaffConfig[] {
+  const eligible = staff.filter(
+    (item) => item.active && item.canBeAe && !isReservedAttributionOption(item),
+  )
+  const ids = eligible.map((item) => item.id)
+  const names = eligible.map((item) => item.name.trim())
+  if (new Set(ids).size !== ids.length) throw new Error('duplicate active attribution staff ID')
+  if (names.some((name) => !name.trim())) throw new Error('active attribution staff name is required')
+  if (new Set(names).size !== names.length) {
+    throw new Error('duplicate active attribution staff name')
+  }
+  return eligible
+}
+
+export function bookingAttributionFormChoices(staff: StaffConfig[]): {
+  admins: string[]
+  aes: string[]
+} {
+  const names = activeAttributionStaff(staff).map((item) => item.name.trim())
+  if (!names.length) throw new Error('no active booking attribution staff')
+  return { admins: [...names], aes: [...names] }
+}
+
+export function resolveSelectableAdminByName(staff: StaffConfig[], name: string): StaffConfig | null {
+  const normalized = name.trim()
+  if (!normalized) return null
+  const matches = activeAttributionStaff(staff).filter((item) => item.name.trim() === normalized)
+  return matches.length === 1 ? matches[0] : null
+}
+
+export function resolveActiveStaffByEmail(staff: StaffConfig[], email: string): StaffConfig | null {
+  const normalized = normalizeStaffEmail(email)
+  if (!normalized) return null
+  const matches = staff.filter(
+    (item) => item.active && normalizeStaffEmail(item.email) === normalized,
   )
   return matches.length === 1 ? matches[0] : null
 }

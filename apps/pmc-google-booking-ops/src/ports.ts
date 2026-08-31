@@ -1,9 +1,17 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { CalendarInterval } from './domain/automaticQueue'
-import type { MiniAppAsyncRequestRecord } from '../../../shared/pmcMiniAppAsyncState'
+import type { MiniAppAsyncRequestRecordV1 } from '../../../shared/pmcMiniAppAsyncState'
+import type { PmcMiniAppTargetRequestRecord } from '../../../shared/pmcBookingRowContracts'
 import type { StockAuditEvent, StockDocumentSummary, StockLedgerEntry, StockProduct } from '../../../shared/pmcStock'
 import type { ExpenseAuditEvent, ExpenseMonthlyProjection, ExpenseSubmission } from '../../../shared/pmcExpense'
 import type { ExpensePrivateAttachment, MiniAppExpenseCommand } from '../../../shared/pmcMiniAppExpenseIngress'
+import type {
+  WorkbookMetadataSnapshot,
+  WorkbookPresentationPlan,
+  WorkbookPresentationSha256,
+} from './domain/workbookPresentation'
+import type { RetentionRecordV2, RetentionStatus } from '../../../shared/pmcMiniAppDraftRetention'
+import type { MiniAppDraftCleanupPayload } from '../../../shared/pmcMiniAppDraftCleanup'
 
 export interface Clock {
   nowIso(): string
@@ -11,6 +19,19 @@ export interface Clock {
 
 export interface LockPort {
   withLock<T>(operation: () => T): T
+}
+
+export interface WorkbookPresentationGateway {
+  inspect(): WorkbookMetadataSnapshot
+  createPrivateNativeBackup(label: string): { fileId: string; url: string }
+  apply(plan: WorkbookPresentationPlan): void
+}
+
+export interface WorkbookPresentationWorkflowPort {
+  gateway: WorkbookPresentationGateway
+  withDocumentLock<T>(operation: () => T): T
+  sha256Hex: WorkbookPresentationSha256
+  backupLabel: string
 }
 
 export interface ExpenseTopologyPort {
@@ -72,6 +93,7 @@ export interface ConfigPort {
   listDoctors(): DoctorConfig[]
   listServices(): ServiceConfig[]
   listChannels(): ChannelConfig[]
+  ruleValue(key: string): string | null
 }
 
 export interface BookingRepository {
@@ -153,10 +175,13 @@ export interface LineDirectoryRepository {
 }
 
 export interface RetentionRepository {
-  queue(input: Record<string, unknown>): void
-  pending(): Record<string, unknown>[]
+  get(id: string): RetentionRecordV2 | null
+  getByDraftId(draftId: string): RetentionRecordV2 | null
+  list(): RetentionRecordV2[]
+  upsert(input: RetentionRecordV2, expectedVersion?: number): RetentionRecordV2
+  setStatus(id: string, expectedVersion: number, status: RetentionStatus, patch?: Partial<RetentionRecordV2>): RetentionRecordV2
+  pending(): RetentionRecordV2[]
   hasCase(caseId: string): boolean
-  approve(id: string, approver: string, reason: string): Record<string, unknown>
 }
 
 export interface AuditRepository {
@@ -292,12 +317,33 @@ export interface ExpenseRepository {
 export interface DrivePort {
   rootFolderId(): string
   ensureChildFolder(parentId: string, name: string, marker: string): { id: string; name: string }
-  createEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', bytes: number[]): string
+  createEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', bytes: number[], marker?: string): string
   fileName(fileId: string): string
   findFileByName(folderId: string, name: string): string | null
+  findEvidenceFile(folderId: string, name: string, mimeType: 'image/jpeg' | 'image/png', marker: string): string | null
   moveAndRenameFile(fileId: string, folderId: string, name: string): string
   folderUrl(folderId: string): string
   trashFolder(folderId: string): void
+  verifyFolder(folderId: string): 'PRESENT' | 'ALREADY_TRASHED'
+  evidenceIntakeFolderId(): string
+  verifyEvidenceFile(input: {
+    fileId: string
+    parentFolderId: string
+    fileName: string
+    mimeType: 'image/jpeg' | 'image/png'
+    marker: string
+  }): 'PRESENT' | 'ALREADY_TRASHED'
+  trashEvidenceFile(input: {
+    fileId: string
+    parentFolderId: string
+    fileName: string
+    mimeType: 'image/jpeg' | 'image/png'
+    marker: string
+  }): 'TRASHED' | 'ALREADY_TRASHED'
+}
+
+export interface DraftCleanupPort {
+  clean(payload: MiniAppDraftCleanupPayload): { cleanedCount: number }
 }
 export interface CalendarEventInput {
   calendarId: string
@@ -392,18 +438,22 @@ export interface SecretsPort {
 export interface CryptoPort {
   hmacSha256Hex(value: string, secret: string): string
   sha256Hex(value: string): string
+  sha256BytesHex(value: number[]): string
   sha256Base64Url(value: string): string
   base64UrlUtf8(value: string): string
   base64Decode(value: string): number[]
 }
 
+export type MiniAppRequestStateRecord = MiniAppAsyncRequestRecordV1 | PmcMiniAppTargetRequestRecord
+
 export interface MiniAppRequestStatePort {
-  getByRequestId(requestId: string): MiniAppAsyncRequestRecord | null
+  list?(): MiniAppRequestStateRecord[]
+  getByRequestId(requestId: string): MiniAppRequestStateRecord | null
   updateByRequestId(
     requestId: string,
     expectedVersion: number,
-    next: MiniAppAsyncRequestRecord,
-  ): MiniAppAsyncRequestRecord
+    next: MiniAppRequestStateRecord,
+  ): MiniAppRequestStateRecord
 }
 
 export interface DashboardPort {
@@ -434,4 +484,5 @@ export interface BookingPorts {
   media: EvidenceMediaPort
   dashboard: DashboardPort
   backups: BackupPort
+  draftCleanup?: DraftCleanupPort
 }

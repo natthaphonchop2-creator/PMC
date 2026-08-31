@@ -58,17 +58,45 @@ describe('PMC Mini App booking wizard model', () => {
   it('validates each step and projects the exact server input and preview labels', () => {
     const state = completeState()
     expect(validateBookingStep(state, 0, config())).toEqual({})
-    expect(bookingInput(state)).toMatchObject({
-      requestId: 'request-1', customerName: 'ลูกค้าทดสอบ', phone: '0812345678', doctorId: 'doctor-1',
+    expect(bookingInput(state, 2)).toEqual({
+      requestId: 'request-1', adminId: 'staff-admin', aeId: null,
+      customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phone: '0812345678', doctorId: 'doctor-1',
+      serviceId: 'service-1', queueType: 'NORMAL', appointmentDate: '2026-09-01', appointmentTime: '13:00',
+      depositAmount: 900, channelId: 'channel-1',
     })
-    expect(previewBooking(state, config())).toMatchObject({ doctor: 'หมอ Benz', service: 'เติมไขมัน', channel: 'เพจTAB' })
+    expect(previewBooking(state, config(), 2)).toMatchObject({
+      admin: 'แวว', ae: 'ไม่ระบุ', doctor: 'หมอ Benz', service: 'เติมไขมัน', channel: 'เพจTAB',
+    })
+  })
+
+  it('requires a canonical Admin ID while keeping AE optional', () => {
+    const state = completeState()
+    state.values.adminId = ''
+
+    expect(validateBookingStep(state, 0, config())).toMatchObject({ adminId: 'กรุณาเลือก Admin' })
+
+    state.values.adminId = 'staff-admin'
+    state.values.aeId = 'staff-ae'
+    expect(validateBookingStep(state, 0, config())).toEqual({})
+    expect(bookingInput(state, 2)).toMatchObject({ adminId: 'staff-admin', aeId: 'staff-ae' })
+  })
+
+  it('emits the exact protocol-1 attribution input in bridge mode', () => {
+    const state = completeState()
+    state.values.aeName = 'หมวย'
+
+    expect(bookingInput(state, 1)).toEqual({
+      requestId: 'request-1', aeName: 'หมวย', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL',
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    })
   })
 })
 
 function completeState() {
   let state = initialBooking('request-1')
   const values = {
-    customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phone: '0812345678', aeName: 'ไม่ระบุ',
+    adminId: 'staff-admin', aeId: '', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phone: '0812345678',
     doctorId: 'doctor-1', serviceId: 'service-1', channelId: 'channel-1', queueType: 'NORMAL' as const,
     appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: '900',
   }
@@ -85,6 +113,9 @@ function config(): MiniAppConfig {
   return {
     miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
     doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
-    channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
+    channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+    bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+    admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
+    aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
   }
 }

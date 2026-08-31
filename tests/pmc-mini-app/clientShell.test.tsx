@@ -3,6 +3,12 @@ import '@testing-library/jest-dom/vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  MiniAppApiError,
+  PMC_BOOKING_TIMING_EVENT,
+  type BrowserBookingTiming,
+  type MiniAppApiFactory,
+} from '../../src/apps/pmc-mini-app/api'
 import { PmcMiniApp, type PmcMiniAppApi } from '../../src/apps/pmc-mini-app/PmcMiniApp'
 import type { MiniAppConfig } from '../../src/apps/pmc-mini-app/contracts'
 
@@ -604,6 +610,26 @@ describe('PMC LINE Mini App shell', () => {
     expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
   })
 
+  it('shows one persistent close-and-reopen instruction for a cached booking client', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    vi.mocked(api.createDraft).mockRejectedValueOnce(new MiniAppApiError('CLIENT_UPGRADE_REQUIRED', 409))
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, bookingProtocol: undefined }}
+      api={api}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+
+    const instruction = await screen.findByRole('alert')
+    expect(instruction).toHaveTextContent('กรุณาปิดหน้าต่างนี้ แล้วเปิด Mini App จาก LINE ใหม่อีกครั้ง')
+    expect(screen.queryByRole('heading', { name: 'สวัสดี, มัส' })).not.toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(api.createDraft).toHaveBeenCalledOnce()
+    expect(api.createDraft).toHaveBeenCalledWith('preview-token', 1)
+  })
+
   it('starts on Home and opens the latest active request only after a booking action', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -630,7 +656,7 @@ describe('PMC LINE Mini App shell', () => {
     const user = userEvent.setup()
     const api = miniAppApi()
     const input = {
-      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      requestId: 'request-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
       phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
       appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     }
@@ -644,6 +670,7 @@ describe('PMC LINE Mini App shell', () => {
     }))
     api.loadDraft = vi.fn(async () => ({
       draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3, input,
+      attribution: savedAttribution(),
       paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 3, chatEvidenceCount: 1, confirmationStatus: null,
       caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }))
@@ -660,17 +687,75 @@ describe('PMC LINE Mini App shell', () => {
     expect(api.createDraft).not.toHaveBeenCalled()
   })
 
+  it('reopens a synchronous prepared READY draft for review and confirmation without creating another draft', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const preparedConfig = { ...config, bookingProtocol: { supported: 2 as const, minimumMutation: 2 as const, prepare: true } }
+    const input = {
+      requestId: 'request-sync-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    vi.mocked(api.loadLatestActiveDraft).mockResolvedValueOnce({
+      draftId: 'draft-sync-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3,
+      input: null, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 1,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    })
+    vi.mocked(api.loadDraft).mockResolvedValueOnce({
+      draftId: 'draft-sync-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM', retentionState: '', version: 3,
+      input, attribution: savedAttribution(), paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 1,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    })
+    vi.mocked(api.confirm).mockResolvedValueOnce({ caseId: 'PMC-202608-0099', status: 'CONFIRMED' })
+    render(<PmcMiniApp initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }} initialConfig={preparedConfig} api={api} />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(api.loadLatestActiveDraft).toHaveBeenCalledOnce()
+    expect(api.loadDraft).toHaveBeenCalledWith('preview-token', 'draft-sync-ready')
+    expect(api.confirm).toHaveBeenCalledWith('preview-token', 'draft-sync-ready', 3, 2)
+    expect(api.createDraft).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+  })
+
+  it('surfaces a synchronous reserved partial draft for cancel and restart instead of creating another draft', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const preparedConfig = { ...config, bookingProtocol: { supported: 2 as const, minimumMutation: 2 as const, prepare: true } }
+    const partial = {
+      draftId: 'draft-sync-partial', requestId: 'request-sync-partial', state: 'DRAFT' as const,
+      retentionState: 'PENDING_APPROVAL' as const, version: 3, input: null,
+      paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 1, chatEvidenceCount: 0,
+      confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }
+    vi.mocked(api.loadLatestActiveDraft).mockResolvedValueOnce(partial)
+    vi.mocked(api.loadDraft).mockResolvedValueOnce(partial)
+    vi.mocked(api.cancel).mockResolvedValueOnce({ ...partial, state: 'CANCELLED', version: 4 })
+    render(<PmcMiniApp initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }} initialConfig={preparedConfig} api={api} />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    expect(await screen.findByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    expect(api.cancel).toHaveBeenCalledWith('preview-token', 'draft-sync-partial', 3, 2)
+    expect(api.createDraft).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+  })
+
   it('returns home immediately after async queue acknowledgement', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
     const input = {
-      requestId: 'request-ready', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      requestId: 'request-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
       phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
       appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
     }
     const ready = {
       draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM' as const, retentionState: '' as const,
       version: 3, input, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 2, chatEvidenceCount: 1,
+      attribution: savedAttribution(),
       confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     }
     api.createDraft = vi.fn(async () => ready)
@@ -694,6 +779,72 @@ describe('PMC LINE Mini App shell', () => {
     expect(toast).toHaveTextContent('ทำรายการเรียบร้อย ระบบจะบันทึกภายใน 5 นาที')
     expect(toast).toHaveClass('success')
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument(), { timeout: 3_500 })
+  })
+
+  it('wires one default privacy-safe timing sink through the API factory and Wizard, then emits Home after commit', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const ready = readyDraft()
+    api.createDraft = vi.fn(async () => ready)
+    api.confirm = vi.fn(async () => ({
+      requestId: ready.requestId,
+      status: 'QUEUED' as const,
+      projection: { ...ready, state: 'QUEUED' as const, version: 4, input: null, queuedAt: '2026-08-29T10:00:00.000Z' },
+    }))
+    const createApi = vi.fn<MiniAppApiFactory>(() => api)
+    const events: unknown[] = []
+    const listener = (event: Event) => {
+      events.push((event as CustomEvent).detail)
+      if ((event as CustomEvent).detail?.event === 'navigation_to_home') {
+        expect(screen.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+      }
+    }
+    window.addEventListener(PMC_BOOKING_TIMING_EVENT, listener)
+
+    try {
+      render(<PmcMiniApp
+        initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+        initialConfig={config}
+        createApi={createApi}
+      />)
+      expect(createApi).toHaveBeenCalledOnce()
+      const sink = createApi.mock.calls[0]![0].bookingTiming
+      expect(typeof sink).toBe('function')
+
+      await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+      await user.click(await screen.findByRole('button', { name: 'ยืนยันบันทึก' }))
+
+      await waitFor(() => expect(events).toContainEqual({
+        event: 'navigation_to_home', action: 'home', status: 202, elapsedMs: expect.any(Number),
+      }))
+      expect(events.find((value) => (value as { event?: string }).event === 'navigation_to_home'))
+        .not.toHaveProperty('requestId')
+      expect(events.filter((value) => (value as { event?: string }).event === 'navigation_to_home')).toHaveLength(1)
+    } finally {
+      window.removeEventListener(PMC_BOOKING_TIMING_EVENT, listener)
+    }
+  })
+
+  it('keeps request results and Home navigation intact when the composed timing sink throws', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    const ready = readyDraft()
+    api.createDraft = vi.fn(async () => ready)
+    api.confirm = vi.fn(async () => ({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' as const }))
+    const throwingTiming = vi.fn<BrowserBookingTiming>(() => { throw new Error('private telemetry failure') })
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'ADMIN_01', displayName: 'มัส', active: true }}
+      initialConfig={config}
+      api={api}
+      bookingTiming={throwingTiming}
+    />)
+
+    await user.click(screen.getByRole('button', { name: 'เริ่มลงนัด' }))
+    await user.click(await screen.findByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
+    expect(api.confirm).toHaveBeenCalledOnce()
+    expect(throwingTiming).toHaveBeenCalledWith('navigation_to_home', expect.objectContaining({ action: 'home', status: 200 }))
   })
 
   it('single-flights deferred home and bottom booking taps before creating a draft', async () => {
@@ -902,7 +1053,10 @@ const config: MiniAppConfig = {
   financeMonthlyIncomeEnabled: true, stockEnabled: false, expenseCaptureEnabled: false, financeReadsEnabled: false, canManageStock: false,
   canSubmitExpense: false, canViewFinance: false, canManageExpense: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
-  channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }],
+  channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+  bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+  admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
+  aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
 }
 
 function miniAppApi(): PmcMiniAppApi {
@@ -916,7 +1070,7 @@ function miniAppApi(): PmcMiniAppApi {
       caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
     })),
     loadDraft: vi.fn(),
-    upload: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
+    upload: vi.fn(), prepare: vi.fn(), save: vi.fn(), confirm: vi.fn(), cancel: vi.fn(),
     loadReport: vi.fn(), refreshReport: vi.fn(),
     loadDailyIncome: vi.fn(async (_token, filter) => dailyIncomeProjection(filter.startDate, filter.endDate)),
     refreshDailyIncome: vi.fn(async () => ({ accepted: true as const, allocationQueued: true, retryAfterSeconds: 60 })),
@@ -954,6 +1108,29 @@ async function openAndCompleteExpenseBill(user: ReturnType<typeof userEvent.setu
 
 function safeApiError(code: string, retryable: boolean) {
   return Object.assign(new Error(code), { code, retryable })
+}
+
+function savedAttribution() {
+  return {
+    protocolVersion: 2 as const,
+    recorder: { id: 'ADMIN_01', name: 'มัส' },
+    admin: { id: 'staff-admin', name: 'แวว' },
+    ae: null,
+  }
+}
+
+function readyDraft() {
+  const input = {
+    requestId: 'request-ready', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+    phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+    appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+  }
+  return {
+    draftId: 'draft-ready', requestId: input.requestId, state: 'READY_TO_CONFIRM' as const, retentionState: '' as const,
+    version: 3, input, paymentEvidenceIds: [], chatEvidenceIds: [], paymentEvidenceCount: 2, chatEvidenceCount: 1,
+    attribution: savedAttribution(),
+    confirmationStatus: null, caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+  }
 }
 
 function dailyIncomeProjection(startDate = '2026-08-29', endDate = '2026-08-29') {

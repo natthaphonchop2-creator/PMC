@@ -123,6 +123,29 @@ describe('PMC Mini App evidence batch API', () => {
     expect(nonOwner.drive.uploadEvidence).toHaveBeenCalledOnce()
   })
 
+  it('rejects protocol-1 legacy evidence at the protocol-2 floor before multipart, Drive, or draft writes', async () => {
+    const deps = dependencies({ asyncBooking: null })
+    deps.config.bookingProtocol.minimumMutation = 2
+
+    const response = await uploadLegacy(deps, 'valid-token')
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: 'CLIENT_UPGRADE_REQUIRED' })
+    expect(deps.drive.uploadEvidence).not.toHaveBeenCalled()
+    expect(deps.storeFixture.writeCount()).toBe(0)
+  })
+
+  it('rejects protocol-1 evidence batches at the protocol-2 floor before multipart, staging, or draft writes', async () => {
+    const deps = dependencies()
+    deps.config.bookingProtocol.minimumMutation = 2
+
+    const response = await uploadBatch(deps, [pngBytes(1)], [jpegBytes(2)])
+
+    expect(response).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(deps.stagingFixture.putCount()).toBe(0)
+    expect(deps.storeFixture.writeCount()).toBe(0)
+  })
+
   it('marks cancellation with staged keys pending approval without deleting staged objects', async () => {
     const deps = dependencies()
     const uploaded = await uploadBatch(deps, [pngBytes(1)], [jpegBytes(2)])
@@ -169,7 +192,8 @@ function dependencies(options: { asyncBooking?: PmcAsyncBookingConfig | null; ow
     enabled: true, miniAppId: '2001234567-mini-app', lineChannelId: '2001234567', spreadsheetId: 'sheet-1',
     intakeFolderId: 'folder-1', bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
     fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', bookingIngressSecret: 'ingress-secret',
-    signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10, asyncBooking,
+    signingSecret: 'signing-secret', enrollmentPin: null, maxImageBytes: 10_000_000, maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false }, asyncBooking,
   }
   return {
     config,
@@ -288,7 +312,8 @@ function asyncConfig(ownerStaffIds: ReadonlySet<string>): PmcAsyncBookingConfig 
 
 function draftFixture(): MiniAppRequestRecord {
   return {
-    requestId: 'request-1', draftId: 'draft-1', staffId: 'staff-1', lineUserIdHash: 'line-user-hash',
+    requestId: 'request-1', draftId: 'draft-1', protocolVersion: 1, staffId: 'staff-1',
+    recorderName: '', adminId: 'staff-1', adminName: '', aeId: null, lineUserIdHash: 'line-user-hash',
     state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
     phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
     depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,

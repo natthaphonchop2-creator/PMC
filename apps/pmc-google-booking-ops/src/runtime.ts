@@ -7,6 +7,7 @@ import {
   createGoogleFormsPort,
 } from './adapters/googleForms'
 import { createEvidenceMediaPort } from './adapters/evidenceMedia'
+import { createAppsScriptDraftCleanupPort } from './adapters/draftCleanupClient'
 import {
   adminBookingMessageBatches,
   adminTentativeMessageBatches,
@@ -27,10 +28,13 @@ import {
   ensureSheetTopology,
   migrateBookingMasterStaffColumns,
   migrateConfigStaffColumns,
+  readGoogleBookingAttributionMigrationSnapshot,
+  writeGoogleBookingAttributionMigration,
 } from './adapters/googleSheets'
 import { SCRIPT_PROPERTY_KEYS } from './config'
 import { BOOKING_FORM_LABELS, NO_AE_OPTION } from './config'
 import {
+  bookingAttributionFormChoices,
   resolveCloserByEmail,
   resolveCloserByName,
   resolveEligibleAeByName,
@@ -42,7 +46,15 @@ import { migrateAppointmentRows } from './domain/appointmentMigration'
 import { STAFF_CONFIG_COLUMNS } from './sheetSchema'
 import type { CallResult } from './domain/types'
 import type { BookingIntake } from './domain/types'
-import type { BookingPorts, ChannelConfig, ConfigPort, DoctorConfig, ServiceConfig, StaffConfig } from './ports'
+import type {
+  BookingPorts,
+  ChannelConfig,
+  ConfigPort,
+  DoctorConfig,
+  ServiceConfig,
+  StaffConfig,
+  WorkbookPresentationWorkflowPort,
+} from './ports'
 import {
   createBookingRepositories,
   createStockRepository,
@@ -72,7 +84,14 @@ import {
 } from './workflows/flexValidation'
 import { sendCallReminderFlexPilot, sendProductionFlexPilot } from './workflows/flexPilot'
 import { createDailyBackup, runIntegrityReport } from './workflows/integrity'
-import { queueEvidenceRetention } from './workflows/retention'
+import { queueEvidenceRetention, reconcileAndExpireDraftEvidenceRetention } from './workflows/retention'
+import {
+  approveDraftEvidenceRetention,
+  executeDraftEvidenceRetention,
+  previewDraftEvidenceRetention,
+  readbackDraftEvidenceRetention,
+  type DraftRetentionPreview,
+} from './workflows/draftEvidenceCleanup'
 import { seedStaffRowsFromLegacy } from './workflows/staffAeMigration'
 import { prepareAutomaticQueue } from './workflows/automaticQueue'
 import {
@@ -82,6 +101,33 @@ import {
   prepareExpensePermissionRoster,
   type ExpensePermissionRosterItem,
 } from './expense/setup'
+import {
+  applyBookingAttributionMigration,
+  previewBookingAttributionMigration,
+  type BookingAttributionMigrationPorts,
+} from './workflows/attributionMigration'
+import {
+  canonicalAttributionMigrationSnapshot,
+  migrationSnapshotFingerprint,
+  type AttributionMigrationSheetSnapshot,
+} from './domain/attributionMigration'
+import {
+  createBookingMigrationManifestEnvelope,
+  parseBookingMigrationManifestJson,
+  parseBookingQueueAttestationJson,
+  validateBookingMigrationManifestTransition,
+  type BookingMigrationManifest,
+  type BookingQueueAttestation,
+} from './domain/attributionMigrationState'
+import {
+  applyWorkbookPresentation,
+  createGoogleWorkbookPresentationGateway,
+} from './adapters/googleWorkbookPresentation'
+import {
+  buildWorkbookPresentationPlan,
+  type WorkbookMetadataSnapshot,
+  type WorkbookPresentationAction,
+} from './domain/workbookPresentation'
 
 const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.spreadsheetId,
@@ -97,6 +143,47 @@ const REQUIRED_PROPERTIES = [
   SCRIPT_PROPERTY_KEYS.mediaSigningSecret,
   SCRIPT_PROPERTY_KEYS.brandLogoUrl,
 ] as const
+
+const ATTRIBUTION_MIGRATION_QUEUE_ATTESTATION = 'PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION'
+const ATTRIBUTION_MIGRATION_EXPECTED_QUEUE_DIGEST = 'PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST'
+const ATTRIBUTION_MIGRATION_MANIFEST = 'PMC_BOOKING_ATTRIBUTION_MIGRATION_MANIFEST'
+const ATTRIBUTION_MIGRATION_APPROVAL = 'PMC_BOOKING_ATTRIBUTION_APPROVED_FINGERPRINT'
+const ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS = 10 * 60 * 1_000
+const ATTRIBUTION_MIGRATION_ENVIRONMENT = 'production'
+const ATTRIBUTION_MIGRATION_CHECKER_VERSION = 'pmc-booking-attribution-v2/1'
+const ATTRIBUTION_REQUEST_ROW_LIMIT = 10_000
+const ATTRIBUTION_MASTER_ROW_LIMIT = 100_000
+const WORKBOOK_PRESENTATION_OWNER_APPROVAL = 'PMC_BOOKING_WORKBOOK_PRESENTATION_APPROVED_DIGEST'
+
+export const BOOKING_INSTALLABLE_TRIGGER_REGISTRY = Object.freeze({
+  bookingForm: Object.freeze({ handler: 'onBookingFormSubmit', kind: 'FORM' } as const),
+  callResultForm: Object.freeze({ handler: 'onCallResultSubmit', kind: 'FORM' } as const),
+  queueConfirmationForm: Object.freeze({
+    handler: 'onQueueConfirmationSubmit', kind: 'FORM',
+  } as const),
+  dailyOperations: Object.freeze({ handler: 'runDailyOperations', kind: 'CLOCK' } as const),
+  integrityChecks: Object.freeze({ handler: 'runIntegrityChecks', kind: 'CLOCK' } as const),
+})
+
+export type BookingInstallableTrigger = typeof BOOKING_INSTALLABLE_TRIGGER_REGISTRY[
+  keyof typeof BOOKING_INSTALLABLE_TRIGGER_REGISTRY
+]
+type BookingFormTriggerHandler = Extract<BookingInstallableTrigger, { kind: 'FORM' }>['handler']
+type BookingClockTriggerHandler = Extract<BookingInstallableTrigger, { kind: 'CLOCK' }>['handler']
+
+const WORKBOOK_PRESENTATION_ACTION_ORDER: readonly WorkbookPresentationAction['kind'][] = Object.freeze([
+  'MOVE_SHEET',
+  'SET_HIDDEN',
+  'SET_FROZEN',
+  'SET_BASIC_FILTER',
+  'SET_COLUMN_WIDTH',
+  'FORMAT_RANGE',
+  'ADD_STATUS_RULE',
+])
+const WORKBOOK_PRESENTATION_MANUAL_HANDLERS = Object.freeze([
+  'previewPmcBookingWorkbookPresentation',
+  'applyPmcBookingWorkbookPresentation',
+] as const)
 
 export function validateRuntimeProperties(properties: Record<string, string | undefined>): void {
   const missing = REQUIRED_PROPERTIES.filter((key) => !properties[key]?.trim())
@@ -137,6 +224,10 @@ function createConfigPort(
       name: String(row.name),
       active: isActive(row.active),
     }))
+  const ruleValue = (key: string): string | null => {
+    const matches = store.read('CONFIG_RULES').filter((row) => String(row.key ?? '') === key)
+    return matches.length === 1 ? String(matches[0]!.value ?? '') : null
+  }
   return {
     findCloserByEmail: (email) => resolveCloserByEmail(staff(), email),
     findCloserByName: (name) => resolveCloserByName(staff(), name),
@@ -156,6 +247,7 @@ function createConfigPort(
     listDoctors: doctors,
     listServices: services,
     listChannels: channels,
+    ruleValue,
   }
 }
 
@@ -172,6 +264,7 @@ export function createRuntime(): BookingPorts & StockIngressPorts & ExpenseIngre
   const store = createGoogleSheetStore(spreadsheet)
   const clock = { nowIso: bangkokNow }
   const crypto = createAppsScriptCryptoPort()
+  const draftCleanupUrl = properties[SCRIPT_PROPERTY_KEYS.draftCleanupUrl]?.trim() ?? ''
   const stock = createStockRepository(store)
   const expense = createGoogleExpenseRepository({
     masterSpreadsheetId: properties[SCRIPT_PROPERTY_KEYS.financeMasterSpreadsheetId] ?? '',
@@ -239,6 +332,12 @@ export function createRuntime(): BookingPorts & StockIngressPorts & ExpenseIngre
       properties[SCRIPT_PROPERTY_KEYS.spreadsheetId],
       properties[SCRIPT_PROPERTY_KEYS.backupFolderId],
     ),
+    ...(draftCleanupUrl ? { draftCleanup: createAppsScriptDraftCleanupPort({
+      url: draftCleanupUrl,
+      secret: properties[SCRIPT_PROPERTY_KEYS.bookingIngressSecret],
+      crypto,
+      clock,
+    }) } : {}),
   }
 }
 
@@ -261,6 +360,536 @@ export function runExpenseRecoveryWorkflow(): ExpenseRecoveryResult {
       abandoned: 0,
       errors: ['EXPENSE_STORAGE_UNAVAILABLE'],
     }
+  }
+}
+
+export function previewPmcBookingAttributionMigrationWorkflow(): {
+  kind: 'NONE' | 'MIGRATE' | 'RESTORE_REQUIRED'
+  preflightFingerprint: string | null
+  requestRowsMigrated: number
+  bookingRowsMigrated: number
+  requestInsertions: readonly string[]
+  masterInsertions: readonly string[]
+  liveWrites: false
+} {
+  const plan = previewBookingAttributionMigration(createPmcBookingAttributionMigrationRuntime())
+  if (plan.kind === 'RESTORE_REQUIRED') {
+    return {
+      kind: 'RESTORE_REQUIRED', preflightFingerprint: null,
+      requestRowsMigrated: 0, bookingRowsMigrated: 0,
+      requestInsertions: [], masterInsertions: [], liveWrites: false,
+    }
+  }
+  return {
+    kind: plan.kind,
+    preflightFingerprint: plan.preflightFingerprint,
+    requestRowsMigrated: plan.requestRowsMigrated,
+    bookingRowsMigrated: plan.bookingRowsMigrated,
+    requestInsertions: plan.kind === 'MIGRATE'
+      ? [plan.requestProtocolInsertion, ...plan.requestInsertions]
+      : [],
+    masterInsertions: plan.kind === 'MIGRATE' ? plan.masterInsertions : [],
+    liveWrites: false,
+  }
+}
+
+export function applyPmcBookingAttributionMigrationWorkflow(): {
+  status: 'COMPLETE' | 'RESTORE_REQUIRED'
+  readbackVerified: boolean
+} {
+  return applyBookingAttributionMigration(createPmcBookingAttributionMigrationRuntime())
+}
+
+export function previewPmcDraftEvidenceRetentionWorkflow(retentionId: string): DraftRetentionPreview {
+  requireEffectiveOwnerEmail()
+  return previewDraftEvidenceRetention(retentionId, createRuntime())
+}
+
+export function approvePmcDraftEvidenceRetentionWorkflow(
+  retentionId: string,
+  expectedVersion: number,
+  approvalDigest: string,
+  reason: string,
+): DraftRetentionPreview {
+  const owner = requireEffectiveOwnerEmail()
+  return approveDraftEvidenceRetention(
+    retentionId,
+    expectedVersion,
+    approvalDigest,
+    reason,
+    owner,
+    createRuntime(),
+  )
+}
+
+export function executePmcDraftEvidenceRetentionWorkflow(
+  retentionId: string,
+  expectedVersion: number,
+): DraftRetentionPreview {
+  const owner = requireEffectiveOwnerEmail()
+  return executeDraftEvidenceRetention(retentionId, expectedVersion, owner, createRuntime())
+}
+
+export function readbackPmcDraftEvidenceRetentionWorkflow(retentionId: string): DraftRetentionPreview {
+  requireEffectiveOwnerEmail()
+  return readbackDraftEvidenceRetention(retentionId, createRuntime())
+}
+
+function requireEffectiveOwnerEmail(): string {
+  const email = Session.getEffectiveUser().getEmail().trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 320) {
+    throw new Error('RETENTION_OWNER_IDENTITY_REQUIRED')
+  }
+  return email
+}
+
+export interface PmcBookingWorkbookPresentationRuntime extends WorkbookPresentationWorkflowPort {
+  assertManualInvocation(): void
+  readQueueAttestation(): BookingQueueAttestation
+  readMigrationManifest(): BookingMigrationManifest | null
+  readOwnerApprovedPreviewDigest(): string | null
+  transitionOwnerApproval(expected: string, next: string): void
+}
+
+export interface PmcBookingWorkbookPresentationPreview {
+  status: 'PREVIEWED'
+  actionCount: number
+  actionTypes: readonly { type: WorkbookPresentationAction['kind']; count: number }[]
+  visibleTabs: readonly string[]
+  tabsHiddenByPolicy: readonly string[]
+  sourceDigest: string
+  planDigest: string
+  queueAttestationDigest: string
+  migrationManifestDigest: string | null
+  reviewDigest: string
+  preflightPassed: true
+  queuePausedAndEmpty: boolean
+  migrationComplete: boolean
+  readyForOwnerApproval: boolean
+  backupCreated: false
+  liveWrites: false
+}
+
+export type PmcBookingWorkbookPresentationApply = {
+  status: 'APPLIED' | 'NOOP'
+  actionCount: number
+  backupCreated: boolean
+  readbackVerified: true
+  sourceDigest: string
+  planDigest: string
+  reviewDigest: string
+  queuePausedAndEmpty: true
+  migrationComplete: true
+  approvalMatched: true
+}
+
+interface OwnerPresentationInspection {
+  snapshot: WorkbookMetadataSnapshot
+  preview: PmcBookingWorkbookPresentationPreview
+}
+
+export function previewPmcBookingWorkbookPresentationWorkflow(
+  runtime: PmcBookingWorkbookPresentationRuntime = createPmcBookingWorkbookPresentationRuntime(),
+): PmcBookingWorkbookPresentationPreview {
+  runtime.assertManualInvocation()
+  const queue = runtime.readQueueAttestation()
+  const manifest = runtime.readMigrationManifest()
+  return inspectOwnerWorkbookPresentation(runtime, queue, manifest).preview
+}
+
+export function applyPmcBookingWorkbookPresentationWorkflow(
+  runtime: PmcBookingWorkbookPresentationRuntime = createPmcBookingWorkbookPresentationRuntime(),
+): PmcBookingWorkbookPresentationApply {
+  runtime.assertManualInvocation()
+  return runtime.withDocumentLock(() => {
+    runtime.assertManualInvocation()
+    const queue = runtime.readQueueAttestation()
+    if (queue.state !== 'PAUSED' || queue.activeTaskCount !== 0) {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_QUEUE_NOT_PAUSED')
+    }
+    const manifest = runtime.readMigrationManifest()
+    if (!manifest || manifest.state !== 'COMPLETE') {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_MIGRATION_NOT_COMPLETE')
+    }
+
+    const inspected = inspectOwnerWorkbookPresentation(runtime, queue, manifest)
+    const approval = runtime.readOwnerApprovedPreviewDigest()?.trim() ?? ''
+    if (approval.startsWith('ATTEMPTED:') || approval.startsWith('APPLIED:')) {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_ALREADY_ATTEMPTED')
+    }
+    if (!isSha256Digest(approval) || approval !== inspected.preview.reviewDigest) {
+      throw new Error('BOOKING_WORKBOOK_PRESENTATION_OWNER_APPROVAL_MISMATCH')
+    }
+    const attemptedApproval = `ATTEMPTED:${approval}`
+    runtime.transitionOwnerApproval(approval, attemptedApproval)
+
+    let firstInspection = true
+    const applied = applyWorkbookPresentation({
+      sha256Hex: runtime.sha256Hex,
+      backupLabel: runtime.backupLabel,
+      withDocumentLock<T>(operation: () => T): T { return operation() },
+      gateway: {
+        inspect() {
+          if (firstInspection) {
+            firstInspection = false
+            return inspected.snapshot
+          }
+          return runtime.gateway.inspect()
+        },
+        createPrivateNativeBackup: (label) => runtime.gateway.createPrivateNativeBackup(label),
+        apply: (plan) => runtime.gateway.apply(plan),
+      },
+    })
+    runtime.transitionOwnerApproval(
+      attemptedApproval,
+      `APPLIED:${inspected.preview.reviewDigest}`,
+    )
+    return {
+      status: applied.status,
+      actionCount: applied.plannedActionCount,
+      backupCreated: applied.backupCreated,
+      readbackVerified: applied.readbackVerified,
+      sourceDigest: inspected.preview.sourceDigest,
+      planDigest: inspected.preview.planDigest,
+      reviewDigest: inspected.preview.reviewDigest,
+      queuePausedAndEmpty: true,
+      migrationComplete: true,
+      approvalMatched: true,
+    }
+  })
+}
+
+export function createPmcBookingWorkbookPresentationRuntime(): PmcBookingWorkbookPresentationRuntime {
+  const scriptProperties = PropertiesService.getScriptProperties()
+  const spreadsheetId = scriptProperties.getProperty(SCRIPT_PROPERTY_KEYS.spreadsheetId)?.trim() ?? ''
+  const backupFolderId = scriptProperties.getProperty(SCRIPT_PROPERTY_KEYS.backupFolderId)?.trim() ?? ''
+  if (!spreadsheetId || !backupFolderId) {
+    throw new Error('WORKBOOK_PRESENTATION_CONFIG_INVALID')
+  }
+  const presentationCrypto = createAppsScriptCryptoPort()
+  const gateway = createGoogleWorkbookPresentationGateway({
+    spreadsheetId,
+    backupFolderId,
+    sha256Hex: presentationCrypto.sha256Hex,
+  })
+  return {
+    gateway,
+    sha256Hex: presentationCrypto.sha256Hex,
+    backupLabel: `PMC Booking Pre-Presentation ${new Date().toISOString()}`,
+    assertManualInvocation: assertPmcBookingWorkbookPresentationManualInvocation,
+    withDocumentLock<T>(operation: () => T): T {
+      return gateway.withDocumentLock(operation)
+    },
+    readQueueAttestation() {
+      const expectedQueueDigest = scriptProperties
+        .getProperty(ATTRIBUTION_MIGRATION_EXPECTED_QUEUE_DIGEST)?.trim() ?? ''
+      if (!isSha256Digest(expectedQueueDigest)) {
+        throw new Error('BOOKING_QUEUE_EXPECTED_IDENTITY_INVALID')
+      }
+      const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_QUEUE_ATTESTATION)
+      if (raw === null) throw new Error('QUEUE_ATTESTATION_INVALID')
+      return parseBookingQueueAttestationJson(raw, {
+        nowMs: Date.now(),
+        maxAgeMs: ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS,
+        environment: ATTRIBUTION_MIGRATION_ENVIRONMENT,
+        queueResourceDigest: expectedQueueDigest,
+        checkerVersion: ATTRIBUTION_MIGRATION_CHECKER_VERSION,
+        sha256: presentationCrypto.sha256Hex,
+      })
+    },
+    readMigrationManifest() {
+      const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_MANIFEST)
+      return raw === null || raw.trim() === ''
+        ? null
+        : parseBookingMigrationManifestJson(raw, presentationCrypto.sha256Hex)
+    },
+    readOwnerApprovedPreviewDigest() {
+      return scriptProperties.getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)
+    },
+    transitionOwnerApproval(expected, next) {
+      if (!isValidWorkbookPresentationApprovalValue(expected)
+        || !isValidWorkbookPresentationApprovalValue(next)) {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      let current: string
+      try {
+        current = scriptProperties.getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)?.trim() ?? ''
+      } catch {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      if (current !== expected) {
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+      try {
+        scriptProperties.setProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL, next)
+        const persisted = scriptProperties
+          .getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)?.trim() ?? ''
+        if (persisted !== next) throw new Error('approval readback mismatch')
+      } catch {
+        if (expected.startsWith('ATTEMPTED:') && next.startsWith('APPLIED:')) {
+          try {
+            scriptProperties.setProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL, expected)
+            const recovered = scriptProperties
+              .getProperty(WORKBOOK_PRESENTATION_OWNER_APPROVAL)?.trim() ?? ''
+            if (recovered !== expected) throw new Error('approval recovery mismatch')
+          } catch {
+            // Both ATTEMPTED and APPLIED are fail-closed used states. The fixed
+            // error below remains authoritative when recovery cannot be proved.
+          }
+        }
+        throw new Error('BOOKING_WORKBOOK_PRESENTATION_APPROVAL_STATE_WRITE_FAILED')
+      }
+    },
+  }
+}
+
+export function assertPmcBookingWorkbookPresentationManualInvocation(): void {
+  let handlers: string[]
+  try {
+    handlers = ScriptApp.getProjectTriggers().map((trigger) => trigger.getHandlerFunction())
+  } catch {
+    throw new Error('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
+  }
+  if (handlers.some((handler) => WORKBOOK_PRESENTATION_MANUAL_HANDLERS.includes(
+    handler as typeof WORKBOOK_PRESENTATION_MANUAL_HANDLERS[number],
+  ))) {
+    throw new Error('BOOKING_WORKBOOK_PRESENTATION_TRIGGER_FORBIDDEN')
+  }
+}
+
+function inspectOwnerWorkbookPresentation(
+  runtime: PmcBookingWorkbookPresentationRuntime,
+  queue: BookingQueueAttestation,
+  manifest: BookingMigrationManifest | null,
+): OwnerPresentationInspection {
+  const snapshot = runtime.gateway.inspect()
+  const plan = buildWorkbookPresentationPlan(snapshot, runtime.sha256Hex)
+  const sourceDigest = safePresentationDigest(runtime, `source:${plan.sourceFingerprint}`)
+  const planDigest = safePresentationDigest(runtime, JSON.stringify(plan))
+  const migrationManifestDigest = manifest?.digest ?? null
+  const reviewDigest = safePresentationDigest(runtime, JSON.stringify({
+    version: 1,
+    sourceDigest,
+    planDigest,
+    queueAttestationDigest: queue.digest,
+    migrationManifestDigest,
+  }))
+  const visible = new Set(plan.visibleOrder)
+  const actionTypes = WORKBOOK_PRESENTATION_ACTION_ORDER
+    .map((type) => ({
+      type,
+      count: plan.actions.filter((action) => action.kind === type).length,
+    }))
+    .filter(({ count }) => count > 0)
+  const queuePausedAndEmpty = queue.state === 'PAUSED' && queue.activeTaskCount === 0
+  const migrationComplete = manifest?.state === 'COMPLETE'
+  return {
+    snapshot,
+    preview: {
+      status: 'PREVIEWED',
+      actionCount: plan.actions.length,
+      actionTypes,
+      visibleTabs: [...plan.visibleOrder],
+      tabsHiddenByPolicy: snapshot.sheets
+        .filter((sheet) => !visible.has(sheet.title))
+        .sort((left, right) => left.index - right.index)
+        .map((sheet) => sheet.title),
+      sourceDigest,
+      planDigest,
+      queueAttestationDigest: queue.digest,
+      migrationManifestDigest,
+      reviewDigest,
+      preflightPassed: true,
+      queuePausedAndEmpty,
+      migrationComplete,
+      readyForOwnerApproval: queuePausedAndEmpty && migrationComplete,
+      backupCreated: false,
+      liveWrites: false,
+    },
+  }
+}
+
+function safePresentationDigest(
+  runtime: PmcBookingWorkbookPresentationRuntime,
+  value: string,
+): string {
+  const digest = runtime.sha256Hex(value)
+  if (!isSha256Digest(digest)) throw new Error('BOOKING_WORKBOOK_PRESENTATION_DIGEST_INVALID')
+  return digest
+}
+
+function isSha256Digest(value: string): boolean {
+  return /^[a-f0-9]{64}$/.test(value)
+}
+
+function isValidWorkbookPresentationApprovalValue(value: string): boolean {
+  return isSha256Digest(value)
+    || /^(?:ATTEMPTED|APPLIED):[a-f0-9]{64}$/.test(value)
+}
+
+export function createPmcBookingAttributionMigrationRuntime(): BookingAttributionMigrationPorts {
+  const scriptProperties = PropertiesService.getScriptProperties()
+  const properties = scriptProperties.getProperties()
+  const spreadsheetId = properties[SCRIPT_PROPERTY_KEYS.spreadsheetId]?.trim()
+  const backupFolderId = properties[SCRIPT_PROPERTY_KEYS.backupFolderId]?.trim()
+  if (!spreadsheetId) throw new Error('PMC_SPREADSHEET_ID is not configured')
+  if (!backupFolderId) throw new Error('PMC_BACKUP_FOLDER_ID is not configured')
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+  const migrationCrypto = createAppsScriptCryptoPort()
+  const expectedQueueDigest = properties[ATTRIBUTION_MIGRATION_EXPECTED_QUEUE_DIGEST]?.trim() ?? ''
+  if (!/^[a-f0-9]{64}$/.test(expectedQueueDigest)) {
+    throw new Error('BOOKING_QUEUE_EXPECTED_IDENTITY_INVALID')
+  }
+
+  const readAdvancedMetadata = (targetSpreadsheetId: string): {
+    MINI_APP_REQUESTS: unknown
+    BOOKING_MASTER: unknown
+  } => {
+    let response: GoogleAppsScript.Sheets.Schema.Spreadsheet
+    try {
+      const sheetsService = Sheets
+      if (!sheetsService) throw new Error('unavailable')
+      response = sheetsService.Spreadsheets.get(targetSpreadsheetId, {
+        includeGridData: true,
+        ranges: ['MINI_APP_REQUESTS', 'BOOKING_MASTER'],
+        fields: [
+          'sheets(properties(sheetId,title,sheetType,gridProperties),data(startRow,startColumn,',
+          'rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note,textFormatRuns,pivotTable,',
+          'dataSourceTable,dataSourceFormula)),',
+          'rowMetadata,columnMetadata),merges,basicFilter,filterViews,bandedRanges,',
+          'conditionalFormats,rowGroups,columnGroups,charts,tables,protectedRanges,developerMetadata,slicers)',
+        ].join(''),
+      })
+    } catch {
+      throw new Error('SHEETS_V4_METADATA_UNAVAILABLE')
+    }
+    const byTitle = new Map((response.sheets ?? []).map((sheet) => [sheet.properties?.title ?? '', sheet]))
+    const request = byTitle.get('MINI_APP_REQUESTS')
+    const master = byTitle.get('BOOKING_MASTER')
+    if (!request || !master) throw new Error('SHEETS_V4_METADATA_UNAVAILABLE')
+    return { MINI_APP_REQUESTS: request, BOOKING_MASTER: master }
+  }
+
+  const readSnapshot = (
+    workbook: GoogleAppsScript.Spreadsheet.Spreadsheet,
+  ): AttributionMigrationSheetSnapshot => {
+    const snapshot: AttributionMigrationSheetSnapshot = {
+      ...readGoogleBookingAttributionMigrationSnapshot(
+        workbook,
+        migrationCrypto.sha256Hex,
+        readAdvancedMetadata(workbook.getId()),
+      ),
+      queueState: 'RUNNING',
+      activeTaskCount: -1,
+      requestRowLimit: ATTRIBUTION_REQUEST_ROW_LIMIT,
+      masterRowLimit: ATTRIBUTION_MASTER_ROW_LIMIT,
+      hashValue: migrationCrypto.sha256Hex,
+    }
+    return {
+      ...snapshot,
+      preflightFingerprint: migrationCrypto.sha256Hex(
+        canonicalAttributionMigrationSnapshot(snapshot),
+      ),
+    }
+  }
+
+  const readManifest = () => {
+    const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_MANIFEST)
+    return raw === null || raw.trim() === ''
+      ? null
+      : parseBookingMigrationManifestJson(raw, migrationCrypto.sha256Hex)
+  }
+
+  return {
+    queueGate: {
+      readAttestation() {
+        const raw = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_QUEUE_ATTESTATION)
+        if (raw === null) throw new Error('QUEUE_ATTESTATION_INVALID')
+        return parseBookingQueueAttestationJson(raw, {
+          nowMs: Date.now(),
+          maxAgeMs: ATTRIBUTION_MIGRATION_GATE_MAX_AGE_MS,
+          environment: ATTRIBUTION_MIGRATION_ENVIRONMENT,
+          queueResourceDigest: expectedQueueDigest,
+          checkerVersion: ATTRIBUTION_MIGRATION_CHECKER_VERSION,
+          sha256: migrationCrypto.sha256Hex,
+        })
+      },
+    },
+    manifest: {
+      read: readManifest,
+      createPrepared(payload) {
+        if (payload.state !== 'PREPARED' || readManifest() !== null) {
+          throw new Error('MIGRATION_MANIFEST_CONFLICT')
+        }
+        const envelope = createBookingMigrationManifestEnvelope(payload, migrationCrypto.sha256Hex)
+        scriptProperties.setProperty(ATTRIBUTION_MIGRATION_MANIFEST, JSON.stringify(envelope))
+        const persisted = readManifest()
+        if (!persisted || persisted.digest !== envelope.digest) {
+          throw new Error('MIGRATION_MANIFEST_WRITE_FAILED')
+        }
+        return persisted
+      },
+      replaceExpected(expectedDigest, payload) {
+        const current = readManifest()
+        if (!current || current.digest !== expectedDigest) throw new Error('MIGRATION_MANIFEST_CONFLICT')
+        validateBookingMigrationManifestTransition(current, payload)
+        const envelope = createBookingMigrationManifestEnvelope(payload, migrationCrypto.sha256Hex)
+        scriptProperties.setProperty(ATTRIBUTION_MIGRATION_MANIFEST, JSON.stringify(envelope))
+        const persisted = readManifest()
+        if (!persisted || persisted.digest !== envelope.digest) {
+          throw new Error('MIGRATION_MANIFEST_WRITE_FAILED')
+        }
+        return persisted
+      },
+    },
+    readSnapshot: () => readSnapshot(spreadsheet),
+    withLock<T>(operation: () => T): T {
+      const lock = LockService.getScriptLock()
+      lock.waitLock(30_000)
+      try { return operation() } finally { lock.releaseLock() }
+    },
+    createAndVerifyPrivateNativeBackup(preflightFingerprint) {
+      const approval = scriptProperties.getProperty(ATTRIBUTION_MIGRATION_APPROVAL)?.trim()
+      if (!approval || approval !== preflightFingerprint) {
+        throw new Error('ATTRIBUTION_MIGRATION_OWNER_APPROVAL_MISMATCH')
+      }
+      try {
+        const timestamp = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd_HH-mm-ss')
+        const backupFolder = DriveApp.getFolderById(backupFolderId)
+        if (backupFolder.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+          throw new Error('not private')
+        }
+        const backup = DriveApp.getFileById(spreadsheetId).makeCopy(
+          `PMC Booking Pre-Attribution-V2 ${timestamp}`,
+          backupFolder,
+        )
+        if (backup.getMimeType() !== 'application/vnd.google-apps.spreadsheet'
+          || backup.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+          throw new Error('invalid backup')
+        }
+        const parents = backup.getParents()
+        if (!parents.hasNext() || parents.next().getId() !== backupFolderId || parents.hasNext()) {
+          throw new Error('invalid parent')
+        }
+        const backupSnapshot = readSnapshot(SpreadsheetApp.openById(backup.getId()))
+        if (migrationSnapshotFingerprint(backupSnapshot) !== preflightFingerprint) {
+          throw new Error('fingerprint mismatch')
+        }
+        return {
+          fileId: backup.getId(),
+          mimeType: 'application/vnd.google-apps.spreadsheet' as const,
+          parentId: backupFolderId,
+          sourceFingerprint: preflightFingerprint,
+        }
+      } catch {
+        throw new Error('MIGRATION_BACKUP_FAILED')
+      }
+    },
+    writeMigration(plan) {
+      writeGoogleBookingAttributionMigration(spreadsheet, plan)
+    },
+    nowIso: () => new Date().toISOString(),
+    sha256: migrationCrypto.sha256Hex,
   }
 }
 
@@ -648,6 +1277,7 @@ export function runEligibleRetries(ports: BookingPorts): void {
 export function runIntegrityAndBackupWorkflow(ports: BookingPorts): string[] {
   const report = runIntegrityReport(ports)
   createDailyBackup(ports)
+  reconcileAndExpireDraftEvidenceRetention(ports)
   queueEvidenceRetention(ports)
   writeDashboard(ports)
   return report.codes
@@ -662,13 +1292,16 @@ export function isConfigurationReady(counts: {
   return counts.staff > 0 && counts.aes > 0 && counts.doctors > 0 && counts.services > 0
 }
 
-function ensureFormTrigger(handler: string, formId: string): boolean {
+function ensureFormTrigger(handler: BookingFormTriggerHandler, formId: string): boolean {
   if (ScriptApp.getProjectTriggers().some((trigger) => trigger.getHandlerFunction() === handler)) return false
   ScriptApp.newTrigger(handler).forForm(FormApp.openById(formId)).onFormSubmit().create()
   return true
 }
 
-function ensureClockTrigger(handler: string, create: (builder: GoogleAppsScript.Script.ClockTriggerBuilder) => void): boolean {
+function ensureClockTrigger(
+  handler: BookingClockTriggerHandler,
+  create: (builder: GoogleAppsScript.Script.ClockTriggerBuilder) => void,
+): boolean {
   if (ScriptApp.getProjectTriggers().some((trigger) => trigger.getHandlerFunction() === handler)) return false
   create(ScriptApp.newTrigger(handler).timeBased())
   return true
@@ -690,22 +1323,22 @@ export function setupSystem(): {
   ensureSheetTopology(spreadsheet)
   const runtime = createRuntime()
   const staff = runtime.config.listStaff().filter((item) => item.active)
-  const aes = runtime.config.listEligibleAes()
-  const { activeClosers } = validateStaffDirectory(staff)
+  const formAttributionChoices = bookingAttributionFormChoices(staff)
+  validateStaffDirectory(staff)
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   const doctors = runtime.config.listDoctors().filter((doctor) => doctor.active)
   const services = runtime.config.listServices().filter((service) => service.active)
   const channels = runtime.config.listChannels().filter((channel) => channel.active)
   if (!isConfigurationReady({
     staff: staff.length,
-    aes: aes.length,
+    aes: formAttributionChoices.aes.length,
     doctors: doctors.length,
     services: services.length,
   })) {
     return {
       createdTriggers: 0,
       syncedStaff: staff.length,
-      syncedAes: aes.length,
+      syncedAes: formAttributionChoices.aes.length,
       syncedDoctors: doctors.length,
       syncedServices: services.length,
       syncedChannels: channels.length,
@@ -714,8 +1347,8 @@ export function setupSystem(): {
   runtime.forms.ensureCloserField()
   runtime.forms.ensureFacebookNameField()
   runtime.forms.syncBookingChoices(
-    activeClosers.map((closer) => closer.name),
-    aes.map((ae) => ae.name),
+    formAttributionChoices.admins,
+    formAttributionChoices.aes,
     doctors.map((doctor) => doctor.id),
     services.map((service) => service.id),
     channels.map((channel) => channel.id),
@@ -730,15 +1363,27 @@ export function setupSystem(): {
   ]
   runtime.forms.syncCallResultChoices(callResults)
   const created = [
-    ensureFormTrigger('onBookingFormSubmit', properties[SCRIPT_PROPERTY_KEYS.bookingFormId]),
-    ensureFormTrigger('onCallResultSubmit', properties[SCRIPT_PROPERTY_KEYS.callResultFormId]),
-    ensureClockTrigger('runDailyOperations', (builder) => builder.everyDays(1).atHour(9).create()),
-    ensureClockTrigger('runIntegrityChecks', (builder) => builder.everyDays(1).atHour(2).create()),
+    ensureFormTrigger(
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.bookingForm.handler,
+      properties[SCRIPT_PROPERTY_KEYS.bookingFormId],
+    ),
+    ensureFormTrigger(
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.callResultForm.handler,
+      properties[SCRIPT_PROPERTY_KEYS.callResultFormId],
+    ),
+    ensureClockTrigger(
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.dailyOperations.handler,
+      (builder) => builder.everyDays(1).atHour(9).create(),
+    ),
+    ensureClockTrigger(
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.integrityChecks.handler,
+      (builder) => builder.everyDays(1).atHour(2).create(),
+    ),
   ].filter(Boolean).length
   return {
     createdTriggers: created,
     syncedStaff: staff.length,
-    syncedAes: aes.length,
+    syncedAes: formAttributionChoices.aes.length,
     syncedDoctors: doctors.length,
     syncedServices: services.length,
     syncedChannels: channels.length,
@@ -1208,9 +1853,9 @@ export function configureCompactBookingIdentityFieldsWorkflow(): {
   aeChoiceCount: number
 } {
   const runtime = createRuntime()
-  const activeAes = runtime.config.listEligibleAes()
+  const activeAes = bookingAttributionFormChoices(runtime.config.listStaff()).aes
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
-  runtime.forms.configureCompactIdentityFields(activeAes.map((ae) => ae.name))
+  runtime.forms.configureCompactIdentityFields(activeAes)
   if (!runtime.forms.bookingHasCloserField()) throw new Error('booking Form closer field is missing')
   if (!runtime.forms.bookingHasAeField()) throw new Error('booking Form AE field is missing')
   return {
@@ -1247,7 +1892,10 @@ export function configureQueueModeFormsWorkflow(): {
   try {
     const queue = runtime.forms.configureQueueModeForm()
     const confirmation = runtime.forms.ensureQueueConfirmationForm()
-    const createdTrigger = ensureFormTrigger('onQueueConfirmationSubmit', confirmationFormId)
+    const createdTrigger = ensureFormTrigger(
+      BOOKING_INSTALLABLE_TRIGGER_REGISTRY.queueConfirmationForm.handler,
+      confirmationFormId,
+    )
     return { ...queue, ...confirmation, createdTrigger, createdConfirmationForm }
   } finally {
     runtime.forms.resumeBookingResponses()
@@ -1288,7 +1936,8 @@ export function prepareAutoQueueMigrationWorkflow(): {
     properties[SCRIPT_PROPERTY_KEYS.queueConfirmationFormId]?.trim(),
   )
   const triggerWouldBeCreated = !ScriptApp.getProjectTriggers().some(
-    (trigger) => trigger.getHandlerFunction() === 'onQueueConfirmationSubmit',
+    (trigger) => trigger.getHandlerFunction()
+      === BOOKING_INSTALLABLE_TRIGGER_REGISTRY.queueConfirmationForm.handler,
   )
   return {
     bookingRows,
@@ -1401,19 +2050,24 @@ export function pauseAndCutoverBookingFormWorkflow(): {
   syncedAes: number
 } {
   const runtime = createRuntime()
-  const { activeClosers, activeAes } = validateStaffDirectory(runtime.config.listStaff())
+  validateStaffDirectory(runtime.config.listStaff())
+  const formAttributionChoices = bookingAttributionFormChoices(runtime.config.listStaff())
   if (!runtime.forms.bookingCollectsEmail()) throw new Error('booking Form must collect email')
   runtime.forms.pauseBookingResponses()
   runtime.forms.renameAdminFieldToAe()
   runtime.forms.ensureCloserField()
   runtime.forms.syncBookingChoices(
-    activeClosers.map((closer) => closer.name),
-    activeAes.map((ae) => ae.name),
+    formAttributionChoices.admins,
+    formAttributionChoices.aes,
     runtime.config.listDoctors().filter((doctor) => doctor.active).map((doctor) => doctor.id),
     runtime.config.listServices().filter((service) => service.active).map((service) => service.id),
     runtime.config.listChannels().filter((channel) => channel.active).map((channel) => channel.id),
   )
-  return { paused: true, syncedClosers: activeClosers.length, syncedAes: activeAes.length }
+  return {
+    paused: true,
+    syncedClosers: formAttributionChoices.admins.length,
+    syncedAes: formAttributionChoices.aes.length,
+  }
 }
 
 export function resumeBookingFormAfterAeCutoverWorkflow(): { acceptingResponses: true } {

@@ -45,6 +45,7 @@ test('active staff can traverse normal booking, multiple evidence, preview, and 
   await expect(page.getByRole('heading', { name: 'สวัสดี, มัส' })).toBeVisible()
   await page.getByRole('button', { name: 'เริ่มลงนัด' }).click()
 
+  await page.getByRole('combobox', { name: /Admin/ }).selectOption('staff-mus')
   await page.getByLabel('ชื่อลูกค้า', { exact: true }).fill('ลูกค้าตัวอย่าง')
   await page.getByLabel(/ชื่อ Facebook/).fill('Facebook Example')
   await page.getByLabel('เบอร์มือถือ', { exact: true }).fill('0812345678')
@@ -86,6 +87,7 @@ test('active staff can traverse normal booking, multiple evidence, preview, and 
 test('automatic queue removes date and time controls', async ({ page }) => {
   await page.goto('/mini-app/?preview=1')
   await page.getByRole('button', { name: 'เริ่มลงนัด' }).click()
+  await page.getByRole('combobox', { name: /Admin/ }).selectOption('staff-mus')
   await page.getByLabel('ชื่อลูกค้า', { exact: true }).fill('ลูกค้าตัวอย่าง')
   await page.getByLabel(/ชื่อ Facebook/).fill('ไม่มี')
   await page.getByLabel('เบอร์มือถือ', { exact: true }).fill('0812345678')

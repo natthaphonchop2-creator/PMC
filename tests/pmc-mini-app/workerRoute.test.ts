@@ -250,6 +250,7 @@ const config: PmcMiniAppServerConfig = {
   enrollmentPin: null,
   maxImageBytes: 10_000_000,
   maxFilesPerKind: 10,
+  bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
   asyncBooking: asyncConfig,
 }
 

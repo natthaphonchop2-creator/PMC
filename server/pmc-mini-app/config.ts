@@ -1,5 +1,6 @@
 import { readPmcAsyncBookingConfig, type PmcAsyncBookingConfig } from './asyncConfig.js'
 import { readPmcFinanceConfig, type PmcFinanceConfig } from './finance/config.js'
+import type { BookingPrepareCapability } from '../../shared/pmcMiniAppBookingPrepare.js'
 
 export interface PmcMiniAppServerConfig {
   enabled: true
@@ -14,6 +15,8 @@ export interface PmcMiniAppServerConfig {
   enrollmentPin: string | null
   maxImageBytes: 10_000_000
   maxFilesPerKind: 10
+  bookingProtocol: BookingPrepareCapability
+  bookingMutationsPaused: boolean
   asyncBooking: PmcAsyncBookingConfig | null
   financeReportsEnabled: boolean
   financeUiPreviewEnabled: boolean
@@ -68,6 +71,12 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
   const financeReportsPilotOnly = env.PMC_FINANCE_REPORTS_PILOT_ONLY === 'true'
   const financePilotDefaultDate = env.PMC_FINANCE_PILOT_DEFAULT_DATE ?? null
   if (financeReportsEnabled && financeReportsPilotOnly && financePilotDefaultDate === null) return null
+  const minimumMutation = bookingProtocolMinimum(env.PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION)
+  if (minimumMutation === null) return null
+  const prepareEnabled = exactOptionalBoolean(env.PMC_BOOKING_PREPARE_ENABLED)
+  if (prepareEnabled === null || prepareEnabled && minimumMutation !== 2) return null
+  const bookingMutationsPaused = exactOptionalBoolean(env.PMC_BOOKING_MUTATIONS_PAUSED)
+  if (bookingMutationsPaused === null) return null
   const enrollmentPin = env.PMC_MINI_APP_ENROLLMENT_ENABLED === 'true'
     ? env.PMC_MINI_APP_ENROLLMENT_PIN?.trim() ?? ''
     : null
@@ -89,6 +98,8 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     enrollmentPin,
     maxImageBytes: MAX_IMAGE_BYTES,
     maxFilesPerKind: MAX_FILES_PER_KIND,
+    bookingProtocol: { supported: 2, minimumMutation, prepare: prepareEnabled },
+    bookingMutationsPaused,
     asyncBooking,
     financeReportsEnabled,
     financeUiPreviewEnabled: env.PMC_FINANCE_UI_PREVIEW_ENABLED === 'true',
@@ -99,6 +110,19 @@ export function readPmcMiniAppConfig(env: MiniAppEnvironment): PmcMiniAppServerC
     stockManagerPilotOnly: env.PMC_STOCK_MANAGER_PILOT_ONLY === 'true',
     finance: readPmcFinanceConfig(env),
   }
+}
+
+function exactOptionalBoolean(value: string | undefined): boolean | null {
+  if (value === undefined || value === 'false') return false
+  if (value === 'true') return true
+  return null
+}
+
+function bookingProtocolMinimum(value: string | undefined): 1 | 2 | null {
+  if (value === undefined) return 1
+  if (value === '1') return 1
+  if (value === '2') return 2
+  return null
 }
 
 function validOptionalFlag(value: string | undefined): boolean {

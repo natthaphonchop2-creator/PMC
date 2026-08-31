@@ -312,6 +312,7 @@ function dependencies(flags: { enabled?: boolean; managerPilotOnly?: boolean } =
       enrollmentPin: null,
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
+      bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
       asyncBooking: null,
       stockEnabled: flags.enabled ?? true,
       stockManagerPilotOnly: flags.managerPilotOnly ?? false,

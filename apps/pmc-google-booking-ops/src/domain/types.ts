@@ -1,3 +1,5 @@
+import type { RecorderSource } from '../../../../shared/pmcBookingProtocol'
+
 export type BookingStatus =
   | 'FORM_SUBMITTED'
   | 'VALIDATION_ERROR'
@@ -53,7 +55,13 @@ export interface BookingIntake {
   chatEvidenceFileIds: string[]
 }
 
-export interface BookingCase {
+export interface BookingRecorderFields {
+  recorderId: string | null
+  recorderName: string
+  recorderSource: RecorderSource
+}
+
+export interface BookingCase extends BookingRecorderFields {
   caseId: string
   version: number
   status: BookingStatus

@@ -105,11 +105,24 @@ describe('doctor Calendar', () => {
         'โทร: 0812345678',
         'ช่องทาง: ไม่ระบุ',
         'มัดจำ: 1,000 บาท · โอนแล้ว',
+        'ผู้บันทึก: Admin A',
         'Admin: Admin A',
         'AE: Admin A',
       ].join('\n'),
       colorId: '5',
     })
+  })
+
+  it('keeps Calendar attribution in ผู้บันทึก then Admin then AE order', () => {
+    const description = calendarEventInput(bookingFixture({
+      calendarId: 'doctor-calendar-1',
+      recorderName: 'Recorder A',
+      adminName: 'Admin B',
+      aeName: 'AE C',
+    })).description
+
+    expect(description.indexOf('ผู้บันทึก: Recorder A')).toBeLessThan(description.indexOf('Admin: Admin B'))
+    expect(description.indexOf('Admin: Admin B')).toBeLessThan(description.indexOf('AE: AE C'))
   })
 
   it('encodes the Facebook search query and escapes the visible Facebook name', () => {
@@ -234,7 +247,7 @@ describe('LINE routing', () => {
 
     for (const message of [ports.line.adminMessages()[0], ports.line.doctorMessages()[0]]) {
       const json = JSON.stringify(message)
-      expect((json.match(/admin-a\.jpg/g) ?? [])).toHaveLength(2)
+      expect((json.match(/admin-a\.jpg/g) ?? [])).toHaveLength(3)
     }
   })
 

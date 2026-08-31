@@ -1,5 +1,11 @@
 import type { MiniAppSheetsPort } from './googleClient.js'
-import { MINI_APP_ASYNC_REQUEST_HEADERS } from '../../shared/pmcMiniAppAsyncState.js'
+import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState.js'
+import type { BookingProtocolVersion } from '../../shared/pmcBookingProtocol.js'
+import type { MiniAppAttributionOption } from './contracts.js'
+import {
+  PMC_MINI_APP_REQUEST_HEADERS_V2,
+  parsePmcMiniAppTargetRequestRow,
+} from '../../shared/pmcBookingRowContracts.js'
 
 export type MiniAppRequestState =
   | 'DRAFT'
@@ -21,12 +27,17 @@ export type MiniAppRetentionState = '' | 'PENDING_APPROVAL'
 export interface MiniAppRequestRecord {
   requestId: string
   draftId: string
+  protocolVersion: BookingProtocolVersion
   staffId: string
+  recorderName: string
+  adminId: string
+  adminName: string
   lineUserIdHash: string
   state: MiniAppRequestState
   retentionState: MiniAppRetentionState
   version: number
   payloadHash: string | null
+  aeId: string | null
   aeName: string
   customerName: string
   facebookName: string
@@ -78,13 +89,19 @@ export interface MiniAppBookingConfigProjection {
   doctors: Array<{ id: string; name: string }>
   services: Array<{ id: string; name: string; durationMinutes: number }>
   channels: Array<{ id: string; name: string }>
-  aes: Array<{ id: string; name: string }>
+  admins: MiniAppAttributionOption[]
+  aes: MiniAppAttributionOption[]
 }
 
 export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'state'
   | 'retentionState'
   | 'payloadHash'
+  | 'protocolVersion'
+  | 'recorderName'
+  | 'adminId'
+  | 'adminName'
+  | 'aeId'
   | 'aeName'
   | 'customerName'
   | 'facebookName'
@@ -107,6 +124,7 @@ export type MiniAppDraftPatch = Partial<Pick<MiniAppRequestRecord,
   | 'processingLeaseUntil'
   | 'lastProgressAt'
   | 'attemptCount'
+  | 'evidenceProjectionHash'
   | 'confirmedAt'
   | 'caseId'
   | 'safeErrorCode'
@@ -139,13 +157,16 @@ export interface MiniAppEnrollmentStore {
   ): Promise<{ allowed: boolean; retryAfterSeconds: number }>
 }
 
-export const MINI_APP_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS
+export const ATTRIBUTION_V2_REQUEST_HEADERS = PMC_MINI_APP_REQUEST_HEADERS_V2
+
+export const MINI_APP_REQUEST_HEADERS = ATTRIBUTION_V2_REQUEST_HEADERS
 
 export const MINI_APP_LINK_ATTEMPT_HEADERS = [
   'lineUserIdHash', 'failureCount', 'windowStartedAt', 'lockedUntil', 'lastAttemptAt',
 ] as const
 
 const REQUEST_TAB = 'MINI_APP_REQUESTS'
+const REQUEST_HEADER_RANGE = `'${REQUEST_TAB}'!1:1`
 const REQUEST_RANGE = `'${REQUEST_TAB}'!A2:${columnName(MINI_APP_REQUEST_HEADERS.length)}`
 const STAFF_RANGE = "'CONFIG_STAFF'!A2:L"
 const LINK_ATTEMPT_TAB = 'MINI_APP_LINK_ATTEMPTS'
@@ -165,6 +186,8 @@ interface EnrollmentAttemptRecord {
   lastAttemptAt: string
 }
 
+type RequestSchema = 'V1' | 'V2'
+
 export function createGoogleMiniAppStore(input: {
   spreadsheetId: string
   sheets: MiniAppSheetsPort
@@ -172,14 +195,25 @@ export function createGoogleMiniAppStore(input: {
   const { spreadsheetId, sheets } = input
   const mutexKey = `pmc-mini-app:${spreadsheetId}`
 
-  async function readRequestRows(): Promise<Array<{ rowNumber: number; value: MiniAppRequestRecord }>> {
-    const response = await sheets.batchGet(spreadsheetId, [REQUEST_RANGE])
-    return (response[REQUEST_RANGE] ?? []).map((row, index) => ({ rowNumber: index + 2, value: requestFromRow(row) }))
+  async function readRequestTable(): Promise<{
+    schema: RequestSchema
+    rows: Array<{ rowNumber: number; value: MiniAppRequestRecord }>
+  }> {
+    const response = await sheets.batchGet(spreadsheetId, [REQUEST_HEADER_RANGE, REQUEST_RANGE])
+    const schema = requestSchema((response[REQUEST_HEADER_RANGE]?.[0] ?? []).map(String))
+    return {
+      schema,
+      rows: (response[REQUEST_RANGE] ?? []).map((row, index) => ({
+        rowNumber: index + 2,
+        value: requestFromRow(row, schema),
+      })),
+    }
   }
 
-  async function writeRequest(rowNumber: number, value: MiniAppRequestRecord): Promise<void> {
-    const end = columnName(MINI_APP_REQUEST_HEADERS.length)
-    await sheets.update(spreadsheetId, `'${REQUEST_TAB}'!A${rowNumber}:${end}${rowNumber}`, [requestToRow(value)])
+  async function writeRequest(rowNumber: number, value: MiniAppRequestRecord, schema: RequestSchema): Promise<void> {
+    const headers = requestHeaders(schema)
+    const end = columnName(headers.length)
+    await sheets.update(spreadsheetId, `'${REQUEST_TAB}'!A${rowNumber}:${end}${rowNumber}`, [requestToRow(value, schema)])
   }
 
   async function readStaffRows(): Promise<Array<{ rowNumber: number; row: unknown[] }>> {
@@ -214,7 +248,8 @@ export function createGoogleMiniAppStore(input: {
     patch: MiniAppDraftPatch,
   ): Promise<MiniAppRequestRecord> {
     return withMutex(mutexKey, async () => {
-      const row = (await readRequestRows()).find(({ value }) => value.draftId === draftId)
+      const table = await readRequestTable()
+      const row = table.rows.find(({ value }) => value.draftId === draftId)
       if (!row) throw new Error('DRAFT_NOT_FOUND')
       if (row.value.version !== expectedVersion) throw new Error('STALE_DRAFT_VERSION')
       if (isDraftIdentityBound(row.value)
@@ -223,7 +258,7 @@ export function createGoogleMiniAppStore(input: {
         throw new Error('BOUND_DRAFT_MUTATION_FORBIDDEN')
       }
       const next = normalizeRequestRecord({ ...row.value, ...patch, version: row.value.version + 1 })
-      await writeRequest(row.rowNumber, next)
+      await writeRequest(row.rowNumber, next, table.schema)
       return next
     })
   }
@@ -241,9 +276,9 @@ export function createGoogleMiniAppStore(input: {
     async getActiveBookingConfig() {
       const ranges = [STAFF_RANGE, DOCTORS_RANGE, SERVICES_RANGE, CHANNELS_RANGE]
       const response = await sheets.batchGet(spreadsheetId, ranges)
-      const aes = (response[STAFF_RANGE] ?? [])
+      const attributionChoices = (response[STAFF_RANGE] ?? [])
         .map(staffCandidateFromRow)
-        .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canBeAe))
+        .filter((staff): staff is MiniAppStaffRecord => Boolean(staff?.canBeAe && !isReservedAttributionOption(staff)))
         .map(({ id, name }) => ({ id, name }))
       const doctors = (response[DOCTORS_RANGE] ?? []).flatMap((row) => {
         const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[4])
@@ -258,7 +293,7 @@ export function createGoogleMiniAppStore(input: {
         const id = text(row[0]); const name = text(row[1]); const active = booleanValue(row[2])
         return active && safeConfigId(id) && name ? [{ id, name }] : []
       })
-      return { doctors, services, channels, aes }
+      return { doctors, services, channels, admins: [...attributionChoices], aes: [...attributionChoices] }
     },
     async listUnlinkedBookingStaff() {
       return (await readStaffRows())
@@ -330,23 +365,24 @@ export function createGoogleMiniAppStore(input: {
     async createDraft(draft) {
       const normalized = normalizeRequestRecord(draft)
       return withMutex(mutexKey, async () => {
-        const rows = await readRequestRows()
-        const duplicate = rows.find(({ value }) => value.requestId === normalized.requestId || value.draftId === normalized.draftId)
+        const table = await readRequestTable()
+        const duplicate = table.rows.find(({ value }) => value.requestId === normalized.requestId || value.draftId === normalized.draftId)
         if (duplicate) {
           if (duplicate.value.requestId === normalized.requestId && duplicate.value.draftId === normalized.draftId) return duplicate.value
           throw new Error('DRAFT_ID_CONFLICT')
         }
-        await sheets.append(spreadsheetId, `'${REQUEST_TAB}'!A:${columnName(MINI_APP_REQUEST_HEADERS.length)}`, [requestToRow(normalized)])
+        const headers = requestHeaders(table.schema)
+        await sheets.append(spreadsheetId, `'${REQUEST_TAB}'!A:${columnName(headers.length)}`, [requestToRow(normalized, table.schema)])
         return normalized
       })
     },
     async getDraft(draftId) {
       if (!safeId(draftId)) return null
-      return (await readRequestRows()).find(({ value }) => value.draftId === draftId)?.value ?? null
+      return (await readRequestTable()).rows.find(({ value }) => value.draftId === draftId)?.value ?? null
     },
     async getLatestActiveDraftByStaff(staffId) {
       if (!safeId(staffId)) return null
-      return (await readRequestRows())
+      return (await readRequestTable()).rows
         .map(({ value }) => value)
         .filter((draft) => draft.staffId === staffId && ACTIVE_RESUMABLE_STATES.has(draft.state) && validIso(draft.updatedAt))
         .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null
@@ -358,7 +394,8 @@ export function createGoogleMiniAppStore(input: {
     async claimConfirmation(requestId, payloadHash) {
       if (!safeId(requestId) || !safeHash(payloadHash)) throw new Error('INVALID_CONFIRMATION_CLAIM')
       return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
+        const table = await readRequestTable()
+        const row = table.rows.find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
         if (row.value.payloadHash && row.value.payloadHash !== payloadHash) throw new Error('PAYLOAD_HASH_CONFLICT')
         if (row.value.state === 'CONFIRMED') return { claimed: false as const, caseId: row.value.caseId, status: row.value.confirmationStatus }
@@ -367,14 +404,15 @@ export function createGoogleMiniAppStore(input: {
         const next = normalizeRequestRecord({
           ...row.value, state: 'CONFIRMING', payloadHash, safeErrorCode: null, version: row.value.version + 1,
         })
-        await writeRequest(row.rowNumber, next)
+        await writeRequest(row.rowNumber, next, table.schema)
         return { claimed: true as const, draft: next }
       })
     },
     async completeConfirmation(requestId, caseId, confirmedAt, status) {
       if (!safeId(requestId) || !safeCaseId(caseId)) throw new Error('INVALID_CONFIRMATION_RESULT')
       return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
+        const table = await readRequestTable()
+        const row = table.rows.find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
         if (row.value.state === 'CONFIRMED' && row.value.caseId === caseId) return row.value
         if (row.value.state !== 'CONFIRMING') throw new Error('DRAFT_NOT_CONFIRMING')
@@ -382,62 +420,153 @@ export function createGoogleMiniAppStore(input: {
           ...row.value, state: 'CONFIRMED', caseId, confirmedAt, confirmationStatus: status, updatedAt: confirmedAt,
           safeErrorCode: null, version: row.value.version + 1,
         })
-        await writeRequest(row.rowNumber, next)
+        await writeRequest(row.rowNumber, next, table.schema)
         return next
       })
     },
     async failConfirmation(requestId, safeErrorCode, updatedAt) {
       if (!safeId(requestId) || !safeError(safeErrorCode)) throw new Error('INVALID_CONFIRMATION_FAILURE')
       return withMutex(mutexKey, async () => {
-        const row = (await readRequestRows()).find(({ value }) => value.requestId === requestId)
+        const table = await readRequestTable()
+        const row = table.rows.find(({ value }) => value.requestId === requestId)
         if (!row) throw new Error('DRAFT_NOT_FOUND')
         if (row.value.state !== 'CONFIRMING') throw new Error('DRAFT_NOT_CONFIRMING')
         const next = normalizeRequestRecord({
           ...row.value, state: 'FAILED_RETRYABLE', safeErrorCode, updatedAt, version: row.value.version + 1,
         })
-        await writeRequest(row.rowNumber, next)
+        await writeRequest(row.rowNumber, next, table.schema)
         return next
       })
     },
   }
 }
 
-function requestToRow(value: MiniAppRequestRecord): unknown[] {
-  return [
-    value.requestId, value.draftId, value.staffId, value.lineUserIdHash, value.state, value.retentionState, value.version,
-    value.payloadHash ?? '', value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId,
-    value.serviceId, value.queueType, value.appointmentDate ?? '', value.appointmentTime ?? '', value.depositAmount,
-    value.channelId, JSON.stringify(value.paymentEvidenceFileIds), JSON.stringify(value.chatEvidenceFileIds),
-    value.evidenceCount, value.createdAt, value.confirmedAt ?? '', value.caseId ?? '', value.confirmationStatus ?? '', value.safeErrorCode ?? '', value.updatedAt,
-    JSON.stringify(value.paymentEvidenceObjectKeys), JSON.stringify(value.chatEvidenceObjectKeys), value.taskName ?? '',
-    value.queuedAt ?? '', value.processingStartedAt ?? '', value.processingLeaseUntil ?? '', value.lastProgressAt ?? '', value.attemptCount,
-    value.processingOwnerToken ?? '', value.evidenceProjectionHash ?? '',
-  ]
+function requestSchema(headers: readonly string[]): RequestSchema {
+  if (sameHeader(headers, MINI_APP_ASYNC_REQUEST_HEADERS_V1)) return 'V1'
+  if (sameHeader(headers, ATTRIBUTION_V2_REQUEST_HEADERS)) return 'V2'
+  throw new Error('incompatible header: MINI_APP_REQUESTS')
 }
 
-function requestFromRow(row: unknown[]): MiniAppRequestRecord {
+function requestHeaders(schema: RequestSchema): readonly string[] {
+  return schema === 'V1' ? MINI_APP_ASYNC_REQUEST_HEADERS_V1 : ATTRIBUTION_V2_REQUEST_HEADERS
+}
+
+function sameHeader(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function requestToRow(value: MiniAppRequestRecord, schema: RequestSchema): unknown[] {
+  if (schema === 'V1' && value.protocolVersion !== 1 || schema === 'V2' && value.protocolVersion !== 2) {
+    throw new Error('BOOKING_PROTOCOL_SCHEMA_MISMATCH')
+  }
+  return requestHeaders(schema).map((header) => requestCell(value, header))
+}
+
+function requestCell(value: MiniAppRequestRecord, header: string): unknown {
+  const cells: Record<string, unknown> = {
+    requestId: value.requestId,
+    draftId: value.draftId,
+    protocolVersion: value.protocolVersion,
+    staffId: value.staffId,
+    recorderName: value.recorderName,
+    adminId: value.adminId,
+    adminName: value.adminName,
+    lineUserIdHash: value.lineUserIdHash,
+    state: value.state,
+    retentionState: value.retentionState,
+    version: value.version,
+    payloadHash: value.payloadHash ?? '',
+    aeId: value.aeId ?? '',
+    aeName: value.aeName,
+    customerName: value.customerName,
+    facebookName: value.facebookName,
+    phoneNormalized: value.phoneNormalized,
+    doctorId: value.doctorId,
+    serviceId: value.serviceId,
+    queueType: value.queueType,
+    appointmentDate: value.appointmentDate ?? '',
+    appointmentTime: value.appointmentTime ?? '',
+    depositAmount: value.depositAmount,
+    channelId: value.channelId,
+    paymentEvidenceFileIdsJson: JSON.stringify(value.paymentEvidenceFileIds),
+    chatEvidenceFileIdsJson: JSON.stringify(value.chatEvidenceFileIds),
+    evidenceCount: value.evidenceCount,
+    createdAt: value.createdAt,
+    confirmedAt: value.confirmedAt ?? '',
+    caseId: value.caseId ?? '',
+    confirmationStatus: value.confirmationStatus ?? '',
+    safeErrorCode: value.safeErrorCode ?? '',
+    updatedAt: value.updatedAt,
+    paymentEvidenceObjectKeysJson: JSON.stringify(value.paymentEvidenceObjectKeys),
+    chatEvidenceObjectKeysJson: JSON.stringify(value.chatEvidenceObjectKeys),
+    taskName: value.taskName ?? '',
+    queuedAt: value.queuedAt ?? '',
+    processingStartedAt: value.processingStartedAt ?? '',
+    processingLeaseUntil: value.processingLeaseUntil ?? '',
+    lastProgressAt: value.lastProgressAt ?? '',
+    attemptCount: value.attemptCount,
+    processingOwnerToken: value.processingOwnerToken ?? '',
+    evidenceProjectionHash: value.evidenceProjectionHash ?? '',
+  }
+  if (!(header in cells)) throw new Error('incompatible header: MINI_APP_REQUESTS')
+  return cells[header]
+}
+
+function requestFromRow(row: unknown[], schema: RequestSchema): MiniAppRequestRecord {
   if (row.length === 0) throw new Error('MINI_APP_STORE_CORRUPT_ROW')
+  if (schema === 'V2') return parsePmcMiniAppTargetRequestRow(row) as MiniAppRequestRecord
+  const headers = requestHeaders(schema)
+  const cell = (header: string): unknown => row[headers.indexOf(header)]
+  const staffId = text(cell('staffId'))
   return normalizeRequestRecord({
-    requestId: text(row[0]), draftId: text(row[1]), staffId: text(row[2]), lineUserIdHash: text(row[3]),
-    state: text(row[4]) as MiniAppRequestState, retentionState: text(row[5]) as MiniAppRetentionState,
-    version: numberValue(row[6]), payloadHash: nullableText(row[7]), aeName: text(row[8]), customerName: text(row[9]),
-    facebookName: text(row[10]), phoneNormalized: text(row[11]), doctorId: text(row[12]), serviceId: text(row[13]),
-    queueType: text(row[14]) as 'NORMAL' | 'AUTO', appointmentDate: nullableText(row[15]), appointmentTime: nullableText(row[16]),
-    depositAmount: numberValue(row[17]), channelId: text(row[18]), paymentEvidenceFileIds: stringArray(row[19]),
-    chatEvidenceFileIds: stringArray(row[20]), evidenceCount: numberValue(row[21]), createdAt: text(row[22]),
-    confirmedAt: nullableText(row[23]), caseId: nullableText(row[24]),
-    confirmationStatus: nullableText(row[25]) as MiniAppRequestRecord['confirmationStatus'],
-    safeErrorCode: nullableText(row[26]), updatedAt: text(row[27]),
-    paymentEvidenceObjectKeys: stringArray(row[28], safeObjectKey), chatEvidenceObjectKeys: stringArray(row[29], safeObjectKey),
-    taskName: nullableText(row[30]), queuedAt: nullableText(row[31]), processingStartedAt: nullableText(row[32]),
-    processingLeaseUntil: nullableText(row[33]), lastProgressAt: nullableText(row[34]), attemptCount: row[35] === undefined ? 0 : numberValue(row[35]),
-    processingOwnerToken: nullableText(row[36]),
-    evidenceProjectionHash: nullableText(row[37]),
+    requestId: text(cell('requestId')), draftId: text(cell('draftId')),
+    protocolVersion: schema === 'V1' ? 1 : numberValue(cell('protocolVersion')) as BookingProtocolVersion,
+    staffId,
+    recorderName: schema === 'V1' ? '' : text(cell('recorderName')),
+    adminId: schema === 'V1' ? staffId : text(cell('adminId')),
+    adminName: schema === 'V1' ? '' : text(cell('adminName')),
+    lineUserIdHash: text(cell('lineUserIdHash')),
+    state: text(cell('state')) as MiniAppRequestState, retentionState: text(cell('retentionState')) as MiniAppRetentionState,
+    version: numberValue(cell('version')), payloadHash: nullableText(cell('payloadHash')),
+    aeId: schema === 'V1' ? null : nullableText(cell('aeId')), aeName: text(cell('aeName')),
+    customerName: text(cell('customerName')), facebookName: text(cell('facebookName')),
+    phoneNormalized: text(cell('phoneNormalized')), doctorId: text(cell('doctorId')), serviceId: text(cell('serviceId')),
+    queueType: text(cell('queueType')) as 'NORMAL' | 'AUTO', appointmentDate: nullableText(cell('appointmentDate')),
+    appointmentTime: nullableText(cell('appointmentTime')), depositAmount: numberValue(cell('depositAmount')),
+    channelId: text(cell('channelId')), paymentEvidenceFileIds: stringArray(cell('paymentEvidenceFileIdsJson')),
+    chatEvidenceFileIds: stringArray(cell('chatEvidenceFileIdsJson')), evidenceCount: numberValue(cell('evidenceCount')),
+    createdAt: text(cell('createdAt')), confirmedAt: nullableText(cell('confirmedAt')), caseId: nullableText(cell('caseId')),
+    confirmationStatus: nullableText(cell('confirmationStatus')) as MiniAppRequestRecord['confirmationStatus'],
+    safeErrorCode: nullableText(cell('safeErrorCode')), updatedAt: text(cell('updatedAt')),
+    paymentEvidenceObjectKeys: stringArray(cell('paymentEvidenceObjectKeysJson'), safeObjectKey),
+    chatEvidenceObjectKeys: stringArray(cell('chatEvidenceObjectKeysJson'), safeObjectKey),
+    taskName: nullableText(cell('taskName')), queuedAt: nullableText(cell('queuedAt')),
+    processingStartedAt: nullableText(cell('processingStartedAt')), processingLeaseUntil: nullableText(cell('processingLeaseUntil')),
+    lastProgressAt: nullableText(cell('lastProgressAt')),
+    attemptCount: cell('attemptCount') === undefined ? 0 : numberValue(cell('attemptCount')),
+    processingOwnerToken: nullableText(cell('processingOwnerToken')),
+    evidenceProjectionHash: nullableText(cell('evidenceProjectionHash')),
   })
 }
 
 function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestRecord {
   if (!safeId(value.requestId) || !safeId(value.draftId) || !safeId(value.staffId)) throw new Error('INVALID_DRAFT_ID')
+  if (value.protocolVersion !== 1 && value.protocolVersion !== 2) throw new Error('INVALID_BOOKING_PROTOCOL_VERSION')
+  if (value.protocolVersion === 2) {
+    const canOmitPreSaveAdmin = ['DRAFT', 'UPLOADING', 'CANCELLED', 'EXPIRED'].includes(value.state)
+      && value.payloadHash === null
+    const missingAdmin = value.adminId === '' && value.adminName === ''
+    if (!value.recorderName || value.recorderName.length > 120) throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
+    if (missingAdmin && !canOmitPreSaveAdmin) throw new Error('BOOKING_ADMIN_REQUIRED')
+    if (!missingAdmin && (!safeId(value.adminId) || isReservedAttributionId(value.adminId)
+      || !value.adminName || value.adminName.length > 120)) throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
+    if (value.aeId === null) {
+      if (value.aeName !== 'ไม่ระบุ') throw new Error('INVALID_BOOKING_ATTRIBUTION_SNAPSHOT')
+    } else if (!safeId(value.aeId) || isReservedAttributionId(value.aeId)
+      || !value.aeName || value.aeName === 'ไม่ระบุ' || value.aeName.length > 120) {
+      throw new Error('INVALID_BOOKING_ATTRIBUTION_ID')
+    }
+  }
   if (!safeHash(value.lineUserIdHash)) throw new Error('INVALID_LINE_USER_HASH')
   if (!REQUEST_STATES.has(value.state)) throw new Error('INVALID_DRAFT_STATE')
   if (value.retentionState !== '' && value.retentionState !== 'PENDING_APPROVAL') throw new Error('INVALID_RETENTION_STATE')
@@ -460,7 +589,7 @@ function normalizeRequestRecord(value: MiniAppRequestRecord): MiniAppRequestReco
   for (const field of [value.taskName, value.queuedAt, value.processingStartedAt, value.processingLeaseUntil, value.lastProgressAt]) {
     if (field !== null && (typeof field !== 'string' || field.length > 512)) throw new Error('INVALID_DRAFT_FIELD')
   }
-  for (const field of [value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId, value.serviceId, value.channelId, value.createdAt, value.updatedAt]) {
+  for (const field of [value.recorderName, value.adminId, value.adminName, value.aeName, value.customerName, value.facebookName, value.phoneNormalized, value.doctorId, value.serviceId, value.channelId, value.createdAt, value.updatedAt]) {
     if (typeof field !== 'string' || field.length > 512) throw new Error('INVALID_DRAFT_FIELD')
   }
   return structuredClone({
@@ -492,6 +621,14 @@ function staffCandidateFromRow(row: unknown[]): MiniAppStaffRecord | null {
   }
 }
 
+function isReservedAttributionOption(staff: Pick<MiniAppStaffRecord, 'id' | 'name'>): boolean {
+  return isReservedAttributionId(staff.id) || staff.name.trim() === 'ไม่ระบุ'
+}
+
+function isReservedAttributionId(value: string): boolean {
+  return value.trim().toUpperCase() === 'NONE'
+}
+
 function enrollmentAttemptFromRow(row: unknown[]): EnrollmentAttemptRecord | null {
   const lineUserIdHash = text(row[0])
   const failureCount = numberValue(row[1])
@@ -520,7 +657,8 @@ const IDENTITY_BOUND_STATES = new Set<MiniAppRequestState>([
   'FAILED_RETRYABLE', 'CANCELLED', 'EXPIRED',
 ])
 const BOUND_DRAFT_MUTATION_KEYS = new Set<string>([
-  'state', 'retentionState', 'payloadHash', 'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
+  'state', 'retentionState', 'payloadHash', 'protocolVersion', 'recorderName', 'adminId', 'adminName', 'aeId', 'aeName',
+  'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIds',
   'chatEvidenceFileIds', 'evidenceCount', 'paymentEvidenceObjectKeys', 'chatEvidenceObjectKeys', 'taskName', 'queuedAt',
   'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken',

@@ -181,6 +181,21 @@ function listItem(form: GoogleAppsScript.Forms.Form, title: string): GoogleAppsS
   return item.asListItem()
 }
 
+function exactUniqueAttributionChoices(closerNames: string[], aeNames: string[]): string[] {
+  const admins = closerNames.map((name) => name.trim())
+  const aes = aeNames.map((name) => name.trim())
+  if (admins.some((name) => !name) || new Set(admins).size !== admins.length) {
+    throw new Error('duplicate or blank Form Admin choice name')
+  }
+  if (aes.some((name) => !name) || new Set(aes).size !== aes.length) {
+    throw new Error('duplicate or blank Form AE choice name')
+  }
+  if (JSON.stringify(admins) !== JSON.stringify(aes)) {
+    throw new Error('Form Admin and AE choices must use the same eligible Staff order')
+  }
+  return admins
+}
+
 export function createGoogleFormsPort(
   bookingFormId: string,
   callResultFormId: string,
@@ -195,8 +210,9 @@ export function createGoogleFormsPort(
   return {
     syncBookingChoices(closerNames, aeNames, doctorIds, serviceIds, channelIds) {
       const form = FormApp.openById(bookingFormId)
-      listItem(form, BOOKING_FORM_LABELS.closerName).setChoiceValues(closerNames)
-      listItem(form, BOOKING_FORM_LABELS.aeName).setChoiceValues(compactAeChoices(aeNames))
+      const staffNames = exactUniqueAttributionChoices(closerNames, aeNames)
+      listItem(form, BOOKING_FORM_LABELS.closerName).setChoiceValues(staffNames)
+      listItem(form, BOOKING_FORM_LABELS.aeName).setChoiceValues(compactAeChoices(staffNames))
       listItem(form, BOOKING_FORM_LABELS.doctorId).setChoiceValues(doctorIds)
       listItem(form, BOOKING_FORM_LABELS.serviceId).setChoiceValues(serviceIds)
       if (channelIds.length) listItem(form, BOOKING_FORM_LABELS.channelId).setChoiceValues(channelIds)
@@ -270,7 +286,11 @@ export function createGoogleFormsPort(
       const closer = items.find((item) => item.getTitle() === plan.closerSourceTitle)
       const ae = items.find((item) => item.getTitle() === plan.aeSourceTitle)
       if (!closer || !ae) throw new Error('booking identity Form fields mismatch')
-      closer.setTitle(plan.closerTargetTitle).setRequired(true)
+      const staffNames = exactUniqueAttributionChoices(aeNames, aeNames)
+      closer
+        .setTitle(plan.closerTargetTitle)
+        .setChoiceValues(staffNames)
+        .setRequired(true)
       ae
         .setTitle(plan.aeTargetTitle)
         .setChoiceValues(plan.aeChoices)

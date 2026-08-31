@@ -5,17 +5,17 @@ export type AsyncBookingEventName =
   | 'booking_worker_claimed'
   | 'drive_copy_completed'
   | 'booking_ingress_completed'
+  | 'booking_completion_mutation_completed'
   | 'booking_worker_retrying'
   | 'booking_worker_completed'
   | 'booking_worker_needs_review'
 
 export type AsyncBookingEventFields = {
-  requestId: string
-  draftId: string
-  caseId?: string
+  route: 'evidence' | 'confirm' | 'worker'
+  action: 'stage' | 'enqueue' | 'claim' | 'evidence_projection' | 'booking_ingress' | 'completion_mutation' | 'retry' | 'complete' | 'review'
+  status: number
   attempt?: number
   state?: string
-  safeErrorCode?: string
   elapsedMs?: number
   fileCount?: number
 }
@@ -25,22 +25,35 @@ export type AsyncBookingTelemetry = (name: AsyncBookingEventName, fields: AsyncB
 const EVENT_NAMES = new Set<AsyncBookingEventName>([
   'evidence_stage_started', 'evidence_stage_completed', 'booking_task_enqueued', 'booking_worker_claimed',
   'drive_copy_completed', 'booking_ingress_completed', 'booking_worker_retrying', 'booking_worker_completed',
-  'booking_worker_needs_review',
+  'booking_worker_needs_review', 'booking_completion_mutation_completed',
 ])
-const FIELD_NAMES = new Set(['requestId', 'draftId', 'caseId', 'attempt', 'state', 'safeErrorCode', 'elapsedMs', 'fileCount'])
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-const SAFE_CASE_ID = /^PMC-\d{4}(?:0[1-9]|1[0-2])-(?:000[1-9]|00[1-9]\d|0[1-9]\d{2}|[1-9]\d{3})$/
+const EVENT_CONTEXT: Record<AsyncBookingEventName, { route: AsyncBookingEventFields['route']; action: AsyncBookingEventFields['action'] }> = {
+  evidence_stage_started: { route: 'evidence', action: 'stage' },
+  evidence_stage_completed: { route: 'evidence', action: 'stage' },
+  booking_task_enqueued: { route: 'confirm', action: 'enqueue' },
+  booking_worker_claimed: { route: 'worker', action: 'claim' },
+  drive_copy_completed: { route: 'worker', action: 'evidence_projection' },
+  booking_ingress_completed: { route: 'worker', action: 'booking_ingress' },
+  booking_completion_mutation_completed: { route: 'worker', action: 'completion_mutation' },
+  booking_worker_retrying: { route: 'worker', action: 'retry' },
+  booking_worker_completed: { route: 'worker', action: 'complete' },
+  booking_worker_needs_review: { route: 'worker', action: 'review' },
+}
+const FIELD_NAMES = new Set(['route', 'action', 'status', 'attempt', 'state', 'elapsedMs', 'fileCount'])
+const ROUTE_ACTIONS = {
+  evidence: new Set<string>(['stage']),
+  confirm: new Set<string>(['enqueue']),
+  worker: new Set<string>(['claim', 'evidence_projection', 'booking_ingress', 'completion_mutation', 'retry', 'complete', 'review']),
+} as const
 const ASYNC_STATES = new Set([
   'DRAFT', 'UPLOADING', 'READY_TO_CONFIRM', 'QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMING',
   'CONFIRMED', 'CONFIRMED_WITH_RETRY', 'NEEDS_REVIEW', 'FAILED_RETRYABLE', 'CANCELLED', 'EXPIRED',
 ])
-const SAFE_ERROR_CODES = new Set(['EVIDENCE_COPY_RETRY', 'BOOKING_INGRESS_RETRY', 'BOOKING_COMPLETION_RETRY', 'RETRY_EXHAUSTED'])
-
 export function asyncBookingEvent(
   name: AsyncBookingEventName,
   fields: AsyncBookingEventFields,
 ): Record<string, string | number> {
-  if (!EVENT_NAMES.has(name) || !validFields(fields)) throw new Error('ASYNC_TELEMETRY_INVALID_FIELDS')
+  if (!EVENT_NAMES.has(name) || !validFields(name, fields)) throw new Error('ASYNC_TELEMETRY_INVALID_FIELDS')
   return { event: name, ...fields }
 }
 
@@ -52,28 +65,27 @@ export function createAsyncBookingTelemetry(
   }
 }
 
-function validFields(fields: AsyncBookingEventFields): boolean {
-  if (!fields || typeof fields !== 'object' || !Object.keys(fields).every((name) => FIELD_NAMES.has(name))) return false
-  if (!safeRequestId(fields.requestId) || !safeDraftId(fields.draftId)) return false
-  if (fields.caseId !== undefined && (typeof fields.caseId !== 'string' || !SAFE_CASE_ID.test(fields.caseId))) return false
-  if (fields.attempt !== undefined && !safeCount(fields.attempt)) return false
+function validFields(name: AsyncBookingEventName, fields: AsyncBookingEventFields): boolean {
+  if (!plainRecord(fields) || !Object.keys(fields).every((name) => FIELD_NAMES.has(name))) return false
+  if (!Object.hasOwn(ROUTE_ACTIONS, fields.route) || !ROUTE_ACTIONS[fields.route].has(fields.action)) return false
+  if (fields.route !== EVENT_CONTEXT[name].route || fields.action !== EVENT_CONTEXT[name].action) return false
+  if (!safeStatus(fields.status)) return false
+  if (fields.attempt !== undefined && !safeInteger(fields.attempt, 0, 8)) return false
   if (fields.state !== undefined && !ASYNC_STATES.has(fields.state)) return false
-  if (fields.safeErrorCode !== undefined && !SAFE_ERROR_CODES.has(fields.safeErrorCode)) return false
-  return [fields.elapsedMs, fields.fileCount].every((value) => value === undefined || safeCount(value))
+  if (fields.fileCount !== undefined && !safeInteger(fields.fileCount, 0, 20)) return false
+  return fields.elapsedMs === undefined || safeInteger(fields.elapsedMs, 0, 86_400_000)
 }
 
-function safeId(value: unknown): value is string {
-  return typeof value === 'string' && UUID_V4.test(value)
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
-function safeRequestId(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('request-') && safeId(value.slice('request-'.length))
+function safeStatus(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 100 && value <= 599
 }
 
-function safeDraftId(value: unknown): value is string {
-  return typeof value === 'string' && value.startsWith('draft-') && safeId(value.slice('draft-'.length))
-}
-
-function safeCount(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 86_400_000
+function safeInteger(value: unknown, minimum: number, maximum: number): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum
 }

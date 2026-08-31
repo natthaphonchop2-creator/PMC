@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import type { MiniAppBookingIngressResult } from '../../shared/pmcMiniAppBooking.js'
-import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
+import type { MiniAppAsyncStateIngressResult, MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
 import { bookingPayloadHash, evidenceProjectionHash } from './bookingDraft.js'
 import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { BookingIngressPort } from './bookingIngressClient.js'
 import type { EvidenceIngressPort } from './evidenceIngressClient.js'
-import type { EvidenceStagingPort } from './stagingStore.js'
+import {
+  assertEvidenceStagingDescriptorSlot,
+  type EvidenceStagingCleanupDescriptor,
+  type EvidenceStagingPort,
+} from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppStore } from './store.js'
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 
@@ -43,7 +47,12 @@ type WorkerContext = {
   ownerToken: string
   taskAttempt: number
   startedAt: number
+  terminalOutcome: TerminalOutcome
+  cleanupDescriptors: Map<string, EvidenceStagingCleanupDescriptor>
 }
+
+type OwnerMutationRead = { draft: MiniAppRequestRecord; result: MiniAppAsyncStateIngressResult | null }
+type TerminalOutcome = { applied: boolean }
 
 type TaskSnapshot = {
   requestId: string
@@ -124,9 +133,9 @@ export function createAsyncBookingWorker(input: {
   async function mutateBeforeDeadline(
     deadline: FinalAttemptDeadline,
     stateMutation: MiniAppAsyncStateMutation,
-  ): Promise<void> {
+  ): Promise<MiniAppAsyncStateIngressResult> {
     requireFinalTime(deadline)
-    await input.stateIngress.mutate(stateMutation)
+    return input.stateIngress.mutate(stateMutation)
   }
 
   async function waitBeforeDeadline(deadline: FinalAttemptDeadline, milliseconds: number): Promise<boolean> {
@@ -172,11 +181,13 @@ export function createAsyncBookingWorker(input: {
     stateMutation: MiniAppAsyncStateMutation,
     validate: (draft: MiniAppRequestRecord) => boolean,
     deadline: FinalAttemptDeadline | null = null,
-  ): Promise<MiniAppRequestRecord> {
+  ): Promise<OwnerMutationRead> {
     let sendFailed = false
+    let ownerResult: MiniAppAsyncStateIngressResult | null = null
     try {
-      if (deadline === null) await input.stateIngress.mutate(stateMutation)
-      else await mutateBeforeDeadline(deadline, stateMutation)
+      ownerResult = deadline === null
+        ? await input.stateIngress.mutate(stateMutation)
+        : await mutateBeforeDeadline(deadline, stateMutation)
     } catch { sendFailed = true }
     let persisted: MiniAppRequestRecord
     try {
@@ -187,7 +198,7 @@ export function createAsyncBookingWorker(input: {
       if (sendFailed) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
       throw error
     }
-    if (validate(persisted)) return persisted
+    if (validate(persisted)) return { draft: persisted, result: ownerResult }
     if (sendFailed) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
     throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
   }
@@ -195,13 +206,13 @@ export function createAsyncBookingWorker(input: {
   async function renew(context: WorkerContext): Promise<void> {
     const previous = context.draft
     const renewMutation = mutation('RENEW', previous, context.taskAttempt, context.ownerToken)
-    context.draft = await sendAndRead(renewMutation, (persisted) =>
+    context.draft = (await sendAndRead(renewMutation, (persisted) =>
       validOwnedProcessing(context.bound, persisted, context.ownerToken, nowDate().getTime())
       && persisted.attemptCount === previous.attemptCount
       && persisted.version === previous.version + 1
       && persisted.processingLeaseUntil === renewMutation.leaseUntil,
       context.deadline,
-    )
+    )).draft
   }
 
   async function fencedAwait<T>(context: WorkerContext, operation: () => Promise<T>): Promise<T> {
@@ -218,7 +229,14 @@ export function createAsyncBookingWorker(input: {
   }
 
   async function copyEvidenceToDrive(context: WorkerContext): Promise<void> {
+    const phaseStartedAt = nowDate().getTime()
     assertEvidenceLayout(context.bound, context.draft, false)
+    await attestProjectedStagedSlots(
+      context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds.length,
+    )
+    await attestProjectedStagedSlots(
+      context, 'CHAT', context.draft.chatEvidenceObjectKeys, context.draft.chatEvidenceFileIds.length,
+    )
     const paymentEvidenceFileIds = await copyMissingEvidence(
       context, 'PAYMENT', context.draft.paymentEvidenceObjectKeys, context.draft.paymentEvidenceFileIds,
     )
@@ -233,7 +251,7 @@ export function createAsyncBookingWorker(input: {
       evidenceCount: paymentEvidenceFileIds.length + chatEvidenceFileIds.length,
     })
     const expectedProjectionHash = projectionHash(context.bound, paymentEvidenceFileIds, chatEvidenceFileIds)
-    context.draft = await sendAndRead(projection, (persisted) =>
+    context.draft = (await sendAndRead(projection, (persisted) =>
       validOwnedProcessing(context.bound, persisted, context.ownerToken, nowDate().getTime())
       && persisted.attemptCount === previous.attemptCount
       && persisted.version === previous.version + 1
@@ -242,13 +260,33 @@ export function createAsyncBookingWorker(input: {
       && persisted.evidenceCount === paymentEvidenceFileIds.length + chatEvidenceFileIds.length
       && persisted.evidenceProjectionHash === expectedProjectionHash,
       context.deadline,
-    )
+    )).draft
     assertEvidenceLayout(context.bound, context.draft, true)
     emit('drive_copy_completed', {
-      requestId: context.draft.requestId, draftId: context.draft.draftId, attempt: context.taskAttempt,
+      route: 'worker', action: 'evidence_projection', status: 200, attempt: context.taskAttempt,
       state: context.draft.state, fileCount: context.draft.evidenceCount,
-      elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+      elapsedMs: Math.max(0, nowDate().getTime() - phaseStartedAt),
     })
+  }
+
+  async function attestProjectedStagedSlots(
+    context: WorkerContext,
+    kind: 'PAYMENT' | 'CHAT',
+    objectKeys: readonly string[],
+    projectedCount: number,
+  ): Promise<void> {
+    for (let ordinal = 0; ordinal < projectedCount; ordinal += 1) {
+      const objectKey = objectKeys[ordinal]!
+      const descriptor = await fencedAwait(context, () => input.staging.describe(objectKey))
+      assertEvidenceStagingDescriptorSlot(descriptor, {
+        objectKey,
+        requestId: context.draft.requestId,
+        draftId: context.draft.draftId,
+        kind,
+        ordinal,
+      })
+      context.cleanupDescriptors.set(objectKey, descriptor)
+    }
   }
 
   async function copyMissingEvidence(
@@ -260,10 +298,16 @@ export function createAsyncBookingWorker(input: {
     const fileIds = [...existingFileIds]
     for (let ordinal = fileIds.length; ordinal < objectKeys.length; ordinal += 1) {
       const staged = await fencedAwait(context, () => input.staging.get(objectKeys[ordinal]!))
+      assertEvidenceStagingDescriptorSlot(staged.cleanupDescriptor, {
+        objectKey: objectKeys[ordinal]!, requestId: context.draft.requestId,
+        draftId: context.draft.draftId, kind, ordinal,
+      })
+      context.cleanupDescriptors.set(objectKeys[ordinal]!, staged.cleanupDescriptor)
       const fileId = await fencedAwait(context, () => input.evidenceIngress.upload({
         draftId: context.draft.draftId,
         requestId: context.draft.requestId,
         kind,
+        ordinal,
         mimeType: staged.mimeType,
         bytes: staged.bytes,
       }))
@@ -274,19 +318,21 @@ export function createAsyncBookingWorker(input: {
   }
 
   async function submitBooking(context: WorkerContext): Promise<MiniAppBookingIngressResult> {
+    const phaseStartedAt = nowDate().getTime()
     assertEvidenceLayout(context.bound, context.draft, true)
     const result = await fencedAwait(context, () => input.bookingIngress.send(context.draft))
     if (!SAFE_CASE_ID.test(result.caseId) || !isConfirmationStatus(result.status) || !validResultProjection(result)) {
       throw new AsyncBookingWorkerError('BOOKING_INGRESS_RETRY')
     }
     emit('booking_ingress_completed', {
-      requestId: context.draft.requestId, draftId: context.draft.draftId, caseId: result.caseId,
-      attempt: context.taskAttempt, state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
+      route: 'worker', action: 'booking_ingress', status: 200, attempt: context.taskAttempt,
+      state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - phaseStartedAt),
     })
     return result
   }
 
   async function recordCompletion(context: WorkerContext, result: MiniAppBookingIngressResult): Promise<void> {
+    const phaseStartedAt = nowDate().getTime()
     await renew(context)
     const previous = context.draft
     const completion = mutation('COMPLETE', previous, context.taskAttempt, context.ownerToken, {
@@ -294,10 +340,16 @@ export function createAsyncBookingWorker(input: {
       confirmationStatus: result.status,
       safeErrorCode: requiresRetryState(result) ? 'DOWNSTREAM_RETRY' : null,
     })
-    context.draft = await sendAndRead(completion, (persisted) =>
+    const completed = await sendAndRead(completion, (persisted) =>
       validExpectedCompletion(context.snapshot, context.bound, previous, persisted, result),
       context.deadline,
     )
+    context.draft = completed.draft
+    context.terminalOutcome.applied = ownerApplied(completed.result, completed.draft, 'COMPLETE')
+    emit('booking_completion_mutation_completed', {
+      route: 'worker', action: 'completion_mutation', status: 200, attempt: context.taskAttempt,
+      state: context.draft.state, elapsedMs: Math.max(0, nowDate().getTime() - phaseStartedAt),
+    })
   }
 
   async function recordRetry(context: WorkerContext, safeErrorCode: string): Promise<AsyncBookingWorkerResult | null> {
@@ -306,7 +358,7 @@ export function createAsyncBookingWorker(input: {
       safeErrorCode: context.taskAttempt === MAX_TASK_ATTEMPTS ? 'RETRY_EXHAUSTED' : safeErrorCode,
     })
     const targetState = context.taskAttempt === MAX_TASK_ATTEMPTS ? 'NEEDS_REVIEW' : 'RETRYING'
-    const persisted = await sendAndRead(retry, (draft) =>
+    const retried = await sendAndRead(retry, (draft) =>
       validIdentity(context.bound, draft)
       && draft.state === targetState
       && draft.version === previous.version + 1
@@ -317,10 +369,13 @@ export function createAsyncBookingWorker(input: {
       && (targetState !== 'NEEDS_REVIEW' || validTerminal(context.snapshot, draft)),
       context.deadline,
     )
+    const persisted = retried.draft
     context.draft = persisted
+    if (targetState === 'NEEDS_REVIEW') {
+      context.terminalOutcome.applied = ownerApplied(retried.result, persisted, 'RETRY')
+    }
     if (targetState === 'RETRYING') emit('booking_worker_retrying', {
-      requestId: persisted.requestId, draftId: persisted.draftId, attempt: context.taskAttempt,
-      state: targetState, safeErrorCode: retry.safeErrorCode!,
+      route: 'worker', action: 'retry', status: 503, attempt: context.taskAttempt, state: targetState,
       elapsedMs: Math.max(0, nowDate().getTime() - context.startedAt),
     })
     return targetState === 'NEEDS_REVIEW' ? terminalResult(persisted) : null
@@ -330,6 +385,7 @@ export function createAsyncBookingWorker(input: {
     draft: MiniAppRequestRecord,
     snapshot: TaskSnapshot,
     deadline: FinalAttemptDeadline,
+    terminalOutcome: TerminalOutcome,
     expectedEvidence?: MiniAppRequestRecord,
   ): Promise<AsyncBookingWorkerResult> {
     let current = draft
@@ -348,7 +404,8 @@ export function createAsyncBookingWorker(input: {
       })
       lastSendFailed = false
       sent = true
-      try { await mutateBeforeDeadline(deadline, exhaustMutation) } catch { lastSendFailed = true }
+      let ownerResult: MiniAppAsyncStateIngressResult | null = null
+      try { ownerResult = await mutateBeforeDeadline(deadline, exhaustMutation) } catch { lastSendFailed = true }
 
       for (let readAttempt = 0; readAttempt < 16; readAttempt += 1) {
         if (remainingFinalTime(deadline) <= 0) break
@@ -356,7 +413,10 @@ export function createAsyncBookingWorker(input: {
           const persisted = await readDraftBeforeDeadline(deadline, snapshot.draftId, snapshot.requestId)
           current = persisted
           const terminal = terminalResult(persisted)
-          if (terminal && validTerminal(snapshot, persisted)) return terminal
+          if (terminal && validTerminal(snapshot, persisted)) {
+            terminalOutcome.applied ||= ownerApplied(ownerResult, persisted, 'EXHAUST')
+            return terminal
+          }
           break
         } catch {
           if (!await waitBeforeDeadline(deadline, POLL_MS)) break
@@ -372,6 +432,7 @@ export function createAsyncBookingWorker(input: {
     waitDeadline: FinalAttemptDeadline,
     operationDeadline: FinalAttemptDeadline,
     ownerToken: string,
+    terminalOutcome: TerminalOutcome,
     expectedEvidence?: MiniAppRequestRecord,
   ): Promise<AsyncBookingWorkerResult> {
     let current = draft
@@ -400,34 +461,37 @@ export function createAsyncBookingWorker(input: {
         current = await readDraftBeforeDeadline(waitDeadline, snapshot.draftId, snapshot.requestId)
       } catch { /* the last exact row remains authoritative while bounded rereads recover */ }
     }
-    return exhaust(current, snapshot, operationDeadline, expectedEvidence)
+    return exhaust(current, snapshot, operationDeadline, terminalOutcome, expectedEvidence)
   }
 
-  async function cleanupVerifiedStaging(
-    draft: MiniAppRequestRecord,
-    snapshot: TaskSnapshot,
-    deadline: FinalAttemptDeadline | null,
-  ): Promise<void> {
-    if (!validTerminal(snapshot, draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
-    for (const objectKey of [...draft.paymentEvidenceObjectKeys, ...draft.chatEvidenceObjectKeys]) {
-      if (deadline !== null) requireFinalTime(deadline)
-      await input.staging.deleteVerified(objectKey)
+  async function cleanupVerifiedStaging(context: WorkerContext): Promise<void> {
+    if (!validTerminal(context.snapshot, context.draft)) throw new AsyncBookingWorkerError('STAGING_CLEANUP_RETRY')
+    for (const [kind, objectKeys] of [
+      ['PAYMENT', context.draft.paymentEvidenceObjectKeys],
+      ['CHAT', context.draft.chatEvidenceObjectKeys],
+    ] as const) {
+      for (let ordinal = 0; ordinal < objectKeys.length; ordinal += 1) {
+        if (context.deadline !== null) requireFinalTime(context.deadline)
+        const objectKey = objectKeys[ordinal]!
+        const descriptor = context.cleanupDescriptors.get(objectKey) ?? await input.staging.describe(objectKey)
+        assertEvidenceStagingDescriptorSlot(descriptor, {
+          objectKey, requestId: context.draft.requestId, draftId: context.draft.draftId, kind, ordinal,
+        })
+        await input.staging.deleteVerified(descriptor)
+      }
     }
   }
 
   return {
     async finalize(finalizeInput) {
       const finalizeStartedAt = nowDate().getTime()
-      const terminalEvents = new Set<string>()
+      const terminalOutcome: TerminalOutcome = { applied: false }
       const emitTerminal = (result: AsyncBookingWorkerResult): void => {
         const name = result.state === 'NEEDS_REVIEW' ? 'booking_worker_needs_review' : 'booking_worker_completed'
-        const key = `${name}:${result.requestId}:${finalizeInput.draftId}:${finalizeInput.attempt}:${result.state}`
-        if (terminalEvents.has(key)) return
-        terminalEvents.add(key)
         emit(name, {
-          requestId: result.requestId, draftId: finalizeInput.draftId, attempt: finalizeInput.attempt,
-          state: result.state, ...(result.caseId ? { caseId: result.caseId } : {}),
-          ...(result.state === 'NEEDS_REVIEW' ? { safeErrorCode: 'RETRY_EXHAUSTED' as const } : {}),
+          route: 'worker', action: result.state === 'NEEDS_REVIEW' ? 'review' : 'complete',
+          status: result.state === 'NEEDS_REVIEW' ? 503 : 200,
+          attempt: finalizeInput.attempt, state: result.state,
           elapsedMs: Math.max(0, nowDate().getTime() - finalizeStartedAt),
         })
       }
@@ -451,6 +515,7 @@ export function createAsyncBookingWorker(input: {
       let bound: MiniAppRequestRecord | null = null
       const ownerToken = nextOwnerToken()
       if (!SAFE_OWNER.test(ownerToken)) throw new AsyncBookingWorkerError('ASYNC_WORKER_INVALID_INPUT')
+      const claimPhaseStartedAt = nowDate().getTime()
 
       while (true) {
         try {
@@ -484,7 +549,7 @@ export function createAsyncBookingWorker(input: {
           const claimedTerminal = terminalResult(lastDraft)
           if (claimedTerminal && validTerminal(snapshot, lastDraft)) return claimedTerminal
           if (finalizeInput.attempt === MAX_TASK_ATTEMPTS) {
-            return convergeFinalAttempt(lastDraft, snapshot, finalWaitDeadline, finalExhaustDeadline, ownerToken)
+            return convergeFinalAttempt(lastDraft, snapshot, finalWaitDeadline, finalExhaustDeadline, ownerToken, terminalOutcome)
           }
         } catch (error) {
           if (error instanceof AsyncBookingWorkerError && error.code === 'INVALID_PERSISTED_ASYNC_STATE') throw error
@@ -496,7 +561,7 @@ export function createAsyncBookingWorker(input: {
 
         if (finalizeInput.attempt < MAX_TASK_ATTEMPTS) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
         if (lastDraft && bound) {
-          return convergeFinalAttempt(lastDraft, snapshot, finalWaitDeadline, finalExhaustDeadline, ownerToken)
+          return convergeFinalAttempt(lastDraft, snapshot, finalWaitDeadline, finalExhaustDeadline, ownerToken, terminalOutcome)
         }
         if (!await waitBeforeDeadline(finalWaitDeadline, POLL_MS)) {
           throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
@@ -505,8 +570,8 @@ export function createAsyncBookingWorker(input: {
 
       if (!lastDraft || !bound) throw new AsyncBookingWorkerError('ASYNC_STATE_RETRY')
       emit('booking_worker_claimed', {
-        requestId: lastDraft.requestId, draftId: lastDraft.draftId, attempt: finalizeInput.attempt,
-        state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - startedAt),
+        route: 'worker', action: 'claim', status: 200, attempt: finalizeInput.attempt,
+        state: 'PROCESSING', elapsedMs: Math.max(0, nowDate().getTime() - claimPhaseStartedAt),
       })
       const context: WorkerContext = {
         draft: lastDraft,
@@ -516,6 +581,8 @@ export function createAsyncBookingWorker(input: {
         ownerToken,
         taskAttempt: finalizeInput.attempt,
         startedAt,
+        terminalOutcome,
+        cleanupDescriptors: new Map(),
       }
       const convergeAfterProcessing = (
         current: MiniAppRequestRecord,
@@ -523,7 +590,7 @@ export function createAsyncBookingWorker(input: {
       ): Promise<AsyncBookingWorkerResult> => {
         const waitDeadline = Math.min(finalProcessingDeadline, nowDate().getTime() + FINAL_WAIT_MS)
         const operationDeadline = Math.min(finalProcessingDeadline, waitDeadline + FINAL_WAIT_MS)
-        return convergeFinalAttempt(current, snapshot, waitDeadline, operationDeadline, ownerToken, expectedEvidence)
+        return convergeFinalAttempt(current, snapshot, waitDeadline, operationDeadline, ownerToken, terminalOutcome, expectedEvidence)
       }
       let stage: WorkerSafeErrorCode = 'EVIDENCE_COPY_RETRY'
       let bookingResult: MiniAppBookingIngressResult | null = null
@@ -539,7 +606,7 @@ export function createAsyncBookingWorker(input: {
           throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
         }
         try {
-          await cleanupVerifiedStaging(context.draft, snapshot, context.deadline)
+          await cleanupVerifiedStaging(context)
         } catch { /* retain staging after terminal */ }
         return terminal
       } catch (error) {
@@ -589,7 +656,7 @@ export function createAsyncBookingWorker(input: {
         throw new AsyncBookingWorkerError(stage)
       }
       })()
-      emitTerminal(result)
+      if (terminalOutcome.applied) emitTerminal(result)
       return result
     },
   }
@@ -598,6 +665,20 @@ export function createAsyncBookingWorker(input: {
 function bindDraft(draft: MiniAppRequestRecord, snapshot: TaskSnapshot): MiniAppRequestRecord {
   if (!validTaskSnapshot(snapshot, draft)) throw new AsyncBookingWorkerError('INVALID_PERSISTED_ASYNC_STATE')
   return structuredClone({ ...draft, payloadHash: snapshot.payloadHash })
+}
+
+function ownerApplied(
+  result: MiniAppAsyncStateIngressResult | null,
+  draft: MiniAppRequestRecord,
+  operation: 'COMPLETE' | 'RETRY' | 'EXHAUST',
+): boolean {
+  if (!result || result.outcome !== 'APPLIED'
+    || result.requestId !== draft.requestId || result.draftId !== draft.draftId
+    || result.state !== draft.state || result.version !== draft.version || result.attemptCount !== draft.attemptCount
+    || result.caseId !== draft.caseId || result.confirmationStatus !== draft.confirmationStatus) return false
+  return operation === 'COMPLETE'
+    ? draft.state === 'CONFIRMED' || draft.state === 'CONFIRMED_WITH_RETRY'
+    : draft.state === 'NEEDS_REVIEW'
 }
 
 function validTaskSnapshot(snapshot: TaskSnapshot, draft: MiniAppRequestRecord): boolean {

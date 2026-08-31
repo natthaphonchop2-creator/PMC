@@ -12,6 +12,9 @@ import {
 } from './adapters/lineMessaging'
 import {
   createRuntime,
+  applyPmcBookingAttributionMigrationWorkflow,
+  applyPmcBookingWorkbookPresentationWorkflow,
+  approvePmcDraftEvidenceRetentionWorkflow,
   configureStaffProfileImagesWorkflow,
   configureStockManagersWorkflow,
   configureCompactBookingIdentityFieldsWorkflow,
@@ -22,12 +25,17 @@ import {
   prepareExpensePermissionsWorkflow,
   prepareAutoQueueMigrationWorkflow,
   applyAutoQueueMigrationWorkflow,
+  executePmcDraftEvidenceRetentionWorkflow,
   pauseAndCutoverBookingFormWorkflow,
   prepareStaffAeMigrationWorkflow,
   resumeBookingFormAfterAeCutoverWorkflow,
   runDailyOperationsWorkflow,
   runBookingRetriesWorkflow,
   runIntegrityAndBackupWorkflow,
+  previewPmcBookingAttributionMigrationWorkflow,
+  previewPmcBookingWorkbookPresentationWorkflow,
+  previewPmcDraftEvidenceRetentionWorkflow,
+  readbackPmcDraftEvidenceRetentionWorkflow,
   runExpenseRecoveryWorkflow,
   sendCallReminderFlexPilotWorkflow,
   sendProductionFlexPilotWorkflow,
@@ -51,6 +59,7 @@ import {
 } from './domain/miniAppEvidenceIngress'
 import type { BookingPorts } from './ports'
 import { mutateMiniAppAsyncState } from './domain/miniAppAsyncStateIngress'
+import { mutateMiniAppDraftState } from './domain/miniAppDraftStateIngress'
 import type { BookingCase } from './domain/types'
 import type { MiniAppBookingIngressResult } from '../../../shared/pmcMiniAppBooking'
 import { processStockIngressResponse, type StockIngressPorts } from './stock/ingress'
@@ -112,6 +121,9 @@ export function processBookingDoPost(
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_ASYNC_STATE') {
     return mutateMiniAppAsyncState(parsed, ports)
+  }
+  if (isRecord(parsed) && parsed.kind === 'MINI_APP_DRAFT_STATE') {
+    return mutateMiniAppDraftState(parsed, ports)
   }
   if (isRecord(parsed) && parsed.kind === 'MINI_APP_BOOKING') {
     const booking = submitMiniAppBooking(verifyMiniAppIngressPayload(parsed, ports), ports)
@@ -309,4 +321,46 @@ export function configurePmcSharedDoctorCalendar() {
     SpreadsheetApp.openById(spreadsheetId),
     SHARED_DOCTOR_CALENDAR_ID,
   )
+}
+
+export function previewPmcBookingAttributionMigration() {
+  return previewPmcBookingAttributionMigrationWorkflow()
+}
+
+export function applyPmcBookingAttributionMigration() {
+  return applyPmcBookingAttributionMigrationWorkflow()
+}
+
+export function previewPmcBookingWorkbookPresentation() {
+  return previewPmcBookingWorkbookPresentationWorkflow()
+}
+
+export function applyPmcBookingWorkbookPresentation() {
+  return applyPmcBookingWorkbookPresentationWorkflow()
+}
+
+export function previewPmcDraftEvidenceRetention(retentionId: string) {
+  return previewPmcDraftEvidenceRetentionWorkflow(retentionId)
+}
+
+export function approvePmcDraftEvidenceRetention(
+  retentionId: string,
+  expectedVersion: number,
+  approvalDigest: string,
+  reason: string,
+) {
+  return approvePmcDraftEvidenceRetentionWorkflow(
+    retentionId,
+    expectedVersion,
+    approvalDigest,
+    reason,
+  )
+}
+
+export function executePmcDraftEvidenceRetention(retentionId: string, expectedVersion: number) {
+  return executePmcDraftEvidenceRetentionWorkflow(retentionId, expectedVersion)
+}
+
+export function readbackPmcDraftEvidenceRetention(retentionId: string) {
+  return readbackPmcDraftEvidenceRetentionWorkflow(retentionId)
 }

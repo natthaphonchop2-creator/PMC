@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarDays, FileChartColumn, House, PackageOpen, UserRound } from 'lucide-react'
-import { createMiniAppApi, type MiniAppBrowserApi } from './api'
+import {
+  createBrowserBookingTimingSink,
+  createMiniAppApi,
+  emitBrowserBookingTiming,
+  type BrowserBookingTiming,
+  type MiniAppApiFactory,
+  type MiniAppBrowserApi,
+} from './api'
 import { BookingWizard, type BookingWizardAdapter } from './BookingWizard'
 import { BookingProcessing, type BookingProcessingAdapter } from './BookingProcessing'
 import {
+  bookingProtocolVersion,
   isBookingTerminalState,
   type BookingDraftProjection,
   type MiniAppConfig,
@@ -50,17 +58,32 @@ import {
 export type PmcMiniAppApi = MiniAppBrowserApi
 type MiniAppView = 'HOME' | 'BOOKING' | 'REPORTS' | 'STOCK' | 'ACCOUNT'
 type FinanceView = 'FINANCE_HOME' | FinanceReportView | EnabledExpenseCategory | 'EXPENSE_RECEIPT' | 'EXPENSE_HISTORY' | 'EXPENSE_RESUME'
+const defaultPerformanceNow = () => globalThis.performance.now()
 
 export function PmcMiniApp({
   initialSession,
   initialConfig,
   api: suppliedApi,
+  bookingTiming: suppliedBookingTiming,
+  performanceNow: suppliedPerformanceNow,
+  createApi = createMiniAppApi,
 }: {
   initialSession?: MiniAppSession
   initialConfig?: MiniAppConfig
   api?: PmcMiniAppApi
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
+  createApi?: MiniAppApiFactory
 }) {
-  const api = useMemo(() => suppliedApi ?? createMiniAppApi(), [suppliedApi])
+  const performanceNow = suppliedPerformanceNow ?? defaultPerformanceNow
+  const bookingTiming = useMemo(
+    () => suppliedBookingTiming ?? createBrowserBookingTimingSink(),
+    [suppliedBookingTiming],
+  )
+  const api = useMemo(
+    () => suppliedApi ?? createApi({ bookingTiming, performanceNow }),
+    [bookingTiming, createApi, performanceNow, suppliedApi],
+  )
   const expenseResumeStorage = useMemo(() => safeExpenseResumeStorage(), [])
   const initialExpenseResumeRoot = useMemo(
     () => loadExpenseResumeRoot(expenseResumeStorage),
@@ -74,6 +97,7 @@ export function PmcMiniApp({
   const [loading, setLoading] = useState(!initialSession)
   const [message, setMessage] = useState('')
   const [messageTone, setMessageTone] = useState<'ERROR' | 'SUCCESS'>('ERROR')
+  const [clientUpgradeRequired, setClientUpgradeRequired] = useState(false)
   const [enrollmentStaff, setEnrollmentStaff] = useState<Array<{ id: string; name: string }> | null>(null)
   const [enrollmentBusy, setEnrollmentBusy] = useState(false)
   const [enrollmentMessage, setEnrollmentMessage] = useState('')
@@ -108,6 +132,8 @@ export function PmcMiniApp({
     setFinanceView('FINANCE_HOME')
     if (!financeShellEnabled) setView('HOME')
   }, [financeShellEnabled])
+  const pendingHomeTimingRef = useRef<{ startedAt: number; status: 200 | 202 } | null>(null)
+  const activeBookingProtocol = config ? bookingProtocolVersion(config) : 1
 
   useEffect(() => { saveReportFilterPreferences(reportFilters) }, [reportFilters])
   useEffect(() => {
@@ -154,11 +180,29 @@ export function PmcMiniApp({
     return () => clearTimeout(timeout)
   }, [checkExpenseResume, config, expenseResumeRoot, idToken, session])
 
+  const runBookingMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    try {
+      return await operation()
+    } catch (error) {
+      if (safeErrorCode(error) === 'CLIENT_UPGRADE_REQUIRED') setClientUpgradeRequired(true)
+      throw error
+    }
+  }, [])
+
   useEffect(() => {
     if (!message || messageTone !== 'SUCCESS') return
     const timeout = setTimeout(() => setMessage(''), 3_000)
     return () => clearTimeout(timeout)
   }, [message, messageTone])
+
+  useEffect(() => {
+    const pending = pendingHomeTimingRef.current
+    if (view !== 'HOME' || !pending) return
+    pendingHomeTimingRef.current = null
+    emitBrowserBookingTiming(bookingTiming, 'navigation_to_home', {
+      action: 'home', status: pending.status, elapsedMs: safeTimingElapsed(performanceNow, pending.startedAt),
+    })
+  }, [bookingTiming, performanceNow, view])
 
   useEffect(() => {
     if (initialSession) return
@@ -198,12 +242,13 @@ export function PmcMiniApp({
 
   const bookingAdapter = useMemo<BookingWizardAdapter>(() => ({
     load: (draftId) => api.loadDraft(idToken, draftId),
+    prepare: (draftId, version, input) => runBookingMutation(() => api.prepare(idToken, draftId, version, input)),
     upload: (draftId, kind, files) => api.upload(idToken, draftId, kind, files),
     uploadEvidenceBatch: (draftId, input) => api.uploadEvidenceBatch(idToken, draftId, input),
-    save: (draftId, version, input) => api.save(idToken, draftId, version, input),
-    confirm: (draftId, version) => api.confirm(idToken, draftId, version),
-    cancel: (draftId, version) => api.cancel(idToken, draftId, version),
-  }), [api, idToken])
+    save: (draftId, version, input) => runBookingMutation(() => api.save(idToken, draftId, version, input, activeBookingProtocol)),
+    confirm: (draftId, version) => runBookingMutation(() => api.confirm(idToken, draftId, version, activeBookingProtocol)),
+    cancel: (draftId, version) => runBookingMutation(() => api.cancel(idToken, draftId, version, activeBookingProtocol)),
+  }), [activeBookingProtocol, api, idToken, runBookingMutation])
 
   const processingAdapter = useMemo<BookingProcessingAdapter>(() => ({
     load: (draftId, signal) => api.loadDraft(idToken, draftId, signal),
@@ -361,12 +406,15 @@ export function PmcMiniApp({
       setMessage('')
       try {
         const activeDraft = await api.loadLatestActiveDraft(idToken)
-        const nextDraft = activeDraft ? await hydrateActiveDraft(api, idToken, activeDraft) : await api.createDraft(idToken)
+        const nextDraft = activeDraft
+          ? await hydrateActiveDraft(api, idToken, activeDraft)
+          : await runBookingMutation(() => api.createDraft(idToken, activeBookingProtocol))
         if (requestEpoch !== navigationEpochRef.current) return
         setDraft(nextDraft)
         setView('BOOKING')
-      } catch {
+      } catch (error) {
         if (requestEpoch === navigationEpochRef.current) {
+          if (safeErrorCode(error) === 'CLIENT_UPGRADE_REQUIRED') return
           setMessageTone('ERROR')
           setMessage('สร้างรายการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
         }
@@ -495,6 +543,7 @@ export function PmcMiniApp({
     onSubmit={linkAccount}
   />
   if (!session) return <Notice>{message || 'รอผู้ดูแลอนุมัติ'}</Notice>
+  if (clientUpgradeRequired) return <ClientUpgradeNotice />
   if (view === 'BOOKING' && config && draft) {
     if (isAsyncBookingState(draft.state) || isBookingTerminalState(draft.state)) {
       return <BookingProcessing
@@ -510,13 +559,17 @@ export function PmcMiniApp({
       draft={draft}
       adapter={bookingAdapter}
       initialStep={draft.state === 'READY_TO_CONFIRM' ? 4 : 0}
-      onQueued={() => {
+      bookingTiming={bookingTiming}
+      performanceNow={performanceNow}
+      onQueued={(_projection, timing) => {
+        pendingHomeTimingRef.current = timing
         navigateTo('HOME')
         setDraft(null)
         setMessageTone('SUCCESS')
         setMessage('ทำรายการเรียบร้อย ระบบจะบันทึกภายใน 5 นาที')
       }}
-      onConfirmed={() => {
+      onConfirmed={(_result, timing) => {
+        pendingHomeTimingRef.current = timing
         navigateTo('HOME')
         setDraft(null)
         setMessageTone('SUCCESS')
@@ -787,6 +840,13 @@ function ExpenseResumeStatusView({ checking, onRetry }: {
   </main>
 }
 
+function ClientUpgradeNotice() {
+  return <main className="pmc-mini-app-notice" role="alert">
+    <h1>กรุณาเปิดระบบใหม่</h1>
+    <p>กรุณาปิดหน้าต่างนี้ แล้วเปิด Mini App จาก LINE ใหม่อีกครั้ง เพื่ออัปเดตระบบ</p>
+  </main>
+}
+
 function isAdditionalReport(value: ReportSelection): boolean {
   return !['TODAY_SUMMARY', 'PAYMENT', 'DEPOSIT', 'REFUND', 'APPOINTMENT'].includes(value)
 }
@@ -828,6 +888,13 @@ function safeRetryAfterSeconds(error: unknown): number {
   if (!error || typeof error !== 'object' || !('retryAfterSeconds' in error)) return 0
   const value = Number(error.retryAfterSeconds)
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function safeTimingElapsed(now: () => number, startedAt: number): number {
+  try {
+    const elapsed = now() - startedAt
+    return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+  } catch { return 0 }
 }
 
 function appendHistoryPage(current: StockHistoryPage, next: StockHistoryPage): StockHistoryPage {

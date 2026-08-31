@@ -12,6 +12,13 @@ function depositStatusLabel(status: BookingCase['depositStatus']): string {
   return 'โอนแล้ว'
 }
 
+function recorderDisplayName(booking: BookingCase): string {
+  const recorderName = String(booking.recorderName ?? '').trim()
+  if (recorderName) return recorderName
+  const legacyAdminName = String(booking.adminName ?? '').trim()
+  return legacyAdminName || 'ไม่ทราบ (เคสเดิม)'
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -42,6 +49,7 @@ export function calendarEventInput(booking: BookingCase): CalendarEventInput {
       `โทร: ${booking.phoneNormalized}`,
       `ช่องทาง: ${booking.channelId || 'ไม่ระบุ'}`,
       `มัดจำ: ${booking.depositAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })} บาท · ${depositStatusLabel(booking.depositStatus)}`,
+      `ผู้บันทึก: ${recorderDisplayName(booking)}`,
       `Admin: ${booking.adminName}`,
       `AE: ${booking.aeName || 'ไม่ระบุ'}`,
       ...(tentative ? ['สถานะนัด: รอยืนยัน'] : []),

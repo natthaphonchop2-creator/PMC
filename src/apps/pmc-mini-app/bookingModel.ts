@@ -1,4 +1,12 @@
-import type { BookingDraftInput, BookingQueueType, MiniAppConfig } from './contracts'
+import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
+import {
+  bookingProtocolVersion,
+  type BookingDraftInput,
+  type BookingDraftInputV1,
+  type BookingDraftInputV2,
+  type BookingQueueType,
+  type MiniAppConfig,
+} from './contracts'
 
 export interface BookingEvidenceItem {
   id: string
@@ -11,6 +19,8 @@ export interface BookingEvidenceItem {
 
 export interface BookingValues {
   requestId: string
+  adminId: string
+  aeId: string
   aeName: string
   customerName: string
   facebookName: string
@@ -44,6 +54,8 @@ export function initialBooking(requestId = ''): BookingWizardState {
     step: 0,
     values: {
       requestId,
+      adminId: '',
+      aeId: '',
       aeName: 'ไม่ระบุ',
       customerName: '',
       facebookName: '',
@@ -99,16 +111,22 @@ export function validateBookingStep(
   state: BookingWizardState,
   step: number,
   config: MiniAppConfig,
+  protocolVersion: BookingProtocolVersion = bookingProtocolVersion(config),
 ): Record<string, string> {
   const errors: Record<string, string> = {}
   const values = state.values
   if (step === 0 || step === 4) {
+    if (protocolVersion === 2) {
+      if (!config.admins.some(({ id }) => id === values.adminId)) errors.adminId = 'กรุณาเลือก Admin'
+      if (values.aeId && !config.aes.some(({ id }) => id === values.aeId)) errors.aeId = 'กรุณาเลือก AE'
+    } else if (values.aeName !== 'ไม่ระบุ' && !config.aes.some(({ name }) => name === values.aeName)) {
+      errors.aeName = 'กรุณาเลือก AE'
+    }
     if (!values.customerName.trim()) errors.customerName = 'กรุณากรอกชื่อลูกค้า'
     if (!values.facebookName.trim()) errors.facebookName = 'กรุณากรอกชื่อ Facebook หรือคำว่า ไม่มี'
     try { normalizeThaiPhoneInput(values.phone) } catch { errors.phone = 'กรุณากรอกเบอร์มือถือให้ถูกต้อง' }
   }
   if (step === 1 || step === 4) {
-    if (!config.aes.some(({ name }) => name === values.aeName)) errors.aeName = 'กรุณาเลือก AE'
     if (!config.doctors.some(({ id }) => id === values.doctorId)) errors.doctorId = 'กรุณาเลือกแพทย์'
     if (!config.services.some(({ id }) => id === values.serviceId)) errors.serviceId = 'กรุณาเลือกโปรแกรม'
     if (!config.channels.some(({ id }) => id === values.channelId)) errors.channelId = 'กรุณาเลือกช่องทาง'
@@ -135,10 +153,12 @@ export function normalizeThaiPhoneInput(value: string): string {
   return digits
 }
 
-export function bookingInput(state: BookingWizardState): BookingDraftInput {
-  return {
+export function bookingInput(
+  state: BookingWizardState,
+  protocolVersion: BookingProtocolVersion = 2,
+): BookingDraftInput {
+  const common = {
     requestId: state.values.requestId,
-    aeName: state.values.aeName,
     customerName: state.values.customerName.trim(),
     facebookName: state.values.facebookName.trim(),
     phone: normalizeThaiPhoneInput(state.values.phone),
@@ -150,14 +170,23 @@ export function bookingInput(state: BookingWizardState): BookingDraftInput {
     depositAmount: Number(state.values.depositAmount),
     channelId: state.values.channelId,
   }
+  if (protocolVersion === 1) return { ...common, aeName: state.values.aeName } satisfies BookingDraftInputV1
+  return {
+    ...common,
+    adminId: state.values.adminId,
+    aeId: state.values.aeId || null,
+  } satisfies BookingDraftInputV2
 }
 
-export function previewBooking(state: BookingWizardState, config: MiniAppConfig) {
-  return {
+export function previewBooking(
+  state: BookingWizardState,
+  config: MiniAppConfig,
+  protocolVersion: BookingProtocolVersion = bookingProtocolVersion(config),
+) {
+  const common = {
     customerName: state.values.customerName.trim(),
     facebookName: state.values.facebookName.trim(),
     phone: normalizeThaiPhoneInput(state.values.phone),
-    ae: state.values.aeName,
     doctor: config.doctors.find(({ id }) => id === state.values.doctorId)?.name ?? '',
     service: config.services.find(({ id }) => id === state.values.serviceId)?.name ?? '',
     channel: config.channels.find(({ id }) => id === state.values.channelId)?.name ?? '',
@@ -167,5 +196,13 @@ export function previewBooking(state: BookingWizardState, config: MiniAppConfig)
     depositAmount: Number(state.values.depositAmount),
     paymentCount: state.evidence.PAYMENT.length,
     chatCount: state.evidence.CHAT.length,
+  }
+  if (protocolVersion === 1) return { ...common, admin: '', ae: state.values.aeName }
+  return {
+    ...common,
+    admin: config.admins.find(({ id }) => id === state.values.adminId)?.name ?? '',
+    ae: state.values.aeId
+      ? config.aes.find(({ id }) => id === state.values.aeId)?.name ?? ''
+      : 'ไม่ระบุ',
   }
 }

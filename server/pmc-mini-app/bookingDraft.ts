@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto'
-import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts.js'
+import type { BookingDraftInputV1 } from '../../src/apps/pmc-mini-app/contracts.js'
 import type { MiniAppRequestRecord, MiniAppRequestState } from './store.js'
+import type { MiniAppAttributionOption } from './contracts.js'
 import {
   canonicalMiniAppAsyncIdentity,
   canonicalMiniAppEvidenceProjection,
   type MiniAppEvidenceProjectionBinding,
 } from '../../shared/pmcMiniAppAsyncState.js'
+import { canonicalMiniAppP2BookingIdentity } from '../../shared/pmcMiniAppDraftState.js'
+import { miniAppEvidenceUploadIdV2 } from '../../shared/pmcMiniAppEvidence.js'
 
 export interface BookingDraftContext {
   draftId: string
@@ -23,6 +26,24 @@ export interface BookingDraftContext {
   now: string
 }
 
+export interface BookingDraftContextV2 {
+  draftId: string
+  staffId: string
+  recorderName: string
+  lineUserIdHash: string
+  doctors: readonly MiniAppAttributionOption[]
+  services: readonly MiniAppAttributionOption[]
+  channels: readonly MiniAppAttributionOption[]
+  admins: readonly MiniAppAttributionOption[]
+  aes: readonly MiniAppAttributionOption[]
+  paymentEvidenceFileIds: readonly string[]
+  chatEvidenceFileIds: readonly string[]
+  paymentEvidenceObjectKeys?: readonly string[]
+  chatEvidenceObjectKeys?: readonly string[]
+  asyncEvidence?: boolean
+  now: string
+}
+
 export type BookingDraftAction = {
   type: 'SET_STATE'
   state: MiniAppRequestState
@@ -31,6 +52,11 @@ export type BookingDraftAction = {
 
 const BOOKING_INPUT_KEYS = new Set([
   'requestId', 'aeName', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId',
+  'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
+])
+
+const BOOKING_INPUT_KEYS_V2 = new Set([
+  'requestId', 'adminId', 'aeId', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId',
   'queueType', 'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
 ])
 
@@ -54,7 +80,7 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   if (!isPlainRecord(input)) throw new Error('INVALID_BOOKING_INPUT')
   for (const key of Object.keys(input)) if (!BOOKING_INPUT_KEYS.has(key)) throw new Error('UNKNOWN_BOOKING_FIELD')
 
-  const value = input as unknown as BookingDraftInput
+  const value = input as unknown as BookingDraftInputV1
   const requestId = requiredId(value.requestId, 'INVALID_REQUEST_ID')
   const draftId = requiredId(context.draftId, 'INVALID_DRAFT_ID')
   const staffId = requiredId(context.staffId, 'INVALID_STAFF_ID')
@@ -76,22 +102,27 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   const paymentEvidenceFileIds = evidenceIds(context.paymentEvidenceFileIds, 'PAYMENT', !context.asyncEvidence)
   const chatEvidenceFileIds = evidenceIds(context.chatEvidenceFileIds, 'CHAT', !context.asyncEvidence)
   const paymentEvidenceObjectKeys = stagingObjectKeys(
-    context.paymentEvidenceObjectKeys ?? [], context.draftId, 'PAYMENT', Boolean(context.asyncEvidence),
+    context.paymentEvidenceObjectKeys ?? [], requestId, context.draftId, 'PAYMENT', Boolean(context.asyncEvidence),
   )
   const chatEvidenceObjectKeys = stagingObjectKeys(
-    context.chatEvidenceObjectKeys ?? [], context.draftId, 'CHAT', Boolean(context.asyncEvidence),
+    context.chatEvidenceObjectKeys ?? [], requestId, context.draftId, 'CHAT', Boolean(context.asyncEvidence),
   )
   const now = isoTimestamp(context.now)
 
   return {
     requestId,
     draftId,
+    protocolVersion: 1,
     staffId,
+    recorderName: '',
+    adminId: staffId,
+    adminName: '',
     lineUserIdHash,
     state: 'READY_TO_CONFIRM',
     retentionState: '',
     version: 1,
     payloadHash: null,
+    aeId: null,
     aeName,
     customerName,
     facebookName,
@@ -127,8 +158,48 @@ export function parseBookingDraft(input: unknown, context: BookingDraftContext):
   }
 }
 
+export function parseBookingDraftV2(input: unknown, context: BookingDraftContextV2): MiniAppRequestRecord {
+  if (!isPlainRecord(input)) throw new Error('INVALID_BOOKING_INPUT')
+  for (const key of Object.keys(input)) if (!BOOKING_INPUT_KEYS_V2.has(key)) throw new Error('UNKNOWN_BOOKING_FIELD')
+
+  const admin = attributionById(input.adminId, context.admins, 'ADMIN_NOT_ALLOWED')
+  const ae = input.aeId === null ? null : attributionById(input.aeId, context.aes, 'AE_NOT_ALLOWED')
+  const recorderName = requiredText(context.recorderName, 120, 'RECORDER_NAME_REQUIRED')
+  const legacyInput = { ...input }
+  delete legacyInput.adminId
+  delete legacyInput.aeId
+  const base = parseBookingDraft({ ...legacyInput, aeName: ae?.name ?? 'ไม่ระบุ' }, {
+    draftId: context.draftId,
+    staffId: context.staffId,
+    lineUserIdHash: context.lineUserIdHash,
+    doctorIds: context.doctors.map(({ id }) => id),
+    serviceIds: context.services.map(({ id }) => id),
+    channelIds: context.channels.map(({ id }) => id),
+    eligibleAeNames: ['ไม่ระบุ', ...context.aes.map(({ name }) => name)],
+    paymentEvidenceFileIds: context.paymentEvidenceFileIds,
+    chatEvidenceFileIds: context.chatEvidenceFileIds,
+    paymentEvidenceObjectKeys: context.paymentEvidenceObjectKeys,
+    chatEvidenceObjectKeys: context.chatEvidenceObjectKeys,
+    asyncEvidence: context.asyncEvidence,
+    now: context.now,
+  })
+
+  return {
+    ...base,
+    protocolVersion: 2,
+    recorderName,
+    adminId: admin.id,
+    adminName: admin.name,
+    aeId: ae?.id ?? null,
+    aeName: ae?.name ?? 'ไม่ระบุ',
+  }
+}
+
 export function bookingPayloadHash(draft: MiniAppRequestRecord): string {
-  return createHash('sha256').update(canonicalMiniAppAsyncIdentity(draft), 'utf8').digest('base64url')
+  const canonical = draft.protocolVersion !== 2
+    ? canonicalMiniAppAsyncIdentity(draft)
+    : canonicalMiniAppP2BookingIdentity({ ...draft, protocolVersion: 2 })
+  return createHash('sha256').update(canonical, 'utf8').digest('base64url')
 }
 
 export function evidenceProjectionHash(binding: MiniAppEvidenceProjectionBinding): string {
@@ -175,6 +246,17 @@ function normalizeThaiPhone(value: unknown): string {
   return digits
 }
 
+function attributionById(
+  value: unknown,
+  options: readonly MiniAppAttributionOption[],
+  errorCode: 'ADMIN_NOT_ALLOWED' | 'AE_NOT_ALLOWED',
+): MiniAppAttributionOption {
+  if (typeof value !== 'string') throw new Error(errorCode)
+  const match = options.find(({ id }) => id === value)
+  if (!match) throw new Error(errorCode)
+  return match
+}
+
 function evidenceIds(values: readonly string[], kind: 'PAYMENT' | 'CHAT', required = true): string[] {
   if (!Array.isArray(values) || required && values.length === 0) throw new Error(`${kind}_EVIDENCE_REQUIRED`)
   if (values.length > 10) throw new Error(`${kind}_EVIDENCE_LIMIT`)
@@ -185,16 +267,30 @@ function evidenceIds(values: readonly string[], kind: 'PAYMENT' | 'CHAT', requir
 
 function stagingObjectKeys(
   values: readonly string[],
+  requestId: string,
   draftId: string,
   kind: 'PAYMENT' | 'CHAT',
   required: boolean,
 ): string[] {
   if (!Array.isArray(values) || required && values.length === 0) throw new Error(`${kind}_EVIDENCE_REQUIRED`)
   if (values.length > 10) throw new Error(`${kind}_EVIDENCE_LIMIT`)
-  const result = values.map((value) => {
+  const result = values.map((value, ordinal) => {
     if (typeof value !== 'string') throw new Error(`${kind}_EVIDENCE_INVALID`)
-    const match = /^drafts\/([A-Za-z0-9_-]{1,124})\/(PAYMENT|CHAT)\/[a-f0-9]{64}\.(?:jpg|png)$/.exec(value)
-    if (!match || match[1] !== draftId || match[2] !== kind) throw new Error(`${kind}_EVIDENCE_INVALID`)
+    const legacy = /^drafts\/([A-Za-z0-9_-]{1,124})\/(PAYMENT|CHAT)\/[a-f0-9]{64}\.(?:jpg|png)$/.exec(value)
+    if (legacy) {
+      if (legacy[1] !== draftId || legacy[2] !== kind) throw new Error(`${kind}_EVIDENCE_INVALID`)
+      return value
+    }
+    const v2 = /^drafts\/v2\/([A-Za-z0-9._:-]{1,124})\/([A-Za-z0-9._:-]{1,124})\/(PAYMENT|CHAT)\/([0-9])\/([a-f0-9]{64})\/([a-f0-9]{64})\.(jpg|png)$/.exec(value)
+    if (!v2 || v2[1] !== requestId || v2[2] !== draftId || v2[3] !== kind || Number(v2[4]) !== ordinal) {
+      throw new Error(`${kind}_EVIDENCE_INVALID`)
+    }
+    const mimeType = v2[7] === 'jpg' ? 'image/jpeg' as const : 'image/png' as const
+    const expectedUploadId = miniAppEvidenceUploadIdV2({
+      requestId: v2[1]!, draftId: v2[2]!, evidenceKind: v2[3] as 'PAYMENT' | 'CHAT',
+      ordinal, mimeType, contentSha256: v2[6]!,
+    }, (canonical) => createHash('sha256').update(canonical, 'utf8').digest('hex'))
+    if (v2[5] !== expectedUploadId) throw new Error(`${kind}_EVIDENCE_INVALID`)
     return value
   })
   if (new Set(result).size !== result.length) throw new Error(`${kind}_EVIDENCE_DUPLICATE`)

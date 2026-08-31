@@ -15,10 +15,53 @@ describe('PMC Mini App server configuration', () => {
     expect(readPmcMiniAppConfig(validEnvironment())).toMatchObject({
       maxImageBytes: 10_000_000,
       maxFilesPerKind: 10,
+      bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
+      bookingMutationsPaused: false,
       enrollmentPin: null,
       bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
       fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
     })
+  })
+
+  it('enables the Booking write barrier only for the exact maintenance value', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_MUTATIONS_PAUSED: 'true',
+    })).toMatchObject({ bookingMutationsPaused: true })
+
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_MUTATIONS_PAUSED: 'false',
+    })).toMatchObject({ bookingMutationsPaused: false })
+  })
+
+  it('raises the Booking mutation floor only for the exact protocol-2 value', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '2',
+    })).toMatchObject({
+      bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+    })
+  })
+
+  it('advertises the combined prepare route only behind the exact flag and protocol-2 floor', () => {
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '2',
+      PMC_BOOKING_PREPARE_ENABLED: 'true',
+    })).toMatchObject({
+      bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true },
+    })
+
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PREPARE_ENABLED: 'true',
+    })).toBeNull()
+    expect(readPmcMiniAppConfig({
+      ...validEnvironment(),
+      PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '2',
+      PMC_BOOKING_PREPARE_ENABLED: 'yes',
+    })).toBeNull()
   })
 
   it('keeps the synchronous configuration unchanged when async booking is disabled', () => {
@@ -122,6 +165,12 @@ describe('PMC Mini App server configuration', () => {
     ['unknown monthly income value', { PMC_FINANCE_MONTHLY_INCOME_ENABLED: 'yes' }],
     ['impossible pilot date', { PMC_FINANCE_PILOT_DEFAULT_DATE: '2026-02-30' }],
     ['non-canonical pilot date', { PMC_FINANCE_PILOT_DEFAULT_DATE: '2026-8-22' }],
+    ['unknown Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '3' }],
+    ['non-exact Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: ' 2 ' }],
+    ['blank configured Booking protocol floor', { PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION: '' }],
+    ['unknown Booking mutation pause value', { PMC_BOOKING_MUTATIONS_PAUSED: 'yes' }],
+    ['blank Booking mutation pause value', { PMC_BOOKING_MUTATIONS_PAUSED: '' }],
+    ['blank Booking prepare flag', { PMC_BOOKING_PREPARE_ENABLED: '' }],
   ])('rejects %s', (_name, patch) => {
     expect(readPmcMiniAppConfig({ ...validEnvironment(), ...patch })).toBeNull()
   })

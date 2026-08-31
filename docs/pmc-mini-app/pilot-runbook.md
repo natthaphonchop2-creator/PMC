@@ -27,6 +27,11 @@ PMC_SPREADSHEET_ID
 PMC_DRIVE_INTAKE_FOLDER_ID
 PMC_BOOKING_INGRESS_URL
 PMC_BOOKING_FALLBACK_FORM_URL
+PMC_BOOKING_PROTOCOL_SUPPORTED
+PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION
+PMC_BOOKING_PREPARE_ENABLED
+PMC_BOOKING_BRIDGE_READY
+PMC_BOOKING_MUTATIONS_PAUSED
 PMC_MINI_APP_ENROLLMENT_ENABLED
 PMC_MINI_APP_ASYNC_ENABLED
 PMC_GCP_PROJECT_ID
@@ -88,6 +93,192 @@ git diff --check
 ```
 
 The runtime checker reports names and presence only. It never prints values.
+
+## Booking attribution protocol-v2 cutover
+
+ส่วนนี้เป็น maintenance window แยกต่างหากและต้องมี owner approval ใหม่ก่อนทุก Production action. โค้ด local และ checker ไม่ได้อนุญาตให้ deploy, push Apps Script, pause/resume queue, สร้าง backup, เปลี่ยน Script Properties, เปลี่ยน Cloud Run environment หรือย้ายข้อมูลเอง. `prepare` ต้องคงเป็น `false`; route `/prepare` ยังไม่อยู่ใน cutover นี้.
+
+Checker เป็น read-only และ stdout แสดงเฉพาะ boolean กับ status label. ห้ามใส่ token, secret, URL ที่มี secret, LINE ID, Sheet/Drive ID, row, ชื่อลูกค้า, เบอร์โทร, backup identity, manifest value หรือ attestation/digest ลง stdout, screenshot, repository หรือ rollout evidence. ไฟล์ Script-Property snapshot และไฟล์ attestation ต้องเป็นไฟล์ private mode `0600`, อยู่นอก repository และดูแลโดย owner.
+
+### Gate B0 — dual readers and minimum 1
+
+1. Build และ review Cloud Run/Apps Script source ที่อ่าน exact legacy และ exact target headers ได้ทั้งสองแบบ และ fail closed เมื่อ headers/version ไม่รู้จัก.
+2. หลัง owner อนุมัติ ให้ push Apps Script, สร้าง immutable version และอัปเดต deployment เดิมเท่านั้น. บันทึก version number แบบไม่เปิด deployment ID/URL.
+3. Deploy Cloud Run bridge revision แบบ `--no-traffic` ก่อน โดยกำหนด exact values `PMC_MINI_APP_ENABLED=true`, `PMC_BOOKING_PROTOCOL_SUPPORTED=2`, `PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION=1`, `PMC_BOOKING_PREPARE_ENABLED=false`, `PMC_BOOKING_BRIDGE_READY=true`, `PMC_BOOKING_MUTATIONS_PAUSED=false` จาก reviewed image เดียวกัน. ค่าใดหายหรือไม่ exact ต้อง fail closed.
+4. Legacy physical schema ต้องยังรับ exact P1 envelope; P2-to-legacy และ P1-to-target ต้อง fail closed. ห้าม migrate Sheet ใน Gate นี้.
+
+ตรวจ bridge แบบ read-only หลัง `npm run build:server` โดยแทนค่าช่อง `<operator-private-...>` จาก owner โดยไม่บันทึกค่าลง repository:
+
+```bash
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage BRIDGE \
+  --allow-no-traffic-precheck \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-bridge-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-property-snapshot> \
+  --strict
+```
+
+ผลที่ยอมรับคือ `safeStatus=READY`, legacy headers exact, dual reader ready และ minimum 1 เท่านั้น. Checker ไม่เปลี่ยน resource ใด ๆ.
+
+### Gate B1 — deploy bridge and force close/reopen
+
+1. Route traffic ไปยัง bridge revision ที่ผ่าน Gate B0 โดย owner approval แยกต่างหาก และต้องเป็น revision เดียว 100% เท่านั้น:
+
+```bash
+gcloud run services update-traffic <operator-private-service> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --to-revisions=<reviewed-bridge-revision>=100
+```
+
+รัน checker `BRIDGE --strict` ซ้ำโดยไม่ใช้ `--allow-no-traffic-precheck`; ต้องได้ `trafficAt100Percent=true` และ exact capability booleans ทั้งหมดก่อนแจ้งพนักงาน.
+2. แจ้งพนักงานทุกคนให้ปิดหน้าต่าง Mini App และปิด/เปิด LINE ใหม่หนึ่งครั้ง. การ refresh นี้จำเป็นเพราะหน้าเก่าไม่สามารถรับ client code ใหม่ย้อนหลังได้.
+3. ยืนยันจาก test identity ว่า client ใหม่ยังส่ง exact P1 create/save/confirm/cancel เมื่อ minimum เป็น 1 และมี persistent `CLIENT_UPGRADE_REQUIRED` handler อยู่แล้ว.
+4. ถ้ายังมี staff ใช้ pre-bridge page หรือ revision/checker ไม่ตรง ให้ abort และคง minimum 1; ห้ามไป Gate ถัดไป.
+
+### Gate B2 — drain to zero
+
+1. ขณะ minimum ยังเป็น 1 ให้พนักงานปิดงานหรือยกเลิก draft เก่า; ห้าม reinterpret attribution ของ draft ที่กำลังทำ.
+2. รอจน exact readback เป็นศูนย์ทั้ง nonterminal protocol-1 drafts และ active Cloud Tasks.
+3. ถ้าไม่เป็นศูนย์ ให้หยุด cutover และแก้รายการเดิมก่อน. ห้ามลบ row/task เพื่อทำให้ตัวเลขเป็นศูนย์.
+
+### Gate B3 — pause, check, attest, backup, and migrate
+
+1. ขอ owner approval แล้ว deploy reviewed maintenance revision แบบ `--no-traffic` โดยคง minimum 1 และเปลี่ยน write barrier เป็น `PMC_BOOKING_MUTATIONS_PAUSED=true`; ห้าม pause queue ก่อน revision นี้พร้อม:
+
+```bash
+gcloud run deploy <operator-private-service> \
+  --image <reviewed-private-image> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --revision-suffix <reviewed-maintenance-suffix> \
+  --update-env-vars PMC_MINI_APP_ENABLED=true,PMC_BOOKING_PROTOCOL_SUPPORTED=2,PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION=1,PMC_BOOKING_PREPARE_ENABLED=false,PMC_BOOKING_BRIDGE_READY=true,PMC_BOOKING_MUTATIONS_PAUSED=true \
+  --no-traffic
+gcloud run services update-traffic <operator-private-service> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --to-revisions=<reviewed-paused-revision>=100
+```
+
+2. รัน checker stage `MIGRATION` แบบ read-only ยังไม่ใช้ `--strict`/`--write-attestation`. แม้ safe status ยังเป็น queue-not-drained ต้องอ่านได้ `trafficAt100Percent=true`, `mutationsPaused=true`, exact capabilities/headers/rows=true. ถ้า revision ไม่ใช่ 100% หรือ barrier ไม่ true ให้ route กลับ revision เดิมและ abort.
+3. เมื่อ write barrier verified แล้วเท่านั้น จึง pause queue และอ่านกลับทั้ง state/task list:
+
+```bash
+gcloud tasks queues pause <operator-private-queue> \
+  --location <operator-private-region> \
+  --project <operator-private-project>
+gcloud tasks list \
+  --queue <operator-private-queue> \
+  --location <operator-private-region> \
+  --project <operator-private-project>
+```
+
+ต้องได้ queue `PAUSED` และ active task count ศูนย์; queue pause อย่างเดียวไม่ถือว่า migration-ready.
+4. รัน checker stage `MIGRATION` พร้อม `--write-attestation` โดย **ไม่ใส่ `--strict`** ในรอบสร้างไฟล์ครั้งแรก:
+
+```bash
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage MIGRATION \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-paused-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-preinstall-property-snapshot> \
+  --write-attestation <absolute-new-private-file>
+```
+
+รอบนี้ต้อง exit `0`, รายงาน `attestationEligible=true`, `safeStatus=PROPERTY_INSTALL_REQUIRED`, `ready=false` และสร้างไฟล์ใหม่ mode `0600`. สถานะ `PROPERTY_INSTALL_REQUIRED` เป็นผลที่คาดไว้ก่อนติดตั้ง property ไม่ใช่ migration failure. Checker ไม่ overwrite, ไม่พิมพ์ JSON/digest/path และไม่ติดตั้ง property.
+5. Owner เปิด private attestation file แล้วติดตั้งด้วยตนเองใน Apps Script project ที่ถูกต้อง:
+   - `PMC_BOOKING_ATTRIBUTION_QUEUE_ATTESTATION` = exact whole JSON ทั้งก้อน;
+   - `PMC_BOOKING_ATTRIBUTION_EXPECTED_QUEUE_DIGEST` = exact `queueResourceDigest` จาก JSON ก้อนเดียวกัน.
+6. สร้าง private `0600` property snapshot ใหม่ที่มีเฉพาะ property cutover ที่ติดตั้งแล้ว จากนั้นจึงรัน checker stage `MIGRATION --strict` โดยไม่ใช้ `--write-attestation` ซ้ำ:
+
+```bash
+node scripts/check-pmc-booking-attribution-v2.mjs \
+  --allow-readonly-production \
+  --expected-stage MIGRATION \
+  --project <operator-private-project> \
+  --region <operator-private-region> \
+  --service <operator-private-service> \
+  --queue <operator-private-queue> \
+  --expected-revision <reviewed-paused-revision> \
+  --apps-script-id <operator-private-script-id> \
+  --apps-script-deployment-id <operator-private-deployment-id> \
+  --minimum-apps-script-version <reviewed-dual-reader-version> \
+  --script-properties-file <absolute-private-0600-installed-property-snapshot> \
+  --strict
+```
+
+รอบ post-install นี้ต้อง exit `0` และได้ `mutationsPaused=true`, queue paused/zero, `attestationInstalled=true`, `expectedQueueDigestInstalled=true`, `manifestStatus=ABSENT`, `safeStatus=READY`, `ready=true`.
+7. เรียก `previewPmcBookingAttributionMigration()` แบบ read-only. Owner ตรวจ exact fingerprint/row-count summary แล้วจึงติดตั้ง `PMC_BOOKING_ATTRIBUTION_APPROVED_FINGERPRINT` ด้วยตนเอง. ห้ามเก็บ fingerprint ใน repository/chat/log.
+8. เรียก `applyPmcBookingAttributionMigration()` หนึ่งครั้ง. Workflow ต้องสร้างและตรวจ private native Spreadsheet backup ก่อนเขียน `PREPARED`, จากนั้นจึง insert/backfill/readback และเขียน `COMPLETE` เมื่อทุก hash ตรง. ตลอดข้อ 4–8 ต้องคงทั้ง Cloud Run write barrier และ queue pause.
+
+หาก fail ก่อน `PREPARED` และยังเป็น legacy schema ที่ untouched ให้ abort, เก็บหลักฐานสถานะที่ปลอดภัย และ owner อาจ resume ระบบเดิมที่ minimum 1 หลังตรวจสอบ. หากพบ `PREPARED`, `RESTORE_REQUIRED`, `UNMANIFESTED_PARTIAL_TARGET` หรือ readback mismatch ให้หยุดทันที, ห้าม rerun apply, ห้าม resume queue และห้ามแก้ Sheet ด้วยมือ. ต้องใช้ private backup identity ใน Script Property เพื่อทำ manual restore ที่ตรวจสอบโดย owner; ไม่มี automatic rollback.
+
+### Gate B4 — minimum 2 before queue resume
+
+1. หลัง apply ต้องอ่านกลับ exact target headers, target row contracts และ valid `COMPLETE` manifest ก่อน.
+2. Deploy reviewed minimum-2 revision แบบ `--no-traffic` โดยต้องคง `PMC_BOOKING_MUTATIONS_PAUSED=true`, จากนั้น route revision เดียว 100%:
+
+```bash
+gcloud run deploy <operator-private-service> \
+  --image <reviewed-private-image> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --revision-suffix <reviewed-cutover-paused-suffix> \
+  --update-env-vars PMC_MINI_APP_ENABLED=true,PMC_BOOKING_PROTOCOL_SUPPORTED=2,PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION=2,PMC_BOOKING_PREPARE_ENABLED=false,PMC_BOOKING_BRIDGE_READY=true,PMC_BOOKING_MUTATIONS_PAUSED=true \
+  --no-traffic
+gcloud run services update-traffic <operator-private-service> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --to-revisions=<reviewed-minimum2-paused-revision>=100
+```
+
+3. รัน checker stage `CUTOVER --strict` ด้วย property snapshot ที่มี valid `COMPLETE`; ต้องได้ revision 100%, `mutationsPaused=true`, target schema/rows exact, dual reader/version, minimum 2, queue paused/zero และ `safeStatus=READY`.
+4. ห้าม resume queue ก่อนตั้ง minimum เป็น 2, คง write barrier และให้ข้อ 3 ผ่าน. เมื่อผ่านแล้ว ขอ owner approval ใหม่เพื่อ deploy reviewed minimum-2 revision ที่เปลี่ยนเฉพาะ `PMC_BOOKING_MUTATIONS_PAUSED=false` แบบ `--no-traffic`, route revision นั้น 100%, ตรวจ exact serving env/read-only config แล้วจึง resume queue:
+
+```bash
+gcloud run deploy <operator-private-service> \
+  --image <reviewed-private-image> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --revision-suffix <reviewed-cutover-unpaused-suffix> \
+  --update-env-vars PMC_MINI_APP_ENABLED=true,PMC_BOOKING_PROTOCOL_SUPPORTED=2,PMC_BOOKING_PROTOCOL_MINIMUM_MUTATION=2,PMC_BOOKING_PREPARE_ENABLED=false,PMC_BOOKING_BRIDGE_READY=true,PMC_BOOKING_MUTATIONS_PAUSED=false \
+  --no-traffic
+gcloud run services update-traffic <operator-private-service> \
+  --region <operator-private-region> \
+  --project <operator-private-project> \
+  --to-revisions=<reviewed-minimum2-unpaused-revision>=100
+gcloud tasks queues resume <operator-private-queue> \
+  --location <operator-private-region> \
+  --project <operator-private-project>
+```
+
+5. Cached P1 mutation หลังจุดนี้ต้องได้ `409 CLIENT_UPGRADE_REQUIRED` โดยไม่มี store/task/ingress effect; exact terminal/idempotent P1 GET/recovery เท่านั้นที่ยังอ่านได้ใน TTL window.
+
+### Gate B5 — protocol 2 verification
+
+1. เปิด LINE ใหม่และตรวจ authenticated config ว่า minimum 2.
+2. ส่ง synthetic P2 normal booking หนึ่งรายการผ่าน exact create/save/confirm envelope. ตรวจ `ผู้บันทึก → Admin → AE`, payload hash, Sheet, Apps Script ingress, Calendar/LINE และ idempotent retry โดยไม่คัดลอกข้อมูลจริงลง evidence.
+3. ทดสอบ cached P1 mutation ให้ได้ `CLIENT_UPGRADE_REQUIRED` และยืนยันว่าไม่มี row, task, ingress, Calendar หรือ LINE side effect.
+4. ถ้า P2 test fail แต่ manifest เป็น `COMPLETE`, ปิด Booking/route traffic กลับ revision ที่ปลอดภัยโดยไม่ลด protocol floor หรือเขียน legacy row ใหม่จนกว่าจะมี owner-approved recovery plan.
+
+### Gate B6 — protocol-1 TTL cleanup
+
+คง protocol-1 terminal/idempotent GET/recovery ไว้จน active-draft TTL ที่กำหนดหมดจริงและตรวจว่าไม่มี recovery traffic แล้ว. การลบ P1 reader/recovery เป็น release ใหม่พร้อม tests, review และ owner approval; ห้ามลบใน migration window นี้.
 
 ## Owner gate 1 — Google Cloud preparation
 

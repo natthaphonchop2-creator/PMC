@@ -1,23 +1,208 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MiniAppApiError } from '../../src/apps/pmc-mini-app/api'
+import { MiniAppApiError, type BrowserBookingTiming } from '../../src/apps/pmc-mini-app/api'
 import { BookingWizard, type BookingWizardAdapter } from '../../src/apps/pmc-mini-app/BookingWizard'
 import type { BookingConfirmationResult, BookingDraftProjection, MiniAppConfig, MiniAppSession } from '../../src/apps/pmc-mini-app/contracts'
 
 afterEach(cleanup)
 
 describe('PMC Mini App mobile booking wizard', () => {
-  it('shows locked Admin, editable AE, and no final confirmation on the first step', () => {
+  it('shows recorder, required Admin, and optional AE in the exact attribution order', () => {
     renderWizard()
 
-    expect(screen.getByLabelText('Admin')).toHaveValue('มัส')
-    expect(screen.getByLabelText('Admin')).toBeDisabled()
-    expect(screen.getByLabelText('AE')).toBeEnabled()
+    const recorder = screen.getByLabelText('ผู้บันทึก')
+    const admin = screen.getByLabelText('Admin')
+    const ae = screen.getByLabelText('AE')
+    expect(recorder).toHaveValue('มัส')
+    expect(recorder).toBeDisabled()
+    expect(admin).toBeRequired()
+    expect(ae).not.toBeRequired()
+    expect(admin).toHaveValue('')
+    expect(ae).toHaveValue('')
+    expect(recorder.compareDocumentPosition(admin) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(admin.compareDocumentPosition(ae) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'ยืนยันบันทึก' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+  })
+
+  it('blocks the first step until a valid Admin ID is selected', async () => {
+    const user = userEvent.setup()
+    renderWizard({ draft: { ...draft, input: completeInput({ adminId: '' }) } })
+
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('กรุณาเลือก Admin')
+    expect(screen.getByRole('heading', { name: 'ข้อมูลลูกค้า' })).toBeVisible()
+  })
+
+  it('submits canonical Admin and nullable AE IDs without browser-owned names', async () => {
+    const user = userEvent.setup()
+    const prepare = vi.fn()
+    const app = Object.assign(adapter(), { prepare })
+    const current = {
+      ...draft,
+      input: completeInput(),
+      paymentEvidenceIds: ['payment-1'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    renderWizard({ draft: current, adapter: app })
+
+    await user.selectOptions(screen.getByLabelText('Admin'), 'staff-admin')
+    await user.selectOptions(screen.getByLabelText('AE'), '')
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    await waitFor(() => expect(app.save).toHaveBeenCalledOnce())
+    const submitted = vi.mocked(app.save).mock.calls[0]![2]
+    expect(submitted).toMatchObject({ adminId: 'staff-admin', aeId: null })
+    expect(submitted).not.toHaveProperty('adminName')
+    expect(submitted).not.toHaveProperty('aeName')
+    expect(submitted).not.toHaveProperty('recorderName')
+    expect(prepare).not.toHaveBeenCalled()
+  })
+
+  it('uses one advertised prepare request for canonical input and all evidence without legacy probes', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const prepared: BookingDraftProjection = {
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 3,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    }
+    vi.mocked(app.prepare).mockResolvedValueOnce(prepared)
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+    })
+    const payment = new File([pngBytes()], 'slip.png', { type: 'image/png' })
+    const chat = new File([pngBytes()], 'chat.png', { type: 'image/png' })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), payment)
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), chat)
+
+    const submit = screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' })
+    fireEvent.click(submit)
+    fireEvent.click(submit)
+
+    await waitFor(() => expect(app.prepare).toHaveBeenCalledOnce())
+    expect(app.prepare).toHaveBeenCalledWith('draft-1', 1, {
+      input: completeInput(), paymentFiles: [payment], chatFiles: [chat],
+    })
+    expect(app.uploadEvidenceBatch).not.toHaveBeenCalled()
+    expect(app.upload).not.toHaveBeenCalled()
+    expect(app.save).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+    const values = [...document.querySelectorAll('.pmc-preview-list dd')].map((element) => element.textContent)
+    expect(values.slice(0, 3)).toEqual(['มัส', 'แวว', 'ไม่ระบุ'])
+  })
+
+  it('previews recorder, Admin, and AE labels in the same exact order', () => {
+    const view = renderWizard({ initialStep: 4, draft: { ...draft, input: completeInput() } })
+    const labels = [...view.container.querySelectorAll('.pmc-preview-list dt')].map((element) => element.textContent)
+    const values = [...view.container.querySelectorAll('.pmc-preview-list dd')].map((element) => element.textContent)
+
+    expect(labels.slice(0, 3)).toEqual(['ผู้บันทึก', 'Admin', 'AE'])
+    expect(values.slice(0, 3)).toEqual(['มัส', 'แวว', 'ไม่ระบุ'])
+  })
+
+  it('keeps the legacy Admin and AE-name UI when the booking cutover capability is absent', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const legacyConfig = { ...config, bookingProtocol: undefined }
+    const current: BookingDraftProjection = {
+      ...draft,
+      input: completeLegacyInput(),
+      paymentEvidenceIds: ['payment-1'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    renderWizard({ draft: current, adapter: app, config: legacyConfig })
+
+    expect(screen.queryByLabelText('ผู้บันทึก')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Admin')).toHaveValue('มัส')
+    expect(screen.getByLabelText('Admin')).toBeDisabled()
+    expect(screen.getByLabelText('AE')).toHaveValue('ไม่ระบุ')
+    await user.selectOptions(screen.getByLabelText('AE'), 'หมวย')
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    await waitFor(() => expect(app.save).toHaveBeenCalledOnce())
+    expect(vi.mocked(app.save).mock.calls[0]![2]).toEqual({
+      ...completeLegacyInput(),
+      aeName: 'หมวย',
+    })
+  })
+
+  it('uses saved attribution snapshots for a recovered review after current config rename or removal', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const recovered: BookingDraftProjection = {
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      input: completeInput({ aeId: 'staff-ae' }),
+      attribution: {
+        protocolVersion: 2,
+        recorder: { id: 'staff-1', name: 'มัสเดิม' },
+        admin: { id: 'staff-admin', name: 'แววเดิม' },
+        ae: { id: 'staff-ae', name: 'หมวยเดิม' },
+      },
+      paymentEvidenceIds: ['payment-1'],
+      chatEvidenceIds: ['chat-1'],
+    }
+    renderWizard({
+      initialStep: 4,
+      draft: recovered,
+      adapter: app,
+      config: { ...config, admins: [], aes: [] },
+    })
+
+    const values = [...document.querySelectorAll('.pmc-preview-list dd')].map((element) => element.textContent)
+    expect(values.slice(0, 3)).toEqual(['มัสเดิม', 'แววเดิม', 'หมวยเดิม'])
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+    expect(app.confirm).toHaveBeenCalledWith('draft-1', 1)
+  })
+
+  it.each([
+    ['missing snapshot', undefined],
+    ['Admin ID mismatch', {
+      protocolVersion: 2 as const,
+      recorder: { id: 'staff-1', name: 'มัสเดิม' },
+      admin: { id: 'other-admin', name: 'แววเดิม' },
+      ae: null,
+    }],
+    ['recorder session mismatch', {
+      protocolVersion: 2 as const,
+      recorder: { id: 'other-recorder', name: 'มัสเดิม' },
+      admin: { id: 'staff-admin', name: 'แววเดิม' },
+      ae: null,
+    }],
+  ])('fails closed on recovered protocol-2 attribution: %s', (_label, attribution) => {
+    const app = adapter()
+    renderWizard({
+      initialStep: 4,
+      adapter: app,
+      draft: {
+        ...draft,
+        state: 'READY_TO_CONFIRM',
+        input: completeInput(),
+        ...(attribution ? { attribution } : {}),
+      },
+    })
+
+    expect(screen.queryByRole('button', { name: 'ยืนยันบันทึก' })).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('ข้อมูลผู้รับผิดชอบของร่างไม่ตรงกับบัญชีนี้')
+    expect(app.confirm).not.toHaveBeenCalled()
   })
 
   it('shows date and time for a normal queue and removes them for an automatic queue', async () => {
@@ -64,8 +249,126 @@ describe('PMC Mini App mobile booking wizard', () => {
 
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
-    expect(onConfirmed).toHaveBeenCalledWith({ caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+    expect(onConfirmed).toHaveBeenCalledWith(
+      { caseId: 'PMC-202608-0001', status: 'CONFIRMED' },
+      expect.objectContaining({ status: 200, startedAt: expect.any(Number) }),
+    )
     expect(screen.queryByText('PMC-202608-0001')).not.toBeInTheDocument()
+  })
+
+  it('hands the confirm start marker to the parent without ending Home timing before parent commit', async () => {
+    const user = userEvent.setup()
+    const bookingTiming = vi.fn<BrowserBookingTiming>()
+    const onConfirmed = vi.fn()
+    const times = [100, 180]
+    renderWizard({
+      initialStep: 4,
+      onConfirmed,
+      bookingTiming,
+      performanceNow: () => times.shift()!,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(onConfirmed).toHaveBeenCalledWith(
+      { caseId: 'PMC-202608-0001', status: 'CONFIRMED' },
+      { status: 200, startedAt: 100 },
+    )
+    expect(bookingTiming).not.toHaveBeenCalledWith('navigation_to_home', expect.anything())
+  })
+
+  it('reports aggregate-only click-to-preview timing after prepare completes', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.prepare).mockResolvedValueOnce({
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 2,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    })
+    const bookingTiming = vi.fn<BrowserBookingTiming>((name) => {
+      if (name === 'navigation_to_preview') {
+        expect(screen.getByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })).toBeVisible()
+      }
+    })
+    const times = [100, 820]
+    renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+      bookingTiming,
+      performanceNow: () => times.shift()!,
+    })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+
+    await screen.findByRole('heading', { name: 'ตรวจสอบก่อนยืนยัน' })
+    expect(bookingTiming).toHaveBeenCalledWith('navigation_to_preview', {
+      action: 'preview', status: 200, elapsedMs: 720,
+    })
+    expect(bookingTiming.mock.calls.filter(([name]) => name === 'navigation_to_preview')).toHaveLength(1)
+  })
+
+  it('ends failed-confirm timing only after the terminal error UI commits', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    vi.mocked(app.confirm).mockRejectedValueOnce(new MiniAppApiError('MINI_APP_STORAGE_UNAVAILABLE', 503))
+    const bookingTiming = vi.fn<BrowserBookingTiming>((name) => {
+      if (name === 'confirm_terminal_error') {
+        expect(screen.getByRole('alert')).toHaveTextContent('ยืนยันการจองไม่สำเร็จ')
+      }
+    })
+    const times = [100, 460]
+    renderWizard({
+      initialStep: 4,
+      adapter: app,
+      bookingTiming,
+      performanceNow: () => times.shift()!,
+    })
+
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    await waitFor(() => expect(bookingTiming).toHaveBeenCalledWith('confirm_terminal_error', {
+      action: 'error', status: 503, elapsedMs: 360,
+    }))
+    expect(bookingTiming.mock.calls.filter(([name]) => name === 'confirm_terminal_error')).toHaveLength(1)
+  })
+
+  it('does not emit a pending preview timing after the Wizard unmounts', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    let resolvePrepare!: (value: BookingDraftProjection) => void
+    vi.mocked(app.prepare).mockImplementationOnce(() => new Promise((resolve) => { resolvePrepare = resolve }))
+    const bookingTiming = vi.fn<BrowserBookingTiming>()
+    const view = renderWizard({
+      initialStep: 3,
+      adapter: app,
+      config: { ...config, bookingProtocol: { supported: 2, minimumMutation: 2, prepare: true } },
+      draft: { ...draft, input: completeInput() },
+      bookingTiming,
+    })
+    await user.upload(screen.getByLabelText('สลิปเงินจอง'), new File([pngBytes()], 'slip.png', { type: 'image/png' }))
+    await user.upload(screen.getByLabelText('หลักฐานแชท'), new File([pngBytes()], 'chat.png', { type: 'image/png' }))
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    view.unmount()
+
+    await act(async () => resolvePrepare({
+      ...draft,
+      state: 'READY_TO_CONFIRM',
+      version: 2,
+      input: completeInput(),
+      attribution: savedAttribution(),
+      paymentEvidenceCount: 1,
+      chatEvidenceCount: 1,
+    }))
+
+    expect(bookingTiming).not.toHaveBeenCalled()
   })
 
   it('does not send the same valid confirmation twice before React disables the submit button', () => {
@@ -92,7 +395,10 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
     expect(app.confirm).toHaveBeenCalledWith('draft-1', 1)
-    await waitFor(() => expect(onQueued).toHaveBeenCalledWith(projection))
+    await waitFor(() => expect(onQueued).toHaveBeenCalledWith(
+      projection,
+      expect.objectContaining({ status: 202, startedAt: expect.any(Number) }),
+    ))
   })
 
   it('cancels the server draft before leaving the first step', async () => {
@@ -117,6 +423,65 @@ describe('PMC Mini App mobile booking wizard', () => {
     await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('ยกเลิกร่างไม่สำเร็จ')
+    expect(onExit).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['BEGIN-only', { ...draft, state: 'DRAFT' as const, version: 2 }],
+    ['partial', { ...draft, state: 'DRAFT' as const, retentionState: 'PENDING_APPROVAL' as const, version: 3,
+      paymentEvidenceCount: 1, chatEvidenceCount: 0 }],
+    ['READY response loss', { ...draft, state: 'READY_TO_CONFIRM' as const, version: 3, input: completeInput(),
+      attribution: savedAttribution(), paymentEvidenceCount: 1, chatEvidenceCount: 1 }],
+  ])('reloads once and retries owner cancellation once for a stale %s prepare draft', async (_label, latest) => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel)
+      .mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+      .mockResolvedValueOnce({ ...latest, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: latest.version + 1 })
+    vi.mocked(app.load).mockResolvedValueOnce(latest)
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    await waitFor(() => expect(onExit).toHaveBeenCalledOnce())
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.load).toHaveBeenCalledWith('draft-1')
+    expect(app.cancel).toHaveBeenNthCalledWith(1, 'draft-1', 1)
+    expect(app.cancel).toHaveBeenNthCalledWith(2, 'draft-1', latest.version)
+  })
+
+  it('exits safely when stale cancel recovery finds the draft already cancelled', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel).mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+    vi.mocked(app.load).mockResolvedValueOnce({
+      ...draft, state: 'CANCELLED', retentionState: 'PENDING_APPROVAL', version: 3,
+      paymentEvidenceCount: 1, chatEvidenceCount: 1,
+    })
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    await waitFor(() => expect(onExit).toHaveBeenCalledOnce())
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.cancel).toHaveBeenCalledOnce()
+  })
+
+  it('does not loop, reopen, or cancel a competing non-cancelable state during stale recovery', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onExit = vi.fn()
+    vi.mocked(app.cancel).mockRejectedValueOnce(new MiniAppApiError('STALE_DRAFT_VERSION', 409))
+    vi.mocked(app.load).mockResolvedValueOnce({ ...draft, state: 'QUEUED', version: 4, queuedAt: '2026-08-30T10:00:00.000Z' })
+    renderWizard({ adapter: app, onExit })
+
+    await user.click(screen.getByRole('button', { name: 'ย้อนกลับ' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('ยกเลิกร่างไม่สำเร็จ')
+    expect(app.load).toHaveBeenCalledOnce()
+    expect(app.cancel).toHaveBeenCalledOnce()
     expect(onExit).not.toHaveBeenCalled()
   })
 
@@ -172,7 +537,12 @@ describe('PMC Mini App mobile booking wizard', () => {
       paymentEvidenceIds: ['payment-1', 'payment-2', 'payment-3'],
       chatEvidenceIds: ['chat-1'],
     }
-    const latest: BookingDraftProjection = { ...current, state: 'READY_TO_CONFIRM', version: 10 }
+    const latest: BookingDraftProjection = {
+      ...current,
+      state: 'READY_TO_CONFIRM',
+      version: 10,
+      attribution: savedAttribution(),
+    }
     const app = {
       ...adapter(),
       load: vi.fn(async () => latest),
@@ -194,6 +564,7 @@ describe('PMC Mini App mobile booking wizard', () => {
       ...current,
       state: 'READY_TO_CONFIRM',
       version: 3,
+      attribution: savedAttribution(),
       paymentEvidenceCount: 3,
       chatEvidenceCount: 1,
     }
@@ -223,16 +594,21 @@ function renderWizard(options: {
   onExit?: () => void
   onQueued?: (projection: BookingDraftProjection) => void
   onConfirmed?: (result: BookingConfirmationResult) => void
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
+  config?: MiniAppConfig
 } = {}) {
   return render(<BookingWizard
     session={session}
-    config={config}
+    config={options.config ?? config}
     draft={options.draft ?? draft}
     adapter={options.adapter ?? adapter()}
     initialStep={options.initialStep}
     onExit={options.onExit}
     onQueued={options.onQueued}
     onConfirmed={options.onConfirmed}
+    bookingTiming={options.bookingTiming}
+    performanceNow={options.performanceNow}
   />)
 }
 
@@ -241,7 +617,10 @@ const config: MiniAppConfig = {
   miniAppId: 'mini-id', fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform', reportingEnabled: false,
   stockEnabled: false, canManageStock: false,
   doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }], services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
-  channels: [{ id: 'channel-1', name: 'เพจTAB' }], aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, { id: 'staff-1', name: 'มัส' }],
+  channels: [{ id: 'channel-1', name: 'เพจTAB' }],
+  bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+  admins: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
+  aes: [{ id: 'staff-admin', name: 'แวว' }, { id: 'staff-ae', name: 'หมวย' }],
 }
 const draft: BookingDraftProjection = {
   draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 1, input: null,
@@ -252,6 +631,7 @@ const draft: BookingDraftProjection = {
 function adapter(): BookingWizardAdapter {
   return {
     load: vi.fn(async () => draft),
+    prepare: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),
     upload: vi.fn(async () => draft),
     uploadEvidenceBatch: vi.fn(async () => draft),
     save: vi.fn(async () => ({ ...draft, state: 'READY_TO_CONFIRM', version: 2 })),
@@ -260,11 +640,32 @@ function adapter(): BookingWizardAdapter {
   }
 }
 
-function completeInput() {
+function completeInput(patch: Partial<ReturnType<typeof completeInputBase>> = {}) {
+  return { ...completeInputBase(), ...patch }
+}
+
+function completeInputBase() {
+  return {
+    requestId: 'request-1', adminId: 'staff-admin', aeId: null, customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+    phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+    appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+  }
+}
+
+function completeLegacyInput() {
   return {
     requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
     phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
     appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+  }
+}
+
+function savedAttribution() {
+  return {
+    protocolVersion: 2 as const,
+    recorder: { id: 'staff-1', name: 'มัส' },
+    admin: { id: 'staff-admin', name: 'แวว' },
+    ae: null,
   }
 }
 

@@ -2,8 +2,11 @@ import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
-import type { MiniAppBookingIngressPayload } from '../../shared/pmcMiniAppBooking'
 import { bookingPayloadHash, parseBookingDraft } from '../../server/pmc-mini-app/bookingDraft'
+import {
+  createBookingIngressClient,
+  type BookingIngressPort,
+} from '../../server/pmc-mini-app/bookingIngressClient'
 import type { PmcMiniAppServerConfig } from '../../server/pmc-mini-app/config'
 import type { LineIdentityPort } from '../../server/pmc-mini-app/contracts'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
@@ -18,7 +21,11 @@ import type { JeraSyncCoordinator, JeraSyncQuery } from '../../server/jera/syncC
 import { jeraCacheKey } from '../../server/jera/cacheKey'
 import type { BookingDraftInput } from '../../src/apps/pmc-mini-app/contracts'
 import { submitMiniAppBooking } from '../../apps/pmc-google-booking-ops/src/workflows/miniAppSubmit'
-import { createTestPorts } from '../../apps/pmc-google-booking-ops/tests/helpers/fakes'
+import { parseAndVerifyMiniAppIngress } from '../../apps/pmc-google-booking-ops/src/domain/miniAppIngress'
+import {
+  createTestPorts,
+  type TestPorts,
+} from '../../apps/pmc-google-booking-ops/tests/helpers/fakes'
 
 describe('PMC Mini App deterministic end-to-end booking flow', () => {
   it('submits one normal and one automatic booking without duplicate Case IDs', async () => {
@@ -41,6 +48,41 @@ describe('PMC Mini App deterministic end-to-end booking flow', () => {
     })
 
     expect(result.booking).toMatchObject({ paymentEvidenceCount: 2, chatEvidenceCount: 2, driveState: 'OK' })
+  })
+
+  it('cuts over to exact protocol 2 without allowing a cached protocol-1 mutation to create side effects', async () => {
+    const system = protocol2HttpSystem()
+
+    const rejectedCreate = await system.json('POST', '/api/mini-app/booking-drafts', {})
+    const created = await system.json('POST', '/api/mini-app/booking-drafts', { protocolVersion: 2 })
+    system.attachEvidence()
+    const saved = await system.json('PATCH', '/api/mini-app/booking-drafts/draft-1', {
+      protocolVersion: 2,
+      version: 1,
+      input: protocol2Booking(),
+    })
+    const rejectedCachedConfirm = await system.json('POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      version: saved.body.version,
+    })
+    const confirmed = await system.json('POST', '/api/mini-app/booking-drafts/draft-1/confirm', {
+      protocolVersion: 2,
+      version: saved.body.version,
+    })
+
+    expect(rejectedCreate).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(created.status).toBe(201)
+    expect(rejectedCachedConfirm).toEqual({ status: 409, body: { error: 'CLIENT_UPGRADE_REQUIRED' } })
+    expect(confirmed).toEqual({
+      status: 200,
+      body: {
+        caseId: 'PMC-202608-0001', status: 'CONFIRMED',
+        driveState: 'OK', calendarState: 'OK', lineState: 'OK',
+      },
+    })
+    expect(system.bookings()).toEqual([expect.objectContaining({
+      recorderId: 'admin-1', recorderName: 'Admin A', adminId: 'staff-ae', adminName: 'เอม',
+      aeId: 'admin-1', aeName: 'Admin A',
+    })])
   })
 })
 
@@ -417,6 +459,7 @@ function financeServerConfig(
     enrollmentPin: null,
     maxImageBytes: 10_000_000,
     maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false },
     asyncBooking: null,
     financeReportsEnabled: true,
     financeUiPreviewEnabled: false,
@@ -460,6 +503,7 @@ function miniAppTestSystem() {
   ports.config.findChannel = (id) => id === 'channel-1'
     ? { id: 'channel-1', name: 'เพจหลัก', active: true }
     : originalFindChannel(id)
+  const ingress = localProductionBookingIngress(ports)
 
   return {
     async submit(input: BookingDraftInput, evidence = evidenceFor(input.requestId)) {
@@ -477,7 +521,8 @@ function miniAppTestSystem() {
         const booking = ports.bookings.getByCaseId(claim.caseId!)!
         return { caseId: booking.caseId, status: claim.status!, booking }
       }
-      const booking = submitMiniAppBooking(ingressPayload(claim.draft), ports)
+      const result = await ingress.send(claim.draft)
+      const booking = ports.bookings.getByCaseId(result.caseId)!
       await store.completeConfirmation(input.requestId, booking.caseId, ports.clock.nowIso(), booking.appointmentStatus)
       return { caseId: booking.caseId, status: booking.appointmentStatus, booking }
     },
@@ -485,13 +530,109 @@ function miniAppTestSystem() {
   }
 }
 
-function ingressPayload(draft: MiniAppRequestRecord): MiniAppBookingIngressPayload {
+function protocol2HttpSystem() {
+  const store = new MemoryMiniAppStore(2)
+  const ports = createTestPorts({ extraDriveFileIds: ['payment-1', 'chat-1'] })
+  const originalFindChannel = ports.config.findChannel
+  ports.config.findChannel = (id) => id === 'channel-1'
+    ? { id: 'channel-1', name: 'เพจหลัก', active: true }
+    : originalFindChannel(id)
+  const config: PmcMiniAppServerConfig = {
+    enabled: true,
+    miniAppId: 'mini-app',
+    lineChannelId: '2001234567',
+    spreadsheetId: 'sheet-1',
+    intakeFolderId: 'folder-1',
+    bookingIngressUrl: 'https://script.google.com/macros/s/deployment/exec',
+    fallbackFormUrl: 'https://docs.google.com/forms/d/e/form-id/viewform',
+    bookingIngressSecret: 'booking-secret',
+    signingSecret: 'signing-secret',
+    enrollmentPin: null,
+    maxImageBytes: 10_000_000,
+    maxFilesPerKind: 10,
+    bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+    asyncBooking: null,
+    financeReportsEnabled: false,
+    stockEnabled: false,
+    stockManagerPilotOnly: false,
+    finance: null,
+  }
+  const middleware = createPmcMiniAppMiddleware({
+    config,
+    identity: { async verify() { return { lineUserId: 'Urecorder' } } },
+    store,
+    requestId: () => 'request-1',
+    draftId: () => 'draft-1',
+    now: () => new Date('2026-08-30T09:00:00.000Z'),
+    ingress: localProductionBookingIngress(ports),
+  })
   return {
-    requestId: draft.requestId, payloadHash: draft.payloadHash!, staffId: draft.staffId, aeName: draft.aeName,
-    customerName: draft.customerName, facebookName: draft.facebookName, phoneNormalized: draft.phoneNormalized,
-    doctorId: draft.doctorId, serviceId: draft.serviceId, queueType: draft.queueType,
-    appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
-    channelId: draft.channelId, paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
+    async json(method: string, path: string, body: Record<string, unknown>) {
+      const response = await invokeFinanceMiddleware(middleware, path, {
+        method,
+        headers: { authorization: 'Bearer valid-token', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return { status: response.status, body: await response.json() as Record<string, unknown> }
+    },
+    attachEvidence: () => store.attachEvidence('draft-1'),
+    bookings: () => ports.bookings.list(),
+  }
+}
+
+function localProductionBookingIngress(ports: TestPorts): BookingIngressPort {
+  let nonceCounter = 0
+  return createBookingIngressClient({
+    url: 'https://script.google.com/macros/s/deployment/exec',
+    secret: ports.secrets.bookingIngressSecret(),
+    now: () => Math.floor(Date.parse(ports.clock.nowIso()) / 1_000),
+    nonce: () => `nonce-e2e-${String(++nonceCounter).padStart(8, '0')}`,
+    fetch: async (_url, init) => {
+      const envelope = JSON.parse(init.body) as unknown
+      const payload = parseAndVerifyMiniAppIngress(appsScriptEvent(envelope), ports)
+      const booking = submitMiniAppBooking(payload, ports)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          caseId: booking.caseId,
+          status: booking.appointmentStatus,
+          driveState: booking.driveState,
+          calendarState: booking.calendarState,
+          lineState: booking.lineState,
+        }),
+      }
+    },
+  })
+}
+
+function appsScriptEvent(payload: unknown) {
+  const contents = JSON.stringify(payload)
+  return {
+    postData: {
+      contents,
+      length: contents.length,
+      name: 'postData',
+      type: 'application/json',
+    },
+  }
+}
+
+function protocol2Booking(): BookingDraftInput {
+  return {
+    requestId: 'request-1',
+    adminId: 'staff-ae',
+    aeId: 'admin-1',
+    customerName: 'ลูกค้าทดสอบ',
+    facebookName: 'Facebook Test',
+    phone: '0812345678',
+    doctorId: 'doctor-1',
+    serviceId: 'service-1',
+    queueType: 'NORMAL',
+    appointmentDate: '2026-08-30',
+    appointmentTime: '13:00',
+    depositAmount: 900,
+    channelId: 'channel-1',
   }
 }
 
@@ -513,9 +654,36 @@ function evidenceFor(requestId: string) {
 
 class MemoryMiniAppStore implements MiniAppStore {
   private readonly drafts = new Map<string, MiniAppRequestRecord>()
-  async getActiveStaffByLineUserId() { return null }
-  async getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection> { return { doctors: [], services: [], channels: [], aes: [] } }
-  async createDraft(draft: MiniAppRequestRecord) { this.drafts.set(draft.draftId, structuredClone(draft)); return structuredClone(draft) }
+  constructor(private readonly requestSchemaVersion: 1 | 2 = 1) {}
+  async getActiveStaffByLineUserId(lineUserId: string) {
+    return {
+      id: 'admin-1', name: 'Admin A', email: 'admin@example.com', lineUserId,
+      canCloseBooking: true, canBeAe: true, active: true as const, profileImageUrl: null,
+    }
+  }
+  async getActiveBookingConfig(): Promise<MiniAppBookingConfigProjection> {
+    return {
+      doctors: [{ id: 'doctor-1', name: 'หมอ Benz' }],
+      services: [{ id: 'service-1', name: 'เติมไขมัน', durationMinutes: 60 }],
+      channels: [{ id: 'channel-1', name: 'เพจหลัก' }],
+      admins: [{ id: 'admin-1', name: 'Admin A' }, { id: 'staff-ae', name: 'เอม' }],
+      aes: [{ id: 'admin-1', name: 'Admin A' }, { id: 'staff-ae', name: 'เอม' }],
+    }
+  }
+  async createDraft(draft: MiniAppRequestRecord) {
+    if (draft.protocolVersion !== this.requestSchemaVersion) throw new Error('BOOKING_PROTOCOL_SCHEMA_MISMATCH')
+    this.drafts.set(draft.draftId, structuredClone(draft))
+    return structuredClone(draft)
+  }
+  attachEvidence(draftId: string) {
+    const draft = this.drafts.get(draftId)!
+    this.drafts.set(draftId, {
+      ...draft,
+      paymentEvidenceFileIds: ['payment-1'],
+      chatEvidenceFileIds: ['chat-1'],
+      evidenceCount: 2,
+    })
+  }
   async getDraft(draftId: string) { return structuredClone(this.drafts.get(draftId) ?? null) }
   async updateDraft(draftId: string, expectedVersion: number, patch: MiniAppDraftPatch) {
     const draft = this.drafts.get(draftId)

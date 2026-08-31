@@ -8,9 +8,14 @@ import type {
   LineIdentityPort,
   StockServerDependencies,
 } from './contracts.js'
-import { bookingPayloadHash, parseBookingDraft } from './bookingDraft.js'
+import { bookingPayloadHash, parseBookingDraft, parseBookingDraftV2 } from './bookingDraft.js'
 import { consumeEvidenceMultipart, MiniAppEvidenceError, serverEvidenceName, validateEvidence } from './evidence.js'
-import { consumeEvidenceBatchMultipart, type EvidenceBatch } from './evidenceBatch.js'
+import {
+  BOOKING_PREPARE_LIMITS,
+  consumeBookingPrepareMultipart,
+  consumeEvidenceBatchMultipart,
+  type EvidenceBatch,
+} from './evidenceBatch.js'
 import type { MiniAppDrivePort, MiniAppEvidenceKind, MiniAppEvidenceMime } from './googleClient.js'
 import type { EvidenceStagingPort } from './stagingStore.js'
 import type { MiniAppRequestRecord, MiniAppResumeStore, MiniAppStore } from './store.js'
@@ -25,9 +30,26 @@ import { isExpenseRecoveryCounts } from '../../shared/pmcMiniAppExpenseIngress.j
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 import { handleStockMiniAppApi, isStockMiniAppApiPath } from './stock/middleware.js'
 import { handleFinanceMiniAppApi, isFinanceMiniAppApiPath } from './finance/middleware.js'
+import {
+  BookingPreparePersistenceError,
+  persistPrepareEvidence,
+  projectionDigest,
+  type PersistPrepareEvidenceInput,
+} from './bookingPrepare.js'
+import type { DraftStateIngressPort } from './draftStateIngressClient.js'
+import type { MiniAppDraftStateMutation, MiniAppDraftStateResult } from '../../shared/pmcMiniAppDraftState.js'
+import { validatedQueueFastPath, type SafeQueueProjection } from './queuedProjection.js'
+import type {
+  BookingPerformanceTelemetry,
+  BookingTimingAction,
+  BookingTimingEventName,
+  BookingTimingRoute,
+} from './bookingPerformanceTelemetry.js'
+import { cleanupMiniAppDraftEvidence } from './draftCleanup.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
 const EXPENSE_RECOVERY_PATH = '/internal/mini-app/recover-expenses'
+const DRAFT_CLEANUP_PATH = '/internal/mini-app/draft-evidence-cleanup'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
 
 export type AsyncBookingWorkerEntrypoint = AsyncBookingWorker
@@ -43,7 +65,10 @@ export interface PmcMiniAppMiddlewareDependencies {
   expenseRecoveryIdentity?: WorkerIdentityVerifier
   asyncWorker?: AsyncBookingWorker
   stateIngress?: AsyncStateIngressPort
+  draftStateIngress?: DraftStateIngressPort
   asyncTelemetry?: AsyncBookingTelemetry
+  bookingPerformanceTelemetry?: BookingPerformanceTelemetry
+  performanceNow?: () => number
   now?: () => Date
   randomId?: () => string
   requestId?: () => string
@@ -83,6 +108,26 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     }
 
     const pathname = url.pathname
+    if (pathname === DRAFT_CLEANUP_PATH) {
+      if (req.method !== 'POST') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+      if (!deps.evidenceStaging) return respond(res, 503, { error: 'DRAFT_CLEANUP_UNAVAILABLE' })
+      const body = await readRequiredJson(req, res)
+      if (!body) return
+      try {
+        respond(res, 200, await cleanupMiniAppDraftEvidence(body, {
+          secret: deps.config.bookingIngressSecret,
+          staging: deps.evidenceStaging,
+          nowSeconds: Math.floor((deps.now ?? (() => new Date()))().getTime() / 1_000),
+        }))
+      } catch {
+        respond(res, 400, { error: 'DRAFT_CLEANUP_REJECTED' })
+      }
+      return
+    }
+    if (deps.config.bookingMutationsPaused && isUserBookingMutation(pathname, req.method)) {
+      respond(res, 503, { error: 'BOOKING_MUTATIONS_PAUSED' })
+      return
+    }
     if (pathname === '/internal/mini-app/jera-sync' || pathname === '/internal/mini-app/jera-allocation-worker'
       || pathname === '/internal/mini-app/finance-daily-seed') {
       if (!deps.jera) {
@@ -185,6 +230,31 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       return
     }
 
+    const prepareRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/prepare$/.exec(pathname)
+    if (prepareRoute) {
+      const requestStartedAt = timingNow(deps)
+      if (!deps.config.bookingProtocol.prepare) {
+        respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+        return
+      }
+      if (req.method !== 'POST') {
+        respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+        return
+      }
+      const authenticated = await authenticate(req, res, deps, { name: 'prepare_completed', route: 'prepare' })
+      if (!authenticated) {
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'request', responseStatus(res, 503), requestStartedAt)
+        return
+      }
+      if (!requireBookingRecorder(authenticated, res)) {
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'request', responseStatus(res, 403), requestStartedAt)
+        return
+      }
+      await handleBookingPrepare(req, res, prepareRoute[1]!, authenticated, deps)
+      emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'request', responseStatus(res, 500), requestStartedAt)
+      return
+    }
+
     const evidenceBatchRoute = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})\/evidence-batch$/.exec(pathname)
     if (evidenceBatchRoute) {
       if (req.method !== 'POST') {
@@ -193,6 +263,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       }
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
       await handleEvidenceBatchUpload(req, res, evidenceBatchRoute[1]!, authenticated, deps)
       return
     }
@@ -201,7 +272,9 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       if (!requireGet(req, res)) return
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
-      if (!deps.config.asyncBooking || !deps.config.asyncBooking.ownerStaffIds.has(authenticated.staffId)) {
+      if (!requireBookingRecorder(authenticated, res)) return
+      const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
+      if (!deps.config.bookingProtocol.prepare && !asyncOwner) {
         respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
         return
       }
@@ -227,15 +300,25 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
       }
       const authenticated = await authenticate(req, res, deps)
       if (!authenticated) return
+      if (!requireBookingRecorder(authenticated, res)) return
       await handleEvidenceUpload(req, res, url, evidenceRoute[1]!, authenticated, deps)
       return
     }
 
     const bookingRoute = bookingDraftRoute(pathname)
     if (bookingRoute) {
-      const authenticated = await authenticate(req, res, deps)
-      if (!authenticated) return
+      const confirmStartedAt = bookingRoute.action === 'CONFIRM' ? timingNow(deps) : null
+      const authenticated = await authenticate(req, res, deps, confirmStartedAt === null ? undefined : { name: 'confirm_completed', route: 'confirm' })
+      if (!authenticated) {
+        if (confirmStartedAt !== null) emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'request', responseStatus(res, 503), confirmStartedAt)
+        return
+      }
+      if (!requireBookingRecorder(authenticated, res)) {
+        if (confirmStartedAt !== null) emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'request', responseStatus(res, 403), confirmStartedAt)
+        return
+      }
       await handleBookingDraftRoute(req, res, bookingRoute, authenticated, deps)
+      if (confirmStartedAt !== null) emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'request', responseStatus(res, 500), confirmStartedAt)
       return
     }
 
@@ -282,7 +365,9 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         doctors: bookingConfig.doctors,
         services: bookingConfig.services,
         channels: bookingConfig.channels,
-        aes: [{ id: 'NONE', name: 'ไม่ระบุ' }, ...bookingConfig.aes.filter(({ id }) => id !== 'NONE')],
+        bookingProtocol: deps.config.bookingProtocol,
+        admins: bookingConfig.admins ?? bookingConfig.aes,
+        aes: bookingConfig.aes,
       })
     } catch {
       respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
@@ -479,6 +564,13 @@ type BookingDraftRoute =
   | { action: 'CREATE' }
   | { action: 'GET' | 'PATCH' | 'CONFIRM' | 'CANCEL'; draftId: string }
 
+function isUserBookingMutation(pathname: string, method: string | undefined): boolean {
+  if (method === 'POST' && pathname === '/api/mini-app/booking-drafts') return true
+  if (method === 'PATCH' && /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}$/.test(pathname)) return true
+  if (method !== 'POST') return false
+  return /^\/api\/mini-app\/booking-drafts\/[A-Za-z0-9._:-]{1,124}\/(?:confirm|cancel|evidence|evidence-batch|prepare)$/.test(pathname)
+}
+
 function bookingDraftRoute(pathname: string): BookingDraftRoute | null {
   if (pathname === '/api/mini-app/booking-drafts') return { action: 'CREATE' }
   const match = /^\/api\/mini-app\/booking-drafts\/([A-Za-z0-9._:-]{1,124})(?:\/(confirm|cancel))?$/.exec(pathname)
@@ -486,6 +578,53 @@ function bookingDraftRoute(pathname: string): BookingDraftRoute | null {
   if (match[2] === 'confirm') return { action: 'CONFIRM', draftId: match[1]! }
   if (match[2] === 'cancel') return { action: 'CANCEL', draftId: match[1]! }
   return { action: 'GET', draftId: match[1]! }
+}
+
+type BookingMutationEnvelope =
+  | { protocolVersion: 1; version: number; input?: unknown }
+  | { protocolVersion: 2; version: number; input?: unknown }
+
+type BookingMutationEnvelopeResult =
+  | { value: BookingMutationEnvelope }
+  | { status: 400; error: 'INVALID_BOOKING_PROTOCOL_VERSION' | 'UNKNOWN_BOOKING_FIELD' }
+
+function parseBookingMutationEnvelope(
+  action: 'PATCH' | 'CONFIRM' | 'CANCEL',
+  body: Record<string, unknown>,
+): BookingMutationEnvelopeResult {
+  const legacyKeys = action === 'PATCH' ? ['version', 'input'] : ['version']
+  const protocol2Keys = action === 'PATCH' ? ['protocolVersion', 'version', 'input'] : ['protocolVersion', 'version']
+  if (hasExactKeys(body, legacyKeys)) {
+    return { value: { protocolVersion: 1, version: body.version as number, ...(action === 'PATCH' ? { input: body.input } : {}) } }
+  }
+  if (hasExactKeys(body, protocol2Keys)) {
+    if (body.protocolVersion !== 2) return { status: 400, error: 'INVALID_BOOKING_PROTOCOL_VERSION' }
+    return { value: { protocolVersion: 2, version: body.version as number, ...(action === 'PATCH' ? { input: body.input } : {}) } }
+  }
+  if ('protocolVersion' in body && body.protocolVersion !== 2) {
+    return { status: 400, error: 'INVALID_BOOKING_PROTOCOL_VERSION' }
+  }
+  return { status: 400, error: 'UNKNOWN_BOOKING_FIELD' }
+}
+
+function isProtocol1Recovery(
+  action: 'PATCH' | 'CONFIRM' | 'CANCEL',
+  draft: MiniAppRequestRecord,
+  mutation: BookingMutationEnvelope,
+  asyncOwner: boolean,
+): boolean {
+  if (mutation.protocolVersion !== 1 || draft.protocolVersion !== 1) return false
+  if (action === 'PATCH') {
+    return mutation.version < draft.version && matchesSavedDraftInput(draft, mutation.input)
+  }
+  if (action === 'CANCEL') {
+    return mutation.version < draft.version
+      && draft.state === 'CANCELLED'
+      && draft.retentionState === 'PENDING_APPROVAL'
+  }
+  return draft.state === 'CONFIRMED'
+    || confirmedWithRetryResult(draft) !== null
+    || asyncOwner && mutation.version <= draft.version && isBoundAsyncConfirmation(draft)
 }
 
 async function handleBookingDraftRoute(
@@ -500,14 +639,26 @@ async function handleBookingDraftRoute(
     if (req.method !== 'POST') return respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
     const body = await readRequiredJson(req, res)
     if (!body) return
-    if (!hasExactKeys(body, [])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+    let requestedProtocol: 1 | 2
+    if (hasExactKeys(body, [])) requestedProtocol = 1
+    else if (hasExactKeys(body, ['protocolVersion'])) {
+      if (body.protocolVersion !== 2) return respond(res, 400, { error: 'INVALID_BOOKING_PROTOCOL_VERSION' })
+      requestedProtocol = 2
+    } else return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
+    if (requestedProtocol < deps.config.bookingProtocol.minimumMutation) {
+      return respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    }
     const now = currentIso(deps)
     const requestId = deps.requestId?.() ?? `request-${randomUUID()}`
     const draftId = deps.draftId?.() ?? `draft-${randomUUID()}`
     const draft: MiniAppRequestRecord = {
-      requestId, draftId, staffId: authenticated.staffId,
+      requestId, draftId, protocolVersion: requestedProtocol, staffId: authenticated.staffId,
+      recorderName: requestedProtocol === 2 ? authenticated.displayName : '',
+      adminId: requestedProtocol === 2 ? '' : authenticated.staffId,
+      adminName: '', aeId: null,
       lineUserIdHash: createHmac('sha256', deps.config.signingSecret).update(authenticated.lineUserId).digest('base64url'),
-      state: 'DRAFT', retentionState: '', version: 1, payloadHash: null, aeName: '', customerName: '', facebookName: '',
+      state: 'DRAFT', retentionState: '', version: 1, payloadHash: null,
+      aeName: requestedProtocol === 2 ? 'ไม่ระบุ' : '', customerName: '', facebookName: '',
       phoneNormalized: '', doctorId: '', serviceId: '', queueType: 'NORMAL', appointmentDate: null, appointmentTime: null,
       depositAmount: 0, channelId: '', paymentEvidenceFileIds: [], chatEvidenceFileIds: [], evidenceCount: 0,
       paymentEvidenceObjectKeys: [], chatEvidenceObjectKeys: [], taskName: null, queuedAt: null, processingStartedAt: null,
@@ -518,8 +669,10 @@ async function handleBookingDraftRoute(
     }
     try {
       respond(res, 201, draftProjection(await deps.store.createDraft(draft)))
-    } catch {
-      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    } catch (error) {
+      if (error instanceof Error && error.message === 'BOOKING_PROTOCOL_SCHEMA_MISMATCH') {
+        respond(res, 409, { error: 'BOOKING_PROTOCOL_SCHEMA_MISMATCH' })
+      } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
     }
     return
   }
@@ -536,15 +689,40 @@ async function handleBookingDraftRoute(
   const body = await readRequiredJson(req, res)
   if (!body) return
 
+  const mutation = parseBookingMutationEnvelope(route.action, body)
+  if ('error' in mutation) return respond(res, mutation.status, { error: mutation.error })
+
+  const confirmDraftReadStartedAt = route.action === 'CONFIRM' ? timingNow(deps) : null
   const draft = await ownedDraft(route.draftId, authenticated.staffId, deps, res)
+  if (confirmDraftReadStartedAt !== null) {
+    emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'draft_read', responseStatus(res, draft ? 200 : 503), confirmDraftReadStartedAt, draft?.state)
+  }
   if (!draft) return
-  const version = body.version
+  const version = mutation.value.version
   if (typeof version !== 'number' || !Number.isSafeInteger(version)) return respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
   const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(authenticated.staffId))
+  if (mutation.value.protocolVersion !== draft.protocolVersion) {
+    return respond(res, mutation.value.protocolVersion < deps.config.bookingProtocol.minimumMutation ? 409 : 400, {
+      error: mutation.value.protocolVersion < deps.config.bookingProtocol.minimumMutation
+        ? 'CLIENT_UPGRADE_REQUIRED'
+        : 'BOOKING_PROTOCOL_MISMATCH',
+    })
+  }
+  if (mutation.value.protocolVersion < deps.config.bookingProtocol.minimumMutation
+    && !isProtocol1Recovery(route.action, draft, mutation.value, asyncOwner)) {
+    return respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+  }
+  if (route.action === 'PATCH' && deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+    if (version < draft.version && matchesSavedDraftInput(draft, mutation.value.input)) {
+      respond(res, 200, draftProjection(draft))
+    } else {
+      respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    }
+    return
+  }
   if (
     route.action === 'CONFIRM'
     && version <= draft.version
-    && hasExactKeys(body, ['version'])
     && asyncOwner
     && isBoundAsyncConfirmation(draft)
   ) {
@@ -553,17 +731,21 @@ async function handleBookingDraftRoute(
   }
   const retryingConfirmation = route.action === 'CONFIRM' && version < draft.version
     && (draft.state === 'FAILED_RETRYABLE' || draft.state === 'CONFIRMED' || confirmedWithRetryResult(draft) !== null)
-  if (version !== draft.version && !retryingConfirmation) {
+  const recoveringOwnerConfirmation = route.action === 'CONFIRM' && !asyncOwner
+    && deps.config.bookingProtocol.prepare && draft.protocolVersion === 2
+    && draft.state === 'CONFIRMING' && version <= draft.version
+    && draft.payloadHash === bookingPayloadHash(draft)
+  if (version !== draft.version && !retryingConfirmation && !recoveringOwnerConfirmation) {
     if (
-      route.action === 'CANCEL' && version < draft.version && hasExactKeys(body, ['version'])
+      route.action === 'CANCEL' && version < draft.version
       && draft.state === 'CANCELLED' && draft.retentionState === 'PENDING_APPROVAL'
     ) {
       respond(res, 200, draftProjection(draft))
       return
     }
     if (
-      route.action === 'PATCH' && version < draft.version && hasExactKeys(body, ['version', 'input'])
-      && matchesSavedDraftInput(draft, body.input)
+      route.action === 'PATCH' && version < draft.version
+      && matchesSavedDraftInput(draft, mutation.value.input)
     ) {
       respond(res, 200, draftProjection(draft))
       return
@@ -572,22 +754,37 @@ async function handleBookingDraftRoute(
   }
 
   if (route.action === 'PATCH') {
-    if (!hasExactKeys(body, ['version', 'input'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
     let config
     try { config = await deps.store.getActiveBookingConfig() } catch { return respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' }) }
     try {
-      const parsed = parseBookingDraft(body.input, {
+      const commonContext = {
         draftId: draft.draftId, staffId: draft.staffId, lineUserIdHash: draft.lineUserIdHash,
-        doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
-        channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
         paymentEvidenceFileIds: draft.paymentEvidenceFileIds, chatEvidenceFileIds: draft.chatEvidenceFileIds,
         paymentEvidenceObjectKeys: draft.paymentEvidenceObjectKeys, chatEvidenceObjectKeys: draft.chatEvidenceObjectKeys,
         asyncEvidence: Boolean(deps.config.asyncBooking?.ownerStaffIds.has(draft.staffId)),
         now: currentIso(deps),
-      })
+      }
+      const parsed = draft.protocolVersion === 2
+        ? parseBookingDraftV2(mutation.value.input, {
+          ...commonContext,
+          recorderName: draft.recorderName || authenticated.displayName,
+          doctors: config.doctors,
+          services: config.services,
+          channels: config.channels,
+          admins: config.admins,
+          aes: config.aes,
+        })
+        : parseBookingDraft(mutation.value.input, {
+          ...commonContext,
+          doctorIds: config.doctors.map(({ id }) => id), serviceIds: config.services.map(({ id }) => id),
+          channelIds: config.channels.map(({ id }) => id), eligibleAeNames: ['ไม่ระบุ', ...config.aes.map(({ name }) => name)],
+        })
       if (parsed.requestId !== draft.requestId) throw new Error('REQUEST_ID_MISMATCH')
       const updated = await deps.store.updateDraft(draft.draftId, draft.version, {
-        state: 'READY_TO_CONFIRM', payloadHash: null, aeName: parsed.aeName, customerName: parsed.customerName,
+        state: 'READY_TO_CONFIRM', payloadHash: null,
+        protocolVersion: parsed.protocolVersion, recorderName: parsed.recorderName,
+        adminId: parsed.adminId, adminName: parsed.adminName, aeId: parsed.aeId, aeName: parsed.aeName,
+        customerName: parsed.customerName,
         facebookName: parsed.facebookName, phoneNormalized: parsed.phoneNormalized, doctorId: parsed.doctorId,
         serviceId: parsed.serviceId, queueType: parsed.queueType, appointmentDate: parsed.appointmentDate,
         appointmentTime: parsed.appointmentTime, depositAmount: parsed.depositAmount, channelId: parsed.channelId,
@@ -600,10 +797,13 @@ async function handleBookingDraftRoute(
     return
   }
 
-  if (!hasExactKeys(body, ['version'])) return respond(res, 400, { error: 'UNKNOWN_BOOKING_FIELD' })
   if (route.action === 'CANCEL') {
     if (!['DRAFT', 'UPLOADING', 'READY_TO_CONFIRM', 'FAILED_RETRYABLE'].includes(draft.state)) {
       return respond(res, 409, { error: 'INVALID_DRAFT_TRANSITION' })
+    }
+    if (deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+      await cancelP2Draft(draft, deps, res)
+      return
     }
     try {
       const cancelled = await deps.store.updateDraft(draft.draftId, draft.version, {
@@ -625,7 +825,9 @@ async function handleBookingDraftRoute(
     respond(res, 200, retryTerminal)
     return
   }
-  if (draft.state !== 'READY_TO_CONFIRM' && draft.state !== 'FAILED_RETRYABLE') {
+  const ownerFencedSync = !asyncOwner && deps.config.bookingProtocol.prepare && draft.protocolVersion === 2
+  if (draft.state !== 'READY_TO_CONFIRM' && draft.state !== 'FAILED_RETRYABLE'
+    && !(ownerFencedSync && draft.state === 'CONFIRMING')) {
     respond(res, 409, { error: 'DRAFT_NOT_READY' })
     return
   }
@@ -642,6 +844,7 @@ async function handleBookingDraftRoute(
     const now = (deps.now ?? (() => new Date()))()
     const nowIso = now.toISOString()
     let task: Awaited<ReturnType<BookingTaskQueuePort['enqueue']>>
+    const taskEnqueueStartedAt = timingNow(deps)
     try {
       task = await deps.taskQueue.enqueue({
         requestId: draft.requestId,
@@ -651,9 +854,11 @@ async function handleBookingDraftRoute(
         scheduleAt: new Date(now.getTime() + 2_000),
       })
     } catch {
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'task_enqueue', 503, taskEnqueueStartedAt)
       respond(res, 503, { error: 'BOOKING_TASK_QUEUE_FAILED' })
       return
     }
+    emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'task_enqueue', 202, taskEnqueueStartedAt, draft.state, draft.evidenceCount, draft.attemptCount)
     const queueMutation: MiniAppAsyncStateMutation = {
       operation: 'QUEUE', requestId: draft.requestId, draftId: draft.draftId, payloadHash,
       expectedVersion: draft.version, expectedAttempt: draft.attemptCount, taskAttempt: 1,
@@ -664,20 +869,53 @@ async function handleBookingDraftRoute(
       chatEvidenceFileIds: [...draft.chatEvidenceFileIds], evidenceCount: draft.evidenceCount,
       safeErrorCode: null, caseId: null, confirmationStatus: null,
     }
+    const queueBinding = {
+      requestId: draft.requestId,
+      draftId: draft.draftId,
+      payloadHash,
+      taskName: task.taskName,
+      baseVersion: draft.version,
+      baseAttempt: draft.attemptCount,
+    }
+    let trustedProjection: SafeQueueProjection | null = null
+    const stateIngressStartedAt = timingNow(deps)
     try {
-      await deps.stateIngress.mutate(queueMutation)
-    } catch { /* persisted reread below resolves response loss */ }
-    let persisted: MiniAppRequestRecord | null
-    try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
-    if (persisted && validQueuedPersistence(draft, persisted, payloadHash)) {
+      trustedProjection = validatedQueueFastPath(queueBinding, await deps.stateIngress.mutate(queueMutation))
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'state_ingress', 202, stateIngressStartedAt, trustedProjection?.state)
+    } catch {
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'state_ingress', 503, stateIngressStartedAt)
+      /* persisted reread below resolves response loss */
+    }
+    let persisted = trustedProjection ? applyQueueProjection(draft, trustedProjection, nowIso) : null
+    if (!persisted) {
+      const rereadStartedAt = timingNow(deps)
+      try { persisted = await deps.store.getDraft(draft.draftId) } catch { persisted = null }
+      if (!persisted || !validQueuedPersistence(draft, persisted, payloadHash, task.taskName)) persisted = null
+      emitBookingPerformance(deps, 'confirm_completed', 'confirm', 'recovery_reread', persisted ? 200 : 503, rereadStartedAt, persisted?.state)
+    }
+    if (persisted) {
       const terminal = confirmedWithRetryResult(persisted)
       emitAsyncTelemetry(deps, 'booking_task_enqueued', {
-        requestId: persisted.requestId, draftId: persisted.draftId, attempt: 1, state: persisted.state,
+        route: 'confirm', action: 'enqueue', status: 202,
+        attempt: Math.max(1, persisted.attemptCount), state: persisted.state,
         fileCount: persisted.evidenceCount, elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
       })
-      if (terminal) respond(res, 200, terminal)
+      if (persisted.state === 'CONFIRMED' && persisted.caseId && persisted.confirmationStatus) {
+        respond(res, 200, { caseId: persisted.caseId, status: persisted.confirmationStatus })
+      } else if (terminal) respond(res, 200, terminal)
+      else if (persisted.state === 'CANCELLED' || persisted.state === 'EXPIRED') {
+        respond(res, 409, { error: 'DRAFT_NOT_READY' })
+      }
       else respond(res, 202, queuedAcknowledgement(persisted))
     } else respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+  if (ownerFencedSync) {
+    if (!deps.draftStateIngress) {
+      respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
+      return
+    }
+    await confirmOwnerFencedP2(draft, payloadHash, { ...deps, draftStateIngress: deps.draftStateIngress }, res)
     return
   }
   try {
@@ -700,6 +938,201 @@ async function handleBookingDraftRoute(
   }
 }
 
+async function confirmOwnerFencedP2(
+  draft: MiniAppRequestRecord,
+  payloadHash: string,
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+  res: ServerResponse,
+): Promise<void> {
+  const claim = draft.state === 'CONFIRMING'
+    ? validConfirmingDraft(draft, payloadHash) ? draft : null
+    : await claimOwnerConfirmation(draft, payloadHash, deps)
+  if (!claim) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+  if (claim.state === 'CONFIRMED' && claim.caseId && claim.confirmationStatus) {
+    respond(res, 200, { caseId: claim.caseId, status: claim.confirmationStatus })
+    return
+  }
+  if (claim.state === 'CANCELLED' || claim.state === 'EXPIRED') {
+    respond(res, 409, { error: 'DRAFT_NOT_READY' })
+    return
+  }
+  if (claim.state !== 'CONFIRMING') {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+
+  let bookingResult: Awaited<ReturnType<NonNullable<PmcMiniAppMiddlewareDependencies['ingress']>['send']>>
+  try {
+    bookingResult = await deps.ingress!.send(claim)
+  } catch (error) {
+    const code = safeIngressError(error)
+    const failure = await failOwnerConfirmation(claim, payloadHash, code, deps)
+    if (failure?.state === 'CONFIRMED' && failure.caseId && failure.confirmationStatus) {
+      respond(res, 200, { caseId: failure.caseId, status: failure.confirmationStatus })
+      return
+    }
+    if (!failure || failure.state !== 'FAILED_RETRYABLE' || failure.safeErrorCode !== code) {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      return
+    }
+    respond(res, code === 'BOOKING_INGRESS_TIMEOUT' ? 504 : 502, { error: code })
+    return
+  }
+
+  const completed = await completeOwnerConfirmation(claim, payloadHash, bookingResult, deps)
+  if (completed?.state === 'CONFIRMED' && completed.caseId === bookingResult.caseId
+    && completed.confirmationStatus === bookingResult.status) {
+    respond(res, 200, bookingResult)
+    return
+  }
+  respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+}
+
+async function claimOwnerConfirmation(
+  draft: MiniAppRequestRecord,
+  payloadHash: string,
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+): Promise<MiniAppRequestRecord | null> {
+  const nowIso = currentIso(deps)
+  const mutation: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_CLAIM' }> = {
+    operation: 'CONFIRM_CLAIM', requestId: draft.requestId, draftId: draft.draftId,
+    expectedVersion: draft.version, expectedAttempt: draft.attemptCount, nowIso, payloadHash,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(draft), state: 'CONFIRMING', payloadHash, safeErrorCode: null,
+    updatedAt: nowIso, version: draft.version + 1,
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trustedOwnerResult(result, expected)) return expected
+  } catch { /* exactly one authoritative reread below */ }
+
+  const reread = await readOwnerDraft(draft, deps)
+  if (!reread) return null
+  if (validClaimRecovery(draft, reread, expected, payloadHash)) return reread
+  if (validConfirmedDraft(reread, payloadHash) || reread.state === 'CANCELLED' || reread.state === 'EXPIRED') return reread
+  if (projectionDigest(reread) !== projectionDigest(draft)) return null
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    return trustedOwnerResult(result, expected) ? expected : null
+  } catch { return null }
+}
+
+function validClaimRecovery(
+  base: MiniAppRequestRecord,
+  reread: MiniAppRequestRecord,
+  expected: MiniAppRequestRecord,
+  payloadHash: string,
+): boolean {
+  return validConfirmingDraft(reread, payloadHash)
+    && reread.version === base.version + 1
+    && reread.attemptCount === base.attemptCount
+    && projectionDigest(reread) === projectionDigest(expected)
+}
+
+async function completeOwnerConfirmation(
+  claimed: MiniAppRequestRecord,
+  payloadHash: string,
+  bookingResult: { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> },
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+): Promise<MiniAppRequestRecord | null> {
+  const nowIso = currentIso(deps)
+  const mutation: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_COMPLETE' }> = {
+    operation: 'CONFIRM_COMPLETE', requestId: claimed.requestId, draftId: claimed.draftId,
+    expectedVersion: claimed.version, expectedAttempt: claimed.attemptCount, nowIso, payloadHash,
+    caseId: bookingResult.caseId, confirmationStatus: bookingResult.status,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(claimed), state: 'CONFIRMED', caseId: bookingResult.caseId,
+    confirmationStatus: bookingResult.status, confirmedAt: nowIso, safeErrorCode: null,
+    updatedAt: nowIso, version: claimed.version + 1,
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trustedOwnerResult(result, expected)) return expected
+  } catch { /* exactly one authoritative reread below */ }
+
+  const reread = await readOwnerDraft(claimed, deps)
+  if (!reread) return null
+  if (validCompletedDraft(reread, payloadHash, bookingResult)) return reread
+  if (!validConfirmingDraft(reread, payloadHash) || projectionDigest(reread) !== projectionDigest(claimed)) return null
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    return trustedOwnerResult(result, expected) ? expected : null
+  } catch { return null }
+}
+
+async function failOwnerConfirmation(
+  claimed: MiniAppRequestRecord,
+  payloadHash: string,
+  safeErrorCode: string,
+  deps: PmcMiniAppMiddlewareDependencies & { draftStateIngress: DraftStateIngressPort },
+): Promise<MiniAppRequestRecord | null> {
+  const nowIso = currentIso(deps)
+  const mutation: Extract<MiniAppDraftStateMutation, { operation: 'CONFIRM_FAIL' }> = {
+    operation: 'CONFIRM_FAIL', requestId: claimed.requestId, draftId: claimed.draftId,
+    expectedVersion: claimed.version, expectedAttempt: claimed.attemptCount, nowIso, payloadHash, safeErrorCode,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(claimed), state: 'FAILED_RETRYABLE', safeErrorCode,
+    updatedAt: nowIso, version: claimed.version + 1,
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trustedOwnerResult(result, expected)) return expected
+  } catch { /* exactly one authoritative reread below */ }
+
+  const reread = await readOwnerDraft(claimed, deps)
+  if (!reread) return null
+  if (reread.state === 'FAILED_RETRYABLE' && reread.payloadHash === payloadHash
+    && reread.safeErrorCode === safeErrorCode) return reread
+  if (validConfirmedDraft(reread, payloadHash)) return reread
+  if (!validConfirmingDraft(reread, payloadHash) || projectionDigest(reread) !== projectionDigest(claimed)) return null
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    return trustedOwnerResult(result, expected) ? expected : null
+  } catch { return null }
+}
+
+function trustedOwnerResult(result: MiniAppDraftStateResult, expected: MiniAppRequestRecord): boolean {
+  return result.requestId === expected.requestId && result.draftId === expected.draftId
+    && result.state === expected.state && result.version === expected.version
+    && result.projectionDigest === projectionDigest(expected)
+    && (result.outcome === 'APPLIED' || result.outcome === 'IDEMPOTENT')
+}
+
+async function readOwnerDraft(
+  expectedOwner: MiniAppRequestRecord,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<MiniAppRequestRecord | null> {
+  try {
+    const reread = await deps.store.getDraft(expectedOwner.draftId)
+    return reread?.staffId === expectedOwner.staffId && reread.requestId === expectedOwner.requestId ? reread : null
+  } catch { return null }
+}
+
+function validConfirmingDraft(draft: MiniAppRequestRecord, payloadHash: string): boolean {
+  return draft.protocolVersion === 2 && draft.state === 'CONFIRMING'
+    && draft.payloadHash === payloadHash && bookingPayloadHash(draft) === payloadHash
+}
+
+function validConfirmedDraft(draft: MiniAppRequestRecord, payloadHash: string): boolean {
+  return draft.state === 'CONFIRMED' && draft.payloadHash === payloadHash && bookingPayloadHash(draft) === payloadHash
+    && /^PMC-\d{6}-\d{4,}$/.test(draft.caseId ?? '') && isConfirmationStatus(draft.confirmationStatus)
+}
+
+function validCompletedDraft(
+  draft: MiniAppRequestRecord,
+  payloadHash: string,
+  bookingResult: { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> },
+): boolean {
+  return validConfirmedDraft(draft, payloadHash)
+    && draft.caseId === bookingResult.caseId && draft.confirmationStatus === bookingResult.status
+}
+
 function isBoundAsyncConfirmation(draft: MiniAppRequestRecord): boolean {
   return (draft.state === 'QUEUED' || draft.state === 'PROCESSING' || draft.state === 'RETRYING')
     && typeof draft.payloadHash === 'string'
@@ -712,10 +1145,14 @@ function validQueuedPersistence(
   before: MiniAppRequestRecord,
   persisted: MiniAppRequestRecord,
   payloadHash: string,
+  taskName: string,
 ): boolean {
   return persisted.requestId === before.requestId && persisted.draftId === before.draftId
     && persisted.payloadHash === payloadHash && bookingPayloadHash(persisted) === payloadHash
-    && persisted.staffId === before.staffId && persisted.aeName === before.aeName
+    && persisted.protocolVersion === before.protocolVersion
+    && persisted.staffId === before.staffId && persisted.recorderName === before.recorderName
+    && persisted.adminId === before.adminId && persisted.adminName === before.adminName
+    && persisted.aeId === before.aeId && persisted.aeName === before.aeName
     && persisted.customerName === before.customerName && persisted.facebookName === before.facebookName
     && persisted.phoneNormalized === before.phoneNormalized && persisted.doctorId === before.doctorId
     && persisted.serviceId === before.serviceId && persisted.queueType === before.queueType
@@ -723,10 +1160,32 @@ function validQueuedPersistence(
     && persisted.depositAmount === before.depositAmount && persisted.channelId === before.channelId
     && sameStringArray(persisted.paymentEvidenceObjectKeys, before.paymentEvidenceObjectKeys)
     && sameStringArray(persisted.chatEvidenceObjectKeys, before.chatEvidenceObjectKeys)
+    && persisted.taskName === taskName
     && (
       ['QUEUED', 'PROCESSING', 'RETRYING', 'CONFIRMED', 'NEEDS_REVIEW'].includes(persisted.state)
       || confirmedWithRetryResult(persisted) !== null
     )
+}
+
+function applyQueueProjection(
+  draft: MiniAppRequestRecord,
+  projection: SafeQueueProjection,
+  queuedAt: string,
+): MiniAppRequestRecord {
+  return {
+    ...structuredClone(draft),
+    state: projection.state,
+    version: projection.version,
+    attemptCount: projection.attemptCount,
+    payloadHash: projection.payloadHash,
+    taskName: projection.taskName,
+    queuedAt: draft.queuedAt ?? queuedAt,
+    caseId: projection.caseId,
+    confirmationStatus: projection.confirmationStatus,
+    safeErrorCode: draft.safeErrorCode,
+    retentionState: draft.retentionState,
+    updatedAt: queuedAt,
+  }
 }
 
 function confirmedWithRetryResult(draft: MiniAppRequestRecord): { caseId: string; status: NonNullable<MiniAppRequestRecord['confirmationStatus']> } | null {
@@ -773,11 +1232,21 @@ function draftProjection(draft: MiniAppRequestRecord): Record<string, unknown> {
     retentionState: draft.retentionState,
     version: draft.version,
     input: hasInput ? {
-      requestId: draft.requestId, aeName: draft.aeName, customerName: draft.customerName, facebookName: draft.facebookName,
+      requestId: draft.requestId,
+      ...(draft.protocolVersion === 2 ? { adminId: draft.adminId, aeId: draft.aeId } : { aeName: draft.aeName }),
+      customerName: draft.customerName, facebookName: draft.facebookName,
       phone: draft.phoneNormalized, doctorId: draft.doctorId, serviceId: draft.serviceId, queueType: draft.queueType,
       appointmentDate: draft.appointmentDate, appointmentTime: draft.appointmentTime, depositAmount: draft.depositAmount,
       channelId: draft.channelId,
     } : null,
+    ...(draft.protocolVersion === 2 && hasInput ? {
+      attribution: {
+        protocolVersion: 2,
+        recorder: { id: draft.staffId, name: draft.recorderName },
+        admin: { id: draft.adminId, name: draft.adminName },
+        ae: draft.aeId === null ? null : { id: draft.aeId, name: draft.aeName },
+      },
+    } : {}),
     paymentEvidenceIds: [...draft.paymentEvidenceFileIds],
     chatEvidenceIds: [...draft.chatEvidenceFileIds],
     ...evidenceCounts(draft),
@@ -866,7 +1335,7 @@ function matchesSavedDraftInput(draft: MiniAppRequestRecord, candidate: unknown)
   const input = candidate as Record<string, unknown>
   const expected: Record<string, unknown> = {
     requestId: draft.requestId,
-    aeName: draft.aeName,
+    ...(draft.protocolVersion === 2 ? { adminId: draft.adminId, aeId: draft.aeId } : { aeName: draft.aeName }),
     customerName: draft.customerName,
     facebookName: draft.facebookName,
     phone: draft.phoneNormalized,
@@ -894,6 +1363,113 @@ function emitAsyncTelemetry(
   try { deps.asyncTelemetry?.(name, fields) } catch { /* observability cannot alter the request outcome */ }
 }
 
+function emitBookingPerformance(
+  deps: PmcMiniAppMiddlewareDependencies,
+  name: BookingTimingEventName,
+  route: BookingTimingRoute,
+  action: BookingTimingAction,
+  status: number,
+  startedAt: number,
+  state?: string,
+  fileCount?: number,
+  attempt?: number,
+): void {
+  try {
+    deps.bookingPerformanceTelemetry?.(name, {
+      route,
+      action,
+      status,
+      ...(state ? { state } : {}),
+      ...(fileCount === undefined ? {} : { fileCount }),
+      ...(attempt === undefined ? {} : { attempt: Math.min(8, Math.max(0, attempt)) }),
+      elapsedMs: timingElapsed(deps, startedAt),
+    })
+  } catch { /* observability cannot alter the request outcome */ }
+}
+
+function timingNow(deps: PmcMiniAppMiddlewareDependencies): number {
+  try {
+    const value = (deps.performanceNow ?? (() => globalThis.performance.now()))()
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch { return 0 }
+}
+
+function timingElapsed(deps: PmcMiniAppMiddlewareDependencies, startedAt: number): number {
+  const elapsed = timingNow(deps) - startedAt
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+}
+
+function responseStatus(res: ServerResponse, fallback: number): number {
+  return Number.isSafeInteger(res.statusCode) && res.statusCode >= 100 && res.statusCode <= 599 ? res.statusCode : fallback
+}
+
+function timedPreparePersistence(
+  persistence: PersistPrepareEvidenceInput['persistence'],
+  deps: PmcMiniAppMiddlewareDependencies,
+  draft: MiniAppRequestRecord,
+): PersistPrepareEvidenceInput['persistence'] {
+  if (persistence.type === 'ASYNC') {
+    const staging = persistence.staging
+    return {
+      type: 'ASYNC',
+      staging: {
+        async put(input) {
+          const startedAt = timingNow(deps)
+          try {
+            const result = await staging.put(input)
+            emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 200, startedAt, draft.state, 1, draft.attemptCount)
+            return result
+          } catch (error) {
+            emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 503, startedAt, draft.state, 1, draft.attemptCount)
+            throw error
+          }
+        },
+        get: (objectKey) => staging.get(objectKey),
+        describe: (objectKey) => staging.describe(objectKey),
+        deleteVerified: (descriptor) => staging.deleteVerified(descriptor),
+      },
+    }
+  }
+  const ingress = persistence.ingress
+  return {
+    type: 'SYNC',
+    ingress: {
+      async upload(input) {
+        const startedAt = timingNow(deps)
+        try {
+          const result = await ingress.upload(input)
+          emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 200, startedAt, draft.state, 1, draft.attemptCount)
+          return result
+        } catch (error) {
+          emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'evidence_persist', 503, startedAt, draft.state, 1, draft.attemptCount)
+          throw error
+        }
+      },
+    },
+  }
+}
+
+function timedPrepareDraftStateIngress(
+  ingress: DraftStateIngressPort,
+  deps: PmcMiniAppMiddlewareDependencies,
+  draft: MiniAppRequestRecord,
+  fileCount: number,
+): DraftStateIngressPort {
+  return {
+    async mutate(input) {
+      const startedAt = timingNow(deps)
+      try {
+        const result = await ingress.mutate(input)
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'draft_write', 200, startedAt, result.state, fileCount, draft.attemptCount)
+        return result
+      } catch (error) {
+        emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'draft_write', 503, startedAt, undefined, fileCount, draft.attemptCount)
+        throw error
+      }
+    },
+  }
+}
+
 function safeBookingError(error: unknown): string {
   const code = error instanceof Error ? error.message : ''
   return /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code : 'INVALID_BOOKING_INPUT'
@@ -911,6 +1487,166 @@ function safeIngressError(error: unknown): string {
   return /^BOOKING_INGRESS_[A-Z_]{1,60}$/.test(code) ? code : 'BOOKING_INGRESS_FAILED'
 }
 
+async function handleBookingPrepare(
+  req: IncomingMessage,
+  res: ServerResponse,
+  draftId: string,
+  authenticated: AuthenticatedMiniAppContext,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  if (deps.config.bookingProtocol.minimumMutation !== 2 || !deps.draftStateIngress) {
+    respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
+    return
+  }
+  const draftReadStartedAt = timingNow(deps)
+  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
+  emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'draft_read', responseStatus(res, draft ? 200 : 503), draftReadStartedAt, draft?.state)
+  if (!draft) return
+  if (draft.protocolVersion !== 2) {
+    respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    return
+  }
+  const asyncOwner = Boolean(deps.config.asyncBooking?.ownerStaffIds.has(draft.staffId))
+  const persistence = asyncOwner
+    ? deps.evidenceStaging ? { type: 'ASYNC' as const, staging: deps.evidenceStaging } : null
+    : deps.evidenceIngress ? { type: 'SYNC' as const, ingress: deps.evidenceIngress } : null
+  if (!persistence) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+
+  const hasBinding = draft.evidenceProjectionHash !== null
+  const reserved = hasBinding && hasReservedPrepareAttribution(draft)
+  if (hasBinding && !reserved) {
+    respond(res, 409, { error: 'BOOKING_PREPARE_CONFLICT' })
+    return
+  }
+  let bookingContext: PersistPrepareEvidenceInput['bookingContext']
+  if (!reserved) {
+    let bookingConfig: Awaited<ReturnType<MiniAppStore['getActiveBookingConfig']>>
+    const configStartedAt = timingNow(deps)
+    try {
+      bookingConfig = await deps.store.getActiveBookingConfig()
+    } catch {
+      emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'config_snapshot', 503, configStartedAt)
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+      return
+    }
+    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'config_snapshot', 200, configStartedAt)
+    bookingContext = {
+      doctors: bookingConfig.doctors,
+      services: bookingConfig.services,
+      channels: bookingConfig.channels,
+      admins: bookingConfig.admins ?? bookingConfig.aes,
+      aes: bookingConfig.aes,
+    }
+  }
+
+  let parsed: Awaited<ReturnType<typeof consumeBookingPrepareMultipart>>
+  const multipartStartedAt = timingNow(deps)
+  try {
+    parsed = await consumeBookingPrepareMultipart(req, BOOKING_PREPARE_LIMITS)
+  } catch (error) {
+    const code = error instanceof MiniAppEvidenceError ? error.code : 'BOOKING_PREPARE_JSON_REQUIRED'
+    emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'multipart_parse', evidenceStatus(code), multipartStartedAt)
+    respond(res, evidenceStatus(code), { error: code })
+    return
+  }
+  const fileCount = parsed.paymentFiles.length + parsed.chatFiles.length
+  emitBookingPerformance(deps, 'prepare_completed', 'prepare', 'multipart_parse', 200, multipartStartedAt, draft.state, fileCount, draft.attemptCount)
+
+  try {
+    const prepared = await persistPrepareEvidence({
+      draft,
+      version: parsed.version,
+      input: parsed.input,
+      paymentFiles: parsed.paymentFiles,
+      chatFiles: parsed.chatFiles,
+      bookingContext,
+      persistence: timedPreparePersistence(persistence, deps, draft),
+      store: deps.store,
+      draftStateIngress: timedPrepareDraftStateIngress(deps.draftStateIngress, deps, draft, fileCount),
+      now: () => currentIso(deps),
+    })
+    respond(res, 200, draftProjection(prepared.draft))
+  } catch (error) {
+    if (error instanceof BookingPreparePersistenceError) {
+      const status = error.code === 'BOOKING_PREPARE_CONFLICT' ? 409 : 503
+      respond(res, status, { error: error.code })
+      return
+    }
+    const code = safeBookingError(error)
+    const status = bookingErrorStatus(error)
+    respond(res, status, { error: code })
+  }
+}
+
+function hasReservedPrepareAttribution(draft: MiniAppRequestRecord): boolean {
+  return Boolean(draft.recorderName && draft.adminId && draft.adminName)
+    && (draft.aeId === null ? draft.aeName === 'ไม่ระบุ' : Boolean(draft.aeName))
+}
+
+async function cancelP2Draft(
+  draft: MiniAppRequestRecord,
+  deps: PmcMiniAppMiddlewareDependencies,
+  res: ServerResponse,
+): Promise<void> {
+  if (!deps.draftStateIngress) {
+    respond(res, 503, { error: 'BOOKING_PREPARE_UNAVAILABLE' })
+    return
+  }
+  const nowIso = currentIso(deps)
+  const mutation = {
+    operation: 'CANCEL' as const,
+    requestId: draft.requestId,
+    draftId: draft.draftId,
+    expectedVersion: draft.version,
+    expectedAttempt: draft.attemptCount,
+    nowIso,
+  }
+  const expected: MiniAppRequestRecord = {
+    ...structuredClone(draft),
+    state: 'CANCELLED',
+    retentionState: 'PENDING_APPROVAL',
+    updatedAt: nowIso,
+    version: draft.version + 1,
+  }
+  const trusted = (result: MiniAppDraftStateResult): boolean => result.requestId === expected.requestId
+    && result.draftId === expected.draftId && result.state === expected.state && result.version === expected.version
+    && result.projectionDigest === projectionDigest(expected)
+    && (result.outcome === 'APPLIED' || result.outcome === 'IDEMPOTENT')
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trusted(result)) {
+      respond(res, 200, draftProjection(expected))
+      return
+    }
+  } catch { /* authoritative recovery below */ }
+
+  let reread: MiniAppRequestRecord | null
+  try { reread = await deps.store.getDraft(draft.draftId) } catch { reread = null }
+  if (!reread || reread.staffId !== draft.staffId) {
+    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    return
+  }
+  if (reread.state === 'CANCELLED' && reread.retentionState === 'PENDING_APPROVAL') {
+    respond(res, 200, draftProjection(reread))
+    return
+  }
+  if (projectionDigest(reread) !== projectionDigest(draft)) {
+    respond(res, 409, { error: 'STALE_DRAFT_VERSION' })
+    return
+  }
+  try {
+    const result = await deps.draftStateIngress.mutate(mutation)
+    if (trusted(result)) {
+      respond(res, 200, draftProjection(expected))
+      return
+    }
+  } catch { /* no uncertain acknowledgement */ }
+  respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+}
+
 async function handleEvidenceBatchUpload(
   req: IncomingMessage,
   res: ServerResponse,
@@ -919,6 +1655,12 @@ async function handleEvidenceBatchUpload(
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<void> {
   const handlerStartedAt = (deps.now ?? (() => new Date()))().getTime()
+  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
+  if (!draft) return
+  if (deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+    respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    return
+  }
   const asyncConfig = deps.config.asyncBooking
   if (!asyncConfig || !asyncConfig.ownerStaffIds.has(authenticated.staffId)) {
     respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
@@ -929,8 +1671,10 @@ async function handleEvidenceBatchUpload(
     return
   }
 
-  const draft = await ownedDraft(draftId, authenticated.staffId, deps, res)
-  if (!draft) return
+  if (draft.protocolVersion < deps.config.bookingProtocol.minimumMutation) {
+    respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+    return
+  }
   if (draft.state !== 'DRAFT') {
     respond(res, 409, { error: 'DRAFT_NOT_UPLOADABLE' })
     return
@@ -943,7 +1687,7 @@ async function handleEvidenceBatchUpload(
       maxTotalBytes: asyncConfig.maxBatchBytes,
     })
     emitAsyncTelemetry(deps, 'evidence_stage_started', {
-      requestId: draft.requestId, draftId: draft.draftId,
+      route: 'evidence', action: 'stage', status: 102,
       fileCount: batch.paymentFiles.length + batch.chatFiles.length,
     })
     const staged = await stageEvidenceBatch(draft.draftId, batch, deps.evidenceStaging)
@@ -955,7 +1699,7 @@ async function handleEvidenceBatchUpload(
       updatedAt: currentIso(deps),
     })
     emitAsyncTelemetry(deps, 'evidence_stage_completed', {
-      requestId: updated.requestId, draftId: updated.draftId, state: updated.state,
+      route: 'evidence', action: 'stage', status: 200, state: updated.state,
       fileCount: staged.paymentObjectKeys.length + staged.chatObjectKeys.length,
       elapsedMs: Math.max(0, (deps.now ?? (() => new Date()))().getTime() - handlerStartedAt),
     })
@@ -1012,10 +1756,6 @@ async function handleEvidenceUpload(
   authenticated: AuthenticatedMiniAppContext,
   deps: PmcMiniAppMiddlewareDependencies,
 ): Promise<void> {
-  if (!deps.drive) {
-    respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
-    return
-  }
   const kinds = url.searchParams.getAll('kind')
   const kind = kinds.length === 1 && (kinds[0] === 'PAYMENT' || kinds[0] === 'CHAT') ? kinds[0] as MiniAppEvidenceKind : null
   if (!kind) {
@@ -1028,6 +1768,18 @@ async function handleEvidenceUpload(
     const draft = await deps.store.getDraft(draftId)
     if (!draft || draft.staffId !== authenticated.staffId) {
       respond(res, 404, { error: 'DRAFT_NOT_FOUND' })
+      return
+    }
+    if (draft.protocolVersion < deps.config.bookingProtocol.minimumMutation) {
+      respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+      return
+    }
+    if (deps.config.bookingProtocol.prepare && draft.protocolVersion === 2) {
+      respond(res, 409, { error: 'CLIENT_UPGRADE_REQUIRED' })
+      return
+    }
+    if (!deps.drive && !deps.evidenceIngress) {
+      respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
       return
     }
     if (draft.state !== 'DRAFT' && draft.state !== 'UPLOADING') {
@@ -1118,20 +1870,33 @@ async function authenticate(
   req: IncomingMessage,
   res: ServerResponse,
   deps: PmcMiniAppMiddlewareDependencies,
+  timing?: { name: BookingTimingEventName; route: BookingTimingRoute },
 ): Promise<AuthenticatedMiniAppContext | null> {
+  const lineVerifyStartedAt = timing ? timingNow(deps) : null
   const lineUserId = await authenticateLineIdentity(req, res, deps)
+  if (timing && lineVerifyStartedAt !== null) {
+    emitBookingPerformance(deps, timing.name, timing.route, 'line_verify', responseStatus(res, lineUserId ? 200 : 503), lineVerifyStartedAt)
+  }
   if (!lineUserId) return null
 
+  const staffSnapshotStartedAt = timing ? timingNow(deps) : null
   try {
     const staff = await deps.store.getActiveStaffByLineUserId(lineUserId)
     if (!staff) {
       respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
+      if (timing && staffSnapshotStartedAt !== null) {
+        emitBookingPerformance(deps, timing.name, timing.route, 'staff_snapshot', 403, staffSnapshotStartedAt)
+      }
       return null
+    }
+    if (timing && staffSnapshotStartedAt !== null) {
+      emitBookingPerformance(deps, timing.name, timing.route, 'staff_snapshot', 200, staffSnapshotStartedAt)
     }
     return {
       staffId: staff.id,
       displayName: staff.name,
       lineUserId,
+      canCloseBooking: staff.canCloseBooking === true,
       canManageStock: staff.canManageStock === true,
       canSubmitExpense: staff.canSubmitExpense === true,
       canViewFinance: staff.canViewFinance === true,
@@ -1139,8 +1904,17 @@ async function authenticate(
     }
   } catch {
     respond(res, 503, { error: 'MINI_APP_STORAGE_UNAVAILABLE' })
+    if (timing && staffSnapshotStartedAt !== null) {
+      emitBookingPerformance(deps, timing.name, timing.route, 'staff_snapshot', 503, staffSnapshotStartedAt)
+    }
     return null
   }
+}
+
+function requireBookingRecorder(authenticated: AuthenticatedMiniAppContext, res: ServerResponse): boolean {
+  if (authenticated.canCloseBooking) return true
+  respond(res, 403, { error: 'STAFF_NOT_ALLOWED' })
+  return false
 }
 
 async function authenticateLineIdentity(

@@ -5,7 +5,9 @@ export type MiniAppAsyncRequestState =
   | 'FAILED_RETRYABLE' | 'CANCELLED' | 'EXPIRED'
 export type MiniAppAsyncConfirmationStatus = 'CONFIRMED' | 'TENTATIVE' | 'AWAITING_ADMIN_SLOT'
 
-export interface MiniAppAsyncRequestRecord {
+import type { BookingProtocolVersion } from './pmcBookingProtocol'
+
+export interface MiniAppAsyncRequestRecordV1 {
   requestId: string
   draftId: string
   staffId: string
@@ -46,13 +48,37 @@ export interface MiniAppAsyncRequestRecord {
   updatedAt: string
 }
 
-export const MINI_APP_ASYNC_REQUEST_HEADERS = [
+export type MiniAppAsyncRequestRecordV2 = Omit<MiniAppAsyncRequestRecordV1, 'aeName'> & {
+  protocolVersion: Extract<BookingProtocolVersion, 2>
+  recorderName: string
+  adminId: string
+  adminName: string
+  aeId: string | null
+  aeName: string | null
+}
+
+export type MiniAppAsyncRequestRecord = MiniAppAsyncRequestRecordV1
+
+export const MINI_APP_ASYNC_REQUEST_HEADERS_V1 = [
   'requestId', 'draftId', 'staffId', 'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash',
   'aeName', 'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
   'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
   'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus', 'safeErrorCode', 'updatedAt',
   'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson', 'taskName', 'queuedAt', 'processingStartedAt',
   'processingLeaseUntil', 'lastProgressAt', 'attemptCount', 'processingOwnerToken', 'evidenceProjectionHash',
+] as const
+
+export const MINI_APP_ASYNC_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS_V1
+
+export const MINI_APP_ASYNC_REQUEST_HEADERS_V2 = [
+  'requestId', 'draftId', 'protocolVersion', 'staffId', 'recorderName', 'adminId', 'adminName',
+  'lineUserIdHash', 'state', 'retentionState', 'version', 'payloadHash', 'aeId', 'aeName',
+  'customerName', 'facebookName', 'phoneNormalized', 'doctorId', 'serviceId', 'queueType',
+  'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId', 'paymentEvidenceFileIdsJson',
+  'chatEvidenceFileIdsJson', 'evidenceCount', 'createdAt', 'confirmedAt', 'caseId', 'confirmationStatus',
+  'safeErrorCode', 'updatedAt', 'paymentEvidenceObjectKeysJson', 'chatEvidenceObjectKeysJson',
+  'taskName', 'queuedAt', 'processingStartedAt', 'processingLeaseUntil', 'lastProgressAt', 'attemptCount',
+  'processingOwnerToken', 'evidenceProjectionHash',
 ] as const
 
 export interface MiniAppEvidenceProjectionBinding {
@@ -141,7 +167,7 @@ export function canonicalMiniAppAsyncStateIngress(envelope: UnsignedMiniAppAsync
   })
 }
 
-export function canonicalMiniAppAsyncIdentity(record: Pick<MiniAppAsyncRequestRecord,
+export function canonicalMiniAppAsyncIdentity(record: Pick<MiniAppAsyncRequestRecordV1,
   | 'requestId' | 'staffId' | 'aeName' | 'customerName' | 'facebookName' | 'phoneNormalized'
   | 'doctorId' | 'serviceId' | 'queueType' | 'appointmentDate' | 'appointmentTime'
   | 'depositAmount' | 'channelId' | 'paymentEvidenceFileIds' | 'chatEvidenceFileIds'

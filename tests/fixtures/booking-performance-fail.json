@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "revision": "fixture-fail",
+  "measuredAtUtc": "2026-08-31T02:00:00.000Z",
+  "measuredAtBangkok": "2026-08-31T09:00:00+07:00",
+  "fixtureLabel": "booking-performance-v1",
+  "paths": {
+    "asyncPreparePostParse": { "route": "prepare", "status": 200, "count": 29, "p50Ms": 2200, "p95Ms": 3001, "maxMs": 3400 },
+    "syncPrepare": { "route": "prepare", "status": 200, "count": 30, "p50Ms": 7001, "p95Ms": 9000, "maxMs": 10000 },
+    "legacySyncPrepare": { "route": "prepare", "status": 200, "count": 30, "p50Ms": 10000, "p95Ms": 12000, "maxMs": 13000 },
+    "asyncConfirm": { "route": "confirm", "status": 202, "count": 30, "p50Ms": 5000, "p95Ms": 6001, "maxMs": 6500 }
+  },
+  "checks": {
+    "unavailableRouteProbeCount": 1,
+    "maximumFixtureFailures": 1,
+    "concurrencyClients": 5,
+    "concurrencyDuplicateCount": 1
+  }
+}

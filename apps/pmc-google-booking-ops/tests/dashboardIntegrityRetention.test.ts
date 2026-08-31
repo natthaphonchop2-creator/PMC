@@ -55,7 +55,7 @@ describe('dashboard and controls', () => {
     expect(ports.drive.trashedFolderIds()).toEqual([])
   })
 
-  it('trashes the evidence folder only after manager approval and audits it', () => {
+  it('records manager approval without deleting evidence', () => {
     const ports = createTestPorts({ now: '2026-11-19T09:00:00+07:00' })
     ports.bookings.insert(
       ports.bookingFixture({
@@ -67,7 +67,8 @@ describe('dashboard and controls', () => {
     queueEvidenceRetention(ports)
     const item = ports.retention.pending()[0]
     approveEvidenceDeletion(String(item.id), 'manager@example.com', 'retention policy', ports)
-    expect(ports.drive.trashedFolderIds()).toEqual(['folder-3'])
+    expect(ports.drive.trashedFolderIds()).toEqual([])
+    expect(ports.retention.get(String(item.id))).toMatchObject({ status: 'APPROVED' })
     expect(ports.repositories.audit.listForCase('PMC-202608-0001')).toHaveLength(1)
   })
 })

@@ -1,11 +1,18 @@
 import type { AuditEvent, BookingCase, CallTask } from './domain/types'
 import type { BookingRepositories, Clock, InitialBookingReservation, LockPort, MutationContext } from './ports'
+import { assertPmcBookingMasterTargetRecord } from '../../../shared/pmcBookingRowContracts'
+import {
+  RETENTION_QUEUE_COLUMNS_V2,
+  assertRetentionRecord,
+  type RetentionRecordV2,
+} from '../../../shared/pmcMiniAppDraftRetention'
 
 export { createStockRepository } from './stock/repository'
 
 export type SheetRow = Record<string, unknown>
 
 export interface SheetStore {
+  columns?(tab: string): readonly string[]
   read(tab: string): SheetRow[]
   replace(tab: string, rows: SheetRow[]): void
   append(tab: string, rows: SheetRow[]): void
@@ -48,6 +55,9 @@ function storedThaiPhone(value: unknown): string {
 }
 
 function asBooking(row: SheetRow): BookingCase {
+  if (Object.prototype.hasOwnProperty.call(row, 'recorderSource')) {
+    assertPmcBookingMasterTargetRecord(row)
+  }
   return {
     ...row,
     aeId: nullableString(row.aeId),
@@ -352,35 +362,73 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
       },
     },
     retention: {
-      queue(input) {
-        append(store, 'RETENTION_QUEUE', input)
+      get(id) {
+        return retentionRows(store).find((row) => row.id === id) ?? null
+      },
+      getByDraftId(draftId) {
+        return retentionRows(store).find((row) => row.scope === 'DRAFT_EVIDENCE' && row.draftId === draftId) ?? null
+      },
+      list() {
+        return retentionRows(store)
+      },
+      upsert(input, expectedVersion) {
+        requireRetentionV2(store)
+        const record = assertRetentionRecord(input)
+        const rows = retentionRows(store)
+        const index = rows.findIndex((row) => row.id === record.id)
+        if (index < 0) {
+          if (expectedVersion !== undefined && expectedVersion !== 0 || record.version !== 1) throw new Error('retention version conflict')
+          store.replace('RETENTION_QUEUE', [...rows, record].map((row) => ({ ...row } as SheetRow)))
+          return { ...record }
+        }
+        if (expectedVersion !== undefined && rows[index]!.version !== expectedVersion
+          || record.version !== rows[index]!.version + 1) throw new Error('retention version conflict')
+        const next = [...rows]; next[index] = record
+        store.replace('RETENTION_QUEUE', next.map((row) => ({ ...row } as SheetRow)))
+        return { ...record }
+      },
+      setStatus(id, expectedVersion, status, patch = {}) {
+        const rows = retentionRows(store)
+        const index = rows.findIndex((row) => row.id === id)
+        const current = rows[index]
+        if (!current || current.version !== expectedVersion) throw new Error('retention version conflict')
+        const updated = assertRetentionRecord({ ...current, ...patch, status, version: current.version + 1 })
+        const next = [...rows]; next[index] = updated
+        store.replace('RETENTION_QUEUE', next.map((row) => ({ ...row } as SheetRow)))
+        return { ...updated }
       },
       pending() {
-        return store.read('RETENTION_QUEUE').filter((row) => row.status === 'PENDING')
+        return retentionRows(store).filter((row) => row.status === 'PENDING')
       },
       hasCase(caseId) {
-        return store.read('RETENTION_QUEUE').some((row) => row.caseId === caseId && row.status === 'PENDING')
-      },
-      approve(id, approver, reason) {
-        const rows = store.read('RETENTION_QUEUE')
-        const index = rows.findIndex((row) => row.id === id && row.status === 'PENDING')
-        if (index === -1) throw new Error('retention item not found')
-        const updated = {
-          ...rows[index],
-          status: 'APPROVED',
-          approvedBy: approver,
-          approvedAt: clock.nowIso(),
-          reason,
-          version: Number(rows[index].version) + 1,
-        }
-        const next = [...rows]
-        next[index] = updated
-        store.replace('RETENTION_QUEUE', next)
-        return clonePlain(updated)
+        return retentionRows(store).some((row) => row.scope === 'CASE_FOLDER' && row.caseId === caseId
+          && row.status !== 'CLEANED' && row.status !== 'PROMOTED')
       },
     },
     audit,
   }
+}
+
+function requireRetentionV2(store: SheetStore): void {
+  const columns = store.columns?.('RETENTION_QUEUE') ?? RETENTION_QUEUE_COLUMNS_V2
+  if (columns.length !== RETENTION_QUEUE_COLUMNS_V2.length
+    || !columns.every((column, index) => column === RETENTION_QUEUE_COLUMNS_V2[index])) {
+    throw new Error('RETENTION_QUEUE_V2_REQUIRED')
+  }
+}
+
+function retentionRows(store: SheetStore): RetentionRecordV2[] {
+  requireRetentionV2(store)
+  return store.read('RETENTION_QUEUE').map((row) => assertRetentionRecord({
+    id: String(row.id ?? ''), scope: String(row.scope ?? '') as RetentionRecordV2['scope'],
+    caseId: nullableString(row.caseId), draftId: nullableString(row.draftId), trigger: String(row.trigger ?? ''),
+    eligibleAt: String(row.eligibleAt ?? ''), status: String(row.status ?? '') as RetentionRecordV2['status'],
+    resourceManifestJson: String(row.resourceManifestJson ?? ''), manifestDigest: String(row.manifestDigest ?? ''),
+    approvedBy: String(row.approvedBy ?? ''), approvedAt: String(row.approvedAt ?? ''), reason: String(row.reason ?? ''),
+    cleanupAttemptCount: Number(row.cleanupAttemptCount), cleanupClaimId: String(row.cleanupClaimId ?? ''),
+    cleanupLeaseUntil: String(row.cleanupLeaseUntil ?? ''), cleanedAt: String(row.cleanedAt ?? ''),
+    safeErrorCode: String(row.safeErrorCode ?? ''), version: Number(row.version),
+  }))
 }
 
 function matchesCreationAudit(actual: SheetRow, expected: AuditEvent): boolean {

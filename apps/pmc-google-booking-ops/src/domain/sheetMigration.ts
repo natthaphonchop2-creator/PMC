@@ -1,4 +1,10 @@
-import { BOOKING_MASTER_COLUMNS, STAFF_CONFIG_COLUMNS } from '../sheetSchema'
+import { BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1, STAFF_CONFIG_COLUMNS } from '../sheetSchema'
+import {
+  RETENTION_QUEUE_COLUMNS_V1,
+  RETENTION_QUEUE_COLUMNS_V2,
+  createRetentionManifest,
+  type RetentionRecordV2,
+} from '../../../../shared/pmcMiniAppDraftRetention'
 
 export type BookingMasterMigrationPlan =
   | { kind: 'NONE' }
@@ -25,56 +31,63 @@ const APPOINTMENT_COLUMNS = [
 ] as const
 
 export function bookingAppointmentMigrationPlan(existing: string[]): BookingMasterMigrationPlan {
-  const previous = BOOKING_MASTER_COLUMNS.filter(
-    (column) => !APPOINTMENT_COLUMNS.includes(column as typeof APPOINTMENT_COLUMNS[number]),
-  )
-  if (JSON.stringify(existing) !== JSON.stringify(previous)) return { kind: 'NONE' }
-  return {
-    kind: 'INSERT_APPOINTMENT_COLUMNS',
-    afterColumn: BOOKING_MASTER_COLUMNS.indexOf('aeName') + 1,
-    headers: [...APPOINTMENT_COLUMNS],
+  for (const canonical of [BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1] as const) {
+    const previous = canonical.filter(
+      (column) => !APPOINTMENT_COLUMNS.includes(column as typeof APPOINTMENT_COLUMNS[number]),
+    )
+    if (same(existing, previous)) {
+      return {
+        kind: 'INSERT_APPOINTMENT_COLUMNS',
+        afterColumn: canonical.indexOf('aeName') + 1,
+        headers: [...APPOINTMENT_COLUMNS],
+      }
+    }
   }
+  return { kind: 'NONE' }
 }
 
 export function bookingMasterMigrationPlan(existing: string[]): BookingMasterMigrationPlan {
-  if (JSON.stringify(existing) === JSON.stringify(BOOKING_MASTER_COLUMNS)) {
+  if (same(existing, BOOKING_MASTER_COLUMNS) || same(existing, BOOKING_MASTER_COLUMNS_V1)) {
     return { kind: 'NONE' }
   }
   const appointmentPlan = bookingAppointmentMigrationPlan(existing)
   if (appointmentPlan.kind !== 'NONE') return appointmentPlan
-  const withoutFacebook = BOOKING_MASTER_COLUMNS.filter(
-    (column) => column !== 'facebookName',
-  )
-  if (JSON.stringify(existing) === JSON.stringify(withoutFacebook)) {
-    return {
-      kind: 'INSERT_FACEBOOK_NAME_COLUMN',
-      afterColumn: BOOKING_MASTER_COLUMNS.indexOf('customerName') + 1,
-      headers: ['facebookName'],
+  for (const canonical of [BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1] as const) {
+    const withoutFacebook = canonical.filter((column) => column !== 'facebookName')
+    if (same(existing, withoutFacebook)) {
+      return {
+        kind: 'INSERT_FACEBOOK_NAME_COLUMN',
+        afterColumn: canonical.indexOf('customerName') + 1,
+        headers: ['facebookName'],
+      }
     }
-  }
-  const withoutAe = BOOKING_MASTER_COLUMNS.filter(
-    (column) => !['aeId', 'aeName'].includes(column),
-  )
-  const withoutAeOrFacebook = BOOKING_MASTER_COLUMNS.filter(
-    (column) => !['aeId', 'aeName', 'facebookName'].includes(column),
-  )
-  const withoutAppointmentOrFacebook = BOOKING_MASTER_COLUMNS.filter(
-    (column) => ![...APPOINTMENT_COLUMNS, 'facebookName'].includes(column as never),
-  )
-  if (JSON.stringify(existing) === JSON.stringify(withoutAppointmentOrFacebook)) {
-    return {
-      kind: 'INSERT_APPOINTMENT_COLUMNS',
-      afterColumn: BOOKING_MASTER_COLUMNS.indexOf('aeName') + 1,
-      headers: [...APPOINTMENT_COLUMNS],
+    const withoutAe = canonical.filter((column) => !['aeId', 'aeName'].includes(column))
+    const withoutAeOrFacebook = canonical.filter(
+      (column) => !['aeId', 'aeName', 'facebookName'].includes(column),
+    )
+    const withoutAppointmentOrFacebook = canonical.filter(
+      (column) => ![...APPOINTMENT_COLUMNS, 'facebookName'].includes(column as never),
+    )
+    if (same(existing, withoutAppointmentOrFacebook)) {
+      return {
+        kind: 'INSERT_APPOINTMENT_COLUMNS',
+        afterColumn: canonical.indexOf('aeName') + 1,
+        headers: [...APPOINTMENT_COLUMNS],
+      }
     }
-  }
-  if (
-    JSON.stringify(existing) === JSON.stringify(withoutAe) ||
-    JSON.stringify(existing) === JSON.stringify(withoutAeOrFacebook)
-  ) {
-    return { kind: 'INSERT_AE_COLUMNS', afterColumn: 8, headers: ['aeId', 'aeName'] }
+    if (same(existing, withoutAe) || same(existing, withoutAeOrFacebook)) {
+      return {
+        kind: 'INSERT_AE_COLUMNS',
+        afterColumn: canonical.indexOf('adminIdentityStatus') + 1,
+        headers: ['aeId', 'aeName'],
+      }
+    }
   }
   throw new Error('unsupported BOOKING_MASTER header')
+}
+
+function same(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 export type StaffConfigMigrationPlan =
@@ -116,4 +129,40 @@ export function staffConfigMigrationPlan(existing: string[]): StaffConfigMigrati
     }
   }
   throw new Error('unsupported CONFIG_STAFF header')
+}
+
+export type RetentionQueueMigrationPlan =
+  | { kind: 'NONE' }
+  | { kind: 'REPLACE_RETENTION_QUEUE_V2'; headers: typeof RETENTION_QUEUE_COLUMNS_V2; rows: RetentionRecordV2[] }
+
+export function retentionQueueMigrationPlan(
+  existing: readonly string[],
+  legacyRows: readonly Record<string, unknown>[],
+  bookings: readonly { caseId: string; driveFolderId: string | null }[],
+  sha256Hex: (value: string) => string,
+): RetentionQueueMigrationPlan {
+  if (same(existing, RETENTION_QUEUE_COLUMNS_V2)) return { kind: 'NONE' }
+  if (!same(existing, RETENTION_QUEUE_COLUMNS_V1)) throw new Error('unsupported RETENTION_QUEUE header')
+  const rows = legacyRows.map((row): RetentionRecordV2 => {
+    const caseId = String(row.caseId ?? '')
+    const matches = bookings.filter((booking) => booking.caseId === caseId && booking.driveFolderId)
+    if (!/^PMC-\d{6}-\d{4,}$/.test(caseId) || matches.length !== 1) {
+      throw new Error('RETENTION_CASE_FOLDER_UNRESOLVED')
+    }
+    const approvedAt = String(row.approvedAt ?? '')
+    const oldStatus = String(row.status ?? '')
+    if (oldStatus !== 'PENDING' && oldStatus !== 'APPROVED') throw new Error('RETENTION_STATUS_UNSUPPORTED')
+    const manifest = createRetentionManifest([
+      { storage: 'CASE_FOLDER', folderId: matches[0]!.driveFolderId! },
+    ], sha256Hex)
+    return {
+      id: String(row.id ?? ''), scope: 'CASE_FOLDER', caseId, draftId: null,
+      trigger: 'LEGACY_CASE_RETENTION', eligibleAt: String(row.eligibleAt ?? ''),
+      status: oldStatus === 'APPROVED' ? 'APPROVED' : 'PENDING', ...manifest,
+      approvedBy: String(row.approvedBy ?? ''), approvedAt, reason: String(row.reason ?? ''),
+      cleanupAttemptCount: oldStatus === 'APPROVED' ? 1 : 0, cleanupClaimId: '', cleanupLeaseUntil: '',
+      cleanedAt: '', safeErrorCode: '', version: Number(row.version),
+    }
+  })
+  return { kind: 'REPLACE_RETENTION_QUEUE_V2', headers: RETENTION_QUEUE_COLUMNS_V2, rows }
 }

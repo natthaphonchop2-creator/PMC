@@ -31,6 +31,114 @@ describe('PMC Mini App browser API', () => {
     expect(fetch.mock.calls.map(([url]) => String(url)).join(' ')).not.toContain('raw-id-token')
   })
 
+  it('sends protocol 2 on every new booking mutation', async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return jsonResponse(200, {
+        bookingProtocol: { supported: 2, minimumMutation: 2, prepare: false },
+      })
+      if (url.endsWith('/confirm')) return jsonResponse(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+      return jsonResponse(url.endsWith('/booking-drafts') ? 201 : 200, {
+        draftId: 'draft-1', requestId: 'request-1', state: url.endsWith('/cancel') ? 'CANCELLED' : 'DRAFT',
+        retentionState: url.endsWith('/cancel') ? 'PENDING_APPROVAL' : '', version: 2, input: null,
+        paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+        caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+      })
+    })
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = {
+      requestId: 'request-1', adminId: 'staff-admin', aeId: null,
+      customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phone: '0812345678',
+      doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+
+    await api.loadConfig('raw-id-token')
+    await api.createDraft('raw-id-token')
+    await api.save('raw-id-token', 'draft-1', 1, input)
+    await api.confirm('raw-id-token', 'draft-1', 2)
+    await api.cancel('raw-id-token', 'draft-1', 2)
+
+    expect(requestBody(fetch, 1)).toEqual({ protocolVersion: 2 })
+    expect(requestBody(fetch, 2)).toEqual({ protocolVersion: 2, version: 1, input })
+    expect(requestBody(fetch, 3)).toEqual({ protocolVersion: 2, version: 2 })
+    expect(requestBody(fetch, 4)).toEqual({ protocolVersion: 2, version: 2 })
+  })
+
+  it('prepares protocol 2 input and both evidence kinds in one exact multipart request', async () => {
+    const fetch = vi.fn(async () => jsonResponse(200, {
+      draftId: 'draft-1', requestId: 'request-1', state: 'READY_TO_CONFIRM', retentionState: '', version: 5,
+      input: null, paymentEvidenceIds: ['payment-1'], chatEvidenceIds: ['chat-1'], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const exactInput = {
+      requestId: 'request-1', adminId: 'staff-admin', aeId: null,
+      customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test', phone: '0812345678',
+      doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+    const input = {
+      ...exactInput,
+      recorderName: 'ห้ามส่ง', adminName: 'ห้ามส่ง', aeName: 'ห้ามส่ง',
+    }
+    const paymentFiles = [new File(['one'], 'payment.png', { type: 'image/png' })]
+    const chatFiles = [new File(['two'], 'chat.png', { type: 'image/png' })]
+
+    await api.prepare('raw-id-token', 'draft-1', 4, { input, paymentFiles, chatFiles })
+
+    expect(fetch).toHaveBeenCalledOnce()
+    const [url, init] = fetch.mock.calls[0]!
+    expect(url).toBe('/api/mini-app/booking-drafts/draft-1/prepare')
+    expect(init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer raw-id-token' } })
+    expect(init?.body).toBeInstanceOf(FormData)
+    const body = init?.body as FormData
+    expect([...body.keys()]).toEqual(['input', 'paymentFiles', 'chatFiles'])
+    expect(body.getAll('input')).toEqual([
+      JSON.stringify({ protocolVersion: 2, version: 4, input: exactInput }),
+    ])
+    expect(body.getAll('paymentFiles')).toEqual(paymentFiles)
+    expect(body.getAll('chatFiles')).toEqual(chatFiles)
+    expect(JSON.stringify([...body.entries()])).not.toContain('recorderName')
+    expect(JSON.stringify([...body.entries()])).not.toContain('adminName')
+    expect(JSON.stringify([...body.entries()])).not.toContain('aeName')
+  })
+
+  it.each([
+    ['the capability is absent', {}],
+    ['minimumMutation is 1', { bookingProtocol: { supported: 2, minimumMutation: 1, prepare: false } }],
+  ])('keeps exact protocol-1 mutation bodies when %s', async (_label, configResponse) => {
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/config')) return jsonResponse(200, configResponse)
+      if (url.endsWith('/confirm')) return jsonResponse(200, { caseId: 'PMC-202608-0001', status: 'CONFIRMED' })
+      return jsonResponse(url.endsWith('/booking-drafts') ? 201 : 200, {
+        draftId: 'draft-1', requestId: 'request-1', state: url.endsWith('/cancel') ? 'CANCELLED' : 'DRAFT',
+        retentionState: url.endsWith('/cancel') ? 'PENDING_APPROVAL' : '', version: 2, input: null,
+        paymentEvidenceIds: [], chatEvidenceIds: [], confirmationStatus: null,
+        caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+      })
+    })
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = {
+      requestId: 'request-1', aeName: 'ไม่ระบุ', customerName: 'ลูกค้าทดสอบ', facebookName: 'Facebook Test',
+      phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1', queueType: 'NORMAL' as const,
+      appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900, channelId: 'channel-1',
+    }
+
+    await api.loadConfig('raw-id-token')
+    await api.createDraft('raw-id-token')
+    await api.save('raw-id-token', 'draft-1', 1, input)
+    await api.confirm('raw-id-token', 'draft-1', 2)
+    await api.cancel('raw-id-token', 'draft-1', 2)
+
+    expect(requestBody(fetch, 1)).toEqual({})
+    expect(requestBody(fetch, 2)).toEqual({ version: 1, input })
+    expect(requestBody(fetch, 3)).toEqual({ version: 2 })
+    expect(requestBody(fetch, 4)).toEqual({ version: 2 })
+    expect(fetch.mock.calls.map(([url]) => String(url))).not.toContain('/api/mini-app/booking-drafts/draft-1/prepare')
+  })
+
   it('uploads payment and chat evidence together through one async batch request', async () => {
     const fetch = vi.fn(async () => jsonResponse(200, {
       draftId: 'draft-1', requestId: 'request-1', state: 'DRAFT', retentionState: '', version: 2,
@@ -58,7 +166,8 @@ describe('PMC Mini App browser API', () => {
 
     await expect(api.confirm('raw-id-token', 'draft-1', 4)).resolves.toEqual({ requestId: 'request-1', status: 'QUEUED', projection })
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1/confirm', expect.objectContaining({
-      method: 'POST', headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' }, body: JSON.stringify({ version: 4 }),
+      method: 'POST', headers: { authorization: 'Bearer raw-id-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ version: 4 }),
     }))
   })
 
@@ -125,6 +234,36 @@ describe('PMC Mini App browser API', () => {
     expect(fetch).toHaveBeenCalledWith('/api/mini-app/booking-drafts/draft-1', expect.objectContaining({
       headers: { authorization: 'Bearer raw-id-token' },
     }))
+  })
+
+  it('preserves an exact saved attribution snapshot and rejects malformed attribution', async () => {
+    const base = {
+      draftId: 'draft-1', requestId: 'request-1', state: 'READY_TO_CONFIRM', retentionState: '', version: 10,
+      input: {
+        requestId: 'request-1', adminId: 'staff-admin', aeId: 'staff-ae', customerName: 'ลูกค้าทดสอบ',
+        facebookName: 'Facebook Test', phone: '0812345678', doctorId: 'doctor-1', serviceId: 'service-1',
+        queueType: 'NORMAL', appointmentDate: '2026-09-01', appointmentTime: '13:00', depositAmount: 900,
+        channelId: 'channel-1',
+      },
+      paymentEvidenceIds: ['payment-1'], chatEvidenceIds: ['chat-1'], confirmationStatus: null,
+      caseId: null, safeErrorCode: null, queuedAt: null, lastProgressAt: null,
+    }
+    const attribution = {
+      protocolVersion: 2, recorder: { id: 'staff-1', name: 'มัสเดิม' },
+      admin: { id: 'staff-admin', name: 'แววเดิม' }, ae: { id: 'staff-ae', name: 'หมวยเดิม' },
+    }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(200, { ...base, attribution }))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        ...base,
+        attribution: { ...attribution, recorder: { ...attribution.recorder, privateEmail: 'must-not-pass' } },
+      }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+
+    await expect(api.loadDraft('raw-id-token', 'draft-1')).resolves.toMatchObject({ attribution })
+    await expect(api.loadDraft('raw-id-token', 'draft-1')).rejects.toMatchObject({
+      code: 'MINI_APP_INVALID_RESPONSE', status: 200,
+    })
   })
 
   it('keeps the terminal retry marker and Case ID from the persisted server projection', async () => {
@@ -573,4 +712,9 @@ function expenseHistoryRow(monthKey: string) {
     amountSatang: 120_000, description: 'สมุดรายวัน', recordState: 'COMMITTED', revision: 2, submittedByName: 'มัส',
     submittedAt: '2026-08-29T02:00:00.000Z', committedAt: '2026-08-29T02:01:00.000Z', attachments: [],
   }
+}
+
+function requestBody(request: ReturnType<typeof vi.fn>, index: number): unknown {
+  const init = request.mock.calls[index]![1] as RequestInit
+  return JSON.parse(String(init.body))
 }

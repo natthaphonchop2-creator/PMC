@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { bookingMasterMigrationPlan, staffConfigMigrationPlan } from '../src/domain/sheetMigration'
-import { BOOKING_MASTER_COLUMNS, STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
+import { BOOKING_MASTER_COLUMNS, BOOKING_MASTER_COLUMNS_V1, STAFF_CONFIG_COLUMNS } from '../src/sheetSchema'
+import { resolveManagedSheetColumns } from '../src/adapters/googleSheets'
 
 describe('booking staff schema migration', () => {
   it('inserts AE columns immediately after adminIdentityStatus', () => {
@@ -9,13 +10,27 @@ describe('booking staff schema migration', () => {
     )
     expect(bookingMasterMigrationPlan([...legacy])).toEqual({
       kind: 'INSERT_AE_COLUMNS',
-      afterColumn: 8,
+      afterColumn: 11,
       headers: ['aeId', 'aeName'],
     })
   })
 
   it('does nothing when the canonical header already exists', () => {
     expect(bookingMasterMigrationPlan([...BOOKING_MASTER_COLUMNS])).toEqual({ kind: 'NONE' })
+  })
+
+  it('leaves the exact attribution legacy header to the guarded owner migration', () => {
+    expect(bookingMasterMigrationPlan([...BOOKING_MASTER_COLUMNS_V1])).toEqual({ kind: 'NONE' })
+  })
+
+  it('lets repository readers and writers use only either exact Booking master schema', () => {
+    expect(resolveManagedSheetColumns('BOOKING_MASTER', [...BOOKING_MASTER_COLUMNS_V1]))
+      .toEqual(BOOKING_MASTER_COLUMNS_V1)
+    expect(resolveManagedSheetColumns('BOOKING_MASTER', [...BOOKING_MASTER_COLUMNS]))
+      .toEqual(BOOKING_MASTER_COLUMNS)
+    const reordered = [...BOOKING_MASTER_COLUMNS_V1]
+    ;[reordered[0], reordered[1]] = [reordered[1], reordered[0]]
+    expect(() => resolveManagedSheetColumns('BOOKING_MASTER', reordered)).toThrow('sheet header mismatch')
   })
 
   it('rejects an unknown header instead of shifting customer data', () => {

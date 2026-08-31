@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState, type ChangeEvent, type Dispatch, type FormEvent, type ReactElement } from 'react'
 import { ArrowLeft, Check, ImagePlus, X } from 'lucide-react'
+import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
 import { BrandMark } from './BrandMark'
 import {
   bookingInput,
@@ -16,17 +17,34 @@ import type {
   BookingDraftInput,
   BookingDraftProjection,
   BookingQueuedResult,
+  BookingDraftAttributionV2,
   MiniAppConfig,
   MiniAppSession,
 } from './contracts'
+import { bookingProtocolVersion } from './contracts'
+import {
+  browserBookingErrorStatus,
+  emitBrowserBookingTiming,
+  type BrowserBookingTiming,
+} from './api'
 
 export interface BookingWizardAdapter {
   load(draftId: string): Promise<BookingDraftProjection>
+  prepare(draftId: string, version: number, input: {
+    input: Extract<BookingDraftInput, { adminId: string }>
+    paymentFiles: File[]
+    chatFiles: File[]
+  }): Promise<BookingDraftProjection>
   upload(draftId: string, kind: 'PAYMENT' | 'CHAT', files: File[]): Promise<BookingDraftProjection>
   uploadEvidenceBatch(draftId: string, input: { paymentFiles: File[]; chatFiles: File[] }): Promise<BookingDraftProjection>
   save(draftId: string, version: number, input: BookingDraftInput): Promise<BookingDraftProjection>
   confirm(draftId: string, version: number): Promise<BookingQueuedResult | BookingConfirmationResult>
   cancel(draftId: string, version: number): Promise<BookingDraftProjection>
+}
+
+export interface BookingHomeTimingStart {
+  startedAt: number
+  status: 200 | 202
 }
 
 export function BookingWizard({
@@ -38,6 +56,8 @@ export function BookingWizard({
   onExit,
   onQueued,
   onConfirmed,
+  bookingTiming,
+  performanceNow = () => globalThis.performance.now(),
 }: {
   session: MiniAppSession
   config: MiniAppConfig
@@ -45,19 +65,49 @@ export function BookingWizard({
   adapter: BookingWizardAdapter
   initialStep?: number
   onExit?: () => void
-  onQueued?: (projection: BookingDraftProjection) => void
-  onConfirmed?: (result: BookingConfirmationResult) => void
+  onQueued?: (projection: BookingDraftProjection, timing: BookingHomeTimingStart) => void
+  onConfirmed?: (result: BookingConfirmationResult, timing: BookingHomeTimingStart) => void
+  bookingTiming?: BrowserBookingTiming
+  performanceNow?: () => number
 }) {
-  const [state, dispatch] = useReducer(reduceBooking, initialDraftState(initialDraft, initialStep))
+  const protocolVersion = bookingProtocolVersion(config)
+  const initialSavedAttribution = recoveredAttribution(initialDraft, session, protocolVersion)
+  const recoveryBlocked = protocolVersion === 2 && initialDraft.state === 'READY_TO_CONFIRM' && !initialSavedAttribution
+  const [state, dispatch] = useReducer(
+    reduceBooking,
+    initialDraftState(initialDraft, recoveryBlocked ? 0 : initialStep),
+  )
   const [draft, setDraft] = useState(initialDraft)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
-  const [failure, setFailure] = useState('')
+  const [failure, setFailure] = useState(recoveryBlocked ? 'ข้อมูลผู้รับผิดชอบของร่างไม่ตรงกับบัญชีนี้ กรุณาตรวจสอบและบันทึกใหม่' : '')
+  const [savedAttribution, setSavedAttribution] = useState(initialSavedAttribution)
   const [result, setResult] = useState<BookingConfirmationResult | null>(null)
-  const preview = useMemo(() => safePreview(state, config), [state, config])
+  const preview = useMemo(() => safePreview(state, config, protocolVersion), [state, config, protocolVersion])
   const evidenceRef = useRef(state.evidence)
+  const saveInFlightRef = useRef(false)
+  const pendingPreviewTimingRef = useRef<number | null>(null)
+  const pendingConfirmErrorTimingRef = useRef<{ startedAt: number; status: number } | null>(null)
 
   useEffect(() => { evidenceRef.current = state.evidence }, [state.evidence])
+
+  useEffect(() => {
+    if (state.step !== 4 || pendingPreviewTimingRef.current === null) return
+    const startedAt = pendingPreviewTimingRef.current
+    pendingPreviewTimingRef.current = null
+    emitBrowserBookingTiming(bookingTiming, 'navigation_to_preview', {
+      action: 'preview', status: 200, elapsedMs: safeElapsed(performanceNow, startedAt),
+    })
+  }, [bookingTiming, performanceNow, state.step])
+
+  useEffect(() => {
+    const pending = pendingConfirmErrorTimingRef.current
+    if (!failure || !pending) return
+    pendingConfirmErrorTimingRef.current = null
+    emitBrowserBookingTiming(bookingTiming, 'confirm_terminal_error', {
+      action: 'error', status: pending.status, elapsedMs: safeElapsed(performanceNow, pending.startedAt),
+    })
+  }, [bookingTiming, failure, performanceNow])
 
   useEffect(() => () => {
     for (const item of [...evidenceRef.current.PAYMENT, ...evidenceRef.current.CHAT]) {
@@ -72,6 +122,7 @@ export function BookingWizard({
   const goBack = async () => {
     setFailure('')
     if (state.step > 0) {
+      if (state.step === 4) setSavedAttribution(null)
       dispatch({ type: 'GO_BACK' })
       return
     }
@@ -81,14 +132,32 @@ export function BookingWizard({
       await adapter.cancel(draft.draftId, draft.version)
       setBusy(false)
       onExit?.()
-    } catch {
+    } catch (error) {
+      if (errorCode(error) === 'STALE_DRAFT_VERSION') {
+        try {
+          const authoritative = await adapter.load(draft.draftId)
+          if (authoritative.state === 'CANCELLED' || authoritative.state === 'EXPIRED') {
+            setBusy(false)
+            onExit?.()
+            return
+          }
+          if (isPrepareCancelableState(authoritative.state)) {
+            await adapter.cancel(authoritative.draftId, authoritative.version)
+            setBusy(false)
+            onExit?.()
+            return
+          }
+        } catch {
+          // Fall through to the bounded cancellation failure below.
+        }
+      }
       setFailure('ยกเลิกร่างไม่สำเร็จ กรุณาลองอีกครั้ง')
       setBusy(false)
     }
   }
   const goNext = async (event: FormEvent) => {
     event.preventDefault()
-    const nextErrors = validateBookingStep(state, state.step, config)
+    const nextErrors = validateBookingStep(state, state.step, config, protocolVersion)
     setErrors(nextErrors)
     if (Object.keys(nextErrors).length > 0) return
     if (state.step < 3) {
@@ -96,13 +165,34 @@ export function BookingWizard({
       return
     }
     if (state.step === 3) {
+      if (saveInFlightRef.current) return
+      saveInFlightRef.current = true
       setBusy(true)
       setFailure('')
-      const input = bookingInput(state)
+      const input = bookingInput(state, protocolVersion)
+      pendingPreviewTimingRef.current = safeNow(performanceNow)
       try {
         let current = draft
         const newPayments = state.evidence.PAYMENT.flatMap(({ file }) => file ? [file] : [])
         const newChats = state.evidence.CHAT.flatMap(({ file }) => file ? [file] : [])
+        const usePrepare = protocolVersion === 2 && config.bookingProtocol?.prepare === true
+        if (usePrepare) {
+          if (!('adminId' in input) || newPayments.length !== state.evidence.PAYMENT.length
+            || newChats.length !== state.evidence.CHAT.length) {
+            setFailure('กรุณาแนบรูปหลักฐานทั้งหมดใหม่ก่อนตรวจสอบข้อมูล')
+            pendingPreviewTimingRef.current = null
+            return
+          }
+          current = await adapter.prepare(current.draftId, current.version, {
+            input, paymentFiles: newPayments, chatFiles: newChats,
+          })
+          setDraft(current)
+          setSavedAttribution(recoveredAttribution(current, session, protocolVersion))
+          replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, current.paymentEvidenceIds, current.paymentEvidenceCount, dispatch)
+          replaceUploadedEvidence('CHAT', state.evidence.CHAT, current.chatEvidenceIds, current.chatEvidenceCount, dispatch)
+          dispatch({ type: 'GO_TO_STEP', step: 4 })
+          return
+        }
         if (newPayments.length > 0 || newChats.length > 0) {
           try {
             current = await adapter.uploadEvidenceBatch(current.draftId, { paymentFiles: newPayments, chatFiles: newChats })
@@ -117,44 +207,54 @@ export function BookingWizard({
         }
         current = await adapter.save(current.draftId, current.version, input)
         setDraft(current)
+        setSavedAttribution(null)
         dispatch({ type: 'GO_TO_STEP', step: 4 })
       } catch (error) {
         if (errorCode(error) === 'STALE_DRAFT_VERSION' || errorCode(error) === 'DRAFT_NOT_UPLOADABLE') {
           try {
             const latest = await adapter.load(draft.draftId)
             if (latest.state === 'READY_TO_CONFIRM' && sameBookingInput(latest.input, input)) {
-              setDraft(latest)
-              replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, latest.paymentEvidenceCount, dispatch)
-              replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, latest.chatEvidenceCount, dispatch)
-              dispatch({ type: 'GO_TO_STEP', step: 4 })
-              return
+              const recovered = recoveredAttribution(latest, session, protocolVersion)
+              if (protocolVersion === 1 || recovered) {
+                setDraft(latest)
+                setSavedAttribution(recovered)
+                replaceUploadedEvidence('PAYMENT', state.evidence.PAYMENT, latest.paymentEvidenceIds, latest.paymentEvidenceCount, dispatch)
+                replaceUploadedEvidence('CHAT', state.evidence.CHAT, latest.chatEvidenceIds, latest.chatEvidenceCount, dispatch)
+                dispatch({ type: 'GO_TO_STEP', step: 4 })
+                return
+              }
             }
           } catch {
             // Fall through to the safe generic message below.
           }
         }
+        pendingPreviewTimingRef.current = null
         setFailure(draftSaveFailureMessage(error))
       } finally {
+        saveInFlightRef.current = false
         setBusy(false)
       }
     }
   }
   const confirm = async () => {
+    const homeStartedAt = safeNow(performanceNow)
+    pendingConfirmErrorTimingRef.current = null
     setBusy(true)
     setFailure('')
     try {
       const confirmed = await adapter.confirm(draft.draftId, draft.version)
       if ('requestId' in confirmed) {
-        onQueued?.(confirmed.projection)
+        onQueued?.(confirmed.projection, { startedAt: homeStartedAt, status: 202 })
         return
       }
       if (onConfirmed) {
-        onConfirmed(confirmed)
+        onConfirmed(confirmed, { startedAt: homeStartedAt, status: 200 })
         return
       }
       setResult(confirmed)
       dispatch({ type: 'GO_TO_STEP', step: 5 })
-    } catch {
+    } catch (error) {
+      pendingConfirmErrorTimingRef.current = { startedAt: homeStartedAt, status: browserBookingErrorStatus(error) }
       setFailure('ยืนยันการจองไม่สำเร็จ กรุณาลองอีกครั้ง')
     } finally {
       setBusy(false)
@@ -209,14 +309,20 @@ export function BookingWizard({
       <div className="pmc-progress" aria-hidden="true"><span style={{ width: `${((state.step + 1) / 5) * 100}%` }} /></div>
 
       <form className="pmc-booking-form" onSubmit={goNext} noValidate>
-        {state.step === 0 && <CustomerStep session={session} config={config} state={state.values} errors={errors} update={update} />}
+        {state.step === 0 && <CustomerStep protocolVersion={protocolVersion} session={session} config={config} state={state.values} errors={errors} update={update} />}
         {state.step === 1 && <DetailsStep config={config} state={state.values} errors={errors} update={update} />}
         {state.step === 2 && <QueueStep state={state.values} errors={errors} update={update} onQueueType={(value) => dispatch({ type: 'SET_QUEUE_TYPE', value })} />}
         {state.step === 3 && <EvidenceStep
           state={state.values} evidence={state.evidence} errors={errors} update={update}
           addEvidence={addEvidence} removeEvidence={removeEvidence}
         />}
-        {state.step === 4 && <PreviewStep session={session} preview={preview} evidence={state.evidence} />}
+        {state.step === 4 && <PreviewStep
+          protocolVersion={protocolVersion}
+          session={session}
+          preview={preview}
+          savedAttribution={savedAttribution}
+          evidence={state.evidence}
+        />}
 
         {failure && <p className="pmc-form-alert" role="alert">{failure}</p>}
         <footer className="pmc-booking-footer">
@@ -229,10 +335,29 @@ export function BookingWizard({
   )
 }
 
-function CustomerStep({ session, config, state, errors, update }: StepProps & { session: MiniAppSession; config: MiniAppConfig }) {
+function CustomerStep({ protocolVersion, session, config, state, errors, update }: StepProps & {
+  protocolVersion: BookingProtocolVersion
+  session: MiniAppSession
+  config: MiniAppConfig
+}) {
   return <section className="pmc-step"><StepHeading title="ข้อมูลลูกค้า" description="กรอกข้อมูลที่ใช้ค้นหาและติดต่อ" />
-    <Field label="Admin" error=""><input value={session.displayName} disabled /></Field>
-    <Field label="AE" error={errors.aeName}><select value={state.aeName} onChange={(event) => update('aeName', event.target.value)}>{config.aes.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></Field>
+    {protocolVersion === 2 ? <>
+      <Field label="ผู้บันทึก" error=""><input value={session.displayName} disabled /></Field>
+      <Field label="Admin" error={errors.adminId}><select
+        name="adminId" value={state.adminId} required aria-invalid={Boolean(errors.adminId)}
+        onChange={(event) => update('adminId', event.target.value)}
+      ><option value="" disabled>เลือก Admin</option>{config.admins.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+      <Field label="AE" error={errors.aeId}><select
+        name="aeId" value={state.aeId} aria-invalid={Boolean(errors.aeId)}
+        onChange={(event) => update('aeId', event.target.value)}
+      ><option value="">ไม่ระบุ</option>{config.aes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+    </> : <>
+      <Field label="Admin" error=""><input value={session.displayName} disabled /></Field>
+      <Field label="AE" error={errors.aeName}><select
+        name="aeName" value={state.aeName} aria-invalid={Boolean(errors.aeName)}
+        onChange={(event) => update('aeName', event.target.value)}
+      ><option value="ไม่ระบุ">ไม่ระบุ</option>{config.aes.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></Field>
+    </>}
     <Field label="ชื่อลูกค้า" error={errors.customerName}><input name="customerName" value={state.customerName} onChange={(event) => update('customerName', event.target.value)} autoComplete="name" required /></Field>
     <Field label="ชื่อ Facebook" hint="ถ้าไม่มี ให้กรอกคำว่า ไม่มี" error={errors.facebookName}><input name="facebookName" value={state.facebookName} onChange={(event) => update('facebookName', event.target.value)} required /></Field>
     <Field label="เบอร์มือถือ" error={errors.phone}><input name="phone" value={state.phone} onChange={(event) => update('phone', event.target.value)} inputMode="tel" autoComplete="tel" required /></Field>
@@ -290,10 +415,20 @@ function EvidencePicker({ label, inputLabel, kind, items, error, onAdd, onRemove
   </div>
 }
 
-function PreviewStep({ session, preview, evidence }: { session: MiniAppSession; preview: ReturnType<typeof safePreview>; evidence: { PAYMENT: BookingEvidenceItem[]; CHAT: BookingEvidenceItem[] } }) {
+function PreviewStep({ protocolVersion, session, preview, savedAttribution, evidence }: {
+  protocolVersion: BookingProtocolVersion
+  session: MiniAppSession
+  preview: ReturnType<typeof safePreview>
+  savedAttribution: BookingDraftAttributionV2 | null
+  evidence: { PAYMENT: BookingEvidenceItem[]; CHAT: BookingEvidenceItem[] }
+}) {
   return <section className="pmc-step"><StepHeading title="ตรวจสอบก่อนยืนยัน" description="ตรวจข้อมูลให้ครบก่อนบันทึกเข้าระบบ" />
     <dl className="pmc-preview-list">
-      <PreviewRow label="Admin" value={session.displayName} /><PreviewRow label="AE" value={preview.ae} />
+      {protocolVersion === 2 ? <>
+        <PreviewRow label="ผู้บันทึก" value={savedAttribution?.recorder.name ?? session.displayName} />
+        <PreviewRow label="Admin" value={savedAttribution?.admin.name ?? preview.admin} />
+        <PreviewRow label="AE" value={savedAttribution ? savedAttribution.ae?.name ?? 'ไม่ระบุ' : preview.ae} />
+      </> : <><PreviewRow label="Admin" value={session.displayName} /><PreviewRow label="AE" value={preview.ae} /></>}
       <PreviewRow label="ลูกค้า" value={preview.customerName} /><PreviewRow label="Facebook" value={preview.facebookName} />
       <PreviewRow label="โทร" value={preview.phone} /><PreviewRow label="แพทย์" value={preview.doctor} />
       <PreviewRow label="โปรแกรม" value={preview.service} /><PreviewRow label="ช่องทาง" value={preview.channel} />
@@ -314,16 +449,18 @@ function initialDraftState(draft: BookingDraftProjection, initialStep: number) {
   const state = initialBooking(draft.requestId)
   state.step = Math.max(0, Math.min(4, initialStep))
   if (draft.input) {
-    state.values = { ...state.values, ...draft.input, depositAmount: String(draft.input.depositAmount) }
+    state.values = 'adminId' in draft.input
+      ? { ...state.values, ...draft.input, aeId: draft.input.aeId ?? '', depositAmount: String(draft.input.depositAmount) }
+      : { ...state.values, ...draft.input, depositAmount: String(draft.input.depositAmount) }
   }
   state.evidence.PAYMENT = savedEvidenceItems('PAYMENT', draft.paymentEvidenceIds, draft.paymentEvidenceCount)
   state.evidence.CHAT = savedEvidenceItems('CHAT', draft.chatEvidenceIds, draft.chatEvidenceCount)
   return state
 }
 
-function safePreview(state: ReturnType<typeof initialBooking>, config: MiniAppConfig) {
-  try { return previewBooking(state, config) } catch {
-    return { customerName: '', facebookName: '', phone: '', ae: state.values.aeName, doctor: '', service: '', channel: '', queueType: state.values.queueType, appointmentDate: state.values.appointmentDate, appointmentTime: state.values.appointmentTime, depositAmount: 0, paymentCount: state.evidence.PAYMENT.length, chatCount: state.evidence.CHAT.length }
+function safePreview(state: ReturnType<typeof initialBooking>, config: MiniAppConfig, protocolVersion: BookingProtocolVersion) {
+  try { return previewBooking(state, config, protocolVersion) } catch {
+    return { customerName: '', facebookName: '', phone: '', admin: '', ae: 'ไม่ระบุ', doctor: '', service: '', channel: '', queueType: state.values.queueType, appointmentDate: state.values.appointmentDate, appointmentTime: state.values.appointmentTime, depositAmount: 0, paymentCount: state.evidence.PAYMENT.length, chatCount: state.evidence.CHAT.length }
   }
 }
 
@@ -345,13 +482,46 @@ function errorCode(error: unknown): string {
   return error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
 }
 
+function safeElapsed(now: () => number, startedAt: number): number {
+  const elapsed = safeNow(now) - startedAt
+  return Number.isFinite(elapsed) && elapsed >= 0 ? Math.min(elapsed, 86_400_000) : 0
+}
+
+function safeNow(now: () => number): number {
+  try {
+    const value = now()
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch { return 0 }
+}
+
+function isPrepareCancelableState(state: BookingDraftProjection['state']): boolean {
+  return state === 'DRAFT' || state === 'UPLOADING' || state === 'READY_TO_CONFIRM' || state === 'FAILED_RETRYABLE'
+}
+
 function sameBookingInput(left: BookingDraftInput | null, right: BookingDraftInput): boolean {
   if (!left) return false
-  const keys: Array<keyof BookingDraftInput> = [
-    'requestId', 'aeName', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId', 'queueType',
+  const keys = [
+    'requestId', 'customerName', 'facebookName', 'phone', 'doctorId', 'serviceId', 'queueType',
     'appointmentDate', 'appointmentTime', 'depositAmount', 'channelId',
-  ]
-  return keys.every((key) => left[key] === right[key])
+  ] as const
+  if (!keys.every((key) => left[key] === right[key])) return false
+  if ('adminId' in left && 'adminId' in right) return left.adminId === right.adminId && left.aeId === right.aeId
+  if ('aeName' in left && 'aeName' in right) return left.aeName === right.aeName
+  return false
+}
+
+function recoveredAttribution(
+  draft: BookingDraftProjection,
+  session: MiniAppSession,
+  protocolVersion: BookingProtocolVersion,
+): BookingDraftAttributionV2 | null {
+  if (protocolVersion !== 2 || draft.state !== 'READY_TO_CONFIRM' || !draft.input || !('adminId' in draft.input)) return null
+  const attribution = draft.attribution
+  if (!attribution || attribution.protocolVersion !== 2) return null
+  if (attribution.recorder.id !== session.staffId || attribution.admin.id !== draft.input.adminId) return null
+  if ((attribution.ae?.id ?? null) !== draft.input.aeId) return null
+  if (!attribution.recorder.name.trim() || !attribution.admin.name.trim() || attribution.ae && !attribution.ae.name.trim()) return null
+  return attribution
 }
 
 function replaceUploadedEvidence(

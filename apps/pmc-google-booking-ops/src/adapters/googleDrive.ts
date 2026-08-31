@@ -98,8 +98,9 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
       created.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
       return { id: created.getId(), name }
     },
-    createEvidenceFile(folderId, name, mimeType, bytes) {
+    createEvidenceFile(folderId, name, mimeType, bytes, marker) {
       const created = folder(folderId).createFile(Utilities.newBlob(bytes, mimeType, name))
+      if (marker !== undefined) created.setDescription(marker)
       created.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE)
       return created.getId()
     },
@@ -107,6 +108,26 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
     findFileByName(folderId, name) {
       const files = folder(folderId).getFilesByName(name)
       return files.hasNext() ? files.next().getId() : null
+    },
+    findEvidenceFile(folderId, name, mimeType, marker) {
+      const files = folder(folderId).getFilesByName(name)
+      let exactId: string | null = null
+      while (files.hasNext()) {
+        const file = files.next()
+        const parents = file.getParents()
+        let parentCount = 0
+        let exactParent = false
+        while (parents.hasNext()) {
+          const parent = parents.next()
+          parentCount += 1
+          exactParent ||= parent.getId() === folderId
+        }
+        if (!exactParent || parentCount !== 1 || file.getName() !== name
+          || file.getMimeType() !== mimeType || file.getDescription() !== marker) continue
+        if (exactId !== null) throw new Error('duplicate exact mini app evidence file')
+        exactId = file.getId()
+      }
+      return exactId
     },
     moveAndRenameFile(fileId, folderId, name) {
       const file = DriveApp.getFileById(fileId)
@@ -117,8 +138,49 @@ export function createGoogleDrivePort(rootFolderId: string): DrivePort {
     },
     folderUrl: (folderId) => folder(folderId).getUrl(),
     trashFolder(folderId) {
-      folder(folderId).setTrashed(true)
+      const target = folder(folderId)
+      if (!target.isTrashed()) target.setTrashed(true)
     },
+    verifyFolder(folderId) {
+      return folder(folderId).isTrashed() ? 'ALREADY_TRASHED' : 'PRESENT'
+    },
+    evidenceIntakeFolderId() {
+      const candidates = folder(rootFolderId).getFoldersByName('_MINI_APP_INTAKE')
+      const exact: string[] = []
+      while (candidates.hasNext()) {
+        const candidate = candidates.next()
+        if (!candidate.isTrashed() && candidate.getDescription() === 'PMC_MARKER:mini-app-intake:v1') {
+          exact.push(candidate.getId())
+        }
+      }
+      if (exact.length !== 1) throw new Error('draft evidence intake folder mismatch')
+      return exact[0]!
+    },
+    verifyEvidenceFile(input) {
+      const file = DriveApp.getFileById(input.fileId)
+      assertExactEvidenceFile(file, input)
+      return file.isTrashed() ? 'ALREADY_TRASHED' : 'PRESENT'
+    },
+    trashEvidenceFile(input) {
+      const file = DriveApp.getFileById(input.fileId)
+      assertExactEvidenceFile(file, input)
+      if (file.isTrashed()) return 'ALREADY_TRASHED'
+      file.setTrashed(true)
+      return 'TRASHED'
+    },
+  }
+}
+
+function assertExactEvidenceFile(
+  file: GoogleAppsScript.Drive.File,
+  input: { fileId: string; parentFolderId: string; fileName: string; mimeType: string; marker: string },
+): void {
+  const parents = file.getParents()
+  const parentIds: string[] = []
+  while (parents.hasNext()) parentIds.push(parents.next().getId())
+  if (parentIds.length !== 1 || parentIds[0] !== input.parentFolderId || file.getName() !== input.fileName
+    || file.getMimeType() !== input.mimeType || file.getDescription() !== input.marker) {
+    throw new Error('draft evidence binding mismatch')
   }
 }
 

@@ -1,5 +1,6 @@
 import type { MiniAppSheetsPort } from './googleClient.js'
-import { MINI_APP_LINK_ATTEMPT_HEADERS, MINI_APP_REQUEST_HEADERS } from './store.js'
+import { ATTRIBUTION_V2_REQUEST_HEADERS, MINI_APP_LINK_ATTEMPT_HEADERS, MINI_APP_REQUEST_HEADERS } from './store.js'
+import { MINI_APP_ASYNC_REQUEST_HEADERS_V1 } from '../../shared/pmcMiniAppAsyncState.js'
 
 export const JERA_API_CACHE_HEADERS = [
   'cacheKey', 'reportType', 'sourceUuid', 'branchUuid', 'branchName', 'eventDate', 'patientUuid', 'patientCode',
@@ -84,7 +85,7 @@ const ASYNC_REQUEST_HEADERS = [
   'evidenceProjectionHash',
 ] as const
 
-const LEGACY_REQUEST_HEADERS = MINI_APP_REQUEST_HEADERS.slice(0, -ASYNC_REQUEST_HEADERS.length)
+const LEGACY_REQUEST_HEADERS = MINI_APP_ASYNC_REQUEST_HEADERS_V1.slice(0, -ASYNC_REQUEST_HEADERS.length)
 
 export async function migrateMiniAppAsyncRequestColumns(input: {
   spreadsheetId: string
@@ -93,7 +94,7 @@ export async function migrateMiniAppAsyncRequestColumns(input: {
   const { spreadsheetId, sheets } = input
   const range = "'MINI_APP_REQUESTS'!1:1"
   const current = ((await sheets.batchGet(spreadsheetId, [range]))[range]?.[0] ?? []).map(String)
-  const expected = [...MINI_APP_REQUEST_HEADERS]
+  const expected = [...MINI_APP_ASYNC_REQUEST_HEADERS_V1]
 
   if (sameHeader(current, expected)) return { appendedColumns: [] }
   if (current.length < LEGACY_REQUEST_HEADERS.length || !sameHeader(current, expected.slice(0, current.length))) {
@@ -143,7 +144,9 @@ export async function ensureMiniAppWorkbook(input: {
     const expected = [...MANAGED_TAB_HEADERS[title as keyof typeof MANAGED_TAB_HEADERS]]
     const compatibleAllocationCoverage = title === 'JERA_ALLOCATION_COVERAGE'
       && actual.length >= 18 && actual.length < expected.length && sameHeader(actual, expected.slice(0, actual.length))
-    if (actual.length > 0 && !sameHeader(actual, expected) && !compatibleAllocationCoverage) {
+    const compatibleRequestHeader = title === 'MINI_APP_REQUESTS'
+      && (sameHeader(actual, MINI_APP_ASYNC_REQUEST_HEADERS_V1) || sameHeader(actual, ATTRIBUTION_V2_REQUEST_HEADERS))
+    if (actual.length > 0 && !sameHeader(actual, expected) && !compatibleAllocationCoverage && !compatibleRequestHeader) {
       throw new Error(`incompatible header: ${title}`)
     }
   }
@@ -236,7 +239,7 @@ export async function ensureMiniAppWorkbook(input: {
   })))
 }
 
-function sameHeader(actual: string[], expected: string[]): boolean {
+function sameHeader(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && actual.every((value, index) => value === expected[index])
 }
 
