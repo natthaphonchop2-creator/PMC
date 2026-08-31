@@ -39,6 +39,10 @@ const SHEETS_V4_FIELDS = [
   'merges,basicFilter,filterViews,bandedRanges,conditionalFormats,protectedRanges,',
   'charts,tables,developerMetadata,rowGroups,columnGroups,slicers),namedRanges,developerMetadata',
 ].join('')
+const SHEETS_V4_TOPOLOGY_FIELDS = [
+  'spreadsheetId,sheets(properties(sheetId,title,index,hidden,sheetType,gridProperties(',
+  'rowCount,columnCount,frozenRowCount,frozenColumnCount))),namedRanges,developerMetadata',
+].join('')
 
 const MANAGED_STYLE_KEYS = new Set<WorkbookPresentationStyleKey>([
   'HEADER', 'BODY', 'BODY_PLAIN_TEXT', 'BODY_CURRENCY', 'BODY_WRAP', 'BODY_PLAIN_TEXT_WRAP',
@@ -172,8 +176,14 @@ export function createGoogleWorkbookPresentationGateway(
       try {
         const sheetsService = Sheets
         if (!sheetsService) fail('SHEETS_V4_PRESENTATION_METADATA_UNAVAILABLE')
+        const topology = sheetsService.Spreadsheets.get(spreadsheetId, {
+          includeGridData: false,
+          fields: SHEETS_V4_TOPOLOGY_FIELDS,
+        })
+        const ranges = presentationMetadataRanges(topology)
         response = sheetsService.Spreadsheets.get(spreadsheetId, {
           includeGridData: true,
+          ranges,
           fields: SHEETS_V4_FIELDS,
         })
       } catch {
@@ -215,6 +225,39 @@ export function createGoogleWorkbookPresentationGateway(
       }
     },
   }
+}
+
+export function presentationMetadataRanges(
+  topology: GoogleAppsScript.Sheets.Schema.Spreadsheet,
+): string[] {
+  const rawSheets = topology.sheets
+  if (!rawSheets?.length) fail('SHEETS_V4_PRESENTATION_METADATA_INVALID')
+  const titles = new Set<string>()
+  return rawSheets.map(({ properties }) => {
+    const title = properties?.title?.trim() ?? ''
+    const rows = properties?.gridProperties?.rowCount
+    const columns = properties?.gridProperties?.columnCount
+    if (!title || titles.has(title) || !Number.isSafeInteger(rows) || Number(rows) < 2
+      || !Number.isSafeInteger(columns) || Number(columns) < 1) {
+      fail('SHEETS_V4_PRESENTATION_METADATA_INVALID')
+    }
+    titles.add(title)
+    const sheet = `'${title.replace(/'/g, "''")}'`
+    return VISIBLE_TABS.has(title)
+      ? `${sheet}!A1:${columnName(Number(columns))}${Number(rows)}`
+      : `${sheet}!1:1`
+  })
+}
+
+function columnName(columnCount: number): string {
+  let value = columnCount
+  let result = ''
+  while (value > 0) {
+    value -= 1
+    result = String.fromCharCode(65 + value % 26) + result
+    value = Math.floor(value / 26)
+  }
+  return result
 }
 
 type DriveFile = GoogleAppsScript.Drive_v3.Drive.V3.Schema.File

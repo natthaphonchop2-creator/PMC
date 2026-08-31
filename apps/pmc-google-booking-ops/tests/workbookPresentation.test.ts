@@ -5,6 +5,7 @@ import {
   applyWorkbookPresentation,
   createGoogleWorkbookPresentationGateway,
   inspectWorkbookPresentationMetadata,
+  presentationMetadataRanges,
   previewWorkbookPresentation,
   translateWorkbookPresentationPlan,
 } from '../src/adapters/googleWorkbookPresentation'
@@ -641,8 +642,15 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
 
     gateway.inspect()
 
-    const firstCall = get.mock.calls[0] as unknown as [string, { fields: string }]
-    const fields = firstCall[1].fields
+    expect(get).toHaveBeenCalledTimes(2)
+    const topologyCall = get.mock.calls[0] as unknown as [string, { fields: string; includeGridData: boolean }]
+    const dataCall = get.mock.calls[1] as unknown as [string, { fields: string; ranges: string[] }]
+    expect(topologyCall[1].includeGridData).toBe(false)
+    expect(dataCall[1].ranges).toEqual(presentationMetadataRanges(response))
+    expect(dataCall[1].ranges).toContain("'MINI_APP_REQUESTS'!1:1")
+    expect(dataCall[1].ranges.find((range) => range.startsWith("'BOOKING_MASTER'!A1:")))
+      .toBeTypeOf('string')
+    const fields = dataCall[1].fields
     for (const field of [
       'chipRuns', 'textFormatRuns', 'dataSourceFormula', 'dataSourceTable',
       'pivotTable', 'rowMetadata', 'hyperlink',
