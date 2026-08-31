@@ -32,6 +32,7 @@ describe('production PMC Mini App route isolation', () => {
     expect((await invoke(app, '/api/mini-app/session')).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/jera-allocation-worker', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/internal/mini-app/finance-daily-seed', { method: 'POST' })).status).toBe(503)
+    expect((await invoke(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST' })).status).toBe(503)
     expect((await invoke(app, '/healthz')).status).toBe(200)
     expect((await invoke(app, '/api/healthz')).status).toBe(200)
     expect((await invoke(app, '/api/booking-line/webhook', { method: 'POST' })).status).not.toBe(503)
@@ -68,6 +69,7 @@ describe('production PMC Mini App route isolation', () => {
     const allocation = await invoke(app, '/internal/mini-app/jera-allocation-worker', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const financeSeed = await invoke(app, '/internal/mini-app/finance-daily-seed', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const worker = await invoke(app, '/internal/mini-app/finalize-booking', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
+    const cleanup = await invoke(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const failed = await invoke(app, '/api/mini-app/explode')
     const health = await invoke(app, '/healthz')
 
@@ -77,6 +79,7 @@ describe('production PMC Mini App route isolation', () => {
     expect(allocation.status).toBe(200)
     expect(financeSeed.status).toBe(200)
     expect(worker.status).toBe(200)
+    expect(cleanup.status).toBe(200)
     expect({ status: failed.status, body: await failed.json() }).toEqual({ status: 500, body: { error: 'Mini App route failed' } })
     expect(health.status).toBe(200)
   })
@@ -124,6 +127,21 @@ describe('production PMC Mini App route isolation', () => {
     const exact = await invokeRaw(app, '/internal/mini-app/finance-daily-seed', { method: 'POST' })
     const query = await invokeRaw(app, '/internal/mini-app/finance-daily-seed?date=2026-08-29', { method: 'POST' })
     const suffix = await invokeRaw(app, '/internal/mini-app/finance-daily-seed/retry', { method: 'POST' })
+
+    expect(exact.status).toBe(204)
+    expect(exact.headers.get('www-authenticate')).toBeNull()
+    expect(query.status).toBe(401)
+    expect(suffix.status).toBe(401)
+    expect(pmcMiniApp).toHaveBeenCalledOnce()
+  })
+
+  it('keeps only the exact draft cleanup route outside legacy Basic Auth', async () => {
+    const pmcMiniApp = vi.fn<Middleware>(async (_req, res) => { res.statusCode = 204; res.end() })
+    const app = handler({ pmcMiniApp })
+
+    const exact = await invokeRaw(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST' })
+    const query = await invokeRaw(app, '/internal/mini-app/draft-evidence-cleanup?retry=1', { method: 'POST' })
+    const suffix = await invokeRaw(app, '/internal/mini-app/draft-evidence-cleanup/retry', { method: 'POST' })
 
     expect(exact.status).toBe(204)
     expect(exact.headers.get('www-authenticate')).toBeNull()
