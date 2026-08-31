@@ -358,7 +358,7 @@ export function createBookingRepositories(store: SheetStore, locks: LockPort, cl
         return store.read('LINE_INGRESS_NONCES').some((row) => row.nonce === nonce)
       },
       rememberNonce(nonce, capturedAt) {
-        append(store, 'LINE_INGRESS_NONCES', { nonce, capturedAt })
+        store.append('LINE_INGRESS_NONCES', [{ nonce, capturedAt }])
       },
     },
     retention: {

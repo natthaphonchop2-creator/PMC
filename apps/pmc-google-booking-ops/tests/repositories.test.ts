@@ -74,6 +74,29 @@ describe('booking repositories', () => {
     )
   })
 
+  it('appends a consumed ingress nonce without rewriting the nonce table', () => {
+    const calls = { read: 0, replace: 0, append: [] as SheetRow[] }
+    const store: SheetStore = {
+      read(tab) { if (tab === 'LINE_INGRESS_NONCES') calls.read += 1; return [] },
+      replace(tab) { if (tab === 'LINE_INGRESS_NONCES') calls.replace += 1 },
+      append(tab, rows) { if (tab === 'LINE_INGRESS_NONCES') calls.append.push(...structuredClone(rows)) },
+      update() { throw new Error('unexpected update') },
+    }
+    const repos = createBookingRepositories(
+      store,
+      { withLock: (operation) => operation() },
+      { nowIso: () => '2026-08-21T12:00:00+07:00' },
+    )
+
+    repos.lineDirectory.rememberNonce('nonce-performance-1', '2026-08-21T12:00:00+07:00')
+
+    expect(calls).toEqual({
+      read: 0,
+      replace: 0,
+      append: [{ nonce: 'nonce-performance-1', capturedAt: '2026-08-21T12:00:00+07:00' }],
+    })
+  })
+
   it('rejects stale updates and appends a before-after audit event', () => {
     const repos = createMemoryRepositories()
     const booking = repos.bookings.insert(bookingFixture())
