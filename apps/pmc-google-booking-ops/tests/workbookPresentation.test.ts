@@ -653,8 +653,13 @@ describe('Sheets-v4 Booking workbook presentation gateway', () => {
     expect(topologyCall[1].includeGridData).toBe(false)
     expect(dataCall[1].ranges).toEqual(presentationMetadataRanges(response))
     expect(dataCall[1].ranges).toContain("'MINI_APP_REQUESTS'!1:1")
-    expect(dataCall[1].ranges.find((range) => range.startsWith("'BOOKING_MASTER'!A1:")))
-      .toBeTypeOf('string')
+    const bookingRanges = dataCall[1].ranges.filter((range) => range.startsWith("'BOOKING_MASTER'!"))
+    expect(bookingRanges).toHaveLength(3)
+    expect(bookingRanges.some((range) => range.startsWith("'BOOKING_MASTER'!A1:")))
+      .toBe(true)
+    expect(bookingRanges.some((range) => range.startsWith("'BOOKING_MASTER'!A2:")))
+      .toBe(true)
+    expect(bookingRanges.every((range) => /!A\d+:[A-Z]+\d+$/.test(range))).toBe(true)
     const fields = dataCall[1].fields
     for (const field of [
       'chipRuns', 'textFormatRuns', 'dataSourceFormula', 'dataSourceTable',

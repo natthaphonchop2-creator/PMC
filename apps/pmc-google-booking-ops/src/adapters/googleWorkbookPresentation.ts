@@ -233,7 +233,7 @@ export function presentationMetadataRanges(
   const rawSheets = topology.sheets
   if (!rawSheets?.length) fail('SHEETS_V4_PRESENTATION_METADATA_INVALID')
   const titles = new Set<string>()
-  return rawSheets.map(({ properties }) => {
+  return rawSheets.flatMap(({ properties }) => {
     const title = properties?.title?.trim() ?? ''
     const rows = properties?.gridProperties?.rowCount
     const columns = properties?.gridProperties?.columnCount
@@ -243,9 +243,10 @@ export function presentationMetadataRanges(
     }
     titles.add(title)
     const sheet = `'${title.replace(/'/g, "''")}'`
-    return VISIBLE_TABS.has(title)
-      ? `${sheet}!A1:${columnName(Number(columns))}${Number(rows)}`
-      : `${sheet}!1:1`
+    if (!VISIBLE_TABS.has(title)) return [`${sheet}!1:1`]
+    const endColumn = columnName(Number(columns))
+    const sampleRows = [...new Set([1, Math.min(2, Number(rows)), Number(rows)])]
+    return sampleRows.map((row) => `${sheet}!A${row}:${endColumn}${row}`)
   })
 }
 
@@ -694,7 +695,10 @@ function rangeMatchesStyle(
   target: GridRangeSnapshot,
   styleKey: WorkbookPresentationStyleKey,
 ): boolean {
-  for (let rowIndex = target.startRowIndex; rowIndex < target.endRowIndex; rowIndex += 1) {
+  const rowIndexes = target.endRowIndex - target.startRowIndex === 1
+    ? [target.startRowIndex]
+    : [...new Set([target.startRowIndex, target.endRowIndex - 1])]
+  for (const rowIndex of rowIndexes) {
     for (let columnIndex = target.startColumnIndex; columnIndex < target.endColumnIndex; columnIndex += 1) {
       const format = cells.get(cellKey(rowIndex, columnIndex))?.data.userEnteredFormat
       if (!format || !sameManagedFormat(format, managedCellFormat(styleKey), styleKey)) return false
