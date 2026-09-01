@@ -59,7 +59,9 @@ export function inspectPmcExpenseAsyncRuntime(snapshot, options = {}) {
     workerUnauthorizedStatus: safeStatus(source.service.workerUnauthorizedStatus),
     ready: false,
   }
-  service.ready = service.healthStatus === 200 && service.workerUnauthorizedStatus === 401
+  // Disabled preflight constructs no async worker dependency, so the exact route is intentionally absent.
+  // The enabled owner-pilot gate separately requires unauthenticated status 401.
+  service.ready = service.healthStatus === 200 && service.workerUnauthorizedStatus === 404
 
   const queue = {
     state: source.queue.state === 'RUNNING' ? 'RUNNING' : 'NOT_RUNNING',

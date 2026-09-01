@@ -85,7 +85,7 @@ node scripts/check-pmc-expense-async-runtime.mjs \
   --strict
 ```
 
-Strict readiness requires an empty running queue, a private seven-day bucket, `/api/healthz` status 200, unauthenticated worker status 401, all seven binding names, and `PMC_EXPENSE_ASYNC_ENABLED=false`.
+Strict disabled-preflight readiness requires an empty running queue, a private seven-day bucket, `/api/healthz` status 200, the exact worker route absent with status 404, all seven binding names, and `PMC_EXPENSE_ASYNC_ENABLED=false`. After the owner-pilot flag is enabled on a tagged revision, the separate security gate requires the same unauthenticated worker request to change from 404 to 401, never 200.
 
 ## 5. No-traffic code deployment
 
@@ -105,7 +105,7 @@ Against the tagged URL, require:
 
 - `/api/healthz` returns 200;
 - `/mini-app/` returns 200;
-- unauthenticated `/internal/mini-app/finalize-expense` returns 401 when async is configured, never 200;
+- unauthenticated `/internal/mini-app/finalize-expense` returns 404 while async is disabled; after the pilot bindings and flag are enabled on the next tagged revision it must return 401, never 200;
 - client config contains only `expenseAsyncEnabled` as a role-filtered boolean and no resource names; and
 - a non-pilot expense still follows the synchronous 200 receipt path.
 

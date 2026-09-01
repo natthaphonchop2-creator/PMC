@@ -28,7 +28,7 @@ describe('read-only async expense runtime checker', () => {
         sourceCheckCount: 5, requiredSourceCheckCount: 5,
         targetMatches: true, environmentMatches: true,
       },
-      service: { healthStatus: 200, workerUnauthorizedStatus: 401, ready: true },
+      service: { healthStatus: 200, workerUnauthorizedStatus: 404, ready: true },
       queue: {
         state: 'RUNNING', taskCount: 0, drained: true, retryReady: true,
       },
@@ -128,7 +128,7 @@ function validSnapshot() {
       collectedAt: '2026-09-01T13:00:00.000Z',
       sourceChecks: { service: true, worker: true, queue: true, bucket: true, bindings: true },
     },
-    service: { healthStatus: 200, workerUnauthorizedStatus: 401 },
+    service: { healthStatus: 200, workerUnauthorizedStatus: 404 },
     queue: {
       name: 'private-expense-queue', state: 'RUNNING', taskCount: 0,
       maxAttempts: 8, minBackoffSeconds: 10, maxBackoffSeconds: 300,
