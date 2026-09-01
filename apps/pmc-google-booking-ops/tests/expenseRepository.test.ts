@@ -569,7 +569,7 @@ describe('Google expense repository containment and literal text', () => {
     expect(environment.expenseFileCount(expenseId)).toBe(1)
   })
 
-  it('returns the settled Drive version when creation increments the version after its first list', () => {
+  it('keeps the bound attachment valid when Drive advances its server version after creation', () => {
     const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
     const repository = createGoogleExpenseRepository({
       masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
@@ -595,8 +595,36 @@ describe('Google expense repository containment and literal text', () => {
       mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
     })
 
-    expect(prepared).toMatchObject({ ...attachment, sizeBytes: bytes.length, driveVersion: '2' })
+    expect(prepared).toMatchObject({ ...attachment, sizeBytes: bytes.length })
     expect(() => repository.verifyPrivateAttachments('2026-08', expenseId, [prepared])).not.toThrow()
+  })
+
+  it('returns a newly created owner file by ID while Drive list visibility is delayed', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master', financeFolderId: 'finance-root',
+    })
+    const expenseId = 'EXP-202608-OWNER-DELAYED-LIST'
+    const rootRequestId = 'owner-delayed-list-request'
+    const bytes = [0xff, 0xd8, 0xff, 0xd9]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const deterministicName = `001-${sha256}.jpg`
+    const attachment = {
+      attachmentId: `ATT-${createHash('sha256').update(`${rootRequestId}:${expenseId}:1`).digest('hex').slice(0, 40)}`,
+      expenseId, rootRequestId, ordinal: 1, mediaType: 'image/jpeg' as const,
+      originalFileName: 'receipt.jpg', deterministicName,
+      slotClaimId: `SLOT-${createHash('sha256').update(JSON.stringify({
+        rootRequestId, expenseId, ordinal: 1, sha256, mimeType: 'image/jpeg', deterministicName,
+      })).digest('hex')}`,
+      sha256, uploadedByStaffId: 'STAFF_01', uploadedAt: EXPENSE_NOW,
+    }
+    environment.ensureExpenseFolder(expenseId)
+    environment.setOwnerListVisibilityDelayReads(2)
+
+    expect(repository.createOrFindPrivateAttachment({
+      mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
+    })).toMatchObject({ ...attachment, sizeBytes: bytes.length })
+    expect(environment.expenseFileCount(expenseId)).toBe(1)
   })
 
   it('replays a metadata-bound owner file when Drive rewrites its display description', () => {

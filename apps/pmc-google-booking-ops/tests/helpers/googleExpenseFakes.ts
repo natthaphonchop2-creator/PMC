@@ -191,6 +191,7 @@ export interface GoogleExpenseFakeEnvironment {
   setOwnerBlobReadFailure(value: boolean): void
   setOwnerChecksumDelayReads(reads: number): void
   setOwnerVersionBumpAfterReads(reads: number): void
+  setOwnerListVisibilityDelayReads(reads: number): void
   addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
@@ -252,6 +253,7 @@ export function installGoogleExpenseFakes(options: {
   let failOwnerBlobReads = false
   let ownerChecksumDelayReads = 0
   let ownerVersionBumpAfterReads: number | null = null
+  let ownerListVisibilityDelayReads = 0
 
   const ownerAdvancedFile = (file: FakeFile) => {
     const metadata = advancedFile(file)
@@ -280,10 +282,15 @@ export function installGoogleExpenseFakes(options: {
     get: (id: string) => ownerAdvancedFile(files.get(id)!),
       list: (input: { q?: string }) => {
         const parentId = /'([^']+)'\s+in\s+parents/.exec(input.q ?? '')?.[1]
+        const matching = [...files.values()]
+          .filter((file) => !parentId || file.parentFolders.some(({ id }) => id === parentId))
+        const hideOwnerFiles = matching.some((file) => file.id.startsWith('owner-file-'))
+          && ownerListVisibilityDelayReads > 0
+        if (hideOwnerFiles) ownerListVisibilityDelayReads -= 1
         return {
           incompleteSearch,
-          files: [...files.values()]
-            .filter((file) => !parentId || file.parentFolders.some(({ id }) => id === parentId))
+          files: matching
+            .filter((file) => !hideOwnerFiles || !file.id.startsWith('owner-file-'))
             .map(ownerAdvancedFile),
         }
       },
@@ -396,6 +403,7 @@ export function installGoogleExpenseFakes(options: {
     setOwnerBlobReadFailure(value) { failOwnerBlobReads = value },
     setOwnerChecksumDelayReads(reads) { ownerChecksumDelayReads = reads },
     setOwnerVersionBumpAfterReads(reads) { ownerVersionBumpAfterReads = reads },
+    setOwnerListVisibilityDelayReads(reads) { ownerListVisibilityDelayReads = reads },
     addExpenseAttachment,
     duplicateExpenseAttachment(attachment, bytes) {
       addExpenseAttachment(attachment, bytes, `${attachment.privateFileId}-duplicate`)

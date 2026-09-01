@@ -809,20 +809,12 @@ function createGoogleExpenseRepositoryBackend(
           parents: [expenseFolder.getId()],
           properties: expenseAttachmentProperties(input.monthKey, attachment),
         }, Utilities.newBlob(bytes, attachment.mediaType, attachment.deterministicName), {
-          fields: 'id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,properties,permissions(id,type,role,deleted)',
+          fields: EXPENSE_FILE_FIELDS,
           supportsAllDrives: true,
         })
         if (!created.id) throw new Error('invalid')
-        const after = matchingExpenseFiles(
-          listExpenseFiles(expenseFolder.getId()),
-          attachment.expenseId,
-          attachment.ordinal,
-          attachment.deterministicName,
-          attachment.slotClaimId,
-        )
-        if (after.length !== 1 || after[0]?.id !== created.id) throw new Error('invalid')
         return verifiedOwnerAttachmentAfterChecksum(
-          after[0], input.monthKey, expenseFolder.getId(), attachment, bytes,
+          created, input.monthKey, expenseFolder.getId(), attachment, bytes,
         )
       } catch {
         throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
@@ -836,6 +828,7 @@ function createGoogleExpenseRepositoryBackend(
 }
 
 type ExpenseDriveMetadata = GoogleAppsScript.Drive_v3.Drive.V3.Schema.File
+const EXPENSE_FILE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,properties,permissions(id,type,role,deleted)'
 
 function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
   const advancedDrive = Drive
@@ -846,7 +839,7 @@ function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
     const response = advancedDrive.Files.list({
       q: `'${folderId}' in parents and trashed = false`,
       spaces: 'drive',
-      fields: 'incompleteSearch,nextPageToken,files(id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,properties,permissions(id,type,role,deleted))',
+      fields: `incompleteSearch,nextPageToken,files(${EXPENSE_FILE_FIELDS})`,
       pageSize: 100,
       includeItemsFromAllDrives: true,
       supportsAllDrives: true,
@@ -863,6 +856,15 @@ function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
     pageToken = response.nextPageToken
   }
   throw new Error('invalid')
+}
+
+function getExpenseFile(fileId: string): ExpenseDriveMetadata {
+  const advancedDrive = Drive
+  if (!advancedDrive || !fileId) throw new Error('invalid')
+  return advancedDrive.Files.get(fileId, {
+    fields: EXPENSE_FILE_FIELDS,
+    supportsAllDrives: true,
+  })
 }
 
 function listExpenseFilesAfterChecksums(folderId: string): ExpenseDriveMetadata[] {
@@ -994,20 +996,14 @@ function verifiedOwnerAttachmentAfterChecksum(
   identity: ExpensePrivateAttachmentIdentity,
   expectedBytes: number[],
 ): ExpensePrivateAttachment {
+  if (!initial.id) throw new Error('invalid')
   let metadata = initial
   for (let attempt = 0; ; attempt += 1) {
     const delay = OWNER_CHECKSUM_RETRY_DELAYS_MS[attempt]
     if (delay === undefined) throw new Error('invalid')
     Utilities.sleep(delay)
-    const matches = matchingExpenseFiles(
-      listExpenseFiles(folderId),
-      identity.expenseId,
-      identity.ordinal,
-      identity.deterministicName,
-      identity.slotClaimId,
-    )
-    if (matches.length !== 1 || matches[0]?.id !== initial.id) throw new Error('invalid')
-    const next = matches[0]
+    const next = getExpenseFile(initial.id)
+    if (next.id !== initial.id) throw new Error('invalid')
     const versionIsStable = next.version === metadata.version
     metadata = next
     if (
