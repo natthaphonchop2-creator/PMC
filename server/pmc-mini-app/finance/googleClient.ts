@@ -25,6 +25,7 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,256}$/
 const SAFE_EXPENSE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const VERSION = /^[1-9]\d*$/
+const LITERAL_TEXT_PREFIX = '\u200c'
 const CHECKSUM_RETRY_DELAYS_MS = [100, 250, 500] as const
 const DRIVE_FIELDS = 'id,name,description,mimeType,parents,trashed,size,version,sha256Checksum,appProperties,properties,permissions(id,type,role,deleted)'
 const DRIVE_LIST_FIELDS = `incompleteSearch,nextPageToken,files(${DRIVE_FIELDS})`
@@ -1008,7 +1009,7 @@ function parseIndexRow(row: unknown[]): {
   monthFolderId: string
 } {
   if (row.length !== 5) throw new FinanceGoogleError('EXPENSE_STORAGE_UNAVAILABLE')
-  const [monthKey, ledgerSpreadsheetId, monthFolderId, createdAt, updatedAt] = row
+  const [monthKey, ledgerSpreadsheetId, monthFolderId, createdAt, updatedAt] = row.map(decodeLiteralText)
   if (
     typeof monthKey !== 'string'
     || typeof ledgerSpreadsheetId !== 'string'
@@ -1024,6 +1025,12 @@ function parseIndexRow(row: unknown[]): {
     ledgerSpreadsheetId: requiredId(ledgerSpreadsheetId, 'EXPENSE_STORAGE_UNAVAILABLE'),
     monthFolderId: requiredId(monthFolderId, 'EXPENSE_STORAGE_UNAVAILABLE'),
   }
+}
+
+function decodeLiteralText(value: unknown): unknown {
+  return typeof value === 'string' && value.startsWith(LITERAL_TEXT_PREFIX)
+    ? value.slice(LITERAL_TEXT_PREFIX.length)
+    : value
 }
 
 function requireBaseMetadata(

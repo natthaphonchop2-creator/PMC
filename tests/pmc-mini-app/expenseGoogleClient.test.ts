@@ -87,6 +87,17 @@ describe('private finance Google ports', () => {
     expect(JSON.stringify(fake.sheetReads.mock.calls)).not.toContain('callerSpreadsheetId')
   })
 
+  it('decodes Apps Script literal-prefixed cells in the monthly index', async () => {
+    const fake = financeGoogleFake()
+    fake.indexRows[0] = fake.indexRows[0]!.map((value) => (
+      typeof value === 'string' ? `\u200c${value}` : value
+    ))
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+
+    await expect(ports.readMonth(MONTH_KEY, ["'EXPENSE_SUBMISSIONS'!A2:T"]))
+      .resolves.toEqual({ "'EXPENSE_SUBMISSIONS'!A2:T": [['EXP-202608-0001']] })
+  })
+
   it('requests unformatted Sheet values and preserves live-like numeric cells for strict expense parsing', async () => {
     const fake = financeGoogleFake()
     fake.setMonthRows('EXPENSE_SUBMISSIONS', [committedSubmissionRow()])
