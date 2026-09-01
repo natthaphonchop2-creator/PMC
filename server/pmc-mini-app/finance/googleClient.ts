@@ -1230,8 +1230,8 @@ function canonicalIdentity(metadata: DriveMetadata): string {
     size: String(metadata.size),
     version: String(metadata.version),
     sha256Checksum: metadata.sha256Checksum,
-    appProperties: metadata.appProperties,
-    properties: metadata.properties,
+    appProperties: canonicalStringProperties(metadata.appProperties),
+    properties: canonicalStringProperties(metadata.properties),
     permissions: [...(metadata.permissions ?? [])]
       .map((permission) => ({
         id: permission.id,
@@ -1241,6 +1241,15 @@ function canonicalIdentity(metadata: DriveMetadata): string {
       }))
       .sort((left, right) => String(left.id).localeCompare(String(right.id))),
   })
+}
+
+function canonicalStringProperties(
+  value: Record<string, string> | null | undefined,
+): Record<string, string> | null | undefined {
+  if (value === null || value === undefined) return value
+  return Object.fromEntries(
+    Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+  )
 }
 
 function arrayBuffer(value: DriveMetadata | ArrayBuffer): Buffer {

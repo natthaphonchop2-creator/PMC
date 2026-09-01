@@ -528,6 +528,28 @@ describe('private finance Google ports', () => {
     })).resolves.toBeUndefined()
   })
 
+  it('accepts stable Drive properties regardless of provider key order', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    fake.afterMediaRead = () => {
+      const file = fake.item(attachment.privateFileId)
+      file.properties = Object.fromEntries(Object.entries(file.properties).reverse())
+    }
+
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+    })).resolves.toBeUndefined()
+  })
+
   it('waits for a temporarily unavailable Drive checksum before verifying evidence', async () => {
     const fake = financeGoogleFake()
     const ports = createFinanceGooglePorts(config(), fake.factory)
