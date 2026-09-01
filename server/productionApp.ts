@@ -26,6 +26,7 @@ const OCR_API_PATHS = new Set([
   '/api/ocr-ledger/image',
 ])
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const EXPENSE_ASYNC_WORKER_PATH = '/internal/mini-app/finalize-expense'
 const EXPENSE_RECOVERY_PATH = '/internal/mini-app/recover-expenses'
 const JERA_ALLOCATION_WORKER_PATH = '/internal/mini-app/jera-allocation-worker'
 const FINANCE_DAILY_SEED_PATH = '/internal/mini-app/finance-daily-seed'
@@ -76,7 +77,8 @@ export function createProductionRequestHandler(deps: ProductionAppDependencies) 
       return
     }
 
-    if (req.url === ASYNC_WORKER_PATH || req.url === EXPENSE_RECOVERY_PATH
+    if (req.url === ASYNC_WORKER_PATH || req.url === EXPENSE_ASYNC_WORKER_PATH
+      || req.url === EXPENSE_RECOVERY_PATH
       || req.url === JERA_ALLOCATION_WORKER_PATH || req.url === FINANCE_DAILY_SEED_PATH
       || req.url === FINANCE_CURRENT_SEED_PATH
       || req.url === DRAFT_EVIDENCE_CLEANUP_PATH) {

@@ -85,6 +85,7 @@ describe('production PMC Mini App route isolation', () => {
     const financeSeed = await invoke(app, '/internal/mini-app/finance-daily-seed', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const expenseRecovery = await invoke(app, '/internal/mini-app/recover-expenses', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const worker = await invoke(app, '/internal/mini-app/finalize-booking', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
+    const expenseWorker = await invoke(app, '/internal/mini-app/finalize-expense', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const cleanup = await invoke(app, '/internal/mini-app/draft-evidence-cleanup', { method: 'POST', headers: { authorization: 'Bearer valid-token' } })
     const failed = await invoke(app, '/api/mini-app/explode')
     const health = await invoke(app, '/healthz')
@@ -96,6 +97,7 @@ describe('production PMC Mini App route isolation', () => {
     expect(financeSeed.status).toBe(200)
     expect(expenseRecovery.status).toBe(200)
     expect(worker.status).toBe(200)
+    expect(expenseWorker.status).toBe(200)
     expect(cleanup.status).toBe(200)
     expect({ status: failed.status, body: await failed.json() }).toEqual({ status: 500, body: { error: 'Mini App route failed' } })
     expect(health.status).toBe(200)
@@ -243,6 +245,41 @@ describe('production PMC Mini App route isolation', () => {
       body: { error: 'MINI_APP_METHOD_NOT_ALLOWED' },
     })
     expect(wrongMethod.headers.get('www-authenticate')).toBeNull()
+    expect(pmcMiniApp).toHaveBeenCalledTimes(2)
+  })
+
+  it('delegates only the exact raw expense worker target outside legacy Basic Auth', async () => {
+    const pmcMiniApp = vi.fn<Middleware>(async (req, res) => {
+      res.statusCode = req.method === 'POST' ? 401 : 405
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({
+        error: req.method === 'POST'
+          ? 'EXPENSE_ASYNC_WORKER_UNAUTHORIZED'
+          : 'MINI_APP_METHOD_NOT_ALLOWED',
+      }))
+    })
+    const app = handler({ pmcMiniApp })
+    const exact = await invokeRaw(app, '/internal/mini-app/finalize-expense', {
+      method: 'POST', headers: { authorization: 'Bearer rejected-token' },
+    })
+    const wrongMethod = await invokeRaw(app, '/internal/mini-app/finalize-expense', { method: 'GET' })
+    const query = await invokeRaw(app, '/internal/mini-app/finalize-expense?retry=1', {
+      method: 'POST', headers: { authorization: 'Bearer rejected-token' },
+    })
+    const suffix = await invokeRaw(app, '/internal/mini-app/finalize-expense/retry', {
+      method: 'POST', headers: { authorization: 'Bearer rejected-token' },
+    })
+
+    expect({ status: exact.status, body: await exact.json() }).toEqual({
+      status: 401, body: { error: 'EXPENSE_ASYNC_WORKER_UNAUTHORIZED' },
+    })
+    expect(exact.headers.get('www-authenticate')).toBeNull()
+    expect({ status: wrongMethod.status, body: await wrongMethod.json() }).toEqual({
+      status: 405, body: { error: 'MINI_APP_METHOD_NOT_ALLOWED' },
+    })
+    expect(query.status).toBe(401)
+    expect(query.headers.get('www-authenticate')).toBe('Basic realm="PMC Ads Agent", charset="UTF-8"')
+    expect(suffix.status).toBe(401)
     expect(pmcMiniApp).toHaveBeenCalledTimes(2)
   })
 
