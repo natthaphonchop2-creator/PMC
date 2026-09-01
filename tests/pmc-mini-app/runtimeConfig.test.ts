@@ -71,6 +71,33 @@ describe('PMC Mini App runtime configuration checker', () => {
     }
   })
 
+  it('reports only expense async binding names and fails closed when enabled bindings are incomplete', async () => {
+    const checker = await import('../../scripts/check-pmc-mini-app-runtime.mjs')
+    const bindings = {
+      PMC_EXPENSE_ASYNC_ENABLED: 'true',
+      PMC_EXPENSE_ASYNC_JOB_BUCKET: 'private-job-bucket',
+      PMC_EXPENSE_ASYNC_QUEUE: 'private-expense-queue',
+      PMC_EXPENSE_ASYNC_WORKER_URL: 'https://private.example/internal/mini-app/finalize-expense',
+      PMC_EXPENSE_ASYNC_WORKER_AUDIENCE: 'https://private.example',
+      PMC_EXPENSE_ASYNC_TASK_INVOKER_EMAIL: 'private-invoker@example.iam.gserviceaccount.com',
+      PMC_EXPENSE_ASYNC_PILOT_STAFF_IDS: 'ADMIN_03',
+    }
+    const report = checker.inspectMiniAppRuntime({ ...validEnvironment(), ...bindings })
+    const incomplete = checker.inspectMiniAppRuntime({
+      ...validEnvironment(), PMC_EXPENSE_ASYNC_ENABLED: 'true',
+    })
+    const serialized = JSON.stringify(report)
+
+    expect(report).toMatchObject({
+      ready: true, expenseAsyncEnabled: true,
+      expenseAsync: { present: Object.keys(bindings), missing: [] },
+    })
+    expect(incomplete).toMatchObject({ ready: false, expenseAsyncEnabled: true })
+    for (const value of Object.values(bindings)) {
+      if (value !== 'true') expect(serialized).not.toContain(value)
+    }
+  })
+
   it('reports Stock rollout flag readiness without exposing configured values', async () => {
     const checker = await import('../../scripts/check-pmc-mini-app-runtime.mjs')
     const environment = {

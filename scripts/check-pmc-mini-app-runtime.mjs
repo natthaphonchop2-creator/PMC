@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { EXPENSE_ASYNC_BINDING_NAMES } from './check-pmc-expense-async-runtime.mjs'
 
 export const MINI_APP_NON_SECRET_NAMES = [
   'PMC_MINI_APP_ENABLED',
@@ -58,6 +59,11 @@ export function inspectMiniAppRuntime(environment) {
   const featureEnabled = environment.PMC_MINI_APP_ENABLED === 'true'
   const asyncBookingEnabled = environment.PMC_MINI_APP_ASYNC_ENABLED === 'true'
   const asyncBooking = presence(MINI_APP_ASYNC_BINDING_NAMES, environment)
+  const expenseAsyncEnabled = environment.PMC_EXPENSE_ASYNC_ENABLED === 'true'
+  const expenseAsyncFlagValid = environment.PMC_EXPENSE_ASYNC_ENABLED === undefined
+    || environment.PMC_EXPENSE_ASYNC_ENABLED === 'true'
+    || environment.PMC_EXPENSE_ASYNC_ENABLED === 'false'
+  const expenseAsync = presence(EXPENSE_ASYNC_BINDING_NAMES, environment)
   const stockFlags = presence(MINI_APP_STOCK_FLAG_NAMES, environment)
   const stockFlagsValid = MINI_APP_STOCK_FLAG_NAMES.every((name) => (
     environment[name] === 'true' || environment[name] === 'false'
@@ -67,11 +73,15 @@ export function inspectMiniAppRuntime(environment) {
   return {
     mode: 'READ_ONLY',
     ready: featureEnabled && enrollmentFlagValid && nonSecret.missing.length === 0 &&
-      secretBindings.missing.length === 0 && stockFlagsValid && stockFlags.missing.length === 0,
+      secretBindings.missing.length === 0 && stockFlagsValid && stockFlags.missing.length === 0
+      && expenseAsyncFlagValid && (!expenseAsyncEnabled || expenseAsync.missing.length === 0),
     featureEnabled,
     enrollmentEnabled,
     asyncBookingEnabled,
     asyncBooking,
+    expenseAsyncEnabled,
+    expenseAsyncFlagValid,
+    expenseAsync,
     stockEnabled,
     stockManagerPilotOnly,
     stockFlagsValid,
