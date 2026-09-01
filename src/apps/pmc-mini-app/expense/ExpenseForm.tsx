@@ -242,7 +242,7 @@ export function ExpenseForm({
         expectedRevision,
         stagingTokens: [...staged.stagingTokens],
       })
-      if ('status' in result && result.status === 'PENDING') {
+      if (isExpenseAsyncAcknowledgement(result)) {
         if (result.rootRequestId !== rootRequestIdRef.current) throw safeClientError()
         onAccepted?.(result)
         return
@@ -407,6 +407,12 @@ function Field({ id, label, error, children }: { id: string; label: string; erro
 function validStagingTokens(tokens: unknown, expectedCount: number): tokens is string[] {
   return Array.isArray(tokens) && tokens.length === expectedCount && new Set(tokens).size === tokens.length
     && tokens.every(isExpenseStagingToken)
+}
+
+function isExpenseAsyncAcknowledgement(
+  value: ExpenseReceipt | ExpenseAsyncAck,
+): value is ExpenseAsyncAck {
+  return 'status' in value && value.status === 'PENDING'
 }
 
 function focusFirstError(errors: ExpenseFormErrors, fileInput: HTMLInputElement | null): void {
