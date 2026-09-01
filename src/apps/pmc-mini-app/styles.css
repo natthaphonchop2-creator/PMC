@@ -210,6 +210,12 @@ button:focus-visible {
 .pmc-fallback-link { color: var(--pmc-gold-dark); font-weight: 650; text-underline-offset: 3px; }
 .pmc-shell-alert, .pmc-shell-loading { position: fixed; z-index: 30; inset-inline: 20px; inset-block-end: 92px; max-width: 520px; margin-inline: auto; border: 1px solid #edc2bd; border-radius: 10px; background: #fff5f4; padding: 10px 14px; color: var(--pmc-error); text-align: center; }
 .pmc-shell-alert.success { border-color: #abd8bd; background: #edf8f1; color: #17643a; }
+.pmc-expense-background-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: start; }
+.pmc-expense-background-status span { display: grid; gap: 2px; min-width: 0; }
+.pmc-expense-background-status strong { font-size: 0.9rem; }
+.pmc-expense-background-status small { color: #43705a; font-size: 0.76rem; }
+.pmc-expense-background-status button { flex: 0 0 auto; min-height: 36px; border: 1px solid #83bea0; border-radius: 9px; background: #fff; padding: 7px 10px; color: #17643a; font: inherit; font-size: 0.78rem; font-weight: 700; }
+.pmc-expense-background-status button:disabled { opacity: 0.65; }
 .pmc-shell-loading { border-color: #dfcfb2; background: #fffaf2; color: var(--pmc-gold-dark); }
 
 .pmc-report-center,

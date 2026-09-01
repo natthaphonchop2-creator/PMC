@@ -594,11 +594,37 @@ describe('PMC LINE Mini App shell', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
 
     expect(await screen.findByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
-    expect(screen.getByRole('status')).toHaveTextContent('รับรายการแล้ว ระบบกำลังบันทึกเบื้องหลัง')
+    expect(screen.getByText('รับรายการแล้ว ระบบกำลังบันทึกเบื้องหลัง')).toBeVisible()
     expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBe(
       JSON.stringify({ version: 1, rootRequestId: acceptedRoot }),
     )
     await waitFor(() => expect(api.resumeExpense).toHaveBeenCalledWith('preview-token', acceptedRoot))
+  })
+
+  it('keeps a visible actionable background-expense status after acceptance', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: [`stage-1.${'a'.repeat(43)}`] }))
+    api.submitExpense = vi.fn(async (_token, input) => ({
+      rootRequestId: input.rootRequestId,
+      status: 'PENDING' as const,
+      acceptedAt: '2026-09-01T12:00:00.000Z',
+    }))
+    api.resumeExpense = vi.fn(async () => ({ status: 'PENDING' as const }))
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'shared-account-test', displayName: 'Admin', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, expenseAsyncEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByText('กำลังบันทึกรายจ่ายเบื้องหลัง ใช้งานเมนูอื่นได้')).toBeVisible()
+    const checksBeforeClick = vi.mocked(api.resumeExpense).mock.calls.length
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบสถานะรายจ่าย' }))
+    await waitFor(() => expect(api.resumeExpense).toHaveBeenCalledTimes(checksBeforeClick + 1))
   })
 
   it('allows a fresh expense only after the server authoritatively confirms the old root is prepared', async () => {
@@ -687,6 +713,10 @@ describe('PMC LINE Mini App shell', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     await act(async () => { vi.advanceTimersByTime(0) })
     expect(api.resumeExpense).toHaveBeenCalledTimes(3)
+
+    window.dispatchEvent(new Event('pageshow'))
+    await act(async () => { vi.advanceTimersByTime(0) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(4)
   })
 
   it('keeps local resume protection and hides abandonment after an uncertain resume network error', async () => {

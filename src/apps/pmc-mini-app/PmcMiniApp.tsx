@@ -162,6 +162,8 @@ export function PmcMiniApp({
       if (status.status === 'COMMITTED') {
         setExpenseReceipt(status.receipt)
         setFinanceView('EXPENSE_RECEIPT')
+        setMessageTone('SUCCESS')
+        setMessage('บันทึกรายจ่ายเรียบร้อย')
       } else {
         setMessageTone('ERROR')
         setMessage(status.status === 'FAILED' && status.error === 'EXPENSE_NEEDS_REVIEW'
@@ -201,13 +203,13 @@ export function PmcMiniApp({
     if (!expenseResumeRoot || !idToken || !session || !config) return
     let cancelled = false
     let timeout: ReturnType<typeof setTimeout> | null = null
-    const schedule = (delay: number) => {
+    const schedule = (delay: number, forceForeground = false) => {
       if (cancelled) return
       if (timeout) clearTimeout(timeout)
-      timeout = setTimeout(() => { void poll() }, delay)
+      timeout = setTimeout(() => { void poll(forceForeground) }, delay)
     }
-    const poll = async () => {
-      if (cancelled || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    const poll = async (forceForeground = false) => {
+      if (cancelled || !forceForeground && typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       await checkExpenseResume(expenseResumeRoot)
       schedule(10_000)
     }
@@ -219,12 +221,21 @@ export function PmcMiniApp({
       }
       schedule(0)
     }
+    const onForeground = () => schedule(0, true)
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onForeground)
+      window.addEventListener('pageshow', onForeground)
+    }
     schedule(0)
     return () => {
       cancelled = true
       if (timeout) clearTimeout(timeout)
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onForeground)
+        window.removeEventListener('pageshow', onForeground)
+      }
     }
   }, [checkExpenseResume, config, expenseResumeRoot, idToken, session])
 
@@ -690,8 +701,6 @@ export function PmcMiniApp({
         setExpenseReceipt(null)
         setExpenseReplacement(null)
         setFinanceView('FINANCE_HOME')
-        setMessageTone('SUCCESS')
-        setMessage('รับรายการแล้ว ระบบกำลังบันทึกเบื้องหลัง')
       }}
       onStopTrackingPrepared={stopTrackingConfirmedPreparedExpense}
       onBack={() => {
@@ -805,6 +814,21 @@ export function PmcMiniApp({
         className={`pmc-shell-alert${messageTone === 'SUCCESS' ? ' success' : ''}`}
         role={messageTone === 'SUCCESS' ? 'status' : 'alert'}
       >{message}</p>}
+      {expenseResumeRoot && <div
+        className="pmc-shell-alert success pmc-expense-background-status"
+        role="status"
+        aria-live="polite"
+      >
+        <span>
+          <strong>รับรายการแล้ว ระบบกำลังบันทึกเบื้องหลัง</strong>
+          <small>กำลังบันทึกรายจ่ายเบื้องหลัง ใช้งานเมนูอื่นได้</small>
+        </span>
+        <button
+          type="button"
+          disabled={expenseResumeChecking}
+          onClick={() => { void checkExpenseResume(expenseResumeRoot) }}
+        >{expenseResumeChecking ? 'กำลังตรวจสอบ' : 'ตรวจสอบสถานะรายจ่าย'}</button>
+      </div>}
       {loading && session && <div className="pmc-shell-loading" aria-live="polite">กำลังเตรียมรายการ</div>}
       <BottomNavigation
         view={view}
