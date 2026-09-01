@@ -994,9 +994,6 @@ function verifiedOwnerAttachmentAfterChecksum(
 ): ExpensePrivateAttachment {
   let metadata = initial
   for (let attempt = 0; ; attempt += 1) {
-    if (typeof metadata.sha256Checksum === 'string' && metadata.sha256Checksum.length > 0) {
-      return verifiedOwnerAttachment(metadata, monthKey, folderId, identity, expectedBytes)
-    }
     const delay = OWNER_CHECKSUM_RETRY_DELAYS_MS[attempt]
     if (delay === undefined) throw new Error('invalid')
     Utilities.sleep(delay)
@@ -1008,7 +1005,16 @@ function verifiedOwnerAttachmentAfterChecksum(
       identity.slotClaimId,
     )
     if (matches.length !== 1 || matches[0]?.id !== initial.id) throw new Error('invalid')
-    metadata = matches[0]
+    const next = matches[0]
+    const versionIsStable = next.version === metadata.version
+    metadata = next
+    if (
+      versionIsStable
+      && typeof metadata.sha256Checksum === 'string'
+      && metadata.sha256Checksum.length > 0
+    ) {
+      return verifiedOwnerAttachment(metadata, monthKey, folderId, identity, expectedBytes)
+    }
   }
 }
 

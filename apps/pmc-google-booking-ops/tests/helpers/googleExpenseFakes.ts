@@ -190,6 +190,7 @@ export interface GoogleExpenseFakeEnvironment {
   setExpenseFileDescription(fileId: string, description: string): void
   setOwnerBlobReadFailure(value: boolean): void
   setOwnerChecksumDelayReads(reads: number): void
+  setOwnerVersionBumpAfterReads(reads: number): void
   addExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   duplicateExpenseAttachment(attachment: ExpensePrivateAttachment, bytes: number[]): void
   mutateExpenseFile(fileId: string, patch: { bytes?: number[]; version?: string }): void
@@ -250,9 +251,18 @@ export function installGoogleExpenseFakes(options: {
   let ownerFileSequence = 0
   let failOwnerBlobReads = false
   let ownerChecksumDelayReads = 0
+  let ownerVersionBumpAfterReads: number | null = null
 
   const ownerAdvancedFile = (file: FakeFile) => {
     const metadata = advancedFile(file)
+    if (file.id.startsWith('owner-file-') && ownerVersionBumpAfterReads !== null) {
+      if (ownerVersionBumpAfterReads === 0) {
+        file.version = String(Number(file.version) + 1)
+        ownerVersionBumpAfterReads = null
+      } else {
+        ownerVersionBumpAfterReads -= 1
+      }
+    }
     if (file.id.startsWith('owner-file-') && ownerChecksumDelayReads > 0) {
       ownerChecksumDelayReads -= 1
       return { ...metadata, sha256Checksum: undefined }
@@ -385,6 +395,7 @@ export function installGoogleExpenseFakes(options: {
     },
     setOwnerBlobReadFailure(value) { failOwnerBlobReads = value },
     setOwnerChecksumDelayReads(reads) { ownerChecksumDelayReads = reads },
+    setOwnerVersionBumpAfterReads(reads) { ownerVersionBumpAfterReads = reads },
     addExpenseAttachment,
     duplicateExpenseAttachment(attachment, bytes) {
       addExpenseAttachment(attachment, bytes, `${attachment.privateFileId}-duplicate`)
