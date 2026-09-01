@@ -759,14 +759,14 @@ function createGoogleExpenseRepositoryBackend(
           || expenseFolder.getSharingAccess() !== DriveApp.Access.PRIVATE
           || !hasDirectParent(expenseFolder.getParents(), monthFolder.getId())
         ) throw new Error('invalid')
-        const before = listExpenseFiles(expenseFolder.getId())
+        const before = listExpenseFilesAfterChecksums(expenseFolder.getId())
         verifyExpenseSiblingSlots(before, monthKey, expenseId, expenseFolder.getId(), attachments)
         for (const attachment of attachments) {
           const metadata = before.find(({ id }) => id === attachment.privateFileId)
           if (!metadata) throw new Error('invalid')
           verifyExpenseFileMetadata(metadata, monthKey, expenseId, expenseFolder.getId(), attachment)
         }
-        const after = listExpenseFiles(expenseFolder.getId())
+        const after = listExpenseFilesAfterChecksums(expenseFolder.getId())
         verifyExpenseSiblingSlots(after, monthKey, expenseId, expenseFolder.getId(), attachments)
       } catch {
         throw new Error('EXPENSE_PRIVATE_FILE_INVALID')
@@ -864,6 +864,18 @@ function listExpenseFiles(folderId: string): ExpenseDriveMetadata[] {
   throw new Error('invalid')
 }
 
+function listExpenseFilesAfterChecksums(folderId: string): ExpenseDriveMetadata[] {
+  let files = listExpenseFiles(folderId)
+  for (const delay of OWNER_CHECKSUM_RETRY_DELAYS_MS) {
+    if (files.every((file) => typeof file.sha256Checksum === 'string' && file.sha256Checksum.length > 0)) {
+      return files
+    }
+    Utilities.sleep(delay)
+    files = listExpenseFiles(folderId)
+  }
+  return files
+}
+
 function verifyExpenseSiblingSlots(
   files: ExpenseDriveMetadata[],
   monthKey: string,
@@ -907,7 +919,7 @@ function verifyExpenseFileMetadata(
     || file.parents.length !== 1
     || file.parents[0] !== folderId
     || Number(file.size) !== attachment.sizeBytes
-    || file.version !== attachment.driveVersion
+    || String(file.version ?? '') !== attachment.driveVersion
     || file.sha256Checksum !== attachment.sha256
     || !isPrivateExpensePermissions(permissions)
     || !actualProperties

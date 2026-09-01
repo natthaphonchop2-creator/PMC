@@ -536,6 +536,7 @@ describe('Google expense repository containment and literal text', () => {
       mode: 'CREATE_OR_FIND', monthKey: '2026-08', attachment, bytes,
     })
     expect(prepared).toMatchObject({ ...attachment, sizeBytes: bytes.length, driveVersion: '1' })
+    environment.setOwnerChecksumDelayReads(1)
     expect(() => repository.verifyPrivateAttachments('2026-08', expenseId, [prepared])).not.toThrow()
     expect(environment.expenseFileCount(expenseId)).toBe(1)
   })

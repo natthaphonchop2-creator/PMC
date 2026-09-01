@@ -654,8 +654,7 @@ function financeGoogleFake() {
     const remaining = delayedChecksumReads.get(selected.id) ?? 0
     if (remaining <= 0) return metadata
     delayedChecksumReads.set(selected.id, remaining - 1)
-    const { sha256Checksum: _delayed, ...withoutChecksum } = metadata
-    return withoutChecksum
+    return { ...metadata, sha256Checksum: undefined }
   }
 
   const driveGets = vi.fn(async (input: { fileId: string; alt?: string }) => {

@@ -255,8 +255,7 @@ export function installGoogleExpenseFakes(options: {
     const metadata = advancedFile(file)
     if (file.id.startsWith('owner-file-') && ownerChecksumDelayReads > 0) {
       ownerChecksumDelayReads -= 1
-      const { sha256Checksum: _delayed, ...withoutChecksum } = metadata
-      return withoutChecksum
+      return { ...metadata, sha256Checksum: undefined }
     }
     return metadata
   }
