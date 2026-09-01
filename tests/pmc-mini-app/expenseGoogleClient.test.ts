@@ -494,6 +494,40 @@ describe('private finance Google ports', () => {
     })).resolves.toBeUndefined()
   })
 
+  it('accepts the exact owner attachment regardless of object key insertion order', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    const ownerOrderedAttachment: ExpensePrivateAttachment = {
+      attachmentId: attachment.attachmentId,
+      expenseId: attachment.expenseId,
+      rootRequestId: attachment.rootRequestId,
+      ordinal: attachment.ordinal,
+      mediaType: attachment.mediaType,
+      originalFileName: attachment.originalFileName,
+      deterministicName: attachment.deterministicName,
+      slotClaimId: attachment.slotClaimId,
+      sha256: attachment.sha256,
+      uploadedByStaffId: attachment.uploadedByStaffId,
+      uploadedAt: attachment.uploadedAt,
+      privateFileId: attachment.privateFileId,
+      sizeBytes: attachment.sizeBytes,
+      driveVersion: attachment.driveVersion,
+    }
+
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: ownerOrderedAttachment.privateFileId,
+      expectedAttachment: ownerOrderedAttachment,
+    })).resolves.toBeUndefined()
+  })
+
   it('waits for a temporarily unavailable Drive checksum before verifying evidence', async () => {
     const fake = financeGoogleFake()
     const ports = createFinanceGooglePorts(config(), fake.factory)

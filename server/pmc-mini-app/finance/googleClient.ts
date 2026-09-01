@@ -656,7 +656,7 @@ export function createFinanceGooglePorts(
       uploadedByStaffId,
       uploadedAt: expectedIdentity.uploadedAt,
     }
-    if (input.expectedAttachment && JSON.stringify(attachment) !== JSON.stringify(input.expectedAttachment)) {
+    if (input.expectedAttachment && !sameExpenseAttachment(attachment, input.expectedAttachment)) {
       throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     }
     return attachment
@@ -980,6 +980,26 @@ export function createFinanceGooglePorts(
       })
     },
   }
+}
+
+function sameExpenseAttachment(
+  left: ExpensePrivateAttachment,
+  right: ExpensePrivateAttachment,
+): boolean {
+  return left.attachmentId === right.attachmentId
+    && left.expenseId === right.expenseId
+    && left.rootRequestId === right.rootRequestId
+    && left.ordinal === right.ordinal
+    && left.mediaType === right.mediaType
+    && left.originalFileName === right.originalFileName
+    && left.privateFileId === right.privateFileId
+    && left.deterministicName === right.deterministicName
+    && left.sizeBytes === right.sizeBytes
+    && left.driveVersion === right.driveVersion
+    && left.slotClaimId === right.slotClaimId
+    && left.sha256 === right.sha256
+    && left.uploadedByStaffId === right.uploadedByStaffId
+    && left.uploadedAt === right.uploadedAt
 }
 
 function parseIndexRow(row: unknown[]): {
