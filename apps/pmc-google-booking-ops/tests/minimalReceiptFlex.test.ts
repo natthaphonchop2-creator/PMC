@@ -64,7 +64,54 @@ describe('Minimal Receipt Flex', () => {
     }
   })
 
-  it('uses short team labels and locks avatar/name columns across both rows', () => {
+  it('renders recorder as muted text-only while keeping Admin and AE avatars', () => {
+    const profiles = {
+      recorder: 'https://media.example/assets/staff-profiles/recorder.jpg',
+      closer: 'https://media.example/assets/staff-profiles/mus.jpg',
+      ae: 'https://media.example/assets/staff-profiles/waew.jpg',
+    }
+    for (const message of [
+      buildAdminMinimalReceipt(bookingFixture({ recorderName: 'หมวย', adminName: 'มัส', aeName: 'แวว' }), evidence, logoUrl, profiles),
+      buildDoctorMinimalReceipt(
+        bookingFixture({ recorderName: 'หมวย', adminName: 'มัส', aeName: 'แวว' }),
+        'BOOKING_CONFIRMED',
+        logoUrl,
+        profiles,
+      ),
+    ]) {
+      const rows: Array<Record<string, unknown>> = []
+      const visit = (value: unknown): void => {
+        if (Array.isArray(value)) return value.forEach(visit)
+        if (!value || typeof value !== 'object') return
+        const component = value as Record<string, unknown>
+        const contents = component.contents as Array<Record<string, unknown>> | undefined
+        if (
+          component.type === 'box' && component.layout === 'horizontal'
+          && ['ผู้บันทึก', 'Admin', 'AE'].includes(String(contents?.[0]?.text))
+        ) rows.push(component)
+        Object.values(component).forEach(visit)
+      }
+      visit(message)
+
+      const recorderContents = ((rows[0]!.contents as Array<Record<string, unknown>>)[1].contents) as Array<Record<string, unknown>>
+      expect(recorderContents).toHaveLength(1)
+      expect(recorderContents[0]).toMatchObject({ text: 'หมวย', color: '#77716D', size: 'sm' })
+      expect(recorderContents[0]).not.toHaveProperty('weight')
+
+      for (const row of rows.slice(1)) {
+        const valueContents = ((row.contents as Array<Record<string, unknown>>)[1].contents) as Array<Record<string, unknown>>
+        expect(valueContents).toHaveLength(2)
+        expect(valueContents[0]).toMatchObject({ width: '32px', height: '32px', flex: 0 })
+        expect(valueContents[1]).toMatchObject({ color: '#282624', weight: 'bold' })
+      }
+      const json = JSON.stringify(message)
+      expect(json).not.toContain(profiles.recorder)
+      expect(json).toContain(profiles.closer)
+      expect(json).toContain(profiles.ae)
+    }
+  })
+
+  it('uses short team labels and locks Admin and AE avatar/name columns', () => {
     const booking = bookingFixture({ adminName: 'มัส', aeName: 'แวว' })
     const profiles = {
       recorder: 'https://media.example/assets/staff-profiles/recorder.jpg',
@@ -93,7 +140,12 @@ describe('Minimal Receipt Flex', () => {
 
       expect(rows.map((row) => (row.contents as Array<Record<string, unknown>>)[0].text))
         .toEqual(['ผู้บันทึก', 'Admin', 'AE'])
-      for (const row of rows) {
+      const recorderValueBox = (rows[0]!.contents as Array<Record<string, unknown>>)[1]
+      expect(recorderValueBox.contents).toHaveLength(1)
+      expect((recorderValueBox.contents as Array<Record<string, unknown>>)[0])
+        .toMatchObject({ flex: 1, align: 'start', color: '#77716D' })
+
+      for (const row of rows.slice(1)) {
         const valueBox = (row.contents as Array<Record<string, unknown>>)[1]
         expect(valueBox).toMatchObject({
           type: 'box',
@@ -120,7 +172,7 @@ describe('Minimal Receipt Flex', () => {
       buildDoctorMinimalReceipt(booking, 'BOOKING_CONFIRMED', logoUrl, profiles),
     ]) {
       const json = JSON.stringify(message)
-      expect(json).toContain(profiles.recorder)
+      expect(json).not.toContain(profiles.recorder)
       expect(json).toContain(profiles.closer)
       expect(json).toContain(profiles.ae)
 
@@ -138,7 +190,7 @@ describe('Minimal Receipt Flex', () => {
         Object.values(component).forEach(visit)
       }
       visit(message)
-      expect(avatars).toHaveLength(3)
+      expect(avatars).toHaveLength(2)
       for (const avatar of avatars) {
         expect(JSON.stringify(avatar)).toContain('"aspectRatio":"1:1"')
         expect(JSON.stringify(avatar)).toContain('"aspectMode":"cover"')
@@ -158,7 +210,7 @@ describe('Minimal Receipt Flex', () => {
         { closer: null, ae: null },
       ),
     )
-    expect((json.match(/"width":"32px"/g) ?? [])).toHaveLength(3)
+    expect((json.match(/"width":"32px"/g) ?? [])).toHaveLength(2)
     expect(json).toContain('"backgroundColor":"#F4F1EC"')
     expect(json).not.toContain('staff-profiles')
   })

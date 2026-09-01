@@ -233,7 +233,7 @@ describe('LINE routing', () => {
     }
   })
 
-  it('reuses the same profile when the closer and AE are the same person', () => {
+  it('reuses the same profile for closer and AE without adding a recorder avatar', () => {
     const ports = createTestPorts()
     const originalFindStaffById = ports.config.findStaffById
     ports.config.findStaffById = (id) => {
@@ -247,7 +247,7 @@ describe('LINE routing', () => {
 
     for (const message of [ports.line.adminMessages()[0], ports.line.doctorMessages()[0]]) {
       const json = JSON.stringify(message)
-      expect((json.match(/admin-a\.jpg/g) ?? [])).toHaveLength(3)
+      expect((json.match(/admin-a\.jpg/g) ?? [])).toHaveLength(2)
     }
   })
 

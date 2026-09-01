@@ -205,7 +205,22 @@ function profileAvatar(profileImageUrl: string | null): FlexComponent {
   }
 }
 
-function teamMemberRow(label: string, name: string, profileImageUrl: string | null): FlexComponent {
+function teamMemberRow(
+  label: string,
+  name: string,
+  profileImageUrl: string | null,
+  presentation: 'profile' | 'muted-text' = 'profile',
+): FlexComponent {
+  const nameComponent: FlexComponent = {
+    type: 'text',
+    text: name,
+    color: presentation === 'muted-text' ? SECONDARY : TEXT,
+    size: 'sm',
+    align: 'start',
+    wrap: true,
+    flex: 1,
+    ...(presentation === 'profile' ? { weight: 'bold' } : {}),
+  }
   return {
     type: 'box',
     layout: 'horizontal',
@@ -220,19 +235,9 @@ function teamMemberRow(label: string, name: string, profileImageUrl: string | nu
         spacing: 'sm',
         alignItems: 'center',
         justifyContent: 'flex-start',
-        contents: [
-          profileAvatar(profileImageUrl),
-          {
-            type: 'text',
-            text: name,
-            color: TEXT,
-            size: 'sm',
-            weight: 'bold',
-            align: 'start',
-            wrap: true,
-            flex: 1,
-          },
-        ],
+        contents: presentation === 'muted-text'
+          ? [nameComponent]
+          : [profileAvatar(profileImageUrl), nameComponent],
       },
     ],
   }
@@ -254,6 +259,7 @@ function teamSection(
       'ผู้บันทึก',
       String(booking.recorderName ?? '').trim() || booking.adminName || 'ไม่ทราบ (เคสเดิม)',
       profiles.recorder ?? null,
+      'muted-text',
     ),
     teamMemberRow('Admin', booking.adminName, profiles.closer),
     teamMemberRow('AE', aeName, profiles.ae),
