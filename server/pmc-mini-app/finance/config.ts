@@ -1,3 +1,5 @@
+import { readPmcExpenseAsyncConfig, type PmcExpenseAsyncConfig } from './asyncConfig.js'
+
 export interface PmcFinanceConfig {
   captureEnabled: boolean
   readsEnabled: boolean
@@ -8,6 +10,7 @@ export interface PmcFinanceConfig {
   expenseIngressSecret: string
   recoveryAudience: string
   recoveryInvokerEmail: string
+  async: PmcExpenseAsyncConfig | null
 }
 
 type FinanceEnvironment = Record<string, string | undefined>
@@ -40,6 +43,14 @@ export function readPmcFinanceConfig(env: FinanceEnvironment): PmcFinanceConfig 
   const expenseIngressSecret = env.PMC_EXPENSE_INGRESS_SECRET!.trim()
   const recoveryAudience = env.PMC_EXPENSE_RECOVERY_AUDIENCE!.trim()
   const recoveryInvokerEmail = env.PMC_EXPENSE_RECOVERY_TASK_INVOKER_EMAIL!.trim()
+  const asyncRequested = env.PMC_EXPENSE_ASYNC_ENABLED === 'true'
+  const asyncFlagInvalid = env.PMC_EXPENSE_ASYNC_ENABLED !== undefined
+    && env.PMC_EXPENSE_ASYNC_ENABLED !== 'true'
+    && env.PMC_EXPENSE_ASYNC_ENABLED !== 'false'
+  const async = captureEnabled && !asyncFlagInvalid
+    ? readPmcExpenseAsyncConfig(env, env.PMC_ASYNC_QUEUE?.trim() || null)
+    : null
+  const safeCaptureEnabled = captureEnabled && !asyncFlagInvalid && (!asyncRequested || async !== null)
   if (
     !safeGoogleId(masterSpreadsheetId)
     || !safeGoogleId(folderId)
@@ -52,7 +63,7 @@ export function readPmcFinanceConfig(env: FinanceEnvironment): PmcFinanceConfig 
   ) return null
 
   return {
-    captureEnabled,
+    captureEnabled: safeCaptureEnabled,
     readsEnabled,
     masterSpreadsheetId,
     folderId,
@@ -61,6 +72,7 @@ export function readPmcFinanceConfig(env: FinanceEnvironment): PmcFinanceConfig 
     expenseIngressSecret,
     recoveryAudience,
     recoveryInvokerEmail,
+    async,
   }
 }
 

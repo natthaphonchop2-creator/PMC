@@ -39,6 +39,7 @@ describe('private finance runtime configuration', () => {
       expenseIngressSecret: 'expense-ingress-secret',
       recoveryAudience: 'https://pmc-mini-app.example',
       recoveryInvokerEmail: 'pmc-expense-recovery@example.iam.gserviceaccount.com',
+      async: null,
     })
   })
 
@@ -58,7 +59,29 @@ describe('private finance runtime configuration', () => {
       readsEnabled: false,
       recoveryAudience: 'https://pmc-mini-app.example',
       recoveryInvokerEmail: 'pmc-expense-recovery@example.iam.gserviceaccount.com',
+      async: null,
     })
+  })
+
+  it('carries a valid async sub-config and disables capture instead of silently falling back when requested async config is incomplete', () => {
+    const valid = readPmcFinanceConfig({
+      ...validFinanceEnvironment(),
+      ...validExpenseAsyncEnvironment(),
+    })
+    expect(valid).toMatchObject({
+      captureEnabled: true,
+      async: {
+        queueName: 'pmc-expense-finalize',
+        jobBucketName: 'pmc-expense-async-jobs',
+        pilotStaffIds: new Set(['ADMIN_03']),
+      },
+    })
+
+    const invalid = readPmcFinanceConfig({
+      ...validFinanceEnvironment(),
+      PMC_EXPENSE_ASYNC_ENABLED: 'true',
+    })
+    expect(invalid).toMatchObject({ captureEnabled: false, async: null })
   })
 
   it('reads exactly the allowlisted private bindings and accepts the existing Apps Script URL with a distinct secret', () => {
@@ -75,6 +98,7 @@ describe('private finance runtime configuration', () => {
       expenseIngressSecret: 'expense-ingress-secret',
       recoveryAudience: 'https://pmc-mini-app.example',
       recoveryInvokerEmail: 'pmc-expense-recovery@example.iam.gserviceaccount.com',
+      async: null,
     })
   })
 
@@ -233,5 +257,21 @@ function validMiniAppEnvironment(): NodeJS.ProcessEnv {
     PMC_BOOKING_FALLBACK_FORM_URL: 'https://docs.google.com/forms/d/e/form-id/viewform',
     PMC_BOOKING_INGRESS_SECRET: 'booking-ingress-secret',
     PMC_MINI_APP_SIGNING_SECRET: 'browser-signing-secret',
+  }
+}
+
+function validExpenseAsyncEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PMC_EXPENSE_ASYNC_ENABLED: 'true',
+    PMC_GCP_PROJECT_ID: 'project-2099d92f-51c8-4d2b-a8c',
+    PMC_ASYNC_LOCATION: 'asia-southeast1',
+    PMC_ASYNC_BUCKET: 'pmc-booking-staging',
+    PMC_ASYNC_QUEUE: 'pmc-booking-finalize',
+    PMC_EXPENSE_ASYNC_JOB_BUCKET: 'pmc-expense-async-jobs',
+    PMC_EXPENSE_ASYNC_QUEUE: 'pmc-expense-finalize',
+    PMC_EXPENSE_ASYNC_WORKER_URL: 'https://pmc-mini-app.example/internal/mini-app/finalize-expense',
+    PMC_EXPENSE_ASYNC_WORKER_AUDIENCE: 'https://pmc-mini-app.example',
+    PMC_EXPENSE_ASYNC_TASK_INVOKER_EMAIL: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+    PMC_EXPENSE_ASYNC_PILOT_STAFF_IDS: 'ADMIN_03',
   }
 }
