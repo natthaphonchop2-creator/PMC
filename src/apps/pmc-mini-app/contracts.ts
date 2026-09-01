@@ -2,7 +2,9 @@ import type { StockCategory } from '../../../shared/pmcStock'
 import type {
   EnabledExpenseCategory,
   ExpensePaymentMethod,
+  ExpenseReceipt,
 } from '../../../shared/pmcExpense'
+import type { ExpenseAsyncAck } from '../../../shared/pmcExpenseAsync'
 import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
 import type { BookingPrepareCapability } from '../../../shared/pmcMiniAppBookingPrepare'
 
@@ -22,6 +24,7 @@ export interface MiniAppConfig {
   financeMonthlyIncomeEnabled?: boolean
   stockEnabled: boolean
   expenseCaptureEnabled?: boolean
+  expenseAsyncEnabled?: boolean
   financeReadsEnabled?: boolean
   canManageStock: boolean
   canSubmitExpense: boolean
@@ -59,6 +62,8 @@ export interface ExpenseSubmitInput {
   expectedRevision: number
   stagingTokens: string[]
 }
+
+export type ExpenseSubmitResult = ExpenseReceipt | ExpenseAsyncAck
 
 export interface MiniAppEnrollmentOptions {
   staff: Array<{ id: string; name: string }>

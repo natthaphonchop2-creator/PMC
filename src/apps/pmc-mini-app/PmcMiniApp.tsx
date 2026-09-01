@@ -117,6 +117,7 @@ export function PmcMiniApp({
   const [expenseResumeRoot, setExpenseResumeRoot] = useState(initialExpenseResumeRoot)
   const [expenseResumeChecking, setExpenseResumeChecking] = useState(false)
   const [expenseResumeConfirmedPrepared, setExpenseResumeConfirmedPrepared] = useState(false)
+  const expenseResumePollInFlightRef = useRef(false)
   const openingBookingRef = useRef<Promise<void> | null>(null)
   const [stockProducts, setStockProducts] = useState<StockProductProjection[]>([])
   const [stockView, setStockView] = useState<'HOME' | 'ISSUE' | 'RECEIVE' | 'MANAGE' | 'HISTORY'>('HOME')
@@ -144,7 +145,8 @@ export function PmcMiniApp({
   }, [config, financeFilterStorage, financeFilters])
 
   const checkExpenseResume = useCallback(async (rootRequestId: string) => {
-    if (!idToken) return
+    if (!idToken || expenseResumePollInFlightRef.current) return
+    expenseResumePollInFlightRef.current = true
     setExpenseResumeConfirmedPrepared(false)
     setExpenseResumeChecking(true)
     try {
@@ -162,8 +164,10 @@ export function PmcMiniApp({
         setFinanceView('EXPENSE_RECEIPT')
       } else {
         setMessageTone('ERROR')
-        setMessage(status.status === 'FAILED'
-          ? 'รายการเดิมสิ้นสุดแล้ว สามารถเริ่มบันทึกรายการใหม่ได้'
+        setMessage(status.status === 'FAILED' && status.error === 'EXPENSE_NEEDS_REVIEW'
+          ? 'รายการนี้ต้องให้ผู้ดูแลตรวจสอบ ไม่ต้องส่งซ้ำ'
+          : status.status === 'FAILED'
+          ? 'รายการนี้บันทึกไม่สำเร็จ กรุณาติดต่อผู้ดูแล'
           : 'ไม่พบรายการค้าง สามารถเริ่มบันทึกรายการใหม่ได้')
         leaveExpenseResumeWithoutReceipt()
       }
@@ -180,6 +184,7 @@ export function PmcMiniApp({
       }
     } finally {
       setExpenseResumeChecking(false)
+      expenseResumePollInFlightRef.current = false
     }
   }, [api, expenseResumeStorage, idToken, leaveExpenseResumeWithoutReceipt])
 
@@ -194,8 +199,33 @@ export function PmcMiniApp({
 
   useEffect(() => {
     if (!expenseResumeRoot || !idToken || !session || !config) return
-    const timeout = setTimeout(() => { void checkExpenseResume(expenseResumeRoot) }, 0)
-    return () => clearTimeout(timeout)
+    let cancelled = false
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const schedule = (delay: number) => {
+      if (cancelled) return
+      if (timeout) clearTimeout(timeout)
+      timeout = setTimeout(() => { void poll() }, delay)
+    }
+    const poll = async () => {
+      if (cancelled || typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      await checkExpenseResume(expenseResumeRoot)
+      schedule(10_000)
+    }
+    const onVisibilityChange = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') {
+        if (timeout) clearTimeout(timeout)
+        timeout = null
+        return
+      }
+      schedule(0)
+    }
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange)
+    schedule(0)
+    return () => {
+      cancelled = true
+      if (timeout) clearTimeout(timeout)
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [checkExpenseResume, config, expenseResumeRoot, idToken, session])
 
   const runBookingMutation = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
@@ -303,9 +333,9 @@ export function PmcMiniApp({
     submit: async (input) => {
       requireExpenseResumePersistence(expenseResumeStorage, input.rootRequestId)
       try {
-        const receipt = await api.submitExpense(idToken, input)
-        clearExpenseResumeRoot(expenseResumeStorage)
-        return receipt
+        const result = await api.submitExpense(idToken, input)
+        if (!('status' in result)) clearExpenseResumeRoot(expenseResumeStorage)
+        return result
       } catch (error) {
         if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
         throw error
@@ -341,9 +371,9 @@ export function PmcMiniApp({
       }
       requireExpenseResumePersistence(expenseResumeStorage, input.rootRequestId)
       try {
-        const receipt = await api.replaceExpense(idToken, expenseReplacement.expenseId, input)
-        clearExpenseResumeRoot(expenseResumeStorage)
-        return receipt
+        const result = await api.replaceExpense(idToken, expenseReplacement.expenseId, input)
+        if (!('status' in result)) clearExpenseResumeRoot(expenseResumeStorage)
+        return result
       } catch (error) {
         if (definiteExpenseFailure(error)) clearExpenseResumeRoot(expenseResumeStorage)
         throw error
@@ -654,6 +684,14 @@ export function PmcMiniApp({
         clearExpenseResumeRoot(expenseResumeStorage)
         setExpenseReceipt(receipt)
         setFinanceView('EXPENSE_RECEIPT')
+      }}
+      onAccepted={(acknowledgement) => {
+        setExpenseResumeRoot(acknowledgement.rootRequestId)
+        setExpenseReceipt(null)
+        setExpenseReplacement(null)
+        setFinanceView('FINANCE_HOME')
+        setMessageTone('SUCCESS')
+        setMessage('รับรายการแล้ว ระบบกำลังบันทึกเบื้องหลัง')
       }}
       onStopTrackingPrepared={stopTrackingConfirmedPreparedExpense}
       onBack={() => {

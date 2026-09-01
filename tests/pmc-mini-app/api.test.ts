@@ -502,6 +502,27 @@ describe('PMC Mini App browser API', () => {
     expect(JSON.stringify(fetch.mock.calls)).not.toContain('staffId')
   })
 
+  it('accepts only an exact 202 async expense acknowledgement while preserving the 200 rollback receipt', async () => {
+    const ack = {
+      rootRequestId: 'root-request-async',
+      status: 'PENDING' as const,
+      acceptedAt: '2026-09-01T12:00:00.000Z',
+    }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(202, ack))
+      .mockResolvedValueOnce(jsonResponse(202, { ...ack, taskName: 'private-task' }))
+    const api = createMiniAppApi({ fetch, liff: inertLiff() })
+    const input = {
+      rootRequestId: ack.rootRequestId, category: 'BILL_DOCUMENT' as const, expenseDate: '2026-09-01',
+      amountSatang: 120_000, counterpartyName: 'ร้านทดสอบ', description: '', paymentMethod: 'TRANSFER' as const,
+      expectedRevision: 0, stagingTokens: [EXPENSE_TOKEN_1],
+    }
+
+    await expect(api.submitExpense('raw-id-token', input)).resolves.toEqual(ack)
+    await expect(api.submitExpense('raw-id-token', input))
+      .rejects.toMatchObject({ code: 'MINI_APP_INVALID_RESPONSE', status: 202 })
+  })
+
   it('resumes one expense root through an empty authenticated POST and rejects history-shaped payloads', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(jsonResponse(200, { status: 'PREPARED' }))

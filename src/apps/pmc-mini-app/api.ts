@@ -7,6 +7,7 @@ import type {
   BookingDraftProjection,
   BookingQueuedResult,
   ExpenseSubmitInput,
+  ExpenseSubmitResult,
   MiniAppConfig,
   MiniAppEnrollmentOptions,
   MiniAppSession,
@@ -33,6 +34,7 @@ import {
   isExpenseResumeStatus,
   type ExpenseResumeStatus,
 } from '../../../shared/pmcMiniAppExpenseIngress'
+import { parseExpenseAsyncAck } from '../../../shared/pmcExpenseAsync'
 import { isExpenseStagingToken } from './expense/expenseModel'
 import { PMC_BOOKING_PROTOCOL_VERSION } from '../../../shared/pmcBookingProtocol'
 import type { BookingProtocolVersion } from '../../../shared/pmcBookingProtocol'
@@ -69,13 +71,13 @@ export interface MiniAppBrowserApi {
   loadExpenseHistory(idToken: string, monthKey: string, cursor?: string): Promise<ExpenseHistoryPage>
   issueExpenseEvidenceToken(idToken: string, expenseId: string, attachmentId: string): Promise<string>
   downloadExpenseEvidence(idToken: string, token: string): Promise<Blob>
-  replaceExpense(idToken: string, expenseId: string, input: ExpenseSubmitInput): Promise<ExpenseReceipt>
+  replaceExpense(idToken: string, expenseId: string, input: ExpenseSubmitInput): Promise<ExpenseSubmitResult>
   voidExpense(idToken: string, expenseId: string, input: { rootRequestId: string; expectedRevision: number; reason: string }): Promise<void>
   loadStockProducts(idToken: string): Promise<{ products: StockProductProjection[] }>
   loadStockHistory(idToken: string, cursor?: string): Promise<StockHistoryPage>
   submitStockCommand(idToken: string, command: StockClientCommand): Promise<StockCommandResult>
   stageExpense(idToken: string, rootRequestId: string, files: File[]): Promise<{ stagingTokens: string[] }>
-  submitExpense(idToken: string, input: ExpenseSubmitInput): Promise<ExpenseReceipt>
+  submitExpense(idToken: string, input: ExpenseSubmitInput): Promise<ExpenseSubmitResult>
   resumeExpense(idToken: string, rootRequestId: string): Promise<ExpenseResumeStatus>
 }
 
@@ -367,7 +369,7 @@ export function createMiniAppApi(options: MiniAppApiFactoryOptions = {}): MiniAp
     },
     submitExpense(idToken, input) {
       return requestJson(request, '/api/mini-app/expenses', authenticatedJson(idToken, 'POST', input),
-        (body, status) => parseExpenseReceiptResponse(body, status, input))
+        (body, status) => parseExpenseSubmitResponse(body, status, input))
     },
     resumeExpense(idToken, rootRequestId) {
       if (!/^[A-Za-z0-9._:-]{1,116}$/.test(rootRequestId)) {
@@ -395,7 +397,7 @@ export function createMiniAppApi(options: MiniAppApiFactoryOptions = {}): MiniAp
         authenticatedJson(idToken, 'POST', {
           expectedVersion: committedExpenseVersion(), expectedRevision, input: replacementInput,
         }),
-        (body, status) => parseExpenseReceiptResponse(body, status, input),
+        (body, status) => parseExpenseSubmitResponse(body, status, input),
       )
     },
     async voidExpense(idToken, expenseId, input) {
@@ -799,6 +801,24 @@ export function parseExpenseReceiptResponse(body: unknown, status: number, expec
     committedAt: body.committedAt,
     unreviewed: true,
   }
+}
+
+export function parseExpenseSubmitResponse(
+  body: unknown,
+  status: number,
+  expected: ExpenseSubmitInput,
+): ExpenseSubmitResult {
+  if (status === 200) return parseExpenseReceiptResponse(body, status, expected)
+  if (status === 202) {
+    try {
+      const acknowledgement = parseExpenseAsyncAck(body)
+      if (acknowledgement.rootRequestId !== expected.rootRequestId) throw new Error('root mismatch')
+      return acknowledgement
+    } catch {
+      throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
+    }
+  }
+  throw new MiniAppApiError('MINI_APP_INVALID_RESPONSE', status)
 }
 
 function enabledExpenseCategory(value: unknown): EnabledExpenseCategory | null {

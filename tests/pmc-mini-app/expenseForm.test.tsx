@@ -42,6 +42,34 @@ describe('expense capture cards', () => {
 })
 
 describe('expense form lifecycle', () => {
+  it('acknowledges an accepted async expense without claiming it is committed', async () => {
+    const user = userEvent.setup()
+    const app = adapter()
+    const onAccepted = vi.fn()
+    const onCommitted = vi.fn()
+    vi.mocked(app.submit).mockResolvedValueOnce({
+      rootRequestId: 'root-request-stable',
+      status: 'PENDING',
+      acceptedAt: '2026-09-01T12:00:00.000Z',
+    })
+    render(<ExpenseForm
+      category="BILL_DOCUMENT"
+      adapter={app}
+      onAccepted={onAccepted}
+      onCommitted={onCommitted}
+      onStopTrackingPrepared={vi.fn()}
+      onBack={vi.fn()}
+    />)
+    await completeBill(user, [imageFile('bill.jpg')])
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith({
+      rootRequestId: 'root-request-stable', status: 'PENDING', acceptedAt: '2026-09-01T12:00:00.000Z',
+    }))
+    expect(onCommitted).not.toHaveBeenCalled()
+  })
+
   it('shows exact bill fields and omits counterparty and payment fields from book capture', () => {
     const view = renderForm('BILL_DOCUMENT')
     expect(screen.getByLabelText('วันที่รายจ่าย')).toBeVisible()

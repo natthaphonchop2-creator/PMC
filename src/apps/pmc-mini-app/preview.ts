@@ -34,6 +34,7 @@ export const PREVIEW_CONFIG: MiniAppConfig = {
   financeMonthlyIncomeEnabled: true,
   stockEnabled: false,
   expenseCaptureEnabled: false,
+  expenseAsyncEnabled: false,
   financeReadsEnabled: false,
   canManageStock: false,
   canSubmitExpense: false,
@@ -59,6 +60,7 @@ export function createPreviewMiniAppConfig(options: {
   stockEnabled?: boolean
   canManageStock?: boolean
   expenseCaptureEnabled?: boolean
+  expenseAsyncEnabled?: boolean
   financeReadsEnabled?: boolean
   canSubmitExpense?: boolean
   canManageExpense?: boolean
@@ -73,6 +75,7 @@ export function createPreviewMiniAppConfig(options: {
     stockEnabled: options.stockEnabled === true,
     canManageStock: options.stockEnabled === true && options.canManageStock === true,
     expenseCaptureEnabled: options.expenseCaptureEnabled === true,
+    expenseAsyncEnabled: options.expenseCaptureEnabled === true && options.expenseAsyncEnabled === true,
     financeReadsEnabled: options.financeReadsEnabled === true,
     canSubmitExpense: options.expenseCaptureEnabled === true && options.canSubmitExpense === true,
     canManageExpense: options.financeReadsEnabled === true && options.expenseCaptureEnabled === true && options.canManageExpense === true,
@@ -88,6 +91,7 @@ export function createPreviewMiniAppApi(options: {
   stockEnabled?: boolean
   canManageStock?: boolean
   expenseCaptureEnabled?: boolean
+  expenseAsyncEnabled?: boolean
   financeReadsEnabled?: boolean
   canSubmitExpense?: boolean
   canManageExpense?: boolean
@@ -110,6 +114,7 @@ export function createPreviewMiniAppApi(options: {
   ))
   const expenseRequests = new Map<string, { fingerprint: string; receipt: ExpenseReceipt }>()
   const pendingResumeRoots = new Set<string>()
+  const asyncPendingResumeRoots = new Set<string>()
   let previewSubmissionSequence = 0
   let previewReplacementSequence = 0
   const evidenceTokens = new Map<string, { expenseId: string; attachmentId: string }>()
@@ -277,10 +282,19 @@ export function createPreviewMiniAppApi(options: {
         pendingResumeRoots.add(input.rootRequestId)
         throw previewExpenseError('EXPENSE_STORAGE_UNAVAILABLE')
       }
+      if (config.expenseAsyncEnabled) {
+        asyncPendingResumeRoots.add(input.rootRequestId)
+        return {
+          rootRequestId: input.rootRequestId,
+          status: 'PENDING' as const,
+          acceptedAt: '2026-09-01T12:00:00.000Z',
+        }
+      }
       return structuredClone(receipt)
     },
     async resumeExpense(_token, rootRequestId) {
       const existing = expenseRequests.get(rootRequestId)
+      if (asyncPendingResumeRoots.delete(rootRequestId)) return { status: 'PENDING' as const }
       if (pendingResumeRoots.has(rootRequestId)) return { status: 'PENDING' as const }
       if (!existing && options.expenseScenario === 'lost-first-submit') {
         return { status: 'COMMITTED' as const, receipt: previewLostResponseReceipt() }

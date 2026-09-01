@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'r
 import { ArrowDown, ArrowLeft, ArrowUp, ImagePlus, X } from 'lucide-react'
 import type { EnabledExpenseCategory, ExpensePaymentMethod, ExpenseReceipt } from '../../../../shared/pmcExpense'
 import type { ExpenseResumeStatus } from '../../../../shared/pmcMiniAppExpenseIngress'
+import type { ExpenseAsyncAck } from '../../../../shared/pmcExpenseAsync'
 import { BrandMark } from '../BrandMark'
 import { normalizeExpenseUploadFiles } from './expenseImageNormalizer'
 import {
@@ -29,7 +30,7 @@ export interface ExpenseFormAdapter {
     paymentMethod: ExpensePaymentMethod | null
     expectedRevision: number
     stagingTokens: string[]
-  }): Promise<ExpenseReceipt>
+  }): Promise<ExpenseReceipt | ExpenseAsyncAck>
   resume(rootRequestId: string): Promise<ExpenseResumeStatus>
 }
 
@@ -46,6 +47,7 @@ export function ExpenseForm({
   lockedExpenseDate,
   normalizeFiles = normalizeExpenseUploadFiles,
   onCommitted,
+  onAccepted,
   onStopTrackingPrepared,
   onBack,
 }: {
@@ -55,6 +57,7 @@ export function ExpenseForm({
   lockedExpenseDate?: string
   normalizeFiles?: (files: File[]) => Promise<File[]>
   onCommitted: (receipt: ExpenseReceipt) => void
+  onAccepted?: (acknowledgement: ExpenseAsyncAck) => void
   onStopTrackingPrepared: () => void
   onBack: () => void
 }) {
@@ -228,7 +231,7 @@ export function ExpenseForm({
       const amountSatang = parseExpenseAmountSatang(values.amount)
       if (amountSatang === null) throw safeClientError()
       const paymentMethod = category === 'BILL_DOCUMENT' ? values.paymentMethod as ExpensePaymentMethod : null
-      const receipt = await adapter.submit({
+      const result = await adapter.submit({
         rootRequestId: rootRequestIdRef.current,
         category,
         expenseDate: values.expenseDate,
@@ -239,8 +242,13 @@ export function ExpenseForm({
         expectedRevision,
         stagingTokens: [...staged.stagingTokens],
       })
-      if (receipt.recordState !== 'COMMITTED' || receipt.unreviewed !== true) throw safeClientError()
-      onCommitted(receipt)
+      if ('status' in result && result.status === 'PENDING') {
+        if (result.rootRequestId !== rootRequestIdRef.current) throw safeClientError()
+        onAccepted?.(result)
+        return
+      }
+      if (result.recordState !== 'COMMITTED' || result.unreviewed !== true) throw safeClientError()
+      onCommitted(result)
     } catch (error) {
       if (requiresFreshExpenseStaging(error)) stagedRef.current = null
       if (ambiguousExpenseResult(error)) {

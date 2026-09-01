@@ -131,6 +131,34 @@ describe('PMC Mini App session and configuration API', () => {
     expect(serialized).not.toContain('private-calendar')
   })
 
+  it('exposes only the authenticated pilot boolean for expense async configuration', async () => {
+    const response = await invoke(createPmcMiniAppMiddleware({
+      ...dependencies(),
+      finance: {
+        signingSecret: 'signing-secret',
+        async: {
+          config: {
+            enabled: true,
+            projectId: 'project-2099d92f-51c8-4d2b-a8c',
+            location: 'asia-southeast1',
+            jobBucketName: 'private-expense-jobs',
+            queueName: 'private-expense-queue',
+            workerUrl: 'https://private.example/internal/mini-app/finalize-expense',
+            workerAudience: 'https://private.example',
+            taskInvokerEmail: 'task-invoker@project-2099d92f-51c8-4d2b-a8c.iam.gserviceaccount.com',
+            pilotStaffIds: new Set(['staff-1']),
+          },
+          jobs: {} as never, queue: {} as never, worker: {} as never, identity: {} as never,
+        },
+      },
+    }), '/api/mini-app/config', { headers: { authorization: 'Bearer valid-token' } })
+    const body = await response.json()
+
+    expect(body).toMatchObject({ expenseAsyncEnabled: true })
+    expect(JSON.stringify(body)).not.toContain('private-expense')
+    expect(JSON.stringify(body)).not.toContain('task-invoker')
+  })
+
   it.each([
     ['flag off, no JERA', false, null, false, false],
     ['flag on, no JERA', true, null, false, false],

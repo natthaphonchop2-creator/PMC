@@ -567,6 +567,40 @@ describe('PMC LINE Mini App shell', () => {
     expect(screen.queryByRole('button', { name: 'หยุดติดตามรายการเดิมและเริ่มใหม่' })).not.toBeInTheDocument()
   })
 
+  it('returns to Finance Home immediately after async acceptance and keeps protected resume polling', async () => {
+    const user = userEvent.setup()
+    const api = miniAppApi()
+    let acceptedRoot = ''
+    api.stageExpense = vi.fn(async () => ({ stagingTokens: [`stage-1.${'a'.repeat(43)}`] }))
+    api.submitExpense = vi.fn(async (_token, input) => {
+      acceptedRoot = input.rootRequestId
+      return {
+        rootRequestId: input.rootRequestId,
+        status: 'PENDING' as const,
+        acceptedAt: '2026-09-01T12:00:00.000Z',
+      }
+    })
+    api.resumeExpense = vi.fn(async () => ({ status: 'PENDING' as const }))
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'SUBMIT_01', displayName: 'มัส', active: true }}
+      initialConfig={{
+        ...config, expenseCaptureEnabled: true, expenseAsyncEnabled: true, canSubmitExpense: true,
+      }}
+      api={api}
+    />)
+    await openAndCompleteExpenseBill(user)
+    await user.click(screen.getByRole('button', { name: 'ตรวจสอบข้อมูล' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันบันทึก' }))
+
+    expect(await screen.findByRole('heading', { name: 'รายงานคลินิก' })).toBeVisible()
+    expect(screen.getByRole('status')).toHaveTextContent('รับรายการแล้ว ระบบกำลังบันทึกเบื้องหลัง')
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBe(
+      JSON.stringify({ version: 1, rootRequestId: acceptedRoot }),
+    )
+    await waitFor(() => expect(api.resumeExpense).toHaveBeenCalledWith('preview-token', acceptedRoot))
+  })
+
   it('allows a fresh expense only after the server authoritatively confirms the old root is prepared', async () => {
     const user = userEvent.setup()
     const api = miniAppApi()
@@ -613,6 +647,48 @@ describe('PMC LINE Mini App shell', () => {
     )
   })
 
+  it('polls one expense resume request at a time every 10 seconds only while visible', async () => {
+    vi.useFakeTimers()
+    let visibility: DocumentVisibilityState = 'visible'
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility)
+    const first = deferred<Awaited<ReturnType<PmcMiniAppApi['resumeExpense']>>>()
+    const api = miniAppApi()
+    api.resumeExpense = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue({ status: 'PENDING' as const })
+    sessionStorage.setItem('pmc-expense-resume:v1', '{"version":1,"rootRequestId":"poll-root"}')
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'SUBMIT_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, expenseAsyncEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+
+    await act(async () => { vi.advanceTimersByTime(0) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(30_000) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      first.resolve({ status: 'PENDING' })
+      await Promise.resolve()
+    })
+    await act(async () => { vi.advanceTimersByTime(9_999) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(1)
+    await act(async () => { vi.advanceTimersByTime(1) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(2)
+
+    visibility = 'hidden'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await act(async () => { vi.advanceTimersByTime(30_000) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(2)
+
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await act(async () => { vi.advanceTimersByTime(0) })
+    expect(api.resumeExpense).toHaveBeenCalledTimes(3)
+  })
+
   it('keeps local resume protection and hides abandonment after an uncertain resume network error', async () => {
     const api = miniAppApi()
     api.resumeExpense = vi.fn(async () => { throw safeApiError('EXPENSE_STORAGE_UNAVAILABLE', true) })
@@ -655,6 +731,24 @@ describe('PMC LINE Mini App shell', () => {
     expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBe(
       '{"version":1,"rootRequestId":"failed-storage-root"}',
     )
+  })
+
+  it('ends tracking with a deterministic no-resubmit message for NEEDS_REVIEW', async () => {
+    const api = miniAppApi()
+    api.resumeExpense = vi.fn(async () => ({
+      status: 'FAILED' as const, error: 'EXPENSE_NEEDS_REVIEW' as const,
+    }))
+    sessionStorage.setItem('pmc-expense-resume:v1', '{"version":1,"rootRequestId":"review-root"}')
+
+    render(<PmcMiniApp
+      initialSession={{ staffId: 'SUBMIT_01', displayName: 'มัส', active: true }}
+      initialConfig={{ ...config, expenseCaptureEnabled: true, expenseAsyncEnabled: true, canSubmitExpense: true }}
+      api={api}
+    />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('รายการนี้ต้องให้ผู้ดูแลตรวจสอบ ไม่ต้องส่งซ้ำ')
+    expect(sessionStorage.getItem('pmc-expense-resume:v1')).toBeNull()
+    expect(screen.queryByText(/เริ่มบันทึกใหม่/)).not.toBeInTheDocument()
   })
 
   it('revokes prepared abandonment when a later status check becomes uncertain', async () => {
