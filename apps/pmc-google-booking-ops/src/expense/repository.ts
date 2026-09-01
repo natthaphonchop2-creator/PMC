@@ -78,6 +78,7 @@ interface ExpenseRequestRow {
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,124}$/
 const SHA256 = /^[a-f0-9]{64}$/
+const DRIVE_VERSION = /^[1-9]\d{0,31}$/
 const LITERAL_TEXT_PREFIX = '\u200c'
 const OWNER_CHECKSUM_RETRY_DELAYS_MS = [100, 250, 500] as const
 const MUTABLE_SUBMISSION_FIELDS = new Set<keyof ExpenseSubmission>([
@@ -919,7 +920,8 @@ function verifyExpenseFileMetadata(
     || file.parents.length !== 1
     || file.parents[0] !== folderId
     || Number(file.size) !== attachment.sizeBytes
-    || String(file.version ?? '') !== attachment.driveVersion
+    || !DRIVE_VERSION.test(String(file.version ?? ''))
+    || !DRIVE_VERSION.test(attachment.driveVersion)
     || file.sha256Checksum !== attachment.sha256
     || !isPrivateExpensePermissions(permissions)
     || !actualProperties

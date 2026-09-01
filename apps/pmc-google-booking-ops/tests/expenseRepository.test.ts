@@ -717,7 +717,49 @@ describe('Google expense repository containment and literal text', () => {
     expect(rows[1]?.[0]).toBe('\u200c2026-08')
   })
 
-  it.each(['bytes', 'version', 'duplicate', 'incomplete-true', 'incomplete-missing'] as const)(
+  it('accepts an invisible Drive server version advance when checksum and bound metadata remain exact', () => {
+    const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
+    const repository = createGoogleExpenseRepository({
+      masterSpreadsheetId: 'finance-master',
+      financeFolderId: 'finance-root',
+    })
+    const base = createExpenseTestPorts()
+    const ports = { ...base, expense: repository }
+    const rootRequestId = 'authoritative-server-version'
+    const expenseId = 'EXP-202608-0001'
+    const bytes = [...Buffer.from('authoritative-drive-bytes')]
+    const sha256 = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+    const attachment = attachmentFixture(expenseId, {
+      attachmentId: 'ATT-authoritative-server-version',
+      rootRequestId,
+      privateFileId: 'FILE-authoritative-server-version',
+      deterministicName: `001-${sha256}.jpg`,
+      sizeBytes: bytes.length,
+      driveVersion: '7',
+      slotClaimId: `SLOT-${'c'.repeat(64)}`,
+      sha256,
+    })
+    const prepare = prepareCommand({
+      rootRequestId,
+      commandIdempotencyKey: `${rootRequestId}:prepare`,
+      payload: {
+        ...prepareCommand().payload,
+        expectedManifestHash: manifestHash([attachment]),
+      },
+    })
+    executeExpenseCommand(prepare, ports)
+    environment.addExpenseAttachment(attachment, bytes)
+    environment.mutateExpenseFile(attachment.privateFileId, { version: '8' })
+
+    expect(executeExpenseCommand(commitCommand({
+      rootRequestId,
+      expenseId,
+      attachments: [attachment],
+    }), ports)).toMatchObject({ recordState: 'COMMITTED', revision: 1 })
+    expect(repository.listAttachments('2026-08', expenseId)).toEqual([attachment])
+  })
+
+  it.each(['bytes', 'duplicate', 'incomplete-true', 'incomplete-missing'] as const)(
     'rejects a %s mutation before COMMIT audit or effective totals',
     (mutation) => {
       const environment = installGoogleExpenseFakes({ indexed: true, initializedLedger: true })
@@ -759,8 +801,6 @@ describe('Google expense repository containment and literal text', () => {
         environment.mutateExpenseFile(attachment.privateFileId, {
           bytes: bytes.map((value, index) => index === 0 ? value ^ 0xff : value),
         })
-      } else if (mutation === 'version') {
-        environment.mutateExpenseFile(attachment.privateFileId, { version: '8' })
       } else if (mutation === 'duplicate') {
         environment.duplicateExpenseAttachment(attachment, bytes)
       } else {

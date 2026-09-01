@@ -657,7 +657,11 @@ export function createFinanceGooglePorts(
       uploadedByStaffId,
       uploadedAt: expectedIdentity.uploadedAt,
     }
-    if (input.expectedAttachment && !sameExpenseAttachment(attachment, input.expectedAttachment)) {
+    if (
+      input.expectedAttachment
+      && (!VERSION.test(input.expectedAttachment.driveVersion)
+        || !sameExpenseAttachment(attachment, input.expectedAttachment))
+    ) {
       throw new FinanceGoogleError('EXPENSE_PRIVATE_FILE_INVALID')
     }
     return attachment
@@ -996,7 +1000,6 @@ function sameExpenseAttachment(
     && left.privateFileId === right.privateFileId
     && left.deterministicName === right.deterministicName
     && left.sizeBytes === right.sizeBytes
-    && left.driveVersion === right.driveVersion
     && left.slotClaimId === right.slotClaimId
     && left.sha256 === right.sha256
     && left.uploadedByStaffId === right.uploadedByStaffId
@@ -1235,7 +1238,6 @@ function canonicalIdentity(metadata: DriveMetadata): string {
     parents: metadata.parents,
     trashed: metadata.trashed,
     size: String(metadata.size),
-    version: String(metadata.version),
     sha256Checksum: metadata.sha256Checksum,
     appProperties: canonicalStringProperties(metadata.appProperties),
     properties: canonicalStringProperties(metadata.properties),

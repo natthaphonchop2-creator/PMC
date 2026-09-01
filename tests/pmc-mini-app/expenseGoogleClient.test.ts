@@ -476,7 +476,7 @@ describe('private finance Google ports', () => {
     await expect(ports.downloadExpenseFile({
       monthKey: MONTH_KEY, expenseId: EXPENSE_ID, fileId, expectedAttachment: attachment,
     }))
-      .rejects.toMatchObject({ code: 'EXPENSE_PRIVATE_FILE_INVALID' })
+      .resolves.toEqual({ bytes, mimeType: 'image/jpeg' })
 
     fake.afterMediaRead = undefined
     fake.item(fileId).parents = ['month-2026-08']
@@ -503,6 +503,31 @@ describe('private finance Google ports', () => {
       fileId: attachment.privateFileId,
       expectedAttachment: attachment,
     })).resolves.toBeUndefined()
+  })
+
+  it('accepts an invisible Drive server version advance when checksum and bound metadata remain exact', async () => {
+    const fake = financeGoogleFake()
+    const ports = createFinanceGooglePorts(config(), fake.factory)
+    const parentId = await ports.ensureExpenseFolder(MONTH_KEY, EXPENSE_ID)
+    const bytes = await jpeg()
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    const attachment = await ports.uploadExpenseImage(claimedUpload({
+      parentId, bytes, sha256, deterministicName: `001-${sha256}.jpg`,
+    }))
+    fake.item(attachment.privateFileId).version = '2'
+
+    await expect(ports.verifyExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+    })).resolves.toBeUndefined()
+    await expect(ports.downloadExpenseFile({
+      monthKey: MONTH_KEY,
+      expenseId: EXPENSE_ID,
+      fileId: attachment.privateFileId,
+      expectedAttachment: attachment,
+    })).resolves.toEqual({ bytes, mimeType: 'image/jpeg' })
   })
 
   it('accepts the exact owner attachment regardless of object key insertion order', async () => {
@@ -580,7 +605,7 @@ describe('private finance Google ports', () => {
     })).resolves.toBeUndefined()
   })
 
-  it.each(['version', 'bytes', 'metadata'] as const)(
+  it.each(['bytes', 'metadata'] as const)(
     'rejects a post-commit %s replacement against the pinned ledger attachment descriptor',
     async (mutation) => {
       const fake = financeGoogleFake()
@@ -595,9 +620,7 @@ describe('private finance Google ports', () => {
       fake.setMonthRows('EXPENSE_ATTACHMENTS', [committedAttachmentRow(attachment)])
 
       const file = fake.item(attachment.privateFileId)
-      if (mutation === 'version') {
-        file.version = '2'
-      } else if (mutation === 'bytes') {
+      if (mutation === 'bytes') {
         const replacement = await jpeg(3, 2)
         const replacementHash = createHash('sha256').update(replacement).digest('hex')
         file.bytes = replacement
