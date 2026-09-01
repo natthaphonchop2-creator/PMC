@@ -3,6 +3,7 @@ import { isMiniAppExpenseSafeErrorCode } from '../../../shared/pmcMiniAppExpense
 export type ExpenseAsyncEventName =
   | 'expense_job_accepted'
   | 'expense_task_enqueued'
+  | 'expense_task_enqueue_failed'
   | 'expense_worker_claimed'
   | 'expense_prepare_completed'
   | 'expense_evidence_completed'
@@ -34,6 +35,7 @@ const CONTEXT: Record<ExpenseAsyncEventName, {
 }> = {
   expense_job_accepted: { route: 'submit', action: 'accept' },
   expense_task_enqueued: { route: 'submit', action: 'enqueue' },
+  expense_task_enqueue_failed: { route: 'submit', action: 'enqueue' },
   expense_worker_claimed: { route: 'worker', action: 'claim' },
   expense_prepare_completed: { route: 'worker', action: 'prepare' },
   expense_evidence_completed: { route: 'worker', action: 'evidence' },

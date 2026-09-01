@@ -44,6 +44,22 @@ import {
   createExpenseRecoveryWorker,
   type ExpenseRecoveryWorker,
 } from './finance/recovery.js'
+import {
+  createGoogleExpenseAsyncJobStore,
+  type ExpenseAsyncJobStore,
+} from './finance/asyncJobStore.js'
+import {
+  createGoogleExpenseTaskQueue,
+  type ExpenseTaskQueue,
+} from './finance/taskQueue.js'
+import {
+  createExpenseAsyncWorker,
+  type ExpenseAsyncWorker,
+} from './finance/asyncWorker.js'
+import {
+  createExpenseAsyncTelemetry,
+  type ExpenseAsyncTelemetry,
+} from './finance/asyncTelemetry.js'
 
 export interface PmcFinanceRuntime {
   config: PmcFinanceConfig
@@ -60,6 +76,14 @@ export interface PmcFinanceRuntime {
     ingress: ExpenseIngressClient
     submission: ExpenseSubmissionService
   }
+  async?: {
+    config: NonNullable<PmcFinanceConfig['async']>
+    jobs: ExpenseAsyncJobStore
+    queue: ExpenseTaskQueue
+    worker: ExpenseAsyncWorker
+    identity: WorkerIdentityVerifier
+    telemetry: ExpenseAsyncTelemetry
+  }
 }
 
 export interface PmcFinanceRuntimeFactories {
@@ -73,6 +97,23 @@ export interface PmcFinanceRuntimeFactories {
     finance: FinanceGoogleCapturePorts
     staging: ExpenseStagingPort
   }): ExpenseSubmissionService
+  createAsyncJobs(input: { bucketName: string }): ExpenseAsyncJobStore
+  createAsyncQueue(input: {
+    projectId: string
+    location: 'asia-southeast1'
+    queueName: string
+    workerUrl: string
+    workerAudience: string
+    taskInvokerEmail: string
+  }): ExpenseTaskQueue
+  createAsyncIdentity(input: { audience: string; allowedEmail: string }): WorkerIdentityVerifier
+  createAsyncTelemetry(): ExpenseAsyncTelemetry
+  createAsyncWorker(input: {
+    jobs: ExpenseAsyncJobStore
+    submission: ExpenseSubmissionService
+    now: () => Date
+    telemetry: ExpenseAsyncTelemetry
+  }): ExpenseAsyncWorker
 }
 
 export type PmcMiniAppRuntimeMiddleware = ReturnType<typeof createPmcMiniAppMiddleware> & {
@@ -89,6 +130,11 @@ const realFinanceFactories: PmcFinanceRuntimeFactories = {
   }),
   createRecoveryIdentity: createWorkerIdentityVerifier,
   createSubmission: createExpenseSubmissionService,
+  createAsyncJobs: ({ bucketName }) => createGoogleExpenseAsyncJobStore({ bucketName }),
+  createAsyncQueue: createGoogleExpenseTaskQueue,
+  createAsyncIdentity: createWorkerIdentityVerifier,
+  createAsyncTelemetry: createExpenseAsyncTelemetry,
+  createAsyncWorker: createExpenseAsyncWorker,
 }
 
 export function createPmcFinanceRuntime(
@@ -125,7 +171,30 @@ export function createPmcFinanceRuntime(
   const ingress = resume
   const submission = factories.createSubmission({ ingress, finance: captureFinance, staging })
   const capture = { finance: captureFinance, staging, ingress, submission }
-  return { config, resume, staging, recovery, recoveryIdentity, ...(reads ? { reads } : {}), capture }
+  const async = config.async ? (() => {
+    const jobs = factories.createAsyncJobs({ bucketName: config.async!.jobBucketName })
+    const queue = factories.createAsyncQueue({
+      projectId: config.async!.projectId,
+      location: config.async!.location,
+      queueName: config.async!.queueName,
+      workerUrl: config.async!.workerUrl,
+      workerAudience: config.async!.workerAudience,
+      taskInvokerEmail: config.async!.taskInvokerEmail,
+    })
+    const identity = factories.createAsyncIdentity({
+      audience: config.async!.workerAudience,
+      allowedEmail: config.async!.taskInvokerEmail,
+    })
+    const telemetry = factories.createAsyncTelemetry()
+    const worker = factories.createAsyncWorker({
+      jobs, submission, now: () => new Date(), telemetry,
+    })
+    return { config: config.async!, jobs, queue, worker, identity, telemetry }
+  })() : undefined
+  return {
+    config, resume, staging, recovery, recoveryIdentity,
+    ...(reads ? { reads } : {}), capture, ...(async ? { async } : {}),
+  }
 }
 
 export function createPmcMiniAppRuntime(
@@ -175,6 +244,7 @@ function constructPmcMiniAppRuntime(config: PmcMiniAppServerConfig, env: NodeJS.
       submission: expenseFinance.capture.submission,
       ingress: expenseFinance.capture.ingress,
     } } : {}),
+    ...(expenseFinance.async ? { async: expenseFinance.async } : {}),
   } : undefined
   const asyncTelemetry = createAsyncBookingTelemetry()
   const bookingPerformanceTelemetry = createBookingPerformanceTelemetry()

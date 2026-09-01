@@ -14,6 +14,7 @@ import type { FinanceServerDependencies, LineIdentityPort } from '../../server/p
 import { ExpenseSubmissionError } from '../../server/pmc-mini-app/finance/submissionService'
 import { ExpenseIngressClientError } from '../../server/pmc-mini-app/finance/ingressClient'
 import type { ExpenseStagingReceipt, ExpenseSubmissionLease } from '../../server/pmc-mini-app/finance/stagingStore'
+import type { ExpenseAsyncJob, ExpenseAsyncJobInput } from '../../server/pmc-mini-app/finance/asyncJobStore'
 import { signExpenseStagingReceipt } from '../../server/pmc-mini-app/finance/stagingToken'
 import { createPmcMiniAppMiddleware } from '../../server/pmc-mini-app/middleware'
 import type { MiniAppStaffRecord, MiniAppStore } from '../../server/pmc-mini-app/store'
@@ -70,6 +71,83 @@ describe('expense capture API', () => {
       'amountSatang', 'category', 'committedAt', 'expenseDate', 'expenseId', 'monthKey',
       'receiptNumber', 'recordState', 'revision', 'scope', 'unreviewed',
     ])
+  })
+
+  it('accepts a pilot expense as a durable async job and never submits inline', async () => {
+    const deps = dependencies()
+    const async = enableExpenseAsync(deps.finance, ['SUBMIT_01'])
+    const body = validSubmitBody('async-root-1')
+    primeToken(deps, body, 'SUBMIT_01')
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/expenses', body, 'submit-token',
+    )
+
+    expect(response).toEqual(expect.objectContaining({
+      status: 202,
+      body: {
+        rootRequestId: 'async-root-1',
+        status: 'PENDING',
+        acceptedAt: '2026-08-30T03:00:00.000Z',
+      },
+    }))
+    expect(async.jobs.createOrRead).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'CREATE', replacementOfExpenseId: null, expectedVersion: null,
+      acceptedAt: '2026-08-30T03:00:00.000Z',
+      submission: expect.objectContaining({
+        rootRequestId: 'async-root-1', staffId: 'SUBMIT_01', category: 'BILL_DOCUMENT',
+      }),
+    }))
+    expect(async.queue.enqueue).toHaveBeenCalledWith({
+      rootRequestId: 'async-root-1',
+      fingerprint: 'a'.repeat(64),
+      scheduleAt: new Date(NOW + 2_000),
+    })
+    expect(async.jobs.markQueued).toHaveBeenCalledOnce()
+    expect(deps.finance.capture?.submission.submit).not.toHaveBeenCalled()
+  })
+
+  it('keeps non-pilot submitters on the synchronous rollback path while async is enabled', async () => {
+    const deps = dependencies()
+    const async = enableExpenseAsync(deps.finance, ['FINANCE_01'])
+    const body = validSubmitBody('sync-rollback-root')
+    primeToken(deps, body, 'SUBMIT_01')
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST', '/api/mini-app/expenses', body, 'submit-token',
+    )
+
+    expect(response).toMatchObject({ status: 200, body: committedReceipt() })
+    expect(deps.finance.capture?.submission.submit).toHaveBeenCalledOnce()
+    expect(async.jobs.createOrRead).not.toHaveBeenCalled()
+    expect(async.queue.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('leaves a QUEUING job retryable when enqueue is uncertain and replays the deterministic task', async () => {
+    const deps = dependencies()
+    const async = enableExpenseAsync(deps.finance, ['SUBMIT_01'])
+    vi.mocked(async.queue.enqueue)
+      .mockRejectedValueOnce(new Error('provider metadata must not escape'))
+      .mockResolvedValueOnce({ taskName: taskName('async-retry-root'), alreadyExists: true })
+    const body = validSubmitBody('async-retry-root')
+    primeToken(deps, body, 'SUBMIT_01')
+    const middleware = createPmcMiniAppMiddleware(deps)
+
+    const first = await request(middleware, 'POST', '/api/mini-app/expenses', body, 'submit-token')
+    const retry = await request(middleware, 'POST', '/api/mini-app/expenses', body, 'submit-token')
+
+    expect(first).toMatchObject({
+      status: 503, body: { error: 'EXPENSE_STORAGE_UNAVAILABLE', retryable: true },
+    })
+    expect(JSON.stringify(first.body)).not.toContain('provider metadata')
+    expect(retry).toMatchObject({
+      status: 202,
+      body: { rootRequestId: 'async-retry-root', status: 'PENDING' },
+    })
+    expect(async.jobs.createOrRead).toHaveBeenCalledTimes(2)
+    expect(async.queue.enqueue).toHaveBeenCalledTimes(2)
+    expect(async.jobs.markQueued).toHaveBeenCalledOnce()
+    expect(deps.finance.capture?.submission.submit).not.toHaveBeenCalled()
   })
 
   it('rejects unknown/repeated/query fields, spoofed identity, wrong-root tokens, and oversized JSON before submit', async () => {
@@ -236,6 +314,55 @@ describe('expense capture API', () => {
     })
     expect(Object.keys(response.body as object).sort()).toEqual(['error', 'retryable'])
   })
+
+  it.each([
+    ['QUEUING', { status: 'PENDING' }],
+    ['QUEUED', { status: 'PENDING' }],
+    ['PROCESSING', { status: 'PENDING' }],
+    ['RETRYING', { status: 'PENDING' }],
+    ['COMMITTED', { status: 'COMMITTED', receipt: committedReceipt() }],
+    ['FAILED', { status: 'FAILED', error: 'EXPENSE_REVISION_CONFLICT' }],
+    ['NEEDS_REVIEW', { status: 'FAILED', error: 'EXPENSE_NEEDS_REVIEW' }],
+  ] as const)('projects async %s before consulting the legacy ingress', async (state, expected) => {
+    const legacyResume = vi.fn(async () => ({ status: 'SAFE_TO_RETRY' as const }))
+    const finance: FinanceServerDependencies = {
+      signingSecret: SECRET,
+      resume: { ingress: { resume: legacyResume } as never, staging: { readSubmissionLease: vi.fn() } as never },
+    }
+    const async = enableExpenseAsync(finance, ['SUBMIT_01'])
+    vi.mocked(async.jobs.read).mockResolvedValueOnce(asyncJob({
+      state,
+      receipt: state === 'COMMITTED' ? committedReceipt() : null,
+      safeErrorCode: state === 'FAILED' ? 'EXPENSE_REVISION_CONFLICT'
+        : state === 'NEEDS_REVIEW' ? 'EXPENSE_NEEDS_REVIEW' : null,
+    }))
+
+    const response = await request(
+      createPmcMiniAppMiddleware(dependencies({ finance })), 'POST',
+      '/api/mini-app/expenses/resume/async-resume-root', null, 'submit-token',
+    )
+
+    expect(response).toMatchObject({ status: 200, body: expected })
+    expect(legacyResume).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the legacy resume journal when the async job does not exist', async () => {
+    const legacyResume = vi.fn(async () => ({ status: 'SAFE_TO_RETRY' as const }))
+    const finance: FinanceServerDependencies = {
+      signingSecret: SECRET,
+      resume: { ingress: { resume: legacyResume } as never, staging: { readSubmissionLease: vi.fn() } as never },
+    }
+    const async = enableExpenseAsync(finance, ['SUBMIT_01'])
+    vi.mocked(async.jobs.read).mockResolvedValueOnce(null)
+
+    const response = await request(
+      createPmcMiniAppMiddleware(dependencies({ finance })), 'POST',
+      '/api/mini-app/expenses/resume/legacy-root', null, 'submit-token',
+    )
+
+    expect(response).toMatchObject({ status: 200, body: { status: 'SAFE_TO_RETRY' } })
+    expect(legacyResume).toHaveBeenCalledOnce()
+  })
 })
 
 describe('finance read and correction APIs', () => {
@@ -322,6 +449,39 @@ describe('finance read and correction APIs', () => {
     }, 'finance-token')
     expect(crossDate).toMatchObject({ status: 409, body: { error: 'EXPENSE_IMMUTABLE_FIELD', retryable: false } })
     expect(crossCategory.status).toBe(409)
+    expect(deps.finance.capture?.submission.submit).not.toHaveBeenCalled()
+  })
+
+  it('accepts an allowlisted replacement asynchronously after validating the current revision', async () => {
+    const deps = dependencies()
+    const async = enableExpenseAsync(deps.finance, ['FINANCE_01'])
+    const receipt = stagedReceipt('replace-async-root')
+    vi.mocked(deps.finance.capture!.staging.get).mockResolvedValue({ ...receipt, bytes: Buffer.from('private-image') })
+    const token = signExpenseStagingReceipt({
+      receipt, staffId: 'FINANCE_01', rootRequestId: 'replace-async-root', secret: SECRET, now: () => NOW,
+    })
+
+    const response = await request(
+      createPmcMiniAppMiddleware(deps), 'POST',
+      `/api/mini-app/finance/expenses/${EXPENSE_ID}/replace`, {
+        expectedVersion: 2,
+        expectedRevision: 1,
+        input: {
+          rootRequestId: 'replace-async-root', expenseDate: '2026-08-29', category: 'BOOK_CLINIC',
+          amountSatang: 22_000, counterpartyName: null, description: 'แก้ยอดรวม', paymentMethod: null,
+          stagingTokens: [token],
+        },
+      }, 'finance-token',
+    )
+
+    expect(response).toMatchObject({
+      status: 202,
+      body: { rootRequestId: 'replace-async-root', status: 'PENDING', acceptedAt: '2026-08-30T03:00:00.000Z' },
+    })
+    expect(async.jobs.createOrRead).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'REPLACE', replacementOfExpenseId: EXPENSE_ID, expectedVersion: 2,
+      submission: expect.objectContaining({ expectedRevision: 1, staffId: 'FINANCE_01' }),
+    }))
     expect(deps.finance.capture?.submission.submit).not.toHaveBeenCalled()
   })
 
@@ -487,6 +647,90 @@ function financeDependencies(staged = new Map<string, ExpenseStagingReceipt & { 
       },
     },
   }
+}
+
+function enableExpenseAsync(finance: FinanceServerDependencies, pilotStaffIds: string[]) {
+  const jobs = {
+    createOrRead: vi.fn(async (input: ExpenseAsyncJobInput) => ({ job: asyncJob({
+      rootRequestId: input.submission.rootRequestId,
+      staffId: input.submission.staffId,
+      kind: input.kind,
+      replacementOfExpenseId: input.replacementOfExpenseId,
+      expectedVersion: input.expectedVersion,
+      submission: input.submission,
+      acceptedAt: input.acceptedAt,
+    }), created: true })),
+    markQueued: vi.fn(async (job: ExpenseAsyncJob, name: string) => ({ ...job, state: 'QUEUED' as const, taskName: name })),
+    read: vi.fn(async () => null),
+    claim: vi.fn(), renew: vi.fn(), markRetrying: vi.fn(), commit: vi.fn(), fail: vi.fn(), needsReview: vi.fn(),
+  }
+  const queue = {
+    enqueue: vi.fn(async (input: { rootRequestId: string }) => ({
+      taskName: taskName(input.rootRequestId), alreadyExists: false,
+    })),
+  }
+  const value = {
+    config: {
+      enabled: true as const,
+      projectId: 'project-2099d92f-51c8-4d2b-a8c',
+      location: 'asia-southeast1' as const,
+      jobBucketName: 'pmc-expense-async-jobs',
+      queueName: 'pmc-expense-finalize',
+      workerUrl: 'https://pmc.example/internal/mini-app/finalize-expense',
+      workerAudience: 'https://pmc.example',
+      taskInvokerEmail: 'task-invoker@project-2099d92f-51c8-4d2b-a8c.iam.gserviceaccount.com',
+      pilotStaffIds: new Set(pilotStaffIds),
+    },
+    jobs,
+    queue,
+    worker: { finalize: vi.fn() },
+    identity: { verify: vi.fn() },
+  }
+  Object.assign(finance, { async: value })
+  return value
+}
+
+function asyncJob(patch: Partial<ExpenseAsyncJob> = {}): ExpenseAsyncJob {
+  const rootRequestId = patch.rootRequestId ?? 'async-resume-root'
+  const acceptedAt = patch.acceptedAt ?? '2026-08-30T03:00:00.000Z'
+  return {
+    version: 1,
+    objectKey: `expense-async-jobs/v1/${rootRequestId}.json`,
+    generation: '1',
+    fingerprint: 'a'.repeat(64),
+    rootRequestId,
+    staffId: 'SUBMIT_01',
+    state: 'QUEUING',
+    taskName: null,
+    createdAt: acceptedAt,
+    updatedAt: acceptedAt,
+    attemptCount: 0,
+    leaseOwnerToken: null,
+    leaseExpiresAt: null,
+    receipt: null,
+    safeErrorCode: null,
+    kind: 'CREATE',
+    replacementOfExpenseId: null,
+    expectedVersion: null,
+    acceptedAt,
+    submission: {
+      rootRequestId,
+      staffId: 'SUBMIT_01',
+      expenseDate: '2026-08-29',
+      category: 'BILL_DOCUMENT',
+      amountSatang: 12_000,
+      counterpartyName: 'ร้านทดสอบ',
+      description: '',
+      paymentMethod: 'CASH',
+      expectedRevision: 0,
+      stagingReceipts: [stagedReceipt(rootRequestId)],
+    },
+    ...patch,
+  }
+}
+
+function taskName(rootRequestId: string): string {
+  return `projects/project-2099d92f-51c8-4d2b-a8c/locations/asia-southeast1/queues/pmc-expense-finalize/tasks/expense-${rootRequestId}`
 }
 
 function primeToken(

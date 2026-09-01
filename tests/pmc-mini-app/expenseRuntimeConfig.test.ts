@@ -190,6 +190,11 @@ describe('private finance runtime configuration', () => {
       createRecovery: vi.fn(() => recovery),
       createRecoveryIdentity: vi.fn(() => recoveryIdentity),
       createSubmission: vi.fn(() => submission),
+      createAsyncJobs: vi.fn(),
+      createAsyncQueue: vi.fn(),
+      createAsyncIdentity: vi.fn(),
+      createAsyncTelemetry: vi.fn(),
+      createAsyncWorker: vi.fn(),
     }
 
     const runtime = createPmcFinanceRuntime(financeConfig!, factories)
@@ -227,6 +232,65 @@ describe('private finance runtime configuration', () => {
       allowedEmail: 'pmc-expense-recovery@example.iam.gserviceaccount.com',
     })
     expect(factories.createSubmission).toHaveBeenCalledTimes(expectCapture ? 1 : 0)
+    expect(factories.createAsyncJobs).not.toHaveBeenCalled()
+  })
+
+  it('constructs the isolated expense job store, queue, OIDC verifier, telemetry, and worker only for valid async config', () => {
+    const financeConfig = readPmcFinanceConfig({
+      ...validFinanceEnvironment(),
+      ...validExpenseAsyncEnvironment(),
+    })!
+    const finance = {
+      readMaster: vi.fn(), readMonth: vi.fn(), ensureExpenseFolder: vi.fn(),
+      uploadExpenseImage: vi.fn(), verifyExpenseFile: vi.fn(), listVerifiedExpenseImages: vi.fn(),
+      deleteExpenseFileIfUnregistered: vi.fn(), downloadExpenseFile: vi.fn(),
+    }
+    const staging = {
+      put: vi.fn(), get: vi.fn(), deleteVerified: vi.fn(), claimDriveSlot: vi.fn(),
+      registerDriveSlotFile: vi.fn(), readDriveSlotClaim: vi.fn(), readSubmissionLease: vi.fn(),
+      acquireSubmissionLease: vi.fn(), renewSubmissionLease: vi.fn(),
+      assertSubmissionLease: vi.fn(), commitSubmissionLease: vi.fn(),
+    }
+    const ingress = { prepare: vi.fn(), commit: vi.fn(), void: vi.fn(), resume: vi.fn(), uploadEvidence: vi.fn() }
+    const recovery = { recover: vi.fn() }
+    const recoveryIdentity = { verify: vi.fn() }
+    const submission = { submit: vi.fn() }
+    const jobs = { read: vi.fn() }
+    const queue = { enqueue: vi.fn() }
+    const identity = { verify: vi.fn() }
+    const telemetry = vi.fn()
+    const worker = { finalize: vi.fn() }
+    const factories = {
+      createGoogle: vi.fn(() => finance),
+      createStaging: vi.fn(() => staging),
+      createIngress: vi.fn(() => ingress),
+      createRecovery: vi.fn(() => recovery),
+      createRecoveryIdentity: vi.fn(() => recoveryIdentity),
+      createSubmission: vi.fn(() => submission),
+      createAsyncJobs: vi.fn(() => jobs),
+      createAsyncQueue: vi.fn(() => queue),
+      createAsyncIdentity: vi.fn(() => identity),
+      createAsyncTelemetry: vi.fn(() => telemetry),
+      createAsyncWorker: vi.fn(() => worker),
+    }
+
+    const runtime = createPmcFinanceRuntime(financeConfig, factories as never)
+
+    expect(runtime.async).toMatchObject({
+      config: financeConfig.async, jobs, queue, identity, telemetry, worker,
+    })
+    expect(factories.createAsyncJobs).toHaveBeenCalledWith({ bucketName: 'pmc-expense-async-jobs' })
+    expect(factories.createAsyncQueue).toHaveBeenCalledWith(expect.objectContaining({
+      queueName: 'pmc-expense-finalize',
+      workerUrl: 'https://pmc-mini-app.example/internal/mini-app/finalize-expense',
+    }))
+    expect(factories.createAsyncIdentity).toHaveBeenCalledWith({
+      audience: 'https://pmc-mini-app.example',
+      allowedEmail: 'pmc-mini-app-task-invoker@example.iam.gserviceaccount.com',
+    })
+    expect(factories.createAsyncWorker).toHaveBeenCalledWith(expect.objectContaining({
+      jobs, submission, telemetry, now: expect.any(Function),
+    }))
   })
 })
 

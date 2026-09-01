@@ -27,6 +27,7 @@ import type { AsyncBookingWorker } from './asyncWorker.js'
 import type { AsyncStateIngressPort } from './asyncStateIngressClient.js'
 import type { MiniAppAsyncStateMutation } from '../../shared/pmcMiniAppAsyncState.js'
 import { isExpenseRecoveryCounts } from '../../shared/pmcMiniAppExpenseIngress.js'
+import { parseExpenseAsyncTaskPayload } from '../../shared/pmcExpenseAsync.js'
 import type { AsyncBookingTelemetry } from './asyncTelemetry.js'
 import { handleStockMiniAppApi, isStockMiniAppApiPath } from './stock/middleware.js'
 import { handleFinanceMiniAppApi, isFinanceMiniAppApiPath } from './finance/middleware.js'
@@ -48,6 +49,7 @@ import type {
 import { cleanupMiniAppDraftEvidence } from './draftCleanup.js'
 
 const ASYNC_WORKER_PATH = '/internal/mini-app/finalize-booking'
+const EXPENSE_ASYNC_WORKER_PATH = '/internal/mini-app/finalize-expense'
 const EXPENSE_RECOVERY_PATH = '/internal/mini-app/recover-expenses'
 const DRAFT_CLEANUP_PATH = '/internal/mini-app/draft-evidence-cleanup'
 const ASYNC_WORKER_MAX_BODY_BYTES = 1_024
@@ -92,6 +94,10 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
     applySecurityHeaders(res)
     if (req.url === EXPENSE_RECOVERY_PATH) {
       await handleExpenseRecoveryRoute(req, res, deps)
+      return
+    }
+    if (req.url === EXPENSE_ASYNC_WORKER_PATH) {
+      await handleExpenseAsyncWorkerRoute(req, res, deps)
       return
     }
     if (req.url === ASYNC_WORKER_PATH) {
@@ -359,6 +365,7 @@ export function createPmcMiniAppMiddleware(deps: PmcMiniAppMiddlewareDependencie
         } : {}),
         stockEnabled: Boolean(deps.stock?.enabled) && (!deps.stock?.managerPilotOnly || authenticated.canManageStock),
         expenseCaptureEnabled: Boolean(deps.finance?.capture),
+        expenseAsyncEnabled: deps.finance?.async?.config.pilotStaffIds.has(authenticated.staffId) === true,
         financeReadsEnabled: Boolean(deps.finance?.reads),
         canManageStock: authenticated.canManageStock,
         canSubmitExpense: authenticated.canSubmitExpense,
@@ -498,6 +505,101 @@ async function handleAsyncWorkerRoute(
     respond(res, 200, { ...result })
   } catch {
     respond(res, 503, { error: 'ASYNC_WORKER_FAILED' })
+  }
+}
+
+async function handleExpenseAsyncWorkerRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: PmcMiniAppMiddlewareDependencies,
+): Promise<void> {
+  if (req.method !== 'POST') {
+    respond(res, 405, { error: 'MINI_APP_METHOD_NOT_ALLOWED' })
+    return
+  }
+  const async = deps.finance?.async
+  if (!async) {
+    respond(res, 404, { error: 'MINI_APP_ROUTE_NOT_FOUND' })
+    return
+  }
+  const token = extractWorkerBearerToken(req.headers.authorization)
+  if (!token) {
+    respond(res, 401, { error: 'EXPENSE_ASYNC_WORKER_UNAUTHORIZED' })
+    return
+  }
+  try {
+    await async.identity.verify(token)
+  } catch {
+    respond(res, 401, { error: 'EXPENSE_ASYNC_WORKER_UNAUTHORIZED' })
+    return
+  }
+  const retryCount = taskRetryCount(req)
+  if (retryCount === null) {
+    respond(res, 400, { error: 'EXPENSE_ASYNC_WORKER_INVALID_RETRY_COUNT' })
+    return
+  }
+  const body = await readExpenseWorkerJson(req, res)
+  if (!body) return
+  let task
+  try {
+    task = parseExpenseAsyncTaskPayload(body)
+  } catch {
+    respond(res, 400, { error: 'EXPENSE_ASYNC_WORKER_INVALID_BODY' })
+    return
+  }
+  try {
+    const result = await async.worker.finalize({ ...task, attempt: retryCount })
+    if (
+      !hasExactKeys(result, ['rootRequestId', 'state'])
+      || result.rootRequestId !== task.rootRequestId
+      || !['COMMITTED', 'FAILED', 'NEEDS_REVIEW'].includes(String(result.state))
+    ) throw new Error('unsafe worker result')
+    respond(res, 200, result)
+  } catch {
+    respond(res, 503, { error: 'EXPENSE_ASYNC_WORKER_FAILED' })
+  }
+}
+
+async function readExpenseWorkerJson(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Record<string, unknown> | null> {
+  const contentType = req.headers['content-type']
+  if (typeof contentType !== 'string'
+    || contentType.includes(',')
+    || contentType.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+    respond(res, 415, { error: 'EXPENSE_ASYNC_WORKER_JSON_REQUIRED' })
+    return null
+  }
+  const contentLength = req.headers['content-length']
+  if (contentLength !== undefined) {
+    if (typeof contentLength !== 'string' || !/^(?:0|[1-9]\d*)$/.test(contentLength)) {
+      respond(res, 400, { error: 'EXPENSE_ASYNC_WORKER_INVALID_BODY' })
+      return null
+    }
+    if (Number(contentLength) > ASYNC_WORKER_MAX_BODY_BYTES) {
+      respond(res, 413, { error: 'EXPENSE_ASYNC_WORKER_PAYLOAD_TOO_LARGE' })
+      return null
+    }
+  }
+  const chunks: Buffer[] = []
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      const bytes = Buffer.from(chunk)
+      size += bytes.length
+      if (size > ASYNC_WORKER_MAX_BODY_BYTES) {
+        respond(res, 413, { error: 'EXPENSE_ASYNC_WORKER_PAYLOAD_TOO_LARGE' })
+        return null
+      }
+      chunks.push(bytes)
+    }
+    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid')
+    return parsed as Record<string, unknown>
+  } catch {
+    respond(res, 400, { error: 'EXPENSE_ASYNC_WORKER_INVALID_JSON' })
+    return null
   }
 }
 

@@ -25,6 +25,12 @@ import {
 } from './stagingStore.js'
 import { ExpenseStagingTokenError, signExpenseStagingReceipt, verifyExpenseStagingReceipt } from './stagingToken.js'
 import { ExpenseSubmissionError } from './submissionService.js'
+import type { ExpenseAsyncTelemetry } from './asyncTelemetry.js'
+import {
+  ExpenseAsyncJobStoreError,
+  type ExpenseAsyncJob,
+  type ExpenseAsyncJobInput,
+} from './asyncJobStore.js'
 
 const EXPENSE_PREFIX = '/api/mini-app/expenses'
 const FINANCE_PREFIX = '/api/mini-app/finance'
@@ -74,8 +80,19 @@ export async function handleFinanceMiniAppApi(
   if (resumeRoute) {
     if (req.method !== 'POST') return methodNotAllowed(res)
     if (!noQuery(url) || !emptyBody(req)) return invalidField(res)
-    if (!finance?.resume) return routeNotFound(res)
+    if (!finance?.resume && !finance?.async) return routeNotFound(res)
     try {
+      if (finance?.async) {
+        const job = await finance.async.jobs.read(resumeRoute[1]!)
+        if (job) {
+          if (job.staffId !== authenticated.staffId) {
+            throw new ExpenseSubmissionError('EXPENSE_RESUME_FORBIDDEN')
+          }
+          json(res, 200, projectAsyncExpenseResume(job))
+          return
+        }
+      }
+      if (!finance?.resume) return routeNotFound(res)
       const internal = await finance.resume.ingress.resume({
         rootRequestId: resumeRoute[1]!,
         staffId: authenticated.staffId,
@@ -320,7 +337,7 @@ async function handleSubmit(
       authenticated.staffId,
       finance,
     )
-    const receipt = await finance.capture!.submission.submit({
+    const submission = {
       rootRequestId: parsed.rootRequestId,
       staffId: authenticated.staffId,
       expenseDate: parsed.expenseDate,
@@ -331,7 +348,15 @@ async function handleSubmit(
       paymentMethod: parsed.paymentMethod,
       expectedRevision: parsed.expectedRevision,
       stagingReceipts,
-    })
+    }
+    if (isAsyncPilot(authenticated, finance)) {
+      await acceptAsyncExpense(res, finance, {
+        kind: 'CREATE', replacementOfExpenseId: null, expectedVersion: null,
+        submission, acceptedAt: acceptedAt(finance),
+      })
+      return
+    }
+    const receipt = await finance.capture!.submission.submit(submission)
     const projected = expenseReceipt(receipt)
     if (!projected) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
     json(res, 200, projected)
@@ -380,7 +405,7 @@ async function handleReplace(
       authenticated.staffId,
       finance,
     )
-    const receipt = await finance.capture!.submission.submit({
+    const submission = {
       rootRequestId: parsed.rootRequestId,
       staffId: authenticated.staffId,
       expenseDate: parsed.expenseDate,
@@ -391,7 +416,15 @@ async function handleReplace(
       paymentMethod: parsed.paymentMethod,
       expectedRevision,
       stagingReceipts,
-    })
+    }
+    if (isAsyncPilot(authenticated, finance)) {
+      await acceptAsyncExpense(res, finance, {
+        kind: 'REPLACE', replacementOfExpenseId: expenseId, expectedVersion,
+        submission, acceptedAt: acceptedAt(finance),
+      })
+      return
+    }
+    const receipt = await finance.capture!.submission.submit(submission)
     const projected = expenseReceipt(receipt)
     if (!projected) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
     json(res, 200, projected)
@@ -640,7 +673,99 @@ function respondMutationError(res: ServerResponse, error: unknown): void {
   if (error instanceof ExpenseStagingTokenError || error instanceof ExpenseStagingError) {
     return safeError(res, 400, 'EXPENSE_INVALID_ATTACHMENTS', false)
   }
+  if (error instanceof ExpenseAsyncJobStoreError) {
+    const code = error.code === 'EXPENSE_IDEMPOTENCY_CONFLICT'
+      ? 'EXPENSE_IDEMPOTENCY_CONFLICT'
+      : 'EXPENSE_STORAGE_UNAVAILABLE'
+    return safeError(res, mutationStatus(code), code, code === 'EXPENSE_STORAGE_UNAVAILABLE')
+  }
   safeError(res, 503, 'EXPENSE_STORAGE_UNAVAILABLE', true)
+}
+
+function isAsyncPilot(
+  authenticated: AuthenticatedMiniAppContext,
+  finance: FinanceServerDependencies,
+): boolean {
+  return finance.async?.config.pilotStaffIds.has(authenticated.staffId) === true
+}
+
+function acceptedAt(finance: FinanceServerDependencies): string {
+  const milliseconds = finance.now?.() ?? Date.now()
+  if (!Number.isSafeInteger(milliseconds) || milliseconds < 0) {
+    throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+  }
+  return new Date(milliseconds).toISOString()
+}
+
+async function acceptAsyncExpense(
+  res: ServerResponse,
+  finance: FinanceServerDependencies,
+  input: ExpenseAsyncJobInput,
+): Promise<void> {
+  const async = finance.async
+  if (!async) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+  const startedAt = finance.now?.() ?? Date.now()
+  const { job } = await async.jobs.createOrRead(input)
+  if (job.state === 'QUEUING') {
+    let queued
+    try {
+      queued = await async.queue.enqueue({
+        rootRequestId: job.rootRequestId,
+        fingerprint: job.fingerprint,
+        scheduleAt: new Date(Date.parse(job.acceptedAt) + 2_000),
+      })
+    } catch {
+      emitAsync(async.telemetry, 'expense_task_enqueue_failed', {
+        route: 'submit', action: 'enqueue', status: 503,
+        state: job.state, elapsedMs: elapsedAsync(startedAt, finance),
+        fileCount: job.submission.stagingReceipts.length,
+        safeErrorCode: 'EXPENSE_STORAGE_UNAVAILABLE',
+      })
+      throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+    }
+    await async.jobs.markQueued(job, queued.taskName)
+  }
+  emitAsync(async.telemetry, 'expense_job_accepted', {
+    route: 'submit', action: 'accept', status: 202,
+    state: job.state === 'QUEUING' ? 'QUEUED' : job.state,
+    elapsedMs: elapsedAsync(startedAt, finance), fileCount: job.submission.stagingReceipts.length,
+  })
+  json(res, 202, {
+    rootRequestId: job.rootRequestId,
+    status: 'PENDING',
+    acceptedAt: job.acceptedAt,
+  })
+}
+
+function projectAsyncExpenseResume(job: ExpenseAsyncJob): ExpenseResumeStatus {
+  if (['QUEUING', 'QUEUED', 'PROCESSING', 'RETRYING'].includes(job.state)) {
+    return { status: 'PENDING' }
+  }
+  if (job.state === 'COMMITTED') {
+    const receipt = job.receipt ? expenseReceipt(job.receipt) : null
+    if (!receipt) throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+    return { status: 'COMMITTED', receipt }
+  }
+  if (job.state === 'NEEDS_REVIEW') {
+    return { status: 'FAILED', error: 'EXPENSE_NEEDS_REVIEW' }
+  }
+  if (job.state === 'FAILED' && job.safeErrorCode) {
+    return { status: 'FAILED', error: job.safeErrorCode }
+  }
+  throw new ExpenseSubmissionError('EXPENSE_STORAGE_UNAVAILABLE')
+}
+
+function emitAsync(
+  telemetry: ExpenseAsyncTelemetry | undefined,
+  name: Parameters<ExpenseAsyncTelemetry>[0],
+  fields: Parameters<ExpenseAsyncTelemetry>[1],
+): void {
+  try { telemetry?.(name, fields) } catch { /* telemetry cannot alter request execution */ }
+}
+
+function elapsedAsync(startedAt: number, finance: FinanceServerDependencies): number {
+  const endedAt = finance.now?.() ?? Date.now()
+  return Number.isFinite(endedAt) ? Math.max(0, Math.round(endedAt - startedAt)) : 0
 }
 
 function respondReadError(res: ServerResponse, error: unknown): void {

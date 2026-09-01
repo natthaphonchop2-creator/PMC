@@ -37,4 +37,13 @@ describe('async expense telemetry', () => {
       route: 'submit', action: 'accept', status: 202, state: 'QUEUED', elapsedMs: 20,
     })).not.toThrow()
   })
+
+  it('allows a safe enqueue failure without request or financial identifiers', () => {
+    expect(expenseAsyncEvent('expense_task_enqueue_failed', {
+      route: 'submit', action: 'enqueue', status: 503, state: 'QUEUING',
+      safeErrorCode: 'EXPENSE_STORAGE_UNAVAILABLE', elapsedMs: 30, fileCount: 1,
+    })).toEqual(expect.objectContaining({
+      event: 'expense_task_enqueue_failed', status: 503, state: 'QUEUING',
+    }))
+  })
 })

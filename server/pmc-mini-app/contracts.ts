@@ -16,6 +16,12 @@ import type { ExpenseIngressClient } from './finance/ingressClient.js'
 import type { ExpenseStagingPort } from './finance/stagingStore.js'
 import type { ExpenseSubmissionService } from './finance/submissionService.js'
 import type { ExpenseRecoveryWorker } from './finance/recovery.js'
+import type { PmcExpenseAsyncConfig } from './finance/asyncConfig.js'
+import type { ExpenseAsyncJobStore } from './finance/asyncJobStore.js'
+import type { ExpenseTaskQueue } from './finance/taskQueue.js'
+import type { ExpenseAsyncWorker } from './finance/asyncWorker.js'
+import type { ExpenseAsyncTelemetry } from './finance/asyncTelemetry.js'
+import type { WorkerIdentityVerifier } from './workerAuth.js'
 
 export type MiniAppSafeErrorCode =
   | 'MINI_APP_UNAUTHORIZED'
@@ -94,6 +100,15 @@ export interface FinanceReadStore {
   getExpenseMutationContext(monthKey: string, expenseId: string): Promise<ExpenseMutationContext | null>
 }
 
+export interface FinanceAsyncDependencies {
+  config: PmcExpenseAsyncConfig
+  jobs: ExpenseAsyncJobStore
+  queue: ExpenseTaskQueue
+  worker: ExpenseAsyncWorker
+  identity: WorkerIdentityVerifier
+  telemetry?: ExpenseAsyncTelemetry
+}
+
 export interface FinanceServerDependencies {
   signingSecret: string
   now?: () => number
@@ -110,4 +125,5 @@ export interface FinanceServerDependencies {
     submission: ExpenseSubmissionService
     ingress: ExpenseIngressClient
   }
+  async?: FinanceAsyncDependencies
 }
