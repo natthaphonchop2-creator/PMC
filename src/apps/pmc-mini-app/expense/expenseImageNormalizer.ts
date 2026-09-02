@@ -1,4 +1,6 @@
-import { expenseSourceImageType } from './expenseModel'
+import { expenseSourceImageType, type ExpenseSourceImageType } from './expenseModel'
+
+const HEIC_BRANDS = new Set(['heic', 'heix', 'hevc', 'hevx', 'heif', 'heim', 'heis', 'mif1', 'msf1'])
 
 export interface ExpenseImageConversionPorts {
   convertWebp(file: File): Promise<Blob>
@@ -18,15 +20,19 @@ export async function normalizeExpenseUploadFiles(
 ): Promise<File[]> {
   const normalized: File[] = []
   for (const file of files) {
-    const sourceType = expenseSourceImageType(file)
+    const sourceType = await imageTypeFromMagic(file) ?? expenseSourceImageType(file)
     if (sourceType === 'JPEG') {
-      normalized.push(file.type.trim().toLowerCase() === 'image/jpeg'
+      normalized.push(file.type.trim().toLowerCase() === 'image/jpeg' && /\.jpe?g$/i.test(file.name)
         ? file
-        : new File([file], file.name, { type: 'image/jpeg', lastModified: file.lastModified }))
+        : new File([file], /\.jpe?g$/i.test(file.name) ? file.name : imageFileName(file.name, 'jpg'), {
+          type: 'image/jpeg', lastModified: file.lastModified,
+        }))
       continue
     }
     if (sourceType === 'PNG') {
-      normalized.push(file)
+      normalized.push(file.type.trim().toLowerCase() === 'image/png' && /\.png$/i.test(file.name)
+        ? file
+        : new File([file], imageFileName(file.name, 'png'), { type: 'image/png', lastModified: file.lastModified }))
       continue
     }
     if (sourceType !== 'WEBP' && sourceType !== 'HEIC') throw new ExpenseImageConversionError()
@@ -41,7 +47,7 @@ export async function normalizeExpenseUploadFiles(
     if (!(converted instanceof Blob) || converted.type !== 'image/jpeg' || converted.size < 1) {
       throw new ExpenseImageConversionError()
     }
-    normalized.push(new File([converted], jpegFileName(file.name), {
+    normalized.push(new File([converted], imageFileName(file.name, 'jpg'), {
       type: 'image/jpeg',
       lastModified: file.lastModified,
     }))
@@ -88,6 +94,28 @@ function safeDimensions(width: number, height: number): boolean {
     && width > 0 && height > 0 && width <= Math.floor(20_000_000 / height)
 }
 
-function jpegFileName(value: string): string {
-  return `${value.replace(/\.(?:webp|heic|heif)$/i, '')}.jpg`
+async function imageTypeFromMagic(file: File): Promise<ExpenseSourceImageType | null> {
+  let bytes: Uint8Array
+  try {
+    bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer())
+  } catch {
+    return null
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'JPEG'
+  if (bytes.length >= 8
+    && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((value, index) => bytes[index] === value)) {
+    return 'PNG'
+  }
+  if (bytes.length >= 12 && ascii(bytes, 0, 4) === 'RIFF' && ascii(bytes, 8, 12) === 'WEBP') return 'WEBP'
+  if (bytes.length >= 12 && ascii(bytes, 4, 8) === 'ftyp' && HEIC_BRANDS.has(ascii(bytes, 8, 12))) return 'HEIC'
+  return null
+}
+
+function ascii(bytes: Uint8Array, start: number, end: number): string {
+  return String.fromCharCode(...bytes.subarray(start, end))
+}
+
+function imageFileName(value: string, extension: 'jpg' | 'png'): string {
+  const base = value.replace(/\.(?:jpe?g|png|webp|heic|heif)$/i, '')
+  return `${base || 'image'}.${extension}`
 }

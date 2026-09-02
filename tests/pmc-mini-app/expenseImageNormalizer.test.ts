@@ -68,8 +68,51 @@ describe('expense mobile image normalization', () => {
     expect(ports.convertWebp).not.toHaveBeenCalled()
     expect(ports.convertHeic).not.toHaveBeenCalled()
   })
+
+  it('detects actual Android image bytes when the picker disguises PNG, WebP, or HEIC as JPEG', async () => {
+    const disguisedPng = fileBytes(
+      'doctor-slip.jpg',
+      'image/jpeg',
+      Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      30,
+    )
+    const disguisedWebp = fileBytes(
+      'doctor-book.jpg',
+      'image/jpeg',
+      Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]),
+      31,
+    )
+    const disguisedHeic = fileBytes(
+      'doctor-photo.jpeg',
+      'image/jpeg',
+      Uint8Array.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]),
+      32,
+    )
+    const ports: ExpenseImageConversionPorts = {
+      convertWebp: vi.fn(async () => jpegBlob()),
+      convertHeic: vi.fn(async () => jpegBlob()),
+    }
+
+    const normalized = await normalizeExpenseUploadFiles([disguisedPng, disguisedWebp, disguisedHeic], ports)
+
+    expect(ports.convertWebp).toHaveBeenCalledWith(disguisedWebp)
+    expect(ports.convertHeic).toHaveBeenCalledWith(disguisedHeic)
+    expect(normalized.map(({ name, type, lastModified }) => ({ name, type, lastModified }))).toEqual([
+      { name: 'doctor-slip.png', type: 'image/png', lastModified: 30 },
+      { name: 'doctor-book.jpg', type: 'image/jpeg', lastModified: 31 },
+      { name: 'doctor-photo.jpg', type: 'image/jpeg', lastModified: 32 },
+    ])
+  })
 })
 
 function file(name: string, type: string, lastModified = 1): File {
   return new File([new Uint8Array([1, 2, 3])], name, { type, lastModified })
+}
+
+function fileBytes(name: string, type: string, bytes: Uint8Array, lastModified = 1): File {
+  return new File([bytes], name, { type, lastModified })
+}
+
+function jpegBlob(): Blob {
+  return new Blob([Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10])], { type: 'image/jpeg' })
 }
